@@ -170,10 +170,12 @@ not be taken ranks last.
 
 **Audio.** Sound beyond the song is how long a source plays outside the
 stretch it shares with another source of the song: a music video's
-intro counts, silence does not. Bandwidth is the highest frequency
-really present, so a FLAC transcoded from a lossy file measures as
-narrow as that file. Real stereo tells stereo from mono copied into two
-channels; clipping is the share of samples stuck at full scale. Opus and
+intro counts, silence does not. Bandwidth is where a lowpass cuts the
+sound off, so a FLAC transcoded from a lossy file measures as narrow as
+that file, while a recording whose treble fades on its own measures
+full. Real stereo tells stereo from mono copied into two channels, even
+at different levels; clipping is the share of samples stuck at full
+scale or at the audio's own peak. Opus and
 FLAC are copied; another lossless codec is encoded to FLAC, another
 lossy one to Opus at the bitrate `[audio]` sets.
 

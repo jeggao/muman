@@ -28,7 +28,7 @@ fn audio(codec: &str, khz: f64) -> Facts {
         channels: 2,
         quality: Some(AudioQuality {
             bandwidth_hz: khz * 1000.0,
-            side_ratio: 0.2,
+            incoherence: 0.2,
             clipping: 0.0,
         }),
     });
@@ -261,7 +261,7 @@ fn real_stereo_beats_mono_in_two_channels() {
         .quality
         .as_mut()
         .unwrap()
-        .side_ratio = 0.0;
+        .incoherence = 0.0;
     let facts = BTreeMap::from([(mono.clone(), m), (stereo.clone(), audio("aac", 20.0))]);
     let alignments = both(&facts, &mono, &stereo, 0, 0.99).to_vec();
     let r = run(&song(&[mono, stereo.clone()]), &facts, &alignments);
