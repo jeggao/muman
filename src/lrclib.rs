@@ -1,6 +1,21 @@
 //! Lyrics from an LRCLIB server: a song's record found by its title,
 //! artist, album and length, and kept in the store as `<id>.lrc`, the
 //! record's length stated in it, beside the record as `<id>.json`.
+//!
+//! `/api/get` is asked first when the album is known, then `/api/search`
+//! by title and artist. A record fits when its length is within 2 s of
+//! the song's audio, and its track and artist names hold the song's,
+//! compared as YouTube Music's are, by letters and digits without
+//! featured artists. Of those, a timed one wins, then the closest in
+//! length. Measured against lrclib.net: asking for 300 s returned a 302 s
+//! record, and a miss is a 404 `TrackNotFound`.
+//!
+//! The stated length, `[length:mm:ss.cc]` atop the `.lrc`, is what ranks
+//! the record's lyrics against the chosen audio (`resolve`): a timed
+//! subtitle of the same recording keeps winning, while LRCLIB's timed
+//! lines win over untimed or missing ones. An instrumental record stops
+//! the song looking; a record deleted from the store is fetched again by
+//! its ID.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

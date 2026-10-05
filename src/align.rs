@@ -4,11 +4,27 @@
 //!
 //! Each side is decoded to 8 kHz mono and reduced to a log-energy
 //! envelope at 100 frames a second. A cross-correlation over the whole
-//! of both finds the shift; ten-second windows of the upload, each
-//! searched again near it, say whether that one shift holds throughout.
-//! Measured on four switched pairs, a shared recording scored above
-//! 0.99 with every window agreeing, a music video's cut included; an
-//! unrelated song scored 0.29 with none.
+//! of both, coarse at a quarter of the rate and then refined, finds the
+//! shift; ten-second windows of the upload, each searched again within
+//! 1 s of it, say whether that one shift holds throughout. The two are
+//! one recording when the whole correlates at 0.8 or more and at least
+//! 80% of the windows agree, each within 50 ms and correlating at 0.5.
+//!
+//! Measured on uploads paired with their releases, one recording scored
+//! 0.991 to 0.997 with 97% to 100% of its windows agreeing, a music video
+//! starting 920 ms late and an upload with an outro included; an
+//! unrelated song scored 0.289 with none.
+//!
+//! A single offset is the model: a cut that inserts a scene mid-song
+//! lowers the windows' agreement and fails, where a piecewise map could
+//! keep it.
+//!
+//! The same envelopes say how long a source plays sound outside the
+//! stretch it shares with the other: frames within 40 dB of its median
+//! loudness, so a video's intro or skit counts and silence padding the
+//! same recording does not. That is what ranks a release over its music
+//! video. Measured, music videos carried 1.2 to 17.9 s of it; an upload
+//! 3.8 s longer than its release carried 60 ms.
 
 use std::ffi::OsString;
 use std::path::Path;

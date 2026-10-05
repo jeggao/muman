@@ -1,5 +1,49 @@
 //! A video's YouTube Music track: the same song as released, with its
 //! album art and release tags, found by searching YouTube Music's songs.
+//!
+//! An upload often has a released counterpart: an auto-generated track
+//! whose info carries the track name, every credited artist and the
+//! album, and whose square album art the upload lacks. yt-dlp's
+//! `music.youtube.com/search?q=…#songs` extractor is asked for the
+//! upload's channel and title; its top songs are extracted whole, and
+//! those named as the upload is, and close enough in length, are
+//! candidates:
+//!
+//! - the track's name inside the upload's title, by letters and digits
+//!   alone, case-folded, and without the featured artists a release
+//!   credits in its name, which an upload credits in its own words and
+//!   script, or not at all;
+//! - an artist, or the release's " - Topic" channel, in the upload's
+//!   channel or title, which covers a label channel's `Artist - Song`
+//!   uploads.
+//!
+//! Their audio decides, in search order (`align`); only where it cannot
+//! be had does a candidate of the same length stand. A playlist's flat
+//! entry names no track, so one from an artist's " - Topic" channel,
+//! where only releases are, counts as one.
+//!
+//! The reverse search, for a release's upload with subtitles, puts the
+//! artist's own channel first and compares only videos with a person's
+//! subtitles: a cover sung over the official instrumental may sound
+//! close enough to pass.
+//!
+//! YouTube Music names every album's playlist `OLAK5uy_…`; any other
+//! playlist is a list of separate songs. A track's number is its place in
+//! the album's full listing, counting entries no longer available, since
+//! a track fetched alone never says it.
+//!
+//! A track's own thumbnails are 16:9 frames with the art pillarboxed in
+//! the middle. Only the `web_music` player client lists the square art,
+//! on `googleusercontent.com`, ranked last and sized to 544 pixels, so
+//! yt-dlp is asked to use that client too, and the `AlbumArt`
+//! postprocessor appends the art at its uploaded size, as JPEG (`=s0-rj`),
+//! as the last thumbnail, the one yt-dlp writes and embeds. Without it
+//! the frame's bars are cropped off when the song is written (`quality`).
+//!
+//! Listing a URL takes about 2 s, the flat search about 1.6 s, extracting
+//! its songs at once about 1.8 s more, and each audio download about 1 s.
+//! More lookups at once than `parallel::LOOKUPS` trip YouTube's rate
+//! limit sooner.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;

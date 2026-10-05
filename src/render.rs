@@ -5,6 +5,19 @@
 //! audio last, so a player scanning the library never sees half a track.
 //! A cover or lyrics that fail are reported and the song is written
 //! without them.
+//!
+//! Opus is written into Ogg. Tags come from the plan alone: the
+//! container's, yt-dlp's description and URL among them, are dropped. The
+//! cover is a front-cover picture written through `lofty`: a JPEG or PNG
+//! without borders as its own bytes, any other converted to PNG and
+//! cropped to the content inside a video frame's bars. Lyrics are cleaned
+//! of cues, symbols and credits and moved by the plan's offset; lyrics
+//! from a `.lrc` file need no ffmpeg at all.
+//!
+//! Starting ffmpeg can cost 100 ms or more against a few milliseconds of
+//! work, so a song is one ffmpeg run writing every output; only when that
+//! run fails is each output run alone, so a bad cover or lyrics stream
+//! costs only itself.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;

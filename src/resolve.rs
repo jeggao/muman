@@ -2,7 +2,8 @@
 //! say it is best, compared lexicographically over bucketed scores so
 //! noise never decides between near-equals. No rule names a kind of
 //! source; a pin in the song list is the only override, and the order
-//! of `sources` breaks the last tie.
+//! of `sources` breaks the last tie. A measure that could not be taken
+//! ranks after any that was.
 //!
 //! - Audio: least that is not the song (a video's intro or skit), then
 //!   the widest bandwidth, real stereo, least clipping.
@@ -14,6 +15,31 @@
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so an album never
 //!   splits.
+//!
+//! The output format follows the winning audio's codec, not its measures:
+//! Opus and FLAC are copied, another lossless codec is encoded to FLAC,
+//! and another lossy one to Opus at the `[audio]` bitrate.
+//!
+//! Lyrics from a source other than the chosen audio need that source's
+//! audio to be the same recording, and are moved by the offset measured.
+//! Lyrics with no audio of their own that state the length they are
+//! timed to, as LRCLIB's do, are as sure as that length agrees with the
+//! chosen audio's, but never as sure as a measured comparison, so a
+//! person's subtitles of the same recording keep winning while LRCLIB's
+//! timed lines win over untimed or missing ones. A `.lrc` that states no
+//! length is taken as timed for the song.
+//!
+//! The release fields, album, album artist, track, disc and date, come
+//! from the one source whose album ranks best, so an album's tracks never
+//! split across folders; with none, the song is a single named for its
+//! final title. The album artist is one a source names, else the first
+//! credited artist as finally set, a hand-set one included, never the
+//! joined `ARTIST`.
+//!
+//! A plan is stored whole and compared whole, which is how a song renders
+//! again exactly when its sources' revisions, the picks, the tags or the
+//! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
+//! renders to change.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

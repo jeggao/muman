@@ -2,6 +2,29 @@
 //! wrote and the plan each was written from, which is what lets it
 //! delete only its own files and rebuild only what changed, and caches
 //! of what it measured, which are safe to lose.
+//!
+//! | Key | Safe to lose |
+//! |---|---|
+//! | `outputs` | No: without it nothing is deleted, and every song renders again |
+//! | `replaced` | Mostly: a playlist added again fetches those uploads |
+//! | `library`, `alignments`, `facts` | Yes: measured or set again |
+//! | `failures`, `lookups` | Yes: each is tried or made again at once |
+//!
+//! An output with no plan is one muman owns but cannot vouch for, as one
+//! a run records just before writing it: a crash between the two leaves
+//! a file the next run writes again or deletes, rather than one no run
+//! would ever delete. An output whose size and time differ from those
+//! recorded was changed by something else, a tagger or a player: it is
+//! not written over, and once no song makes it, it is left in place and
+//! dropped from `outputs`, no longer muman's. When the library folder
+//! moves, the files in the old one are left alone.
+//!
+//! A source that could not be read is not read again until its revision,
+//! each of its files' size and modification time, changes; one that could
+//! not be fetched again waits an hour, doubling with each failure up to a
+//! week. A cache entry an earlier version wrote in another shape is
+//! dropped and made again; only `outputs` failing to parse refuses the
+//! file, since losing it would lose which library files are muman's.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

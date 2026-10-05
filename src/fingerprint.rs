@@ -17,6 +17,25 @@
 //! of words that never change is silence or a held note, alike in any
 //! two songs. The offsets tried are those exactly equal half-words vote
 //! for, so a comparison costs the prints' lengths, not their product.
+//!
+//! | Agreeing words, of the shorter print's sounding ones | Span of the longer | Verdict |
+//! |---|---|---|
+//! | 30% or more, and at least 48 (~6 s) | 80% or more | The same recording |
+//! | 30% or more, and at least 48 | Under 80% | Unsure: an excerpt, or a video with a skit |
+//! | 10% to 30%, and at least 48 | 80% or more | Unsure: another master or mix |
+//! | Less | Any | A different song |
+//!
+//! The thresholds were calibrated over every pair of sources in a real
+//! library, printed by ffmpeg's muxer with the same algorithm. Pairs the
+//! user had joined as one song scored 42% to 100%, besides one other mix
+//! at 6%; no two songs of different titles scored above 14%; and every
+//! pair of releases of one master scoring 30% or more was one recording.
+//!
+//! The measure before this one, the share of bits agreeing at the best
+//! offset, failed both ways: a 16 to 40 s song slid along a five-minute
+//! one found 0.62 to 0.75 by chance, and two songs sharing a silence
+//! agree on every bit of it. Counted in agreeing words, those pairs score
+//! 0 to 20.
 
 use std::collections::HashMap;
 use std::ffi::OsString;

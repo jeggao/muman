@@ -2,6 +2,16 @@
 //! settings, and the triggers by which a song with a source from one
 //! looks another up, as `[providers.*]` and `[[trigger]]` in the song
 //! list set them over the defaults.
+//!
+//! `youtube` and `youtube-music` share one key scheme, `youtube:<id>`: a
+//! video is a release when its info names a track or its channel is an
+//! artist's " - Topic", read with its tags, so no key changes when a
+//! video is told apart. A video not measured yet is neither.
+//!
+//! Any `[[trigger]]` replaces every default trigger rather than adding to
+//! them, so the triggers in the file are the whole of what runs. A YouTube
+//! provider is looked up from a YouTube video alone, so a file of the
+//! user's own never searches YouTube.
 
 use std::collections::BTreeMap;
 use std::fmt;

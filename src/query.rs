@@ -8,6 +8,12 @@
 //! A source key, as `youtube:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case is
 //! ignored throughout.
+//!
+//! A term is a key when what comes before its colon is a scheme some key
+//! in the song list uses and no field's name, so `youtube:<id>` names a
+//! key where `composer:quill` names a field. A song that does not resolve
+//! yet, its sources not measured, offers its `[song.tags]` and the tags of
+//! its first measured source, so a query still finds it.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

@@ -1,5 +1,11 @@
 //! The yt-dlp call that fetches sources into the store, and the list of
 //! files it reports finishing.
+//!
+//! yt-dlp runs with `--ignore-config`, so a personal config cannot change
+//! what a source holds; the song list's `[ytdlp]` is how options reach
+//! it. Unfinished downloads wait in `partial/` under the state root,
+//! beside the store, so an interrupted one resumes on the next run and a
+//! finished one is renamed into the store rather than copied.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

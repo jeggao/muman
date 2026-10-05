@@ -2,6 +2,42 @@
 //! an uploader wrapped around the song's name, read by rules in a fixed
 //! order. Each rule is a switch in the song list's `[clean.<tier>]`, its
 //! tier saying how far it may stray from the value it was given.
+//!
+//! Cleaning is what lets `Song (Album Version)` agree with `Song`, and a
+//! title read off a video compete as the song's name. Measured on uploads
+//! matched to their releases, under two in five titles agreed with the
+//! release before cleaning, and all did after, romanization aside.
+//!
+//! Offers are cleaned at each resolve, never when read: the raw offers
+//! stay in the state, so changing a rule or a switch needs nothing read
+//! again, and a song whose tags it changes renders again. Tags set in
+//! `[song.tags]` or `[album.tags]` are never cleaned.
+//!
+//! A *structured* value comes from a field kept for it: a release's track
+//! and artists, a file's own tags. A *derived* one is read off a video's
+//! title or its channel's name, and only a derived title is split by
+//! convention. Its credit goes when one side of a ` - ` or ` / ` names
+//! someone the song's sources credit; with neither side named, a slash
+//! keeps its left side, a list of names is the credit, and a dash keeps
+//! its right side, YouTube's `Artist - Title`. With both sides named, or
+//! a right side that only qualifies, as ` - Acoustic Version`, the title
+//! stays whole.
+//!
+//! What the rules leave alone matters as much as what they take:
+//!
+//! - artists are split at `;` only, since a comma belongs to names such
+//!   as `Venn, Hale & Orchard`; genres split at `,`, `;` and `/`, never at
+//!   `&`, as in `Rock & Roll`;
+//! - a remaster note goes from a title, never from an album, whose
+//!   remaster is another release;
+//! - a bracket naming the video stays when it also says live, demo, mix,
+//!   edit, acoustic, instrumental, cover or karaoke: that names another
+//!   recording;
+//! - an alias after a slash goes from a derived artist always, a channel
+//!   having one owner, but from a structured one only when the two read as
+//!   one person's, so a duet `Paper Comets / Marlo Venn` stays whole;
+//! - the ideographic space, and symbols below U+2700 such as `☆` and `♪`,
+//!   are part of a name.
 
 use std::collections::BTreeSet;
 

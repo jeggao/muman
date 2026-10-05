@@ -3,6 +3,31 @@
 //! one it finds, is a lookup, made unless one made the same way found
 //! something, or found nothing lately. What a lookup finds joins the
 //! song, and may trigger lookups of its own, for a few rounds.
+//!
+//! Each lookup is recorded in the state by the source it was made from,
+//! the provider looked up and that provider's `method`, with when and
+//! what came of it. It is made again:
+//!
+//! | Recorded | Made again |
+//! |---|---|
+//! | Nothing, or another `method` | At once |
+//! | Found nothing | After the provider's `recheck_days` |
+//! | Failed | After an hour, doubling with each failure, up to a week |
+//! | Found a source, an instrumental, or declined | Never |
+//!
+//! A song makes at most one lookup per provider a run, so a release and
+//! its upload never look each other up in turn. Each round measures what
+//! the triggers read, makes its lookups and fetches what they found,
+//! without holding the run's lock; what one round adds may trigger the
+//! next. A provider's `per_run` cap lets a backlog, as the first sync of
+//! a library never looked up has, drain over several runs rather than all
+//! at once on a free service.
+//!
+//! A YouTube Music track found later is fetched beside its upload and
+//! joins the song; the upload stays a source when the two are one
+//! recording, else the track takes its key. A source the run already
+//! knows, listed, removed or replaced, is recorded found but never added
+//! again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;

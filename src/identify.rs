@@ -1,6 +1,13 @@
 //! Which song new sources belong to, by their fingerprints: a source the
 //! same recording as a listed song joins it, one that may be is asked
 //! about, and any other is a song of its own.
+//!
+//! A new source is compared with every listed song's sources, and its
+//! strongest match decides: a surer verdict first, then the larger share
+//! (`fingerprint`). One that may be the song, an excerpt, a video with a
+//! long skit, or another master or mix, is asked about on a terminal;
+//! elsewhere it is kept as a song of its own with a warning rather than
+//! joined unasked, since a song made of two recordings writes only one.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;

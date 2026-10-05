@@ -3,6 +3,18 @@
 //! before, and the library files it replaced or removed, as many as a
 //! budget of bytes allows. A file not kept is written again from its
 //! sources instead.
+//!
+//! Every library write lands as a new file renamed into place, so a hard
+//! link to the old one keeps its bytes; a file is linked where the
+//! filesystem allows, else copied, while the `[history]` budget lasts.
+//! Past it, a run that rewrites the whole library keeps part of it and
+//! loses nothing. The history is safe to lose: it only makes `undo`
+//! possible.
+//!
+//! `undo` refuses when the song list changed after the run, by hand or
+//! otherwise, rather than lose those changes. A purge cannot be undone in
+//! full: a fetched source is fetched again by the next sync, and a file
+//! of the user's own is in the desktop's trash.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;

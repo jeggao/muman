@@ -2,10 +2,38 @@
 //! decoded samples, never from what a container or codec declares: an
 //! upscaled image or a transcoded file claims more than it holds.
 //!
-//! Audio is judged by its effective bandwidth, whether its stereo is
-//! real, and how much of it is clipped; a picture by the content left
-//! once uniform borders are trimmed, whether that is square, the
-//! resolution its detail supports, and its block artifacts.
+//! Audio is measured on short excerpts at a quarter, half and three
+//! quarters of its length, decoded at the source's own rate.
+//!
+//! - **Bandwidth.** The frequency below which each frame carries sound,
+//!   taken low across the frames. A lossy encoder leaves nothing above its
+//!   lowpass, so a FLAC transcoded from a 16 kHz source measures 16 kHz
+//!   whatever its bitrate. YouTube's Opus measures about 20 kHz; some
+//!   releases YouTube Music serves as AAC measure 11 to 16 kHz.
+//! - **Real stereo.** A mono recording copied into two channels has next
+//!   to no side energy, and counts as mono.
+//! - **Clipping.** The share of samples in runs at full scale.
+//!
+//! A picture is measured in gray.
+//!
+//! - **Content.** In a picture that is not square, uniform rows or columns
+//!   that match on opposite sides, within 2% of each other in width, are
+//!   bars, and the content is what they enclose: a pillarboxed video frame
+//!   yields its square art, which the cover is cropped to. Square art is
+//!   never trimmed: bands across it are its design, and a solid edge on
+//!   one side only is part of any picture.
+//! - **Effective resolution.** Detail at a size is the mean squared
+//!   Laplacian over the variance, once the picture is averaged down to
+//!   that size. Stepping up from 256 px by half an octave, each size must
+//!   keep a set share of the detail half its size holds; the effective
+//!   resolution is the last size that does. An upscale fails past the size
+//!   it was made from, so a large pixel count proves nothing. Measured on
+//!   covers: a native 1400 px album art measured 1400 px; a 3000 px
+//!   upscale of a 500 px picture measured 362 px; release covers served at
+//!   1400 and 1500 px measured 512 px.
+//! - **Block artifacts.** How much more the pixels jump across 8×8 block
+//!   boundaries than halfway between them. Halfway shares the boundary's
+//!   parity, so the pattern a 2× upscale leaves cancels out.
 
 use std::ffi::OsString;
 use std::path::Path;

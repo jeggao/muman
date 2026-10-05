@@ -6,6 +6,32 @@
 //! comments, order and keys this version does not know survive a write.
 //! `version` names the format. A file of another version is refused,
 //! never rewritten by a program that cannot read it.
+//!
+//! There is no song ID: a song is the sources it lists, and a key
+//! belongs to one song only. A key that does not parse, one two songs
+//! list, and a pin outside the song's sources stop the run before
+//! anything is written, rather than a song being silently dropped and
+//! its file deleted.
+//!
+//! muman changes the file only by recording edits and applying them to
+//! the file as it is when saved, under the folder's lock and through a
+//! renamed part file, so two runs keep each other's songs and a crash
+//! leaves the old list or the new. An edit made from a song as it was
+//! read, by `remove`, `set` or `edit`, is saved only while that song is
+//! still listed as it was: a song changed meanwhile, by hand or by
+//! another run, refuses the save and nothing is written.
+//!
+//! Every write puts the usage comment atop the file, replacing one an
+//! earlier version wrote, while the user's own comments below it stay;
+//! and it gives each song a `[song.tags]` table with the common keys it
+//! lacks added empty, so the file shows what can be set. A key under
+//! `[clean]` naming no rule is kept and warned about, so a misspelled
+//! switch is never silently ignored.
+//!
+//! A `[[removed]]` key no song lists is a tombstone: a playlist or album
+//! listing skips it, a manual file under it is not listed, and naming its
+//! video alone lists it again. A key a song lists wins over a tombstone
+//! that also names it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
