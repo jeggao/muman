@@ -28,7 +28,7 @@ fn audio(codec: &str, khz: f64) -> Facts {
         channels: 2,
         quality: Some(AudioQuality {
             bandwidth_hz: khz * 1000.0,
-            side_ratio: 0.2,
+            incoherence: 0.2,
             clipping: 0.0,
         }),
     });
@@ -104,6 +104,7 @@ fn aligned(
         method: crate::align::METHOD.into(),
         revs: (facts[a].rev.clone(), facts[b].rev.clone()),
         offset_ms,
+        stretch_ppm: 0,
         score,
         coverage: 1.0,
         a_ms: ms(facts[a].duration),
@@ -124,6 +125,18 @@ fn both(
         aligned(facts, a, b, offset_ms, score),
         aligned(facts, b, a, -offset_ms, score),
     ]
+}
+
+#[test]
+fn lyrics_from_a_copy_that_runs_slow_are_shortened_by_its_drift() {
+    let (song, facts, mut alignments) = release_and_video();
+    let video = yt("vvvvvvvvvvv");
+    for a in alignments.iter_mut().filter(|a| a.a == video) {
+        a.stretch_ppm = 1000;
+    }
+    let lyrics = run(&song, &facts, &alignments).plan.lyrics.unwrap();
+    assert_eq!(lyrics.key, video);
+    assert_eq!(lyrics.stretch_ppm, 1000);
 }
 
 fn why<'r>(r: &'r Resolved, key: &str) -> &'r TagWhy {
@@ -203,6 +216,7 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
     let lyrics = r.plan.lyrics.unwrap();
     assert_eq!(lyrics.key, yt("vvvvvvvvvvv"));
     assert_eq!(lyrics.shift_ms, 20_000, "the video plays 20 s later");
+    assert_eq!(lyrics.stretch_ppm, 0);
     let get = |k: &str| {
         r.plan
             .tags
@@ -261,7 +275,7 @@ fn real_stereo_beats_mono_in_two_channels() {
         .quality
         .as_mut()
         .unwrap()
-        .side_ratio = 0.0;
+        .incoherence = 0.0;
     let facts = BTreeMap::from([(mono.clone(), m), (stereo.clone(), audio("aac", 20.0))]);
     let alignments = both(&facts, &mono, &stereo, 0, 0.99).to_vec();
     let r = run(&song(&[mono, stereo.clone()]), &facts, &alignments);

@@ -233,7 +233,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                     .map(|b| lyrics::decode(&b))
                     .map_err(|e| problems.push(format!("no lyrics: {e}")))
                     .ok()
-                    .map(|t| lyrics::shift_lrc(&lyrics::clean_lrc(&t), l.shift_ms)),
+                    .map(|t| lyrics::shift_lrc(&lyrics::clean_lrc(&t), l.shift_ms, l.stretch_ppm)),
             },
             _ => None,
         }
@@ -382,6 +382,7 @@ fn lyrics_plan(
     Ok(Some(lyrics::shift_lrc(
         &lyrics::clean_lrc(&text),
         lyrics.shift_ms,
+        lyrics.stretch_ppm,
     )))
 }
 

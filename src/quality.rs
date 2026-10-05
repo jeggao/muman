@@ -5,14 +5,16 @@
 //! Audio is measured on short excerpts at a quarter, half and three
 //! quarters of its length, decoded at the source's own rate.
 //!
-//! - **Bandwidth.** The frequency below which each frame carries sound,
-//!   taken low across the frames. A lossy encoder leaves nothing above its
-//!   lowpass, so a FLAC transcoded from a 16 kHz source measures 16 kHz
-//!   whatever its bitrate. YouTube's Opus measures about 20 kHz; some
-//!   releases YouTube Music serves as AAC measure 11 to 16 kHz.
-//! - **Real stereo.** A mono recording copied into two channels has next
-//!   to no side energy, and counts as mono.
-//! - **Clipping.** The share of samples in runs at full scale.
+//! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
+//!   highest band standing 20 dB above all bands past a short guard,
+//!   in each excerpt's mean spectrum, taken low across the excerpts. A FLAC
+//!   transcoded from a 16 kHz source measures 16 kHz; a recording whose
+//!   treble fades into its noise floor shows no wall and measures full.
+//! - **Real stereo.** One minus the channels' squared correlation at the lag
+//!   within 1 ms that best aligns them: mono copied into two channels, at two
+//!   levels or a few samples apart, has next to none and counts as mono.
+//! - **Clipping.** The share of samples in runs at full scale or just under the
+//!   peak, or piled up just under full scale once a lossy codec smeared them.
 //!
 //! A picture is measured in gray.
 //!
@@ -42,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/3";
+pub const METHOD: &str = "quality/4";
 
 /// Seconds of audio measured at each of [`SEGMENTS`].
 pub const SEGMENT_SECONDS: f64 = 8.0;
@@ -50,22 +52,84 @@ pub const SEGMENT_SECONDS: f64 = 8.0;
 pub const SEGMENTS: [f64; 3] = [0.25, 0.5, 0.75];
 
 const FFT: usize = 4096;
-/// FFT bins summed into one band when looking for the cutoff.
-const BAND_BINS: usize = 32;
-/// A band counts as carrying sound within this many decibels of the
-/// frame's loudest band; a lossy encoder leaves nothing near it above
-/// its lowpass.
-const CUTOFF_DB: f64 = 80.0;
+/// FFT bins summed into one band when looking for a wall.
+const BAND_BINS: usize = 16;
+/// Bands between a wall's top and the bands it stands above, about 375 Hz
+/// at 48 kHz: room for an encoder's lowpass to fall.
+const WALL_GUARD: usize = 2;
+/// How far a wall stands above every band past its guard. A recording's
+/// own treble fades gradually and leaves none, so it measures half its
+/// sample rate; each excerpt is judged alone, so an encoder starved of bits
+/// in one passage still shows its wall.
+///
+/// Calibrated on 22 public-domain recordings, orchestral, chamber and
+/// piano, 16 lossless at 44.1 and 48 kHz and 6 transfers of 78 rpm discs at
+/// 96 kHz, and on copies of 8 of them made for the purpose:
+///
+/// - The measure walls replaced, each frame's top band within 80 dB of its
+///   loudest, put 6 of the lossless recordings at 10.5 to 12.1 kHz, where
+///   their treble faded into their noise floor, and ranked two of them
+///   below their own 48 kbit/s Opus copies. Walls put every recording at
+///   half its sample rate.
+/// - Of 80 lossy or resampled copies, walls put 69 at least 1 kHz below
+///   their source; the old measure, 57. Off the darkest recordings, MP3 at
+///   128 kbit/s measured 16 to 16.5 kHz and AAC at 128 kbit/s 17.2 to
+///   17.4 kHz; Opus at 128 kbit/s measured 20 to 20.6 kHz on all. Opus at
+///   48 kbit/s on solo piano, starved, measured 8.4 and 12.6 kHz.
+/// - A copy whose lost treble stood less than 20 dB above what was left in
+///   its place shows no wall. Two 44.1 kHz piano recordings resampled to
+///   22.05 kHz and back up to 48 kHz measured 24 kHz, above their sources.
+const WALL_DB: f64 = 20.0;
+/// Walls are looked for above this frequency. Below it a piano's spectrum
+/// can fall nearly as steeply as a lowpass: with a 15 dB wall, soft piano
+/// showed walls at 1 to 1.3 kHz.
+const WALL_MIN_HZ: f64 = 2000.0;
 /// Frames quieter than this RMS, about -60 dBFS, say nothing of bandwidth.
 const SILENT_RMS: f64 = 1e-3;
-/// The bandwidth reported is this percentile of the frames' cutoffs, low
-/// enough to catch an encoder starved of bits whose cutoff wanders.
-const CUTOFF_PERCENTILE: f64 = 0.2;
-/// Side energy below this share of the mid is a mono source in two
-/// channels.
-const STEREO_SIDE: f64 = 1e-3;
+/// Energy no gain and lag between the channels explains, below this share,
+/// is a mono source in two channels. On the recordings [`WALL_DB`] was
+/// calibrated on, stereo ones, the 78 rpm transfers among them, left 0.19
+/// to 0.89 unexplained. Mono copied into channels 1 dB apart left under
+/// 2e-7, and at most 3.5e-3 through Opus; the side-to-mid ratio used before
+/// counted it as stereo. Mono with one channel delayed by whole samples up
+/// to 1 ms left under 1e-11, and by half a sample at most 2.1e-4, or 2.7e-3
+/// through Opus; at lag 0 alone, one sample left up to 2.4e-2.
+const STEREO_INCOHERENCE: f64 = 1e-2;
+/// The longest delay between the channels a mono copy may carry, in
+/// seconds: a tape head's azimuth or a resampled channel.
+const STEREO_LAG: f64 = 1e-3;
 const CLIP_LEVEL: f32 = 0.9999;
+/// Samples this close to the audio's own peak are at a lowered clip level.
+/// On the recordings [`WALL_DB`] was calibrated on, clipped masters turned
+/// down by 1 dB measured as clipped as before; at full scale alone they
+/// measured nothing. MP3 smears flat tops: clipped masters measuring 2.6e-3
+/// to 7.9e-2 measured 2e-5 to 6.2e-3 as MP3. No lossless recording measured
+/// over 1e-6, and no master limited below full scale measured any.
+const CLIP_OF_PEAK: f32 = 0.999;
 const CLIP_RUN: usize = 3;
+/// A lossy codec smears clipped flat tops into a pile-up of samples just
+/// under full scale, rising from a valley below it and falling into the
+/// codec's overshoot above it. It is looked for from this level up, in bins
+/// [`PILE_BIN`] wide, against bins up to [`PILE_REACH`] below it and from
+/// [`PILE_OVERSHOOT`] above it.
+const PILE_FROM: f64 = 0.9;
+const PILE_BIN: f64 = 0.01;
+const PILE_REACH: f64 = 0.2;
+/// A tone's samples crowd just under its own peak; a codec rings past the
+/// flat tops it smears, at least 0.06 past them on the clipped masters.
+const PILE_OVERSHOOT: f64 = 0.04;
+/// How many times the valley below, and some bin past the overshoot, a
+/// pile-up holds.
+///
+/// On the recordings [`WALL_DB`] was calibrated on, clipped masters as MP3,
+/// measuring 2e-5 to 6.2e-3 in runs, measured 3.3e-3 to 1e-1 piled up,
+/// against 2.6e-3 to 7.9e-2 before encoding. No unclipped master piled up:
+/// not 8 peaking at -0.1 dBFS, nor 8 driven 12 dB into a limiter at
+/// -0.2 dBFS, each also as MP3 and Opus, and the limited ones as AAC. A loud
+/// pure tone through a codec would pile up the same way; none was measured.
+const PILE_RISE: f64 = 2.0;
+/// The least share of the samples a pile-up's top bin holds.
+const PILE_SHARE: f64 = 1e-4;
 
 /// A row or column at most this far from uniform, in gray levels, is a
 /// border when it matches the edge.
@@ -90,8 +154,10 @@ const OCTAVE_FLOOR: f64 = 0.25;
 pub struct AudioQuality {
     /// The frequency below which the audio carries sound.
     pub bandwidth_hz: f64,
-    /// Side energy over mid energy.
-    pub side_ratio: f64,
+    /// The share of the channels' energy no gain from one to the other
+    /// explains: one minus their squared correlation.
+    #[serde(alias = "side_ratio")]
+    pub incoherence: f64,
     /// The share of samples in clipped runs.
     pub clipping: f64,
 }
@@ -99,7 +165,7 @@ pub struct AudioQuality {
 impl AudioQuality {
     #[must_use]
     pub fn is_stereo(&self) -> bool {
-        self.side_ratio > STEREO_SIDE
+        self.incoherence > STEREO_INCOHERENCE
     }
 
     /// Wider bandwidth first, in 500 Hz steps so noise never decides.
@@ -252,43 +318,117 @@ pub fn audio(segments: &[Vec<[f32; 2]>], sample_rate: u32) -> Option<AudioQualit
     let window: Vec<f64> = (0..FFT)
         .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * real(i) / real(FFT)).cos())
         .collect();
-    let mut cutoffs = Vec::new();
-    let (mut side, mut mid) = (0.0, 0.0);
+    let peak = segments
+        .iter()
+        .flatten()
+        .fold(0.0_f32, |m, s| m.max(s[0].abs()).max(s[1].abs()));
+    let level = CLIP_LEVEL.min(peak * CLIP_OF_PEAK);
+    let mut bandwidth: Option<f64> = None;
     let (mut clipped, mut total) = (0_usize, 0_usize);
     for samples in segments {
-        for s in samples {
-            let (l, r) = (f64::from(s[0]), f64::from(s[1]));
-            side += (l - r).powi(2);
-            mid += (l + r).powi(2);
-        }
         for channel in 0..2 {
-            clipped += clipped_samples(samples.iter().map(|s| s[channel]));
+            clipped += clipped_samples(samples.iter().map(|s| s[channel]), level);
         }
         total += samples.len() * 2;
-        for frame in samples.as_chunks::<FFT>().0 {
-            if let Some(hz) = frame_cutoff(frame, &window, sample_rate) {
-                cutoffs.push(hz);
-            }
+        if let Some(spectrum) = mean_spectrum(samples, &window) {
+            let hz = wall(&spectrum, sample_rate);
+            bandwidth = Some(bandwidth.map_or(hz, |b| b.min(hz)));
         }
     }
-    if cutoffs.is_empty() || mid == 0.0 {
+    let bandwidth_hz = bandwidth?;
+    if peak == 0.0 {
         return None;
     }
-    cutoffs.sort_by(f64::total_cmp);
-    let at = (real(cutoffs.len() - 1) * CUTOFF_PERCENTILE).round();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let bandwidth_hz = cutoffs[at as usize];
+    let reach = (f64::from(sample_rate) * STEREO_LAG).round() as usize;
+    let incoherence = incoherence(segments, reach);
+    let clipping = (real(clipped) / real(total.max(1))).max(pile_up(segments, peak, total));
     Some(AudioQuality {
         bandwidth_hz,
-        side_ratio: side / mid,
-        clipping: real(clipped) / real(total.max(1)),
+        incoherence,
+        clipping,
     })
 }
 
-fn clipped_samples(channel: impl Iterator<Item = f32>) -> usize {
+/// One minus the squared correlation of the channels at the lag within
+/// `reach` samples where it is highest, interpolated between whole lags. A
+/// silent channel beside a sounding one is no mono copy, and measures 1.
+fn incoherence(segments: &[Vec<[f32; 2]>], reach: usize) -> f64 {
+    let lags = 2 * reach + 1;
+    let (mut cross, mut right, mut left) = (vec![0.0; lags], vec![0.0; lags], 0.0);
+    for samples in segments.iter().filter(|s| s.len() > 2 * reach) {
+        let n = samples.len();
+        let mut energy = vec![0.0; n + 1];
+        for (i, s) in samples.iter().enumerate() {
+            energy[i + 1] = energy[i] + f64::from(s[1]).powi(2);
+        }
+        let middle = &samples[reach..n - reach];
+        left += middle.iter().map(|s| f64::from(s[0]).powi(2)).sum::<f64>();
+        for k in 0..lags {
+            right[k] += energy[n - 2 * reach + k] - energy[k];
+            cross[k] += middle
+                .iter()
+                .zip(&samples[k..])
+                .map(|(l, r)| f64::from(l[0]) * f64::from(r[1]))
+                .sum::<f64>();
+        }
+    }
+    if left == 0.0 || right.contains(&0.0) {
+        return 1.0;
+    }
+    let rho: Vec<f64> = (0..lags)
+        .map(|k| (cross[k] / (left * right[k]).sqrt()).abs())
+        .collect();
+    let k = (0..lags)
+        .max_by(|a, b| rho[*a].total_cmp(&rho[*b]))
+        .unwrap_or(reach);
+    let mut peak = rho[k];
+    if k > 0 && k + 1 < lags {
+        let curve = rho[k - 1] - 2.0 * rho[k] + rho[k + 1];
+        if curve < 0.0 {
+            peak -= (rho[k - 1] - rho[k + 1]).powi(2) / (8.0 * curve);
+        }
+    }
+    (1.0 - peak.min(1.0).powi(2)).max(0.0)
+}
+
+/// The share of samples from the valley under a pile-up up, as
+/// [`PILE_FROM`] describes; zero when there is none.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn pile_up(segments: &[Vec<[f32; 2]>], peak: f32, total: usize) -> f64 {
+    let lowest = PILE_FROM - PILE_REACH;
+    let peak = f64::from(peak);
+    if peak <= PILE_FROM || total == 0 {
+        return 0.0;
+    }
+    let bins = ((peak - lowest) / PILE_BIN).ceil() as usize + 1;
+    let mut counts = vec![0_usize; bins];
+    for x in segments.iter().flatten().flatten() {
+        let a = f64::from(x.abs());
+        if a >= lowest {
+            counts[(((a - lowest) / PILE_BIN) as usize).min(bins - 1)] += 1;
+        }
+    }
+    let reach = (PILE_REACH / PILE_BIN).round() as usize;
+    let Some(top) = (reach..bins).max_by_key(|b| counts[*b]) else {
+        return 0.0;
+    };
+    let held = real(counts[top]);
+    let overshoot = (PILE_OVERSHOOT / PILE_BIN).round() as usize;
+    let falls = counts
+        .get(top + overshoot..)
+        .is_some_and(|above| above.iter().any(|c| real(*c) * PILE_RISE <= held));
+    let valley = (top - reach..top).min_by_key(|b| counts[*b]).unwrap_or(top);
+    if held < PILE_SHARE * real(total) || !falls || real(counts[valley]) * PILE_RISE > held {
+        return 0.0;
+    }
+    real(counts[valley..].iter().sum()) / real(total)
+}
+
+fn clipped_samples(channel: impl Iterator<Item = f32>, level: f32) -> usize {
     let (mut clipped, mut run) = (0, 0);
     for x in channel {
-        if x.abs() >= CLIP_LEVEL {
+        if x.abs() >= level {
             run += 1;
         } else {
             if run >= CLIP_RUN {
@@ -304,30 +444,49 @@ fn clipped_samples(channel: impl Iterator<Item = f32>) -> usize {
     }
 }
 
-/// The top of the highest band within [`CUTOFF_DB`] of the loudest one;
-/// `None` for a silent frame.
-fn frame_cutoff(frame: &[[f32; 2]], window: &[f64], sample_rate: u32) -> Option<f64> {
-    let mono: Vec<f64> = frame
-        .iter()
-        .map(|s| f64::midpoint(f64::from(s[0]), f64::from(s[1])))
-        .collect();
-    let rms = (mono.iter().map(|x| x * x).sum::<f64>() / real(mono.len())).sqrt();
-    if rms < SILENT_RMS {
-        return None;
+/// The mean power spectrum of a segment's sounding frames, by FFT bin;
+/// `None` when every frame is silent.
+fn mean_spectrum(samples: &[[f32; 2]], window: &[f64]) -> Option<Vec<f64>> {
+    let mut sum = vec![0.0; FFT / 2];
+    let mut frames = 0_usize;
+    for frame in samples.as_chunks::<FFT>().0 {
+        let mono: Vec<f64> = frame
+            .iter()
+            .map(|s| f64::midpoint(f64::from(s[0]), f64::from(s[1])))
+            .collect();
+        let rms = (mono.iter().map(|x| x * x).sum::<f64>() / real(FFT)).sqrt();
+        if rms < SILENT_RMS {
+            continue;
+        }
+        let mut re: Vec<f64> = mono.iter().zip(window).map(|(x, w)| x * w).collect();
+        let mut im = vec![0.0; FFT];
+        fft(&mut re, &mut im);
+        for (k, power) in sum.iter_mut().enumerate() {
+            *power += re[k] * re[k] + im[k] * im[k];
+        }
+        frames += 1;
     }
-    let mut re: Vec<f64> = mono.iter().zip(window).map(|(x, w)| x * w).collect();
-    let mut im = vec![0.0; FFT];
-    fft(&mut re, &mut im);
-    let bands: Vec<f64> = (0..FFT / 2)
-        .map(|k| re[k] * re[k] + im[k] * im[k])
-        .collect::<Vec<_>>()
+    (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
+}
+
+/// The top of the highest band above [`WALL_MIN_HZ`] that stands
+/// [`WALL_DB`] above every band past [`WALL_GUARD`]; half the sample rate
+/// when none does.
+fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
+    let hz = |bands: usize| real(bands * BAND_BINS) * f64::from(sample_rate) / real(FFT);
+    let levels: Vec<f64> = spectrum
         .chunks(BAND_BINS)
-        .map(|c| c.iter().sum())
+        .map(|c| 10.0 * (c.iter().sum::<f64>() + f64::MIN_POSITIVE).log10())
         .collect();
-    let peak = bands.iter().copied().fold(0.0, f64::max);
-    let floor = peak * 10_f64.powf(-CUTOFF_DB / 10.0);
-    let top = bands.iter().rposition(|e| *e >= floor)?;
-    Some(real((top + 1) * BAND_BINS) * f64::from(sample_rate) / real(FFT))
+    let mut above = vec![f64::NEG_INFINITY; levels.len() + 1];
+    for b in (0..levels.len()).rev() {
+        above[b] = above[b + 1].max(levels[b]);
+    }
+    (0..levels.len().saturating_sub(WALL_GUARD + 1))
+        .rev()
+        .take_while(|b| hz(b + 1) >= WALL_MIN_HZ)
+        .find(|b| levels[*b] - above[b + WALL_GUARD + 1] >= WALL_DB)
+        .map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
 }
 
 /// An in-place radix-2 FFT; `re.len()` must be a power of two.
@@ -651,28 +810,39 @@ mod tests {
 
     /// Noise lowpassed at `cutoff` by zeroing its spectrum, frame by frame.
     fn lowpassed(n: usize, cutoff: f64, rate: f64) -> Vec<f64> {
+        shaped(n, rate, |f| if f > cutoff { 0.0 } else { 1.0 })
+    }
+
+    /// Noise with each frequency scaled by `gain`, frame by frame.
+    fn shaped(n: usize, rate: f64, gain: impl Fn(f64) -> f64) -> Vec<f64> {
+        filtered(&noise(n, 3), rate, gain)
+            .into_iter()
+            .map(|v| v * 0.3)
+            .collect()
+    }
+
+    /// `signal` with each frequency scaled by `gain`, frame by frame.
+    fn filtered(signal: &[f64], rate: f64, gain: impl Fn(f64) -> f64) -> Vec<f64> {
         let mut out = Vec::new();
-        for (i, chunk) in noise(n, 3).chunks(FFT).enumerate() {
+        for (i, chunk) in signal.chunks(FFT).enumerate() {
             let mut re = chunk.to_vec();
             re.resize(FFT, 0.0);
             let mut im = vec![0.0; FFT];
             fft(&mut re, &mut im);
             for k in 0..FFT {
-                let f = real(k.min(FFT - k)) * rate / real(FFT);
-                if f > cutoff {
-                    re[k] = 0.0;
-                    im[k] = 0.0;
-                }
+                let g = gain(real(k.min(FFT - k)) * rate / real(FFT));
+                re[k] *= g;
+                im[k] *= g;
             }
             // An inverse FFT is the forward one on the conjugate.
             for v in &mut im {
                 *v = -*v;
             }
             fft(&mut re, &mut im);
-            out.extend(re.iter().map(|v| v / real(FFT) * 0.3));
+            out.extend(re.iter().map(|v| v / real(FFT)));
             let _ = i;
         }
-        out.truncate(n);
+        out.truncate(signal.len());
         out
     }
 
@@ -697,9 +867,32 @@ mod tests {
     }
 
     #[test]
+    fn treble_fading_into_the_noise_floor_is_no_lowpass() {
+        let rate = 48_000.0;
+        // 6 dB per kHz above 2 kHz, down to a floor 80 dB below.
+        let fade = |f: f64| 10_f64.powf(-((f - 2000.0).max(0.0) * 0.0003).min(4.0));
+        let natural = shaped(FFT * 40, rate, fade);
+        let q = audio(&[stereo(&natural, &natural)], 48_000).unwrap();
+        assert!(q.bandwidth_hz >= 24_000.0, "{q:?}");
+        let encoded = shaped(FFT * 40, rate, |f| if f > 16_000.0 { 0.0 } else { fade(f) });
+        let q = audio(&[stereo(&encoded, &encoded)], 48_000).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+    }
+
+    #[test]
     fn mono_in_two_channels_is_not_stereo() {
         let n = noise(FFT * 4, 1);
         assert!(!audio(&[stereo(&n, &n)], 48_000).unwrap().is_stereo());
+        let quieter: Vec<f64> = n.iter().map(|v| v * 0.89).collect();
+        assert!(!audio(&[stereo(&n, &quieter)], 48_000).unwrap().is_stereo());
+        let late: Vec<f64> = std::iter::repeat_n(0.0, 3)
+            .chain(n.iter().copied())
+            .collect();
+        assert!(!audio(&[stereo(&n, &late)], 48_000).unwrap().is_stereo());
+        let far: Vec<f64> = std::iter::repeat_n(0.0, 200)
+            .chain(n.iter().copied())
+            .collect();
+        assert!(audio(&[stereo(&n, &far)], 48_000).unwrap().is_stereo());
         assert!(
             audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000)
                 .unwrap()
@@ -715,13 +908,45 @@ mod tests {
         let q = audio(&[stereo(&sine, &sine)], 48_000).unwrap();
         assert!(q.clipping > 0.1, "{q:?}");
         assert_eq!(q.clipping_bucket(), 2);
-        let quiet: Vec<f64> = sine.iter().map(|v| v * 0.5).collect();
+        let turned_down: Vec<f64> = sine.iter().map(|v| v * 0.89).collect();
+        let q = audio(&[stereo(&turned_down, &turned_down)], 48_000).unwrap();
+        assert_eq!(q.clipping_bucket(), 2, "{q:?}");
+        let clean: Vec<f64> = (0..FFT * 4).map(|i| 0.8 * (real(i) * 0.05).sin()).collect();
         assert_eq!(
-            audio(&[stereo(&quiet, &quiet)], 48_000)
+            audio(&[stereo(&clean, &clean)], 48_000)
                 .unwrap()
                 .clipping_bucket(),
             0
         );
+    }
+
+    #[test]
+    fn clipping_smeared_by_a_codec_is_flagged() {
+        let rate = 48_000.0;
+        let music = shaped(FFT * 40, rate, |f| if f > 8000.0 { 0.0 } else { 1.0 });
+        let peak = music.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        // Clipped at full scale with 4 dB to spare, then lowpassed as an
+        // encoder would, which rounds the flat tops and rings past them.
+        let clipped: Vec<f64> = music
+            .iter()
+            .map(|v| (v / peak * 1.6).clamp(-1.0, 1.0))
+            .collect();
+        let smeared = filtered(&clipped, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
+        let q = audio(&[stereo(&smeared, &smeared)], 48_000).unwrap();
+        assert!(q.clipping_bucket() >= 1, "{q:?}");
+        let hot: Vec<f64> = music.iter().map(|v| v / peak * 0.99).collect();
+        let hot = filtered(&hot, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
+        let q = audio(&[stereo(&hot, &hot)], 48_000).unwrap();
+        assert_eq!(q.clipping_bucket(), 0, "{q:?}");
+    }
+
+    #[test]
+    fn a_full_scale_tone_is_no_pile_up() {
+        let tone: Vec<f64> = (0..FFT * 8)
+            .map(|i| 0.97 * (real(i) * 0.05).sin())
+            .collect();
+        let q = audio(&[stereo(&tone, &tone)], 48_000).unwrap();
+        assert_eq!(q.clipping_bucket(), 0, "{q:?}");
     }
 
     #[test]

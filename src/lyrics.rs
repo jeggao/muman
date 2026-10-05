@@ -237,16 +237,18 @@ pub fn timing(text: &str) -> Option<Timing> {
 }
 
 /// LRC timed for another cut of the recording: every `[mm:ss.xx]` tag
-/// moved `offset_ms` earlier. A line that would start before the track
-/// does is dropped; untimed lines are kept.
+/// moved `offset_ms` earlier, then shortened by `stretch_ppm` parts per
+/// million for a cut that plays the recording that much longer. A line
+/// that would start before the track does is dropped; untimed lines are
+/// kept.
 #[must_use]
-pub fn shift_lrc(text: &str, offset_ms: i64) -> String {
+pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
     let mut out = String::new();
     for line in text.lines() {
         let mut rest = line;
         let mut times = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(ms - offset_ms);
+            times.push(unstretch(ms - offset_ms, stretch_ppm));
             rest = after;
         }
         if !times.is_empty() {
@@ -272,6 +274,15 @@ pub fn shift_lrc(text: &str, offset_ms: i64) -> String {
 
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
+/// `ms` played `stretch_ppm` parts per million longer, brought back.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
+    if stretch_ppm == 0 {
+        return ms;
+    }
+    (ms as f64 / (1.0 + stretch_ppm as f64 / 1e6)).round() as i64
+}
+
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
     let (tag, after) = s.split_once(']')?;
     let (min, sec) = tag.split_once(':')?;
@@ -468,7 +479,7 @@ mod tests {
     fn lrc_moves_earlier_by_the_offset() {
         let lrc = "[00:01.85](intro)\n[00:05.45]line\n[01:02.300][01:10.00]twice\n[ar:x]\n";
         assert_eq!(
-            shift_lrc(lrc, 920),
+            shift_lrc(lrc, 920, 0),
             "[00:00.93](intro)\n[00:04.53]line\n[01:01.38][01:09.08]twice\n[ar:x]\n"
         );
     }
@@ -476,14 +487,16 @@ mod tests {
     #[test]
     fn a_line_before_the_track_starts_is_dropped() {
         assert_eq!(
-            shift_lrc("[00:00.50]gone\n[00:02.00]kept\n", 1000),
+            shift_lrc("[00:00.50]gone\n[00:02.00]kept\n", 1000, 0),
             "[00:01.00]kept\n"
         );
     }
 
     #[test]
     fn a_later_track_moves_lines_later() {
-        assert_eq!(shift_lrc("[00:59.99]x\n", -20), "[01:00.01]x\n");
+        assert_eq!(shift_lrc("[00:59.99]x\n", -20, 0), "[01:00.01]x\n");
+        // A cut 0.1% slow plays the line at 200.2 s where the track does at 200 s.
+        assert_eq!(shift_lrc("[03:20.20]x\n", 0, 1000), "[03:20.00]x\n");
     }
 
     #[test]

@@ -170,12 +170,15 @@ not be taken ranks last.
 
 **Audio.** Sound beyond the song is how long a source plays outside the
 stretch it shares with another source of the song: a music video's
-intro counts, silence does not. Bandwidth is the highest frequency
-really present, so a FLAC transcoded from a lossy file measures as
-narrow as that file. Real stereo tells stereo from mono copied into two
-channels; clipping is the share of samples stuck at full scale. Opus and
-FLAC are copied; another lossless codec is encoded to FLAC, another
-lossy one to Opus at the bitrate `[audio]` sets.
+intro counts, silence does not. Bandwidth is where a lowpass cuts the
+sound off, so a FLAC transcoded from a lossy file measures as narrow as
+that file, while a recording whose treble fades on its own measures
+full. Real stereo tells stereo from mono copied into two channels, even
+at different levels or a few samples apart; clipping is the share of
+samples stuck at full scale or at the audio's own peak, or piled up just
+under full scale where a lossy encoder smeared them. Opus and FLAC are
+copied; another lossless codec is encoded to FLAC, another lossy one to
+Opus at the bitrate `[audio]` sets.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -184,7 +187,8 @@ detail, so an upscale measures the size it was made from.
 
 **Lyrics.** Only subtitles a person wrote count; generated captions
 never do. Lyrics from a source other than the chosen audio must be the
-same recording, and are shifted by the offset measured between the two.
+same recording, and are shifted by the offset measured between the two,
+and stretched when one plays a little faster than the other.
 Cues such as `[Music]`, symbol-only lines and credits are dropped. A
 `.lrc` with no audio of its own is taken as timed for the song; one that
 states its length, as LRCLIB's do, is trusted as far as that length
@@ -218,9 +222,10 @@ names the song, its artists and album, with the square art the upload
 lacks. Before fetching, `add` searches YouTube Music's songs for each
 new video. A candidate must carry its track name in the upload's title,
 an artist in the upload's channel or title, and a length close to the
-upload's. The two recordings are then aligned at one offset; they are
-one recording when they correlate at 0.8 or more and at least 80% of
-their windows agree. The same comparison measures sound beyond the song.
+upload's. The two recordings are then aligned at one offset, or along a
+line when one plays up to 1% faster; they are one recording when they
+correlate at 0.8 or more and at least 80% of their windows agree. The
+same comparison measures sound beyond the song.
 
 When the two are one recording, both become the song's sources and each
 aspect is picked by its measures. Otherwise only the release is listed

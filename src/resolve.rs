@@ -116,6 +116,11 @@ pub struct LyricsRef {
     pub at: LyricsAt,
     /// How much earlier the lines are moved.
     pub shift_ms: i64,
+    /// How much longer the lyrics' source plays the recording, in parts per
+    /// million; the lines' times, once moved, are shortened by it. The hand
+    /// correction in the shift is shortened too, by a millisecond or two.
+    #[serde(default)]
+    pub stretch_ppm: i64,
     pub placement: LyricsPlacement,
 }
 
@@ -429,12 +434,12 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         }
         // The audio's own lyrics, and a file of lyrics with no audio to
         // compare, are taken as timed for it.
-        let (confidence, offset) = if key == audio || facts.audio.is_none() {
-            (1.0, 0)
+        let (confidence, offset, stretch_ppm) = if key == audio || facts.audio.is_none() {
+            (1.0, 0, 0)
         } else {
             match input.aligned(key, audio) {
-                Some(a) if a.fits() || pin.is_some() => (a.score, a.offset_ms),
-                None if pin.is_some() => (0.0, 0),
+                Some(a) if a.fits() || pin.is_some() => (a.score, a.offset_ms, a.stretch_ppm),
+                None if pin.is_some() => (0.0, 0, 0),
                 _ => continue,
             }
         };
@@ -492,6 +497,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     rev: facts.rev.clone(),
                     at: l.at.clone(),
                     shift_ms: offset - input.song.lyrics_offset_ms,
+                    stretch_ppm,
                     placement: input.placement,
                 },
                 why,

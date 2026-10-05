@@ -14,6 +14,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   overlay and a development shell, and `nix-build` works without
   flakes.
 
+### Changed
+
+- **Audio measured against real recordings.** Bandwidth is where a
+  lowpass cuts the sound off, so a dark or quiet lossless recording no
+  longer ranks below its own lossy copies; mono copied into channels at
+  different levels or a few samples apart counts as mono; audio clipped
+  and then turned down, or clipped and then lossy-encoded, counts as
+  clipped. Sources are measured again on the next `sync`.
+- **Copies a little fast or slow.** An upload that plays up to 1% faster
+  or slower than its release is still the same recording, and its lyrics
+  are moved and stretched to fit. Sources are compared again on the next
+  `sync`.
+
 ## [0.1.0] - 2026-10-05
 
 ### Added

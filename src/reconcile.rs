@@ -230,6 +230,7 @@ fn compare<R: Runner, W: Write>(
         let (ea, eb) = (envelopes.get(a)?, envelopes.get(b)?);
         let found = align::align(ea, eb).unwrap_or(align::Alignment {
             offset_ms: 0,
+            stretch_ppm: 0,
             score: 0.0,
             coverage: 0.0,
         });
@@ -240,11 +241,12 @@ fn compare<R: Runner, W: Write>(
             method: align::METHOD.to_string(),
             revs: revs.clone(),
             offset_ms: found.offset_ms,
+            stretch_ppm: found.stretch_ppm,
             score: found.score,
             coverage: found.coverage,
             a_ms: ms(ea),
             b_ms: ms(eb),
-            a_extra_ms: align::audible_outside(ea, eb.len(), found.offset_ms),
+            a_extra_ms: align::audible_outside(ea, eb.len(), &found),
         })
     });
     for aligned in compared.into_iter().flatten() {
