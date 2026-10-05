@@ -171,6 +171,7 @@ pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Resul
                     .and_then(|()| measure_image(&out)),
             });
         }
+        Kind::Tags => facts.tags = tags::from_record(&crate::musicbrainz::read(&located.path)?),
         Kind::Media => media(runner, located, scratch, &mut facts)?,
     }
     Ok(facts)
@@ -179,8 +180,13 @@ pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Resul
 /// The tags of one located source, read again: a media file's are
 /// probed, its pictures not dumped nor anything measured.
 pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<(Offers, bool)> {
-    if located.kind != Kind::Media {
-        return Ok((Offers::new(), false));
+    match located.kind {
+        Kind::Media => {}
+        Kind::Tags => {
+            let record = crate::musicbrainz::read(&located.path)?;
+            return Ok((tags::from_record(&record), false));
+        }
+        Kind::Lyrics | Kind::Image => return Ok((Offers::new(), false)),
     }
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;

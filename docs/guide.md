@@ -22,6 +22,7 @@ holds only what muman renders from it.
 | `sources/yt-dlp/<handle>/<title> [<id>].mkv` | What yt-dlp fetched, video, subtitles and metadata in one file |
 | `sources/manual/` | Files you dropped in, at any depth, with lyrics and pictures beside them |
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
+| `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -81,12 +82,16 @@ genre = ""
 
 A song has no ID of its own: it is its sources, and any of its keys
 names it. A key is `youtube:<id>` for a video, `lrclib:<id>` for LRCLIB
-lyrics, or `manual:<path>` for a file under `sources/manual`.
+lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
+`manual:<path>` for a file under `sources/manual`.
 `[song.tags]` takes `title`, `artist`, `album`, `album_artist`, `genre`,
-`date` (or `year`), `track`, `disc`, or any Vorbis comment name; a list
-sets a tag several times. `add --artist`, `--album` and the other tag
-flags set these on every song an `add` lists. `muman status` shows each
-tag's value and the source it came from.
+`date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
+`release_country`, the MusicBrainz IDs under Picard's names
+(`musicbrainz_trackid`, `musicbrainz_albumid` and the like), or any
+other Vorbis comment name; a list sets a tag several times. `add
+--artist`, `--album` and the other tag flags set these on every song an
+`add` lists. `muman status` shows each tag's value and the source it
+came from.
 
 The file also holds the settings tables of
 [configuration](configuration.md), `[clean.*]` ([cleaning](#cleaning)),
@@ -102,9 +107,11 @@ deleting the table by hand lets it back.
 
 ## Sources
 
-A source is a video yt-dlp fetched, a file of your own, or lyrics from
+A source is a video yt-dlp fetched, a file of your own, lyrics from
 [LRCLIB](https://lrclib.net), a free lyrics database that songs without
-timed lyrics [look up](#lookups-and-providers).
+timed lyrics [look up](#lookups-and-providers), or tags from
+[MusicBrainz](https://musicbrainz.org), the open music encyclopedia,
+which songs on no album look up.
 
 ### yt-dlp
 
@@ -205,9 +212,17 @@ states its length, as LRCLIB's do, is trusted as far as that length
 agrees with the chosen audio's. Whether lyrics go beside the song,
 inside it or both is a `[library]` setting.
 
-**Tags.** The album, album artist, track, disc and date come together
-from the one source whose album ranks best, so an album never splits
-across folders; a song on no album is a single named for its title.
+**Tags.** Each field describes the recording or the release. The
+recording's, title, artist, genre, ISRC and the recording's and artists'
+MusicBrainz IDs, each come from whichever source offers it best. The
+release's, album, album artist, track, disc, date, totals, country and
+the release's MusicBrainz IDs, come together from the one source whose
+album ranks best, so an album never splits across folders and one
+release's IDs never mix with another's; a song on no album is a single
+named for its title. A file's own tags offer every field by its Vorbis
+name or the name Picard gives it in MP3 and MP4, and a track written
+`3/12` offers its total too. Fields with no tag of their own in MP3 or
+MP4 are written as Picard writes them there.
 
 ### Cleaning
 
@@ -258,22 +273,25 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube` | A video that is not a release | Searching YouTube for the artist and title: the first video with a person's subtitles that is the same recording, the artist's channel first |
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
+| `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
 
 A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
-`no-lyrics` or `no-timed-lyrics`. The built-in triggers:
+`no-lyrics`, `no-timed-lyrics` or `no-album` (neither a source nor the
+song list names an album). The built-in triggers:
 
 | From | Finds | When |
 |---|---|---|
 | `youtube` | `youtube-music` | `always` |
 | `youtube-music` | `youtube` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `lrclib` | `no-timed-lyrics` |
+| `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 
 Any `[[trigger]]` in the song list replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck_days` (how long a lookup that found nothing waits),
-`per_run` (the most one run makes, `0` for no limit), and for `lrclib`,
-`url`, another LRCLIB server:
+`per_run` (the most one run makes, `0` for no limit), and for `lrclib`
+and `musicbrainz`, `url`, another server, such as a mirror:
 
 ```toml
 [[trigger]]
@@ -297,7 +315,25 @@ trigger the next, as an upload's release then finds the release's
 lyrics. An LRCLIB record fits when its length is within 2 s of the
 song's and its names hold the song's; a timed record wins, then the
 closest in length. A song without a title, an artist or a measured
-length looks nothing up on LRCLIB.
+length looks nothing up on LRCLIB or MusicBrainz.
+
+A MusicBrainz recording fits when it is no video, its length is within
+3 s of the song's and its names hold the song's. Releases rank by the
+song's own album if it has one, then a release that is no compilation,
+live album or soundtrack, an official one, an album before an EP before
+a single. Of the recordings that fit, the one on the best release wins,
+then the one on the most releases, which tells a famous song's original
+from its remixes and live takes; of its releases, the best ranked, then
+the earliest. Its tags
+are ranked with every other source's, as [tags](#how-the-best-of-each-is-picked)
+are: a value it agrees on with another source wins over one alone. To
+look every song up, write the built-in triggers out with `when =
+"always"` for `musicbrainz`.
+
+muman asks MusicBrainz at most once a second, as MusicBrainz asks of
+every client, whatever `concurrency` says; when it answers that requests
+come too fast, muman waits 2 s, doubling, and asks again up to three
+times. Each request names muman and its repository in its user agent.
 
 ## Choosing songs and changing them
 

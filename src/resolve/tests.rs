@@ -633,6 +633,48 @@ fn an_album_never_splits_across_sources() {
 }
 
 #[test]
+fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
+    let (a, mb) = (
+        manual("a.flac"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+    );
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Album, &["Record"], true);
+    tag(&mut fa, Field::Isrc, &["XX0000000001"], true);
+    let mut fmb = Facts::unreadable("mb".into());
+    tag(&mut fmb, Field::Album, &["Record (Deluxe)"], true);
+    tag(
+        &mut fmb,
+        Field::MusicBrainzAlbumId,
+        &["00000000-0000-0000-0000-00000000000a"],
+        true,
+    );
+    tag(
+        &mut fmb,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000001"],
+        true,
+    );
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb)]);
+    let r = run(&song(&[a, mb.clone()]), &facts, &[]);
+    let get = |k: &str| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(t, _)| t == k)
+            .map(|(_, v)| v.join("|"))
+    };
+    assert_eq!(get("ALBUM").as_deref(), Some("Record"));
+    assert_eq!(
+        get("MUSICBRAINZ_ALBUMID"),
+        None,
+        "another release's ID never joins the album"
+    );
+    assert_eq!(why(&r, "MUSICBRAINZ_TRACKID").from, mb.to_string());
+    assert_eq!(get("ISRC").as_deref(), Some("XX0000000001"));
+}
+
+#[test]
 fn formats_follow_the_winning_codec() {
     let opus = |kbps| Format::Encode {
         codec: Codec::Opus,

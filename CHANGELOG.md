@@ -7,6 +7,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-05
+
+### Added
+
+- **Tags from MusicBrainz.** A song no source names an album for looks
+  its recording up on MusicBrainz by title, artist and length, and gains
+  its title, artists, album, album artist, track, disc, date, track
+  total, release country, ISRCs and MusicBrainz IDs, ranked with every
+  other source's tags. Of the recordings that fit, the one on an official
+  album and on the most releases wins, and of its releases the song's own
+  album, then the earliest official album that is no compilation.
+  `[providers.musicbrainz]` sets it like any provider, `url` a mirror,
+  and the `no-album` condition triggers it.
+- **More tags.** Track and disc totals, the ISRC, the release country
+  and the MusicBrainz recording, track, release, release group, artist
+  and album artist IDs are tags of their own, under Picard's names: read
+  from a file's tags, set in `[song.tags]`, and written to every format.
+  The release's come with the album, from one source. Sources' tags are
+  read again on the next `sync`, and a song whose file tags offer any of
+  these is written again.
+- **Polite to MusicBrainz.** Requests go at most one a second across a
+  whole run, back off and ask again when MusicBrainz says they come too
+  fast, and name muman and its repository in the user agent.
+
 ## [0.1.1] - 2026-10-05
 
 ### Added
@@ -83,6 +107,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/jeggao/muman/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jeggao/muman/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jeggao/muman/releases/tag/v0.1.0

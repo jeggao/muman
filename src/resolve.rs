@@ -16,7 +16,7 @@
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so an album never
-//!   splits.
+//!   splits. Each field's [`tags::Scope`] says which it is.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -42,12 +42,14 @@
 //! timed lines win over untimed or missing ones. A `.lrc` that states no
 //! length is taken as timed for the song.
 //!
-//! The release fields, album, album artist, track, disc and date, come
-//! from the one source whose album ranks best, so an album's tracks never
-//! split across folders; with none, the song is a single named for its
-//! final title. The album artist is one a source names, else the first
-//! credited artist as finally set, a hand-set one included, never the
-//! joined `ARTIST`.
+//! The release fields, album, album artist, track, disc, date, totals,
+//! country and release IDs, come from the one source whose album ranks
+//! best, so an album's tracks never split across folders and a release's
+//! MusicBrainz IDs never mix with another's; with none, the song is a
+//! single named for its final title, without release fields but a date.
+//! The album artist is one a source names, else the first credited
+//! artist as finally set, a hand-set one included, never the joined
+//! `ARTIST`.
 //!
 //! A plan is stored whole and compared whole, which is how a song renders
 //! again exactly when its sources' revisions, the picks, the tags or the
@@ -70,7 +72,7 @@ use crate::quality::{ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Quality};
 use crate::source::SourceKey;
 use crate::state::Aligned;
-use crate::tags::{self, Field, Offer};
+use crate::tags::{self, Field, Offer, Scope};
 
 /// Bumped whenever the bytes a plan renders to change, so every song is
 /// rendered again.
@@ -757,7 +759,7 @@ type Comments = Vec<(String, Vec<String>)>;
 fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
-    for field in [Field::Title, Field::Artist, Field::Genre] {
+    for field in Field::of(Scope::Recording) {
         if let Some(c) = best_offer(&candidates, field, None) {
             fields.insert(field, Slot::of(c));
         }
@@ -766,7 +768,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
     let release = best_offer(&candidates, Field::Album, None).filter(|c| c.offer.structured);
     match release {
         Some(album) => {
-            for field in Field::RELEASE {
+            for field in Field::of(Scope::Release) {
                 if let Some(c) = best_offer(&candidates, field, Some(album.key)) {
                     fields.insert(field, Slot::of(c));
                 }

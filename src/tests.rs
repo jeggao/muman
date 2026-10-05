@@ -44,6 +44,7 @@ impl Setup {
     fn job(&self, args: &[&str]) -> Job {
         let mut job = Job::from_cli(cli(args), defaults(self.dir.path()));
         job.settling = std::time::Duration::ZERO;
+        job.throttle = crate::http::Throttle::none();
         job.dirs = Dirs {
             home: self.dir.path().join("home"),
             library: self.dir.path().join("lib"),
@@ -450,6 +451,115 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     assert!(
         s.dir.path().join("home/sources/lrclib/7.lrc").exists(),
         "{text}"
+    );
+}
+
+const MBID: &str = "00000000-0000-4000-8000-000000000001";
+
+/// A recording of `Song` by `Artist` on the album `Glass Orchards`, as a
+/// search (`track`) or a lookup (`tracks`) lists its track.
+fn recording(tracks: &str) -> String {
+    format!(
+        r#"{{"id": "{MBID}", "score": 100, "title": "Song", "length": 200400,
+            "artist-credit": [{{"name": "Artist"}}],
+            "releases": [{{"id": "00000000-0000-4000-8000-00000000000a", "title": "Glass Orchards",
+                "status": "Official", "date": "2011-03-04", "artist-credit": [{{"name": "Artist"}}],
+                "release-group": {{"primary-type": "Album", "secondary-types": []}},
+                "media": [{{"position": 1, "track-offset": 3, "{tracks}": [{{"number": "4"}}]}}]}}]}}"#
+    )
+}
+
+#[test]
+fn a_song_on_no_album_finds_its_album_on_musicbrainz_once() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let fake = Fake::default().probe(".flac", &FLAC.replace(r#""ALBUM": "Record", "#, ""));
+    let search = format!(r#"{{"recordings": [{}]}}"#, recording("track"));
+    let run = |server: &Server| {
+        let mut out = Vec::new();
+        let ok = run_with(
+            &s.job(&["sync"]),
+            &fake,
+            server,
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let server = Server::default().answer("/ws/2/recording?query=", &search);
+    let (ok, text) = run(&server);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(&format!(
+            "tags from MusicBrainz, musicbrainz:{MBID}, on Glass Orchards"
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        s.songs(),
+        [vec![
+            SourceKey::Manual("a.flac".into()),
+            SourceKey::parse(&format!("musicbrainz:{MBID}")).unwrap()
+        ]]
+    );
+    assert!(
+        s.dir
+            .path()
+            .join("lib/Artist/Glass Orchards/04 Song.flac")
+            .exists(),
+        "{text}"
+    );
+
+    let again = Server::default();
+    let (ok, text) = run(&again);
+    assert!(ok, "{text}");
+    assert!(
+        !again
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/ws/2/")),
+        "found once, not asked again"
+    );
+
+    let kept = s
+        .dir
+        .path()
+        .join(format!("home/sources/musicbrainz/{MBID}.json"));
+    std::fs::remove_file(&kept).unwrap();
+    let refetch =
+        Server::default().answer(&format!("/ws/2/recording/{MBID}?"), &recording("tracks"));
+    let (ok, text) = run(&refetch);
+    assert!(ok, "{text}");
+    assert!(kept.exists(), "{text}");
+    assert!(
+        s.dir
+            .path()
+            .join("lib/Artist/Glass Orchards/04 Song.flac")
+            .exists(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let server = Server::default();
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        !server
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/ws/2/")),
+        "{:?}",
+        server.asked
     );
 }
 

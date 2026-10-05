@@ -60,8 +60,9 @@ const HEADER: &str = "\
 # changed song and deletes the library copy of anything no longer listed.
 #
 #   sources:  every file the song may be made from, as `youtube:<id>`,
-#             `lrclib:<id>` or `manual:<path>` under sources/manual. muman
-#             picks the best audio, cover, lyrics and tags by measuring each.
+#             `lrclib:<id>`, `musicbrainz:<id>` or `manual:<path>` under
+#             sources/manual. muman picks the best audio, cover, lyrics and
+#             tags by measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset_ms moves them later.
 #   Tags:     fill in [song.tags]; an empty value keeps what the sources
@@ -74,7 +75,8 @@ const HEADER: &str = "\
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
 #             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck_days, per_run and lrclib's url.
+#             enabled, concurrency, recheck_days, per_run, and the url
+#             of lrclib and musicbrainz.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
 #   Settings: [library], [audio], [ytdlp] and [history] lay out and name

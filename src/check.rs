@@ -147,8 +147,7 @@ pub fn check<R: Runner, W: Write>(
     let listed = manifest.keys();
     for key in &listed {
         if !store.has(key) {
-            let fetchable = key.url().is_some()
-                || matches!(key, crate::source::SourceKey::Remote { extractor, .. } if extractor == crate::provider::LRCLIB);
+            let fetchable = key.url().is_some() || crate::provider::is_kept(key);
             let how = if fetchable {
                 "`sync` fetches it again"
             } else {

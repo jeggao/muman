@@ -212,7 +212,8 @@ pub enum Command {
     Sync {
         /// Make every lookup now, whatever an earlier one found: an upload
         /// on YouTube Music for its track, a track on YouTube for an upload
-        /// with subtitles, a song on LRCLIB for its lyrics.
+        /// with subtitles, a song on LRCLIB for its lyrics, a song on
+        /// MusicBrainz for its album.
         #[arg(long)]
         rematch: bool,
 

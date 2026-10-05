@@ -34,6 +34,11 @@ impl Dirs {
     }
 
     #[must_use]
+    pub fn musicbrainz(&self) -> PathBuf {
+        self.home.join("sources").join("musicbrainz")
+    }
+
+    #[must_use]
     pub fn manual(&self) -> PathBuf {
         self.home.join("sources").join("manual")
     }

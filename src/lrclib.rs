@@ -139,18 +139,10 @@ impl std::fmt::Debug for Client<'_> {
     }
 }
 
-fn user_agent() -> String {
-    format!(
-        "muman/{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_REPOSITORY")
-    )
-}
-
 impl Client<'_> {
     fn get(&self, path: &str) -> Result<Option<String>> {
         let url = format!("{}{path}", self.base.trim_end_matches('/'));
-        let agent = user_agent();
+        let agent = crate::http::user_agent();
         match self
             .transport
             .get_json(&url, &[("User-Agent", agent.as_str())], TIMEOUT)

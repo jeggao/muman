@@ -1,6 +1,7 @@
 //! The sources on disk: what yt-dlp fetched, found by the ID in each
-//! file's name, and the manual folder, where a song's file brings the
-//! lyrics and pictures beside it.
+//! file's name, the records LRCLIB and MusicBrainz lookups kept, by
+//! theirs, and the manual folder, where a song's file brings the lyrics
+//! and pictures beside it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 use crate::dirs::Dirs;
-use crate::provider::LRCLIB;
+use crate::provider::{LRCLIB, MUSICBRAINZ};
 use crate::source::{SourceKey, id_of};
 
 /// A manual file this recent may still be copying in.
@@ -29,6 +30,8 @@ pub enum Kind {
     Media,
     Lyrics,
     Image,
+    /// A MusicBrainz record, which offers tags alone.
+    Tags,
 }
 
 fn kind_of(path: &Path) -> Option<Kind> {
@@ -104,6 +107,8 @@ pub struct Store {
     fetched: HashMap<String, PathBuf>,
     /// LRCLIB's lyrics by record ID.
     lrclib: HashMap<String, PathBuf>,
+    /// MusicBrainz records by recording ID.
+    musicbrainz: HashMap<String, PathBuf>,
     /// Manual files by their path in the manual folder.
     manual: BTreeMap<PathBuf, Kind>,
 }
@@ -139,6 +144,15 @@ impl Store {
                 store.lrclib.insert(id.to_string(), file.clone());
             }
         }
+        for file in walk(&dirs.musicbrainz(), 1)? {
+            let json = file.extension().is_some_and(|e| e == "json");
+            if let Some(id) = file.file_stem().and_then(|s| s.to_str())
+                && json
+                && crate::musicbrainz::is_mbid(id)
+            {
+                store.musicbrainz.insert(id.to_string(), file.clone());
+            }
+        }
         let root = dirs.manual();
         for file in walk(&root, usize::MAX)? {
             if let (Some(kind), Ok(rel)) = (kind_of(&file), file.strip_prefix(&root)) {
@@ -154,6 +168,9 @@ impl Store {
             SourceKey::Remote { extractor, id } if extractor == LRCLIB => {
                 self.lrclib.contains_key(id)
             }
+            SourceKey::Remote { extractor, id } if extractor == MUSICBRAINZ => {
+                self.musicbrainz.contains_key(id)
+            }
             SourceKey::Remote { id, .. } => self.fetched.contains_key(id),
             SourceKey::Manual(rel) => self.manual.contains_key(rel),
         }
@@ -166,6 +183,13 @@ impl Store {
                 key: key.clone(),
                 path: self.lrclib.get(id)?.clone(),
                 kind: Kind::Lyrics,
+                lyrics: None,
+                covers: Vec::new(),
+            }),
+            SourceKey::Remote { extractor, id } if extractor == MUSICBRAINZ => Some(Located {
+                key: key.clone(),
+                path: self.musicbrainz.get(id)?.clone(),
+                kind: Kind::Tags,
                 lyrics: None,
                 covers: Vec::new(),
             }),
@@ -269,6 +293,7 @@ impl Store {
             .fetched
             .values()
             .chain(self.lrclib.values())
+            .chain(self.musicbrainz.values())
             .chain(
                 self.manual
                     .keys()
@@ -354,6 +379,20 @@ mod tests {
         );
         assert!(!store.has(&SourceKey::youtube("bbbbbbbbbbb")));
         assert!(!store.has(&SourceKey::youtube("ccccccccccc")));
+    }
+
+    #[test]
+    fn kept_records_are_found_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let id = "00000000-0000-0000-0000-000000000001";
+        let json = touch(dir.path(), &format!("sources/musicbrainz/{id}.json"));
+        touch(dir.path(), "sources/musicbrainz/not-an-id.json");
+        let store = Store::scan(&d).unwrap();
+        let key = SourceKey::parse(&format!("musicbrainz:{id}")).unwrap();
+        let located = store.locate(&key).unwrap();
+        assert_eq!((located.path, located.kind), (json, Kind::Tags));
+        assert!(!store.has(&SourceKey::parse("musicbrainz:not-an-id").unwrap()));
     }
 
     #[test]

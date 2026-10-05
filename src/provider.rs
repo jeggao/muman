@@ -32,14 +32,17 @@ pub enum Provider {
     YouTubeMusic,
     /// Lyrics from lrclib.net.
     Lrclib,
+    /// Tags from musicbrainz.org.
+    MusicBrainz,
 }
 
 impl Provider {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Manual,
         Self::YouTube,
         Self::YouTubeMusic,
         Self::Lrclib,
+        Self::MusicBrainz,
     ];
 
     #[must_use]
@@ -49,6 +52,7 @@ impl Provider {
             Self::YouTube => "youtube",
             Self::YouTubeMusic => "youtube-music",
             Self::Lrclib => "lrclib",
+            Self::MusicBrainz => "musicbrainz",
         }
     }
 
@@ -78,6 +82,7 @@ impl Provider {
                     Self::YouTube
                 }),
                 LRCLIB => Some(Self::Lrclib),
+                MUSICBRAINZ => Some(Self::MusicBrainz),
                 _ => None,
             },
         }
@@ -96,14 +101,27 @@ impl Provider {
             Self::Manual => (0, 1, 0),
             Self::YouTube | Self::YouTubeMusic => (14, 4, 50),
             Self::Lrclib => (7, 4, 300),
+            // Its requests go a second apart whatever runs them (`musicbrainz`).
+            Self::MusicBrainz => (30, 1, 200),
         };
         Settings {
             enabled: true,
             concurrency,
             recheck_days,
             per_run,
-            url: (self == Self::Lrclib).then(|| LRCLIB_URL.to_string()),
+            url: match self {
+                Self::Lrclib => Some(LRCLIB_URL.to_string()),
+                Self::MusicBrainz => Some(MUSICBRAINZ_URL.to_string()),
+                Self::Manual | Self::YouTube | Self::YouTubeMusic => None,
+            },
         }
+    }
+
+    /// Whether its sources are records muman keeps from a lookup, which
+    /// `sync` fetches again by ID when gone.
+    #[must_use]
+    pub fn kept(self) -> bool {
+        matches!(self, Self::Lrclib | Self::MusicBrainz)
     }
 }
 
@@ -116,6 +134,16 @@ impl fmt::Display for Provider {
 /// The extractor name LRCLIB's keys carry: `lrclib:<id>`.
 pub const LRCLIB: &str = "lrclib";
 const LRCLIB_URL: &str = "https://lrclib.net";
+/// The extractor name MusicBrainz's keys carry: `musicbrainz:<recording id>`.
+pub const MUSICBRAINZ: &str = "musicbrainz";
+const MUSICBRAINZ_URL: &str = "https://musicbrainz.org";
+
+/// Whether `key` is a record muman keeps from a lookup, as
+/// [`Provider::kept`] says.
+#[must_use]
+pub fn is_kept(key: &SourceKey) -> bool {
+    matches!(key, SourceKey::Remote { extractor, .. } if extractor == LRCLIB || extractor == MUSICBRAINZ)
+}
 
 /// One provider's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,7 +156,7 @@ pub struct Settings {
     /// Lookups one run makes at most, so a backlog drains over several
     /// runs rather than at once on a free service; 0 for no limit.
     pub per_run: usize,
-    /// Where an LRCLIB server answers.
+    /// Where an LRCLIB or a MusicBrainz server answers.
     pub url: Option<String>,
 }
 
@@ -140,6 +168,8 @@ pub enum When {
     NoLyrics,
     /// The song has no timed lyrics.
     NoTimedLyrics,
+    /// No source names the song's album, nor does the song list.
+    NoAlbum,
 }
 
 impl When {
@@ -148,7 +178,8 @@ impl When {
             "always" => Self::Always,
             "no-lyrics" => Self::NoLyrics,
             "no-timed-lyrics" => Self::NoTimedLyrics,
-            _ => bail!("`{name}` is no condition: always, no-lyrics, no-timed-lyrics"),
+            "no-album" => Self::NoAlbum,
+            _ => bail!("`{name}` is no condition: always, no-lyrics, no-timed-lyrics, no-album"),
         })
     }
 }
@@ -171,7 +202,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        use Provider::{Lrclib, Manual, YouTube, YouTubeMusic};
+        use Provider::{Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
         Self {
             providers: Provider::ALL
                 .into_iter()
@@ -192,6 +223,13 @@ impl Default for Config {
                     from: vec![Manual, YouTube, YouTubeMusic],
                     find: Lrclib,
                     when: When::NoTimedLyrics,
+                },
+                // A release or a tagged file offers what a record would, and at
+                // a request a second, 3600 songs looked up take an hour.
+                Trigger {
+                    from: vec![Manual, YouTube, YouTubeMusic],
+                    find: MusicBrainz,
+                    when: When::NoAlbum,
                 },
             ],
         }
@@ -248,7 +286,7 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
             }
             "recheck_days" => s.recheck_days = number()?,
             "per_run" => s.per_run = usize::try_from(number()?).unwrap_or(usize::MAX),
-            "url" if p == Provider::Lrclib => {
+            "url" if p.kept() => {
                 let url = item
                     .as_str()
                     .filter(|u| !u.trim().is_empty())
@@ -343,11 +381,13 @@ mod tests {
             .unwrap();
         assert!(lrclib.from.contains(&Provider::Manual));
         assert!(
-            !c.triggers
-                .iter()
-                .any(|t| t.from.contains(&Provider::Manual) && t.find != Provider::Lrclib),
+            !c.triggers.iter().any(|t| t.from.contains(&Provider::Manual)
+                && [Provider::YouTube, Provider::YouTubeMusic].contains(&t.find)),
             "a file of the user's own looks nothing up on YouTube"
         );
+        let mb = c.settings(Provider::MusicBrainz);
+        assert_eq!(mb.url.as_deref(), Some("https://musicbrainz.org"));
+        assert_eq!(mb.concurrency, 1);
     }
 
     #[test]
@@ -355,9 +395,14 @@ mod tests {
         let c = config(
             "[providers.lrclib]\nrecheck_days = 3\nurl = \"lrclib.example:8080\"\n\
              [providers.youtube-music]\nenabled = false\n\
+             [providers.musicbrainz]\nurl = \"https://mb.example/\"\n\
              [[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"no-lyrics\"\n",
         )
         .unwrap();
+        assert_eq!(
+            c.settings(Provider::MusicBrainz).url.as_deref(),
+            Some("https://mb.example")
+        );
         let l = c.settings(Provider::Lrclib);
         assert_eq!((l.recheck_days, l.concurrency, l.per_run), (3, 4, 300));
         assert_eq!(l.url.as_deref(), Some("http://lrclib.example:8080"));
@@ -370,6 +415,7 @@ mod tests {
     fn mistakes_are_refused() {
         assert!(config("[providers.spotify]\n").is_err());
         assert!(config("[providers.lrclib]\nrecheck = 3\n").is_err());
+        assert!(config("[providers.youtube]\nurl = \"yt.example\"\n").is_err());
         assert!(config("[[trigger]]\nfrom = \"youtube\"\nfind = \"manual\"\n").is_err());
         assert!(config("[[trigger]]\nfrom = \"manual\"\nfind = \"youtube-music\"\n").is_err());
         assert!(

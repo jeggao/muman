@@ -1,6 +1,6 @@
 [package]
 name = "muman"
-version = "0.1.1"
+version = "0.1.2"
 description = "Keep a music library in step with a song list, each song made from the best of its sources."
 edition = "2024"
 rust-version = "1.89"
