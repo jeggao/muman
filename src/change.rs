@@ -176,6 +176,14 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBu
                 .filter(|p| p.exists())
                 .collect()
         }
+        SourceKey::Remote { extractor, id } if extractor == crate::provider::MUSICBRAINZ => {
+            let path = crate::musicbrainz::path_of(&dirs.musicbrainz(), id);
+            if path.exists() {
+                vec![path]
+            } else {
+                Vec::new()
+            }
+        }
         SourceKey::Remote { id, .. } => crate::store::walk(&dirs.ytdlp(), 2)?
             .into_iter()
             .filter(|p| crate::source::id_of(p) == Some(id.as_str()))

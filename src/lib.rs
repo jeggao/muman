@@ -29,6 +29,7 @@ pub mod lrclib;
 pub mod lyrics;
 pub mod manifest;
 pub mod music;
+pub mod musicbrainz;
 pub mod naming;
 pub mod overview;
 pub mod parallel;
@@ -96,6 +97,8 @@ pub struct Job {
     /// How long a file dropped into the manual folder waits, so one still
     /// being copied in is not read half written.
     pub settling: Duration,
+    /// The pace of every request to MusicBrainz in the run.
+    pub throttle: http::Throttle,
 }
 
 impl Job {
@@ -109,6 +112,7 @@ impl Job {
             command: cli.command,
             verbose: cli.verbose,
             settling: store::SETTLING,
+            throttle: musicbrainz::throttle(),
             cache: defaults.cache,
             live: false,
         }
@@ -189,7 +193,7 @@ fn mode(m: Matching) -> Mode {
     }
 }
 
-/// Run one command, asking LRCLIB through `http`, writing what it lists
+/// Run one command, asking LRCLIB and MusicBrainz through `http`, writing what it lists
 /// to `data` and every message to `out`. Returns whether every step
 /// succeeded.
 #[allow(clippy::too_many_lines)]
@@ -415,7 +419,10 @@ fn look_up<R: Runner, W: Write>(
     out: &mut W,
 ) -> Result<bool> {
     let (ok, ()) = network(job, runner, out, |acquire| {
-        Ok((lookup::run(acquire, &job.dirs, http, force, declined)?, ()))
+        Ok((
+            lookup::run(acquire, &job.dirs, http, &job.throttle, force, declined)?,
+            (),
+        ))
     })?;
     Ok(ok)
 }
@@ -435,12 +442,12 @@ fn fetch_missing<R: Runner, W: Write>(
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
     })?;
-    let lyrics = lookup::refetch_lrclib(&job.dirs, manifest, http)?;
-    for (key, error) in &lyrics {
+    let records = lookup::refetch(&job.dirs, manifest, http, &job.throttle)?;
+    for (key, error) in &records {
         ok = false;
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
-    failed.extend(lyrics);
+    failed.extend(records);
     if !failed.is_empty() {
         for (key, error) in failed {
             state.record_failure(&key, state::Step::Fetch, None, error);

@@ -16,7 +16,6 @@ use crate::dirs::{Dirs, STATE};
 use crate::facts::Facts;
 use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
-use crate::provider::Provider;
 use crate::reconcile;
 use crate::resolve::{Resolved, SINGLE};
 use crate::source::SourceKey;
@@ -274,7 +273,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         unplanned.add(line.trim_start_matches("Failed: "));
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
-    for p in [Provider::YouTubeMusic, Provider::YouTube, Provider::Lrclib] {
+    for p in lookup::ORDER {
         let mut wanted = Group::default();
         let due = lookup::due(&c.manifest, &c.state, &c.planned, state::now_secs(), false);
         for d in due.iter().filter(|d| d.find == p) {

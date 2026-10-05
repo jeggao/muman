@@ -1137,6 +1137,7 @@ fn status<W: Write>(
         if let (Some(l), Some(why)) = (&r.plan.lyrics, &r.why.lyrics) {
             writeln!(out, "  lyrics  {}: {why}", l.key)?;
         }
+        let width = r.plan.tags.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
             let cleaned = if why.cleaned.is_empty() {
                 String::new()
@@ -1145,7 +1146,7 @@ fn status<W: Write>(
             };
             writeln!(
                 out,
-                "  {key:<12} {} ({}{cleaned})",
+                "  {key:<width$} {} ({}{cleaned})",
                 values.join("; "),
                 why.from
             )?;

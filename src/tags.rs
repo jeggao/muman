@@ -1,5 +1,6 @@
 //! The tags each source offers, and how much each offer is worth: a
-//! dedicated metadata field beats a value read off a video's title or
+//! dedicated metadata field, as a file's own tags, a release's info or a
+//! MusicBrainz record holds, beats a value read off a video's title or
 //! channel, and a value decorated with `(Official Video)` or `【MV】`
 //! is worth less than a plain one.
 
@@ -13,8 +14,24 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/3";
+pub const METHOD: &str = "tags/4";
 
+/// What a field describes, which decides where a song's value comes
+/// from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The recording: each field from whichever source offers it best.
+    Recording,
+    /// The release the song is on: every field from the one source whose
+    /// album ranks best, so an album never splits and its IDs never mix.
+    Release,
+}
+
+/// A tag muman knows: how sources offer it, how a song list names it,
+/// and where a song's value comes from. Adding a field is a variant and
+/// its row in each `match` below; reading it from a file's tags, ranking
+/// it and writing it follow. Picard's names are used where they differ,
+/// so a library tagged by muman and by Picard agrees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
@@ -26,10 +43,28 @@ pub enum Field {
     Disc,
     Date,
     Genre,
+    Isrc,
+    TrackTotal,
+    DiscTotal,
+    ReleaseCountry,
+    /// The recording's MBID, as Picard names it.
+    #[serde(rename = "musicbrainz_trackid")]
+    MusicBrainzTrackId,
+    #[serde(rename = "musicbrainz_releasetrackid")]
+    MusicBrainzReleaseTrackId,
+    #[serde(rename = "musicbrainz_albumid")]
+    MusicBrainzAlbumId,
+    #[serde(rename = "musicbrainz_releasegroupid")]
+    MusicBrainzReleaseGroupId,
+    #[serde(rename = "musicbrainz_artistid")]
+    MusicBrainzArtistId,
+    #[serde(rename = "musicbrainz_albumartistid")]
+    MusicBrainzAlbumArtistId,
 }
 
 impl Field {
-    pub const ALL: [Self; 8] = [
+    /// Every field, in the order written.
+    pub const ALL: [Self; 18] = [
         Self::Title,
         Self::Artist,
         Self::Album,
@@ -38,16 +73,16 @@ impl Field {
         Self::Disc,
         Self::Date,
         Self::Genre,
-    ];
-
-    /// The fields that describe the release a song is on, which come
-    /// from one source together so an album never splits.
-    pub const RELEASE: [Self; 5] = [
-        Self::Album,
-        Self::AlbumArtist,
-        Self::Track,
-        Self::Disc,
-        Self::Date,
+        Self::Isrc,
+        Self::TrackTotal,
+        Self::DiscTotal,
+        Self::ReleaseCountry,
+        Self::MusicBrainzTrackId,
+        Self::MusicBrainzReleaseTrackId,
+        Self::MusicBrainzAlbumId,
+        Self::MusicBrainzReleaseGroupId,
+        Self::MusicBrainzArtistId,
+        Self::MusicBrainzAlbumArtistId,
     ];
 
     /// The Vorbis comment field it is written as.
@@ -62,23 +97,92 @@ impl Field {
             Self::Disc => "DISCNUMBER",
             Self::Date => "DATE",
             Self::Genre => "GENRE",
+            Self::Isrc => "ISRC",
+            Self::TrackTotal => "TRACKTOTAL",
+            Self::DiscTotal => "DISCTOTAL",
+            Self::ReleaseCountry => "RELEASECOUNTRY",
+            Self::MusicBrainzTrackId => "MUSICBRAINZ_TRACKID",
+            Self::MusicBrainzReleaseTrackId => "MUSICBRAINZ_RELEASETRACKID",
+            Self::MusicBrainzAlbumId => "MUSICBRAINZ_ALBUMID",
+            Self::MusicBrainzReleaseGroupId => "MUSICBRAINZ_RELEASEGROUPID",
+            Self::MusicBrainzArtistId => "MUSICBRAINZ_ARTISTID",
+            Self::MusicBrainzAlbumArtistId => "MUSICBRAINZ_ALBUMARTISTID",
         }
     }
 
-    /// The field a song list's tag name sets, the common spellings
-    /// included.
+    /// Its other names, lower-cased: the common spellings a song list may
+    /// use, and the names ffprobe reports for MP3 and MP4 files.
+    fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::AlbumArtist => &["album_artist"],
+            Self::Track => &["track", "track_number"],
+            Self::Disc => &["disc", "disc_number"],
+            Self::Date => &["year"],
+            Self::Isrc => &["tsrc"],
+            Self::TrackTotal => &["track_total", "totaltracks"],
+            Self::DiscTotal => &["disc_total", "totaldiscs"],
+            Self::ReleaseCountry => &["release_country", "musicbrainz album release country"],
+            Self::MusicBrainzTrackId => &["musicbrainz track id"],
+            Self::MusicBrainzReleaseTrackId => &["musicbrainz release track id"],
+            Self::MusicBrainzAlbumId => &["musicbrainz album id"],
+            Self::MusicBrainzReleaseGroupId => &["musicbrainz release group id"],
+            Self::MusicBrainzArtistId => &["musicbrainz artist id"],
+            Self::MusicBrainzAlbumArtistId => &["musicbrainz album artist id"],
+            Self::Title | Self::Artist | Self::Album | Self::Genre => &[],
+        }
+    }
+
+    #[must_use]
+    pub fn scope(self) -> Scope {
+        match self {
+            Self::Title
+            | Self::Artist
+            | Self::Genre
+            | Self::Isrc
+            | Self::MusicBrainzTrackId
+            | Self::MusicBrainzArtistId => Scope::Recording,
+            Self::Album
+            | Self::AlbumArtist
+            | Self::Track
+            | Self::Disc
+            | Self::Date
+            | Self::TrackTotal
+            | Self::DiscTotal
+            | Self::ReleaseCountry
+            | Self::MusicBrainzReleaseTrackId
+            | Self::MusicBrainzAlbumId
+            | Self::MusicBrainzReleaseGroupId
+            | Self::MusicBrainzAlbumArtistId => Scope::Release,
+        }
+    }
+
+    /// Whether its values are identifiers, several to a value in a file
+    /// that joins them, and never cleaned.
+    #[must_use]
+    pub fn is_id(self) -> bool {
+        matches!(
+            self,
+            Self::MusicBrainzTrackId
+                | Self::MusicBrainzReleaseTrackId
+                | Self::MusicBrainzAlbumId
+                | Self::MusicBrainzReleaseGroupId
+                | Self::MusicBrainzArtistId
+                | Self::MusicBrainzAlbumArtistId
+        )
+    }
+
+    /// The fields of one scope, in the order written.
+    pub fn of(scope: Scope) -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().filter(move |f| f.scope() == scope)
+    }
+
+    /// The field a song list's or a file's tag name sets: its Vorbis name
+    /// or any alias, case ignored.
     #[must_use]
     pub fn named(name: &str) -> Option<Self> {
-        Some(match name.to_ascii_lowercase().as_str() {
-            "title" => Self::Title,
-            "artist" => Self::Artist,
-            "album" => Self::Album,
-            "album_artist" | "albumartist" => Self::AlbumArtist,
-            "track" | "track_number" | "tracknumber" => Self::Track,
-            "disc" | "disc_number" | "discnumber" => Self::Disc,
-            "date" | "year" => Self::Date,
-            "genre" => Self::Genre,
-            _ => return None,
+        let lower = name.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|f| {
+            f.vorbis().eq_ignore_ascii_case(&lower) || f.aliases().contains(&lower.as_str())
         })
     }
 }
@@ -220,27 +324,98 @@ pub fn from_info(info: &VideoInfo) -> Offers {
     o
 }
 
+/// What a MusicBrainz record offers: the recording's title, artists,
+/// ISRCs and IDs, and its release's album, album artist, track, disc,
+/// date, track total, country and IDs.
+#[must_use]
+pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
+    let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
+    let number = |n: Option<u32>| n.map(|n| n.to_string()).into_iter().collect();
+    let mut o = Offers::new();
+    offer(&mut o, Field::Title, vec![record.title.clone()], true);
+    offer(&mut o, Field::Artist, record.artists.clone(), true);
+    offer(&mut o, Field::Isrc, record.isrcs.clone(), true);
+    offer(
+        &mut o,
+        Field::MusicBrainzTrackId,
+        vec![record.id.clone()],
+        true,
+    );
+    offer(
+        &mut o,
+        Field::MusicBrainzArtistId,
+        record.artist_ids.clone(),
+        true,
+    );
+    if let Some(r) = &record.release {
+        offer(&mut o, Field::Album, vec![r.title.clone()], true);
+        offer(&mut o, Field::AlbumArtist, r.artists.clone(), true);
+        offer(&mut o, Field::Track, number(r.track), true);
+        offer(&mut o, Field::Disc, number(r.disc), true);
+        offer(&mut o, Field::Date, one(r.date.as_ref()), true);
+        offer(&mut o, Field::TrackTotal, number(r.tracks), true);
+        offer(&mut o, Field::ReleaseCountry, one(r.country.as_ref()), true);
+        offer(&mut o, Field::MusicBrainzAlbumId, vec![r.id.clone()], true);
+        offer(
+            &mut o,
+            Field::MusicBrainzReleaseGroupId,
+            one(r.group_id.as_ref()),
+            true,
+        );
+        offer(
+            &mut o,
+            Field::MusicBrainzReleaseTrackId,
+            one(r.track_id.as_ref()),
+            true,
+        );
+        offer(
+            &mut o,
+            Field::MusicBrainzAlbumArtistId,
+            r.artist_ids.clone(),
+            true,
+        );
+    }
+    o
+}
+
 /// What a file's own tags offer, every one structured: someone set it.
+/// A track or disc written `3/12` offers its total too, unless the file
+/// names the total in a tag of its own.
 #[must_use]
 pub fn from_container(tags: &BTreeMap<String, String>) -> Offers {
+    let number = |n: &str| n.trim().trim_start_matches('0').to_string();
     let mut o = Offers::new();
+    let mut totals = Vec::new();
     for (key, value) in tags {
         let Some(field) = Field::named(key) else {
             continue;
         };
-        let value = match field {
+        let values = match field {
             Field::Date => value
                 .trim()
                 .split('T')
                 .next()
-                .map(|d| iso_date(d).unwrap_or_else(|| d.to_string())),
-            Field::Track | Field::Disc => value
-                .split('/')
-                .next()
-                .map(|n| n.trim().trim_start_matches('0').to_string()),
-            _ => Some(value.clone()),
+                .map(|d| iso_date(d).unwrap_or_else(|| d.to_string()))
+                .into_iter()
+                .collect(),
+            Field::Track | Field::Disc => {
+                let (n, total) = value.split_once('/').unwrap_or((value, ""));
+                let of = if field == Field::Track {
+                    Field::TrackTotal
+                } else {
+                    Field::DiscTotal
+                };
+                totals.push((of, number(total)));
+                vec![number(n)]
+            }
+            Field::TrackTotal | Field::DiscTotal => vec![number(value)],
+            f if f.is_id() => value.split([';', '/']).map(str::to_string).collect(),
+            _ => vec![value.clone()],
         };
-        offer(&mut o, field, value.into_iter().collect(), true);
+        offer(&mut o, field, values, true);
+    }
+    for (field, total) in totals {
+        offer(&mut o, field, vec![total], true);
     }
     o
 }
@@ -363,8 +538,79 @@ mod tests {
         assert_eq!(o[&Field::Track].values, ["3"]);
         assert_eq!(o[&Field::Date].values, ["2001-05-06"]);
         assert_eq!(o[&Field::AlbumArtist].values, ["A"]);
+        assert_eq!(o[&Field::TrackTotal].values, ["12"]);
         assert!(o.values().all(|v| v.structured));
-        assert_eq!(o.len(), 4);
+        assert_eq!(o.len(), 5);
+    }
+
+    #[test]
+    fn a_file_s_musicbrainz_ids_and_totals_are_read_by_any_name() {
+        let tags = BTreeMap::from([
+            ("TSRC".to_string(), "XX0000000001".to_string()),
+            (
+                "MusicBrainz Artist Id".to_string(),
+                "00000000-0000-0000-0000-00000000000a;00000000-0000-0000-0000-00000000000b"
+                    .to_string(),
+            ),
+            ("disc".to_string(), "1/2".to_string()),
+            ("TOTALDISCS".to_string(), "3".to_string()),
+        ]);
+        let o = from_container(&tags);
+        assert_eq!(o[&Field::Isrc].values, ["XX0000000001"]);
+        assert_eq!(o[&Field::MusicBrainzArtistId].values.len(), 2);
+        assert_eq!(o[&Field::Disc].values, ["1"]);
+        assert_eq!(o[&Field::DiscTotal].values, ["3"], "a tag of its own wins");
+    }
+
+    #[test]
+    fn every_field_has_one_name_and_a_scope() {
+        for f in Field::ALL {
+            assert_eq!(Field::named(f.vorbis()), Some(f));
+            for alias in f.aliases() {
+                assert_eq!(Field::named(alias), Some(f), "{alias}");
+            }
+        }
+        assert_eq!(
+            Field::of(Scope::Recording).count() + Field::of(Scope::Release).count(),
+            Field::ALL.len()
+        );
+    }
+
+    #[test]
+    fn a_musicbrainz_record_offers_its_release_whole() {
+        let record = crate::musicbrainz::Record {
+            id: "00000000-0000-0000-0000-000000000001".into(),
+            title: "Song".into(),
+            artists: vec!["A".into(), "B".into()],
+            artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],
+            isrcs: vec!["XX0000000001".into()],
+            length_ms: Some(200_000),
+            release: Some(crate::musicbrainz::Release {
+                id: "00000000-0000-0000-0000-00000000000a".into(),
+                title: "Record".into(),
+                artists: vec!["A".into()],
+                artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],
+                group_id: Some("00000000-0000-0000-0000-00000000000b".into()),
+                date: Some("2004".into()),
+                country: Some("XW".into()),
+                track: Some(3),
+                tracks: Some(12),
+                track_id: None,
+                disc: Some(1),
+            }),
+        };
+        let o = from_record(&record);
+        assert_eq!(o[&Field::Artist].values, ["A", "B"]);
+        assert_eq!(o[&Field::Date].values, ["2004"]);
+        assert_eq!(o[&Field::Track].values, ["3"]);
+        assert_eq!(o[&Field::TrackTotal].values, ["12"]);
+        assert_eq!(
+            o[&Field::MusicBrainzTrackId].values,
+            ["00000000-0000-0000-0000-000000000001"]
+        );
+        assert!(!o.contains_key(&Field::MusicBrainzReleaseTrackId));
+        assert!(o.values().all(|v| v.structured));
+        assert_eq!(o.len(), 15);
     }
 
     #[test]

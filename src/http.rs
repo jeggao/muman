@@ -1,8 +1,16 @@
-//! HTTP GETs behind a trait, so LRCLIB lookups run against a fake server
-//! in tests. Production uses `ureq` with rustls and its bundled roots, so
-//! no system TLS library is needed on any platform.
+//! HTTP GETs behind a trait, so LRCLIB and MusicBrainz lookups run
+//! against a fake server in tests. Production uses `ureq` with rustls and
+//! its bundled roots, so no system TLS library is needed on any platform.
+//!
+//! Every request names muman by [`user_agent`], in the form MusicBrainz
+//! asks of every client, `name/version ( contact )`, with the repository
+//! as the contact; a service that throttles anonymous clients can tell
+//! muman apart and reach whoever runs it. A [`Throttle`] spaces the
+//! requests to one service across every thread of a run, for a service
+//! that allows so many a second from one address.
 
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -75,6 +83,81 @@ impl HttpTransport for UreqTransport {
     }
 }
 
+/// What every request names muman as: `muman/<version> ( <repository> )`.
+#[must_use]
+pub fn user_agent() -> String {
+    format!(
+        "muman/{} ( {} )",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
+    )
+}
+
+/// Requests to one service spaced at least `gap` apart, whichever thread
+/// makes them, each taking the next free turn; a refusal for going too
+/// fast holds every later turn back.
+#[derive(Debug)]
+pub struct Throttle {
+    gap: Duration,
+    backoff: Duration,
+    /// When the next request may go.
+    next: Mutex<Option<Instant>>,
+}
+
+impl Throttle {
+    /// Turns `gap` apart, held back by `backoff`, doubling, after each
+    /// refusal in a row.
+    #[must_use]
+    pub fn new(gap: Duration, backoff: Duration) -> Self {
+        Self {
+            gap,
+            backoff,
+            next: Mutex::new(None),
+        }
+    }
+
+    /// No spacing and no holding back, for tests.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::new(Duration::ZERO, Duration::ZERO)
+    }
+
+    /// Wait for this request's turn.
+    pub fn wait(&self) {
+        let wait = self.take(Instant::now());
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
+    }
+
+    /// Hold every later request back after the `times`th refusal in a row.
+    pub fn refused(&self, times: u32) {
+        self.hold(Instant::now(), times);
+    }
+
+    /// Take the next free turn at `now`; how long until it comes.
+    fn take(&self, now: Instant) -> Duration {
+        let mut next = self
+            .next
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let turn = next.map_or(now, |n| n.max(now));
+        *next = Some(turn + self.gap);
+        turn - now
+    }
+
+    fn hold(&self, now: Instant, times: u32) {
+        let pause = self
+            .backoff
+            .saturating_mul(1 << times.saturating_sub(1).min(16));
+        let mut next = self
+            .next
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *next = Some(next.map_or(now, |n| n.max(now)).max(now + pause));
+    }
+}
+
 /// `url` as an `http(s)://` base without trailing slashes; a bare
 /// `host:port` gets `http://`. Any other scheme is refused, so a song
 /// list cannot turn a lookup into a local file read.
@@ -110,6 +193,30 @@ mod tests {
         assert_eq!(
             normalize_base("127.0.0.1:8080/").unwrap(),
             "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn a_throttle_spaces_turns_across_callers_and_holds_back_after_a_refusal() {
+        let t = Throttle::new(Duration::from_secs(1), Duration::from_secs(2));
+        let start = Instant::now();
+        assert_eq!(t.take(start), Duration::ZERO);
+        assert_eq!(t.take(start), Duration::from_secs(1));
+        assert_eq!(t.take(start), Duration::from_secs(2));
+        let later = start + Duration::from_secs(10);
+        assert_eq!(t.take(later), Duration::ZERO, "an idle gap is not saved up");
+        t.hold(later, 2);
+        assert_eq!(t.take(later), Duration::from_secs(4));
+        assert_eq!(t.take(later), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn the_user_agent_names_muman_and_a_contact() {
+        let agent = user_agent();
+        assert!(agent.starts_with("muman/"), "{agent}");
+        assert!(
+            agent.ends_with(" ( https://github.com/jeggao/muman )"),
+            "{agent}"
         );
     }
 
