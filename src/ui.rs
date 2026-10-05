@@ -82,7 +82,7 @@ pub fn trace<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
 }
 
 /// How the user is asked. `run` passes [`InquirePrompter`] when both
-/// ends are a terminal and none otherwise; tests pass [`MockPrompter`].
+/// ends are a terminal and none otherwise; tests pass `MockPrompter`.
 pub trait Prompter {
     /// A yes-or-no question; anything but yes, cancel included, is no.
     fn ask(&mut self, question: &str) -> io::Result<bool>;

@@ -34,6 +34,7 @@ pub mod provider;
 pub mod quality;
 pub mod query;
 pub mod reconcile;
+pub mod relpath;
 pub mod render;
 pub mod resolve;
 pub mod runner;

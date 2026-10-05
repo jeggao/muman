@@ -387,7 +387,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
     })
     .unwrap();
     assert_eq!(r.stem, PathBuf::from("Hoshi7ne/Song ⧸ Wren/Song ⧸ Wren"));
-    assert!(why(&r, "TITLE").cleaned.is_empty());
+    assert_eq!(why(&r, "TITLE").cleaned, Vec::<&str>::new());
 }
 
 #[test]
@@ -544,7 +544,7 @@ fn hand_set_tags_and_the_album_win_last() {
     assert_eq!(get("COMMENT").as_deref(), Some("x"));
     assert_eq!(r.stem, PathBuf::from("Various/Record/03 Mine"));
     assert_eq!(why(&r, "TITLE").from, "song.tags");
-    assert!(why(&r, "TITLE").cleaned.is_empty());
+    assert_eq!(why(&r, "TITLE").cleaned, Vec::<&str>::new());
 }
 
 #[test]

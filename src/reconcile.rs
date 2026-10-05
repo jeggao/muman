@@ -314,7 +314,7 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 /// earlier song took is named with its audio's ID too, and numbered
 /// when that is taken as well, as two manual files of one name are.
 fn separate(planned: &mut [(usize, Resolved)]) {
-    let lower = |r: &Resolved| path_of(r).to_string_lossy().to_lowercase();
+    let lower = |r: &Resolved| crate::relpath::folded(&path_of(r));
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for (_, r) in planned.iter_mut() {
         if taken.insert(lower(r)) {
@@ -642,8 +642,12 @@ fn prune<W: Write>(
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
+    let now: BTreeSet<String> = outputs.keys().map(|p| crate::relpath::folded(p)).collect();
     for (path, written) in old {
-        if outputs.contains_key(path) {
+        // On a filesystem blind to case and composition, a song renamed
+        // only so is the same file as its new name: deleting the old name
+        // would delete the new song.
+        if outputs.contains_key(path) || now.contains(&crate::relpath::folded(path)) {
             continue;
         }
         if written.sources.iter().any(|k| failed.contains(k)) {

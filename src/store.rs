@@ -142,7 +142,7 @@ impl Store {
         let root = dirs.manual();
         for file in walk(&root, usize::MAX)? {
             if let (Some(kind), Ok(rel)) = (kind_of(&file), file.strip_prefix(&root)) {
-                store.manual.insert(rel.to_path_buf(), kind);
+                store.manual.insert(crate::relpath::normalized(rel), kind);
             }
         }
         Ok(store)
@@ -387,7 +387,7 @@ mod tests {
             (vec![manual("b.mp3")], vec![])
         );
         let (ready, settling) = store.unlisted(&listed, SystemTime::now());
-        assert!(ready.is_empty());
+        assert_eq!(ready, []);
         assert_eq!(settling, vec![PathBuf::from("b.mp3")]);
     }
 

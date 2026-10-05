@@ -155,7 +155,10 @@ mod tests {
     fn the_newest_release_must_be_the_crate_version() {
         let manifest = "[package]\nname = \"muman\"\nversion = \"0.2.0\"\n";
         let ok = "# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-01-01\n";
-        assert!(changelog_problems(manifest, ok).is_empty());
+        assert_eq!(
+            changelog_problems(manifest, ok),
+            [] as [std::string::String; 0]
+        );
         let stale = "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-01-01\n";
         assert_eq!(changelog_problems(manifest, stale).len(), 1);
         assert_eq!(changelog_problems(manifest, "# Changelog\n").len(), 1);

@@ -27,7 +27,7 @@ pub struct State {
     #[serde(default)]
     pub library: Option<PathBuf>,
     /// Every audio file written, by its path in the library.
-    #[serde(default)]
+    #[serde(default, with = "crate::relpath::portable_keys")]
     pub outputs: BTreeMap<PathBuf, Written>,
     /// Uploads a release was kept in place of, so listing them again
     /// fetches nothing.
@@ -144,7 +144,7 @@ pub struct Written {
     /// whose build failed is known to keep this file.
     pub sources: Vec<SourceKey>,
     /// The lyrics written beside it.
-    #[serde(default)]
+    #[serde(default, with = "crate::relpath::portable_opt")]
     pub lyrics: Option<PathBuf>,
     /// What it was made from; none for a file an earlier version wrote,
     /// or one a run was about to write.

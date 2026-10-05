@@ -132,7 +132,7 @@ mod tests {
         let i =
             info(r#"{"subtitles": {"en": [{"ext": "vtt", "name": "English"}, {"ext": "srt"}]}}"#);
         assert_eq!(i.subtitle_names("en"), vec!["English"]);
-        assert!(i.subtitle_names("ja").is_empty());
+        assert_eq!(i.subtitle_names("ja"), Vec::<&str>::new());
     }
 
     #[test]

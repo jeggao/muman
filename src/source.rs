@@ -30,11 +30,10 @@ impl SourceKey {
             bail!("`{text}` names no source: expected `youtube:<id>` or `manual:<path>`");
         };
         if scheme == "manual" {
-            let path = PathBuf::from(rest);
-            if !is_plain_relative(&path) {
+            if !is_plain_relative(Path::new(rest)) {
                 bail!("`{text}`: a manual source is a path inside the manual folder");
             }
-            return Ok(Self::Manual(path));
+            return Ok(Self::Manual(crate::relpath::from_portable(rest)));
         }
         let extractor = scheme.to_ascii_lowercase();
         if extractor.is_empty() || !is_token(rest) || (extractor == "youtube" && !is_id(rest)) {
@@ -92,7 +91,7 @@ impl fmt::Display for SourceKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Remote { extractor, id } => write!(f, "{extractor}:{id}"),
-            Self::Manual(path) => write!(f, "manual:{}", path.display()),
+            Self::Manual(path) => write!(f, "manual:{}", crate::relpath::to_portable(path)),
         }
     }
 }

@@ -29,10 +29,13 @@ const RECORD: &str = "run.json";
 struct Record {
     songs_before: Option<String>,
     songs_after: Option<String>,
+    #[serde(with = "crate::relpath::portable_keys")]
     outputs: BTreeMap<PathBuf, Written>,
     /// Library files the run replaced or removed.
+    #[serde(with = "crate::relpath::portable_keys")]
     touched: BTreeSet<PathBuf>,
     /// Those kept under the run's `files`.
+    #[serde(with = "crate::relpath::portable_keys")]
     kept: BTreeSet<PathBuf>,
 }
 
@@ -283,7 +286,7 @@ mod tests {
         let d = dirs(dir.path());
         std::fs::create_dir_all(&d.home).unwrap();
         Run::begin(&d.home).unwrap().finish(&d.home).unwrap();
-        assert!(runs(&d.home).unwrap().is_empty());
+        assert_eq!(runs(&d.home).unwrap(), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -310,7 +313,7 @@ mod tests {
         state.save(&d.home).unwrap();
         run.finish(&d.home).unwrap();
 
-        assert!(describe(&d.home).unwrap().len() == 2);
+        assert_eq!(describe(&d.home).unwrap().len(), 2);
         undo(&d, &mut Vec::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.home.join(MANIFEST)).unwrap(),

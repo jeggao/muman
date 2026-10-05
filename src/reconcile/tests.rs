@@ -437,7 +437,7 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
     };
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
     h.run(&broken, retry);
-    assert!(!broken.calls().is_empty());
+    assert_ne!(broken.calls(), Vec::<Vec<String>>::new());
     std::fs::write(&path, "changed").unwrap();
     let fixed = infos(&["aaaaaaaaaaa"]);
     let (ok, text) = h.run(&fixed, Options::default());

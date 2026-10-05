@@ -74,7 +74,7 @@ fn a_failed_measure_costs_only_itself() {
         ..Fake::default()
     };
     let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
-    assert!(facts.lyrics.is_empty());
+    assert_eq!(facts.lyrics, []);
     assert!(facts.print.is_some() && facts.audio.unwrap().quality.is_some());
     assert!(fake.calls().len() > 3, "the outputs were retried alone");
 }
@@ -87,7 +87,7 @@ fn a_standalone_lrc_is_lyrics_only() {
     source.kind = Kind::Lyrics;
     let fake = Fake::default();
     let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
-    assert!(fake.calls().is_empty());
+    assert_eq!(fake.calls(), Vec::<Vec<String>>::new());
     assert_eq!(facts.lyrics[0].at, LyricsAt::File);
     assert!(facts.audio.is_none());
 }

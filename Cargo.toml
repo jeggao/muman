@@ -29,6 +29,7 @@ shell-words = "1"
 tempfile = "3"
 toml_edit = "0.25"
 trash = "5"
+unicode-normalization = "0.1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 which = "8"
 

@@ -410,7 +410,10 @@ mod tests {
     #[test]
     fn a_todo_needs_its_colon_and_sentence() {
         assert_eq!(fired("//! m\n// TODO fix\n", "todo-format"), [2]);
-        assert!(fired("//! m\n// TODO: Fix the thing.\n", "todo-format").is_empty());
+        assert_eq!(
+            fired("//! m\n// TODO: Fix the thing.\n", "todo-format"),
+            [] as [usize; 0]
+        );
     }
 
     #[test]
@@ -423,7 +426,7 @@ mod tests {
         let plain = "//! m\n// a\n// b\n// c\n// d\nfn f() {}\n";
         assert_eq!(fired(plain, "consecutive-comments"), [5]);
         let doc = "//! m\n/// a\n/// b\n/// c\n/// d\nfn f() {}\n";
-        assert!(fired(doc, "consecutive-comments").is_empty());
+        assert_eq!(fired(doc, "consecutive-comments"), [] as [usize; 0]);
     }
 
     #[test]
@@ -432,7 +435,10 @@ mod tests {
             fired("//! m\n// ===== X =====\n", "section-header-style"),
             [2]
         );
-        assert!(fired("//! m\n// ---- Title ----\n", "section-header-style").is_empty());
+        assert_eq!(
+            fired("//! m\n// ---- Title ----\n", "section-header-style"),
+            [] as [usize; 0]
+        );
         assert!(
             fired("//! m\n/// | a |\n/// |---|\n", "section-header-style").is_empty(),
             "a rustdoc table is no header"
@@ -470,13 +476,16 @@ mod tests {
     #[test]
     fn an_allow_marker_silences_the_next_line() {
         let src = "//! m\n// allow-commented-out-code: kept as the reference shape\n// foo(bar);\n";
-        assert!(fired(src, "commented-out-code").is_empty());
+        assert_eq!(fired(src, "commented-out-code"), [] as [usize; 0]);
     }
 
     #[test]
     fn a_module_opens_with_its_summary() {
         assert_eq!(fired("use std::io;\n", "module-doc"), [1]);
-        assert!(fired("\n//! What this is.\nuse std::io;\n", "module-doc").is_empty());
+        assert_eq!(
+            fired("\n//! What this is.\nuse std::io;\n", "module-doc"),
+            [] as [usize; 0]
+        );
     }
 
     #[test]
@@ -484,7 +493,7 @@ mod tests {
         let dense = format!("//! m\n{}", "// why\nlet x = 1;\n".repeat(6));
         assert_eq!(fired(&dense, "comment-density"), [1]);
         let documented = format!("//! m\n{}", "/// what\nlet x = 1;\n".repeat(6));
-        assert!(fired(&documented, "comment-density").is_empty());
+        assert_eq!(fired(&documented, "comment-density"), [] as [usize; 0]);
     }
 
     #[test]

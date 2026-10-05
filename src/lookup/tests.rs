@@ -66,7 +66,7 @@ fn a_file_of_your_own_looks_nothing_up_on_youtube() {
         "[[song]]\nsources = [\"manual:a.flac\"]\n",
         &[("manual:a.flac", false)],
     );
-    assert!(finds(&m, &s, false).is_empty());
+    assert_eq!(finds(&m, &s, false), []);
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn a_lookup_is_made_again_only_when_due() {
         "two weeks on, it is asked again"
     );
     s.lookups = vec![looked(0, Outcome::Declined)];
-    assert!(finds(&m, &s, false).is_empty());
+    assert_eq!(finds(&m, &s, false), []);
     s.lookups = vec![Looked {
         method: "youtube-music/0".into(),
         ..looked(NOW, Outcome::Nothing)
@@ -118,5 +118,5 @@ fn a_provider_turned_off_is_not_looked_up() {
         &format!("[providers.youtube-music]\nenabled = false\n{UPLOAD}"),
         &[("youtube:uuuuuuuuuuu", false)],
     );
-    assert!(finds(&m, &s, false).is_empty());
+    assert_eq!(finds(&m, &s, false), []);
 }

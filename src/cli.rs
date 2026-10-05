@@ -259,7 +259,7 @@ pub enum Command {
         removed: bool,
     },
     /// Remove the songs a query matches: their library files go, and they
-    /// are kept under [[removed]] so no playlist or dropped file lists
+    /// are kept under `[[removed]]` so no playlist or dropped file lists
     /// them again.
     #[command(after_help = QUERY_HELP)]
     Remove {
@@ -355,7 +355,7 @@ mod tests {
         };
         assert_eq!(inputs, ["a", "b.flac"]);
         assert!(!no_match && !matching.yes && !matching.new);
-        assert!(tags.tags().is_empty());
+        assert_eq!(tags.tags(), []);
     }
 
     #[test]

@@ -121,7 +121,7 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
         fs::read_to_string(lib.join("A/Record/Song.lrc")).unwrap(),
         "[00:01.00]line\n[00:30.00]more\n"
     );
-    assert!(leftover_parts(&lib.join("A/Record")).is_empty());
+    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<String>::new());
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn failed_audio_fails_the_song_and_leaves_nothing_behind() {
     };
     assert!(go(&fake, &f, &plan(Format::OpusCopy)).is_err());
     let dir = f.dir.path().join("lib/A/Record");
-    assert!(leftover_parts(&dir).is_empty());
+    assert_eq!(leftover_parts(&dir), Vec::<String>::new());
     assert!(!dir.join("Song.opus").exists());
 }
 

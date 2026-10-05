@@ -118,10 +118,14 @@ fn real(count: usize) -> f64 {
 /// The log-energy envelope of 16-bit little-endian samples.
 #[must_use]
 pub fn envelope(pcm: &[u8]) -> Vec<f64> {
-    pcm.chunks_exact(HOP * 2)
+    pcm.as_chunks::<{ HOP * 2 }>()
+        .0
+        .iter()
         .map(|frame| {
             let energy = frame
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|s| f64::from(i16::from_le_bytes([s[0], s[1]])).powi(2))
                 .sum::<f64>()
                 / real(HOP);
@@ -207,7 +211,9 @@ fn best(scored: impl Iterator<Item = (isize, f64)>) -> Option<(isize, f64)> {
 }
 
 fn decimate(x: &[f64]) -> Vec<f64> {
-    x.chunks_exact(COARSE)
+    x.as_chunks::<COARSE>()
+        .0
+        .iter()
         .map(|c| c.iter().sum::<f64>() / real(COARSE))
         .collect()
 }

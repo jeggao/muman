@@ -342,7 +342,7 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
 
     m.edit(Edit::Restore(yt("aaaaaaaaaaa")));
     m.save().unwrap();
-    assert!(m.removed.is_empty());
+    assert_eq!(m.removed, []);
     let song = &m.songs[1];
     assert_eq!(song.audio, Some(yt("bbbbbbbbbbb")));
     assert_eq!(song.tags, [("genre".to_string(), vec!["Pop".to_string()])]);
@@ -370,7 +370,7 @@ fn adding_a_removed_key_lifts_it_from_its_tombstone() {
     });
     m.save().unwrap();
     assert!(m.removed.is_empty(), "an emptied tombstone goes");
-    assert!(Manifest::load(dir.path()).unwrap().removed.is_empty());
+    assert_eq!(Manifest::load(dir.path()).unwrap().removed, []);
     assert!(!text(dir.path()).contains("note = "));
 }
 
@@ -444,6 +444,6 @@ fn edits_are_not_saved_over_a_song_changed_meanwhile() {
     assert!(text(dir.path()).contains("lyrics_offset_ms = 5"));
     assert!(m.has_edits(), "the edits wait for another try");
     let now = Manifest::load(dir.path()).unwrap().songs;
-    assert!(m.save_if_unchanged(&now).unwrap().is_empty());
+    assert_eq!(m.save_if_unchanged(&now).unwrap(), []);
     assert!(m.songs.is_empty() && m.removed.len() == 1);
 }

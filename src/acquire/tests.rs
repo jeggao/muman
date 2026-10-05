@@ -103,7 +103,7 @@ fn a_playlist_is_downloaded_at_its_own_address() {
     assert_eq!(l.urls, ["https://own", "https://v"]);
     let ids: Vec<_> = l.videos.iter().map(|v| v.id.as_str()).collect();
     assert_eq!(ids, ["vid00000009", "vid00000010"]);
-    assert!(l.albums.is_empty());
+    assert_eq!(l.albums, []);
 }
 
 #[test]

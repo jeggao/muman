@@ -205,7 +205,9 @@ pub fn gray_output(input: usize, stream: &str) -> Vec<OsString> {
 #[must_use]
 pub fn stereo_samples(bytes: &[u8]) -> Vec<[f32; 2]> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|c| {
             [
                 f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
@@ -235,7 +237,7 @@ pub fn audio(segments: &[Vec<[f32; 2]>], sample_rate: u32) -> Option<AudioQualit
             clipped += clipped_samples(samples.iter().map(|s| s[channel]));
         }
         total += samples.len() * 2;
-        for frame in samples.chunks_exact(FFT) {
+        for frame in samples.as_chunks::<FFT>().0 {
             if let Some(hz) = frame_cutoff(frame, &window, sample_rate) {
                 cutoffs.push(hz);
             }

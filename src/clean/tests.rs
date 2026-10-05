@@ -560,7 +560,7 @@ fn with_every_rule_off_nothing_changes() {
     for (title, credited, _, _) in PAIRS {
         let c = run(Field::Title, &[title], false, credited, &Settings::none());
         assert_eq!(c.values, [*title]);
-        assert!(c.rules.is_empty());
+        assert_eq!(c.rules, Vec::<&str>::new());
     }
     let c = run(Field::Genre, &["Pop, Rock"], true, &[], &Settings::none());
     assert_eq!(c.values, ["Pop, Rock"]);
