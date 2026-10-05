@@ -12,6 +12,8 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use std::path::Path;
+
 use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexBuilder};
 
@@ -83,8 +85,8 @@ impl View {
 }
 
 /// Every song as a query reads it, in song-list order.
-pub fn views(manifest: &Manifest, state: &State) -> Result<Vec<View>> {
-    let (planned, _) = reconcile::plan(manifest, state, &mut std::io::sink())?;
+pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<View>> {
+    let (planned, _) = reconcile::plan(manifest, state, library, &mut std::io::sink())?;
     let mut views: Vec<View> = manifest
         .songs
         .iter()

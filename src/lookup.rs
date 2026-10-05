@@ -254,7 +254,7 @@ pub fn run<R: Runner, W: Write>(
             &mut how,
             acquire.out,
         )?;
-        let (planned, _) = reconcile::plan(&manifest, &state, &mut std::io::sink())?;
+        let (planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut std::io::sink())?;
         let (refused, due): (Vec<Due>, Vec<Due>) =
             due(&manifest, &state, &planned, state::now_secs(), force)
                 .into_iter()

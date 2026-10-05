@@ -18,7 +18,7 @@ use crate::facts::{self, Facts};
 use crate::history::Run;
 use crate::hooks;
 use crate::manifest::{Manifest, Song};
-use crate::naming;
+use crate::naming::{self, Naming};
 use crate::parallel;
 use crate::render::{self, Rendered};
 use crate::resolve::{self, Input, Plan, Resolved};
@@ -366,7 +366,7 @@ pub fn reconcile<R: Runner, W: Write>(
         state.save(home)?;
     }
 
-    let (planned, mut failed) = plan(&manifest, &state, out)?;
+    let (planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
     let old = state.outputs.clone();
@@ -574,8 +574,10 @@ type PlannedSong = (usize, Resolved);
 pub(crate) fn plan<W: Write>(
     manifest: &Manifest,
     state: &State,
+    library: &Path,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
+    let naming = Naming::new(&manifest.settings.library, library)?;
     let mut failed = BTreeSet::new();
     let mut planned = Vec::new();
     for key in &manifest.clean.unknown {
@@ -594,6 +596,9 @@ pub(crate) fn plan<W: Write>(
             lyrics: &manifest.lyrics,
             clean: &manifest.clean,
             albums: &albums,
+            naming: &naming,
+            audio: &manifest.settings.audio,
+            placement: manifest.settings.library.lyrics,
         };
         match resolve::resolve(&input) {
             Ok(r) => planned.push((n, r)),

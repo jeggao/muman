@@ -25,8 +25,9 @@ use crate::clean::{self, Albums, Settings};
 use crate::facts::{CoverAt, Facts, LyricsAt};
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
-use crate::naming;
+use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
+use crate::settings::{Audio, LyricsPlacement};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer};
@@ -46,6 +47,9 @@ pub enum Format {
     /// Any other lossy codec, encoded to Opus.
     OpusEncode {
         channels: u32,
+        /// The bitrate encoded at, in kbit/s; a new `[audio]` setting
+        /// changes the plan, so the song is encoded again.
+        kbps: u32,
     },
     FlacCopy,
     /// Any other lossless codec, encoded to FLAC.
@@ -86,6 +90,7 @@ pub struct LyricsRef {
     pub at: LyricsAt,
     /// How much earlier the lines are moved.
     pub shift_ms: i64,
+    pub placement: LyricsPlacement,
 }
 
 /// Everything a library file is made from. Stored beside each output and
@@ -140,6 +145,9 @@ pub struct Input<'a> {
     pub clean: &'a Settings,
     /// Every album the library holds, for cleaning.
     pub albums: &'a Albums,
+    pub naming: &'a Naming,
+    pub audio: &'a Audio,
+    pub placement: LyricsPlacement,
 }
 
 impl Input<'_> {
@@ -196,6 +204,11 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         Some(a) if a.is_lossless() => Format::FlacEncode,
         Some(a) => Format::OpusEncode {
             channels: a.channels,
+            kbps: if a.channels > 2 {
+                input.audio.opus_surround_kbps
+            } else {
+                input.audio.opus_kbps
+            },
         },
         None => bail!("no source of this song has audio"),
     };
@@ -208,13 +221,24 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             .and_then(|(_, v)| v.first())
             .map(String::as_str)
     };
-    let stem = naming::stem(
-        get(Field::AlbumArtist).unwrap_or_default(),
-        get(Field::Album).unwrap_or_default(),
-        get(Field::Disc),
-        get(Field::Track),
-        get(Field::Title).unwrap_or_default(),
-    );
+    let all = |field: Field| {
+        tags.iter()
+            .find(|(k, _)| k == field.vorbis())
+            .map(|(_, v)| v.iter().map(String::as_str).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let id = audio_key.short();
+    let stem = input.naming.stem(&naming::Tags {
+        title: get(Field::Title),
+        artists: all(Field::Artist),
+        album: get(Field::Album),
+        album_artist: get(Field::AlbumArtist),
+        genre: get(Field::Genre),
+        date: get(Field::Date),
+        track: get(Field::Track),
+        disc: get(Field::Disc),
+        id: &id,
+    })?;
     Ok(Resolved {
         plan: Plan {
             version: RENDER_VERSION,
@@ -442,6 +466,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     rev: facts.rev.clone(),
                     at: l.at.clone(),
                     shift_ms: offset - input.song.lyrics_offset_ms,
+                    placement: input.placement,
                 },
                 why,
             ));

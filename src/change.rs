@@ -127,7 +127,7 @@ impl Read {
     pub fn new(dirs: &Dirs, terms: &[String]) -> Result<Self> {
         let manifest = Manifest::load(&dirs.home)?;
         let state = State::load(&dirs.home)?;
-        let views = query::views(&manifest, &state)?;
+        let views = query::views(&manifest, &state, &dirs.library)?;
         let query = Query::parse(terms, &query::extractors(&manifest))?;
         Ok(Self {
             manifest,

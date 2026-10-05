@@ -175,6 +175,8 @@ pub struct Manifest {
     /// What `[providers.*]` and `[[trigger]]` set over the defaults.
     pub providers: provider::Config,
     pub hooks: Vec<Hook>,
+    /// `[library]`, `[audio]`, `[ytdlp]` and `[history]`.
+    pub settings: crate::settings::Settings,
     edits: Vec<Edit>,
     stale: bool,
 }
@@ -194,6 +196,7 @@ impl Manifest {
             providers: parsed.providers,
             hooks: parsed.hooks,
             clean: parsed.clean,
+            settings: parsed.settings,
             edits: Vec::new(),
             stale: file.exists()
                 && (with_header(&doc.to_string()).is_some() || normalize(&mut doc.clone())),
@@ -299,6 +302,7 @@ impl Manifest {
         (self.songs, self.albums, self.lyrics, self.removed) =
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
+        self.settings = parsed.settings;
         self.stale = false;
         Ok(Vec::new())
     }
@@ -403,6 +407,7 @@ struct Parsed {
     providers: provider::Config,
     hooks: Vec<Hook>,
     clean: Settings,
+    settings: crate::settings::Settings,
 }
 
 /// The keys a table lists, each parsed.
@@ -517,6 +522,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         providers: provider::read(doc)?,
         hooks: hooks::read(doc)?,
         clean: clean_of(doc)?,
+        settings: crate::settings::read(doc)?,
     })
 }
 

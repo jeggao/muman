@@ -38,10 +38,12 @@ pub mod relpath;
 pub mod render;
 pub mod resolve;
 pub mod runner;
+pub mod settings;
 pub mod source;
 pub mod state;
 pub mod store;
 pub mod tags;
+pub mod template;
 #[cfg(test)]
 mod testing;
 pub mod ui;
@@ -354,7 +356,7 @@ fn list_songs<D: Write>(
     let views = if removed {
         manifest.removed.iter().map(query::removed_view).collect()
     } else {
-        query::views(&manifest, &State::load(&dirs.home)?)?
+        query::views(&manifest, &State::load(&dirs.home)?, &dirs.library)?
     };
     let template = match (format, keys, removed) {
         (Some(f), _, _) => f,

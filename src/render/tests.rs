@@ -1,3 +1,4 @@
+use crate::settings::LyricsPlacement;
 use lofty::flac::FlacFile;
 use lofty::ogg::OpusFile;
 
@@ -58,6 +59,7 @@ fn plan(format: Format) -> Plan {
             rev: "r".into(),
             at: LyricsAt::Stream { index: 2 },
             shift_ms: 0,
+            placement: LyricsPlacement::Sidecar,
         }),
         tags: vec![
             ("TITLE".into(), vec!["Song".into()]),
@@ -121,7 +123,7 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
         fs::read_to_string(lib.join("A/Record/Song.lrc")).unwrap(),
         "[00:01.00]line\n[00:30.00]more\n"
     );
-    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<String>::new());
+    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<PathBuf>::new());
 }
 
 #[test]
@@ -169,8 +171,16 @@ fn a_flac_song_keeps_its_tags_and_cover_as_flac() {
 fn another_lossy_codec_is_encoded_to_opus() {
     let f = fixture();
     let fake = Fake::default();
-    go(&fake, &f, &plan(Format::OpusEncode { channels: 2 })).unwrap();
-    assert!(fake.ran("libopus") && fake.ran(STEREO_BITRATE));
+    go(
+        &fake,
+        &f,
+        &plan(Format::OpusEncode {
+            channels: 2,
+            kbps: 160,
+        }),
+    )
+    .unwrap();
+    assert!(fake.ran("libopus") && fake.ran("160k"));
 }
 
 #[test]
@@ -203,7 +213,7 @@ fn failed_audio_fails_the_song_and_leaves_nothing_behind() {
     };
     assert!(go(&fake, &f, &plan(Format::OpusCopy)).is_err());
     let dir = f.dir.path().join("lib/A/Record");
-    assert_eq!(leftover_parts(&dir), Vec::<String>::new());
+    assert_eq!(leftover_parts(&dir), Vec::<PathBuf>::new());
     assert!(!dir.join("Song.opus").exists());
 }
 
@@ -230,6 +240,7 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         rev: "r".into(),
         at: LyricsAt::File,
         shift_ms: 1000,
+        placement: LyricsPlacement::Sidecar,
     });
     let fake = Fake::default();
     go(&fake, &f, &p).unwrap();

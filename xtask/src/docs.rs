@@ -34,11 +34,14 @@ pub fn run(root: &Path, check: bool) -> Result<Vec<String>> {
         }
     }
     for file in markdown_files(root)? {
-        let text = std::fs::read_to_string(root.join(&file))?;
+        let text = std::fs::read_to_string(root.join(&file))
+            .with_context(|| format!("reading {}", file.display()))?;
         problems.extend(broken_links(root, &file, &text));
     }
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml"))?;
-    let changelog = std::fs::read_to_string(root.join("CHANGELOG.md"))?;
+    let manifest =
+        std::fs::read_to_string(root.join("Cargo.toml")).context("reading Cargo.toml")?;
+    let changelog =
+        std::fs::read_to_string(root.join("CHANGELOG.md")).context("reading CHANGELOG.md")?;
     problems.extend(changelog_problems(&manifest, &changelog));
     Ok(problems)
 }

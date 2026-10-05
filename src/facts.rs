@@ -191,7 +191,7 @@ fn tags_of(info: Option<&VideoInfo>, probed: &Probed) -> Offers {
 
 fn read_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(crate::lyrics::decode(&bytes))
 }
 
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {

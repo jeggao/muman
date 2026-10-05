@@ -26,13 +26,9 @@ use crate::ffmpeg::{self, Output};
 use crate::lyrics;
 use crate::resolve::{CoverRef, Format, LyricsRef, Plan};
 use crate::runner::Runner;
+use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::store::Located;
-
-/// Opus bitrates for what is encoded rather than copied: at or above
-/// what YouTube serves, so a second lossy pass costs as little as it can.
-const STEREO_BITRATE: &str = "160k";
-const SURROUND_BITRATE: &str = "256k";
 
 #[derive(Debug)]
 pub struct Job<'a> {
@@ -83,23 +79,19 @@ impl Inputs {
 
 fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output {
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{index}")];
-    let codec: &[&str] = match format {
-        Format::OpusCopy | Format::FlacCopy => &["-c:a", "copy"],
-        Format::FlacEncode => &["-c:a", "flac"],
-        Format::OpusEncode { channels } => &[
-            "-c:a",
-            "libopus",
-            "-b:a",
-            if channels > 2 {
-                SURROUND_BITRATE
-            } else {
-                STEREO_BITRATE
-            },
-            "-vbr",
-            "on",
+    let codec: Vec<String> = match format {
+        Format::OpusCopy | Format::FlacCopy => vec!["-c:a".into(), "copy".into()],
+        Format::FlacEncode => vec!["-c:a".into(), "flac".into()],
+        Format::OpusEncode { kbps, .. } => vec![
+            "-c:a".into(),
+            "libopus".into(),
+            "-b:a".into(),
+            format!("{kbps}k"),
+            "-vbr".into(),
+            "on".into(),
         ],
     };
-    args.extend(codec.iter().map(|s| (*s).to_string()));
+    args.extend(codec);
     // Tags are written from the plan alone; ffmpeg would carry the
     // container's, chapters as comments among them.
     args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
@@ -217,7 +209,6 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             read.map_err(|e| problems.push(format!("no cover: {e:#}")))
                 .ok()
         });
-        write_tags(&audio_part, plan.format, &plan.tags, picture)?;
         let text = match (&plan.lyrics, lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -226,20 +217,30 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                     None
                 }
                 None => fs::read(&lyrics_raw)
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .map(|b| lyrics::decode(&b))
                     .map_err(|e| problems.push(format!("no lyrics: {e}")))
                     .ok()
                     .map(|t| lyrics::shift_lrc(&lyrics::clean_lrc(&t), l.shift_ms)),
             },
             _ => None,
-        };
-        match text {
-            Some(text) if text.lines().any(|l| !l.trim().is_empty()) => {
+        }
+        .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
+        let placement = plan.lyrics.as_ref().map(|l| l.placement);
+        let mut tags = plan.tags.clone();
+        if let Some(text) = text
+            .as_ref()
+            .filter(|_| placement.is_some_and(LyricsPlacement::embedded))
+        {
+            tags.push(("LYRICS".to_string(), vec![text.clone()]));
+        }
+        write_tags(&audio_part, plan.format, &tags, picture)?;
+        match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
+            Some(text) => {
                 fs::write(&lyrics_part, text)
                     .with_context(|| format!("writing {}", lyrics_part.display()))?;
                 Ok(Some(lyrics_rel.clone()))
             }
-            _ => Ok(None),
+            None => Ok(None),
         }
     })();
     match staged {
@@ -363,10 +364,8 @@ fn lyrics_plan(
             .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?,
         LyricsAt::File => source.path.clone(),
     };
-    let text = String::from_utf8_lossy(
-        &fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
-    )
-    .into_owned();
+    let text =
+        lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
     Ok(Some(lyrics::shift_lrc(
         &lyrics::clean_lrc(&text),
         lyrics.shift_ms,

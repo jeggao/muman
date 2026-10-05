@@ -172,6 +172,24 @@ pub fn stated_length(text: &str) -> Option<i64> {
     Some((seconds * 1000.0).round() as i64)
 }
 
+/// The text of a lyrics file, whatever wrote it: UTF-8 with or without
+/// a byte-order mark, or UTF-16 as Windows tools save it; CRLF line
+/// endings become LF.
+#[must_use]
+pub fn decode(bytes: &[u8]) -> String {
+    let utf16 = |b: &[u8], unit: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| unit(*c)).collect();
+        String::from_utf16_lossy(&units)
+    };
+    let text = match bytes {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    };
+    text.replace("\r\n", "\n")
+}
+
 /// LRC without its timed lines that are no lyric; untimed lines, the
 /// `[ar:…]` headers among them, stay.
 #[must_use]
@@ -274,6 +292,25 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lyrics_files_decode_from_any_common_encoding() {
+        let lrc = "[00:01.00]雨\n";
+        let crlf = "[00:01.00]雨\r\n";
+        let mut bom = vec![0xEF, 0xBB, 0xBF];
+        bom.extend_from_slice(crlf.as_bytes());
+        let le: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(crlf.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let be: Vec<u8> = [0xFE, 0xFF]
+            .into_iter()
+            .chain(crlf.encode_utf16().flat_map(u16::to_be_bytes))
+            .collect();
+        for bytes in [lrc.as_bytes(), &bom, &le, &be] {
+            assert_eq!(decode(bytes), lrc);
+        }
+    }
     use crate::info;
 
     fn sub(index: u32, language: &str, title: &str) -> Subtitle {

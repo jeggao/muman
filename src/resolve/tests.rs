@@ -1,4 +1,10 @@
 use super::*;
+use crate::settings::Library;
+
+static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
+    Naming::new(&Library::default(), std::path::Path::new("lib")).unwrap()
+});
+static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
@@ -140,6 +146,9 @@ fn run(song: &Song, facts: &BTreeMap<SourceKey, Facts>, alignments: &[Aligned]) 
         lyrics: &["en".to_string()],
         clean: &Settings::default(),
         albums: &Albums::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        placement: LyricsPlacement::Sidecar,
     })
     .unwrap()
 }
@@ -257,7 +266,13 @@ fn real_stereo_beats_mono_in_two_channels() {
     let alignments = both(&facts, &mono, &stereo, 0, 0.99).to_vec();
     let r = run(&song(&[mono, stereo.clone()]), &facts, &alignments);
     assert_eq!(r.plan.audio.key, stereo);
-    assert_eq!(r.plan.format, Format::OpusEncode { channels: 2 });
+    assert_eq!(
+        r.plan.format,
+        Format::OpusEncode {
+            channels: 2,
+            kbps: 160,
+        }
+    );
 }
 
 #[test]
@@ -384,6 +399,9 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         lyrics: &[],
         clean: &clean,
         albums: &Albums::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
     assert_eq!(r.stem, PathBuf::from("Hoshi7ne/Song ⧸ Wren/Song ⧸ Wren"));
@@ -447,6 +465,9 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         lyrics: &[],
         clean: &Settings::default(),
         albums: &albums,
+        naming: &NAMING,
+        audio: &AUDIO,
+        placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
     let artist = r.plan.tags.iter().find(|(k, _)| k == "ARTIST").unwrap();
@@ -528,6 +549,9 @@ fn hand_set_tags_and_the_album_win_last() {
         lyrics: &["en".to_string()],
         clean: &Settings::default(),
         albums: &Albums::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
     let get = |k: &str| {
@@ -582,7 +606,13 @@ fn formats_follow_the_winning_codec() {
     for (codec, format) in [
         ("alac", Format::FlacEncode),
         ("pcm_s16le", Format::FlacEncode),
-        ("mp3", Format::OpusEncode { channels: 2 }),
+        (
+            "mp3",
+            Format::OpusEncode {
+                channels: 2,
+                kbps: 160,
+            },
+        ),
     ] {
         let key = manual("x");
         let facts = BTreeMap::from([(key.clone(), audio(codec, 20.0))]);
@@ -607,6 +637,9 @@ fn a_song_without_audio_on_disk_is_an_error() {
             lyrics: &[],
             clean: &Settings::default(),
             albums: &Albums::default(),
+            naming: &NAMING,
+            audio: &AUDIO,
+            placement: LyricsPlacement::Sidecar,
         })
         .is_err()
     );
