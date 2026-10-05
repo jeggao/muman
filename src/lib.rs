@@ -29,6 +29,7 @@ pub mod naming;
 pub mod overview;
 pub mod parallel;
 pub mod platform;
+pub mod plugins;
 pub mod probe;
 pub mod provider;
 pub mod quality;
@@ -80,7 +81,9 @@ use crate::ui::{InquirePrompter, Prompter};
 pub struct Job {
     pub command: Command,
     pub dirs: Dirs,
-    pub plugins: Option<PathBuf>,
+    /// Where the yt-dlp plugins are written; none in tests, which run
+    /// without them.
+    pub cache: Option<PathBuf>,
     /// Whether output goes to a terminal, where yt-dlp's progress is one
     /// line rewritten in place.
     pub live: bool,
@@ -102,7 +105,7 @@ impl Job {
             command: cli.command,
             verbose: cli.verbose,
             settling: store::SETTLING,
-            plugins: cli.ytdlp_plugins,
+            cache: defaults.cache,
             live: false,
         }
     }
@@ -458,11 +461,15 @@ fn network<R: Runner, W: Write, T>(
     let ytdlp = job.dirs.ytdlp();
     let partial = job.dirs.home.join("partial");
     clear_stale(&partial, manifest.settings.ytdlp.partial_days);
+    let plugins = match &job.cache {
+        Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
+        _ => None,
+    };
     let fetcher = Fetcher {
         store: &ytdlp,
         temp: temp.path(),
         partial: &partial,
-        plugins: job.plugins.as_deref(),
+        plugins: plugins.as_deref(),
         options: &manifest.settings.ytdlp,
         live: job.live,
         runs: Cell::new(0),

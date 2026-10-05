@@ -52,11 +52,6 @@ pub struct Cli {
     /// close each new source came to every song it was compared with.
     #[arg(short, long, global = true)]
     pub verbose: bool,
-
-    /// A yt-dlp plugin directory holding the `OriginalSubs` and
-    /// `AlbumArt` postprocessors; the package's wrapper sets it.
-    #[arg(long, global = true, env = "MUMAN_YTDLP_PLUGINS", hide = true)]
-    pub ytdlp_plugins: Option<PathBuf>,
 }
 
 /// How new sources that may be a listed song are decided.

@@ -98,7 +98,7 @@ impl<'de> Deserialize<'de> for Print {
 const SAMPLE_RATE: u32 = 11_025;
 
 /// The ffmpeg output options that decode the audio stream `input:index`
-/// for [`compute`]: raw 16-bit little-endian mono at [`SAMPLE_RATE`].
+/// for [`compute`]: raw 16-bit little-endian mono at Chromaprint's 11,025 Hz.
 #[must_use]
 pub fn output(input: usize, index: u32) -> Vec<OsString> {
     [

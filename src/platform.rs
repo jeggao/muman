@@ -19,6 +19,8 @@ const NAME: &str = "muman";
 pub struct Defaults {
     pub home: PathBuf,
     pub library: PathBuf,
+    /// Where files muman can make again are kept: the yt-dlp plugins.
+    pub cache: Option<PathBuf>,
 }
 
 /// The platform's folders; `None` when it names no home directory.
@@ -33,6 +35,7 @@ pub fn defaults() -> Option<Defaults> {
     Some(Defaults {
         home: project.data_local_dir().to_path_buf(),
         library: music.join(NAME),
+        cache: Some(project.cache_dir().to_path_buf()),
     })
 }
 

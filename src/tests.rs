@@ -12,6 +12,7 @@ fn defaults(root: &Path) -> Defaults {
     Defaults {
         home: root.join("data"),
         library: root.join("music"),
+        cache: None,
     }
 }
 
