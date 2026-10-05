@@ -41,7 +41,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: FedericoCarboni/setup-ffmpeg@v3
+      # setup-ffmpeg has x64 builds only; macOS runners are arm64.
+      - if: runner.os != 'macOS'
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - if: runner.os == 'macOS'
+        run: brew install ffmpeg
       - run: cargo test --test smoke --locked -- --ignored
 
   fmt:
