@@ -1,0 +1,249 @@
+//! `muman check`: the library and the sources against what earlier
+//! runs recorded. Reads only, takes no lock; `--decode` decodes every
+//! listed source in full, where a truncated download fails.
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
+use crate::dirs::Dirs;
+use crate::manifest::Manifest;
+use crate::parallel;
+use crate::runner::Runner;
+use crate::state::State;
+use crate::store::{self, Kind, Store};
+
+/// What a library file muman writes ends in.
+const WRITTEN: [&str; 3] = ["opus", "flac", "lrc"];
+
+fn decode_command(path: &Path) -> Vec<OsString> {
+    let mut cmd: Vec<OsString> = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-v",
+        "error",
+        "-xerror",
+        "-i",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    cmd.push(path.as_os_str().to_os_string());
+    cmd.extend(["-map", "0:a:0", "-f", "null", "-"].map(OsString::from));
+    cmd
+}
+
+/// Every file below `dir`, hidden ones included.
+fn files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for path in entries.filter_map(|e| Some(e.ok()?.path())) {
+        if path.is_dir() {
+            found.extend(files(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Say every problem found. Returns whether there was none.
+#[allow(clippy::too_many_lines)]
+pub fn check<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    decode: bool,
+    out: &mut W,
+) -> Result<bool> {
+    let manifest = Manifest::load(&dirs.home)?;
+    let state = State::load(&dirs.home)?;
+    let store = Store::scan(dirs)?;
+    let library = &dirs.library;
+    let mut problems = 0_usize;
+    let mut problem = |out: &mut W, text: String| {
+        problems += 1;
+        crate::ui::warning(out, &text)
+    };
+
+    let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
+    for (path, written) in &state.outputs {
+        owned.insert(path.clone());
+        owned.extend(written.lyrics.iter().cloned());
+        let file = library.join(path);
+        match std::fs::metadata(&file) {
+            Err(_) => problem(
+                out,
+                format!(
+                    "Missing, `sync` writes it again: {}",
+                    crate::relpath::show(path)
+                ),
+            )?,
+            Ok(m) if m.len() == 0 => problem(
+                out,
+                format!(
+                    "Empty, `sync` writes it again: {}",
+                    crate::relpath::show(path)
+                ),
+            )?,
+            Ok(_) if written.plan.is_none() => problem(
+                out,
+                format!(
+                    "Not finished by an interrupted run, `sync` writes it again: {}",
+                    crate::relpath::show(path)
+                ),
+            )?,
+            Ok(_) => {
+                let changed = written
+                    .stamp
+                    .as_ref()
+                    .is_some_and(|s| store::stamp_text(&file).as_ref() != Some(s));
+                if changed {
+                    problem(
+                        out,
+                        format!(
+                            "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
+                            crate::relpath::show(path)
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
+    for file in files(library) {
+        let Ok(rel) = file.strip_prefix(library) else {
+            continue;
+        };
+        if rel
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("part"))
+        {
+            problem(
+                out,
+                format!("Left by an interrupted run: {}", file.display()),
+            )?;
+            continue;
+        }
+        let ours = rel
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| WRITTEN.contains(&e));
+        if ours && !owned.contains(rel) {
+            crate::ui::info(
+                out,
+                &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
+            )?;
+        }
+    }
+
+    let listed = manifest.keys();
+    for key in &listed {
+        if !store.has(key) {
+            let fetchable = key.url().is_some()
+                || matches!(key, crate::source::SourceKey::Remote { extractor, .. } if extractor == crate::provider::LRCLIB);
+            let how = if fetchable {
+                "`sync` fetches it again"
+            } else {
+                "its song cannot be written"
+            };
+            problem(out, format!("Missing from the store, {how}: {key}"))?;
+        }
+    }
+    for (key, failure) in &state.failures {
+        problem(
+            out,
+            format!(
+                "Failed {} time(s) to {:?}: {key}: {}",
+                failure.count, failure.step, failure.error
+            ),
+        )?;
+    }
+    if decode {
+        let media: Vec<_> = listed
+            .iter()
+            .filter_map(|k| store.locate(k))
+            .filter(|l| l.kind == Kind::Media)
+            .collect();
+        crate::ui::info(out, &format!("Decoding {} source(s)", media.len()))?;
+        let decoded = parallel::map(&media, parallel::builds(), |l| {
+            runner.run(&decode_command(&l.path))
+        });
+        for (l, result) in media.iter().zip(decoded) {
+            if let Err(e) = result {
+                problem(out, format!("Does not decode in full: {}: {e:#}", l.key))?;
+            }
+        }
+    }
+    if problems == 0 {
+        crate::ui::success(out, "No problems found")?;
+    }
+    Ok(problems == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::Written;
+    use crate::testing::Fake;
+
+    #[test]
+    fn missing_changed_and_stray_files_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+        };
+        std::fs::create_dir_all(dirs.library.join("A")).unwrap();
+        std::fs::create_dir_all(&dirs.home).unwrap();
+        std::fs::write(dirs.library.join("A/kept.opus"), "x").unwrap();
+        std::fs::write(dirs.library.join("A/changed.opus"), "x").unwrap();
+        std::fs::write(dirs.library.join("A/stray.opus"), "x").unwrap();
+        std::fs::write(dirs.library.join("A/half.opus.part"), "x").unwrap();
+        let mut state = State::default();
+        let written = |stamp: Option<String>| Written {
+            sources: Vec::new(),
+            lyrics: None,
+            plan: Some(crate::resolve::Plan {
+                version: crate::resolve::RENDER_VERSION,
+                format: crate::resolve::Format::OpusCopy,
+                audio: crate::resolve::AudioRef {
+                    key: crate::source::SourceKey::youtube("aaaaaaaaaaa"),
+                    rev: "1".into(),
+                    index: 1,
+                },
+                cover: None,
+                lyrics: None,
+                tags: Vec::new(),
+            }),
+            stamp,
+        };
+        let kept = store::stamp_text(&dirs.library.join("A/kept.opus"));
+        state.outputs.insert("A/kept.opus".into(), written(kept));
+        state
+            .outputs
+            .insert("A/changed.opus".into(), written(Some("1:1".into())));
+        state.outputs.insert("A/gone.opus".into(), written(None));
+        state.save(&dirs.home).unwrap();
+        let mut out = Vec::new();
+        let ok = check(&Fake::default(), &dirs, false, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!ok);
+        assert!(
+            text.contains("Missing, `sync` writes it again: A/gone.opus"),
+            "{text}"
+        );
+        assert!(text.contains("Changed since muman wrote it"), "{text}");
+        assert!(text.contains("A/changed.opus"), "{text}");
+        assert!(!text.contains("A/kept.opus"), "{text}");
+        assert!(
+            text.contains("Not muman's, left alone: A/stray.opus"),
+            "{text}"
+        );
+        assert!(text.contains("Left by an interrupted run"), "{text}");
+    }
+}

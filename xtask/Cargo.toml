@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Repository checks for muman: comment rules and generated docs."
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+clap-markdown = "=0.1.5"
+muman = { path = ".." }
+regex = "1"
+
+[lints]
+workspace = true

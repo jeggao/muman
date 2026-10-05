@@ -1,0 +1,57 @@
+version = 1
+
+# Settings. Every key below is shown with its default; uncomment a table
+# and the keys to change. A key a table does not know is an error.
+
+# [library]
+# # The library folder: absolute, ~/..., or relative to this file's folder.
+# # Unset, it is the platform's music folder, then `muman`; --library and
+# # MUMAN_LIBRARY override it on one machine.
+# # path = "~/Music/muman"
+# # Each song's path without its extension, as a MiniJinja template. See
+# # docs/configuration.md for the variables and filters.
+# template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
+# # What is replaced in tag values before they make a path; set "none" to
+# # replace only "/", or "ascii" to transliterate everything to ASCII.
+# restrict = "windows"
+# # Replacements merged over the defaults, such as { ":" = " -" }.
+# replace = {}
+# max_name_bytes = 200
+# max_folder_bytes = 120
+# # The longest whole path in characters, library folder included; unset,
+# # there is no limit. 250 keeps a library usable on Windows.
+# # max_path = 250
+# unknown_artist = "Unknown Artist"
+# unknown_album = "Unknown Album"
+# untitled = "Untitled"
+# # Where lyrics go: "sidecar" (.lrc beside the song), "embedded" or "both".
+# lyrics = "sidecar"
+# # Set the library folder's time after a change, for players that rescan
+# # only when it is newer.
+# touch_root = false
+
+# [audio]
+# # Opus bitrates in kbit/s for audio that is encoded rather than copied.
+# opus_kbps = 160
+# opus_surround_kbps = 256
+
+# [ytdlp]
+# format = "bv*+ba/b"
+# sub_langs = "all,-live_chat"
+# concurrent_fragments = 4
+# # muman's postprocessors: no generated captions, square album art.
+# plugins = true
+# # More arguments, such as ["--cookies-from-browser", "firefox"].
+# args = []
+# # Days an unfinished download is kept to resume.
+# partial_days = 14
+
+# [history]
+# # Changing runs `undo` can put back, and the most their replaced files
+# # may take, in MiB.
+# runs = 3
+# max_mib = 2048
+
+[defaults]
+# Subtitle languages lyrics are taken in, most preferred first.
+lyrics = ["en"]

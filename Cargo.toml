@@ -1,0 +1,60 @@
+[package]
+name = "muman"
+version = "0.1.0"
+description = "Keep a music library in step with a song list, each song made from the best of its sources."
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+repository = "https://github.com/jeggao/muman"
+keywords = ["music", "library", "yt-dlp", "ffmpeg", "tagging"]
+categories = ["command-line-utilities", "multimedia::audio"]
+readme = "README.md"
+exclude = [".github/", "xtask/"]
+
+[dependencies]
+anstream = "1"
+anstyle = "1"
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+deunicode = "1"
+directories = "6"
+dunce = "1"
+filetime = "0.2"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+lofty = "0.25"
+minijinja = "2"
+regex = "1"
+rusty-chromaprint = "0.3"
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shell-words = "1"
+tempfile = "3"
+terminal_size = "0.4"
+toml = "1"
+toml_edit = "0.25"
+trash = "5"
+unicode-normalization = "0.1"
+unicode-width = "0.2"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+which = "8"
+
+[lints]
+workspace = true
+
+[workspace]
+members = [".", "xtask"]
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+strip = "symbols"
