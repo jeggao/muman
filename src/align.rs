@@ -67,10 +67,11 @@ const MAX_STRETCH: f64 = 0.01;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Alignment {
-    /// How much later the upload plays the track's first moment.
+    /// How much later the upload plays a moment than the track does.
     pub offset_ms: i64,
     /// How much longer the upload plays the recording than the track, in
-    /// parts per million: negative when it runs fast.
+    /// parts per million: negative when it runs fast. The offset then holds
+    /// at the track's first moment.
     pub stretch_ppm: i64,
     /// Normalized cross-correlation of the envelopes at that offset.
     pub score: f64,
