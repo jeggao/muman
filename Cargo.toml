@@ -39,6 +39,7 @@ unicode-normalization = "0.1"
 unicode-width = "0.2"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 which = "8"
+zip = { version = "8", default-features = false }
 
 [lints]
 workspace = true

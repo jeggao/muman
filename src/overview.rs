@@ -11,13 +11,14 @@ use std::time::SystemTime;
 use crate::ui::Style;
 use anyhow::Result;
 
+use crate::codec::Codec;
 use crate::dirs::{Dirs, STATE};
 use crate::facts::Facts;
 use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
 use crate::provider::Provider;
 use crate::reconcile;
-use crate::resolve::{Format, Resolved, SINGLE};
+use crate::resolve::{Resolved, SINGLE};
 use crate::source::SourceKey;
 use crate::state;
 use crate::state::State;
@@ -74,7 +75,8 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let mut failures = Vec::new();
-    let (planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut failures)?;
+    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut failures)?;
+    crate::limit::as_written(&manifest, &state, &mut planned);
     let c = Context {
         dirs,
         verbose,
@@ -141,17 +143,29 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.duration)
         .sum();
     row(out, "Playing time", &duration(seconds))?;
-    let count = |f: fn(Format) -> bool| c.planned.iter().filter(|(_, r)| f(r.plan.format)).count();
+    let formats: Vec<String> = Codec::ALL
+        .into_iter()
+        .filter_map(|codec| {
+            let of = |encoded: bool| {
+                c.planned
+                    .iter()
+                    .filter(|(_, r)| {
+                        r.plan.format.codec() == codec && (!encoded || r.plan.format.is_encoded())
+                    })
+                    .count()
+            };
+            let all = of(false);
+            (all > 0).then(|| format!("{all} {} ({} encoded)", codec.label(), of(true)))
+        })
+        .collect();
     row(
         out,
         "Formats",
-        &format!(
-            "{} Opus ({} encoded), {} FLAC ({} encoded)",
-            count(|f| f.extension() == "opus"),
-            count(|f| matches!(f, Format::OpusEncode { .. })),
-            count(|f| f.extension() == "flac"),
-            count(|f| f == Format::FlacEncode),
-        ),
+        &if formats.is_empty() {
+            "none".to_string()
+        } else {
+            formats.join(", ")
+        },
     )?;
     let written: u64 = c
         .state
@@ -163,7 +177,17 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     row(
         out,
         "On disk",
-        &format!("{} in {}", bytes(written), c.dirs.library.display()),
+        &format!(
+            "{}{} in {}",
+            crate::ui::bytes(written),
+            c.manifest
+                .settings
+                .library
+                .max_size
+                .map(|max| format!(" of {} (max_size)", crate::ui::bytes(max.0)))
+                .unwrap_or_default(),
+            c.dirs.library.display()
+        ),
     )?;
 
     Ok(())
@@ -190,8 +214,8 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         "Stored",
         &format!(
             "{} in yt-dlp, {} manual",
-            bytes(folder_size(&c.dirs.ytdlp())),
-            bytes(folder_size(&c.dirs.manual()))
+            crate::ui::bytes(folder_size(&c.dirs.ytdlp())),
+            crate::ui::bytes(folder_size(&c.dirs.manual()))
         ),
     )?;
     let mut per_song = [0_usize; 3];
@@ -390,7 +414,7 @@ impl Health {
                     if q.bandwidth_hz < NARROW_HZ {
                         h.narrow.add(&name);
                     }
-                    if !q.is_stereo() {
+                    if !q.is_stereo(manifest.settings.quality.stereo.incoherence) {
                         h.mono.add(&name);
                     }
                     if q.clipping > CLIPPED {
@@ -407,7 +431,7 @@ impl Health {
                         .and_then(|f| f.covers.iter().find(|x| x.at == c.at))
                         .and_then(|x| x.quality.as_ref());
                     if let Some(q) = quality {
-                        if !q.is_square() {
+                        if !q.is_square(manifest.settings.quality.square.tolerance) {
                             h.not_square.add(&name);
                         }
                         if q.effective < SOFT_COVER {
@@ -483,23 +507,6 @@ fn folder_size(dir: &Path) -> u64 {
             _ => 0,
         })
         .sum()
-}
-
-/// `n` bytes in the largest binary unit that keeps it at least one.
-#[allow(clippy::cast_precision_loss)]
-fn bytes(n: u64) -> String {
-    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = n as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < units.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} B")
-    } else {
-        format!("{value:.1} {}", units[unit])
-    }
 }
 
 /// Seconds as days, hours and minutes, the two largest that apply.

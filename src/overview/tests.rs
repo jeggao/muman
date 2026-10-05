@@ -61,10 +61,7 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
     assert_eq!(value(&text, "Songs"), "2 (0 on 0 albums, 2 singles)");
     assert_eq!(value(&text, "Up to date"), "2");
     assert_eq!(value(&text, "To write"), "0");
-    assert_eq!(
-        value(&text, "Formats"),
-        "2 Opus (0 encoded), 0 FLAC (0 encoded)"
-    );
+    assert_eq!(value(&text, "Formats"), "2 Opus (0 encoded)");
     assert_eq!(value(&text, "Cannot be made"), "0");
     assert_eq!(value(&text, "No lyrics"), "0");
     assert!(
@@ -90,8 +87,8 @@ fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
 
 #[test]
 fn sizes_and_times_read_plainly() {
-    assert_eq!(bytes(512), "512 B");
-    assert_eq!(bytes(3 * 1024 * 1024 * 1024 / 2), "1.5 GiB");
+    assert_eq!(crate::ui::bytes(512), "512 B");
+    assert_eq!(crate::ui::bytes(3 * 1024 * 1024 * 1024 / 2), "1.5 GiB");
     assert_eq!(duration(59.0), "1 min");
     assert_eq!(duration(3.0 * 3600.0 + 120.0), "3 h 2 min");
     assert_eq!(duration(50.0 * 3600.0), "2 d 2 h");

@@ -169,8 +169,8 @@ Query:
   title::^one        A field matching a regular expression
   ^lyrics:yes        Not matching the term
   youtube:<id>       The song listing that source
-Fields are any tag, and key, path, format (opus, flac), cover and lyrics
-(yes, none). Case is ignored.";
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
 
 const SET_HELP: &str = "\
 Assignments:
@@ -317,6 +317,20 @@ pub enum Command {
     /// Say what a sync would write, and for each song where each of its
     /// aspects comes from and why; change nothing.
     Status,
+    /// Write the song list and the library, as the last run left them,
+    /// into one zip: songs.toml at its root, the songs under library/.
+    /// With --max-size, songs are encoded again at lower bitrates, the
+    /// least audible loss first, until the zip fits; the library itself
+    /// is left as it is.
+    Export {
+        /// The zip to write, or a folder to write muman.zip in.
+        #[arg(short, long, value_name = "PATH", default_value = "muman.zip")]
+        output: PathBuf,
+
+        /// The most the zip may take, such as 4GiB or 700MB.
+        #[arg(long, value_name = "SIZE", value_parser = crate::fit::parse_size)]
+        max_size: Option<u64>,
+    },
     /// Count what the library holds, whether it is in step with the song
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,
     /// missing or soft covers, missing lyrics or tags. Reads only what
@@ -397,6 +411,20 @@ mod tests {
         let cli = parse(&["--home", "/h", "sync", "--library", "/l"]).unwrap();
         assert_eq!(cli.home, Some(PathBuf::from("/h")));
         assert_eq!(cli.library, Some(PathBuf::from("/l")));
+    }
+
+    #[test]
+    fn export_reads_a_size_with_its_unit() {
+        let Command::Export { output, max_size } =
+            parse(&["export", "-o", "out.zip", "--max-size", "4GiB"])
+                .unwrap()
+                .command
+        else {
+            panic!("not export");
+        };
+        assert_eq!(output, PathBuf::from("out.zip"));
+        assert_eq!(max_size, Some(4 << 30));
+        assert!(parse(&["export", "--max-size", "lots"]).is_err());
     }
 
     #[test]

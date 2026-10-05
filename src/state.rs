@@ -8,6 +8,7 @@
 //! | `outputs` | No: without it nothing is deleted, and every song renders again |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
 //! | `library`, `alignments`, `facts` | Yes: measured or set again |
+//! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //!
 //! An output with no plan is one muman owns but cannot vouch for, as one
@@ -67,6 +68,10 @@ pub struct State {
     /// Each lookup a song made from one of its sources, and what it found.
     #[serde(default, deserialize_with = "lenient_list")]
     pub lookups: Vec<Looked>,
+    /// What each plan fitting asked about renders to, by
+    /// [`crate::limit::plan_key`].
+    #[serde(default, deserialize_with = "lenient_map")]
+    pub sizes: BTreeMap<String, Measured>,
 }
 
 /// A lookup of `find` made from the source `from`.
@@ -177,6 +182,16 @@ pub struct Written {
     /// changed since is told from one muman wrote.
     #[serde(default)]
     pub stamp: Option<String>,
+}
+
+/// What a plan renders to, as rendered once: its audio file and its
+/// lyrics file, in bytes, before any hook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Measured {
+    /// The plan's audio source, which keeps the entry while it is listed.
+    pub source: SourceKey,
+    pub audio: u64,
+    pub lyrics: u64,
 }
 
 /// A step that failed for a source: what it was, how often, when last.

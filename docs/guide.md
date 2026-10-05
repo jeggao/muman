@@ -4,7 +4,8 @@ muman keeps a music library in step with a song list, `songs.toml`,
 that you edit by hand or from the command line. Each song lists the
 sources it may be made from. muman measures every source, picks the best
 audio, cover, lyrics and tags among them, and writes the song once into
-the library as a tagged Opus or FLAC file. Where the home and the
+the library as a tagged file, in its source's codec or one you choose.
+Where the home and the
 library are, which programs run, and the settings that shape the
 library are in [configuration](configuration.md); every command and flag
 is in [the command reference](cli.md).
@@ -157,11 +158,19 @@ nothing, and `--verbose` shows how close the nearest songs came.
 
 No rule names a kind of source: a release, an upload and a file of your
 own are ranked by what they measure. A pin is the only override, and the
-order of `sources` breaks the last tie. Measures are compared in steps,
-so noise never decides between near-equals, and a measure that could
-not be taken ranks last.
+order of `sources` breaks the last tie. Measures are counted in steps,
+so noise never decides between near-equals; each step is multiplied by
+its measure's weight and the sums compared, lowest best. A source with a
+measure that could not be taken ranks after those with fewer such.
 
-| Aspect | Criteria, in order |
+The weights `songs.toml` starts with rank by each measure in turn, as
+the table lists them: each outweighs everything after it. `[quality]`
+in the song list switches a measure off, changes its weight, or changes
+the steps and cutoffs it is judged by; lower one weight and the
+measures after it can make up for it. See
+[configuration](configuration.md#how-sources-are-ranked).
+
+| Aspect | Criteria, by default in order |
 |---|---|
 | Audio | Least sound beyond the song; widest real bandwidth; real stereo; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
@@ -176,9 +185,10 @@ that file, while a recording whose treble fades on its own measures
 full. Real stereo tells stereo from mono copied into two channels, even
 at different levels or a few samples apart; clipping is the share of
 samples stuck at full scale or at the audio's own peak, or piled up just
-under full scale where a lossy encoder smeared them. Opus and FLAC are
-copied; another lossless codec is encoded to FLAC, another lossy one to
-Opus at the bitrate `[audio]` sets.
+under full scale where a lossy encoder smeared them. The chosen audio is
+copied when `[audio] codecs` lists its codec; any other is encoded,
+lossless audio to `[audio] lossless` and lossy audio to `[audio] lossy`,
+at the bitrate `[audio]` sets.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -304,7 +314,8 @@ are all required, case ignored:
 | `^lyrics:yes` | A song the term does not match |
 | `youtube:vid00000001` | The song listing that key |
 
-A field is any tag, or `key`, `path`, `format` (`opus`, `flac`),
+A field is any tag, or `key`, `path`, `format` (the file's extension:
+`opus`, `ogg`, `flac`, `mp3`, `m4a`),
 `cover` and `lyrics` (`yes`, `none`).
 
 - **`list`** writes each song's key, artist, title and album, separated
@@ -346,7 +357,9 @@ refuses the save.
 
 - **`status`** runs the offline phase without writing: what would be
   written, moved or deleted, and for each song where each aspect comes
-  from and why.
+  from and why, and, under `[library] max_size`, which songs are
+  written below their best format to fit; see
+  [configuration](configuration.md#library-size).
 - **`info`** counts what the library holds, whether it is in step, the
   lookups due, and what could be better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
@@ -354,6 +367,25 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing or unreadable;
   `--decode` decodes every source in full to find a truncated download.
+
+## Export
+
+`muman export -o FILE` writes the song list and the library, as the
+last run left them, into one zip: `songs.toml` at its root and every
+song with its lyrics under `library/`, at its path in the library. A
+song not written yet is not in it, so `sync` first. `-o` may name a
+folder, which gets `muman.zip`.
+
+`--max-size` caps the zip, such as `--max-size 32GiB` for a card, as
+`[library] max_size` caps the library.
+Songs that do not fit are encoded again from their sources at lower
+bitrates of `[audio] lossy`, the least audible loss for each byte saved
+first: lossless songs before lossy ones, which would lose a generation,
+and a few songs lowered far before many a little. Each song is measured
+once encoded and the rest fitted again on what it really took, so the
+zip lands under the cap. When even the lowest bitrates cannot fit,
+nothing is written and the size needed is said. The library itself is
+never changed.
 
 ## Hooks
 

@@ -13,6 +13,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   and yt-dlp on Linux and Apple silicon Macs; the flake also has an
   overlay and a development shell, and `nix-build` works without
   flakes.
+- **Codecs of your choice.** `[audio] codecs` lists the codecs copied
+  as they are, among Opus, Vorbis, AAC, MP3, FLAC and ALAC, and `lossy`
+  and `lossless` what the rest is encoded to, each tagged in its own
+  format.
+- **Ranking you can tune.** Each audio and cover measure has a
+  `[quality.*]` table in the song list to switch it off, weigh it
+  against the others, or change the steps and cutoffs it is judged by.
+- **A library size limit.** `[library] max_size` keeps the library
+  under a size: songs that do not fit are written at lower bitrates,
+  the least audible loss first. Which songs is decided by the song list,
+  its sources and the settings alone, never by what the library held
+  before, so a library fitted song by song ends as one fitted at once.
+  `status` says which songs and why.
+- **`export`.** Writes the song list and the library into one zip;
+  `--max-size` encodes songs again at lower bitrates, the least audible
+  loss first, until it fits, leaving the library as it is.
 
 ### Changed
 
@@ -26,6 +42,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   or slower than its release is still the same recording, and its lyrics
   are moved and stretched to fit. Sources are compared again on the next
   `sync`.
+- **`info` lists only the formats the library holds**, AAC, MP3, Vorbis
+  and ALAC among them.
+- **A song written again only for its format says so**: `Updated
+  (format)` rather than `(audio)`.
+- **The same song list writes the same bytes.** Ogg files no longer get
+  a random stream serial, so a library rendered twice is identical file
+  for file. Every song is written once again on the next `sync`.
 
 ## [0.1.0] - 2026-10-05
 

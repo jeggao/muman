@@ -88,7 +88,8 @@ impl View {
 
 /// Every song as a query reads it, in song-list order.
 pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<View>> {
-    let (planned, _) = reconcile::plan(manifest, state, library, &mut std::io::sink())?;
+    let (mut planned, _) = reconcile::plan(manifest, state, library, &mut std::io::sink())?;
+    crate::limit::as_written(manifest, state, &mut planned);
     let mut views: Vec<View> = manifest
         .songs
         .iter()

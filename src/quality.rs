@@ -87,14 +87,14 @@ const WALL_MIN_HZ: f64 = 2000.0;
 /// Frames quieter than this RMS, about -60 dBFS, say nothing of bandwidth.
 const SILENT_RMS: f64 = 1e-3;
 /// Energy no gain and lag between the channels explains, below this share,
-/// is a mono source in two channels. On the recordings [`WALL_DB`] was
+/// is a mono source in two channels. On the recordings `WALL_DB` was
 /// calibrated on, stereo ones, the 78 rpm transfers among them, left 0.19
 /// to 0.89 unexplained. Mono copied into channels 1 dB apart left under
 /// 2e-7, and at most 3.5e-3 through Opus; the side-to-mid ratio used before
 /// counted it as stereo. Mono with one channel delayed by whole samples up
 /// to 1 ms left under 1e-11, and by half a sample at most 2.1e-4, or 2.7e-3
 /// through Opus; at lag 0 alone, one sample left up to 2.4e-2.
-const STEREO_INCOHERENCE: f64 = 1e-2;
+pub const STEREO_INCOHERENCE: f64 = 1e-2;
 /// The longest delay between the channels a mono copy may carry, in
 /// seconds: a tape head's azimuth or a resampled channel.
 const STEREO_LAG: f64 = 1e-3;
@@ -137,7 +137,9 @@ const BORDER_STDDEV: f64 = 6.0;
 const BORDER_MATCH: f64 = 8.0;
 /// Trimming that leaves less than this share of a side is not a border.
 const MIN_CONTENT: f64 = 0.25;
-const SQUARE_TOLERANCE: f64 = 0.03;
+/// How far from square, as the log of the sides' ratio, a picture may be
+/// and still be square art.
+pub const SQUARE_TOLERANCE: f64 = 0.03;
 /// Bars on opposite sides are a letterbox or pillarbox when their widths
 /// differ by at most this share of the side.
 const BAR_SYMMETRY: f64 = 0.02;
@@ -164,25 +166,21 @@ pub struct AudioQuality {
 
 impl AudioQuality {
     #[must_use]
-    pub fn is_stereo(&self) -> bool {
-        self.incoherence > STEREO_INCOHERENCE
+    pub fn is_stereo(&self, incoherence: f64) -> bool {
+        self.incoherence > incoherence
     }
 
-    /// Wider bandwidth first, in 500 Hz steps so noise never decides.
+    /// The bandwidth in whole steps of `step_hz`, so noise never decides.
     #[must_use]
-    pub fn bandwidth_bucket(&self) -> i64 {
-        bucket(self.bandwidth_hz / 500.0)
+    pub fn bandwidth_bucket(&self, step_hz: f64) -> i64 {
+        bucket(self.bandwidth_hz / step_hz)
     }
 
-    /// Fewer clipped samples first, by order of magnitude from the
-    /// inaudible.
+    /// How many of `cutoffs` the share of clipped samples reaches.
     #[must_use]
-    pub fn clipping_bucket(&self) -> i64 {
-        match self.clipping {
-            c if c < 1e-3 => 0,
-            c if c < 1e-2 => 1,
-            _ => 2,
-        }
+    pub fn clipping_bucket(&self, cutoffs: &[f64]) -> i64 {
+        let reached = cutoffs.iter().filter(|c| self.clipping >= **c).count();
+        i64::try_from(reached).unwrap_or(i64::MAX)
     }
 }
 
@@ -209,12 +207,12 @@ pub struct ImageQuality {
 
 impl ImageQuality {
     #[must_use]
-    pub fn is_square(&self) -> bool {
+    pub fn is_square(&self, tolerance: f64) -> bool {
         let (w, h) = (
             f64::from(self.content.width),
             f64::from(self.content.height),
         );
-        h > 0.0 && (w / h).ln().abs() <= SQUARE_TOLERANCE
+        h > 0.0 && (w / h).ln().abs() <= tolerance
     }
 
     #[must_use]
@@ -222,19 +220,20 @@ impl ImageQuality {
         self.content.width != self.width || self.content.height != self.height
     }
 
-    /// Higher effective resolution first, in steps of about 10%.
+    /// The effective resolution in steps each `step` larger than the
+    /// last, 0.1 for 10%; none for a picture with no detail.
     #[must_use]
-    pub fn resolution_bucket(&self) -> i64 {
+    pub fn resolution_bucket(&self, step: f64) -> i64 {
         if self.effective == 0 {
-            return i64::MIN;
+            return 0;
         }
-        bucket(f64::from(self.effective).ln() / 1.1_f64.ln())
+        bucket(f64::from(self.effective).ln() / step.ln_1p())
     }
 
-    /// Fewer block artifacts first, in tenths.
+    /// Block artifacts in whole steps of `step`, up to a tenth step.
     #[must_use]
-    pub fn blockiness_bucket(&self) -> i64 {
-        bucket(self.blockiness / 0.1).min(10)
+    pub fn blockiness_bucket(&self, step: f64) -> i64 {
+        bucket(self.blockiness / step).min(10)
     }
 }
 
@@ -795,6 +794,8 @@ pub fn read_segment(path: &Path) -> Vec<[f32; 2]> {
 mod tests {
     use super::*;
 
+    const CUTOFFS: &[f64] = &[1e-3, 1e-2];
+
     /// Deterministic white noise in [-1, 1).
     fn noise(n: usize, seed: u64) -> Vec<f64> {
         let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
@@ -882,21 +883,37 @@ mod tests {
     #[test]
     fn mono_in_two_channels_is_not_stereo() {
         let n = noise(FFT * 4, 1);
-        assert!(!audio(&[stereo(&n, &n)], 48_000).unwrap().is_stereo());
+        assert!(
+            !audio(&[stereo(&n, &n)], 48_000)
+                .unwrap()
+                .is_stereo(STEREO_INCOHERENCE)
+        );
         let quieter: Vec<f64> = n.iter().map(|v| v * 0.89).collect();
-        assert!(!audio(&[stereo(&n, &quieter)], 48_000).unwrap().is_stereo());
+        assert!(
+            !audio(&[stereo(&n, &quieter)], 48_000)
+                .unwrap()
+                .is_stereo(STEREO_INCOHERENCE)
+        );
         let late: Vec<f64> = std::iter::repeat_n(0.0, 3)
             .chain(n.iter().copied())
             .collect();
-        assert!(!audio(&[stereo(&n, &late)], 48_000).unwrap().is_stereo());
+        assert!(
+            !audio(&[stereo(&n, &late)], 48_000)
+                .unwrap()
+                .is_stereo(STEREO_INCOHERENCE)
+        );
         let far: Vec<f64> = std::iter::repeat_n(0.0, 200)
             .chain(n.iter().copied())
             .collect();
-        assert!(audio(&[stereo(&n, &far)], 48_000).unwrap().is_stereo());
+        assert!(
+            audio(&[stereo(&n, &far)], 48_000)
+                .unwrap()
+                .is_stereo(STEREO_INCOHERENCE)
+        );
         assert!(
             audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000)
                 .unwrap()
-                .is_stereo()
+                .is_stereo(STEREO_INCOHERENCE)
         );
     }
 
@@ -907,15 +924,15 @@ mod tests {
             .collect();
         let q = audio(&[stereo(&sine, &sine)], 48_000).unwrap();
         assert!(q.clipping > 0.1, "{q:?}");
-        assert_eq!(q.clipping_bucket(), 2);
+        assert_eq!(q.clipping_bucket(CUTOFFS), 2);
         let turned_down: Vec<f64> = sine.iter().map(|v| v * 0.89).collect();
         let q = audio(&[stereo(&turned_down, &turned_down)], 48_000).unwrap();
-        assert_eq!(q.clipping_bucket(), 2, "{q:?}");
+        assert_eq!(q.clipping_bucket(CUTOFFS), 2, "{q:?}");
         let clean: Vec<f64> = (0..FFT * 4).map(|i| 0.8 * (real(i) * 0.05).sin()).collect();
         assert_eq!(
             audio(&[stereo(&clean, &clean)], 48_000)
                 .unwrap()
-                .clipping_bucket(),
+                .clipping_bucket(CUTOFFS),
             0
         );
     }
@@ -933,11 +950,11 @@ mod tests {
             .collect();
         let smeared = filtered(&clipped, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
         let q = audio(&[stereo(&smeared, &smeared)], 48_000).unwrap();
-        assert!(q.clipping_bucket() >= 1, "{q:?}");
+        assert!(q.clipping_bucket(CUTOFFS) >= 1, "{q:?}");
         let hot: Vec<f64> = music.iter().map(|v| v / peak * 0.99).collect();
         let hot = filtered(&hot, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
         let q = audio(&[stereo(&hot, &hot)], 48_000).unwrap();
-        assert_eq!(q.clipping_bucket(), 0, "{q:?}");
+        assert_eq!(q.clipping_bucket(CUTOFFS), 0, "{q:?}");
     }
 
     #[test]
@@ -946,7 +963,7 @@ mod tests {
             .map(|i| 0.97 * (real(i) * 0.05).sin())
             .collect();
         let q = audio(&[stereo(&tone, &tone)], 48_000).unwrap();
-        assert_eq!(q.clipping_bucket(), 0, "{q:?}");
+        assert_eq!(q.clipping_bucket(CUTOFFS), 0, "{q:?}");
     }
 
     #[test]
@@ -1014,7 +1031,7 @@ mod tests {
         let up = upscale2(&upscale2(&small, 192, 192), 384, 384);
         let up = image(&gray(&up), 768, 768).unwrap();
         assert!(up.effective < 362, "{up:?}");
-        assert!(up.resolution_bucket() < native.resolution_bucket());
+        assert!(up.resolution_bucket(0.1) < native.resolution_bucket(0.1));
     }
 
     #[test]
@@ -1035,13 +1052,13 @@ mod tests {
                 height: 180
             }
         );
-        assert!(q.is_square() && q.is_cropped());
+        assert!(q.is_square(SQUARE_TOLERANCE) && q.is_cropped());
         let wide = gray(&picture(512));
         let full: Vec<u8> = (0..h)
             .flat_map(|y| wide[y * 512..y * 512 + w].to_vec())
             .collect();
         let full = image(&full, 320, 180).unwrap();
-        assert!(!full.is_square() && !full.is_cropped());
+        assert!(!full.is_square(SQUARE_TOLERANCE) && !full.is_cropped());
     }
 
     #[test]
@@ -1051,7 +1068,7 @@ mod tests {
         let mut banded = vec![255_u8; side * side];
         banded[40 * side..216 * side].copy_from_slice(&art[40 * side..216 * side]);
         let q = image(&banded, 256, 256).unwrap();
-        assert!(!q.is_cropped() && q.is_square(), "{q:?}");
+        assert!(!q.is_cropped() && q.is_square(SQUARE_TOLERANCE), "{q:?}");
     }
 
     #[test]

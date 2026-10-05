@@ -2,6 +2,10 @@
 //! files: its audio and how good it is, its pictures, its lyrics, its
 //! tags and its fingerprint.
 //!
+//! The measuring run also lists the audio's packets, whose sizes sum to
+//! what a copy takes, for `[library] max_size`; facts made before are
+//! given theirs by [`audio_bytes`] when a limit asks.
+//!
 //! A media file costs at most three runs: ffprobe, one ffmpeg dumping
 //! its attachments, and one ffmpeg writing every measured excerpt as a
 //! separate output.
@@ -85,6 +89,9 @@ pub struct AudioFacts {
     pub codec: String,
     pub channels: u32,
     pub quality: Option<AudioQuality>,
+    /// The bytes of the audio stream's packets, which a copy carries.
+    #[serde(default)]
+    pub bytes: Option<u64>,
 }
 
 impl AudioFacts {
@@ -241,6 +248,7 @@ fn segment_starts(duration: Option<f64>) -> Vec<f64> {
 /// What one ffmpeg output measures, to read back once it ran.
 enum Measured {
     Print,
+    Packets,
     Segment(PathBuf),
     Subtitle(u32, Language),
     Cover(CoverAt, String),
@@ -266,6 +274,10 @@ fn media<R: Runner>(
         outputs.push((
             Output::new(fingerprint::output(0, a.index), &scratch.join("print.pcm")),
             Measured::Print,
+        ));
+        outputs.push((
+            Output::new(packets_output(0, a.index), &scratch.join("packets.crc")),
+            Measured::Packets,
         ));
         for (n, start) in segment_starts(probed.duration).into_iter().enumerate() {
             let path = scratch.join(format!("segment{n}"));
@@ -327,6 +339,7 @@ fn media<R: Runner>(
     let plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
     let results = ffmpeg::run_outputs(runner, &input_refs, &plain);
     let mut segments = Vec::new();
+    let mut bytes = None;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
             continue;
@@ -335,6 +348,7 @@ fn media<R: Runner>(
             Measured::Print => {
                 facts.print = runner.fingerprint(&output.path).ok().map(Print);
             }
+            Measured::Packets => bytes = read_packets(&output.path),
             Measured::Segment(path) => segments.push(quality::read_segment(&path)),
             Measured::Subtitle(index, language) => {
                 if let Ok(text) = read_text(&output.path) {
@@ -363,8 +377,51 @@ fn media<R: Runner>(
         index: a.index,
         codec: a.codec,
         channels: a.channels,
+        bytes,
     });
     Ok(())
+}
+
+/// The ffmpeg output options that list every packet of the audio stream
+/// `input:index`, copied, one line each with its size.
+fn packets_output(input: usize, index: u32) -> Vec<std::ffi::OsString> {
+    let map = format!("{input}:{index}");
+    ["-map", &map, "-c:a", "copy", "-f", "framecrc"]
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// The sum of the packet sizes a `framecrc` list holds: the fifth field
+/// of each line that is no `#` comment.
+#[must_use]
+pub fn packet_bytes(text: &str) -> Option<u64> {
+    let sizes: Option<Vec<u64>> = text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(|l| l.split(',').nth(4)?.trim().parse().ok())
+        .collect();
+    sizes.filter(|s| !s.is_empty()).map(|s| s.iter().sum())
+}
+
+fn read_packets(path: &Path) -> Option<u64> {
+    packet_bytes(&std::fs::read_to_string(path).ok()?)
+}
+
+/// The bytes of a located source's audio stream `index`, by one ffmpeg
+/// run that copies its packets and decodes nothing.
+pub fn audio_bytes<R: Runner>(
+    runner: &R,
+    located: &Located,
+    index: u32,
+    scratch: &Path,
+) -> Result<u64> {
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let path = scratch.join("packets.crc");
+    let outputs = [Output::new(packets_output(0, index), &path)];
+    let ran = ffmpeg::run_outputs(runner, &[located.path.as_path()], &outputs);
+    ran.into_iter().next().unwrap_or(Ok(()))?;
+    read_packets(&path).with_context(|| format!("listing the packets of {}", located.key))
 }
 
 /// The options that write one subtitle stream as LRC. Without

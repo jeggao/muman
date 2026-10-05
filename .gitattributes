@@ -2,3 +2,6 @@
 *.opus binary
 *.flac binary
 *.png binary
+*.ogg binary
+*.mp3 binary
+*.m4a binary

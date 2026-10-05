@@ -545,3 +545,107 @@ fn a_backlog_of_lookups_drains_over_runs() {
     s.run_against(&third, &["sync"]);
     assert_eq!(asked(&third), 0, "both asked lately");
 }
+
+/// The entries of the zip at `path`, by name, with their bytes.
+fn unzip(path: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    (0..zip.len())
+        .map(|n| {
+            let mut entry = zip.by_index(n).unwrap();
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+            (entry.name().to_string(), bytes)
+        })
+        .collect()
+}
+
+/// A home with one FLAC song, written; `seconds` long.
+fn exported_home(seconds: &str) -> (Setup, Fake) {
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    s.file("rips/Song.lrc");
+    let fake = Fake::default().probe(".flac", &FLAC.replace("200.0", seconds));
+    let (ok, text) = s.run(&fake, &["add", &song]);
+    assert!(ok, "{text}");
+    (s, fake)
+}
+
+#[test]
+fn export_writes_the_song_list_and_the_library_into_a_zip() {
+    let (s, fake) = exported_home("200.0");
+    let zip = s.dir.path().join("out");
+    std::fs::create_dir_all(&zip).unwrap();
+    let (ok, text) = s.run(&fake, &["export", "-o", &zip.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let entries = unzip(&zip.join("muman.zip"));
+    assert_eq!(
+        entries.keys().collect::<Vec<_>>(),
+        [
+            "library/Artist/Record/02 Song.flac",
+            "library/Artist/Record/02 Song.lrc",
+            "songs.toml"
+        ]
+    );
+    let lib = s.dir.path().join("lib/Artist/Record");
+    assert_eq!(
+        entries["library/Artist/Record/02 Song.flac"],
+        std::fs::read(lib.join("02 Song.flac")).unwrap()
+    );
+    assert_eq!(
+        entries["songs.toml"],
+        std::fs::read(s.dir.path().join("home/songs.toml")).unwrap()
+    );
+}
+
+#[test]
+fn export_encodes_songs_lower_to_fit_and_leaves_the_library_alone() {
+    let (s, fake) = exported_home("0.05");
+    let whole = s.dir.path().join("whole.zip");
+    s.run(&fake, &["export", "-o", &whole.to_string_lossy()]);
+    let state = std::fs::read(s.dir.path().join("home/state.json")).unwrap();
+    let max = std::fs::metadata(&whole).unwrap().len() - 2000;
+    let fitted = s.dir.path().join("fitted.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &fitted.to_string_lossy(),
+            "--max-size",
+            &max.to_string(),
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(fake.ran("libopus"), "{text}");
+    assert!(std::fs::metadata(&fitted).unwrap().len() <= max);
+    let entries = unzip(&fitted);
+    assert!(
+        entries.contains_key("library/Artist/Record/02 Song.opus"),
+        "{:?}",
+        entries.keys()
+    );
+    assert!(entries.contains_key("library/Artist/Record/02 Song.lrc"));
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert_eq!(
+        std::fs::read(s.dir.path().join("home/state.json")).unwrap(),
+        state
+    );
+}
+
+#[test]
+fn export_into_too_little_room_says_what_it_needs() {
+    let (s, fake) = exported_home("0.05");
+    let mut out = Vec::new();
+    let zip = s.dir.path().join("small.zip");
+    let e = run_with(
+        &s.job(&["export", "-o", &zip.to_string_lossy(), "--max-size", "1KiB"]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("cannot hold"), "{e:#}");
+    assert!(!zip.exists());
+}

@@ -1,9 +1,11 @@
 //! What a song is made of: for each aspect, the source whose measures
-//! say it is best, compared lexicographically over bucketed scores so
-//! noise never decides between near-equals. No rule names a kind of
-//! source; a pin in the song list is the only override, and the order
-//! of `sources` breaks the last tie. A measure that could not be taken
-//! ranks after any that was.
+//! say it is best. Audio and covers are scored by the song list's
+//! `[quality]`: each measure in whole steps, so noise never decides
+//! between near-equals, times its weight, summed; the lowest score wins.
+//! No rule names a kind of source; a pin in the song list is the only
+//! override, and the order of `sources` breaks the last tie. A source
+//! with a measure that could not be taken ranks after every source with
+//! fewer such.
 //!
 //! - Audio: least that is not the song (a video's intro or skit), then
 //!   the widest bandwidth, real stereo, least clipping.
@@ -16,9 +18,20 @@
 //!   release fields come together from one source so an album never
 //!   splits.
 //!
+//! The default weights rank as the order above does, each measure first
+//! by a margin wider than everything after it can make up: a step of
+//! purity outweighs any bandwidth up to 500 kHz, a step of bandwidth all
+//! of stereo and clipping. Lowering a weight lets the measures after it
+//! trade against it.
+//!
 //! The output format follows the winning audio's codec, not its measures:
-//! Opus and FLAC are copied, another lossless codec is encoded to FLAC,
-//! and another lossy one to Opus at the `[audio]` bitrate.
+//! a codec `[audio] codecs` lists is copied, and so is one already in the
+//! codec it would be encoded to; any other lossless codec is encoded to
+//! `[audio] lossless` and any other lossy one to `[audio] lossy`, at that
+//! codec's bitrate. See [`crate::codec`]. This is the song at its best;
+//! under `[library] max_size`, [`crate::limit`] may lower it once every
+//! song is resolved. Plans stored before other codecs than Opus and FLAC
+//! were written read as the [`Format`] they mean today.
 //!
 //! Lyrics from a source other than the chosen audio need that source's
 //! audio to be the same recording, and are moved by the offset measured.
@@ -48,51 +61,118 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::facts::{CoverAt, Facts, LyricsAt};
+use crate::codec::Codec;
+use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
-use crate::settings::{Audio, LyricsPlacement};
+use crate::settings::{Audio, LyricsPlacement, Quality};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer};
 
 /// Bumped whenever the bytes a plan renders to change, so every song is
 /// rendered again.
-pub const RENDER_VERSION: u32 = 1;
-
-/// Unmatched sound is judged in steps this long: a fade differs by less,
-/// an intro or a skit by more.
-const PURITY_STEP_MS: i64 = 2000;
+pub const RENDER_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredFormat")]
 pub enum Format {
-    /// Opus packets copied into Ogg.
-    OpusCopy,
-    /// Any other lossy codec, encoded to Opus.
-    OpusEncode {
-        channels: u32,
-        /// The bitrate encoded at, in kbit/s; a new `[audio]` setting
-        /// changes the plan, so the song is encoded again.
-        kbps: u32,
+    /// The source's packets copied into the codec's container.
+    Copy { codec: Codec },
+    /// The source decoded and encoded to `codec`.
+    Encode {
+        codec: Codec,
+        /// The bitrate encoded at, in kbit/s, for a lossy codec; a new
+        /// `[audio]` setting changes the plan, so the song is encoded again.
+        kbps: Option<u32>,
     },
-    FlacCopy,
-    /// Any other lossless codec, encoded to FLAC.
-    FlacEncode,
 }
 
 impl Format {
     #[must_use]
-    pub fn extension(self) -> &'static str {
+    pub fn codec(self) -> Codec {
         match self {
-            Self::OpusCopy | Self::OpusEncode { .. } => "opus",
-            Self::FlacCopy | Self::FlacEncode => "flac",
+            Self::Copy { codec } | Self::Encode { codec, .. } => codec,
+        }
+    }
+
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        self.codec().extension()
+    }
+
+    #[must_use]
+    pub fn is_encoded(self) -> bool {
+        matches!(self, Self::Encode { .. })
+    }
+
+    /// The format in words: `Opus 96 kbit/s`, `FLAC, copied`.
+    #[must_use]
+    pub fn describe(self) -> String {
+        match self {
+            Self::Copy { codec } => format!("{}, copied", codec.label()),
+            Self::Encode {
+                codec,
+                kbps: Some(kbps),
+            } => format!("{} {kbps} kbit/s", codec.label()),
+            Self::Encode { codec, kbps: None } => codec.label().to_string(),
+        }
+    }
+
+    /// The format `audio` is written in under `settings`.
+    #[must_use]
+    pub fn of(audio: &AudioFacts, settings: &Audio) -> Self {
+        let target = if audio.is_lossless() {
+            settings.lossless
+        } else {
+            settings.lossy
+        };
+        match Codec::probed(&audio.codec) {
+            Some(codec) if codec == target || settings.codecs.contains(&codec) => {
+                Self::Copy { codec }
+            }
+            _ => Self::Encode {
+                codec: target,
+                kbps: settings.kbps(target, audio.channels),
+            },
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A [`Format`] as `state.json` holds it, in today's form or as plans
+/// stored before other codecs than Opus and FLAC were written.
+#[derive(Deserialize)]
+enum StoredFormat {
+    Copy { codec: Codec },
+    Encode { codec: Codec, kbps: Option<u32> },
+    OpusCopy,
+    OpusEncode { kbps: u32 },
+    FlacCopy,
+    FlacEncode,
+}
+
+impl From<StoredFormat> for Format {
+    fn from(stored: StoredFormat) -> Self {
+        match stored {
+            StoredFormat::Copy { codec } => Self::Copy { codec },
+            StoredFormat::Encode { codec, kbps } => Self::Encode { codec, kbps },
+            StoredFormat::OpusCopy => Self::Copy { codec: Codec::Opus },
+            StoredFormat::OpusEncode { kbps } => Self::Encode {
+                codec: Codec::Opus,
+                kbps: Some(kbps),
+            },
+            StoredFormat::FlacCopy => Self::Copy { codec: Codec::Flac },
+            StoredFormat::FlacEncode => Self::Encode {
+                codec: Codec::Flac,
+                kbps: None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AudioRef {
     pub key: SourceKey,
     pub rev: String,
@@ -145,6 +225,8 @@ pub struct Why {
     pub lyrics: Option<String>,
     /// Each written tag, in the order written.
     pub tags: Vec<TagWhy>,
+    /// Why the format is lower than the best, to fit `[library] max_size`.
+    pub fit: Option<String>,
 }
 
 /// Where a written tag's value came from.
@@ -178,6 +260,7 @@ pub struct Input<'a> {
     pub albums: &'a Albums,
     pub naming: &'a Naming,
     pub audio: &'a Audio,
+    pub quality: &'a Quality,
     pub placement: LyricsPlacement,
 }
 
@@ -230,17 +313,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let facts = &input.facts[&audio_key];
     let audio = facts.audio.as_ref().map_or(0, |a| a.index);
     let format = match facts.audio.as_ref() {
-        Some(a) if a.codec == "opus" => Format::OpusCopy,
-        Some(a) if a.codec == "flac" => Format::FlacCopy,
-        Some(a) if a.is_lossless() => Format::FlacEncode,
-        Some(a) => Format::OpusEncode {
-            channels: a.channels,
-            kbps: if a.channels > 2 {
-                input.audio.opus_surround_kbps
-            } else {
-                input.audio.opus_kbps
-            },
-        },
+        Some(a) => Format::of(a, input.audio),
         None => bail!("no source of this song has audio"),
     };
     let cover = pick_cover(input);
@@ -289,6 +362,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             cover: cover.map(|(_, w)| w),
             lyrics: lyrics.map(|(_, w)| w),
             tags: tag_why,
+            fit: None,
         },
     })
 }
@@ -298,6 +372,18 @@ type Rank = Vec<i64>;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
+
+/// A source's score over measures, each its weight and its steps, `None`
+/// when it could not be taken: how many of the counted ones could not be,
+/// then the weighted sum of the rest.
+fn score(measures: &[(i64, Option<i64>)]) -> [i64; 2] {
+    let counted = measures.iter().filter(|(weight, _)| *weight != 0);
+    let unknown = counted.clone().filter(|(_, steps)| steps.is_none()).count();
+    let sum = counted
+        .filter_map(|(weight, steps)| Some(weight.saturating_mul((*steps)?)))
+        .fold(0_i64, i64::saturating_add);
+    [i64::try_from(unknown).unwrap_or(UNKNOWN), sum]
+}
 
 fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
     let audible: Vec<(usize, &SourceKey, &Facts)> = input
@@ -318,13 +404,26 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             .map(Aligned::unmatched_ms)
             .min();
         let q = facts.audio.as_ref().and_then(|a| a.quality);
-        let rank: Rank = vec![
-            unmatched.map_or(UNKNOWN, |ms| ms / PURITY_STEP_MS),
-            q.map_or(UNKNOWN, |q| -q.bandwidth_bucket()),
-            q.map_or(UNKNOWN, |q| i64::from(!q.is_stereo())),
-            q.map_or(UNKNOWN, |q| q.clipping_bucket()),
-            i64::try_from(*n).unwrap_or(UNKNOWN),
-        ];
+        let w = input.quality;
+        let [unknown, sum] = score(&[
+            (
+                w.purity.weight(),
+                unmatched.map(|ms| ms / i64::from(w.purity.step_ms)),
+            ),
+            (
+                w.bandwidth.weight(),
+                q.map(|q| -q.bandwidth_bucket(f64::from(w.bandwidth.step_hz))),
+            ),
+            (
+                w.stereo.weight(),
+                q.map(|q| i64::from(!q.is_stereo(w.stereo.incoherence))),
+            ),
+            (
+                w.clipping.weight(),
+                q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
+            ),
+        ]);
+        let rank: Rank = vec![unknown, sum, i64::try_from(*n).unwrap_or(UNKNOWN)];
         let why = match (unmatched, q) {
             (u, Some(q)) => format!(
                 "{}, {:.1} kHz, {}, {:.2}% clipped",
@@ -337,7 +436,11 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                     )
                 ),
                 q.bandwidth_hz / 1000.0,
-                if q.is_stereo() { "stereo" } else { "mono" },
+                if q.is_stereo(input.quality.stereo.incoherence) {
+                    "stereo"
+                } else {
+                    "mono"
+                },
                 q.clipping * 100.0
             ),
             (_, None) => "not measured".to_string(),
@@ -360,12 +463,22 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
         for cover in &facts.covers {
             order += 1;
             let q = cover.quality;
-            let rank: Rank = vec![
-                q.map_or(UNKNOWN, |q| i64::from(!q.is_square())),
-                q.map_or(UNKNOWN, |q| -q.resolution_bucket()),
-                q.map_or(UNKNOWN, |q| q.blockiness_bucket()),
-                order,
-            ];
+            let w = input.quality;
+            let [unknown, sum] = score(&[
+                (
+                    w.square.weight(),
+                    q.map(|q| i64::from(!q.is_square(w.square.tolerance))),
+                ),
+                (
+                    w.resolution.weight(),
+                    q.map(|q| -q.resolution_bucket(w.resolution.step)),
+                ),
+                (
+                    w.blockiness.weight(),
+                    q.map(|q| q.blockiness_bucket(w.blockiness.step)),
+                ),
+            ]);
+            let rank: Rank = vec![unknown, sum, order];
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }

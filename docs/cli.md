@@ -35,6 +35,7 @@ Exit codes:
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
+* `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Options:**
@@ -102,8 +103,8 @@ Query:
   title::^one        A field matching a regular expression
   ^lyrics:yes        Not matching the term
   youtube:<id>       The song listing that source
-Fields are any tag, and key, path, format (opus, flac), cover and lyrics
-(yes, none). Case is ignored.
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
 
 **Arguments:**
@@ -132,8 +133,8 @@ Query:
   title::^one        A field matching a regular expression
   ^lyrics:yes        Not matching the term
   youtube:<id>       The song listing that source
-Fields are any tag, and key, path, format (opus, flac), cover and lyrics
-(yes, none). Case is ignored.
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
 
 **Arguments:**
@@ -163,8 +164,8 @@ Query:
   title::^one        A field matching a regular expression
   ^lyrics:yes        Not matching the term
   youtube:<id>       The song listing that source
-Fields are any tag, and key, path, format (opus, flac), cover and lyrics
-(yes, none). Case is ignored.
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
 
 **Arguments:**
@@ -222,8 +223,8 @@ Query:
   title::^one        A field matching a regular expression
   ^lyrics:yes        Not matching the term
   youtube:<id>       The song listing that source
-Fields are any tag, and key, path, format (opus, flac), cover and lyrics
-(yes, none). Case is ignored.
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
 
 **Arguments:**
@@ -266,6 +267,21 @@ Check the library against what muman recorded: files missing, empty or changed s
 Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
 
 **Usage:** `muman status`
+
+
+
+### `muman export`
+
+Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
+
+**Usage:** `muman export [OPTIONS]`
+
+**Options:**
+
+* `-o`, `--output <PATH>` — The zip to write, or a folder to write muman.zip in
+
+  Default value: `muman.zip`
+* `--max-size <SIZE>` — The most the zip may take, such as 4GiB or 700MB
 
 
 
