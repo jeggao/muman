@@ -58,13 +58,42 @@ fn cli_reference() -> String {
         .map_or(raw.as_str(), |(_, rest)| rest);
     let mut out = String::from(CLI_HEADER);
     out.push_str("## ");
-    for line in body.split_inclusive('\n') {
-        if line.starts_with('#') {
-            out.push('#');
+    let lines: Vec<&str> = body.lines().collect();
+    let mut fenced = false;
+    for (i, line) in lines.iter().enumerate() {
+        if fenced && line.trim().is_empty() {
+            out.push_str("```\n");
+            fenced = false;
         }
-        out.push_str(line);
+        if let Some(label) = line.strip_prefix("###### ") {
+            // clap-markdown's "Options:" and "Subcommands:" labels.
+            out.push_str(label);
+        } else if line.starts_with('#') {
+            out.push('#');
+            out.push_str(line);
+        } else if !fenced && is_help_block(line, lines.get(i + 1).copied()) {
+            // An `after_help` table such as the exit codes: aligned text.
+            out.push_str("```text\n");
+            out.push_str(line);
+            fenced = true;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if fenced {
+        out.push_str("```\n");
     }
     format!("{}\n", out.trim_end())
+}
+
+/// Whether `line` opens a block of help text laid out in columns: a
+/// label such as `Exit codes:` over indented lines.
+fn is_help_block(line: &str, next: Option<&str>) -> bool {
+    line.ends_with(':')
+        && line.starts_with(|c: char| c.is_ascii_uppercase())
+        && !line.contains("**")
+        && next.is_some_and(|n| n.starts_with("  "))
 }
 
 /// Tracked and new Markdown files, as git lists them.
@@ -142,6 +171,8 @@ mod tests {
         assert!(text.starts_with("# Command-line reference"));
         assert!(text.contains("## `muman`"), "{text}");
         assert!(text.contains("### `muman sync`"), "{text}");
+        assert!(!text.contains("#######"), "{text}");
+        assert!(text.contains("```text\nExit codes:"), "{text}");
     }
 
     #[test]
