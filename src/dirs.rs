@@ -25,17 +25,17 @@ impl Dirs {
 
     #[must_use]
     pub fn ytdlp(&self) -> PathBuf {
-        self.home.join("sources/yt-dlp")
+        self.home.join("sources").join("yt-dlp")
     }
 
     #[must_use]
     pub fn lrclib(&self) -> PathBuf {
-        self.home.join("sources/lrclib")
+        self.home.join("sources").join("lrclib")
     }
 
     #[must_use]
     pub fn manual(&self) -> PathBuf {
-        self.home.join("sources/manual")
+        self.home.join("sources").join("manual")
     }
 
     #[must_use]

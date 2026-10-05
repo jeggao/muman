@@ -428,14 +428,15 @@ fn write_tags(
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
+    match crate::atomic::remove(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         r => r.with_context(|| format!("removing {}", path.display())),
     }
 }
 
 fn rename(from: &Path, to: &Path) -> Result<()> {
-    fs::rename(from, to).with_context(|| format!("renaming {} → {}", from.display(), to.display()))
+    crate::atomic::rename(from, to)
+        .with_context(|| format!("renaming {} → {}", from.display(), to.display()))
 }
 
 #[cfg(test)]

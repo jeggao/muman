@@ -215,7 +215,11 @@ pub fn undo<W: Write>(dirs: &Dirs, out: &mut W) -> Result<()> {
         );
     }
     let mut state = State::load(home)?;
-    if state.library.as_deref() != Some(dirs.library.as_path()) {
+    if !state
+        .library
+        .as_deref()
+        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
+    {
         bail!("the last run wrote another library folder");
     }
     for rel in &record.kept {

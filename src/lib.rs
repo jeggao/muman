@@ -115,33 +115,21 @@ pub fn run() -> ExitCode {
     };
     let mut job = Job::from_cli(cli, defaults);
     job.live = live;
-    let mut tools = vec!["ffmpeg", "ffprobe"];
-    match job.command {
-        Command::Add { .. } | Command::Sync { .. } | Command::Restore { .. } => {
-            tools.push("yt-dlp");
-        }
-        Command::Info | Command::List { .. } => tools.clear(),
-        Command::Check { decode } => {
-            if !decode {
-                tools.clear();
-            }
-        }
-        Command::Status
-        | Command::Remove { .. }
-        | Command::Set { .. }
-        | Command::Edit { .. }
-        | Command::Undo { .. } => {}
-    }
-    if let Some(missing) = tools.into_iter().find(|t| !on_path(t)) {
-        let _ = ui::error(&mut err, &format!("{missing} not found"));
-        return ExitCode::from(2);
-    }
     let mut inquire = InquirePrompter;
     let prompter: Option<&mut dyn Prompter> =
         (std::io::stdin().is_terminal() && job.live).then_some(&mut inquire);
-    let system = System {
-        fingerprint: job.fingerprint_ffmpeg.clone(),
+    let system = System::new(job.fingerprint_ffmpeg.clone());
+    // yt-dlp is found when a run first fetches; a library made from
+    // files alone never needs it.
+    let needs_ffmpeg = match &job.command {
+        Command::Info | Command::List { .. } => false,
+        Command::Check { decode } => *decode,
+        _ => true,
     };
+    if needs_ffmpeg && let Err(e) = system.require("ffmpeg").and(system.require("ffprobe")) {
+        let _ = ui::error(&mut err, &format!("{e:#}"));
+        return ExitCode::from(2);
+    }
     let mut data = anstream::stdout();
     let http = UreqTransport;
     let ran = if job.verbose {
@@ -152,6 +140,10 @@ pub fn run() -> ExitCode {
     match ran {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(4),
+        Err(e) if e.downcast_ref::<runner::MissingTool>().is_some() => {
+            let _ = ui::error(&mut err, &format!("{e:#}"));
+            ExitCode::from(2)
+        }
         Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
             let _ = ui::error(&mut err, &format!("{e:#}"));
             ExitCode::from(5)
@@ -161,11 +153,6 @@ pub fn run() -> ExitCode {
             ExitCode::from(4)
         }
     }
-}
-
-fn on_path(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(name).is_file()))
 }
 
 fn mode(m: Matching) -> Mode {

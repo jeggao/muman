@@ -10,7 +10,7 @@
 //! Windows: its sources run to gigabytes, which a roaming profile would
 //! copy at every sign-in.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The folder name under each platform's data and music folders.
 const NAME: &str = "muman";
@@ -34,4 +34,45 @@ pub fn defaults() -> Option<Defaults> {
         home: project.data_local_dir().to_path_buf(),
         library: music.join(NAME),
     })
+}
+
+/// Whether two paths name the same folder: resolved through links and
+/// `.`/`..`, and without regard to case where the platform's filesystems
+/// ignore it, so `D:\Music` and `d:\music\` agree.
+#[must_use]
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    let resolve = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (a, b) = (resolve(a), resolve(b));
+    if cfg!(any(windows, target_os = "macos")) {
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_reached_two_ways_is_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("lib");
+        std::fs::create_dir_all(dir.path().join("x")).unwrap();
+        std::fs::create_dir(&lib).unwrap();
+        assert!(same_path(
+            &lib,
+            &dir.path().join("x").join("..").join("lib")
+        ));
+        assert!(!same_path(&lib, dir.path()));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn case_does_not_tell_folders_apart_where_the_filesystem_ignores_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("Lib");
+        std::fs::create_dir(&lib).unwrap();
+        assert!(same_path(&lib, &dir.path().join("lib")));
+    }
 }

@@ -541,7 +541,7 @@ pub fn reconcile<R: Runner, W: Write>(
         // Some players rescan only when the root or a folder directly inside
         // it is newer than their last run; a song three levels down changes
         // neither.
-        touch(&dirs.library)?;
+        touch(&dirs.library, out)?;
         let (written, removed) = (written.to_string(), removed.len().to_string());
         let library = dirs.library.to_string_lossy();
         let values = [
@@ -611,7 +611,11 @@ pub(crate) fn plan<W: Write>(
 /// Take `library` as the folder the outputs are in; the files written
 /// into another before are no longer muman's to delete.
 fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
-    if let Some(before) = state.library.as_deref().filter(|l| *l != library) {
+    if let Some(before) = state
+        .library
+        .as_deref()
+        .filter(|l| !crate::platform::same_path(l, library))
+    {
         crate::ui::warning(
             out,
             &format!(
@@ -656,17 +660,31 @@ fn prune<W: Write>(
             )?;
             continue;
         }
+        let mut held = false;
         for file in std::iter::once(path).chain(&written.lyrics) {
             if outputs.values().any(|w| w.lyrics.as_ref() == Some(file)) {
                 continue;
             }
             keep(file)?;
-            match std::fs::remove_file(library.join(file)) {
+            match crate::atomic::remove(&library.join(file)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(e).with_context(|| format!("removing {}", file.display()));
+                    // One file held open must not stop the run before the
+                    // state is saved; it stays listed and goes next time.
+                    crate::ui::warning(
+                        out,
+                        &format!(
+                            "Could not remove {}: {e}; the next sync tries again",
+                            file.display()
+                        ),
+                    )?;
+                    held = true;
                 }
                 _ => removed.push(file.clone()),
             }
+        }
+        if held {
+            outputs.insert(path.clone(), written.clone());
+            continue;
         }
         crate::ui::info(out, &format!("Removed: {}", path.display()))?;
     }
@@ -690,15 +708,40 @@ fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
         .collect();
     folders.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
     for folder in folders {
-        // A folder that still holds anything stays; the error says so.
-        let _ = std::fs::remove_dir(library.join(folder));
+        let folder = library.join(folder);
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        let names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+        if names
+            .iter()
+            .all(|n| is_desktop_clutter(&n.to_string_lossy()))
+        {
+            for name in &names {
+                let _ = std::fs::remove_file(folder.join(name));
+            }
+            // A folder that still holds anything stays; the error says so.
+            let _ = std::fs::remove_dir(&folder);
+        }
     }
 }
 
-fn touch(dir: &Path) -> Result<()> {
-    std::fs::File::open(dir)
-        .and_then(|f| f.set_modified(SystemTime::now()))
-        .with_context(|| format!("updating the time of {}", dir.display()))
+/// Files a file manager leaves in a folder it showed, which keep an
+/// emptied album folder from being removed otherwise.
+fn is_desktop_clutter(name: &str) -> bool {
+    matches!(name, "desktop.ini" | "Thumbs.db" | ".DS_Store") || name.starts_with("._")
+}
+
+/// Set a folder's time to now, so players that rescan by it notice.
+/// Best effort: a filesystem that refuses it costs only a rescan.
+fn touch<W: Write>(dir: &Path, out: &mut W) -> Result<()> {
+    if let Err(e) = filetime::set_file_mtime(dir, filetime::FileTime::now()) {
+        crate::ui::warning(
+            out,
+            &format!("Could not update the time of {}: {e}", dir.display()),
+        )?;
+    }
+    Ok(())
 }
 
 /// Say, song by song, what a sync would write and why each aspect comes

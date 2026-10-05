@@ -1,11 +1,11 @@
 //! The subprocess seam: every yt-dlp, ffmpeg and ffprobe call goes
 //! through [`Runner`], so tests drive the pipeline without spawning one.
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 
 use anyhow::{Context, Result, anyhow};
 
@@ -30,23 +30,133 @@ pub trait Runner: Sync {
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool>;
 }
 
-/// The production runner.
+/// A tool muman runs that could not be found; `run` exits 2 on it.
+#[derive(Debug)]
+pub struct MissingTool {
+    pub name: &'static str,
+    pub variable: &'static str,
+}
+
+impl std::fmt::Display for MissingTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} not found: install it, or name it in {}",
+            self.name, self.variable
+        )
+    }
+}
+
+impl std::error::Error for MissingTool {}
+
+/// The tools commands name, each with the variable that overrides it.
+const TOOLS: [(&str, &str); 3] = [
+    ("ffmpeg", "MUMAN_FFMPEG"),
+    ("ffprobe", "MUMAN_FFPROBE"),
+    ("yt-dlp", "MUMAN_YT_DLP"),
+];
+
+/// The production runner. Commands name a tool by its bare name; each
+/// is found the first time it runs, so a run that never fetches never
+/// needs yt-dlp. A tool is looked for, in order:
+///
+/// 1. In its variable (`MUMAN_FFMPEG`, `MUMAN_FFPROBE`, `MUMAN_YT_DLP`):
+///    a path or a name, and for yt-dlp a whole command such as
+///    `python -m yt_dlp`.
+/// 1. Beside the muman executable, as a bundle ships them.
+/// 1. On `PATH`, with Windows' `PATHEXT` extensions such as `.cmd`.
 #[derive(Debug, Default)]
 pub struct System {
     /// The ffmpeg that runs a command writing a `chromaprint` output,
-    /// in place of the one on PATH.
+    /// in place of the one found.
     pub fingerprint: Option<PathBuf>,
+    found: [OnceLock<Option<Vec<OsString>>>; 3],
 }
 
 impl System {
-    fn program<'a>(&'a self, cmd: &'a [OsString]) -> &'a OsStr {
-        match &self.fingerprint {
-            Some(ffmpeg) if cmd[0] == "ffmpeg" && cmd.iter().any(|a| a == "chromaprint") => {
-                ffmpeg.as_os_str()
-            }
-            _ => &cmd[0],
+    #[must_use]
+    pub fn new(fingerprint: Option<PathBuf>) -> Self {
+        Self {
+            fingerprint,
+            ..Self::default()
         }
     }
+
+    /// Fail now, with [`MissingTool`], when `name` cannot be found, so a
+    /// run that needs it stops before its first song rather than failing
+    /// every one.
+    pub fn require(&self, name: &str) -> Result<()> {
+        let index = TOOLS
+            .iter()
+            .position(|(n, _)| *n == name)
+            .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
+        self.tool(index).map(drop)
+    }
+
+    /// The command line `tool` starts with, found once.
+    fn tool(&self, index: usize) -> Result<&[OsString]> {
+        let (name, variable) = TOOLS[index];
+        self.found[index]
+            .get_or_init(|| find(name, std::env::var_os(variable)))
+            .as_deref()
+            .ok_or_else(|| MissingTool { name, variable }.into())
+    }
+
+    /// `cmd` with its tool resolved, ready to spawn.
+    fn command(&self, cmd: &[OsString]) -> Result<Command> {
+        let mut program: Vec<OsString> = match TOOLS.iter().position(|(n, _)| cmd[0] == *n) {
+            Some(i) => self.tool(i)?.to_vec(),
+            None => vec![cmd[0].clone()],
+        };
+        if let Some(ffmpeg) = &self.fingerprint
+            && cmd[0] == "ffmpeg"
+            && cmd.iter().any(|a| a == "chromaprint")
+        {
+            program = vec![ffmpeg.clone().into_os_string()];
+        }
+        let mut command = Command::new(&program[0]);
+        command.args(&program[1..]);
+        if cmd[0] == "yt-dlp" {
+            // yt-dlp finds ffmpeg on PATH only; tell it which one muman uses.
+            if let Ok([ffmpeg, ..]) = self.tool(0) {
+                command.arg("--ffmpeg-location").arg(ffmpeg);
+            }
+            // Python writes a pipe in the legacy code page on Windows,
+            // which mangles any path outside it; UTF-8 everywhere.
+            command
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8");
+        }
+        command.args(&cmd[1..]).stdin(Stdio::null());
+        Ok(command)
+    }
+}
+
+/// How `name` is started: from `variable` when set, else beside the
+/// running executable, else from `PATH`.
+fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
+    if let Some(value) = variable.filter(|v| !v.is_empty()) {
+        let words = shell_words::split(&value.to_string_lossy())
+            .ok()
+            .filter(|w| !w.is_empty())
+            .map_or_else(
+                || vec![value.clone()],
+                |w| w.into_iter().map(OsString::from).collect(),
+            );
+        let program = which::which(&words[0]).ok()?;
+        return Some(
+            std::iter::once(program.into_os_string())
+                .chain(words.into_iter().skip(1))
+                .collect(),
+        );
+    }
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .and_then(|dir| which::which_in(name, Some(dir), ".").ok());
+    beside
+        .or_else(|| which::which(name).ok())
+        .map(|p| vec![p.into_os_string()])
 }
 
 impl Runner for System {
@@ -55,9 +165,8 @@ impl Runner for System {
     }
 
     fn output(&self, cmd: &[OsString]) -> Result<Vec<u8>> {
-        let out = Command::new(self.program(cmd))
-            .args(&cmd[1..])
-            .stdin(Stdio::null())
+        let out = self
+            .command(cmd)?
             .output()
             .with_context(|| format!("spawning {}", name(cmd)))?;
         if out.status.success() {
@@ -74,9 +183,8 @@ impl Runner for System {
     }
 
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
-        let mut child = Command::new(self.program(cmd))
-            .args(&cmd[1..])
-            .stdin(Stdio::null())
+        let mut child = self
+            .command(cmd)?
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -176,4 +284,32 @@ fn reader<R: Read + Send + 'static>(
 fn name(cmd: &[OsString]) -> String {
     cmd.first()
         .map_or_else(|| "?".to_string(), |s| s.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_variable_names_a_whole_command() {
+        let exe = std::env::current_exe().unwrap();
+        let line = format!("\"{}\" -m yt_dlp", exe.display());
+        let found = find("yt-dlp", Some(line.into())).unwrap();
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[1], "-m");
+    }
+
+    #[test]
+    fn a_tool_found_nowhere_is_none() {
+        assert!(find("muman-no-such-tool", Some("muman-no-such-tool".into())).is_none());
+    }
+
+    #[test]
+    fn a_missing_tool_says_which_variable_names_it() {
+        let missing = MissingTool {
+            name: "ffprobe",
+            variable: "MUMAN_FFPROBE",
+        };
+        assert!(missing.to_string().contains("MUMAN_FFPROBE"));
+    }
 }
