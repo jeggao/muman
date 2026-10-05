@@ -84,10 +84,19 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
         planned,
         failures,
     };
+    folders(&c, out)?;
     library(&c, out)?;
     sources(&c, out)?;
     status(&c, out)?;
     health(&c, out)
+}
+
+/// Where the song list and the library are, as flags, variables and the
+/// song list's `[library] path` resolved them.
+fn folders<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
+    heading(out, "Folders")?;
+    row(out, "Song list", &c.dirs.manifest().display().to_string())?;
+    row(out, "Library", &c.dirs.library.display().to_string())
 }
 
 fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {

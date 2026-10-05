@@ -25,8 +25,9 @@ Exit codes:
         Each source is measured — its audio's real bandwidth, stereo and clipping, how much of it \
         is not the song, its pictures' content and real detail, its lyrics, its tags — and for \
         each song the best audio, cover, lyrics and tags are picked from among them by those \
-        measures alone. The song is written to the library as <album artist>/<album>/<track \
-        title>, its audio copied or encoded, tagged and covered, its lyrics in a .lrc beside it. \
+        measures alone. The song is written to the library where the song list's [library] template puts it, \
+        <album artist>/<album>/<track title> by default, its audio copied or encoded, tagged \
+        and covered, with its lyrics. \
         A song is written again only when what it is made from changes, and a file muman \
         wrote that no listed song makes any more is deleted.\n\n\
         A new source the same recording as a listed song, by its fingerprint, is added to that \
@@ -43,8 +44,8 @@ pub struct Cli {
     #[arg(long, global = true, env = "MUMAN_HOME", value_name = "DIR")]
     pub home: Option<PathBuf>,
 
-    /// Folder the songs are written to [default: the platform's music
-    /// folder, then `muman`].
+    /// Folder the songs are written to [default: the song list's
+    /// `[library] path`, else the platform's music folder, then `muman`].
     #[arg(long, global = true, env = "MUMAN_LIBRARY", value_name = "DIR")]
     pub library: Option<PathBuf>,
 
@@ -295,7 +296,8 @@ pub enum Command {
         all: bool,
     },
     /// Put the song list and the library back as they were before the
-    /// last run that changed them; the three latest runs are kept.
+    /// last run that changed them; how many runs are kept is the song
+    /// list's `[history] runs`.
     Undo {
         #[arg(short = 'y', long)]
         yes: bool,
