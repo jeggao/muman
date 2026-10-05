@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-05
+
 ### Added
 
 - **A Nix flake.** `nix run github:jeggao/muman` runs muman with ffmpeg
@@ -81,5 +83,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jeggao/muman/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jeggao/muman/releases/tag/v0.1.0
