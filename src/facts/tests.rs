@@ -1,0 +1,118 @@
+use super::*;
+use crate::source::SourceKey;
+use crate::testing::{FLAC, Fake};
+
+fn located(dir: &Path, rel: &str) -> Located {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"x").unwrap();
+    Located {
+        key: SourceKey::Manual(rel.into()),
+        path,
+        kind: Kind::Media,
+        lyrics: None,
+        covers: Vec::new(),
+    }
+}
+
+#[test]
+fn an_original_s_facts_take_three_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let fake = Fake::default();
+    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    assert_eq!(fake.calls().len(), 3, "{:#?}", fake.calls());
+    let audio = facts.audio.unwrap();
+    assert_eq!((audio.index, audio.codec.as_str()), (1, "opus"));
+    assert!(audio.quality.unwrap().bandwidth_hz > 20_000.0);
+    assert_eq!(facts.print.unwrap().0.len(), 1600);
+    assert_eq!(facts.covers.len(), 1);
+    assert_eq!(facts.covers[0].at, CoverAt::Attachment { ordinal: 1 });
+    assert_eq!(facts.covers[0].quality.unwrap().width, 64);
+    assert_eq!(facts.lyrics.len(), 1);
+    assert_eq!(facts.lyrics[0].at, LyricsAt::Stream { index: 2 });
+    assert_eq!(facts.lyrics[0].language, Language::Codes(vec!["en".into()]));
+    assert_eq!(facts.lyrics[0].timing.unwrap().lines, 2);
+    assert_eq!(facts.tags[&tags::Field::Artist].values, ["Hoshi7ne"]);
+    assert_eq!(facts.duration, Some(200.0));
+}
+
+#[test]
+fn a_manual_file_brings_its_tags_cover_and_lrc() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = located(dir.path(), "A/Song.flac");
+    let lrc = dir.path().join("A/Song.lrc");
+    std::fs::write(&lrc, "[00:05.00]sung\n[00:06.00]♪\n").unwrap();
+    let cover = dir.path().join("A/cover.png");
+    std::fs::write(&cover, b"png").unwrap();
+    source.lyrics = Some(lrc);
+    source.covers = vec![cover];
+    let fake = Fake::default().probe("Song.flac", FLAC);
+    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    assert_eq!(fake.calls().len(), 2, "no attachments to dump");
+    assert_eq!(facts.tags[&tags::Field::Album].values, ["Record"]);
+    assert_eq!(facts.tags[&tags::Field::Track].values, ["2"]);
+    let at: Vec<&CoverAt> = facts.covers.iter().map(|c| &c.at).collect();
+    assert_eq!(at, [&CoverAt::Picture { index: 1 }, &CoverAt::Sidecar(0)]);
+    assert_eq!(facts.covers[1].mimetype, "image/png");
+    assert_eq!(facts.lyrics.len(), 1);
+    assert_eq!(facts.lyrics[0].at, LyricsAt::Sidecar);
+    assert_eq!(
+        facts.lyrics[0].timing.unwrap().lines,
+        1,
+        "the cue is no lyric"
+    );
+    assert!(facts.audio.unwrap().is_lossless());
+}
+
+#[test]
+fn a_failed_measure_costs_only_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let fake = Fake {
+        failing: vec!["lrc".into()],
+        ..Fake::default()
+    };
+    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    assert!(facts.lyrics.is_empty());
+    assert!(facts.print.is_some() && facts.audio.unwrap().quality.is_some());
+    assert!(fake.calls().len() > 3, "the outputs were retried alone");
+}
+
+#[test]
+fn a_standalone_lrc_is_lyrics_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut source = located(dir.path(), "x.lrc");
+    std::fs::write(&source.path, "[00:01.00]a\n").unwrap();
+    source.kind = Kind::Lyrics;
+    let fake = Fake::default();
+    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    assert!(fake.calls().is_empty());
+    assert_eq!(facts.lyrics[0].at, LyricsAt::File);
+    assert!(facts.audio.is_none());
+}
+
+#[test]
+fn segments_stay_inside_the_recording() {
+    assert_eq!(segment_starts(None), [0.0]);
+    assert_eq!(segment_starts(Some(10.0)), [0.0]);
+    assert_eq!(segment_starts(Some(200.0)), [50.0, 100.0, 150.0]);
+}
+
+#[test]
+fn facts_round_trip_through_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let facts = gather(&Fake::default(), &source, &dir.path().join("scratch")).unwrap();
+    let back: Facts = serde_json::from_str(&serde_json::to_string(&facts).unwrap()).unwrap();
+    assert_eq!(
+        (&back.covers[0].at, &back.lyrics, &back.tags, &back.print),
+        (
+            &facts.covers[0].at,
+            &facts.lyrics,
+            &facts.tags,
+            &facts.print
+        )
+    );
+    assert!(back.holds_for(&source.rev()));
+}

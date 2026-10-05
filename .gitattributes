@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.opus binary
+*.flac binary
+*.png binary

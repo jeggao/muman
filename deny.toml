@@ -1,0 +1,33 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+ignore = [
+    # paste, a proc-macro lofty uses at build time; unmaintained, not unsound.
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+version = 2
+# Every license here is compatible with distributing muman under AGPL-3.0.
+allow = [
+    "0BSD",
+    "AGPL-3.0-only",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
