@@ -12,13 +12,6 @@
 //! them, so the triggers in the file are the whole of what runs. A YouTube
 //! provider is looked up from a YouTube video alone, so a file of the
 //! user's own never searches YouTube.
-//!
-//! MusicBrainz is looked up by default only for a song no source names an
-//! album for: a release on YouTube Music, or a file someone tagged, already
-//! offers what a record would, and at a request a second a library of 3600
-//! songs looked up whole takes an hour. Its `concurrency`
-//! starts at 1, since its requests wait their turn one after another
-//! anyway ([`crate::musicbrainz`]).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -108,6 +101,7 @@ impl Provider {
             Self::Manual => (0, 1, 0),
             Self::YouTube | Self::YouTubeMusic => (14, 4, 50),
             Self::Lrclib => (7, 4, 300),
+            // Its requests go a second apart whatever runs them (`musicbrainz`).
             Self::MusicBrainz => (30, 1, 200),
         };
         Settings {
@@ -230,6 +224,8 @@ impl Default for Config {
                     find: Lrclib,
                     when: When::NoTimedLyrics,
                 },
+                // A release or a tagged file offers what a record would, and at
+                // a request a second, 3600 songs looked up take an hour.
                 Trigger {
                     from: vec![Manual, YouTube, YouTubeMusic],
                     find: MusicBrainz,

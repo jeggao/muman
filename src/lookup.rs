@@ -29,10 +29,6 @@
 //! record found is kept in the store and joins the song. A source the run
 //! already knows, listed, removed or replaced, is recorded found but never
 //! added again.
-//!
-//! LRCLIB and MusicBrainz are asked for the song as it resolves: its
-//! title, first artist, album and length; a song lacking any but the
-//! album asks neither.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
@@ -118,7 +114,8 @@ fn album_of(r: Option<&Resolved>) -> bool {
 
 /// What an LRCLIB or MusicBrainz lookup asks for a resolved song: its
 /// title, first artist, album and length; no album for a single named
-/// for its title, which no source names.
+/// for its title, which no source names. A song lacking any but the
+/// album is asked of neither.
 #[must_use]
 pub fn query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<Query> {
     let tag = |f: Field| {
@@ -295,10 +292,9 @@ fn template_beside(store: &Store, from: &SourceKey) -> String {
 }
 
 /// Make every lookup due, joining what is found to its song, for up to
-/// [`ROUNDS`] rounds, asking MusicBrainz at the pace of `throttle`.
-/// `force` makes the first round's lookups whatever was found before; a
-/// YouTube Music lookup from a key in `declined` is recorded declined
-/// instead. Returns whether every fetch succeeded.
+/// [`ROUNDS`] rounds. `force` makes the first round's lookups whatever
+/// was found before; a YouTube Music lookup from a key in `declined` is
+/// recorded declined instead. Returns whether every fetch succeeded.
 #[allow(clippy::too_many_lines)]
 pub fn run<R: Runner, W: Write>(
     acquire: &mut Acquire<'_, R, W>,
