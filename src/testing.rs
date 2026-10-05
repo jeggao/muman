@@ -1,7 +1,8 @@
 //! A runner that answers ffprobe from canned JSON and writes, for each
-//! ffmpeg output, what that output would have written: the Opus or FLAC
-//! fixture, a picture, a line of LRC, a print, noise to measure. Tags,
-//! covers and renames then run against real files offline.
+//! ffmpeg output, what that output would have written: the Opus, FLAC,
+//! Vorbis, MP3 or M4A fixture, a picture, a line of LRC, a print, noise
+//! to measure. Tags, covers and renames then run against real files
+//! offline.
 
 use std::ffi::OsString;
 use std::fs;
@@ -14,6 +15,9 @@ use crate::runner::{Line, Runner};
 
 pub const SILENCE_OPUS: &[u8] = include_bytes!("../testdata/silence.opus");
 pub const SILENCE_FLAC: &[u8] = include_bytes!("../testdata/silence.flac");
+pub const SILENCE_VORBIS: &[u8] = include_bytes!("../testdata/silence.ogg");
+pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
+pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
 pub const PIXEL: &[u8] = include_bytes!("../testdata/pixel.png");
 
 /// The ffprobe JSON of a yt-dlp original: video, Opus audio, an English
@@ -52,6 +56,8 @@ pub struct Fake {
     /// The size of every picture decoded to gray, by path fragment.
     pub pictures: Vec<(String, (u32, u32))>,
     pub lrc: Option<String>,
+    /// The bytes an audio stream's packets add up to, by path fragment.
+    pub packets: Vec<(String, u64)>,
     /// Output formats that fail.
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
@@ -186,6 +192,15 @@ impl Fake {
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),
             "flac" => SILENCE_FLAC.to_vec(),
+            // A stream's packets, as many bytes as its length at 128 kbit/s
+            // would take, unless the table says otherwise.
+            "framecrc" => {
+                let bytes = find(&self.packets, &input).copied().unwrap_or(3_200_000);
+                format!("#tb 0: 1/48000\n0, 0, 0, 960, {bytes}, 0x00000000\n").into_bytes()
+            }
+            "ogg" => SILENCE_VORBIS.to_vec(),
+            "mp3" => SILENCE_MP3.to_vec(),
+            "ipod" => SILENCE_M4A.to_vec(),
             _ => return Ok(()),
         };
         fs::write(&path, bytes)?;
@@ -248,6 +263,9 @@ impl Runner for Fake {
                     .cloned()
                     .unwrap_or_else(|| ORIGINAL.into())
                     .into_bytes())
+            }
+            Some("ffmpeg") if args.iter().any(|a| a == "-version") => {
+                Ok(b"ffmpeg version fake\n".to_vec())
             }
             Some("ffmpeg") if args.iter().any(|a| a == "s16le") => {
                 let path = args

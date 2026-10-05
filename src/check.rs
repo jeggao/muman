@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::codec::Codec;
 use crate::dirs::Dirs;
 use crate::manifest::Manifest;
 use crate::parallel;
@@ -16,8 +17,10 @@ use crate::runner::Runner;
 use crate::state::State;
 use crate::store::{self, Kind, Store};
 
-/// What a library file muman writes ends in.
-const WRITTEN: [&str; 3] = ["opus", "flac", "lrc"];
+/// Whether a library file muman writes could end in `extension`.
+fn is_written(extension: &str) -> bool {
+    extension == "lrc" || Codec::ALL.iter().any(|c| c.extension() == extension)
+}
 
 fn decode_command(path: &Path) -> Vec<OsString> {
     let mut cmd: Vec<OsString> = [
@@ -132,7 +135,7 @@ pub fn check<R: Runner, W: Write>(
         let ours = rel
             .extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| WRITTEN.contains(&e));
+            .is_some_and(is_written);
         if ours && !owned.contains(rel) {
             crate::ui::info(
                 out,
@@ -210,7 +213,7 @@ mod tests {
             lyrics: None,
             plan: Some(crate::resolve::Plan {
                 version: crate::resolve::RENDER_VERSION,
-                format: crate::resolve::Format::OpusCopy,
+                format: crate::resolve::Format::Copy { codec: Codec::Opus },
                 audio: crate::resolve::AudioRef {
                     key: crate::source::SourceKey::youtube("aaaaaaaaaaa"),
                     rev: "1".into(),

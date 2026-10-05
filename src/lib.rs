@@ -9,17 +9,21 @@ pub mod change;
 pub mod check;
 pub mod clean;
 pub mod cli;
+pub mod codec;
 pub mod dirs;
 pub mod download;
 pub mod editor;
+pub mod export;
 pub mod facts;
 pub mod ffmpeg;
 pub mod fingerprint;
+pub mod fit;
 pub mod history;
 pub mod hooks;
 pub mod http;
 pub mod identify;
 pub mod info;
+pub mod limit;
 pub mod lookup;
 pub mod lrclib;
 pub mod lyrics;
@@ -143,6 +147,7 @@ pub fn run() -> ExitCode {
     let needs_ffmpeg = match &job.command {
         Command::Info | Command::List { .. } => false,
         Command::Check { decode } => *decode,
+        Command::Export { max_size, .. } => max_size.is_some(),
         _ => true,
     };
     if needs_ffmpeg && let Err(e) = system.require("ffmpeg").and(system.require("ffprobe")) {
@@ -227,6 +232,9 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             Ok(true)
         }
         Command::Check { decode } => check::check(runner, dirs, *decode, out),
+        Command::Export { output, max_size } => {
+            export::export(runner, dirs, output, *max_size, out)
+        }
         Command::Undo { yes, dry_run } => {
             let lines = history::describe(&dirs.home)?;
             ui::info(out, "Undoing the last run:")?;

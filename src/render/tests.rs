@@ -1,8 +1,13 @@
 use crate::settings::LyricsPlacement;
 use lofty::flac::FlacFile;
-use lofty::ogg::OpusFile;
+use lofty::id3::v2::Id3v2Tag;
+use lofty::mp4::Mp4File;
+use lofty::mpeg::MpegFile;
+use lofty::ogg::{OpusFile, VorbisFile};
+use lofty::tag::Accessor;
 
 use super::*;
+use crate::codec::Codec;
 use crate::quality::Rect;
 use crate::resolve::{AudioRef, RENDER_VERSION};
 use crate::store::Kind;
@@ -99,7 +104,7 @@ fn leftover_parts(dir: &Path) -> Vec<PathBuf> {
 fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
     let f = fixture();
     let fake = Fake::default();
-    let r = go(&fake, &f, &plan(Format::OpusCopy)).unwrap();
+    let r = go(&fake, &f, &plan(Format::Copy { codec: Codec::Opus })).unwrap();
     assert_eq!(r.audio, PathBuf::from("A/Record/Song.opus"));
     assert_eq!(r.lyrics, Some(PathBuf::from("A/Record/Song.lrc")));
     assert!(r.problems.is_empty(), "{:?}", r.problems);
@@ -131,7 +136,7 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
 fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
     let f = fixture();
     let fake = Fake::default();
-    let mut p = plan(Format::OpusCopy);
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
     p.cover = Some(CoverRef {
         key: yt("bbbbbbbbbbb"),
         rev: "r".into(),
@@ -160,7 +165,7 @@ fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
 fn a_flac_song_keeps_its_tags_and_cover_as_flac() {
     let f = fixture();
     let fake = Fake::default();
-    let r = go(&fake, &f, &plan(Format::FlacCopy)).unwrap();
+    let r = go(&fake, &f, &plan(Format::Copy { codec: Codec::Flac })).unwrap();
     assert_eq!(r.audio, PathBuf::from("A/Record/Song.flac"));
     let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
     let flac = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
@@ -175,13 +180,106 @@ fn another_lossy_codec_is_encoded_to_opus() {
     go(
         &fake,
         &f,
-        &plan(Format::OpusEncode {
-            channels: 2,
-            kbps: 160,
+        &plan(Format::Encode {
+            codec: Codec::Opus,
+            kbps: Some(160),
         }),
     )
     .unwrap();
     assert!(fake.ran("libopus") && fake.ran("160k"));
+}
+
+/// The plan's tags with one no format names, and lyrics embedded.
+fn tagged(format: Format) -> Plan {
+    let mut p = plan(format);
+    p.tags.push(("TRACKNUMBER".into(), vec!["3".into()]));
+    p.tags.push(("TRACKTOTAL".into(), vec!["12".into()]));
+    p.tags
+        .push(("GENRE".into(), vec!["House".into(), "Disco".into()]));
+    p.tags.push(("FAVOURITE".into(), vec!["Bright".into()]));
+    p.lyrics.as_mut().unwrap().placement = LyricsPlacement::Embedded;
+    p
+}
+
+#[test]
+fn an_mp3_song_is_tagged_with_id3v2() {
+    let f = fixture();
+    let fake = Fake::default();
+    let r = go(
+        &fake,
+        &f,
+        &tagged(Format::Encode {
+            codec: Codec::Mp3,
+            kbps: Some(320),
+        }),
+    )
+    .unwrap();
+    assert!(fake.ran("libmp3lame") && fake.ran("320k"));
+    assert_eq!(r.audio, PathBuf::from("A/Record/Song.mp3"));
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let id3: &Id3v2Tag = mp3.id3v2().unwrap();
+    assert_eq!(id3.title().as_deref(), Some("Song"));
+    assert_eq!(id3.artist().as_deref(), Some("A, B"));
+    assert_eq!(id3.track(), Some(3));
+    assert_eq!(id3.track_total(), Some(12));
+    assert_eq!(id3.genre().as_deref(), Some("House / Disco"));
+    assert_eq!(id3.get_user_text("FAVOURITE"), Some("Bright"));
+    let generic = lofty::tag::Tag::from(id3.clone());
+    assert_eq!(
+        generic.get_string(lofty::tag::ItemKey::UnsyncLyrics),
+        Some("[00:01.00]line\n[00:30.00]more\n")
+    );
+    assert_eq!(generic.pictures().len(), 1);
+}
+
+#[test]
+fn an_m4a_song_is_tagged_with_atoms() {
+    let f = fixture();
+    let fake = Fake::default();
+    let r = go(&fake, &f, &tagged(Format::Copy { codec: Codec::Aac })).unwrap();
+    assert!(fake.ran("copy") && fake.ran("ipod"));
+    assert_eq!(r.audio, PathBuf::from("A/Record/Song.m4a"));
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+    let ilst = m4a.ilst().unwrap();
+    assert_eq!(ilst.title().as_deref(), Some("Song"));
+    assert_eq!(ilst.track(), Some(3));
+    assert_eq!(ilst.track_total(), Some(12));
+    let mood = ilst
+        .get(&lofty::mp4::AtomIdent::Freeform {
+            mean: "com.apple.iTunes".into(),
+            name: "FAVOURITE".into(),
+        })
+        .unwrap();
+    assert!(
+        mood.data()
+            .any(|d| matches!(d, lofty::mp4::AtomData::UTF8(s) if s == "Bright"))
+    );
+    assert_eq!(ilst.pictures().unwrap().count(), 1);
+}
+
+#[test]
+fn a_vorbis_song_keeps_vorbis_comments_in_ogg() {
+    let f = fixture();
+    let fake = Fake::default();
+    let r = go(
+        &fake,
+        &f,
+        &tagged(Format::Encode {
+            codec: Codec::Vorbis,
+            kbps: Some(192),
+        }),
+    )
+    .unwrap();
+    assert!(fake.ran("libvorbis") && fake.ran("192k"));
+    assert_eq!(r.audio, PathBuf::from("A/Record/Song.ogg"));
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let ogg = VorbisFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let c = ogg.vorbis_comments();
+    assert_eq!(c.get("FAVOURITE"), Some("Bright"));
+    assert_eq!(c.get_all("GENRE").collect::<Vec<_>>(), ["House", "Disco"]);
+    assert_eq!(c.pictures().len(), 1);
 }
 
 #[test]
@@ -194,7 +292,7 @@ fn failed_lyrics_cost_only_themselves_and_clear_the_last_build_s() {
         failing: vec!["lrc".into()],
         ..Fake::default()
     };
-    let r = go(&fake, &f, &plan(Format::OpusCopy)).unwrap();
+    let r = go(&fake, &f, &plan(Format::Copy { codec: Codec::Opus })).unwrap();
     assert_eq!(r.lyrics, None);
     assert!(
         r.problems.iter().any(|p| p.starts_with("no lyrics")),
@@ -212,7 +310,7 @@ fn failed_audio_fails_the_song_and_leaves_nothing_behind() {
         failing: vec!["opus".into()],
         ..Fake::default()
     };
-    assert!(go(&fake, &f, &plan(Format::OpusCopy)).is_err());
+    assert!(go(&fake, &f, &plan(Format::Copy { codec: Codec::Opus })).is_err());
     let dir = f.dir.path().join("lib/A/Record");
     assert_eq!(leftover_parts(&dir), Vec::<PathBuf>::new());
     assert!(!dir.join("Song.opus").exists());
@@ -234,7 +332,7 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
             covers: Vec::new(),
         },
     );
-    let mut p = plan(Format::OpusCopy);
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
     p.cover = None;
     p.lyrics = Some(LyricsRef {
         key,

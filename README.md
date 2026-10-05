@@ -10,8 +10,9 @@ YouTube Music, files you dropped into a folder, and lyrics from
 the best audio, cover, lyrics and tags by what it measures — real
 bandwidth and clipping, how much of a cover is picture and how sharp,
 timed lyrics over untimed — never by where a source came from. Each song
-is then written once into your library as a tagged Opus or FLAC file
-with its cover and lyrics, at a path you choose with a template.
+is then written once into your library as a tagged file in the codecs
+you choose, with its cover and lyrics, at a path you choose with a
+template.
 
 - **The song list is the library's source of truth.** Edit it, run
   `muman sync`, and the library follows: songs added, rewritten where
@@ -96,6 +97,7 @@ muman undo
 | `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, then sync |
 | `check` | Compare the library and the sources with what muman recorded |
 | `edit` | Edit the songs a query matches in your editor |
+| `export` | Write the song list and the library into a zip, fitted to a size if given |
 | `info` | Count what the library holds and what could be better, from what earlier runs measured |
 | `list` | List the songs a query matches |
 | `remove`, `restore` | Take songs out of the list, keeping a record so nothing adds them back; and list them again |
@@ -116,7 +118,7 @@ Every flag is in the [command reference](docs/cli.md).
 ## Documentation
 
 - [Guide](docs/guide.md): the song list, sources, how the best of each is
-  picked, lookups, queries and editing, hooks.
+  picked, lookups, queries and editing, export, hooks.
 - [Configuration](docs/configuration.md): folders, programs, the
   settings in `songs.toml`, the path template and safe names.
 - [Command reference](docs/cli.md): every command and flag.

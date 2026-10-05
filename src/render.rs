@@ -6,13 +6,16 @@
 //! A cover or lyrics that fail are reported and the song is written
 //! without them.
 //!
-//! Opus is written into Ogg. Tags come from the plan alone: the
-//! container's, yt-dlp's description and URL among them, are dropped. The
-//! cover is a front-cover picture written through `lofty`: a JPEG or PNG
-//! without borders as its own bytes, any other converted to PNG and
-//! cropped to the content inside a video frame's bars. Lyrics are cleaned
-//! of cues, symbols and credits and moved by the plan's offset; lyrics
-//! from a `.lrc` file need no ffmpeg at all.
+//! Each codec goes into its own container, as [`crate::codec`] says. Tags
+//! come from the plan alone: the container's, yt-dlp's description and URL
+//! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
+//! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
+//! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
+//! name. The cover is a front-cover picture written through `lofty`: a
+//! JPEG or PNG without borders as its own bytes, any other converted to
+//! PNG and cropped to the content inside a video frame's bars. Lyrics are
+//! cleaned of cues, symbols and credits and moved by the plan's offset;
+//! lyrics from a `.lrc` file need no ffmpeg at all.
 //!
 //! Starting ffmpeg can cost 100 ms or more against a few milliseconds of
 //! work, so a song is one ffmpeg run writing every output; only when that
@@ -26,14 +29,18 @@ use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
+use lofty::TextEncoding;
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::flac::FlacFile;
+use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::ogg::tag::VorbisComments;
-use lofty::ogg::{OggPictureStorage, OpusFile};
+use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
 use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::tag::TagExt;
+use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
 
+use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
 use crate::ffmpeg::{self, Output};
 use crate::lyrics;
@@ -61,6 +68,9 @@ pub struct Rendered {
     pub lyrics: Option<PathBuf>,
     /// What could not be added, each said once.
     pub problems: Vec<String>,
+    /// What the audio and lyrics files take, in bytes, as written.
+    pub audio_bytes: u64,
+    pub lyrics_bytes: u64,
 }
 
 fn with_extension(stem: &Path, ext: &str) -> PathBuf {
@@ -92,28 +102,14 @@ impl Inputs {
 
 fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output {
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{index}")];
-    let codec: Vec<String> = match format {
-        Format::OpusCopy | Format::FlacCopy => vec!["-c:a".into(), "copy".into()],
-        Format::FlacEncode => vec!["-c:a".into(), "flac".into()],
-        Format::OpusEncode { kbps, .. } => vec![
-            "-c:a".into(),
-            "libopus".into(),
-            "-b:a".into(),
-            format!("{kbps}k"),
-            "-vbr".into(),
-            "on".into(),
-        ],
-    };
-    args.extend(codec);
+    args.extend(match format {
+        Format::Copy { .. } => vec!["-c:a".into(), "copy".into()],
+        Format::Encode { codec, kbps } => codec.encoder_args(kbps),
+    });
     // Tags are written from the plan alone; ffmpeg would carry the
     // container's, chapters as comments among them.
     args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
-    if format.extension() == "opus" {
-        // libopusfile refuses a stream that starts before zero.
-        args.extend(["-avoid_negative_ts", "make_non_negative", "-f", "opus"].map(String::from));
-    } else {
-        args.extend(["-f", "flac"].map(String::from));
-    }
+    args.extend(format.codec().muxer_args());
     Output::new(args.into_iter().map(OsString::from).collect(), path)
 }
 
@@ -266,6 +262,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             }
             rename(&audio_part, &audio_path)?;
             Ok(Rendered {
+                audio_bytes: size_of(&audio_path),
+                lyrics_bytes: lyrics.as_ref().map_or(0, |_| size_of(&lyrics_path)),
                 audio: audio_rel,
                 lyrics,
                 problems,
@@ -277,6 +275,33 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             Err(e)
         }
     }
+}
+
+fn size_of(path: &Path) -> u64 {
+    fs::metadata(path).map_or(0, |m| m.len())
+}
+
+/// Put a song [`render`] wrote into the library folder `from` at its
+/// place in `library`, as rendering it there would have: lyrics first,
+/// audio last, each through `.part`, and the last build's lyrics gone
+/// when it has none now.
+pub fn place(from: &Path, rendered: &Rendered, library: &Path) -> Result<Rendered> {
+    let copy_in = |rel: &Path| -> Result<()> {
+        let to = library.join(rel);
+        if let Some(dir) = to.parent() {
+            fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        let staged = part(&to);
+        fs::copy(from.join(rel), &staged)
+            .with_context(|| format!("copying {} into the library", rel.display()))?;
+        rename(&staged, &to)
+    };
+    match &rendered.lyrics {
+        Some(lyrics) => copy_in(lyrics)?,
+        None => remove_if_present(&library.join(rendered.audio.with_extension("lrc")))?,
+    }
+    copy_in(&rendered.audio)?;
+    Ok(rendered.clone())
 }
 
 /// Plan the cover: a JPEG or PNG without borders is used as it is; any
@@ -394,8 +419,8 @@ fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
         .build())
 }
 
-/// Replace every comment the file carries with the plan's tags and the
-/// cover, keeping the encoder's vendor string.
+/// Replace every tag the file carries with the plan's tags and the
+/// cover, in the codec's own kind of tag.
 fn write_tags(
     path: &Path,
     format: Format,
@@ -407,18 +432,71 @@ fn write_tags(
         .write(true)
         .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let vendor = if format.extension() == "opus" {
-        OpusFile::read_from(&mut file, ParseOptions::new())
-            .with_context(|| format!("reading {} as Ogg Opus", path.display()))?
+    let codec = format.codec();
+    let written = match codec.container() {
+        Container::Ogg | Container::Flac => {
+            let comments = vorbis_comments(&mut file, path, codec, tags, picture)?;
+            file.seek(SeekFrom::Start(0))?;
+            comments.save_to(&mut file, WriteOptions::default())
+        }
+        Container::Mp3 => {
+            let (generic, own) = generic_tag(TagType::Id3v2, tags, picture);
+            let mut id3 = Id3v2Tag::from(generic);
+            for (key, values) in own {
+                id3.insert(Frame::UserText(ExtendedTextFrame::new(
+                    TextEncoding::UTF8,
+                    key.clone(),
+                    values.join("\0"),
+                )));
+            }
+            id3.save_to(&mut file, WriteOptions::default())
+        }
+        Container::Mp4 => {
+            let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
+            let mut ilst = Ilst::from(generic);
+            for (key, values) in own {
+                let ident = AtomIdent::Freeform {
+                    mean: "com.apple.iTunes".into(),
+                    name: key.clone().into(),
+                };
+                let data = values.iter().cloned().map(AtomData::UTF8).collect();
+                if let Some(atom) = Atom::from_collection(ident, data) {
+                    ilst.insert(atom);
+                }
+            }
+            ilst.save_to(&mut file, WriteOptions::default())
+        }
+    };
+    written.with_context(|| format!("writing tags to {}", path.display()))
+}
+
+/// The plan's tags and the cover as Vorbis comments, keeping the
+/// encoder's vendor string, read from `file`.
+fn vorbis_comments(
+    file: &mut fs::File,
+    path: &Path,
+    codec: Codec,
+    tags: &[(String, Vec<String>)],
+    picture: Option<Picture>,
+) -> Result<VorbisComments> {
+    let options = ParseOptions::new();
+    let reading = || format!("reading {} as {codec}", path.display());
+    let vendor = match codec {
+        Codec::Opus => OpusFile::read_from(file, options)
+            .with_context(reading)?
             .vorbis_comments()
             .vendor()
-            .to_string()
-    } else {
-        FlacFile::read_from(&mut file, ParseOptions::new())
-            .with_context(|| format!("reading {} as FLAC", path.display()))?
+            .to_string(),
+        Codec::Vorbis => VorbisFile::read_from(file, options)
+            .with_context(reading)?
+            .vorbis_comments()
+            .vendor()
+            .to_string(),
+        _ => FlacFile::read_from(file, options)
+            .with_context(reading)?
             .vorbis_comments()
             .map(|c| c.vendor().to_string())
-            .unwrap_or_default()
+            .unwrap_or_default(),
     };
     let mut comments = VorbisComments::default();
     comments.set_vendor(vendor);
@@ -432,12 +510,46 @@ fn write_tags(
             .insert_picture(picture, None)
             .context("reading the cover's dimensions")?;
     }
-    // lofty identifies the file it writes to from the current position,
-    // which reading left at the end.
-    file.seek(SeekFrom::Start(0))?;
-    comments
-        .save_to(&mut file, WriteOptions::default())
-        .with_context(|| format!("writing tags to {}", path.display()))
+    Ok(comments)
+}
+
+/// The tags `lofty` can map into `kind`, as a generic tag holding the
+/// cover too, and the rest, which the format keeps under their own names.
+fn generic_tag(
+    kind: TagType,
+    tags: &[(String, Vec<String>)],
+    picture: Option<Picture>,
+) -> (Tag, Vec<(&String, &Vec<String>)>) {
+    // The format writes these as frames of their own kind, or folds them
+    // into another, so they map to no key of it.
+    let special = [
+        ItemKey::TrackNumber,
+        ItemKey::TrackTotal,
+        ItemKey::DiscNumber,
+        ItemKey::DiscTotal,
+        ItemKey::UnsyncLyrics,
+    ];
+    let mut generic = Tag::new(kind);
+    let mut own = Vec::new();
+    for (key, values) in tags {
+        let item = ItemKey::from_key(TagType::VorbisComments, key).map(|item| match item {
+            // ID3v2 keeps lyrics in an unsynchronised lyrics frame.
+            ItemKey::Lyrics if item.map_key(kind).is_none() => ItemKey::UnsyncLyrics,
+            item => item,
+        });
+        match item.filter(|item| item.map_key(kind).is_some() || special.contains(item)) {
+            Some(item) => {
+                for value in values {
+                    generic.push(TagItem::new(item, ItemValue::Text(value.clone())));
+                }
+            }
+            None => own.push((key, values)),
+        }
+    }
+    if let Some(picture) = picture {
+        generic.push_picture(picture);
+    }
+    (generic, own)
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {

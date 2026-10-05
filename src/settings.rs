@@ -1,10 +1,12 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
-//! and named, what bitrate encodes, how yt-dlp fetches, and how much
-//! history `undo` keeps.
+//! and named, which codecs are kept and what the rest is encoded to, how
+//! sources are ranked, how yt-dlp fetches, and how much history `undo`
+//! keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[ytdlp]` and `[history]`; every key is
+//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]` and `[history]`;
+//! every key is
 //! optional, and `new.toml`, the file a new home starts from, lists each
 //! with its default. A key these tables do not know is an error naming
 //! it, so a misspelled setting is never silently ignored. Which machine
@@ -14,19 +16,23 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+use crate::codec::Codec;
+use crate::quality;
+
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 4] = ["library", "audio", "ytdlp", "history"];
+pub const TABLES: [&str; 5] = ["library", "audio", "quality", "ytdlp", "history"];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub library: Library,
     pub audio: Audio,
+    pub quality: Quality,
     pub ytdlp: Ytdlp,
     pub history: History,
 }
@@ -60,6 +66,12 @@ pub struct Library {
     /// Set the library folder's time to now after a run that changed it,
     /// for players that rescan only when it is newer than their last scan.
     pub touch_root: bool,
+    /// The most the files muman writes may take; songs are encoded at
+    /// lower bitrates to fit. See [`crate::limit`].
+    pub max_size: Option<Size>,
+    /// Each file counts as taking a whole number of these, the
+    /// filesystem's allocation unit.
+    pub block_size: Size,
 }
 
 /// `<album artist>/<album>/<NN title>`, `<D-NN title>` from a second
@@ -81,6 +93,8 @@ impl Default for Library {
             untitled: "Untitled".into(),
             lyrics: LyricsPlacement::default(),
             touch_root: false,
+            max_size: None,
+            block_size: Size(4096),
         }
     }
 }
@@ -103,6 +117,30 @@ impl Library {
         } else {
             home.join(expanded)
         })
+    }
+}
+
+/// A number of bytes, written in `songs.toml` as an integer or as text
+/// with a unit: `"32 GiB"`, `"700MB"`; see [`crate::fit::parse_size`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "SizeText")]
+pub struct Size(pub u64);
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SizeText {
+    Bytes(u64),
+    Text(String),
+}
+
+impl TryFrom<SizeText> for Size {
+    type Error = String;
+
+    fn try_from(text: SizeText) -> Result<Self, String> {
+        match text {
+            SizeText::Bytes(n) => Ok(Self(n)),
+            SizeText::Text(t) => crate::fit::parse_size(&t).map(Self),
+        }
     }
 }
 
@@ -145,25 +183,299 @@ impl LyricsPlacement {
     }
 }
 
-/// How audio that is not copied is encoded.
+/// Which codecs a source's audio is copied in, and how the rest is
+/// encoded.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Audio {
+    /// Codecs copied as they are; audio in any other is encoded. Audio
+    /// already in the codec it would be encoded to is copied too.
+    pub codecs: Vec<Codec>,
+    /// What lossy audio in a codec not copied is encoded to.
+    pub lossy: Codec,
+    /// What lossless audio in a codec not copied is encoded to; a lossy
+    /// codec here encodes at its bitrate below.
+    pub lossless: Codec,
     /// Opus bitrate for mono and stereo, in kbit/s; at or above what
     /// YouTube serves, so encoding loses nothing audible.
     pub opus_kbps: u32,
     /// Opus bitrate for more than two channels.
     pub opus_surround_kbps: u32,
+    /// Vorbis and AAC bitrates for two channels, raised in proportion for
+    /// more.
+    pub vorbis_kbps: u32,
+    pub aac_kbps: u32,
+    /// MP3 bitrate, constant; MP3 holds two channels at most.
+    pub mp3_kbps: u32,
+    /// The lowest bitrate a song is lowered to so the library fits
+    /// `[library] max_size`, for two channels; none, the encoder's lowest.
+    pub min_kbps: Option<u32>,
 }
 
 impl Default for Audio {
     fn default() -> Self {
         Self {
+            codecs: vec![Codec::Opus, Codec::Flac],
+            lossy: Codec::Opus,
+            lossless: Codec::Flac,
             opus_kbps: 160,
             opus_surround_kbps: 256,
+            vorbis_kbps: 192,
+            aac_kbps: 256,
+            mp3_kbps: 320,
+            min_kbps: None,
         }
     }
 }
+
+impl Audio {
+    /// The bitrate `codec` encodes `channels` at, in kbit/s; none for a
+    /// lossless codec.
+    #[must_use]
+    pub fn kbps(&self, codec: Codec, channels: u32) -> Option<u32> {
+        let scaled = |kbps: u32| {
+            if channels > 2 {
+                kbps * channels / 2
+            } else {
+                kbps
+            }
+        };
+        match codec {
+            Codec::Opus if channels > 2 => Some(self.opus_surround_kbps),
+            Codec::Opus => Some(self.opus_kbps),
+            Codec::Vorbis => Some(scaled(self.vorbis_kbps)),
+            Codec::Aac => Some(scaled(self.aac_kbps)),
+            Codec::Mp3 => Some(self.mp3_kbps),
+            Codec::Flac | Codec::Alac => None,
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.lossy.is_lossless() {
+            bail!(
+                "[audio] lossy = \"{}\" is lossless; name a lossy codec: opus, vorbis, aac or mp3",
+                self.lossy
+            );
+        }
+        if self.min_kbps == Some(0) {
+            bail!("[audio] min_kbps must be above 0");
+        }
+        if self.mp3_kbps > 320 {
+            bail!("[audio] mp3_kbps is over 320, the most MP3 holds");
+        }
+        Ok(())
+    }
+}
+
+/// How the best of a song's sources is picked. Each measure scores a
+/// source in whole steps; a source's score is each measure's steps times
+/// its weight, summed, and the lowest wins. A measure switched off, or
+/// weighing 0, counts for nothing; one that could not be taken ranks a
+/// source after every one it was taken on. Ties go to the source listed
+/// first. See [`crate::resolve`].
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Quality {
+    pub purity: Purity,
+    pub bandwidth: Bandwidth,
+    pub stereo: Stereo,
+    pub clipping: Clipping,
+    pub square: Square,
+    pub resolution: Resolution,
+    pub blockiness: Blockiness,
+}
+
+impl Quality {
+    fn check(&self) -> Result<()> {
+        let steps = [
+            ("purity.step_ms", f64::from(self.purity.step_ms)),
+            ("bandwidth.step_hz", f64::from(self.bandwidth.step_hz)),
+            ("resolution.step", self.resolution.step),
+            ("blockiness.step", self.blockiness.step),
+        ];
+        for (key, step) in steps {
+            if step.is_nan() || step <= 0.0 {
+                bail!("[quality.{key}] must be above 0");
+            }
+        }
+        let cutoffs = self
+            .clipping
+            .cutoffs
+            .iter()
+            .map(|c| ("clipping.cutoffs", *c));
+        let bounds = [
+            ("stereo.incoherence", self.stereo.incoherence),
+            ("square.tolerance", self.square.tolerance),
+        ];
+        for (key, value) in bounds.into_iter().chain(cutoffs) {
+            if !value.is_finite() || value < 0.0 {
+                bail!("[quality.{key}] must be a number of 0 or more");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sound in a source beyond the song: a video's intro, outro or skit.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Purity {
+    pub enabled: bool,
+    pub weight: u32,
+    /// Sound beyond the song is judged in steps this long: a fade differs
+    /// by less, an intro or a skit by more.
+    pub step_ms: u32,
+}
+
+impl Default for Purity {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 10_000,
+            step_ms: 2000,
+        }
+    }
+}
+
+/// Where a lowpass cuts the audio off; wider is better.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Bandwidth {
+    pub enabled: bool,
+    pub weight: u32,
+    /// Wide enough that noise never decides between near-equals.
+    pub step_hz: u32,
+}
+
+impl Default for Bandwidth {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 10,
+            step_hz: 500,
+        }
+    }
+}
+
+/// Real stereo over mono copied into two channels.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Stereo {
+    pub enabled: bool,
+    pub weight: u32,
+    /// The share of the channels' energy no gain or lag between them
+    /// explains, at or below which audio counts as mono; see
+    /// [`quality::STEREO_INCOHERENCE`].
+    pub incoherence: f64,
+}
+
+impl Default for Stereo {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 5,
+            incoherence: quality::STEREO_INCOHERENCE,
+        }
+    }
+}
+
+/// Samples clipped at full scale.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Clipping {
+    pub enabled: bool,
+    pub weight: u32,
+    /// Shares of clipped samples, each one reached a step: by order of
+    /// magnitude from the inaudible.
+    pub cutoffs: Vec<f64>,
+}
+
+impl Default for Clipping {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 1,
+            cutoffs: vec![1e-3, 1e-2],
+        }
+    }
+}
+
+/// A square cover over one of another shape.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Square {
+    pub enabled: bool,
+    pub weight: u32,
+    /// How far from square, as the log of the sides' ratio, still counts.
+    pub tolerance: f64,
+}
+
+impl Default for Square {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 10_000,
+            tolerance: quality::SQUARE_TOLERANCE,
+        }
+    }
+}
+
+/// A cover's effective resolution; higher is better.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Resolution {
+    pub enabled: bool,
+    pub weight: u32,
+    /// Each step is this share more resolution: 0.1 is 10%.
+    pub step: f64,
+}
+
+impl Default for Resolution {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 20,
+            step: 0.1,
+        }
+    }
+}
+
+/// A cover's JPEG block artifacts; fewer is better.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Blockiness {
+    pub enabled: bool,
+    pub weight: u32,
+    /// Steps past the tenth count no more, so artifacts never outweigh a
+    /// step of resolution at the default weights.
+    pub step: f64,
+}
+
+impl Default for Blockiness {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: 1,
+            step: 0.1,
+        }
+    }
+}
+
+macro_rules! weighed {
+    ($($measure:ty),*) => {$(
+        impl $measure {
+            /// What one step weighs: nothing when the measure is off.
+            #[must_use]
+            pub fn weight(&self) -> i64 {
+                if self.enabled { i64::from(self.weight) } else { 0 }
+            }
+        }
+    )*};
+}
+
+weighed!(
+    Purity, Bandwidth, Stereo, Clipping, Square, Resolution, Blockiness
+);
 
 /// How yt-dlp fetches a source.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -237,7 +549,13 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
             only.insert(table, item.clone());
         }
     }
-    toml::from_str(&only.to_string()).context("reading the settings")
+    let settings: Settings = toml::from_str(&only.to_string()).context("reading the settings")?;
+    if settings.library.block_size.0 == 0 {
+        bail!("[library] block_size must be above 0");
+    }
+    settings.audio.check()?;
+    settings.quality.check()?;
+    Ok(settings)
 }
 
 #[cfg(test)]
@@ -272,6 +590,50 @@ mod tests {
         let e = settings("[audio]\nopus_kpbs = 192\n").unwrap_err();
         assert!(format!("{e:#}").contains("opus_kpbs"), "{e:#}");
         assert!(settings("[library]\nrestrict = \"dos\"\n").is_err());
+    }
+
+    #[test]
+    fn codecs_are_named_and_a_lossy_target_must_be_lossy() {
+        let s = settings(
+            "[audio]\ncodecs = [\"aac\", \"mp3\", \"alac\"]\nlossy = \"mp3\"\nlossless = \"alac\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.audio.codecs, [Codec::Aac, Codec::Mp3, Codec::Alac]);
+        assert_eq!(s.audio.kbps(Codec::Mp3, 6), Some(320));
+        assert_eq!(s.audio.kbps(Codec::Aac, 6), Some(768));
+        assert_eq!(s.audio.kbps(Codec::Alac, 2), None);
+        let e = settings("[audio]\nlossy = \"flac\"\n").unwrap_err();
+        assert!(format!("{e:#}").contains("lossless"), "{e:#}");
+        assert!(settings("[audio]\ncodecs = [\"wma\"]\n").is_err());
+    }
+
+    #[test]
+    fn a_quality_table_sets_only_what_it_names() {
+        let s = settings("[quality.stereo]\nweight = 0\n[quality.clipping]\nenabled = false\n")
+            .unwrap();
+        assert_eq!(s.quality.stereo.weight(), 0);
+        assert_eq!(
+            s.quality.stereo,
+            Stereo {
+                weight: 0,
+                ..Stereo::default()
+            }
+        );
+        assert_eq!(s.quality.clipping.weight(), 0);
+        assert_eq!(s.quality.bandwidth, Bandwidth::default());
+        assert!(settings("[quality.bandwidth]\nstep_hz = 0\n").is_err());
+        assert!(settings("[quality.clipping]\ncutoffs = [-1.0]\n").is_err());
+        assert!(settings("[quality.loudness]\nweight = 1\n").is_err());
+    }
+
+    #[test]
+    fn a_size_is_bytes_or_text_with_a_unit() {
+        let s = settings("[library]\nmax_size = \"32 GiB\"\nblock_size = 32768\n").unwrap();
+        assert_eq!(s.library.max_size, Some(Size(32 << 30)));
+        assert_eq!(s.library.block_size, Size(32 << 10));
+        let e = settings("[library]\nmax_size = \"lots\"\n").unwrap_err();
+        assert!(format!("{e:#}").contains("lots"), "{e:#}");
+        assert!(settings("[library]\nblock_size = 0\n").is_err());
     }
 
     #[test]

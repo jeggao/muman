@@ -29,11 +29,72 @@ version = 1
 # # Set the library folder's time after a change, for players that rescan
 # # only when it is newer.
 # touch_root = false
+# # The most the library may take, such as "32 GiB"; songs are encoded at
+# # lower bitrates of `[audio] lossy` to fit, the least audible first.
+# # Unset, there is no limit.
+# # max_size = "32 GiB"
+# # Each file counts rounded up to this: "32 KiB" on a FAT32 card.
+# block_size = "4 KiB"
 
 # [audio]
-# # Opus bitrates in kbit/s for audio that is encoded rather than copied.
+# # Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac and
+# # alac. Audio in any other is encoded: lossy audio to `lossy`, lossless
+# # audio to `lossless`; audio already in that codec is copied.
+# codecs = ["opus", "flac"]
+# lossy = "opus"
+# lossless = "flac"
+# # Bitrates in kbit/s for audio that is encoded rather than copied. Vorbis
+# # and AAC are raised in proportion past two channels; MP3 holds two.
 # opus_kbps = 160
 # opus_surround_kbps = 256
+# vorbis_kbps = 192
+# aac_kbps = 256
+# mp3_kbps = 320
+# # The lowest bitrate in kbit/s a song is lowered to for `max_size`;
+# # unset, the encoder's lowest.
+# # min_kbps = 64
+
+# # How the best of a song's sources is picked. Each measure scores a
+# # source in whole steps; the steps times the weight are summed, and the
+# # lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
+# # The weights below rank by each measure in turn, top first.
+# [quality.purity]
+# # Sound beyond the song, such as a video's intro, in steps of step_ms.
+# enabled = true
+# weight = 10000
+# step_ms = 2000
+# [quality.bandwidth]
+# # Where a lowpass cuts the audio off, a step per step_hz lower.
+# enabled = true
+# weight = 10
+# step_hz = 500
+# [quality.stereo]
+# # One step for mono: the channels' energy no gain or lag between them
+# # explains is at most `incoherence`.
+# enabled = true
+# weight = 5
+# incoherence = 0.01
+# [quality.clipping]
+# # A step for each share of clipped samples reached.
+# enabled = true
+# weight = 1
+# cutoffs = [0.001, 0.01]
+# [quality.square]
+# # One step for a cover that is not square within `tolerance`, the log
+# # of its sides' ratio.
+# enabled = true
+# weight = 10000
+# tolerance = 0.03
+# [quality.resolution]
+# # A cover's detail, a step per `step` (0.1 is 10%) less resolution.
+# enabled = true
+# weight = 20
+# step = 0.1
+# [quality.blockiness]
+# # A cover's JPEG block artifacts, a step per `step`, ten at most.
+# enabled = true
+# weight = 1
+# step = 0.1
 
 # [ytdlp]
 # format = "bv*+ba/b"

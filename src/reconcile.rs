@@ -1,7 +1,8 @@
 //! The library brought in line with the song list, offline: every listed
 //! source measured, the comparisons each song needs made, each song
-//! resolved to a plan, a song rendered only when its plan changed, and
-//! every file muman wrote that no song makes now deleted.
+//! resolved to a plan and the songs fitted into `[library] max_size`
+//! when it is set, a song rendered only when its plan changed, and every
+//! file muman wrote that no song makes now deleted.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
@@ -17,6 +18,7 @@ use crate::dirs::Dirs;
 use crate::facts::{self, Facts};
 use crate::history::Run;
 use crate::hooks;
+use crate::limit;
 use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::parallel;
@@ -292,8 +294,10 @@ fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     if old.version != new.version {
         what.push("muman's rendering");
     }
-    if old.format != new.format || old.audio != new.audio {
+    if old.audio != new.audio {
         what.push("audio");
+    } else if old.format != new.format {
+        what.push("format");
     }
     if old.cover != new.cover {
         what.push("cover");
@@ -372,9 +376,39 @@ pub fn reconcile<R: Runner, W: Write>(
         state.save(home)?;
     }
 
-    let (planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
+    let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
+    let located: BTreeMap<SourceKey, Located> = listed
+        .iter()
+        .filter_map(|k| Some((k.clone(), store.locate(k)?)))
+        .collect();
+    // Beside the home rather than in the system's temporary folder, which
+    // may be memory: fitting may render much of the library into it.
+    let workshop = tempfile::tempdir_in(home).context("creating a folder to fit the library in")?;
+    let (fitted, placed) = if manifest.settings.library.max_size.is_some() {
+        if sizes(runner, &store, &planned, &mut state, temp.path(), out)? {
+            state.save(home)?;
+        }
+        let block = manifest.settings.library.block_size.0;
+        let at = limit::Workshop {
+            sources: &located,
+            scratch: workshop.path(),
+            library: &dirs.library,
+            kept: limit::kept(&state, &dirs.library, &failed, block),
+        };
+        let fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
+        if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {
+            state.save(home)?;
+        }
+        if let Some((f, _)) = fitted.as_ref().filter(|(f, _)| !f.left_out.is_empty()) {
+            ok = false;
+            left_out(&manifest, &state, f, out)?;
+        }
+        fitted.map_or((None, HashMap::new()), |(f, made)| (Some(f), made))
+    } else {
+        (None, HashMap::new())
+    };
     let moved = relocate(&planned, &mut state, &dirs.library, opts.dry_run, out)?;
     if !moved.is_empty() && !opts.dry_run {
         // The files are already at their new paths; a failure before the
@@ -415,6 +449,9 @@ pub fn reconcile<R: Runner, W: Write>(
             &moved,
             out,
         )?;
+        if let Some(f) = &fitted {
+            fit_summary(f, out)?;
+        }
         drop(lock);
         return Ok(ok);
     }
@@ -422,10 +459,6 @@ pub fn reconcile<R: Runner, W: Write>(
         run.outputs_before(&old);
     }
 
-    let located: BTreeMap<SourceKey, Located> = listed
-        .iter()
-        .filter_map(|k| Some((k.clone(), store.locate(k)?)))
-        .collect();
     if !due.is_empty() {
         // Owned before written: a crash between the two must not leave a
         // file no run would ever delete.
@@ -456,6 +489,9 @@ pub fn reconcile<R: Runner, W: Write>(
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
     }
     let rendered: Vec<Result<Rendered>> = parallel::map(&due, parallel::builds(), |(n, r)| {
+        if let Some((folder, made)) = placed.get(n) {
+            return render::place(folder, made, &dirs.library);
+        }
         render::render(
             runner,
             &render::Job {
@@ -498,13 +534,22 @@ pub fn reconcile<R: Runner, W: Write>(
     }
     let mut changed = false;
     let mut written = 0_usize;
+    let mut learned = Vec::new();
     for ((n, r), result) in due.iter().zip(rendered) {
         let song = &manifest.songs[*n];
         let name = name_of(song, Some(r), &state.facts);
         match result {
             Ok(done) => {
                 changed = true;
-                let verb = match old.get(&done.audio).and_then(|w| w.plan.as_ref()) {
+                // A new format writes the song beside its old file, under
+                // another extension.
+                let stem = done.audio.with_extension("");
+                let before = old.get(&done.audio).or_else(|| {
+                    old.iter()
+                        .find(|(p, w)| p.with_extension("") == stem && w.sources == song.sources)
+                        .map(|(_, w)| w)
+                });
+                let verb = match before.and_then(|w| w.plan.as_ref()) {
                     Some(p) => format!("Updated ({})", changes(p, &r.plan).join(", ")),
                     None => "Added".to_string(),
                 };
@@ -522,6 +567,14 @@ pub fn reconcile<R: Runner, W: Write>(
                 let values: Vec<(&str, &str)> =
                     values.iter().map(|(k, v)| (*k, v.as_str())).collect();
                 hooks::run(runner, &manifest.hooks, hooks::Event::Written, &values, out)?;
+                if let Some(f) = &fitted {
+                    let measured = state::Measured {
+                        source: r.plan.audio.key.clone(),
+                        audio: done.audio_bytes,
+                        lyrics: done.lyrics_bytes,
+                    };
+                    learned.push((limit::plan_key(&f.tools, &r.plan), measured));
+                }
                 outputs.insert(
                     done.audio.clone(),
                     Written {
@@ -550,11 +603,38 @@ pub fn reconcile<R: Runner, W: Write>(
     }
 
     state.outputs = outputs;
+    state.sizes.extend(learned);
+    if let Some(f) = &fitted {
+        let block = manifest.settings.library.block_size.0;
+        let size = limit::library_size(&state, &dirs.library, block);
+        if size > f.max {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "The library takes {}, over its max_size of {}; the next sync fits it again",
+                    crate::ui::bytes(size),
+                    crate::ui::bytes(f.max)
+                ),
+            )?;
+        } else {
+            fit_summary(
+                &limit::Fitted {
+                    projected: size,
+                    ..f.clone()
+                },
+                out,
+            )?;
+        }
+    }
     // A removed song's measures stay while its sources do, so restoring
     // it measures nothing again.
     let mut kept = listed.clone();
     kept.extend(manifest.removed_keys().into_iter().filter(|k| store.has(k)));
     state.facts.retain(|k, _| kept.contains(k));
+    match &fitted {
+        Some(f) => state.sizes.retain(|key, _| f.keys.contains(key)),
+        None => state.sizes.clear(),
+    }
     state.failures.retain(|k, _| listed.contains(k));
     state
         .alignments
@@ -577,9 +657,120 @@ pub fn reconcile<R: Runner, W: Write>(
     Ok(ok)
 }
 
+/// The audio stream of a source to measure, and where the source is.
+struct Sizing(u32, Located);
+
+/// Measure the audio bytes of each planned song's source that a copy
+/// would carry and whose facts lack them, for fitting. Returns whether
+/// any were.
+fn sizes<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    planned: &Planned,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: BTreeMap<SourceKey, Sizing> = planned
+        .iter()
+        .filter(|(_, r)| {
+            matches!(
+                r.plan.format,
+                resolve::Format::Copy { .. } | resolve::Format::Encode { kbps: None, .. }
+            )
+        })
+        .filter(|(_, r)| {
+            state
+                .facts
+                .get(&r.plan.audio.key)
+                .and_then(|f| f.audio.as_ref())
+                .is_some_and(|a| a.bytes.is_none())
+        })
+        .filter_map(|(_, r)| {
+            let located = store.locate(&r.plan.audio.key)?;
+            Some((
+                r.plan.audio.key.clone(),
+                Sizing(r.plan.audio.index, located),
+            ))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!("Measuring the audio size of {} source(s)", due.len()),
+    )?;
+    let due: Vec<(usize, (SourceKey, Sizing))> = due.into_iter().enumerate().collect();
+    let measured = parallel::map(
+        &due,
+        parallel::builds(),
+        |(n, (_, Sizing(index, located)))| {
+            facts::audio_bytes(runner, located, *index, &scratch.join(format!("size-{n}"))).ok()
+        },
+    );
+    for ((_, (key, _)), bytes) in due.iter().zip(measured) {
+        if let Some(audio) = state.facts.get_mut(key).and_then(|f| f.audio.as_mut()) {
+            audio.bytes = bytes;
+        }
+    }
+    Ok(true)
+}
+
+/// Say which songs were left out for want of room, and what the library
+/// would need.
+fn left_out<W: Write>(
+    manifest: &Manifest,
+    state: &State,
+    fitted: &limit::Fitted,
+    out: &mut W,
+) -> Result<()> {
+    const NAMED: usize = 10;
+    let names: Vec<String> = fitted
+        .left_out
+        .iter()
+        .take(NAMED)
+        .map(|n| name_of(&manifest.songs[*n], None, &state.facts))
+        .collect();
+    let more = fitted.left_out.len().saturating_sub(NAMED);
+    crate::ui::error(
+        out,
+        &format!(
+            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} (raise [library] max_size or lower [audio] min_kbps)",
+            crate::ui::bytes(fitted.max),
+            crate::ui::bytes(fitted.floor.unwrap_or(0)),
+            names.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ),
+    )?;
+    Ok(())
+}
+
+/// Say how full the library is projected to be against its limit.
+fn fit_summary<W: Write>(fitted: &limit::Fitted, out: &mut W) -> Result<()> {
+    crate::ui::info(
+        out,
+        &format!(
+            "Library: {} of {} (max_size); {} song(s) below their best format",
+            crate::ui::bytes(fitted.projected),
+            crate::ui::bytes(fitted.max),
+            fitted.lowered
+        ),
+    )?;
+    Ok(())
+}
+
 /// Whether a file muman wrote has changed since, by its size and
 /// time: a tagger or player that rewrote it.
-fn changed_since_written(library: &Path, old: &BTreeMap<PathBuf, Written>, path: &Path) -> bool {
+pub(crate) fn changed_since_written(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+) -> bool {
     old.get(path)
         .and_then(|w| w.stamp.as_ref())
         .zip(store::stamp_text(&library.join(path)))
@@ -737,6 +928,7 @@ pub(crate) fn plan<W: Write>(
             albums: &albums,
             naming: &naming,
             audio: &manifest.settings.audio,
+            quality: &manifest.settings.quality,
             placement: manifest.settings.library.lyrics,
         };
         match resolve::resolve(&input) {
@@ -936,6 +1128,9 @@ fn status<W: Write>(
             crate::ui::Style::Path.paint(&crate::relpath::show(&path))
         )?;
         writeln!(out, "  audio   {}: {}", r.plan.audio.key, r.why.audio)?;
+        if let Some(why) = &r.why.fit {
+            writeln!(out, "  format  {why}")?;
+        }
         if let (Some(c), Some(why)) = (&r.plan.cover, &r.why.cover) {
             writeln!(out, "  cover   {}: {why}", c.key)?;
         }

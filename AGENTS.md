@@ -42,7 +42,7 @@ These bind every change, by a person or an agent.
 src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [audio], [ytdlp], [history] from songs.toml
+  settings.rs       [library], [audio], [quality], [ytdlp], [history]
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
   manifest/new.toml a new home's song list, the reference for every setting
   state.rs          state.json: files written, measures, comparisons
@@ -64,7 +64,11 @@ src/
   tags.rs, clean.rs tag offers and the cleaning rules
   lyrics.rs         subtitle languages, LRC cleaning and timing
   naming.rs         safe names; template.rs, the path template
+  codec.rs          output codecs: names, containers, ffmpeg arguments
   render.rs         one plan to library files
+  fit.rs            songs fitted into a size, least audible loss first
+  limit.rs          the library kept under [library] max_size
+  export.rs         the song list and the library into one zip
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   check.rs, overview.rs            check and info

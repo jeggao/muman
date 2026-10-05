@@ -1,10 +1,12 @@
 use super::*;
+use crate::codec::Codec;
 use crate::settings::Library;
 
 static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
     Naming::new(&Library::default(), std::path::Path::new("lib")).unwrap()
 });
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
+static QUALITY: std::sync::LazyLock<Quality> = std::sync::LazyLock::new(Quality::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
@@ -31,6 +33,7 @@ fn audio(codec: &str, khz: f64) -> Facts {
             incoherence: 0.2,
             clipping: 0.0,
         }),
+        bytes: None,
     });
     f
 }
@@ -151,6 +154,16 @@ fn song(sources: &[SourceKey]) -> Song {
 }
 
 fn run(song: &Song, facts: &BTreeMap<SourceKey, Facts>, alignments: &[Aligned]) -> Resolved {
+    run_with(song, facts, alignments, &AUDIO, &QUALITY)
+}
+
+fn run_with(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    alignments: &[Aligned],
+    audio: &Audio,
+    quality: &Quality,
+) -> Resolved {
     resolve(&Input {
         song,
         album: None,
@@ -160,7 +173,8 @@ fn run(song: &Song, facts: &BTreeMap<SourceKey, Facts>, alignments: &[Aligned]) 
         clean: &Settings::default(),
         albums: &Albums::default(),
         naming: &NAMING,
-        audio: &AUDIO,
+        audio,
+        quality,
         placement: LyricsPlacement::Sidecar,
     })
     .unwrap()
@@ -209,7 +223,7 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
     let (song, facts, alignments) = release_and_video();
     let r = run(&song, &facts, &alignments);
     assert_eq!(r.plan.audio.key, yt("rrrrrrrrrrr"), "{:?}", r.why);
-    assert_eq!(r.plan.format, Format::OpusCopy);
+    assert_eq!(r.plan.format, Format::Copy { codec: Codec::Opus });
     let cover = r.plan.cover.unwrap();
     assert_eq!(cover.key, yt("rrrrrrrrrrr"));
     assert_eq!(cover.crop, None);
@@ -260,7 +274,7 @@ fn wider_bandwidth_wins_between_clean_recordings_and_a_transcode_cannot_fake_it(
         &alignments,
     );
     assert_eq!(r.plan.audio.key, real);
-    assert_eq!(r.plan.format, Format::FlacCopy);
+    assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
     let r = run(&song(&[fake, opus.clone()]), &facts, &alignments);
     assert_eq!(r.plan.audio.key, opus, "a 16 kHz FLAC is a lossy transcode");
 }
@@ -282,9 +296,9 @@ fn real_stereo_beats_mono_in_two_channels() {
     assert_eq!(r.plan.audio.key, stereo);
     assert_eq!(
         r.plan.format,
-        Format::OpusEncode {
-            channels: 2,
-            kbps: 160,
+        Format::Encode {
+            codec: Codec::Opus,
+            kbps: Some(160),
         }
     );
 }
@@ -415,6 +429,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         albums: &Albums::default(),
         naming: &NAMING,
         audio: &AUDIO,
+        quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
@@ -481,6 +496,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         albums: &albums,
         naming: &NAMING,
         audio: &AUDIO,
+        quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
@@ -565,6 +581,7 @@ fn hand_set_tags_and_the_album_win_last() {
         albums: &Albums::default(),
         naming: &NAMING,
         audio: &AUDIO,
+        quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
     })
     .unwrap();
@@ -617,25 +634,146 @@ fn an_album_never_splits_across_sources() {
 
 #[test]
 fn formats_follow_the_winning_codec() {
-    for (codec, format) in [
-        ("alac", Format::FlacEncode),
-        ("pcm_s16le", Format::FlacEncode),
-        (
-            "mp3",
-            Format::OpusEncode {
-                channels: 2,
-                kbps: 160,
-            },
-        ),
+    let opus = |kbps| Format::Encode {
+        codec: Codec::Opus,
+        kbps: Some(kbps),
+    };
+    let flac = Format::Encode {
+        codec: Codec::Flac,
+        kbps: None,
+    };
+    for (codec, channels, format) in [
+        ("alac", 2, flac),
+        ("pcm_s16le", 2, flac),
+        ("mp3", 2, opus(160)),
+        ("aac", 6, opus(256)),
     ] {
         let key = manual("x");
-        let facts = BTreeMap::from([(key.clone(), audio(codec, 20.0))]);
+        let mut f = audio(codec, 20.0);
+        f.audio.as_mut().unwrap().channels = channels;
+        let facts = BTreeMap::from([(key.clone(), f)]);
         assert_eq!(
             run(&song(&[key]), &facts, &[]).plan.format,
             format,
             "{codec}"
         );
     }
+}
+
+#[test]
+fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
+    let settings = Audio {
+        codecs: vec![Codec::Aac, Codec::Mp3],
+        lossy: Codec::Mp3,
+        lossless: Codec::Alac,
+        ..Audio::default()
+    };
+    for (codec, format) in [
+        ("aac", Format::Copy { codec: Codec::Aac }),
+        ("mp3", Format::Copy { codec: Codec::Mp3 }),
+        ("alac", Format::Copy { codec: Codec::Alac }),
+        (
+            "opus",
+            Format::Encode {
+                codec: Codec::Mp3,
+                kbps: Some(320),
+            },
+        ),
+        (
+            "flac",
+            Format::Encode {
+                codec: Codec::Alac,
+                kbps: None,
+            },
+        ),
+    ] {
+        let key = manual("x");
+        let facts = BTreeMap::from([(key.clone(), audio(codec, 20.0))]);
+        let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+        assert_eq!(r.plan.format, format, "{codec}");
+    }
+    let lossy = Audio {
+        lossless: Codec::Aac,
+        ..settings
+    };
+    let key = manual("x");
+    let facts = BTreeMap::from([(key.clone(), audio("pcm_s24le", 20.0))]);
+    assert_eq!(
+        run_with(&song(&[key]), &facts, &[], &lossy, &QUALITY)
+            .plan
+            .format,
+        Format::Encode {
+            codec: Codec::Aac,
+            kbps: Some(256),
+        },
+        "lossless audio encodes to a lossy target at its bitrate"
+    );
+}
+
+#[test]
+fn plans_stored_before_other_codecs_read_as_today() {
+    for (stored, format) in [
+        (r#""OpusCopy""#, Format::Copy { codec: Codec::Opus }),
+        (r#""FlacCopy""#, Format::Copy { codec: Codec::Flac }),
+        (
+            r#"{"OpusEncode":{"channels":2,"kbps":160}}"#,
+            Format::Encode {
+                codec: Codec::Opus,
+                kbps: Some(160),
+            },
+        ),
+        (
+            r#""FlacEncode""#,
+            Format::Encode {
+                codec: Codec::Flac,
+                kbps: None,
+            },
+        ),
+    ] {
+        assert_eq!(
+            serde_json::from_str::<Format>(stored).unwrap(),
+            format,
+            "{stored}"
+        );
+    }
+    let today = Format::Encode {
+        codec: Codec::Mp3,
+        kbps: Some(320),
+    };
+    let json = serde_json::to_string(&today).unwrap();
+    assert_eq!(serde_json::from_str::<Format>(&json).unwrap(), today);
+}
+
+#[test]
+fn a_measure_switched_off_or_outweighed_no_longer_decides() {
+    let (narrow, wide) = (yt("nnnnnnnnnnn"), yt("wwwwwwwwwww"));
+    let mut n = audio("opus", 16.0);
+    n.rev = "n".into();
+    let mut w = audio("opus", 20.0);
+    w.rev = "w".into();
+    w.audio
+        .as_mut()
+        .unwrap()
+        .quality
+        .as_mut()
+        .unwrap()
+        .incoherence = 0.0;
+    let facts = BTreeMap::from([(narrow.clone(), n), (wide.clone(), w)]);
+    let alignments = both(&facts, &narrow, &wide, 0, 0.99).to_vec();
+    let songs = song(&[narrow.clone(), wide.clone()]);
+    let pick = |quality: &Quality| {
+        run_with(&songs, &facts, &alignments, &AUDIO, quality)
+            .plan
+            .audio
+            .key
+    };
+    assert_eq!(pick(&QUALITY), wide, "8 steps of bandwidth outweigh mono");
+    let mut off = Quality::default();
+    off.bandwidth.enabled = false;
+    assert_eq!(pick(&off), narrow, "without bandwidth, stereo decides");
+    let mut heavy = Quality::default();
+    heavy.stereo.weight = 100;
+    assert_eq!(pick(&heavy), narrow, "stereo outweighs 8 steps");
 }
 
 #[test]
@@ -653,6 +791,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             albums: &Albums::default(),
             naming: &NAMING,
             audio: &AUDIO,
+            quality: &QUALITY,
             placement: LyricsPlacement::Sidecar,
         })
         .is_err()

@@ -35,6 +35,25 @@ fn an_original_s_facts_take_three_runs() {
     assert_eq!(facts.lyrics[0].timing.unwrap().lines, 2);
     assert_eq!(facts.tags[&tags::Field::Artist].values, ["Hoshi7ne"]);
     assert_eq!(facts.duration, Some(200.0));
+    assert_eq!(audio.bytes, Some(3_200_000), "listed in the same run");
+}
+
+#[test]
+fn packet_sizes_add_up_and_an_old_source_is_listed_alone() {
+    let text = "#tb 0: 1/48000\n0, -312, -312, 960, 307, 0xd64e9e1c, S=1, Skip Samples, 10, 0x1\n\
+                0, 648, 648, 960, 168, 0x8757553d\n";
+    assert_eq!(packet_bytes(text), Some(475));
+    assert_eq!(packet_bytes("#tb 0: 1/48000\n"), None);
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let fake = Fake {
+        packets: vec![("Song.flac".into(), 31_000_000)],
+        ..Fake::default()
+    };
+    let bytes = audio_bytes(&fake, &source, 0, &dir.path().join("scratch")).unwrap();
+    assert_eq!(bytes, 31_000_000);
+    assert_eq!(fake.calls().len(), 1);
+    assert!(fake.ran("framecrc") && !fake.ran("pcm_s16le"));
 }
 
 #[test]

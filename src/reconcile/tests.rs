@@ -567,3 +567,186 @@ fn status_says_a_song_would_move() {
             .exists()
     );
 }
+
+/// A home with one manual FLAC whose audio takes 30 MB, and `settings`.
+fn flac_home(settings: &str) -> Home {
+    let h = home();
+    let path = h.dirs.manual().join("Song.flac");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "flac").unwrap();
+    h.songs(&format!(
+        "{settings}\n[[song]]\nsources = [\"manual:Song.flac\"]\n"
+    ));
+    h
+}
+
+fn big_flac() -> Fake {
+    Fake {
+        packets: vec![("Song.flac".into(), 30_000_000)],
+        ..Fake::default()
+    }
+    .probe(".flac", crate::testing::FLAC)
+}
+
+#[test]
+fn a_song_over_the_limit_is_written_lower_and_stays_so() {
+    let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
+    let status = h.run(
+        &big_flac(),
+        Options {
+            dry_run: true,
+            ..Options::default()
+        },
+    );
+    assert!(
+        status
+            .1
+            .contains("Opus 192 kbit/s to fit max_size; at best FLAC, copied"),
+        "{}",
+        status.1
+    );
+    assert!(status.1.contains("(max_size)"), "{}", status.1);
+    let fake = big_flac();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(fake.ran("libopus") && fake.ran("192k"), "{text}");
+    assert!(h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
+    assert!(!h.lib("Artist/Record/02 Song.flac").exists());
+
+    let again = big_flac();
+    let (ok, text) = h.run(&again, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&again), 0, "a fixed point: {text}");
+    assert!(!again.ran("framecrc"), "the size is measured once");
+}
+
+#[test]
+fn without_a_limit_a_lowered_song_is_written_at_its_best_again() {
+    let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
+    h.run(&big_flac(), Options::default());
+    assert!(h.lib("Artist/Record/02 Song.opus").exists());
+    h.songs("[[song]]\nsources = [\"manual:Song.flac\"]\n");
+    let (ok, text) = h.run(&big_flac(), Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Updated (format): Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert!(h.lib("Artist/Record/02 Song.flac").exists(), "{text}");
+    assert!(!h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
+}
+
+#[test]
+fn a_limit_too_small_for_any_bitrate_leaves_songs_out() {
+    let h = flac_home("[library]\nmax_size = \"2 KiB\"\n");
+    let (ok, text) = h.run(&big_flac(), Options::default());
+    assert!(!ok);
+    assert!(
+        text.contains("cannot hold the library") && text.contains("left out: Song"),
+        "{text}"
+    );
+    assert!(!h.lib("Artist/Record/02 Song.opus").exists());
+    assert!(!h.lib("Artist/Record/02 Song.flac").exists());
+}
+
+/// Three manual FLACs a second long with no cover, whose audio takes 30,
+/// 20 and 10 kB: estimates the size of what the fake writes.
+fn three_flacs() -> Fake {
+    let short = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
+        "channels": 2, "sample_rate": "44100"}], "format": {"duration": "1.0",
+        "tags": {"TITLE": "Song", "ARTIST": "Artist", "ALBUM": "Record", "track": "2"}}}"#;
+    Fake {
+        packets: vec![
+            ("a.flac".into(), 30_000),
+            ("b.flac".into(), 20_000),
+            ("c.flac".into(), 10_000),
+        ],
+        ..Fake::default()
+    }
+    .probe(".flac", short)
+}
+
+fn limit(bytes: u64) -> String {
+    format!("[library]\nmax_size = {bytes}\nblock_size = 1\n")
+}
+
+/// A home holding `names` as manual files, listing those in `listed`.
+fn listing(h: &Home, settings: &str, listed: &[&str]) {
+    for name in ["a", "b", "c"] {
+        let path = h.dirs.manual().join(format!("{name}.flac"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, name).unwrap();
+    }
+    let songs = listed
+        .iter()
+        .map(|n| format!("[[song]]\nsources = [\"manual:{n}.flac\"]\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    h.songs(&format!("{settings}\n{songs}"));
+}
+
+/// Each library file and the format it was written in.
+fn formats(h: &Home) -> Vec<(PathBuf, crate::resolve::Format)> {
+    State::load(&h.dirs.home)
+        .unwrap()
+        .outputs
+        .into_iter()
+        .filter_map(|(p, w)| Some((p, w.plan?.format)))
+        .collect()
+}
+
+#[test]
+fn a_library_fitted_song_by_song_ends_as_one_fitted_at_once() {
+    let at_once = home();
+    listing(&at_once, &limit(20_000), &["a", "b", "c"]);
+    let (ok, text) = at_once.run(&three_flacs(), Options::default());
+    assert!(ok, "{text}");
+    let lowered = formats(&at_once)
+        .iter()
+        .filter(|(_, f)| f.is_encoded())
+        .count();
+    assert!(lowered > 0, "the limit binds: {text}");
+
+    let by_song = home();
+    for listed in [&["c"][..], &["c", "a"], &["a", "b", "c"]] {
+        listing(&by_song, &limit(20_000), listed);
+        let (ok, text) = by_song.run(&three_flacs(), Options::default());
+        assert!(ok, "{text}");
+    }
+    assert_eq!(formats(&by_song), formats(&at_once));
+}
+
+#[test]
+fn sizes_measured_under_another_limit_change_no_choice() {
+    let fresh = home();
+    listing(&fresh, &limit(20_000), &["a", "b", "c"]);
+    fresh.run(&three_flacs(), Options::default());
+    assert!(formats(&fresh).iter().any(|(_, f)| f.is_encoded()));
+
+    let measured = home();
+    for max in [9_000, 200_000, 14_000] {
+        listing(&measured, &limit(max), &["a", "b", "c"]);
+        measured.run(&three_flacs(), Options::default());
+    }
+    listing(&measured, &limit(20_000), &["a", "b", "c"]);
+    let (ok, text) = measured.run(&three_flacs(), Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(formats(&measured), formats(&fresh));
+}
+
+#[test]
+fn a_song_rendered_to_be_measured_is_moved_into_place_not_rendered_again() {
+    let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
+    let fake = big_flac();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let encodes = fake
+        .calls()
+        .iter()
+        .filter(|c| c.iter().any(|a| a == "libopus"))
+        .count();
+    assert_eq!(encodes, 1, "{text}");
+    assert!(h.lib("Artist/Record/02 Song.opus").exists());
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.sizes.len(), 1, "{:?}", state.sizes);
+}
