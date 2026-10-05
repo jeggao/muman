@@ -1,6 +1,13 @@
 //! Which songs a new source is the same recording as, by Chromaprint:
-//! one 32-bit word per ~0.12 s of audio, from ffmpeg's `chromaprint`
-//! muxer.
+//! one 32-bit word per ~0.12 s of audio.
+//!
+//! The print is computed in-process by `rusty-chromaprint`, a port of
+//! Chromaprint, with the algorithm ffmpeg's `chromaprint` muxer and
+//! `fpcalc` use by default (TEST2). ffmpeg only decodes: it writes the
+//! audio as 16-bit mono at 11,025 Hz, the rate Chromaprint works at, so
+//! nothing is resampled twice and any ffmpeg build will do, where the
+//! muxer needed one built with Chromaprint. Prints are of the whole
+//! track, as the muxer's were; `fpcalc` stops at two minutes.
 //!
 //! Two prints of one recording share long stretches of words that agree
 //! to within a few bits; two songs that merely sound alike agree on bits
@@ -20,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Names how a print is made. A stored print made by another is made
 /// again; how prints are compared is no part of it.
-pub const METHOD: &str = "chromaprint-ber/1";
+pub const METHOD: &str = "chromaprint-rs/1";
 
 /// The audio one word stands for.
 const SECONDS_PER_WORD: f64 = 0.1238;
@@ -87,20 +94,62 @@ impl<'de> Deserialize<'de> for Print {
     }
 }
 
-/// The ffmpeg output options that print the audio stream `input:index`.
+/// The rate Chromaprint analyzes audio at.
+const SAMPLE_RATE: u32 = 11_025;
+
+/// The ffmpeg output options that decode the audio stream `input:index`
+/// for [`compute`]: raw 16-bit little-endian mono at [`SAMPLE_RATE`].
 #[must_use]
 pub fn output(input: usize, index: u32) -> Vec<OsString> {
     [
         "-map".to_string(),
         format!("{input}:{index}"),
-        "-fp_format".to_string(),
-        "raw".to_string(),
+        "-ac".to_string(),
+        "1".to_string(),
+        "-ar".to_string(),
+        SAMPLE_RATE.to_string(),
+        "-c:a".to_string(),
+        "pcm_s16le".to_string(),
         "-f".to_string(),
-        "chromaprint".to_string(),
+        "s16le".to_string(),
     ]
     .into_iter()
     .map(OsString::from)
     .collect()
+}
+
+/// The print of the audio [`output`] wrote to `pcm`, read in chunks so
+/// an hour-long video never sits in memory whole.
+pub fn compute(pcm: &std::path::Path) -> anyhow::Result<Print> {
+    use std::io::Read;
+
+    let config = rusty_chromaprint::Configuration::preset_test2();
+    let mut printer = rusty_chromaprint::Fingerprinter::new(&config);
+    printer
+        .start(SAMPLE_RATE, 1)
+        .map_err(|e| anyhow::anyhow!("starting the fingerprint: {e:?}"))?;
+    let mut file = std::fs::File::open(pcm)?;
+    let mut bytes = vec![0_u8; 1 << 16];
+    let mut carry: Option<u8> = None;
+    let mut samples = Vec::with_capacity(bytes.len() / 2);
+    loop {
+        let n = file.read(&mut bytes)?;
+        if n == 0 {
+            break;
+        }
+        samples.clear();
+        let mut chunk = &bytes[..n];
+        if let Some(low) = carry.take() {
+            samples.push(i16::from_le_bytes([low, chunk[0]]));
+            chunk = &chunk[1..];
+        }
+        let (pairs, rest) = chunk.as_chunks::<2>();
+        samples.extend(pairs.iter().map(|p| i16::from_le_bytes(*p)));
+        carry = rest.first().copied();
+        printer.consume(&samples);
+    }
+    printer.finish();
+    Ok(Print(printer.fingerprint().to_vec()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

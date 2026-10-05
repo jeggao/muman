@@ -321,7 +321,7 @@ fn tags_read_another_way_are_read_again_without_measuring() {
     let (ok, text) = h.run(&again, Options::default());
     assert!(ok, "{text}");
     assert!(text.contains("Reading the tags of 1 source(s)"), "{text}");
-    assert!(!again.ran("chromaprint"), "nothing is measured again");
+    assert!(!again.ran("s16le"), "nothing is measured again");
     assert!(text.contains("Up to date: 1 song(s)"), "{text}");
     let state = State::load(&h.dirs.home).unwrap();
     assert_eq!(state.facts[&key].tags, tags);

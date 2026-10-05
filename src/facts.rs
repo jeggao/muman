@@ -264,7 +264,7 @@ fn media<R: Runner>(
     let mut outputs: Vec<(Output, Measured)> = Vec::new();
     if let Some(a) = &probed.audio {
         outputs.push((
-            Output::new(fingerprint::output(0, a.index), &scratch.join("print")),
+            Output::new(fingerprint::output(0, a.index), &scratch.join("print.pcm")),
             Measured::Print,
         ));
         for (n, start) in segment_starts(probed.duration).into_iter().enumerate() {
@@ -333,9 +333,7 @@ fn media<R: Runner>(
         }
         match measured {
             Measured::Print => {
-                facts.print = std::fs::read(&output.path)
-                    .ok()
-                    .map(|b| Print::from_raw(&b));
+                facts.print = runner.fingerprint(&output.path).ok().map(Print);
             }
             Measured::Segment(path) => segments.push(quality::read_segment(&path)),
             Measured::Subtitle(index, language) => {

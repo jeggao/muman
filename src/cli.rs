@@ -57,12 +57,6 @@ pub struct Cli {
     /// `AlbumArt` postprocessors; the package's wrapper sets it.
     #[arg(long, global = true, env = "MUMAN_YTDLP_PLUGINS", hide = true)]
     pub ytdlp_plugins: Option<PathBuf>,
-
-    /// An ffmpeg with the `chromaprint` muxer for the runs that print,
-    /// where the one on PATH lacks it or starts slower; the package's
-    /// wrapper sets it.
-    #[arg(long, global = true, env = "MUMAN_FFMPEG_FINGERPRINT", hide = true)]
-    pub fingerprint_ffmpeg: Option<PathBuf>,
 }
 
 /// How new sources that may be a listed song are decided.

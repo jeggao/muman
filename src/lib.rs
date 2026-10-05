@@ -89,8 +89,6 @@ pub struct Job {
     /// How long a file dropped into the manual folder waits, so one still
     /// being copied in is not read half written.
     pub settling: Duration,
-    /// An ffmpeg with the `chromaprint` muxer, for the runs that print.
-    pub fingerprint_ffmpeg: Option<PathBuf>,
 }
 
 impl Job {
@@ -105,7 +103,6 @@ impl Job {
             verbose: cli.verbose,
             settling: store::SETTLING,
             plugins: cli.ytdlp_plugins,
-            fingerprint_ffmpeg: cli.fingerprint_ffmpeg,
             live: false,
         }
     }
@@ -137,7 +134,7 @@ pub fn run() -> ExitCode {
     let mut inquire = InquirePrompter;
     let prompter: Option<&mut dyn Prompter> =
         (std::io::stdin().is_terminal() && job.live).then_some(&mut inquire);
-    let system = System::new(job.fingerprint_ffmpeg.clone());
+    let system = System::default();
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
     let needs_ffmpeg = match &job.command {

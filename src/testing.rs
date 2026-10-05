@@ -163,7 +163,9 @@ impl Fake {
             return Err(anyhow!("ffmpeg: {format} failed"));
         }
         let bytes = match format {
-            "chromaprint" => find(&self.prints, &input)
+            // The fake's decoded audio is the print itself, which its
+            // `fingerprint` hands back as it is.
+            "s16le" => find(&self.prints, &input)
                 .cloned()
                 .unwrap_or_else(|| words(1600, seed_of(&input)))
                 .into_iter()
@@ -192,6 +194,10 @@ impl Fake {
 }
 
 impl Runner for Fake {
+    fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
+        Ok(crate::fingerprint::Print::from_raw(&fs::read(pcm)?).0)
+    }
+
     fn run(&self, cmd: &[OsString]) -> Result<()> {
         let args = self.record(cmd);
         let inputs: Vec<String> = args

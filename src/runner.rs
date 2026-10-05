@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 
@@ -28,6 +28,12 @@ pub trait Runner: Sync {
     /// Run with each line it writes, on either stream, handed to
     /// `on_line` as it arrives. Returns whether it exited successfully.
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool>;
+
+    /// The Chromaprint words of the audio `fingerprint::output` decoded
+    /// to `pcm`. Tests answer with chosen prints instead of computing.
+    fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
+        crate::fingerprint::compute(pcm).map(|p| p.0)
+    }
 
     /// [`Self::stream`] with `env` added to the program's environment.
     fn stream_env(
@@ -78,21 +84,10 @@ const TOOLS: [(&str, &str); 3] = [
 /// 1. On `PATH`, with Windows' `PATHEXT` extensions such as `.cmd`.
 #[derive(Debug, Default)]
 pub struct System {
-    /// The ffmpeg that runs a command writing a `chromaprint` output,
-    /// in place of the one found.
-    pub fingerprint: Option<PathBuf>,
     found: [OnceLock<Option<Vec<OsString>>>; 3],
 }
 
 impl System {
-    #[must_use]
-    pub fn new(fingerprint: Option<PathBuf>) -> Self {
-        Self {
-            fingerprint,
-            ..Self::default()
-        }
-    }
-
     /// Fail now, with [`MissingTool`], when `name` cannot be found, so a
     /// run that needs it stops before its first song rather than failing
     /// every one.
@@ -115,16 +110,10 @@ impl System {
 
     /// `cmd` with its tool resolved, ready to spawn.
     fn command(&self, cmd: &[OsString]) -> Result<Command> {
-        let mut program: Vec<OsString> = match TOOLS.iter().position(|(n, _)| cmd[0] == *n) {
+        let program: Vec<OsString> = match TOOLS.iter().position(|(n, _)| cmd[0] == *n) {
             Some(i) => self.tool(i)?.to_vec(),
             None => vec![cmd[0].clone()],
         };
-        if let Some(ffmpeg) = &self.fingerprint
-            && cmd[0] == "ffmpeg"
-            && cmd.iter().any(|a| a == "chromaprint")
-        {
-            program = vec![ffmpeg.clone().into_os_string()];
-        }
         let mut command = Command::new(&program[0]);
         command.args(&program[1..]);
         if cmd[0] == "yt-dlp" {
@@ -259,6 +248,10 @@ impl<R: Runner> Runner for Traced<R> {
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
         Self::say(cmd);
         self.0.stream(cmd, on_line)
+    }
+
+    fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
+        self.0.fingerprint(pcm)
     }
 
     fn stream_env(
