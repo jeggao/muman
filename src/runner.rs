@@ -144,7 +144,7 @@ fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
         // Then a command with arguments, as `python -m yt_dlp`.
         let text = value.to_string_lossy();
         let words: Vec<String> = if cfg!(windows) {
-            text.split_whitespace().map(str::to_string).collect()
+            windows_words(&text)
         } else {
             shell_words::split(&text).ok()?
         };
@@ -163,6 +163,28 @@ fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
     beside
         .or_else(|| which::which(name).ok())
         .map(|p| vec![p.into_os_string()])
+}
+
+/// `text` split into words the way Windows programs read a command line:
+/// at spaces outside double quotes, the quotes dropped, and `\` taken
+/// as it is, since it separates folders.
+fn windows_words(text: &str) -> Vec<String> {
+    let (mut words, mut word, mut quoted) = (Vec::new(), String::new(), false);
+    for c in text.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            c => word.push(c),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
 }
 
 impl Runner for System {
@@ -339,6 +361,14 @@ mod tests {
         std::fs::copy(&exe, &copy).unwrap();
         let found = find("ffmpeg", Some(copy.clone().into())).unwrap();
         assert_eq!(found, [copy.into_os_string()]);
+    }
+
+    #[test]
+    fn windows_words_keep_quoted_spaces_and_backslashes() {
+        assert_eq!(
+            windows_words(r#""C:\Program Files\Python\python.exe" -m yt_dlp"#),
+            [r"C:\Program Files\Python\python.exe", "-m", "yt_dlp"]
+        );
     }
 
     #[test]

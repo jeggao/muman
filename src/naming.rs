@@ -371,7 +371,12 @@ mod tests {
         };
         assert_eq!(
             naming(&none).stem(&tags("A: B", "x", "Why?")).unwrap(),
-            path(&["A: B", "x", "Why?"])
+            // Windows itself refuses them whatever `restrict` says.
+            if cfg!(windows) {
+                path(&["A_ B", "x", "Why_"])
+            } else {
+                path(&["A: B", "x", "Why?"])
+            }
         );
     }
 
