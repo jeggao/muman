@@ -31,14 +31,20 @@ pub struct Relay<'a, W: Write> {
     /// The width of the line now showing, to blank what a shorter one
     /// leaves.
     shown: usize,
+    /// The terminal's width in columns, which a status line must stay
+    /// under or it wraps and can no longer be rewritten in place.
+    columns: usize,
 }
 
 impl<'a, W: Write> Relay<'a, W> {
     pub fn new(out: &'a mut W, live: bool) -> Self {
+        let columns = terminal_size::terminal_size_of(std::io::stderr())
+            .map_or(80, |(w, _)| usize::from(w.0));
         Self {
             out,
             live,
             shown: 0,
+            columns,
         }
     }
 
@@ -70,10 +76,18 @@ impl<'a, W: Write> Relay<'a, W> {
         }
     }
 
-    /// Show `text` in place of the line now showing, cut to fit a line.
+    /// Show `text` in place of the line now showing, cut to fit a line;
+    /// a wide character such as a CJK one takes two columns.
     fn status(&mut self, text: &str) {
-        let text: String = text.chars().take(100).collect();
-        let width = text.chars().count();
+        let mut width = 0;
+        let text: String = text
+            .chars()
+            .take_while(|c| {
+                width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                width < self.columns
+            })
+            .collect();
+        let width = unicode_width::UnicodeWidthStr::width(text.as_str());
         let pad = " ".repeat(self.shown.saturating_sub(width));
         let _ = write!(self.out, "\r{}{pad}", Style::Muted.paint(&text));
         let _ = self.out.flush();

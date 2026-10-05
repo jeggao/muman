@@ -277,8 +277,11 @@ pub fn edit<W: Write>(
     loop {
         std::fs::write(&file, &shown).with_context(|| format!("writing {}", file.display()))?;
         editor(&file)?;
+        // An editor on Windows may save with CRLF line endings, which
+        // would otherwise count as a change to every line.
         let text = std::fs::read_to_string(&file)
-            .with_context(|| format!("reading {}", file.display()))?;
+            .with_context(|| format!("reading {}", file.display()))?
+            .replace("\r\n", "\n");
         if without_notes(&text) == without_notes(&first) {
             crate::ui::info(out, "Nothing changed")?;
             return Ok(false);
@@ -323,17 +326,26 @@ pub fn edit<W: Write>(
     }
 }
 
-/// Run `$VISUAL`, else `$EDITOR`, else the system's own, on `path`, as
-/// a shell would run the command.
+/// Run `$VISUAL`, else `$EDITOR`, else the system's own, on `path`. On
+/// Unix the variable is a shell command, as other programs read it; on
+/// Windows it is split into words the same way and its program found
+/// with `PATHEXT`, so `code --wait` finds `code.cmd`, and the path is
+/// passed as an argument of its own rather than through cmd.exe's
+/// quoting.
 pub fn launch(path: &Path) -> Result<()> {
     let editor = ["VISUAL", "EDITOR"]
         .iter()
         .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()))
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
     let status = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .arg("/C")
-            .arg(format!("{editor} \"{}\"", path.display()))
+        let words = shell_words::split(&editor)
+            .ok()
+            .filter(|w| !w.is_empty())
+            .with_context(|| format!("reading the editor `{editor}`"))?;
+        let program = which::which(&words[0]).unwrap_or_else(|_| words[0].clone().into());
+        std::process::Command::new(program)
+            .args(&words[1..])
+            .arg(path)
             .status()
     } else {
         std::process::Command::new("sh")

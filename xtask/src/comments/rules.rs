@@ -508,7 +508,7 @@ mod tests {
         let src = format!("//! m\n// {}\n", "word ".repeat(25));
         assert_eq!(fired(&src, "line-length"), [2]);
         let table = format!("//! | a | {} |\n", "word ".repeat(25));
-        assert!(fired(&table, "line-length").is_empty());
+        assert_eq!(fired(&table, "line-length"), Vec::<usize>::new());
     }
 
     #[test]

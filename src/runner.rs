@@ -28,6 +28,17 @@ pub trait Runner: Sync {
     /// Run with each line it writes, on either stream, handed to
     /// `on_line` as it arrives. Returns whether it exited successfully.
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool>;
+
+    /// [`Self::stream`] with `env` added to the program's environment.
+    fn stream_env(
+        &self,
+        cmd: &[OsString],
+        env: &[(String, String)],
+        on_line: &mut dyn FnMut(Line<'_>),
+    ) -> Result<bool> {
+        let _ = env;
+        self.stream(cmd, on_line)
+    }
 }
 
 /// A tool muman runs that could not be found; `run` exits 2 on it.
@@ -183,8 +194,18 @@ impl Runner for System {
     }
 
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
+        self.stream_env(cmd, &[], on_line)
+    }
+
+    fn stream_env(
+        &self,
+        cmd: &[OsString],
+        env: &[(String, String)],
+        on_line: &mut dyn FnMut(Line<'_>),
+    ) -> Result<bool> {
         let mut child = self
             .command(cmd)?
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -238,6 +259,16 @@ impl<R: Runner> Runner for Traced<R> {
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
         Self::say(cmd);
         self.0.stream(cmd, on_line)
+    }
+
+    fn stream_env(
+        &self,
+        cmd: &[OsString],
+        env: &[(String, String)],
+        on_line: &mut dyn FnMut(Line<'_>),
+    ) -> Result<bool> {
+        Self::say(cmd);
+        self.0.stream_env(cmd, env, on_line)
     }
 }
 

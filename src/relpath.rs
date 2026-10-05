@@ -28,6 +28,13 @@ pub fn to_portable(path: &Path) -> String {
         .join("/")
 }
 
+/// A path inside the library or the home as muman shows it: with `/`,
+/// as the song list and state write it, on every platform.
+#[must_use]
+pub fn show(path: &Path) -> String {
+    to_portable(path)
+}
+
 /// A path written with `/`, in NFC. On Windows a `\` typed by hand
 /// separates too; elsewhere it is a character a name may hold.
 #[must_use]

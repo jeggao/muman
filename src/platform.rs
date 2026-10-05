@@ -36,6 +36,28 @@ pub fn defaults() -> Option<Defaults> {
     })
 }
 
+/// When a file arrived where it is: the later of its modification time
+/// and the time it was created there. A copy by Explorer, Finder or
+/// `cp -p` keeps the source's modification time, so that alone would
+/// make a file still being copied in look long settled. Unix has no
+/// creation time everywhere, but the status-change time moves on any
+/// copy or rename.
+#[must_use]
+pub fn arrived(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
+    let modified = meta.modified().ok();
+    #[cfg(unix)]
+    let placed = {
+        use std::os::unix::fs::MetadataExt;
+        u64::try_from(meta.ctime()).ok().map(|secs| {
+            std::time::UNIX_EPOCH
+                + std::time::Duration::new(secs, u32::try_from(meta.ctime_nsec()).unwrap_or(0))
+        })
+    };
+    #[cfg(not(unix))]
+    let placed = meta.created().ok();
+    modified.max(placed)
+}
+
 /// Whether two paths name the same folder: resolved through links and
 /// `.`/`..`, and without regard to case where the platform's filesystems
 /// ignore it, so `D:\Music` and `d:\music\` agree.
@@ -53,6 +75,23 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_with_an_old_modification_time_arrived_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.flac");
+        std::fs::write(&file, b"x").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600 * 24 * 365);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let meta = std::fs::metadata(&file).unwrap();
+        let arrived = arrived(&meta).unwrap();
+        assert!(arrived.elapsed().unwrap() < std::time::Duration::from_secs(60));
+    }
 
     #[test]
     fn a_folder_reached_two_ways_is_the_same() {

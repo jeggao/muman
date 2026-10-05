@@ -359,7 +359,9 @@ fn with_header(text: &str) -> Option<String> {
 fn read(dir: &Path) -> Result<DocumentMut> {
     let file = dir.join(MANIFEST);
     let text = match std::fs::read_to_string(&file) {
-        Ok(text) => text,
+        // Windows editors may add a byte-order mark and CRLF endings; the
+        // file is written back with neither, rather than with both mixed.
+        Ok(text) => text.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => NEW.to_string(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };

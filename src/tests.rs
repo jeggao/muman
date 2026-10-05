@@ -42,6 +42,7 @@ impl Setup {
 
     fn job(&self, args: &[&str]) -> Job {
         let mut job = Job::from_cli(cli(args), defaults(self.dir.path()));
+        job.settling = std::time::Duration::ZERO;
         job.dirs = Dirs {
             home: self.dir.path().join("home"),
             library: self.dir.path().join("lib"),

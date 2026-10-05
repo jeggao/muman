@@ -191,7 +191,7 @@ pub fn describe(home: &Path) -> Result<Vec<String>> {
         } else {
             "written again from its sources"
         };
-        lines.push(format!("{}: {how}", rel.display()));
+        lines.push(format!("{}: {how}", crate::relpath::show(rel)));
     }
     let added = State::load(home)?
         .outputs
@@ -247,7 +247,7 @@ pub fn undo<W: Write>(dirs: &Dirs, out: &mut W) -> Result<()> {
         std::fs::rename(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
             .with_context(|| format!("putting back {}", to.display()))?;
-        crate::ui::info(out, &format!("Put back: {}", rel.display()))?;
+        crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
     }
     let mut outputs = state.outputs.clone();
     for (rel, before) in &record.outputs {

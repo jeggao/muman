@@ -79,17 +79,23 @@ pub fn check<R: Runner, W: Write>(
         match std::fs::metadata(&file) {
             Err(_) => problem(
                 out,
-                format!("Missing, `sync` writes it again: {}", path.display()),
+                format!(
+                    "Missing, `sync` writes it again: {}",
+                    crate::relpath::show(path)
+                ),
             )?,
             Ok(m) if m.len() == 0 => problem(
                 out,
-                format!("Empty, `sync` writes it again: {}", path.display()),
+                format!(
+                    "Empty, `sync` writes it again: {}",
+                    crate::relpath::show(path)
+                ),
             )?,
             Ok(_) if written.plan.is_none() => problem(
                 out,
                 format!(
                     "Not finished by an interrupted run, `sync` writes it again: {}",
-                    path.display()
+                    crate::relpath::show(path)
                 ),
             )?,
             Ok(_) => {
@@ -102,7 +108,7 @@ pub fn check<R: Runner, W: Write>(
                         out,
                         format!(
                             "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
-                            path.display()
+                            crate::relpath::show(path)
                         ),
                     )?;
                 }
@@ -128,7 +134,10 @@ pub fn check<R: Runner, W: Write>(
             .and_then(|e| e.to_str())
             .is_some_and(|e| WRITTEN.contains(&e));
         if ours && !owned.contains(rel) {
-            crate::ui::info(out, &format!("Not muman's, left alone: {}", rel.display()))?;
+            crate::ui::info(
+                out,
+                &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
+            )?;
         }
     }
 

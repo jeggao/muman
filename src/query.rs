@@ -46,11 +46,7 @@ impl View {
         let yes_no = |b: bool| vec![if b { "yes" } else { "none" }.to_string()];
         match field.to_ascii_lowercase().as_str() {
             "key" => self.keys.iter().map(ToString::to_string).collect(),
-            "path" => self
-                .path
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
+            "path" => self.path.iter().map(|p| crate::relpath::show(p)).collect(),
             "format" => self.format.iter().cloned().collect(),
             "cover" => yes_no(self.cover),
             "lyrics" => yes_no(self.lyrics),

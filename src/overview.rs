@@ -202,6 +202,7 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let listed = c.manifest.keys();
     heading(out, "Status")?;
@@ -230,7 +231,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     let mut gone = Group::default();
     for path in c.state.outputs.keys().filter(|p| !made.contains(*p)) {
-        gone.add(&path.display().to_string());
+        gone.add(&crate::relpath::show(path));
     }
     row(out, "Up to date", &current.to_string())?;
     group(out, c.verbose, "To write", &due)?;
@@ -270,13 +271,15 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     group(out, c.verbose, "Sources missing", &missing)?;
     group(out, c.verbose, "Sources to measure", &to_measure)?;
-    let (unlisted, settling) = c.store.unlisted(&listed, SystemTime::now());
+    let (unlisted, settling) = c
+        .store
+        .unlisted(&listed, SystemTime::now(), crate::store::SETTLING);
     let mut new = Group::default();
     for key in unlisted {
         new.add(&key.to_string());
     }
     for path in settling {
-        new.add(&path.display().to_string());
+        new.add(&crate::relpath::show(&path));
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let mut unused = Group::default();
@@ -286,7 +289,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .iter()
         .filter(|p| p.starts_with(c.dirs.ytdlp()))
     {
-        unused.add(&path.display().to_string());
+        unused.add(&crate::relpath::show(path));
     }
     group(out, c.verbose, "Fetched, not listed", &unused)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;
@@ -318,7 +321,7 @@ fn foreign(c: &Context<'_>) -> Result<Group> {
         if let Ok(rel) = file.strip_prefix(&c.dirs.library)
             && !ours.contains(rel)
         {
-            foreign.add(&rel.display().to_string());
+            foreign.add(&crate::relpath::show(rel));
         }
     }
     Ok(foreign)

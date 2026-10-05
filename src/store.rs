@@ -232,6 +232,7 @@ impl Store {
         &self,
         listed: &BTreeSet<SourceKey>,
         now: SystemTime,
+        wait: Duration,
     ) -> (Vec<SourceKey>, Vec<PathBuf>) {
         let (mut ready, mut settling) = (Vec::new(), Vec::new());
         for (rel, kind) in &self.manual {
@@ -240,8 +241,9 @@ impl Store {
                 continue;
             }
             let fresh = std::fs::metadata(self.manual_root.join(rel))
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| now.duration_since(t).unwrap_or_default() < SETTLING);
+                .ok()
+                .and_then(|m| crate::platform::arrived(&m))
+                .is_some_and(|t| now.duration_since(t).unwrap_or_default() < wait);
             if fresh {
                 settling.push(rel.clone());
             } else {
@@ -383,10 +385,10 @@ mod tests {
         let listed = BTreeSet::from([manual("a.flac")]);
         let later = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(
-            store.unlisted(&listed, later),
+            store.unlisted(&listed, later, SETTLING),
             (vec![manual("b.mp3")], vec![])
         );
-        let (ready, settling) = store.unlisted(&listed, SystemTime::now());
+        let (ready, settling) = store.unlisted(&listed, SystemTime::now(), SETTLING);
         assert_eq!(ready, []);
         assert_eq!(settling, vec![PathBuf::from("b.mp3")]);
     }

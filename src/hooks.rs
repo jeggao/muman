@@ -3,6 +3,11 @@
 //! size and time, so a hook may tag it further; one after a run that
 //! wrote or removed anything. Each is an argument list, run without a
 //! shell; its output is relayed and a failure is warned of, never fatal.
+//!
+//! The values a hook is given come both as `{name}` placeholders in its
+//! words and as `MUMAN_<NAME>` environment variables. A Windows batch
+//! file (`.bat`, `.cmd`) gets the variables only: cmd.exe re-reads its
+//! arguments, so a title passed as one could run as a command.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -72,7 +77,30 @@ pub fn run<R: Runner, W: Write>(
     values: &[(&str, &str)],
     out: &mut W,
 ) -> Result<()> {
+    let env: Vec<(String, String)> = values
+        .iter()
+        .map(|(name, v)| {
+            (
+                format!("MUMAN_{}", name.to_ascii_uppercase()),
+                (*v).to_string(),
+            )
+        })
+        .collect();
     for hook in hooks.iter().filter(|h| h.on == event) {
+        let placeholders = hook
+            .run
+            .iter()
+            .any(|w| values.iter().any(|(n, _)| w.contains(&format!("{{{n}}}"))));
+        if placeholders && is_batch(&hook.run[0]) {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "Hook `{}` not run: a batch file takes the MUMAN_* variables, not {{placeholders}}",
+                    hook.run.join(" ")
+                ),
+            )?;
+            continue;
+        }
         let argv: Vec<OsString> = hook
             .run
             .iter()
@@ -86,7 +114,7 @@ pub fn run<R: Runner, W: Write>(
             })
             .collect();
         let mut lines = Vec::new();
-        let ran = runner.stream(&argv, &mut |line| {
+        let ran = runner.stream_env(&argv, &env, &mut |line| {
             let (Line::Out(l) | Line::Err(l)) = line;
             lines.push(l.to_string());
         });
@@ -104,12 +132,22 @@ pub fn run<R: Runner, W: Write>(
     Ok(())
 }
 
-/// The placeholders a written file's hooks fill in.
+/// Whether `program` is, or is found as, a Windows batch file.
+fn is_batch(program: &str) -> bool {
+    let batch = |p: &Path| {
+        p.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"))
+    };
+    batch(Path::new(program)) || (cfg!(windows) && which::which(program).is_ok_and(|p| batch(&p)))
+}
+
+/// The values a written file's hooks are given: its absolute path, its
+/// path in the library with `/`, and the library folder.
 #[must_use]
 pub fn written_values(library: &Path, rel: &Path) -> [(&'static str, String); 3] {
     [
         ("path", library.join(rel).to_string_lossy().into_owned()),
-        ("rel", rel.to_string_lossy().into_owned()),
+        ("rel", crate::relpath::show(rel)),
         ("library", library.to_string_lossy().into_owned()),
     ]
 }
@@ -129,13 +167,38 @@ mod tests {
         assert_eq!(hooks.len(), 2);
         let fake = Fake::default();
         let mut out = Vec::new();
-        let values = written_values(Path::new("/lib"), Path::new("A/b.opus"));
+        let library = Path::new("lib");
+        let rel: std::path::PathBuf = ["A", "b.opus"].iter().collect();
+        let values = written_values(library, &rel);
+        assert_eq!(values[1].1, "A/b.opus");
         let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
         run(&fake, &hooks, Event::Written, &values, &mut out).unwrap();
         assert_eq!(
             fake.calls(),
-            [vec!["tagger".to_string(), "/lib/A/b.opus".to_string()]]
+            [vec![
+                "tagger".to_string(),
+                library.join(&rel).to_string_lossy().into_owned()
+            ]]
         );
+    }
+
+    #[test]
+    fn a_batch_file_gets_no_placeholders() {
+        let doc: DocumentMut = "[[hook]]\non = \"written\"\nrun = [\"tag.CMD\", \"{path}\"]\n"
+            .parse()
+            .unwrap();
+        let fake = Fake::default();
+        let mut out = Vec::new();
+        run(
+            &fake,
+            &read(&doc).unwrap(),
+            Event::Written,
+            &[("path", "x")],
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(fake.calls(), Vec::<Vec<String>>::new());
+        assert!(crate::ui::plain(&String::from_utf8(out).unwrap()).contains("MUMAN_*"));
     }
 
     #[test]

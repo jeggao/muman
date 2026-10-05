@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::http::{HttpTransport, UreqTransport};
 use anyhow::{Context, Result, bail};
@@ -86,6 +86,9 @@ pub struct Job {
     pub live: bool,
     /// Say each command run and why each new source matched or not.
     pub verbose: bool,
+    /// How long a file dropped into the manual folder waits, so one still
+    /// being copied in is not read half written.
+    pub settling: Duration,
     /// An ffmpeg with the `chromaprint` muxer, for the runs that print.
     pub fingerprint_ffmpeg: Option<PathBuf>,
 }
@@ -100,6 +103,7 @@ impl Job {
             },
             command: cli.command,
             verbose: cli.verbose,
+            settling: store::SETTLING,
             plugins: cli.ytdlp_plugins,
             fingerprint_ffmpeg: cli.fingerprint_ffmpeg,
             live: false,
@@ -194,6 +198,10 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
 ) -> Result<bool> {
     let dirs = &job.dirs;
     let sync = |opts: Options, run: Option<&mut Run>, out: &mut W| {
+        let opts = Options {
+            settling: job.settling,
+            ..opts
+        };
         reconcile::reconcile(runner, dirs, opts, run, out)
     };
     match &job.command {
@@ -282,7 +290,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
-            let proposals = dropped_in(dirs, out)?;
+            let proposals = dropped_in(dirs, job.settling, out)?;
             let manifest = Manifest::load(&dirs.home)?;
             let mut ok = fetch_missing(job, runner, http, &manifest, *retry, out)?;
             let how = Listing {
@@ -295,7 +303,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let opts = Options {
                 force: *force,
                 retry: *retry,
-                dry_run: false,
+                ..Options::default()
             };
             ok &= sync(opts, Some(&mut run), out)?;
             run.finish(&dirs.home)?;
@@ -561,20 +569,20 @@ fn list<R: Runner, W: Write>(
 
 /// Song files dropped into the manual folder that no song lists, each a
 /// proposal; a listed file moved within the folder is followed instead.
-fn dropped_in<W: Write>(dirs: &Dirs, out: &mut W) -> Result<Vec<Proposal>> {
+fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let listed = manifest.keys();
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    let (mut ready, settling) = store.unlisted(&known, SystemTime::now());
+    let (mut ready, settling) = store.unlisted(&known, SystemTime::now(), wait);
     for path in settling {
         ui::info(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                path.display()
+                relpath::show(&path)
             ),
         )?;
     }

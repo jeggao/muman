@@ -36,6 +36,8 @@ pub struct Options {
     pub dry_run: bool,
     /// Measure again sources that could not be read before.
     pub retry: bool,
+    /// How long a dropped-in file waits after arriving.
+    pub settling: Duration,
 }
 
 /// How long measuring runs between saves of what it measured.
@@ -393,7 +395,15 @@ pub fn reconcile<R: Runner, W: Write>(
 
     if opts.dry_run {
         status(
-            &manifest, &planned, &old, &state, &store, &listed, dirs, out,
+            &manifest,
+            &planned,
+            &old,
+            &state,
+            &store,
+            &listed,
+            dirs,
+            opts.settling,
+            out,
         )?;
         drop(lock);
         return Ok(ok);
@@ -472,7 +482,7 @@ pub fn reconcile<R: Runner, W: Write>(
             out,
             &format!(
                 "Left alone, changed since muman wrote it: {} (`sync --force` writes it again)",
-                path_of(r).display()
+                crate::relpath::show(&path_of(r))
             ),
         )?;
     }
@@ -488,7 +498,10 @@ pub fn reconcile<R: Runner, W: Write>(
                     Some(p) => format!("Updated ({})", changes(p, &r.plan).join(", ")),
                     None => "Added".to_string(),
                 };
-                crate::ui::success(out, &format!("{verb}: {}", done.audio.display()))?;
+                crate::ui::success(
+                    out,
+                    &format!("{verb}: {}", crate::relpath::show(&done.audio)),
+                )?;
                 for problem in &done.problems {
                     crate::ui::warning(out, &format!("  {problem}"))?;
                 }
@@ -603,7 +616,11 @@ fn relocate<W: Write>(
         if dry_run {
             crate::ui::info(
                 out,
-                &format!("Would move: {} → {}", from.display(), to.display()),
+                &format!(
+                    "Would move: {} → {}",
+                    crate::relpath::show(&from),
+                    crate::relpath::show(&to)
+                ),
             )?;
         } else {
             let result =
@@ -616,14 +633,18 @@ fn relocate<W: Write>(
                     out,
                     &format!(
                         "Could not move {}: {e:#}; it is written again",
-                        from.display()
+                        crate::relpath::show(&from)
                     ),
                 )?;
                 continue;
             }
             crate::ui::info(
                 out,
-                &format!("Moved: {} → {}", from.display(), to.display()),
+                &format!(
+                    "Moved: {} → {}",
+                    crate::relpath::show(&from),
+                    crate::relpath::show(&to)
+                ),
             )?;
             left.push(from.clone());
         }
@@ -759,7 +780,7 @@ fn prune<W: Write>(
                 out,
                 &format!(
                     "Left in place, changed since muman wrote it: {}; it is yours now",
-                    path.display()
+                    crate::relpath::show(path)
                 ),
             )?;
             continue;
@@ -790,7 +811,7 @@ fn prune<W: Write>(
             outputs.insert(path.clone(), written.clone());
             continue;
         }
-        crate::ui::info(out, &format!("Removed: {}", path.display()))?;
+        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(path)))?;
     }
     remove_empty_folders(library, &removed);
     Ok(removed)
@@ -860,6 +881,7 @@ fn status<W: Write>(
     store: &Store,
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
+    settling: Duration,
     out: &mut W,
 ) -> Result<()> {
     let library = &dirs.library;
@@ -880,7 +902,7 @@ fn status<W: Write>(
         writeln!(
             out,
             "  → {} ({verdict})",
-            crate::ui::Style::Path.paint(&path.display().to_string())
+            crate::ui::Style::Path.paint(&crate::relpath::show(&path))
         )?;
         writeln!(out, "  audio   {}: {}", r.plan.audio.key, r.why.audio)?;
         if let (Some(c), Some(why)) = (&r.plan.cover, &r.why.cover) {
@@ -905,11 +927,14 @@ fn status<W: Write>(
         made.insert(path);
     }
     for path in old.keys().filter(|p| !made.contains(*p)) {
-        crate::ui::warning(out, &format!("Would remove: {}", path.display()))?;
+        crate::ui::warning(
+            out,
+            &format!("Would remove: {}", crate::relpath::show(path)),
+        )?;
     }
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    let (unlisted, settling) = store.unlisted(&known, SystemTime::now());
+    let (unlisted, settling) = store.unlisted(&known, SystemTime::now(), settling);
     for key in unlisted {
         crate::ui::info(
             out,
@@ -921,7 +946,7 @@ fn status<W: Write>(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                path.display()
+                crate::relpath::show(&path)
             ),
         )?;
     }
@@ -932,7 +957,7 @@ fn status<W: Write>(
         .iter()
         .filter(|p| p.starts_with(dirs.ytdlp()))
     {
-        crate::ui::info(out, &format!("Unused: {}", path.display()))?;
+        crate::ui::info(out, &format!("Unused: {}", crate::relpath::show(path)))?;
     }
     Ok(())
 }

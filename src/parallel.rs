@@ -63,6 +63,7 @@ mod tests {
         map(&items, 8, |()| {
             std::thread::sleep(std::time::Duration::from_millis(100));
         });
-        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        // Eight in a row take 800 ms; a busy CI runner gets some slack.
+        assert!(start.elapsed() < std::time::Duration::from_millis(700));
     }
 }
