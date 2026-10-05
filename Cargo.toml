@@ -15,7 +15,7 @@ exclude = [".github/", "xtask/"]
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 deunicode = "1"
 directories = "6"
