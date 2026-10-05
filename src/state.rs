@@ -236,8 +236,12 @@ pub struct Aligned {
     pub method: String,
     /// The revisions of `a` and `b` it was made on.
     pub revs: (String, String),
-    /// How much later `a` plays a moment than `b` does.
+    /// How much later `a` plays `b`'s first moment.
     pub offset_ms: i64,
+    /// How much longer `a` plays the recording than `b`, in parts per
+    /// million.
+    #[serde(default)]
+    pub stretch_ppm: i64,
     pub score: f64,
     /// The share of `a`'s windows that agree with the offset.
     pub coverage: f64,
@@ -253,6 +257,7 @@ impl Aligned {
     pub fn alignment(&self) -> align::Alignment {
         align::Alignment {
             offset_ms: self.offset_ms,
+            stretch_ppm: self.stretch_ppm,
             score: self.score,
             coverage: self.coverage,
         }
@@ -421,6 +426,7 @@ mod tests {
             method: align::METHOD.into(),
             revs: ("1".into(), "2".into()),
             offset_ms,
+            stretch_ppm: 0,
             score: 0.99,
             coverage,
             a_ms,

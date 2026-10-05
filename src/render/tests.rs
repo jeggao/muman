@@ -59,6 +59,7 @@ fn plan(format: Format) -> Plan {
             rev: "r".into(),
             at: LyricsAt::Stream { index: 2 },
             shift_ms: 0,
+            stretch_ppm: 0,
             placement: LyricsPlacement::Sidecar,
         }),
         tags: vec![
@@ -240,6 +241,7 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         rev: "r".into(),
         at: LyricsAt::File,
         shift_ms: 1000,
+        stretch_ppm: 0,
         placement: LyricsPlacement::Sidecar,
     });
     let fake = Fake::default();
