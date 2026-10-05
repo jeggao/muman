@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -16,11 +17,6 @@ use crate::atomic;
 use crate::dirs::{Dirs, MANIFEST};
 use crate::state::{State, Written};
 use crate::store;
-
-/// How many runs are kept to undo.
-pub const KEPT_RUNS: usize = 3;
-/// How many bytes of library files one run keeps.
-pub const KEPT_BYTES: u64 = 2 << 30;
 
 const RECORD: &str = "run.json";
 
@@ -47,6 +43,8 @@ pub struct Run {
     record: Record,
     outputs_known: bool,
     bytes: u64,
+    /// The song list's `[history]`, read as the run began.
+    limits: crate::settings::History,
 }
 
 fn songs_text(home: &Path) -> Result<Option<String>> {
@@ -78,23 +76,37 @@ fn runs(home: &Path) -> Result<Vec<PathBuf>> {
 impl Run {
     /// Begin recording, with the song list as it is before anything.
     pub fn begin(home: &Path) -> Result<Self> {
+        // A clock coarser than a nanosecond can repeat a reading; the
+        // count keeps two runs of one process apart regardless.
+        static STARTED: AtomicU32 = AtomicU32::new(0);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
         let id = format!(
-            "{:012}-{:09}-{}",
+            "{:012}-{:09}-{}-{}",
             now.as_secs(),
             now.subsec_nanos(),
-            std::process::id()
+            std::process::id(),
+            STARTED.fetch_add(1, Ordering::Relaxed)
         );
+        let songs_before = songs_text(home)?;
+        // A song list that does not read keeps the default history; the
+        // run itself reports why it does not read.
+        let limits = songs_before
+            .as_deref()
+            .and_then(|t| t.parse().ok())
+            .and_then(|doc| crate::settings::read(&doc).ok())
+            .unwrap_or_default()
+            .history;
         Ok(Self {
             dir: history(home).join(id),
             record: Record {
-                songs_before: songs_text(home)?,
+                songs_before,
                 ..Record::default()
             },
             outputs_known: false,
             bytes: 0,
+            limits,
         })
     }
 
@@ -116,7 +128,7 @@ impl Run {
         if !self.record.touched.insert(rel.to_path_buf()) {
             return Ok(());
         }
-        if self.bytes + meta.len() > KEPT_BYTES {
+        if self.bytes + meta.len() > self.limits.max_mib << 20 {
             return Ok(());
         }
         let to = self.dir.join("files").join(rel);
@@ -134,7 +146,7 @@ impl Run {
     }
 
     /// Write the record when the run changed the song list or the
-    /// library, and let go of runs beyond [`KEPT_RUNS`].
+    /// library, and let go of runs beyond the `[history]` count.
     pub fn finish(mut self, home: &Path) -> Result<()> {
         self.record.songs_after = songs_text(home)?;
         if self.record.touched.is_empty()
@@ -149,7 +161,7 @@ impl Run {
         let text = serde_json::to_vec(&self.record).context("writing the run record")?;
         atomic::write(&self.dir, RECORD, &text)?;
         let all = runs(home)?;
-        for old in all.iter().take(all.len().saturating_sub(KEPT_RUNS)) {
+        for old in all.iter().take(all.len().saturating_sub(self.limits.runs)) {
             std::fs::remove_dir_all(old).with_context(|| format!("removing {}", old.display()))?;
         }
         Ok(())
@@ -346,11 +358,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let d = dirs(dir.path());
         std::fs::create_dir_all(&d.home).unwrap();
-        for n in 0..KEPT_RUNS + 2 {
+        for n in 0..crate::settings::History::default().runs + 2 {
             let run = Run::begin(&d.home).unwrap();
             std::fs::write(d.home.join(MANIFEST), n.to_string()).unwrap();
             run.finish(&d.home).unwrap();
         }
-        assert_eq!(runs(&d.home).unwrap().len(), KEPT_RUNS);
+        assert_eq!(
+            runs(&d.home).unwrap().len(),
+            crate::settings::History::default().runs
+        );
     }
 }

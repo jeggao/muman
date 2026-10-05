@@ -447,3 +447,29 @@ fn edits_are_not_saved_over_a_song_changed_meanwhile() {
     assert_eq!(m.save_if_unchanged(&now).unwrap(), []);
     assert!(m.songs.is_empty() && m.removed.len() == 1);
 }
+
+#[test]
+fn the_new_song_list_lists_every_default_as_the_code_has_it() {
+    // Uncommenting every setting must change nothing: the file is the
+    // reference, and must not drift from the defaults it shows.
+    let mut tables = false;
+    let mut uncommented = String::new();
+    for l in NEW.lines() {
+        tables = (tables || l.starts_with("# [")) && (l.is_empty() || l.starts_with('#'));
+        let l = if tables {
+            l.strip_prefix("# ").unwrap_or(l)
+        } else {
+            l
+        };
+        uncommented.push_str(l);
+        uncommented.push('\n');
+    }
+    let doc: toml_edit::DocumentMut = uncommented.parse().unwrap();
+    for table in crate::settings::TABLES {
+        assert!(doc.contains_key(table), "{table} is not shown");
+    }
+    assert_eq!(
+        crate::settings::read(&doc).unwrap(),
+        crate::settings::Settings::default()
+    );
+}

@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use crate::settings::Ytdlp;
 use crate::source::SourceKey;
 
 /// `<handle>/<title> [<id>].mkv`. The byte limits keep a long title in
@@ -38,8 +39,13 @@ pub struct Places<'a> {
     pub store: &'a Path,
     pub temp: &'a Path,
     pub done: &'a Path,
-    /// The `OriginalSubs` plugin directory, when the package provides one.
+    /// The folder muman's postprocessors are loaded from, if any.
     pub plugins: Option<&'a Path>,
+    /// The song list's `[ytdlp]`.
+    pub options: &'a Ytdlp,
+    /// A file holding the URLs, one per line, in place of the command
+    /// line, which Windows caps at 32,767 characters.
+    pub batch: Option<&'a Path>,
 }
 
 /// yt-dlp's argv. Everything is embedded into one `.mkv`, so a source
@@ -58,16 +64,12 @@ pub fn ytdlp_command(
         // The library step depends on what this list produces, so a
         // personal yt-dlp config must not change it.
         "--ignore-config",
-        "--format",
-        "bv*+ba/b",
         "--merge-output-format",
         "mkv",
         // A single-file format skips the merge; the attachments below
         // need Matroska either way.
         "--remux-video",
         "mkv",
-        "--concurrent-fragments",
-        "4",
         // Without a sleep yt-dlp retries at once, which is what keeps a
         // rate limit tripped.
         "--retry-sleep",
@@ -87,9 +89,6 @@ pub fn ytdlp_command(
         "--write-subs",
         "--compat-options",
         "no-keep-subs",
-        "--sub-langs",
-        "all,-live_chat",
-        "--xattrs",
         // A watch URL inside a playlist means the one video; a playlist
         // arrives at its own address (fetch::list).
         "--no-playlist",
@@ -103,13 +102,30 @@ pub fn ytdlp_command(
     .map(OsString::from)
     .collect();
     cmd.push(template.into());
+    let options = places.options;
+    for (flag, value) in [
+        ("--format", options.format.clone()),
+        ("--sub-langs", options.sub_langs.clone()),
+        (
+            "--concurrent-fragments",
+            options.concurrent_fragments.to_string(),
+        ),
+    ] {
+        cmd.push(flag.into());
+        cmd.push(value.into());
+    }
+    // Extended attributes keep the source URL with the file; Windows'
+    // and many removable filesystems have none to keep it in.
+    if cfg!(unix) {
+        cmd.push("--xattrs".into());
+    }
     // Machine-translated captions run to hundreds per video and trip the
     // rate limit, where one failed track aborts the download.
     let mut extractor = String::from("youtube:skip=translated_subs");
     // skip=translated_subs leaves the translations of the speech
     // recognition track, one per language; OriginalSubs drops them before
     // any is fetched. Without it, generated captions are not asked for.
-    if let Some(plugins) = places.plugins {
+    if let Some(plugins) = places.plugins.filter(|_| options.plugins) {
         // Only the web_music client lists a track's square album art.
         extractor.push_str(";player_client=default,web_music");
         cmd.extend(["--write-auto-subs", "--no-plugin-dirs", "--plugin-dirs"].map(OsString::from));
@@ -133,6 +149,11 @@ pub fn ytdlp_command(
     cmd.push("--print-to-file".into());
     cmd.push("after_move:%(extractor_key)s %(id)s %(filepath)j".into());
     cmd.push(places.done.as_os_str().to_os_string());
+    cmd.extend(options.args.iter().map(OsString::from));
+    if let Some(batch) = places.batch {
+        cmd.push("--batch-file".into());
+        cmd.push(batch.as_os_str().to_os_string());
+    }
     // A video ID may begin with a dash.
     cmd.push("--".into());
     cmd.extend(urls.iter().map(OsString::from));
@@ -186,12 +207,16 @@ pub fn archive_lines<'a>(keys: impl IntoIterator<Item = &'a SourceKey>) -> Strin
 mod tests {
     use super::*;
 
+    static OPTIONS: std::sync::LazyLock<Ytdlp> = std::sync::LazyLock::new(Ytdlp::default);
+
     fn places(plugins: Option<&Path>) -> Places<'_> {
         Places {
             store: Path::new("/o"),
             temp: Path::new("/t"),
             done: Path::new("/d"),
             plugins,
+            options: &OPTIONS,
+            batch: None,
         }
     }
 

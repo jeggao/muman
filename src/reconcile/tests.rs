@@ -474,3 +474,25 @@ fn a_run_keeps_what_it_replaces_and_removes() {
     );
     assert!(lines.contains("song list"), "{lines}");
 }
+
+#[test]
+fn a_new_template_moves_songs_without_writing_them_again() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let before = renders(&fake);
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&fake), before, "{text}");
+    assert!(h.lib("Chan - Title aaaaaaaaaaa.opus").exists(), "{text}");
+    assert!(h.lib("Chan - Title aaaaaaaaaaa.lrc").exists(), "{text}");
+    assert!(!h.lib("Chan").exists(), "the emptied folders go: {text}");
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(!again.contains("Moved"), "{again}");
+}

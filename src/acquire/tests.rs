@@ -150,6 +150,7 @@ fn acquire_urls(
         temp: &temp,
         partial: &temp,
         plugins: None,
+        options: &crate::settings::Ytdlp::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -232,6 +233,7 @@ fn missing_sources_are_fetched_again_without_the_archive() {
         temp: &temp,
         partial: &temp,
         plugins: None,
+        options: &crate::settings::Ytdlp::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -281,6 +283,7 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
             temp: &temp,
             partial: &temp,
             plugins: None,
+            options: &crate::settings::Ytdlp::default(),
             live: false,
             runs: Cell::new(0),
         };

@@ -215,6 +215,20 @@ impl Default for History {
     }
 }
 
+/// The library folder the song list in `home` names, if it names one.
+pub fn library_folder(home: &Path) -> Result<Option<PathBuf>> {
+    let file = home.join(crate::dirs::MANIFEST);
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+    };
+    let doc: DocumentMut = text
+        .parse()
+        .with_context(|| format!("{} is not valid TOML", file.display()))?;
+    Ok(read(&doc)?.library.folder(home))
+}
+
 /// The settings `doc` sets, the defaults where it sets none.
 pub fn read(doc: &DocumentMut) -> Result<Settings> {
     let mut only = DocumentMut::new();

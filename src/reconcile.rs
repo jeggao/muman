@@ -369,6 +369,7 @@ pub fn reconcile<R: Runner, W: Write>(
     let (planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
+    relocate(&planned, &mut state, &dirs.library, opts.dry_run, out)?;
     let old = state.outputs.clone();
     let current = |r: &Resolved| {
         let path = path_of(r);
@@ -538,10 +539,9 @@ pub fn reconcile<R: Runner, W: Write>(
     state.save(home)?;
     manifest.save_locked(&lock)?;
     if changed || !removed.is_empty() {
-        // Some players rescan only when the root or a folder directly inside
-        // it is newer than their last run; a song three levels down changes
-        // neither.
-        touch(&dirs.library, out)?;
+        if manifest.settings.library.touch_root {
+            touch(&dirs.library, out)?;
+        }
         let (written, removed) = (written.to_string(), removed.len().to_string());
         let library = dirs.library.to_string_lossy();
         let values = [
@@ -561,6 +561,101 @@ fn changed_since_written(library: &Path, old: &BTreeMap<PathBuf, Written>, path:
         .and_then(|w| w.stamp.as_ref())
         .zip(store::stamp_text(&library.join(path)))
         .is_some_and(|(was, now)| *was != now)
+}
+
+/// Move each song whose plan is unchanged but whose path is not, as a
+/// new `[library]` template makes it, rather than render it again; only
+/// a file muman wrote and nobody changed since is moved, and only to a
+/// path no other song takes. `dry_run` says what would move.
+fn relocate<W: Write>(
+    planned: &[PlannedSong],
+    state: &mut State,
+    library: &Path,
+    dry_run: bool,
+    out: &mut W,
+) -> Result<()> {
+    let wanted: BTreeSet<PathBuf> = planned.iter().map(|(_, r)| path_of(r)).collect();
+    let mut moves = Vec::new();
+    for (_, r) in planned {
+        let to = path_of(r);
+        if state
+            .outputs
+            .get(&to)
+            .is_some_and(|w| w.plan.as_ref() == Some(&r.plan))
+        {
+            continue;
+        }
+        let from = state.outputs.iter().find(|(p, w)| {
+            w.plan.as_ref() == Some(&r.plan)
+                && !wanted.contains(*p)
+                && !moves.iter().any(|(f, _)| f == *p)
+                && library.join(p).metadata().is_ok_and(|m| m.len() > 0)
+                && !changed_since_written(library, &state.outputs, p)
+        });
+        if let Some((from, _)) = from {
+            moves.push((from.clone(), to));
+        }
+    }
+    let mut left = Vec::new();
+    for (from, to) in moves {
+        let mut written = state.outputs[&from].clone();
+        let lyrics = written.lyrics.as_ref().map(|_| to.with_extension("lrc"));
+        if dry_run {
+            crate::ui::info(
+                out,
+                &format!("Would move: {} → {}", from.display(), to.display()),
+            )?;
+        } else {
+            let result =
+                move_file(library, &from, &to).and_then(|()| match (&written.lyrics, &lyrics) {
+                    (Some(a), Some(b)) => move_file(library, a, b),
+                    _ => Ok(()),
+                });
+            if let Err(e) = result {
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "Could not move {}: {e:#}; it is written again",
+                        from.display()
+                    ),
+                )?;
+                continue;
+            }
+            crate::ui::info(
+                out,
+                &format!("Moved: {} → {}", from.display(), to.display()),
+            )?;
+            left.push(from.clone());
+        }
+        written.lyrics = lyrics;
+        state.outputs.remove(&from);
+        state.outputs.insert(to, written);
+    }
+    remove_empty_folders(library, &left);
+    Ok(())
+}
+
+/// Rename a library file, creating its new folder. A rename that only
+/// changes case goes through a temporary name, which a filesystem blind
+/// to case would otherwise take for a rename onto itself.
+fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
+    let (from, to) = (library.join(from), library.join(to));
+    if let Some(dir) = to.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let step = |a: &Path, b: &Path| {
+        crate::atomic::rename(a, b)
+            .with_context(|| format!("moving {} to {}", a.display(), b.display()))
+    };
+    if crate::relpath::folded(&from) == crate::relpath::folded(&to) {
+        let mut temp = to.clone().into_os_string();
+        temp.push(".moving");
+        let temp = PathBuf::from(temp);
+        step(&from, &temp)?;
+        step(&temp, &to)
+    } else {
+        step(&from, &to)
+    }
 }
 
 /// Each song's place in the song list, and what it resolved to.
@@ -741,7 +836,8 @@ fn is_desktop_clutter(name: &str) -> bool {
     matches!(name, "desktop.ini" | "Thumbs.db" | ".DS_Store") || name.starts_with("._")
 }
 
-/// Set a folder's time to now, so players that rescan by it notice.
+/// Set a folder's time to now, so players that rescan by it notice: a
+/// song three levels down changes neither the root nor its children.
 /// Best effort: a filesystem that refuses it costs only a rescan.
 fn touch<W: Write>(dir: &Path, out: &mut W) -> Result<()> {
     if let Err(e) = filetime::set_file_mtime(dir, filetime::FileTime::now()) {

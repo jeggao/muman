@@ -116,6 +116,18 @@ pub fn run() -> ExitCode {
         let _ = ui::error(&mut err, "the system names no home folder for this user");
         return ExitCode::from(2);
     };
+    let home = cli.home.clone().unwrap_or_else(|| defaults.home.clone());
+    let library = match settings::library_folder(&home) {
+        Ok(library) => library,
+        Err(e) => {
+            let _ = ui::error(&mut err, &format!("{e:#}"));
+            return ExitCode::from(4);
+        }
+    };
+    let defaults = Defaults {
+        library: library.unwrap_or(defaults.library),
+        ..defaults
+    };
     let mut job = Job::from_cli(cli, defaults);
     job.live = live;
     let mut inquire = InquirePrompter;
@@ -440,12 +452,13 @@ fn network<R: Runner, W: Write, T>(
     let temp = tempfile::tempdir().context("creating a temporary directory")?;
     let ytdlp = job.dirs.ytdlp();
     let partial = job.dirs.home.join("partial");
-    clear_stale(&partial);
+    clear_stale(&partial, manifest.settings.ytdlp.partial_days);
     let fetcher = Fetcher {
         store: &ytdlp,
         temp: temp.path(),
         partial: &partial,
         plugins: job.plugins.as_deref(),
+        options: &manifest.settings.ytdlp,
         live: job.live,
         runs: Cell::new(0),
     };
@@ -464,15 +477,13 @@ fn network<R: Runner, W: Write, T>(
     step(&mut acquire)
 }
 
-/// How long a partial download is kept for a later run to resume.
-const PARTIAL_DAYS: u64 = 14;
-
-/// Remove what yt-dlp left unfinished longer ago than [`PARTIAL_DAYS`].
-fn clear_stale(partial: &Path) {
+/// Remove what yt-dlp left unfinished longer than `days` ago; younger,
+/// a later run resumes it.
+fn clear_stale(partial: &Path, days: u64) {
     let Ok(entries) = std::fs::read_dir(partial) else {
         return;
     };
-    let limit = std::time::Duration::from_secs(PARTIAL_DAYS * 24 * 3600);
+    let limit = std::time::Duration::from_secs(days * 24 * 3600);
     for path in entries.filter_map(|e| Some(e.ok()?.path())) {
         let old = std::fs::metadata(&path)
             .and_then(|m| m.modified())

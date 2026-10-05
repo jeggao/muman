@@ -118,6 +118,13 @@ fn line_length(file: &ParsedFile) -> Vec<Diagnostic> {
         .iter()
         .enumerate()
         .filter(|(_, l)| l.comment.is_some())
+        // A Markdown table row in rustdoc cannot be wrapped.
+        .filter(|(_, l)| {
+            !(l.kind == LineKind::Doc
+                && l.comment
+                    .as_ref()
+                    .is_some_and(|c| c.text[3..].trim_start().starts_with('|')))
+        })
         .filter_map(|(idx, line)| {
             let len = line.raw.chars().count();
             (len > MAX_LINE_LEN).then(|| {
@@ -497,9 +504,11 @@ mod tests {
     }
 
     #[test]
-    fn a_long_comment_line_is_flagged() {
+    fn a_long_comment_line_is_flagged_but_a_rustdoc_table_row_is_not() {
         let src = format!("//! m\n// {}\n", "word ".repeat(25));
         assert_eq!(fired(&src, "line-length"), [2]);
+        let table = format!("//! | a | {} |\n", "word ".repeat(25));
+        assert!(fired(&table, "line-length").is_empty());
     }
 
     #[test]

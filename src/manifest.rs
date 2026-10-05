@@ -51,14 +51,18 @@ const HEADER: &str = "\
 #             enabled, concurrency, recheck_days, per_run and lrclib's url.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
+#   Settings: [library], [audio], [ytdlp] and [history] lay out and name
+#             the library, set encoding and fetching, and size `undo`.
 #
-# Keys muman does not know are kept. Leave `version` as it is.
+# Other keys muman does not know are kept. Leave `version` as it is.
 ";
 
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
 
-const NEW: &str = "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n";
+/// A new home's song list: the settings, each commented out at its
+/// default, as the reference the docs point to.
+pub const NEW: &str = include_str!("manifest/new.toml");
 
 /// The tags every song's `[song.tags]` offers to fill in.
 const TAG_TEMPLATE: [&str; 6] = ["title", "artist", "album", "album_artist", "genre", "date"];

@@ -13,8 +13,8 @@
 //! Besides MiniJinja's own filters (`default`, `lower`, `upper`,
 //! `replace`, `first`, `join`, …) there are `pad(n)`, a number with
 //! leading zeros; `truncate(n)`, the first `n` characters; `asciify`,
-//! the text transliterated to ASCII; and `the_suffix`, `The Band` as
-//! `Band, The`. Every value arrives already safe for a path, so a `/` in
+//! the text transliterated to ASCII; and `the_suffix`, `The Orchards` as
+//! `Orchards, The`. Every value arrives already safe for a path, so a `/` in
 //! a title never makes a folder; only the template's own `/` does.
 
 use anyhow::{Context, Result};

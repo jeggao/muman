@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 
 use crate::align::{self, Alignment};
 use crate::download::{self, Fetched};
@@ -19,6 +19,7 @@ use crate::music::{self, Entry, Listing};
 use crate::parallel;
 use crate::provider::Provider;
 use crate::runner::Runner;
+use crate::settings::Ytdlp;
 use crate::source::{SourceKey, watch_url};
 use crate::state::{self, Failure, Looked, Outcome, Step};
 use crate::store::Store;
@@ -34,6 +35,7 @@ pub struct Fetcher<'a> {
     /// a later run resumes it and the finished file is renamed in.
     pub partial: &'a Path,
     pub plugins: Option<&'a Path>,
+    pub options: &'a Ytdlp,
     /// Whether output goes to a terminal, where progress is one line.
     pub live: bool,
     pub runs: Cell<usize>,
@@ -52,12 +54,23 @@ impl Fetcher<'_> {
         let n = self.runs.get();
         self.runs.set(n + 1);
         let done = self.temp.join(format!("done-{n}"));
+        // Well under Windows' 32,767-character command line, with room
+        // for every other argument.
+        let long = urls.iter().map(|u| u.len() + 1).sum::<usize>() > 16_000;
+        let batch = self.temp.join(format!("urls-{n}"));
+        if long {
+            std::fs::write(&batch, urls.join("\n"))
+                .with_context(|| format!("writing {}", batch.display()))?;
+        }
         let places = download::Places {
             store: self.store,
             temp: self.partial,
             done: &done,
             plugins: self.plugins,
+            options: self.options,
+            batch: long.then_some(batch.as_path()),
         };
+        let urls = if long { &[][..] } else { urls };
         let cmd = download::ytdlp_command(&places, template, archive, urls);
         let ok = {
             let mut relay = Relay::new(out, self.live);
