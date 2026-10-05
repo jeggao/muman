@@ -315,8 +315,10 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 /// Give every song a path of its own: a later song resolving to one an
 /// earlier song took is named with its audio's ID too, and numbered
 /// when that is taken as well, as two manual files of one name are.
-fn separate(planned: &mut [(usize, Resolved)]) {
-    let lower = |r: &Resolved| crate::relpath::folded(&path_of(r));
+fn separate(planned: &mut [(usize, Resolved)], max_name: usize) {
+    // By stem, not path: a FLAC song and an Opus song of one name would
+    // write the same `.lrc`.
+    let lower = |r: &Resolved| crate::relpath::folded(&r.stem);
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for (_, r) in planned.iter_mut() {
         if taken.insert(lower(r)) {
@@ -325,7 +327,7 @@ fn separate(planned: &mut [(usize, Resolved)]) {
         let base = r.stem.clone();
         let id = r.plan.audio.key.short();
         for n in 1.. {
-            r.stem = naming::suffixed(&base, &id, n);
+            r.stem = naming::suffixed(&base, &id, n, max_name);
             if taken.insert(lower(r)) {
                 break;
             }
@@ -371,7 +373,12 @@ pub fn reconcile<R: Runner, W: Write>(
     let (planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
-    relocate(&planned, &mut state, &dirs.library, opts.dry_run, out)?;
+    let moved = relocate(&planned, &mut state, &dirs.library, opts.dry_run, out)?;
+    if !moved.is_empty() && !opts.dry_run {
+        // The files are already at their new paths; a failure before the
+        // end of the run must not leave the state naming the old ones.
+        state.save(home)?;
+    }
     let old = state.outputs.clone();
     let current = |r: &Resolved| {
         let path = path_of(r);
@@ -403,6 +410,7 @@ pub fn reconcile<R: Runner, W: Write>(
             &listed,
             dirs,
             opts.settling,
+            &moved,
             out,
         )?;
         drop(lock);
@@ -586,9 +594,12 @@ fn relocate<W: Write>(
     library: &Path,
     dry_run: bool,
     out: &mut W,
-) -> Result<()> {
-    let wanted: BTreeSet<PathBuf> = planned.iter().map(|(_, r)| path_of(r)).collect();
-    let mut moves = Vec::new();
+) -> Result<BTreeSet<PathBuf>> {
+    use crate::relpath::folded;
+    // Folded, since on NTFS and APFS a path differing only in case is the
+    // same file: moving onto it would overwrite another song.
+    let wanted: BTreeSet<String> = planned.iter().map(|(_, r)| folded(&path_of(r))).collect();
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (_, r) in planned {
         let to = path_of(r);
         if state
@@ -598,9 +609,17 @@ fn relocate<W: Write>(
         {
             continue;
         }
+        // Only onto a path nobody holds: no other output of muman's, and
+        // no file of anyone's, which the render would guard.
+        let occupied = state.outputs.keys().any(|p| folded(p) == folded(&to))
+            || library.join(&to).exists()
+            || moves.iter().any(|(_, t)| folded(t) == folded(&to));
+        if occupied {
+            continue;
+        }
         let from = state.outputs.iter().find(|(p, w)| {
             w.plan.as_ref() == Some(&r.plan)
-                && !wanted.contains(*p)
+                && !wanted.contains(&folded(p))
                 && !moves.iter().any(|(f, _)| f == *p)
                 && library.join(p).metadata().is_ok_and(|m| m.len() > 0)
                 && !changed_since_written(library, &state.outputs, p)
@@ -610,6 +629,7 @@ fn relocate<W: Write>(
         }
     }
     let mut left = Vec::new();
+    let mut done = BTreeSet::new();
     for (from, to) in moves {
         let mut written = state.outputs[&from].clone();
         let lyrics = written.lyrics.as_ref().map(|_| to.with_extension("lrc"));
@@ -650,10 +670,11 @@ fn relocate<W: Write>(
         }
         written.lyrics = lyrics;
         state.outputs.remove(&from);
+        done.insert(to.clone());
         state.outputs.insert(to, written);
     }
     remove_empty_folders(library, &left);
-    Ok(())
+    Ok(done)
 }
 
 /// Rename a library file, creating its new folder. A rename that only
@@ -725,7 +746,7 @@ pub(crate) fn plan<W: Write>(
             }
         }
     }
-    separate(&mut planned);
+    separate(&mut planned, manifest.settings.library.max_name_bytes);
     Ok((planned, failed))
 }
 
@@ -763,12 +784,18 @@ fn prune<W: Write>(
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
-    let now: BTreeSet<String> = outputs.keys().map(|p| crate::relpath::folded(p)).collect();
+    let now: BTreeMap<String, PathBuf> = outputs
+        .keys()
+        .map(|p| (crate::relpath::folded(p), p.clone()))
+        .collect();
     for (path, written) in old {
         // On a filesystem blind to case and composition, a song renamed
         // only so is the same file as its new name: deleting the old name
-        // would delete the new song.
-        if outputs.contains_key(path) || now.contains(&crate::relpath::folded(path)) {
+        // would delete the new song. Elsewhere they are two files.
+        let renamed = now.get(&crate::relpath::folded(path)).is_some_and(|new| {
+            same_file::is_same_file(library.join(path), library.join(new)).unwrap_or(false)
+        });
+        if outputs.contains_key(path) || renamed {
             continue;
         }
         if written.sources.iter().any(|k| failed.contains(k)) {
@@ -882,6 +909,7 @@ fn status<W: Write>(
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
     settling: Duration,
+    moved: &BTreeSet<PathBuf>,
     out: &mut W,
 ) -> Result<()> {
     let library = &dirs.library;
@@ -891,6 +919,7 @@ fn status<W: Write>(
         let path = path_of(r);
         let verdict = match old.get(&path).and_then(|w| w.plan.as_ref()) {
             Some(p) if p == &r.plan && library.join(&path).exists() => "up to date".to_string(),
+            Some(p) if p == &r.plan && moved.contains(&path) => "moved".to_string(),
             Some(p) => format!("changes: {}", changes(p, &r.plan).join(", ")),
             None => "new".to_string(),
         };

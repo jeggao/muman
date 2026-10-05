@@ -140,28 +140,59 @@ impl Naming {
             id: self.value(tags.id),
         };
         let rendered = self.template.render(&fields)?;
-        let mut parts: Vec<String> = rendered
-            .split('/')
+        let mut raw: Vec<&str> = rendered.split('/').collect();
+        // The file name is the template's last part even when it renders
+        // empty, so a blank title never turns the album folder into it.
+        let name = raw.pop().unwrap_or_default();
+        let mut parts: Vec<String> = raw
+            .iter()
             .map(|p| self.component(p, self.max_folder))
             .filter(|p| !p.is_empty())
             .collect();
-        let name = parts.pop().unwrap_or_default();
-        let folders: usize = parts.iter().map(|p| p.chars().count() + 1).sum();
-        let name_limit = match self.room {
-            Some(room) => self
-                .max_name
-                .min(room.saturating_sub(folders + SUFFIX_ROOM).max(8)),
-            None => self.max_name,
+        let Some(room) = self.room else {
+            return Ok(self.finish(&parts, name, self.max_name));
         };
-        let name = match self.component(&name, name_limit) {
-            n if n.is_empty() => self.component(&self.untitled, name_limit),
+        // Folders get an even share of what the path may take when
+        // together they would leave the name too little.
+        let share = (room.saturating_sub(SUFFIX_ROOM) / (parts.len() + 1)).max(8);
+        let length =
+            |parts: &[String]| -> usize { parts.iter().map(|p| p.chars().count() + 1).sum() };
+        if length(&parts) + share + SUFFIX_ROOM > room {
+            parts = parts
+                .iter()
+                .map(|p| {
+                    self.component(&p.chars().take(share).collect::<String>(), self.max_folder)
+                })
+                .collect();
+        }
+        let chars = room.saturating_sub(length(&parts) + SUFFIX_ROOM).max(8);
+        let name: String = name.chars().take(chars).collect();
+        Ok(self.finish(&parts, &name, self.max_name))
+    }
+
+    /// The folders and the file name as one path, in NFC, as every path
+    /// muman records is: a decomposed tag must name the same file on
+    /// every run.
+    fn finish(&self, parts: &[String], name: &str, limit: usize) -> PathBuf {
+        let name = match self.component(name, limit) {
+            n if n.is_empty() => self.component(&self.untitled, limit),
             n => n,
         };
-        Ok(parts
+        let path: PathBuf = parts
             .iter()
             .map(String::as_str)
             .chain([name.as_str()])
-            .collect())
+            .collect();
+        crate::relpath::normalized(&path)
+    }
+
+    /// Whether `c` cannot stand in a name: control characters and `/`
+    /// everywhere; Windows' set under `restrict`, and on Windows itself
+    /// always, since there they are separators, streams or wildcards.
+    fn forbidden(&self, c: char) -> bool {
+        c == '/'
+            || c.is_control()
+            || ((self.restrict != Restrict::None || cfg!(windows)) && FORBIDDEN.contains(&c))
     }
 
     /// One tag value made safe for a path.
@@ -177,17 +208,24 @@ impl Naming {
         }
         out.chars()
             .filter(|c| !c.is_control())
-            .map(|c| match self.restrict {
-                Restrict::None if c == '/' => '_',
-                Restrict::Windows | Restrict::Ascii if FORBIDDEN.contains(&c) => '_',
-                _ => c,
-            })
+            .map(|c| if self.forbidden(c) { '_' } else { c })
             .collect()
     }
 
     /// A display name as one path component within `limit` bytes.
     fn component(&self, name: &str, limit: usize) -> String {
-        let trimmed = name.trim().trim_start_matches('.');
+        // What the template itself spells, values aside, is made safe too.
+        let safe: String = name
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(
+                |c| match LOOKALIKES.iter().find(|(f, _)| f.starts_with(c)) {
+                    Some((_, to)) if self.forbidden(c) => to.chars().next().unwrap_or('_'),
+                    _ => c,
+                },
+            )
+            .collect();
+        let trimmed = safe.trim().trim_start_matches('.');
         let mut out = cut(trimmed, limit);
         if self.restrict != Restrict::None {
             out = out.trim_end_matches(['.', ' ']).to_string();
@@ -219,10 +257,10 @@ fn number(text: &str) -> Option<u32> {
 }
 
 /// `stem` told apart by `id`, and by `n` when that is not enough:
-/// `Song [id]`, `Song [id 2]`. The suffix fits in the room every name
-/// keeps for it.
+/// `Song [id]`, `Song [id 2]`. The name is cut so the whole stays within
+/// `max_name` bytes with room for the extension and a temporary suffix.
 #[must_use]
-pub fn suffixed(stem: &Path, id: &str, n: u32) -> PathBuf {
+pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
     let id = cut(id, ID_BYTES);
     let suffix = if n > 1 {
         format!(" [{} {n}]", id.trim())
@@ -232,8 +270,10 @@ pub fn suffixed(stem: &Path, id: &str, n: u32) -> PathBuf {
     let name = stem
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let name = cut(&name, name.len().min(ID_BYTES * 8));
-    stem.with_file_name(format!("{name}{suffix}"))
+    // The extension and `.moving`, the longest temporary suffix.
+    let tail = ".flac.moving".len();
+    let name = cut(&name, max_name.saturating_sub(suffix.len() + tail));
+    stem.with_file_name(format!("{}{suffix}", name.trim_end()))
 }
 
 /// `text` cut at a character boundary within `limit` bytes.
@@ -412,12 +452,70 @@ mod tests {
     #[test]
     fn a_suffix_tells_two_songs_apart() {
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 1),
+            suffixed(&path(&["A", "B", "Song"]), "id", 1, 200),
             path(&["A", "B", "Song [id]"])
         );
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 2),
+            suffixed(&path(&["A", "B", "Song"]), "id", 2, 200),
             path(&["A", "B", "Song [id 2]"])
         );
+    }
+
+    #[test]
+    fn a_name_takes_the_name_limit_and_a_suffix_fits_within_it() {
+        let stem = naming(&Library::default())
+            .stem(&tags("A", "B", &"t".repeat(300)))
+            .unwrap();
+        let name = stem.file_name().unwrap().to_str().unwrap().len();
+        assert!(name > 120 && name <= 200 - SUFFIX_ROOM, "{name}");
+        let long = suffixed(&stem, &"i".repeat(100), 3, 200);
+        let total = long.file_name().unwrap().to_str().unwrap().len() + ".flac.moving".len();
+        assert!(total <= 200, "{total}");
+    }
+
+    #[test]
+    fn a_blank_title_never_takes_the_album_folders_place() {
+        assert_eq!(
+            naming(&Library::default())
+                .stem(&tags("A", "Album", ". ."))
+                .unwrap(),
+            path(&["A", "Album", "Untitled"])
+        );
+    }
+
+    #[test]
+    fn a_decomposed_tag_names_the_composed_path() {
+        assert_eq!(
+            naming(&Library::default())
+                .stem(&tags("A", "B", "Cafe\u{301}"))
+                .unwrap(),
+            path(&["A", "B", "Caf\u{e9}"])
+        );
+    }
+
+    #[test]
+    fn what_the_template_spells_is_made_safe_too() {
+        let custom = Library {
+            template: "{{ album_artist }}: {{ title }}?".into(),
+            ..Library::default()
+        };
+        assert_eq!(
+            naming(&custom).stem(&tags("A", "x", "T")).unwrap(),
+            path(&["A： T？"])
+        );
+    }
+
+    #[test]
+    fn a_path_limit_holds_even_for_deep_templates() {
+        let deep = Library {
+            template: "{{ album_artist }}/{{ album }}/{{ genre }}x/{{ title }}".into(),
+            max_path: Some(60),
+            ..Library::default()
+        };
+        let n = Naming::new(&deep, Path::new("lib")).unwrap();
+        let long = "w".repeat(80);
+        let stem = n.stem(&tags(&long, &long, &long)).unwrap();
+        let chars = 4 + stem.to_string_lossy().chars().count();
+        assert!(chars + SUFFIX_ROOM <= 60, "{chars}");
     }
 }

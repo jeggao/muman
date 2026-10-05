@@ -83,7 +83,6 @@ pub mod portable_keys {
         BTreeMap, BTreeSet, Deserialize, Deserializer, PathBuf, Serialize, Serializer,
         from_portable, to_portable,
     };
-    use serde::de::Error;
 
     pub trait Keyed: Sized {
         fn write<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error>;
@@ -96,12 +95,12 @@ pub mod portable_keys {
         }
 
         fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            // Two spellings of one path, as `A//b` and `A/b` or a name in
+            // NFD and NFC, are one entry; the first stands.
             let raw = BTreeMap::<String, V>::deserialize(d)?;
             let mut out = BTreeMap::new();
             for (k, v) in raw {
-                if out.insert(from_portable(&k), v).is_some() {
-                    return Err(D::Error::custom(format!("`{k}` is listed twice")));
-                }
+                out.entry(from_portable(&k)).or_insert(v);
             }
             Ok(out)
         }

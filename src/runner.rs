@@ -136,17 +136,23 @@ impl System {
 /// running executable, else from `PATH`.
 fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
     if let Some(value) = variable.filter(|v| !v.is_empty()) {
-        let words = shell_words::split(&value.to_string_lossy())
-            .ok()
-            .filter(|w| !w.is_empty())
-            .map_or_else(
-                || vec![value.clone()],
-                |w| w.into_iter().map(OsString::from).collect(),
-            );
-        let program = which::which(&words[0]).ok()?;
+        // A path or name first, whatever it holds: `C:\Tools\ffmpeg.exe`
+        // and `/Applications/My Tools/ffmpeg` are one word each.
+        if let Ok(program) = which::which(&value) {
+            return Some(vec![program.into_os_string()]);
+        }
+        // Then a command with arguments, as `python -m yt_dlp`.
+        let text = value.to_string_lossy();
+        let words: Vec<String> = if cfg!(windows) {
+            text.split_whitespace().map(str::to_string).collect()
+        } else {
+            shell_words::split(&text).ok()?
+        };
+        let (first, rest) = words.split_first()?;
+        let program = which::which(first).ok()?;
         return Some(
             std::iter::once(program.into_os_string())
-                .chain(words.into_iter().skip(1))
+                .chain(rest.iter().map(OsString::from))
                 .collect(),
         );
     }
@@ -321,6 +327,18 @@ mod tests {
         let found = find("yt-dlp", Some(line.into())).unwrap();
         assert_eq!(found.len(), 3);
         assert_eq!(found[1], "-m");
+    }
+
+    #[test]
+    fn a_variable_naming_a_path_with_spaces_is_one_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("My Tools");
+        std::fs::create_dir(&folder).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let copy = folder.join(exe.file_name().unwrap());
+        std::fs::copy(&exe, &copy).unwrap();
+        let found = find("ffmpeg", Some(copy.clone().into())).unwrap();
+        assert_eq!(found, [copy.into_os_string()]);
     }
 
     #[test]

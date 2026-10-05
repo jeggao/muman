@@ -104,14 +104,7 @@ pub fn run<R: Runner, W: Write>(
         let argv: Vec<OsString> = hook
             .run
             .iter()
-            .map(|word| {
-                values
-                    .iter()
-                    .fold(word.clone(), |w, (name, v)| {
-                        w.replace(&format!("{{{name}}}"), v)
-                    })
-                    .into()
-            })
+            .map(|word| fill(word, values).into())
             .collect();
         let mut lines = Vec::new();
         let ran = runner.stream_env(&argv, &env, &mut |line| {
@@ -132,11 +125,40 @@ pub fn run<R: Runner, W: Write>(
     Ok(())
 }
 
-/// Whether `program` is, or is found as, a Windows batch file.
+/// `word` with each `{name}` replaced by its value, in one pass, so a
+/// value that itself holds `{library}` stays as it is.
+fn fill(word: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    let mut rest = word;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let value = after.find('}').and_then(|close| {
+            let name = &after[..close];
+            values
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| (*v, close))
+        });
+        if let Some((v, close)) = value {
+            out.push_str(v);
+            rest = &after[close + 1..];
+        } else {
+            out.push('{');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether `program` is, or is found as, a Windows batch file, or is
+/// cmd.exe itself, which reads its arguments the same way.
 fn is_batch(program: &str) -> bool {
     let batch = |p: &Path| {
         p.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"))
+            || p.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("cmd"))
     };
     batch(Path::new(program)) || (cfg!(windows) && which::which(program).is_ok_and(|p| batch(&p)))
 }
@@ -180,6 +202,17 @@ mod tests {
                 library.join(&rel).to_string_lossy().into_owned()
             ]]
         );
+    }
+
+    #[test]
+    fn placeholders_are_filled_once() {
+        let values = [("path", "a {library} b"), ("library", "lib")];
+        assert_eq!(
+            fill("{path}|{library}|{other}", &values),
+            "a {library} b|lib|{other}"
+        );
+        assert!(is_batch("cmd") && is_batch("CMD.EXE") && is_batch("tag.bat"));
+        assert!(!is_batch("rsgain"));
     }
 
     #[test]

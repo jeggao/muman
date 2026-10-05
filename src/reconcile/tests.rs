@@ -496,3 +496,74 @@ fn a_new_template_moves_songs_without_writing_them_again() {
     let (_, again) = h.run(&fake, Options::default());
     assert!(!again.contains("Moved"), "{again}");
 }
+
+#[test]
+fn a_move_never_lands_on_a_file_another_song_holds() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let theirs = h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
+    std::fs::write(&theirs, "edited by a tagger").unwrap();
+    h.songs(&format!(
+        "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}Chan/Title bbbbbbbbbbb/Title \
+         bbbbbbbbbbb{{% else %}}moved/{{{{ title }}}}{{% endif %}}\"\n{TWO}"
+    ));
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(!text.contains("Moved: Chan/Title aaaaaaaaaaa"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&theirs).unwrap(),
+        "edited by a tagger",
+        "{text}"
+    );
+}
+
+#[test]
+fn a_rename_in_case_alone_leaves_no_old_file_behind() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"lantern\" }\n");
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"Lantern\" }\n");
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let chan = h.lib("Chan");
+    let mut names: Vec<String> = std::fs::read_dir(&chan)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_lowercase())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["lantern"], "{text}");
+    let files = std::fs::read_dir(chan.join("Lantern")).unwrap().count();
+    assert_eq!(files, 2, "the song and its lyrics, once: {text}");
+}
+
+#[test]
+fn status_says_a_song_would_move() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+    );
+    let (_, text) = h.run(
+        &fake,
+        Options {
+            dry_run: true,
+            ..Options::default()
+        },
+    );
+    let text = crate::ui::plain(&text);
+    assert!(text.contains("Would move"), "{text}");
+    assert!(text.contains("(moved)"), "{text}");
+    assert!(
+        h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus")
+            .exists()
+    );
+}

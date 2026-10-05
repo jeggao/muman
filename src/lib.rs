@@ -121,12 +121,12 @@ pub fn run() -> ExitCode {
         return ExitCode::from(2);
     };
     let home = cli.home.clone().unwrap_or_else(|| defaults.home.clone());
-    let library = match settings::library_folder(&home) {
-        Ok(library) => library,
-        Err(e) => {
-            let _ = ui::error(&mut err, &format!("{e:#}"));
-            return ExitCode::from(4);
-        }
+    // A song list that does not read is reported by the command itself,
+    // which names the problem; the default folder stands meanwhile.
+    let library = if cli.library.is_some() {
+        None
+    } else {
+        settings::library_folder(&home).ok().flatten()
     };
     let defaults = Defaults {
         library: library.unwrap_or(defaults.library),
