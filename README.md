@@ -45,6 +45,24 @@ Then build muman with a [Rust toolchain](https://rustup.rs):
 cargo install --locked --git https://github.com/jeggao/muman
 ```
 
+### Nix
+
+With [Nix](https://nixos.org), the flake builds muman with ffmpeg and
+yt-dlp on Linux and on Macs with Apple silicon, so neither needs
+installing:
+
+```bash
+nix run github:jeggao/muman -- info
+nix profile add github:jeggao/muman
+```
+
+It names its ffmpeg, ffprobe and yt-dlp in `MUMAN_FFMPEG`,
+`MUMAN_FFPROBE` and `MUMAN_YT_DLP` only where those are unset, so a
+program you name there still wins. For NixOS or Home Manager, add the
+flake's `overlays.default` and install `pkgs.muman`. Without flakes,
+`nix-build` in a checkout builds the same package, from the nixpkgs
+`flake.lock` pins.
+
 ## Quick start
 
 ```bash
