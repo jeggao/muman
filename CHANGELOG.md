@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **A Nix flake.** `nix run github:jeggao/muman` runs muman with ffmpeg
+  and yt-dlp on Linux and Apple silicon Macs; the flake also has an
+  overlay and a development shell, and `nix-build` works without
+  flakes.
+
 ## [0.1.0] - 2026-10-05
 
 ### Added
