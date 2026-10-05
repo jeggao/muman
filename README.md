@@ -40,7 +40,15 @@ muman needs [ffmpeg](https://ffmpeg.org) (with ffprobe), and
 | macOS | `brew install ffmpeg yt-dlp` |
 | Windows | `winget install Gyan.FFmpeg yt-dlp.yt-dlp`, or `scoop install ffmpeg yt-dlp` |
 
-Then build muman with a [Rust toolchain](https://rustup.rs):
+Then install muman from [crates.io](https://crates.io/crates/muman)
+with a [Rust toolchain](https://rustup.rs):
+
+```bash
+cargo install --locked muman
+```
+
+The same command updates it to the latest release. To build what is on
+`main` since the last release instead:
 
 ```bash
 cargo install --locked --git https://github.com/jeggao/muman
@@ -56,6 +64,9 @@ installing:
 nix run github:jeggao/muman -- info
 nix profile add github:jeggao/muman
 ```
+
+These build `main`; name a release's tag, as in
+`github:jeggao/muman/v<version>`, to build that release.
 
 It names its ffmpeg, ffprobe and yt-dlp in `MUMAN_FFMPEG`,
 `MUMAN_FFPROBE` and `MUMAN_YT_DLP` only where those are unset, so a
