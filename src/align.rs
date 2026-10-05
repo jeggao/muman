@@ -60,8 +60,9 @@ const FIT_COVERAGE: f64 = 0.8;
 /// Measured on public-domain recordings, copies played 0.1% fast had 24%
 /// to 72% of their windows on one shift and failed; on the line, all of
 /// them, with a drift of 1001 ppm. Copies 0.5% fast had at most 11% on one
-/// shift; on the line, 98% to 100%, at 4990 to 5025 ppm. Other recordings,
-/// another take by the same orchestra among them, kept their one shift.
+/// shift; on the line, 98% to 100%, at 4990 to 5025 ppm, and copies 0.9%
+/// and 0.99% fast as many. Other recordings, another take by the same
+/// orchestra among them, kept their one shift.
 const MAX_STRETCH: f64 = 0.01;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
