@@ -15,14 +15,6 @@
 //! starting 920 ms late and an upload with an outro included; an
 //! unrelated song scored 0.289 with none.
 //!
-//! Measured on public-domain recordings, two transfers of one 78 rpm disc,
-//! their surface noise apart, scored 0.815 with 97% of windows agreeing,
-//! close to the threshold. Another take of a movement by the same
-//! orchestra scored 0.655 with 10%, and unrelated pieces at most 0.59.
-//! Speed is the model's limit: a copy played 0.1% fast drifts past the
-//! windows' 50 ms and failed with 24% to 72% of them agreeing, and 0.5%
-//! fast failed with at most 11%.
-//!
 //! A single offset is the model: a cut that inserts a scene mid-song
 //! lowers the windows' agreement and fails, where a piecewise map could
 //! keep it.

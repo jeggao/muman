@@ -6,49 +6,15 @@
 //! quarters of its length, decoded at the source's own rate.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
-//!   highest band that stands 20 dB above every band more than two bands
-//!   past it, in each excerpt's mean spectrum, taken low across the
-//!   excerpts. A lossy encoder leaves a wall at its lowpass, so a FLAC
-//!   transcoded from a 16 kHz source measures 16 kHz whatever its bitrate.
-//!   A recording's own treble fades gradually into its noise floor and
-//!   leaves no wall, so it measures the whole band up to half its sample
-//!   rate. Each excerpt is judged alone, so an encoder
-//!   starved of bits in one passage still shows its wall.
-//! - **Real stereo.** The share of the channels' energy that no single gain
-//!   from one to the other explains, one minus their squared correlation.
-//!   A mono recording copied into two channels, at the same level or not,
-//!   has next to none, and counts as mono.
-//! - **Clipping.** The share of samples in runs at the clipping level: full
-//!   scale, or just under the audio's own peak when that is lower, so a
-//!   master clipped and then turned down still counts.
-//!
-//! Calibrated on 22 public-domain recordings, orchestral, chamber and
-//! piano, 16 lossless at 44.1 and 48 kHz and 6 transfers of 78 rpm discs
-//! at 96 kHz, and on copies of 8 of them made for the purpose:
-//!
-//! - The measure walls replaced, each frame's top band within 80 dB of its
-//!   loudest, put 6 of the lossless recordings at 10.5 to 12.1 kHz, where
-//!   their treble faded into their noise floor, and ranked two of them
-//!   below their own 48 kbit/s Opus copies. Walls put every recording at
-//!   half its sample rate.
-//! - Of 80 lossy or resampled copies, walls put 69 at least 1 kHz below
-//!   their source; the old measure, 57. Off the darkest recordings, MP3 at
-//!   128 kbit/s measured 16 to 16.5 kHz and AAC at 128 kbit/s 17.2 to
-//!   17.4 kHz; Opus at 128 kbit/s measured 20 to 20.6 kHz on all. Opus at
-//!   48 kbit/s on solo piano, starved, measured 8.4 and 12.6 kHz.
-//! - A copy whose lost treble stood less than 20 dB above what was left in
-//!   its place shows no wall. Two 44.1 kHz piano recordings resampled to
-//!   22.05 kHz and back up to 48 kHz measured 24 kHz, above their sources.
-//! - Stereo recordings, the 78 rpm transfers among them, left 0.21 to 0.89
-//!   of their energy unexplained. Mono copied into channels 1 dB apart
-//!   left under 2e-7, and at most 3.4e-3 through Opus; the side-to-mid
-//!   ratio used before counted it as stereo. A channel delayed by one
-//!   sample left up to 2.4e-2, and can count as stereo.
-//! - Clipped masters turned down by 1 dB measured as clipped as before;
-//!   at full scale alone they measured nothing. MP3 smears flat tops:
-//!   clipped masters measuring 2.6e-3 to 7.9e-2 measured 2e-5 to 6.2e-3
-//!   as MP3. No lossless recording measured over 1e-6, and no master
-//!   limited below full scale measured any.
+//!   highest band standing 20 dB above all bands past a short guard,
+//!   in each excerpt's mean spectrum, taken low across the excerpts. A FLAC
+//!   transcoded from a 16 kHz source measures 16 kHz; a recording whose
+//!   treble fades into its noise floor shows no wall and measures full.
+//! - **Real stereo.** One minus the channels' squared correlation: mono
+//!   copied into two channels, at one level or two, has next to none and
+//!   counts as mono.
+//! - **Clipping.** The share of samples in runs at full scale, or just under
+//!   the audio's own peak when lower, so clipped audio turned down counts.
 //!
 //! A picture is measured in gray.
 //!
@@ -91,6 +57,28 @@ const BAND_BINS: usize = 16;
 /// Bands between a wall's top and the bands it stands above, about 375 Hz
 /// at 48 kHz: room for an encoder's lowpass to fall.
 const WALL_GUARD: usize = 2;
+/// How far a wall stands above every band past its guard. A recording's
+/// own treble fades gradually and leaves none, so it measures half its
+/// sample rate; each excerpt is judged alone, so an encoder starved of bits
+/// in one passage still shows its wall.
+///
+/// Calibrated on 22 public-domain recordings, orchestral, chamber and
+/// piano, 16 lossless at 44.1 and 48 kHz and 6 transfers of 78 rpm discs at
+/// 96 kHz, and on copies of 8 of them made for the purpose:
+///
+/// - The measure walls replaced, each frame's top band within 80 dB of its
+///   loudest, put 6 of the lossless recordings at 10.5 to 12.1 kHz, where
+///   their treble faded into their noise floor, and ranked two of them
+///   below their own 48 kbit/s Opus copies. Walls put every recording at
+///   half its sample rate.
+/// - Of 80 lossy or resampled copies, walls put 69 at least 1 kHz below
+///   their source; the old measure, 57. Off the darkest recordings, MP3 at
+///   128 kbit/s measured 16 to 16.5 kHz and AAC at 128 kbit/s 17.2 to
+///   17.4 kHz; Opus at 128 kbit/s measured 20 to 20.6 kHz on all. Opus at
+///   48 kbit/s on solo piano, starved, measured 8.4 and 12.6 kHz.
+/// - A copy whose lost treble stood less than 20 dB above what was left in
+///   its place shows no wall. Two 44.1 kHz piano recordings resampled to
+///   22.05 kHz and back up to 48 kHz measured 24 kHz, above their sources.
 const WALL_DB: f64 = 20.0;
 /// Walls are looked for above this frequency. Below it a piano's spectrum
 /// can fall nearly as steeply as a lowpass: with a 15 dB wall, soft piano
@@ -99,10 +87,20 @@ const WALL_MIN_HZ: f64 = 2000.0;
 /// Frames quieter than this RMS, about -60 dBFS, say nothing of bandwidth.
 const SILENT_RMS: f64 = 1e-3;
 /// Energy no gain between the channels explains, below this share, is a
-/// mono source in two channels.
+/// mono source in two channels. On the recordings [`WALL_DB`] was
+/// calibrated on, stereo ones, the 78 rpm transfers among them, left 0.21
+/// to 0.89 unexplained. Mono copied into channels 1 dB apart left under
+/// 2e-7, and at most 3.4e-3 through Opus; the side-to-mid ratio used before
+/// counted it as stereo. A channel delayed by one sample left up to 2.4e-2,
+/// and can count as stereo.
 const STEREO_INCOHERENCE: f64 = 1e-2;
 const CLIP_LEVEL: f32 = 0.9999;
 /// Samples this close to the audio's own peak are at a lowered clip level.
+/// On the recordings [`WALL_DB`] was calibrated on, clipped masters turned
+/// down by 1 dB measured as clipped as before; at full scale alone they
+/// measured nothing. MP3 smears flat tops: clipped masters measuring 2.6e-3
+/// to 7.9e-2 measured 2e-5 to 6.2e-3 as MP3. No lossless recording measured
+/// over 1e-6, and no master limited below full scale measured any.
 const CLIP_OF_PEAK: f32 = 0.999;
 const CLIP_RUN: usize = 3;
 

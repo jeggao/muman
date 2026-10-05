@@ -31,14 +31,6 @@
 //! at 6%; no two songs of different titles scored above 14%; and every
 //! pair of releases of one master scoring 30% or more was one recording.
 //!
-//! Checked on public-domain recordings: another take of a movement by the
-//! same orchestra agreed on 4%, a piece and its repeat by the same pianist
-//! on 3%, and other performances of a piece on 0%. Two transfers of one
-//! 78 rpm disc agreed on 59%, and copies through MP3 or Opus, with a loud
-//! master or an added intro, on 91% to 100%. Chromaprint hears pitch: a
-//! copy played 0.1% fast still agreed on 64% to 87%, but at 0.5% fast,
-//! 3% to 34%, and only one of eight such copies stayed the same recording.
-//!
 //! The measure before this one, the share of bits agreeing at the best
 //! offset, failed both ways: a 16 to 40 s song slid along a five-minute
 //! one found 0.62 to 0.75 by chance, and two songs sharing a silence
