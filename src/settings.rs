@@ -183,8 +183,7 @@ impl LyricsPlacement {
     }
 }
 
-/// Which codecs a source's audio is copied in, and how the rest is
-/// encoded.
+/// How audio that is not copied is encoded.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Audio {

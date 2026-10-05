@@ -419,8 +419,8 @@ fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
         .build())
 }
 
-/// Replace every tag the file carries with the plan's tags and the
-/// cover, in the codec's own kind of tag.
+/// Replace every comment the file carries with the plan's tags and the
+/// cover, keeping the encoder's vendor string.
 fn write_tags(
     path: &Path,
     format: Format,

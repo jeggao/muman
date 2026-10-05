@@ -36,11 +36,6 @@
 //! - **Block artifacts.** How much more the pixels jump across 8×8 block
 //!   boundaries than halfway between them. Halfway shares the boundary's
 //!   parity, so the pattern a 2× upscale leaves cancels out.
-//!
-//! The measures are taken here alone; how they rank sources is the song
-//! list's `[quality]`, read by [`crate::settings::Quality`], so the steps
-//! and cutoffs that judge a measure take arguments. The calibrated
-//! defaults of the two that decide a kind, mono and square, live here.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -169,11 +164,7 @@ pub struct AudioQuality {
     pub clipping: f64,
 }
 
-/// Steps of block artifacts past which more count no more.
-const BLOCKINESS_STEPS: i64 = 10;
-
 impl AudioQuality {
-    /// Whether the channels hold more than mono, beyond `incoherence`.
     #[must_use]
     pub fn is_stereo(&self, incoherence: f64) -> bool {
         self.incoherence > incoherence
@@ -215,8 +206,6 @@ pub struct ImageQuality {
 }
 
 impl ImageQuality {
-    /// Whether the content is square within `tolerance`, the log of its
-    /// sides' ratio.
     #[must_use]
     pub fn is_square(&self, tolerance: f64) -> bool {
         let (w, h) = (
@@ -244,7 +233,7 @@ impl ImageQuality {
     /// Block artifacts in whole steps of `step`, up to a tenth step.
     #[must_use]
     pub fn blockiness_bucket(&self, step: f64) -> i64 {
-        bucket(self.blockiness / step).min(BLOCKINESS_STEPS)
+        bucket(self.blockiness / step).min(10)
     }
 }
 

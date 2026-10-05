@@ -2,12 +2,13 @@
 //! files: its audio and how good it is, its pictures, its lyrics, its
 //! tags and its fingerprint.
 //!
+//! The measuring run also lists the audio's packets, whose sizes sum to
+//! what a copy takes, for `[library] max_size`; facts made before are
+//! given theirs by [`audio_bytes`] when a limit asks.
+//!
 //! A media file costs at most three runs: ffprobe, one ffmpeg dumping
 //! its attachments, and one ffmpeg writing every measured excerpt as a
-//! separate output. That run also lists the audio's packets, whose sizes
-//! sum to what a copy of the audio takes, for fitting a library into
-//! `[library] max_size`; facts measured before it are given theirs by
-//! [`audio_bytes`] when a size limit asks for them.
+//! separate output.
 
 use std::path::{Path, PathBuf};
 

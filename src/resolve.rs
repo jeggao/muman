@@ -30,7 +30,8 @@
 //! `[audio] lossless` and any other lossy one to `[audio] lossy`, at that
 //! codec's bitrate. See [`crate::codec`]. This is the song at its best;
 //! under `[library] max_size`, [`crate::limit`] may lower it once every
-//! song is resolved.
+//! song is resolved. Plans stored before other codecs than Opus and FLAC
+//! were written read as the [`Format`] they mean today.
 //!
 //! Lyrics from a source other than the chosen audio need that source's
 //! audio to be the same recording, and are moved by the offset measured.
@@ -51,9 +52,7 @@
 //! A plan is stored whole and compared whole, which is how a song renders
 //! again exactly when its sources' revisions, the picks, the tags or the
 //! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
-//! renders to change: 2 writes every container bit-exact. Plans stored
-//! before other codecs than Opus and FLAC were written read as the
-//! [`Format`] they mean today.
+//! renders to change.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
