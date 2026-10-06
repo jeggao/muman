@@ -20,6 +20,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   left every one taken for changed by someone else: never written again,
   and left behind as a duplicate when its path changed. A library a
   stopped run left so needs one `sync --force`.
+- **`status` changes nothing and says what `sync` does.** A dry run
+  keeps only what it measured: run against another library folder, it
+  no longer saved the state as if the library had moved, so the next
+  sync wrote every song again. It decides what to remove, keep or leave
+  alone as a sync does, so a file changed by hand is shown left in
+  place, not removed, and a song missing its lyrics file is shown
+  written again, not up to date.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

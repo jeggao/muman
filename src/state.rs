@@ -444,9 +444,23 @@ impl State {
     /// Merge what `measured` holds of facts and failures into the state
     /// file as it is now, under its lock, by [`Self::merge_caches`].
     pub fn keep_measures(home: &Path, measured: &Self) -> Result<()> {
-        let _lock = atomic::Lock::folder(home)?;
+        let lock = atomic::Lock::folder(home)?;
+        Self::keep_caches(home, measured, &lock)
+    }
+
+    /// Merge every cache `measured` holds into the state file as it is
+    /// now, for a caller already holding its lock: facts and failures by
+    /// [`Self::merge_caches`], alignments and sizes by key. What the
+    /// library holds, `outputs` and `library`, is left as it is.
+    pub fn keep_caches(home: &Path, measured: &Self, _lock: &atomic::Lock) -> Result<()> {
         let mut state = Self::load(home)?;
         state.merge_caches(measured);
+        for aligned in &measured.alignments {
+            state.record_alignment(aligned.clone());
+        }
+        state
+            .sizes
+            .extend(measured.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
         state.save(home)
     }
 

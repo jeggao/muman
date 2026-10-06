@@ -347,6 +347,17 @@ fn separate(planned: &mut [(usize, Resolved)], max_name: usize) {
     }
 }
 
+/// Keep `state` before the run's end: whole on a sync, and on a dry run
+/// only what it measured, which a dry run may cache but never what the
+/// library holds.
+fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()> {
+    if dry_run {
+        State::keep_caches(home, state, lock)
+    } else {
+        state.save(home)
+    }
+}
+
 /// Bring the library in line with the song list, recording what it
 /// replaces and removes in `run`. Returns whether every song was
 /// written.
@@ -367,7 +378,7 @@ pub fn reconcile<R: Runner, W: Write>(
     let listed = manifest.keys();
     let mut how = Measuring {
         retry: opts.retry,
-        checkpoint: &mut |s: &State| s.save(home),
+        checkpoint: &mut |s: &State| persist(home, s, opts.dry_run, &lock),
     };
     measure(
         runner,
@@ -379,7 +390,7 @@ pub fn reconcile<R: Runner, W: Write>(
         out,
     )?;
     if compare(runner, &store, &manifest.songs, &mut state, out)? {
-        state.save(home)?;
+        persist(home, &state, opts.dry_run, &lock)?;
     }
 
     let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
@@ -394,7 +405,7 @@ pub fn reconcile<R: Runner, W: Write>(
     let workshop = tempfile::tempdir_in(home).context("creating a folder to fit the library in")?;
     let (fitted, placed) = if manifest.settings.library.max_size.is_some() {
         if sizes(runner, &store, &planned, &mut state, temp.path(), out)? {
-            state.save(home)?;
+            persist(home, &state, opts.dry_run, &lock)?;
         }
         let block = manifest.settings.library.block_size.0;
         let at = limit::Workshop {
@@ -405,7 +416,7 @@ pub fn reconcile<R: Runner, W: Write>(
         };
         let fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
         if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {
-            state.save(home)?;
+            persist(home, &state, opts.dry_run, &lock)?;
         }
         if let Some((f, _)) = fitted.as_ref().filter(|(f, _)| !f.left_out.is_empty()) {
             ok = false;
@@ -422,20 +433,7 @@ pub fn reconcile<R: Runner, W: Write>(
         state.save(home)?;
     }
     let old = state.outputs.clone();
-    let current = |r: &Resolved| {
-        let path = path_of(r);
-        let written = old.get(&path)?;
-        let present = dirs
-            .library
-            .join(&path)
-            .metadata()
-            .is_ok_and(|m| m.len() > 0)
-            && written
-                .lyrics
-                .as_ref()
-                .is_none_or(|l| dirs.library.join(l).exists());
-        (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
-    };
+    let current = |r: &Resolved| current(&dirs.library, &old, r);
     let changed_since = |path: &Path| changed_since_written(&dirs.library, &old, path);
     let (due, guarded): (Vec<&PlannedSong>, Vec<&PlannedSong>) = planned
         .iter()
@@ -443,18 +441,16 @@ pub fn reconcile<R: Runner, W: Write>(
         .partition(|(_, r)| opts.force || !changed_since(&path_of(r)));
 
     if opts.dry_run {
-        status(
-            &manifest,
-            &planned,
-            &old,
-            &state,
-            &store,
-            &listed,
-            dirs,
-            opts.settling,
-            &moved,
-            out,
-        )?;
+        let shown = Shown {
+            manifest: &manifest,
+            planned: &planned,
+            guarded: &guarded,
+            old: &old,
+            state: &state,
+            failed: &failed,
+            moved: &moved,
+        };
+        status(&shown, &store, &listed, dirs, opts.settling, out)?;
         if let Some(f) = &fitted {
             fit_summary(f, out)?;
         }
@@ -788,6 +784,24 @@ fn fit_summary<W: Write>(fitted: &limit::Fitted, out: &mut W) -> Result<()> {
 
 /// Whether a file muman wrote has changed since, by its size and
 /// time: a tagger or player that rewrote it.
+/// What `old` records of the song's file, when that file is the song as
+/// it would be written now: its plan, its file there and not empty, its
+/// lyrics there.
+fn current<'a>(
+    library: &Path,
+    old: &'a BTreeMap<PathBuf, Written>,
+    r: &Resolved,
+) -> Option<&'a Written> {
+    let path = path_of(r);
+    let written = old.get(&path)?;
+    let present = library.join(&path).metadata().is_ok_and(|m| m.len() > 0)
+        && written
+            .lyrics
+            .as_ref()
+            .is_none_or(|l| library.join(l).exists());
+    (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
+}
+
 pub(crate) fn changed_since_written(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
@@ -987,6 +1001,58 @@ fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()>
     Ok(())
 }
 
+/// What becomes of a file `old` lists that the outputs do not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Pruned {
+    /// Deleted, with its lyrics unless another output takes them.
+    Removed(Vec<PathBuf>),
+    /// Kept, as a song it came from failed this run.
+    KeptForFailed,
+    /// Left in place and no longer muman's: changed since written.
+    LeftChanged,
+}
+
+/// What pruning `old` against `outputs` does to each file, deciding
+/// alone, for a sync to carry out and a dry run to show.
+fn prune_plan(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    outputs: &BTreeMap<PathBuf, Written>,
+    failed: &BTreeSet<SourceKey>,
+) -> Vec<(PathBuf, Pruned)> {
+    let now: BTreeMap<String, PathBuf> = outputs
+        .keys()
+        .map(|p| (crate::relpath::folded(p), p.clone()))
+        .collect();
+    let mut plan = Vec::new();
+    for (path, written) in old {
+        // On a filesystem blind to case and composition, a song renamed
+        // only so is the same file as its new name: deleting the old name
+        // would delete the new song. Elsewhere they are two files.
+        let renamed = now.get(&crate::relpath::folded(path)).is_some_and(|new| {
+            same_file::is_same_file(library.join(path), library.join(new)).unwrap_or(false)
+        });
+        if outputs.contains_key(path) || renamed {
+            continue;
+        }
+        let fate = if written.sources.iter().any(|k| failed.contains(k)) {
+            Pruned::KeptForFailed
+        } else if changed_since_written(library, old, path) {
+            Pruned::LeftChanged
+        } else {
+            Pruned::Removed(
+                std::iter::once(path)
+                    .chain(&written.lyrics)
+                    .filter(|file| !outputs.values().any(|w| w.lyrics.as_ref() == Some(*file)))
+                    .cloned()
+                    .collect(),
+            )
+        };
+        plan.push((path.clone(), fate));
+    }
+    plan
+}
+
 /// Delete every file `old` lists that `outputs` does not, unless a song
 /// that failed this run made it, which keeps it, each handed to `keep`
 /// first. A file changed since it was written is left, and no longer
@@ -1000,39 +1066,26 @@ fn prune<W: Write>(
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
-    let now: BTreeMap<String, PathBuf> = outputs
-        .keys()
-        .map(|p| (crate::relpath::folded(p), p.clone()))
-        .collect();
-    for (path, written) in old {
-        // On a filesystem blind to case and composition, a song renamed
-        // only so is the same file as its new name: deleting the old name
-        // would delete the new song. Elsewhere they are two files.
-        let renamed = now.get(&crate::relpath::folded(path)).is_some_and(|new| {
-            same_file::is_same_file(library.join(path), library.join(new)).unwrap_or(false)
-        });
-        if outputs.contains_key(path) || renamed {
-            continue;
-        }
-        if written.sources.iter().any(|k| failed.contains(k)) {
-            outputs.insert(path.clone(), written.clone());
-            continue;
-        }
-        if changed_since_written(library, old, path) {
-            crate::ui::warning(
-                out,
-                &format!(
-                    "Left in place, changed since muman wrote it: {}; it is yours now",
-                    crate::relpath::show(path)
-                ),
-            )?;
-            continue;
-        }
-        let mut held = false;
-        for file in std::iter::once(path).chain(&written.lyrics) {
-            if outputs.values().any(|w| w.lyrics.as_ref() == Some(file)) {
+    for (path, fate) in prune_plan(library, old, outputs, failed) {
+        let files = match fate {
+            Pruned::KeptForFailed => {
+                outputs.insert(path.clone(), old[&path].clone());
                 continue;
             }
+            Pruned::LeftChanged => {
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "Left in place, changed since muman wrote it: {}; it is yours now",
+                        crate::relpath::show(&path)
+                    ),
+                )?;
+                continue;
+            }
+            Pruned::Removed(files) => files,
+        };
+        let mut held = false;
+        for file in &files {
             keep(file)?;
             match crate::atomic::remove(&library.join(file)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -1051,10 +1104,10 @@ fn prune<W: Write>(
             }
         }
         if held {
-            outputs.insert(path.clone(), written.clone());
+            outputs.insert(path.clone(), old[&path].clone());
             continue;
         }
-        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(path)))?;
+        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
     }
     remove_empty_folders(library, &removed);
     Ok(removed)
@@ -1113,31 +1166,85 @@ fn touch<W: Write>(dir: &Path, out: &mut W) -> Result<()> {
     Ok(())
 }
 
-/// Say, song by song, what a sync would write and why each aspect comes
-/// from where it does, then what it would remove and what lies unused.
-#[allow(clippy::too_many_arguments)]
+/// Where each aspect of a song's plan comes from, and why.
+fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
+    writeln!(out, "  audio   {}: {}", r.plan.audio.key, r.why.audio)?;
+    if let Some(why) = &r.why.fit {
+        writeln!(out, "  format  {why}")?;
+    }
+    if let (Some(c), Some(why)) = (&r.plan.cover, &r.why.cover) {
+        writeln!(out, "  cover   {}: {why}", c.key)?;
+    }
+    if let (Some(l), Some(why)) = (&r.plan.lyrics, &r.why.lyrics) {
+        writeln!(out, "  lyrics  {}: {why}", l.key)?;
+    }
+    let width = r.plan.tags.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
+        let cleaned = if why.cleaned.is_empty() {
+            String::new()
+        } else {
+            format!(", cleaned: {}", why.cleaned.join(", "))
+        };
+        writeln!(
+            out,
+            "  {key:<width$} {} ({}{cleaned})",
+            values.join("; "),
+            why.from
+        )?;
+    }
+    Ok(())
+}
+
+/// What a dry run shows: the decisions a sync would act on.
+struct Shown<'a> {
+    manifest: &'a Manifest,
+    planned: &'a [(usize, Resolved)],
+    /// Songs due but left alone, changed since written.
+    guarded: &'a [&'a PlannedSong],
+    old: &'a BTreeMap<PathBuf, Written>,
+    state: &'a State,
+    failed: &'a BTreeSet<SourceKey>,
+    moved: &'a BTreeSet<PathBuf>,
+}
+
+/// Say what a sync would do, by the decisions it would make: each song's
+/// file and where each aspect comes from, then what it would remove.
 fn status<W: Write>(
-    manifest: &Manifest,
-    planned: &[(usize, Resolved)],
-    old: &BTreeMap<PathBuf, Written>,
-    state: &State,
+    shown: &Shown<'_>,
     store: &Store,
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
     settling: Duration,
-    moved: &BTreeSet<PathBuf>,
     out: &mut W,
 ) -> Result<()> {
+    let Shown {
+        manifest,
+        planned,
+        guarded,
+        old,
+        state,
+        failed,
+        moved,
+    } = shown;
     let library = &dirs.library;
-    let mut made: BTreeSet<PathBuf> = BTreeSet::new();
-    for (n, r) in planned {
+    let mut after: BTreeMap<PathBuf, Written> = BTreeMap::new();
+    for (n, r) in *planned {
         let song = &manifest.songs[*n];
         let path = path_of(r);
-        let verdict = match old.get(&path).and_then(|w| w.plan.as_ref()) {
-            Some(p) if p == &r.plan && library.join(&path).exists() => "up to date".to_string(),
-            Some(p) if p == &r.plan && moved.contains(&path) => "moved".to_string(),
-            Some(p) => format!("changes: {}", changes(p, &r.plan).join(", ")),
-            None => "new".to_string(),
+        let left_alone = guarded.iter().any(|(m, _)| m == n);
+        let same_plan = old.get(&path).and_then(|w| w.plan.as_ref()) == Some(&r.plan);
+        let verdict = if moved.contains(&path) && same_plan {
+            "moved".to_string()
+        } else if current(library, old, r).is_some() {
+            "up to date".to_string()
+        } else if left_alone {
+            "left alone, changed since muman wrote it".to_string()
+        } else {
+            match old.get(&path).and_then(|w| w.plan.as_ref()) {
+                Some(p) if p == &r.plan => "written again".to_string(),
+                Some(p) => format!("changes: {}", changes(p, &r.plan).join(", ")),
+                None => "new".to_string(),
+            }
         };
         writeln!(
             out,
@@ -1149,37 +1256,36 @@ fn status<W: Write>(
             "  → {} ({verdict})",
             crate::ui::Style::Path.paint(&crate::relpath::show(&path))
         )?;
-        writeln!(out, "  audio   {}: {}", r.plan.audio.key, r.why.audio)?;
-        if let Some(why) = &r.why.fit {
-            writeln!(out, "  format  {why}")?;
+        show_why(r, out)?;
+        let written = if left_alone {
+            old.get(&path).cloned()
+        } else {
+            Some(Written {
+                sources: song.sources.clone(),
+                lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
+                plan: Some(r.plan.clone()),
+                stamp: None,
+            })
+        };
+        if let Some(written) = written {
+            after.insert(path, written);
         }
-        if let (Some(c), Some(why)) = (&r.plan.cover, &r.why.cover) {
-            writeln!(out, "  cover   {}: {why}", c.key)?;
-        }
-        if let (Some(l), Some(why)) = (&r.plan.lyrics, &r.why.lyrics) {
-            writeln!(out, "  lyrics  {}: {why}", l.key)?;
-        }
-        let width = r.plan.tags.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
-        for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
-            let cleaned = if why.cleaned.is_empty() {
-                String::new()
-            } else {
-                format!(", cleaned: {}", why.cleaned.join(", "))
-            };
-            writeln!(
-                out,
-                "  {key:<width$} {} ({}{cleaned})",
-                values.join("; "),
-                why.from
-            )?;
-        }
-        made.insert(path);
     }
-    for path in old.keys().filter(|p| !made.contains(*p)) {
-        crate::ui::warning(
-            out,
-            &format!("Would remove: {}", crate::relpath::show(path)),
-        )?;
+    for (path, fate) in prune_plan(library, old, &after, failed) {
+        match fate {
+            Pruned::Removed(_) => crate::ui::warning(
+                out,
+                &format!("Would remove: {}", crate::relpath::show(&path)),
+            )?,
+            Pruned::LeftChanged => crate::ui::warning(
+                out,
+                &format!(
+                    "Would leave in place, changed since muman wrote it: {}",
+                    crate::relpath::show(&path)
+                ),
+            )?,
+            Pruned::KeptForFailed => {}
+        }
     }
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());

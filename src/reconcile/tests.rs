@@ -200,6 +200,65 @@ fn a_dry_run_writes_nothing_and_says_why() {
     );
 }
 
+#[test]
+fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let before = State::load(&h.dirs.home).unwrap();
+    h.fetched("bbbbbbbbbbb");
+    h.songs(&format!("[library]\nmax_size = \"1 GiB\"\n{TWO}"));
+    let elsewhere = Dirs {
+        library: h.dirs.home.join("phone"),
+        ..h.dirs.clone()
+    };
+    let mut out = Vec::new();
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    reconcile(
+        &infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]),
+        &elsewhere,
+        dry,
+        None,
+        &mut out,
+    )
+    .unwrap();
+    let after = State::load(&h.dirs.home).unwrap();
+    assert_eq!(after.outputs, before.outputs);
+    assert_eq!(after.library, before.library);
+    assert!(after.facts.contains_key(&SourceKey::youtube("bbbbbbbbbbb")));
+}
+
+#[test]
+fn a_dry_run_says_what_a_sync_would_remove_keep_or_write_again() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
+    std::fs::write(
+        h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus"),
+        "mine",
+    )
+    .unwrap();
+    std::fs::remove_file(h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc")).unwrap();
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let (_, text) = h.run(&infos(&["aaaaaaaaaaa"]), dry);
+    assert!(text.contains("(written again)"), "lyrics gone: {text}");
+    assert!(!text.contains("Would remove"), "{text}");
+    assert!(
+        text.contains("Would leave in place, changed since muman wrote it"),
+        "{text}"
+    );
+}
+
 /// 8 kHz samples whose loudness follows `levels`, one per 10 ms.
 fn pcm(levels: &[f64]) -> Vec<u8> {
     levels
