@@ -282,6 +282,28 @@ fn a_refusal_for_going_too_fast_is_asked_again_three_times() {
 }
 
 #[test]
+fn a_recording_titled_exactly_wins_over_one_holding_the_title() {
+    let body = search(&[
+        recording(
+            1,
+            "Lantern Weather Again",
+            355_000,
+            &release(1, "Rooms of Salt", "Album", "", "2003"),
+        ),
+        recording(
+            2,
+            "Lantern Weather",
+            355_000,
+            &release(2, "Lantern Weather", "Single", "", "2004"),
+        ),
+    ]);
+    let server = Server::default().answer("/ws/2/recording?", &body);
+    let throttle = Throttle::none();
+    let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
+    assert_eq!(record.title, "Lantern Weather");
+}
+
+#[test]
 fn an_mbid_has_its_shape() {
     assert!(is_mbid("0a1b2c3d-0000-4fff-8000-00000000000f"));
     assert!(!is_mbid("0a1b2c3d00004fff800000000000000f"));

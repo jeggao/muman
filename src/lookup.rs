@@ -10,10 +10,11 @@
 //!
 //! | Recorded | Made again |
 //! |---|---|
-//! | Nothing, or another `method` | At once |
-//! | Found nothing | After the provider's `recheck_days` |
+//! | Nothing | At once |
+//! | Made another way | At once, unless it found a source the song lists |
+//! | Found nothing, or an instrumental | After the provider's `recheck_days` |
 //! | Failed | After an hour, doubling with each failure, up to a week |
-//! | Found a source, an instrumental, or declined | Never |
+//! | Found a source, or declined | Never |
 //!
 //! A lookup a service refused for going too fast, after the retries
 //! [`crate::http::Service`] makes, is recorded as nothing at all: it and
@@ -82,7 +83,7 @@ pub fn method(p: Provider) -> &'static str {
     match p {
         Provider::YouTubeMusic => "youtube-music/1",
         Provider::YouTube => "youtube/1",
-        Provider::Lrclib => "lrclib/1",
+        Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
         Provider::Manual => "manual",
     }
@@ -178,7 +179,10 @@ pub fn due(
             };
             let askable = !t.find.kept() || r.and_then(|r| query_of(r, &state.facts)).is_some();
             let days = config.settings(t.find).recheck_days;
-            let open = force || state.looked(from, t.find).is_none_or(|l| l.due(now, days));
+            let open = force
+                || state
+                    .looked(from, t.find)
+                    .is_none_or(|l| l.due(now, days, &|k| song.has(k)));
             if wanted && askable && open {
                 taken.insert(t.find);
                 found.push(Due {

@@ -128,19 +128,22 @@ impl Looked {
         }
     }
 
-    /// Whether it is due again: one that found nothing after
-    /// `recheck_days`, one that failed after an hour doubling with each
-    /// failure; one made another way at once.
+    /// Whether it is due again: one that found nothing or an instrumental
+    /// after `recheck_days`, one that failed after an hour doubling with
+    /// each failure; one made another way at once, unless what it found
+    /// the song still lists, by `listed`.
     #[must_use]
-    pub fn due(&self, now: u64, recheck_days: u64) -> bool {
+    pub fn due(&self, now: u64, recheck_days: u64, listed: &dyn Fn(&SourceKey) -> bool) -> bool {
         let find = Provider::named(&self.find).ok();
         if find.is_none_or(|p| crate::lookup::method(p) != self.method) {
-            return true;
+            return !matches!(&self.outcome, Outcome::Found(k) if listed(k));
         }
         let age = now.saturating_sub(self.at);
         match &self.outcome {
-            Outcome::Found(_) | Outcome::Instrumental | Outcome::Declined => false,
-            Outcome::Nothing => age >= recheck_days.saturating_mul(24 * 3600),
+            Outcome::Found(_) | Outcome::Declined => false,
+            Outcome::Nothing | Outcome::Instrumental => {
+                age >= recheck_days.saturating_mul(24 * 3600)
+            }
             Outcome::Failed { count, .. } => {
                 age >= 3600_u64
                     .saturating_mul(1 << count.saturating_sub(1).min(16))
@@ -476,6 +479,31 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_instrumental_is_asked_again_and_a_listed_find_survives_a_new_method() {
+        let day = 24 * 3600;
+        let looked = |outcome: Outcome, method: &str| Looked {
+            from: SourceKey::youtube("aaaaaaaaaaa"),
+            find: "lrclib".into(),
+            method: method.into(),
+            at: 0,
+            outcome,
+        };
+        let method = crate::lookup::method(Provider::Lrclib);
+        let none = |_: &SourceKey| false;
+        let instrumental = looked(Outcome::Instrumental, method);
+        assert!(!instrumental.due(day, 7, &none));
+        assert!(instrumental.due(7 * day, 7, &none));
+        let record = SourceKey::parse("lrclib:7").unwrap();
+        let old = looked(Outcome::Found(record.clone()), "lrclib/1");
+        assert!(
+            !old.due(0, 7, &|k| *k == record),
+            "the song lists what it found"
+        );
+        assert!(old.due(0, 7, &none), "found, never joined: asked again");
+        assert!(!looked(Outcome::Found(record), method).due(100 * day, 7, &none));
+    }
 
     #[test]
     fn a_merge_clears_what_a_step_cleared_and_keeps_what_another_recorded() {

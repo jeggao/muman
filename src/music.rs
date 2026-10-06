@@ -471,13 +471,38 @@ fn is_named(video: &Entry, track: &Entry) -> bool {
         .any(|a| title.contains(&a) || channels.iter().any(|c| c.contains(&a) || a.contains(c)))
 }
 
-/// Letters and digits only, lower-cased, so punctuation, spacing and
-/// case never decide a match.
+/// Letters and digits only, lower-cased and in NFKC, so punctuation,
+/// spacing, case and full-width forms never decide a match.
 pub(crate) fn normalize(s: &str) -> String {
-    s.chars()
+    use unicode_normalization::UnicodeNormalization;
+    s.nfkc()
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+/// How closely one name holds another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Exactness {
+    /// One holds the other, as `Rain` and `Rain (Live)` do.
+    Holds,
+    Exact,
+}
+
+/// Whether two names are one, by their letters and digits without
+/// featured artists, or one holds the other; `None` when neither.
+pub(crate) fn names_match(a: &str, b: &str) -> Option<Exactness> {
+    let (a, b) = (
+        normalize(clean::without_credits(a)),
+        normalize(clean::without_credits(b)),
+    );
+    if a.is_empty() || b.is_empty() {
+        None
+    } else if a == b {
+        Some(Exactness::Exact)
+    } else {
+        (a.contains(&b) || b.contains(&a)).then_some(Exactness::Holds)
+    }
 }
 
 pub(crate) fn percent_encode(s: &str) -> String {
@@ -494,6 +519,25 @@ pub(crate) fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_match_exactly_before_one_holds_the_other() {
+        assert_eq!(
+            names_match("Lantern Weather", "lantern weather!"),
+            Some(Exactness::Exact)
+        );
+        assert_eq!(
+            names_match("Ｌａｎｔｅｒｎ　Ｗｅａｔｈｅｒ", "Lantern Weather"),
+            Some(Exactness::Exact),
+            "full-width forms are the same letters"
+        );
+        assert_eq!(
+            names_match("Lantern Weather (Live)", "Lantern Weather"),
+            Some(Exactness::Holds)
+        );
+        assert_eq!(names_match("Second Tune", "Lantern Weather"), None);
+        assert_eq!(names_match("", "Lantern Weather"), None);
+    }
 
     fn video() -> Entry {
         Entry {

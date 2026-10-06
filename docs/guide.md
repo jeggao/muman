@@ -307,20 +307,24 @@ enabled = false
 
 | Last lookup | Made again |
 |---|---|
-| None, or made by an older method | At once |
-| Found nothing | After the provider's `recheck_days` |
+| None | At once |
+| Made by an older method | At once, unless it found a source the song lists |
+| Found nothing, or an instrumental | After the provider's `recheck_days` |
 | Failed | After an hour, doubling with each failure, up to a week |
-| Found a source, an instrumental, or declined | Never |
+| Found a source, or declined | Never |
 
 `sync --rematch` makes every lookup at once. What one round finds can
 trigger the next, as an upload's release then finds the release's
 lyrics. An LRCLIB record fits when its length is within 2 s of the
-song's and its names hold the song's; a timed record wins, then the
-closest in length. A song without a title, an artist or a measured
+song's and its names hold the song's, compared by letters and digits in
+any width; a record with words wins over one marked instrumental, then
+one named exactly the song's title over one holding it, as `Rain (Live)`
+holds `Rain`, then a timed record, then the closest in length. A song without a title, an artist or a measured
 length looks nothing up on LRCLIB or MusicBrainz.
 
 A MusicBrainz recording fits when it is no video, its length is within
-3 s of the song's and its names hold the song's. Releases rank by the
+3 s of the song's and its names hold the song's; one titled exactly the
+song's title wins over one holding it. Releases rank by the
 song's own album if it has one, then a release that is no compilation,
 live album or soundtrack, an official one, an album before an EP before
 a single. Of the recordings that fit, the one on the best release wins,

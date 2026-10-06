@@ -18,8 +18,10 @@
 //! 1. Official, over a promotion or a bootleg.
 //! 1. An album, then an EP, then a single.
 //!
-//! Of the recordings that fit, the one whose best release ranks first
-//! wins, then the one on the most releases, then the closest in length;
+//! Of the recordings that fit, one titled exactly the song's title wins
+//! over one whose title only holds it, as `Purple Rain` holds `Rain`;
+//! then the one whose best release ranks first, then the one on the most
+//! releases, then the closest in length;
 //! of its releases, the best ranked, then the earliest. Measured against
 //! musicbrainz.org, a famous song's title and artist matched 225
 //! recordings, every one scored 100 and the first 25 live bootlegs; the
@@ -48,7 +50,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::clean;
 use crate::http::{HttpTransport, Service, Throttle};
 use crate::lrclib::Query;
 use crate::music;
@@ -252,14 +253,9 @@ fn artist_ids(credit: &[Credit]) -> Vec<String> {
         .collect()
 }
 
-/// Whether two names hold one another, by letters and digits, without
-/// featured artists.
+/// Whether two names hold one another, by [`music::names_match`].
 fn same(a: &str, b: &str) -> bool {
-    let (a, b) = (
-        music::normalize(clean::without_credits(a)),
-        music::normalize(clean::without_credits(b)),
-    );
-    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+    music::names_match(a, b).is_some()
 }
 
 /// The artist a search asks for: the first of the song's, which are
@@ -355,14 +351,15 @@ impl Recording {
         })
     }
 
-    /// Its rank among the recordings that fit, smaller first: by its best
-    /// release, a recording on none last, then on the most releases, the
-    /// gap in whole seconds, the date, without a comment, the search's
-    /// score.
-    fn rank(&self, album: Option<&str>, seconds: f64) -> impl Ord + '_ {
+    /// Its rank among the recordings that fit, smaller first: titled the
+    /// song's title exactly, then by its best release, a recording on none
+    /// last, then on the most releases, the gap in whole seconds, the
+    /// date, without a comment, the search's score.
+    fn rank(&self, title: &str, album: Option<&str>, seconds: f64) -> impl Ord + '_ {
         let best = self.best(album);
         let class = best.map(|f| f.class(album));
         (
+            std::cmp::Reverse(music::names_match(&self.title, title)),
             class.is_none(),
             class,
             std::cmp::Reverse(self.releases.len()),
@@ -459,7 +456,7 @@ impl Client<'_> {
             .recordings
             .iter()
             .filter(|r| r.fits(q))
-            .min_by_key(|r| r.rank(album, q.seconds));
+            .min_by_key(|r| r.rank(&q.title, album, q.seconds));
         Ok(best.map(|r| r.record(album)))
     }
 }

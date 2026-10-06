@@ -69,6 +69,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   MusicBrainz records were counted as fetched by yt-dlp; they are kept
   from lookups, counted and stored apart, and one no song lists any more
   shows as unused, as an unused download does.
+- **Lyrics are no longer lost to an instrumental record.** LRCLIB lists a
+  song's instrumental or off-vocal take as long as the song; one could
+  win over the record with words and mark the song instrumental for
+  good. A record with words now wins, an exact title wins over one only
+  holding it, as `Rain (Live)` holds `Rain`, on LRCLIB and MusicBrainz
+  alike, and an instrumental verdict is checked again after
+  `recheck_days`. Songs LRCLIB found nothing or an instrumental for are
+  looked up again once; full-width and half-width names now match.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived
