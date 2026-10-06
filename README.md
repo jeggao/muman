@@ -7,7 +7,8 @@ Each song in the list may have several sources: what
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) fetched from YouTube or
 YouTube Music, files you dropped into a folder, lyrics from
 [LRCLIB](https://lrclib.net) and tags from
-[MusicBrainz](https://musicbrainz.org). muman measures every source and picks
+[MusicBrainz](https://musicbrainz.org), found by name or by fingerprint
+on [AcoustID](https://acoustid.org). muman measures every source and picks
 the best audio, cover, lyrics and tags by what it measures — real
 bandwidth and clipping, how much of a cover is picture and how sharp,
 timed lyrics over untimed — never by where a source came from. Each song

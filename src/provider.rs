@@ -12,6 +12,10 @@
 //! them, so the triggers in the file are the whole of what runs. A YouTube
 //! provider is looked up from a YouTube video alone, so a file of the
 //! user's own never searches YouTube.
+//!
+//! `acoustid` finds MusicBrainz records by a song's fingerprint, so what
+//! it finds is a `musicbrainz:` source ([`Provider::yields`]): a song with
+//! one has what either would find, and no source is from `acoustid`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,17 +38,20 @@ pub enum Provider {
     Lrclib,
     /// Tags from musicbrainz.org.
     MusicBrainz,
+    /// MusicBrainz recordings found by fingerprint on acoustid.org.
+    AcoustId,
     /// Covers from the Cover Art Archive.
     CoverArt,
 }
 
 impl Provider {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Manual,
         Self::YouTube,
         Self::YouTubeMusic,
         Self::Lrclib,
         Self::MusicBrainz,
+        Self::AcoustId,
         Self::CoverArt,
     ];
 
@@ -56,6 +63,7 @@ impl Provider {
             Self::YouTubeMusic => "youtube-music",
             Self::Lrclib => "lrclib",
             Self::MusicBrainz => "musicbrainz",
+            Self::AcoustId => "acoustid",
             Self::CoverArt => "coverart",
         }
     }
@@ -96,6 +104,20 @@ impl Provider {
         self != Self::Manual
     }
 
+    /// The provider of the sources it finds.
+    #[must_use]
+    pub fn yields(self) -> Self {
+        match self {
+            Self::AcoustId => Self::MusicBrainz,
+            p => p,
+        }
+    }
+
+    /// Whether `[providers.*] url` names its server.
+    fn served(self) -> bool {
+        self.kept() || self == Self::AcoustId
+    }
+
     /// The defaults its `[providers.*]` table is read over.
     #[must_use]
     pub fn defaults(self) -> Settings {
@@ -103,8 +125,9 @@ impl Provider {
             Self::Manual => (0, 1, 0),
             Self::YouTube | Self::YouTubeMusic => (14, 4, 50),
             Self::Lrclib => (7, 4, 300),
-            // Its requests go a second apart whatever runs them (`musicbrainz`).
-            Self::MusicBrainz => (30, 1, 200),
+            // Its requests go a second apart whatever runs them (`musicbrainz`),
+            // and each recording AcoustID finds is fetched from MusicBrainz.
+            Self::MusicBrainz | Self::AcoustId => (30, 1, 200),
             // One lookup an album, its searches on MusicBrainz's pace.
             Self::CoverArt => (30, 1, 500),
         };
@@ -116,9 +139,11 @@ impl Provider {
             url: match self {
                 Self::Lrclib => Some(LRCLIB_URL.to_string()),
                 Self::MusicBrainz => Some(MUSICBRAINZ_URL.to_string()),
+                Self::AcoustId => Some(ACOUSTID_URL.to_string()),
                 Self::CoverArt => Some(COVERART_URL.to_string()),
                 Self::Manual | Self::YouTube | Self::YouTubeMusic => None,
             },
+            key: (self == Self::AcoustId).then(|| crate::acoustid::KEY.to_string()),
         }
     }
 
@@ -146,6 +171,7 @@ const MUSICBRAINZ_URL: &str = "https://musicbrainz.org";
 /// `coverart:<release group or release id>`.
 pub const COVERART: &str = "coverart";
 const COVERART_URL: &str = "https://coverartarchive.org";
+const ACOUSTID_URL: &str = "https://api.acoustid.org";
 
 /// Whether `key` is a record muman keeps from a lookup, as
 /// [`Provider::kept`] says.
@@ -165,8 +191,11 @@ pub struct Settings {
     /// Lookups one run makes at most, so a backlog drains over several
     /// runs rather than at once on a free service; 0 for no limit.
     pub per_run: usize,
-    /// Where an LRCLIB or a MusicBrainz server answers.
+    /// Where an LRCLIB, MusicBrainz, AcoustID or Cover Art Archive server
+    /// answers.
     pub url: Option<String>,
+    /// The application key AcoustID is asked with.
+    pub key: Option<String>,
 }
 
 /// When a trigger looks a song up.
@@ -217,7 +246,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        use Provider::{CoverArt, Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
+        use Provider::{AcoustId, CoverArt, Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
         Self {
             providers: Provider::ALL
                 .into_iter()
@@ -241,6 +270,11 @@ impl Default for Config {
                 },
                 // A release or a tagged file offers what a record would, and at
                 // a request a second, 3600 songs looked up take an hour.
+                Trigger {
+                    from: vec![Manual, YouTube, YouTubeMusic],
+                    find: AcoustId,
+                    when: When::NoAlbum,
+                },
                 Trigger {
                     from: vec![Manual, YouTube, YouTubeMusic],
                     find: MusicBrainz,
@@ -306,7 +340,7 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
             }
             "recheck_days" => s.recheck_days = number()?,
             "per_run" => s.per_run = usize::try_from(number()?).unwrap_or(usize::MAX),
-            "url" if p.kept() => {
+            "url" if p.served() => {
                 let url = item
                     .as_str()
                     .filter(|u| !u.trim().is_empty())
@@ -315,6 +349,14 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
                     crate::http::normalize_base(url)
                         .map_err(|e| anyhow::anyhow!("{what}: `url`: {e}"))?,
                 );
+            }
+            "key" if p == Provider::AcoustId => {
+                let k = item
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|k| !k.is_empty())
+                    .with_context(|| format!("{what}: `key` must be an application key"))?;
+                s.key = Some(k.to_string());
             }
             _ => bail!("{what}: `{key}` is no setting"),
         }
@@ -355,6 +397,9 @@ pub fn read(doc: &DocumentMut) -> Result<Config> {
                 .and_then(Item::as_str)
                 .with_context(|| format!("{what} names no `find`"))?;
             let find = Provider::named(find)?;
+            if from.contains(&Provider::AcoustId) {
+                bail!("{what}: no source is from acoustid; its finds are from musicbrainz");
+            }
             if !find.findable() {
                 bail!("{what}: {find} cannot be looked up");
             }
@@ -408,6 +453,12 @@ mod tests {
         let mb = c.settings(Provider::MusicBrainz);
         assert_eq!(mb.url.as_deref(), Some("https://musicbrainz.org"));
         assert_eq!(mb.concurrency, 1);
+        assert_eq!(mb.key, None);
+        let acoustid = c.settings(Provider::AcoustId);
+        assert_eq!(acoustid.key.as_deref(), Some(crate::acoustid::KEY));
+        let order: Vec<Provider> = c.triggers.iter().map(|t| t.find).collect();
+        let at = |p| order.iter().position(|f| *f == p).unwrap();
+        assert!(at(Provider::AcoustId) < at(Provider::MusicBrainz));
     }
 
     #[test]
@@ -416,6 +467,7 @@ mod tests {
             "[providers.lrclib]\nrecheck_days = 3\nurl = \"lrclib.example:8080\"\n\
              [providers.youtube-music]\nenabled = false\n\
              [providers.musicbrainz]\nurl = \"https://mb.example/\"\n\
+             [providers.acoustid]\nkey = \"0wnK3y\"\nurl = \"https://aid.example\"\n\
              [[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"no-lyrics\"\n",
         )
         .unwrap();
@@ -426,6 +478,9 @@ mod tests {
         let l = c.settings(Provider::Lrclib);
         assert_eq!((l.recheck_days, l.concurrency, l.per_run), (3, 4, 300));
         assert_eq!(l.url.as_deref(), Some("http://lrclib.example:8080"));
+        let acoustid = c.settings(Provider::AcoustId);
+        assert_eq!(acoustid.key.as_deref(), Some("0wnK3y"));
+        assert_eq!(acoustid.url.as_deref(), Some("https://aid.example"));
         assert_eq!(c.triggers.len(), 1);
         assert_eq!(c.triggers[0].when, When::NoLyrics);
         assert!(!c.settings(Provider::YouTubeMusic).enabled);
@@ -436,6 +491,9 @@ mod tests {
         assert!(config("[providers.spotify]\n").is_err());
         assert!(config("[providers.lrclib]\nrecheck = 3\n").is_err());
         assert!(config("[providers.youtube]\nurl = \"yt.example\"\n").is_err());
+        assert!(config("[providers.musicbrainz]\nkey = \"k\"\n").is_err());
+        assert!(config("[providers.acoustid]\nkey = \" \"\n").is_err());
+        assert!(config("[[trigger]]\nfrom = \"acoustid\"\nfind = \"lrclib\"\n").is_err());
         assert!(config("[[trigger]]\nfrom = \"youtube\"\nfind = \"manual\"\n").is_err());
         assert!(config("[[trigger]]\nfrom = \"manual\"\nfind = \"youtube-music\"\n").is_err());
         assert!(

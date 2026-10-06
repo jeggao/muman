@@ -288,6 +288,7 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
 | `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
+| `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is |
 | `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz |
 
 A trigger makes a song with a source from any provider in `from`, and
@@ -301,14 +302,17 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 | `youtube` | `youtube-music` | `always` |
 | `youtube-music` | `youtube` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `lrclib` | `no-timed-lyrics` |
+| `manual`, `youtube`, `youtube-music` | `acoustid` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
 Any `[[trigger]]` in the song list replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck_days` (how long a lookup that found nothing waits),
-`per_run` (the most one run makes, `0` for no limit), and for `lrclib`,
-`musicbrainz` and `coverart`, `url`, another server, such as a mirror:
+`per_run` (the most one run makes, `0` for no limit), for `lrclib`,
+`musicbrainz`, `acoustid` and `coverart`, `url`, another server, such as
+a mirror, and for `acoustid`, `key`, the application key it is asked
+with, muman's own unless you set one:
 
 ```toml
 [[trigger]]
@@ -335,7 +339,7 @@ song's and its names hold the song's, compared by letters and digits in
 any width; a record with words wins over one marked instrumental, then
 one named exactly the song's title over one holding it, as `Rain (Live)`
 holds `Rain`, then a timed record, then the closest in length. A song without a title, an artist or a measured
-length looks nothing up on LRCLIB or MusicBrainz.
+length looks nothing up on LRCLIB, nor searches MusicBrainz by name.
 
 A MusicBrainz recording fits when it is no video, its length is within
 3 s of the song's and its names hold the song's; one titled exactly the
@@ -349,7 +353,21 @@ the earliest. Its tags
 are ranked with every other source's, as [tags](#how-the-best-of-each-is-picked)
 are: a value it agrees on with another source wins over one alone. To
 look every song up, write the built-in triggers out with `when =
-"always"` for `musicbrainz`.
+"always"` for `acoustid` and `musicbrainz`.
+
+A song whose audio has a fingerprint asks AcoustID before it searches
+MusicBrainz by name, so a file with wrong tags, or none, still finds its
+recording. muman sends the fingerprint of the audio's first two minutes
+and its length; AcoustID answers with the MusicBrainz recordings
+submitted with prints like it. A result counts when its score is at
+least 0.5 and the recording's length is within 3 s of the song's; of
+those, one named as the song is wins, then the one with the most prints
+submitted, then one on a release that is no compilation, live album or
+soundtrack. The recording is then fetched from MusicBrainz by its ID,
+its release picked as a search picks one. The song's search by name
+waits for AcoustID and runs in the same `sync` only when AcoustID finds
+nothing. To send no fingerprints, set `enabled = false` under
+`[providers.acoustid]`.
 
 A cover found joins every song of its album, which asks for it once
 between them, and is picked over the songs' own pictures only by the
@@ -358,10 +376,11 @@ the built-in triggers out with `when = "small-cover"` changed for
 `coverart`.
 
 muman asks MusicBrainz at most once a second, as MusicBrainz asks of
-every client, and LRCLIB at most four times a second, whatever
-`concurrency` says. When a service answers that requests come too fast
-(a 429 or a 503), muman waits as long as it asks, or 2 s for MusicBrainz
-and 10 s for LRCLIB, doubling, and asks again up to three times. A
+every client, AcoustID at most three times a second, as AcoustID asks,
+and LRCLIB at most four times a second, whatever `concurrency` says.
+When a service answers that requests come too fast (a 429 or a 503),
+muman waits as long as it asks, or 2 s for MusicBrainz and AcoustID and
+10 s for LRCLIB, doubling, and asks again up to three times. A
 service still refusing after that leaves its remaining lookups for the
 next run, recorded as nothing, so none waits out a failure's backoff.
 Each request names muman and its repository in its user agent.
