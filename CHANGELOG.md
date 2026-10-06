@@ -123,6 +123,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A name telling two songs apart is made safe.** The part of a file's
   own name added to tell two songs of one path apart was written as it
   was, so a character Windows refuses reached the library.
+- **YouTube lookups made at once keep apart.** Lookups under way at once
+  downloaded the audio they compare into one folder, so two comparing
+  the same candidate wrote one file and could fail or misjudge.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

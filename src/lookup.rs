@@ -469,7 +469,9 @@ pub fn run<R: Runner, W: Write>(
                     store.locate(&d.from).as_ref(),
                     query.as_ref(),
                     &clients,
-                    &audio,
+                    // A folder each: two lookups downloading one candidate
+                    // at once would write one file.
+                    &audio.join(format!("{}-{}", d.song, d.find)),
                 );
                 if hit
                     .as_ref()

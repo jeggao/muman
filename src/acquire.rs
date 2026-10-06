@@ -414,7 +414,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         )?;
         let audio = self.temp().join("audio");
         let runner = self.runner;
-        let found = parallel::map(&videos, parallel::LOOKUPS, |v| lookup(runner, v, &audio));
+        // A folder each: two lookups downloading one candidate at once
+        // would write one file.
+        let found = parallel::map(&videos, parallel::LOOKUPS, |v| {
+            lookup(runner, v, &audio.join(&v.id))
+        });
         let mut ok = true;
         for (video, found) in videos.iter().zip(found) {
             let title = video.title.clone().unwrap_or_else(|| video.id.clone());
@@ -476,17 +480,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                     add.replaced.push((upload_key, track_key));
                 }
             } else {
-                // Fetched before, by a run that listed it alone: no song
-                // lists it now, and the release takes its place.
-                for file in self.store.discard(
-                    std::slice::from_ref(&upload_key),
-                    &std::collections::BTreeSet::new(),
-                )? {
-                    crate::ui::info(
-                        self.out,
-                        &format!("  deleted the upload, {}", file.display()),
-                    )?;
-                }
+                self.discard_upload(&upload_key)?;
                 add.replaced.push((upload_key, track_key));
             }
             add.proposals.push(Proposal {
@@ -496,6 +490,19 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             });
         }
         Ok(ok)
+    }
+
+    /// Delete an upload a release takes the place of, fetched before by a
+    /// run that listed it alone: no song lists it now.
+    fn discard_upload(&mut self, upload: &SourceKey) -> Result<()> {
+        let none = std::collections::BTreeSet::new();
+        for file in self.store.discard(std::slice::from_ref(upload), &none)? {
+            crate::ui::info(
+                self.out,
+                &format!("  deleted the upload, {}", file.display()),
+            )?;
+        }
+        Ok(())
     }
 
     /// Fetch one source by its key's URL; whether it arrived.
