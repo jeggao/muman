@@ -10,6 +10,15 @@
 //! hand. The time left is the step's rate so far applied to what is
 //! left.
 //!
+//! A run has one status line, whatever steps are under way. A step begun
+//! inside another, as a fetch of what a round of lookups found, takes the
+//! line once it has shown for [`SHOW_AFTER`], and gives it back to the
+//! step around it when it ends; two bars drawn to one line would take
+//! turns on it with each tick. The line keeps to the terminal's width,
+//! which is read again at each update: as it narrows, the line drops its
+//! bar's percentage, then the bar, then the time left, so the names of
+//! what is under way keep room and the line never wraps.
+//!
 //! | Mode | Where | What |
 //! |---|---|---|
 //! | `auto` on a terminal | stderr | One status line under the messages, redrawn in place: the step, a bar, the count, the time left, what is under way |
@@ -94,8 +103,24 @@ struct Inner {
     /// Where plain lines, JSON events and the taskbar's sequence go.
     sink: Mutex<Box<dyn Write + Send>>,
     plan: Mutex<Vec<String>>,
+    line: Mutex<Line>,
+}
+
+/// The run's one status line, and the steps that may take it.
+#[derive(Default)]
+struct Line {
+    /// The steps under way, the one begun last at the end: the one the
+    /// line shows.
+    steps: Vec<Arc<State>>,
     /// The bar showing now, for [`Console`] to lift out of the way.
-    bar: Mutex<Option<ProgressBar>>,
+    bar: Option<Shown>,
+}
+
+/// A bar on the status line, the step it shows and how it is laid out.
+struct Shown {
+    step: Arc<State>,
+    bar: ProgressBar,
+    layout: Layout,
 }
 
 impl std::fmt::Debug for Progress {
@@ -115,7 +140,7 @@ impl Progress {
                 kind,
                 sink: Mutex::new(sink),
                 plan: Mutex::new(Vec::new()),
-                bar: Mutex::new(None),
+                line: Mutex::new(Line::default()),
             }),
         }
     }
@@ -150,8 +175,10 @@ impl Progress {
             note: Mutex::new(None),
             started: Instant::now(),
             reported: Mutex::new(Reported::default()),
-            bar: Mutex::new(None),
         });
+        if matches!(self.inner.kind, Kind::Bar { .. }) {
+            lock(&self.inner.line).steps.push(Arc::clone(&state));
+        }
         let step = Step {
             progress: self.clone(),
             state,
@@ -163,10 +190,93 @@ impl Progress {
     /// Run `f` with the status line lifted out of the way, as a prompt
     /// or a message must.
     pub fn suspend<R>(&self, f: impl FnOnce() -> R) -> R {
-        let bar = lock(&self.inner.bar).clone();
+        let bar = lock(&self.inner.line).bar.as_ref().map(|s| s.bar.clone());
         match bar {
             Some(bar) => bar.suspend(f),
             None => f(),
+        }
+    }
+
+    /// Show `state` on the status line, if it is the step begun last.
+    fn draw(&self, state: &Arc<State>) {
+        let (done, total) = state.count();
+        let layout = Layout::of(columns(), total.is_some());
+        let mut line = lock(&self.inner.line);
+        if !line.steps.last().is_some_and(|s| Arc::ptr_eq(s, state)) {
+            return;
+        }
+        if !line
+            .bar
+            .as_ref()
+            .is_some_and(|s| Arc::ptr_eq(&s.step, state))
+        {
+            if state.started.elapsed() < SHOW_AFTER && total.is_some_and(|t| done < t) {
+                return;
+            }
+            if let Some(old) = line.bar.take() {
+                old.bar.finish_and_clear();
+            }
+            // Begun again, as when a step inside it ends, the bar goes on
+            // from the step's start rather than from now.
+            let bar = ProgressBar::with_draw_target(total, ProgressDrawTarget::stderr())
+                .with_elapsed(state.started.elapsed())
+                .with_position(done)
+                .with_message(state.doing())
+                .with_style(layout.style())
+                .with_prefix(state.title());
+            bar.enable_steady_tick(Duration::from_millis(200));
+            lock(&state.reported).percent = None;
+            line.bar = Some(Shown {
+                step: Arc::clone(state),
+                bar,
+                layout,
+            });
+        }
+        if let Some(shown) = line.bar.as_mut() {
+            if shown.layout != layout {
+                shown.bar.set_style(layout.style());
+                shown.layout = layout;
+            }
+            if let Some(t) = total {
+                shown.bar.set_length(t);
+            }
+            shown.bar.set_position(done);
+            shown.bar.set_message(state.doing());
+        }
+        drop(line);
+        if self.taskbar()
+            && let Some(t) = total.filter(|t| *t > 0)
+        {
+            let percent = done.min(t) * 100 / t;
+            let mut r = lock(&state.reported);
+            if r.percent != Some(percent) {
+                r.percent = Some(percent);
+                drop(r);
+                self.write(&format!("\x1b]9;4;1;{percent}\x07"));
+            }
+        }
+    }
+
+    /// Take `state` off the status line, and give the line back to the
+    /// step it was begun in.
+    fn end(&self, state: &Arc<State>) {
+        let outer = {
+            let mut line = lock(&self.inner.line);
+            line.steps.retain(|s| !Arc::ptr_eq(s, state));
+            if line
+                .bar
+                .as_ref()
+                .is_some_and(|s| Arc::ptr_eq(&s.step, state))
+                && let Some(shown) = line.bar.take()
+            {
+                shown.bar.finish_and_clear();
+            }
+            line.steps.last().cloned()
+        };
+        match outer {
+            Some(outer) => self.draw(&outer),
+            None if self.taskbar() => self.write("\x1b]9;4;0\x07"),
+            None => {}
         }
     }
 
@@ -201,7 +311,35 @@ struct State {
     note: Mutex<Option<String>>,
     started: Instant,
     reported: Mutex<Reported>,
-    bar: Mutex<Option<ProgressBar>>,
+}
+
+impl State {
+    fn title(&self) -> String {
+        match self.index {
+            Some((n, of)) => format!("[{n}/{of}] {}", self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    fn count(&self) -> (u64, Option<u64>) {
+        (*lock(&self.done), *lock(&self.total))
+    }
+
+    /// The time left at the rate so far, once anything is done.
+    fn left(&self) -> Option<Duration> {
+        let (done, total) = self.count();
+        left(self.started.elapsed(), done, total?)
+    }
+
+    /// What is under way, the names of the items in hand first.
+    fn doing(&self) -> String {
+        let working = lock(&self.working);
+        if working.is_empty() {
+            lock(&self.note).clone().unwrap_or_default()
+        } else {
+            working.join(" · ")
+        }
+    }
 }
 
 /// What was last said of a step, so plain lines and events come at a
@@ -237,10 +375,7 @@ impl Step {
     /// The step's title: `[3/5] Writing`, or the name alone off the plan.
     #[must_use]
     pub fn title(&self) -> String {
-        match self.state.index {
-            Some((n, of)) => format!("[{n}/{of}] {}", self.state.name),
-            None => self.state.name.clone(),
-        }
+        self.state.title()
     }
 
     /// Begin on the item `name`, done when the guard is dropped.
@@ -276,7 +411,7 @@ impl Step {
     /// What it has done, of how many.
     #[must_use]
     pub fn count(&self) -> (u64, Option<u64>) {
-        (*lock(&self.state.done), *lock(&self.state.total))
+        self.state.count()
     }
 
     fn started(&self) {
@@ -285,31 +420,9 @@ impl Step {
         }
     }
 
-    /// The time left at the rate so far, once anything is done.
-    fn left(&self) -> Option<Duration> {
-        let (done, total) = self.count();
-        let total = total?;
-        if done == 0 || done >= total {
-            return None;
-        }
-        let count = |n: u64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
-        let per = self.state.started.elapsed().as_secs_f64() / count(done);
-        Some(Duration::from_secs_f64(per * count(total - done)))
-    }
-
-    /// What is under way, the names of the items in hand first.
-    fn doing(&self) -> String {
-        let working = lock(&self.state.working);
-        if working.is_empty() {
-            lock(&self.state.note).clone().unwrap_or_default()
-        } else {
-            working.join(" · ")
-        }
-    }
-
     fn update(&self) {
         match self.progress.inner.kind {
-            Kind::Bar { .. } => self.draw(),
+            Kind::Bar { .. } => self.progress.draw(&self.state),
             Kind::Plain => self.plain(false),
             Kind::Json => {
                 let due = {
@@ -325,44 +438,6 @@ impl Step {
                 }
             }
             Kind::Hidden => {}
-        }
-    }
-
-    fn draw(&self) {
-        let (done, total) = self.count();
-        let mut bar = lock(&self.state.bar);
-        if bar.is_none() {
-            if self.state.started.elapsed() < SHOW_AFTER && total.is_some_and(|t| done < t) {
-                return;
-            }
-            let new = match total {
-                Some(t) => ProgressBar::with_draw_target(Some(t), ProgressDrawTarget::stderr()),
-                None => ProgressBar::with_draw_target(None, ProgressDrawTarget::stderr()),
-            };
-            new.set_style(style(total.is_some()));
-            new.set_prefix(self.title());
-            new.enable_steady_tick(Duration::from_millis(200));
-            *lock(&self.progress.inner.bar) = Some(new.clone());
-            *bar = Some(new);
-        }
-        if let Some(bar) = bar.as_ref() {
-            if let Some(t) = total {
-                bar.set_length(t);
-            }
-            bar.set_position(done);
-            bar.set_message(self.doing());
-        }
-        drop(bar);
-        if self.progress.taskbar()
-            && let Some(t) = total.filter(|t| *t > 0)
-        {
-            let percent = done.min(t) * 100 / t;
-            let mut r = lock(&self.state.reported);
-            if r.percent != Some(percent) {
-                r.percent = Some(percent);
-                drop(r);
-                self.progress.write(&format!("\x1b]9;4;1;{percent}\x07"));
-            }
         }
     }
 
@@ -392,7 +467,7 @@ impl Step {
         }
         if end {
             let _ = write!(line, ", done in {}", human(self.state.started.elapsed()));
-        } else if let Some(left) = self.left().filter(|l| l.as_secs() > 0) {
+        } else if let Some(left) = self.state.left().filter(|l| l.as_secs() > 0) {
             let _ = write!(line, ", about {} left", human(left));
         }
         self.progress.write(&format!("{line}\n"));
@@ -417,7 +492,7 @@ impl Step {
                 if let Some(note) = lock(&self.state.note).clone() {
                     value["note"] = note.into();
                 }
-                if let Some(left) = self.left() {
+                if let Some(left) = self.state.left() {
                     value["eta_secs"] = left.as_secs().into();
                 }
             }
@@ -431,15 +506,7 @@ impl Step {
 impl Drop for Step {
     fn drop(&mut self) {
         match self.progress.inner.kind {
-            Kind::Bar { .. } => {
-                if let Some(bar) = lock(&self.state.bar).take() {
-                    bar.finish_and_clear();
-                }
-                *lock(&self.progress.inner.bar) = None;
-                if self.progress.taskbar() {
-                    self.progress.write("\x1b]9;4;0\x07");
-                }
-            }
+            Kind::Bar { .. } => self.progress.end(&self.state),
             Kind::Plain => self.plain(true),
             Kind::Json => self.event("finish"),
             Kind::Hidden => {}
@@ -447,27 +514,87 @@ impl Drop for Step {
     }
 }
 
-/// The status line: the step and its bar, count and time left, then what
-/// is under way, cut to the terminal's width.
-fn style(counted: bool) -> ProgressStyle {
-    let template = if counted {
-        "{prefix:.cyan} [{bar:24}] {pos}/{len} {percent:>3}% {left:>12}  {wide_msg:.dim}"
-    } else {
-        "{prefix:.cyan} {spinner} {pos}  {wide_msg:.dim}"
-    };
-    ProgressStyle::with_template(template)
-        .unwrap_or_else(|_| ProgressStyle::default_bar())
-        .progress_chars("=> ")
-        // Nothing until something is done, when there is a rate to go by.
-        .with_key(
-            "left",
-            |state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
-                let left = state.eta();
-                if state.len().is_some_and(|l| state.pos() < l) && left.as_secs() > 0 {
-                    let _ = write!(w, "{} left", human(left));
-                }
-            },
-        )
+/// What the status line holds, by the terminal's width: the step, then
+/// its bar, count, percentage and time left as they fit, then what is
+/// under way in whatever is left, cut to fit.
+///
+/// Each layout is used from the width where its fixed fields at their
+/// longest, `[2/2] Writing the zip`, `12345/12345` and `59 min 59 s
+/// left`, leave a dozen columns for the names of what is under way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// A step of a number of items not known yet: a spinner and the count.
+    Uncounted,
+    Full,
+    /// A shorter bar, without the percentage it shows already.
+    Short,
+    /// The count and the time left.
+    Count,
+    /// The count alone.
+    Bare,
+}
+
+impl Layout {
+    const FULL_FROM: usize = 100;
+    const SHORT_FROM: usize = 80;
+    const COUNT_FROM: usize = 60;
+
+    fn of(columns: usize, counted: bool) -> Self {
+        match columns {
+            _ if !counted => Self::Uncounted,
+            Self::FULL_FROM.. => Self::Full,
+            Self::SHORT_FROM.. => Self::Short,
+            Self::COUNT_FROM.. => Self::Count,
+            _ => Self::Bare,
+        }
+    }
+
+    fn template(self) -> &'static str {
+        match self {
+            Self::Uncounted => "{prefix:.cyan} {spinner} {pos}  {wide_msg:.dim}",
+            Self::Full => {
+                "{prefix:.cyan} [{bar:24}] {pos}/{len} {percent:>3}% {left:>12}  {wide_msg:.dim}"
+            }
+            Self::Short => "{prefix:.cyan} [{bar:12}] {pos}/{len} {left}  {wide_msg:.dim}",
+            Self::Count => "{prefix:.cyan} {pos}/{len} {left}  {wide_msg:.dim}",
+            Self::Bare => "{prefix:.cyan} {pos}/{len}  {wide_msg:.dim}",
+        }
+    }
+
+    fn style(self) -> ProgressStyle {
+        ProgressStyle::with_template(self.template())
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> ")
+            .with_key(
+                "left",
+                |state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
+                    if let Some(left) = state
+                        .len()
+                        .and_then(|len| left(state.elapsed(), state.pos(), len))
+                        .filter(|l| l.as_secs() > 0)
+                    {
+                        let _ = write!(w, "{} left", human(left));
+                    }
+                },
+            )
+    }
+}
+
+/// The terminal's width in columns, or a common width when stderr is no
+/// terminal.
+fn columns() -> usize {
+    terminal_size::terminal_size_of(io::stderr()).map_or(80, |(w, _)| usize::from(w.0))
+}
+
+/// The time `total - done` items take at the rate `done` took `elapsed`;
+/// nothing until something is done, when there is a rate to go by.
+fn left(elapsed: Duration, done: u64, total: u64) -> Option<Duration> {
+    if done == 0 || done >= total {
+        return None;
+    }
+    let count = |n: u64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+    let per = elapsed.as_secs_f64() / count(done);
+    Some(Duration::from_secs_f64(per * count(total - done)))
 }
 
 /// `d` as `41 s`, `2 min 5 s` or `1 h 3 min`.
@@ -617,7 +744,7 @@ mod tests {
         {
             let _a = step.working("Lantern Weather");
             let _b = step.working("Rooms of Salt");
-            assert_eq!(step.doing(), "Lantern Weather · Rooms of Salt");
+            assert_eq!(step.state.doing(), "Lantern Weather · Rooms of Salt");
         }
         step.advance(1);
         assert_eq!(step.count(), (3, Some(3)));
@@ -664,6 +791,47 @@ mod tests {
             (last["event"].as_str(), last["done"].as_u64()),
             (Some("finish"), Some(1))
         );
+    }
+
+    #[test]
+    fn a_step_begun_inside_another_takes_the_line_and_gives_it_back() {
+        let sink = Shared::default();
+        let progress = Progress::new(Kind::Bar { taskbar: true }, Box::new(sink.clone()));
+        let showing = || {
+            lock(&progress.inner.line)
+                .bar
+                .as_ref()
+                .map(|s| s.step.name.clone())
+        };
+        let outer = progress.step("Looking up", Some(2));
+        outer.advance(2);
+        assert_eq!(showing().as_deref(), Some("Looking up"));
+        {
+            let inner = progress.step("Fetching", Some(1));
+            inner.advance(1);
+            assert_eq!(showing().as_deref(), Some("Fetching"));
+            outer.note("Paper Comets");
+            assert_eq!(showing().as_deref(), Some("Fetching"));
+        }
+        assert_eq!(showing().as_deref(), Some("Looking up"));
+        assert!(!sink.text().contains("\x1b]9;4;0"), "{:?}", sink.text());
+        drop(outer);
+        assert_eq!(showing(), None);
+        assert!(sink.text().ends_with("\x1b]9;4;0\x07"), "{:?}", sink.text());
+    }
+
+    #[test]
+    fn the_line_drops_fields_as_the_terminal_narrows() {
+        assert_eq!(Layout::of(120, true), Layout::Full);
+        assert_eq!(Layout::of(99, true), Layout::Short);
+        assert_eq!(Layout::of(79, true), Layout::Count);
+        assert_eq!(Layout::of(40, true), Layout::Bare);
+        assert_eq!(Layout::of(40, false), Layout::Uncounted);
+        assert_eq!(
+            left(Duration::from_secs(10), 1, 4),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(left(Duration::from_secs(10), 0, 4), None);
     }
 
     #[test]

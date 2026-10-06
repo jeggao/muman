@@ -1,9 +1,37 @@
 //! Command line: what to add, sync or show, and where the state root
 //! and the library are.
+//!
+//! Help is wrapped to the terminal's width, up to clap's 100 columns, and
+//! colored in muman's palette ([`STYLES`]): headings green, what is typed
+//! cyan, values to fill in yellow, defaults dimmed. The tables after a
+//! command's options, written laid out for 80 columns, are laid out again
+//! for the width ([`laid_out`]); [`command`] does both for `run`, while
+//! the generated reference reads [`Cli`] as written.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::builder::styling::{AnsiColor, Effects, Styles};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+
+/// Help's colors, those of `ui::Style`: a heading as a success, what is
+/// typed as an accent, a value as a path, a default muted.
+pub const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
+    .literal(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
+    .placeholder(AnsiColor::Yellow.on_default())
+    .valid(AnsiColor::Green.on_default())
+    .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
+    .error(AnsiColor::Red.on_default().effects(Effects::BOLD))
+    .context(anstyle::Style::new().effects(Effects::DIMMED))
+    .context_value(AnsiColor::Yellow.on_default());
+
+/// The fewest columns a table's text is wrapped to beside its terms;
+/// narrower, it goes under them.
+const BESIDE_FROM: usize = 30;
+/// How far a table's text is indented under its term.
+const UNDER: usize = 6;
 
 pub const EXIT_CODES_HELP: &str = "\
 Exit codes:
@@ -35,6 +63,7 @@ Exit codes:
         song; one that may be is asked about.",
     version,
     after_help = EXIT_CODES_HELP,
+    styles = STYLES,
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -376,12 +405,259 @@ pub enum Command {
     Info,
 }
 
+/// The command line as `run` parses it: [`Cli`]'s, its help colored and
+/// its tables laid out for the terminal's width.
+#[must_use]
+pub fn command() -> clap::Command {
+    painted(Cli::command(), help_width())
+}
+
+/// The width clap wraps help to: the terminal's, else `COLUMNS`, at most
+/// 100 columns.
+fn help_width() -> usize {
+    terminal_size::terminal_size()
+        .map(|(w, _)| usize::from(w.0))
+        .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
+        .unwrap_or(100)
+        .min(100)
+}
+
+/// `cmd` and its subcommands with their help colored, and their tables
+/// laid out for `width` columns.
+fn painted(cmd: clap::Command, width: usize) -> clap::Command {
+    let mut cmd = cmd.mut_args(|mut arg| {
+        if let Some(help) = arg.get_help().map(|h| spans(&h.to_string())) {
+            arg = arg.help(help);
+        }
+        if let Some(long) = arg.get_long_help().map(|h| spans(&h.to_string())) {
+            arg = arg.long_help(long);
+        }
+        arg
+    });
+    if let Some(about) = cmd.get_about().map(|h| spans(&h.to_string())) {
+        cmd = cmd.about(about);
+    }
+    if let Some(about) = cmd.get_long_about().map(|h| spans(&h.to_string())) {
+        cmd = cmd.long_about(about);
+    }
+    if let Some(after) = cmd
+        .get_after_help()
+        .map(|h| laid_out(&h.to_string(), width))
+    {
+        cmd = cmd.after_help(after);
+    }
+    cmd.mut_subcommands(|sub| painted(sub, width))
+}
+
+/// `text` with each `` `quoted` `` span styled as what is typed, and a
+/// `[default: …]` written by hand muted, as clap's own are.
+///
+/// A style begins before the space ahead of it: clap wraps each styled
+/// run apart and drops a line's last space only within one, so a space
+/// left at the end of the run before would stand past the width.
+fn spans(text: &str) -> String {
+    let (literal, context) = (STYLES.get_literal(), STYLES.get_context());
+    let mut out = String::new();
+    let mut base = anstyle::Style::new();
+    let mut quoted = false;
+    for (at, c) in text.char_indices() {
+        match c {
+            '[' if !quoted && text[at..].starts_with("[default:") => {
+                base = *context;
+                restyle(&mut out, &format!("{base}"));
+                out.push('[');
+            }
+            ']' if !quoted && base == *context => {
+                let _ = write!(out, "]{base:#}");
+                base = anstyle::Style::new();
+            }
+            '`' if quoted => {
+                let _ = write!(out, "`{literal:#}{base}");
+                quoted = false;
+            }
+            '`' => {
+                restyle(&mut out, &format!("{base:#}{literal}"));
+                out.push('`');
+                quoted = true;
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A table written for help, `Heading:` then `  term  text` lines whose
+/// text may go on indented under it, then lines of prose, laid out again
+/// for `width` columns and colored: each term's text wrapped beside it at
+/// its column, or under it where that leaves too little room.
+fn laid_out(text: &str, width: usize) -> String {
+    enum Part {
+        Entry {
+            term: String,
+            column: usize,
+            text: String,
+        },
+        Prose(String),
+    }
+    let mut lines = text.lines();
+    let heading = lines.next().unwrap_or_default();
+    let mut parts: Vec<Part> = Vec::new();
+    for line in lines {
+        let indent = line.len() - line.trim_start().len();
+        let words = line.trim();
+        match parts.last_mut() {
+            Some(Part::Entry { text, .. }) if indent > 2 => push_words(text, words),
+            Some(Part::Prose(text)) if indent == 0 => push_words(text, words),
+            _ if indent == 2 => {
+                let (term, rest) = words.split_once("  ").unwrap_or((words, ""));
+                parts.push(Part::Entry {
+                    term: term.to_string(),
+                    column: line.len() - rest.trim_start().len(),
+                    text: rest.trim().to_string(),
+                });
+            }
+            _ => parts.push(Part::Prose(words.to_string())),
+        }
+    }
+    let (header, literal) = (STYLES.get_header(), STYLES.get_literal());
+    let mut out = format!("{header}{heading}{header:#}");
+    for part in parts {
+        match part {
+            Part::Entry { term, column, text } => {
+                let _ = write!(out, "\n  {literal}{term}{literal:#}");
+                if text.is_empty() {
+                    continue;
+                }
+                let beside = width.saturating_sub(column) >= BESIDE_FROM;
+                let (column, gap) = if beside {
+                    (column, column.saturating_sub(term.len() + 2).max(2))
+                } else {
+                    out.push('\n');
+                    (UNDER, UNDER)
+                };
+                out.push_str(&" ".repeat(gap));
+                out.push_str(&spans(&wrapped(
+                    &text,
+                    width.saturating_sub(column),
+                    column,
+                )));
+            }
+            Part::Prose(text) => {
+                out.push('\n');
+                out.push_str(&spans(&wrapped(&text, width, 0)));
+            }
+        }
+    }
+    out
+}
+
+/// Write the escape codes `codes` to `out`, before the space it ends in.
+fn restyle(out: &mut String, codes: &str) {
+    let space = out.ends_with(' ');
+    if space {
+        out.pop();
+    }
+    out.push_str(codes);
+    if space {
+        out.push(' ');
+    }
+}
+
+fn push_words(text: &mut String, words: &str) {
+    if !text.is_empty() {
+        text.push(' ');
+    }
+    text.push_str(words);
+}
+
+/// `text` wrapped at its spaces to lines of at most `room` columns, each
+/// after the first indented by `indent`; a word longer than the room
+/// stands alone on its line.
+fn wrapped(text: &str, room: usize, indent: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for word in text.split(' ') {
+        let len = word.chars().count();
+        if used > 0 && used + 1 + len > room {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            used = 0;
+        } else if used > 0 {
+            out.push(' ');
+            used += 1;
+        }
+        out.push_str(word);
+        used += len;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("muman").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn a_table_is_wrapped_beside_its_terms_or_under_them_when_narrow() {
+        let table = "\
+Shelves:
+  oak    The long shelf by the window, with room
+         for a second row
+  pine   The short one
+Shelves hold `songs` alone.";
+        let wide = crate::ui::plain(&laid_out(table, 40));
+        assert_eq!(
+            wide,
+            "\
+Shelves:
+  oak    The long shelf by the window,
+         with room for a second row
+  pine   The short one
+Shelves hold `songs` alone."
+        );
+        let narrow = crate::ui::plain(&laid_out(table, 30));
+        assert_eq!(
+            narrow,
+            "\
+Shelves:
+  oak
+      The long shelf by the
+      window, with room for a
+      second row
+  pine
+      The short one
+Shelves hold `songs` alone."
+        );
+    }
+
+    #[test]
+    fn quoted_spans_and_written_defaults_are_styled_as_clap_styles_its_own() {
+        let (literal, context) = (STYLES.get_literal(), STYLES.get_context());
+        assert_eq!(
+            spans("Where [default: `muman`] lives"),
+            format!(
+                "Where{context} [default:{context:#}{literal} `muman`{literal:#}{context}]{context:#} lives"
+            )
+        );
+    }
+
+    #[test]
+    fn help_keeps_to_a_narrow_terminal() {
+        let mut cmd = painted(Cli::command(), 40).term_width(40);
+        cmd.build();
+        for name in ["list", "set", "sync"] {
+            let help = cmd
+                .find_subcommand_mut(name)
+                .unwrap()
+                .render_long_help()
+                .to_string();
+            for line in help.lines().filter(|l| !l.starts_with("Usage:")) {
+                assert!(line.chars().count() <= 40, "{name}: {line:?}");
+            }
+        }
     }
 
     #[test]

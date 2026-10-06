@@ -45,10 +45,13 @@ lock on the home:
 
 A long step shows how far it has got on stderr, as `--progress` says.
 On a terminal, `auto` pins one status line under the messages, such as
-`[5/5] Writing [====>   ] 812/1546  53%  41 s left  Hurricane · Isis`:
+`[5/5] Writing [====>   ] 812/1546  53%  41 s left  Rooms of Salt · Paper Comets`:
 the step of the command's steps, the count, the time left at the rate
 so far, and the songs or files under way; terminals that show a task's
-progress in their tab or taskbar show it there too. Elsewhere, as in a
+progress in their tab or taskbar show it there too. On a narrower
+terminal the line drops the percentage, then the bar, then the time
+left, and stays one line. A step inside another, as a fetch of what a
+lookup found, takes the line until it ends. Elsewhere, as in a
 log, `auto` and `plain` write a line every tenth of the way or ten
 seconds; `json` writes one JSON object a line, `start`, `progress` and
 `finish` events, for a program to read; `none` writes nothing. What a

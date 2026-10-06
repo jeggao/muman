@@ -16,7 +16,7 @@ anstream = "1"
 anstyle = "1"
 anyhow = "1"
 base64 = "0.23"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 deunicode = "1"
 directories = "6"
 dunce = "1"

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use clap::Parser;
+
 use super::*;
 use crate::lrclib::testing::Server;
 use crate::testing::{FLAC, Fake, words};

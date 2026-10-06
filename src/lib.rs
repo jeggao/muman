@@ -69,7 +69,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::http::{HttpTransport, UreqTransport};
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::FromArgMatches;
 
 use crate::acquire::{Acquire, Additions, Fetcher, Proposal};
 use crate::atomic::Lock;
@@ -129,7 +129,11 @@ impl Job {
 
 #[must_use]
 pub fn run() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = cli::command()
+        .try_get_matches()
+        .and_then(|m| Cli::from_arg_matches(&m))
+        .map_err(|e| e.format(&mut cli::command()))
+        .unwrap_or_else(|e| e.exit());
     let live = std::io::stderr().is_terminal();
     let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
     let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
