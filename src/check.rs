@@ -56,20 +56,22 @@ fn files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Say every problem found. Returns whether there was none.
+/// Say every problem found to `report`, and what it is doing to `out`.
+/// Returns whether there was none.
 #[allow(clippy::too_many_lines)]
-pub fn check<R: Runner, W: Write>(
+pub fn check<R: Runner, W: Write, D: Write>(
     runner: &R,
     dirs: &Dirs,
     decode: bool,
     out: &mut W,
+    report: &mut D,
 ) -> Result<bool> {
     let manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let library = &dirs.library;
     let mut problems = 0_usize;
-    let mut problem = |out: &mut W, text: String| {
+    let mut problem = |out: &mut D, text: String| {
         problems += 1;
         crate::ui::warning(out, &text)
     };
@@ -81,21 +83,21 @@ pub fn check<R: Runner, W: Write>(
         let file = library.join(path);
         match std::fs::metadata(&file) {
             Err(_) => problem(
-                out,
+                report,
                 format!(
                     "Missing, `sync` writes it again: {}",
                     crate::relpath::show(path)
                 ),
             )?,
             Ok(m) if m.len() == 0 => problem(
-                out,
+                report,
                 format!(
                     "Empty, `sync` writes it again: {}",
                     crate::relpath::show(path)
                 ),
             )?,
             Ok(_) if written.plan.is_none() => problem(
-                out,
+                report,
                 format!(
                     "Not finished by an interrupted run, `sync` writes it again: {}",
                     crate::relpath::show(path)
@@ -108,7 +110,7 @@ pub fn check<R: Runner, W: Write>(
                     .is_some_and(|s| store::stamp_text(&file).as_ref() != Some(s));
                 if changed {
                     problem(
-                        out,
+                        report,
                         format!(
                             "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
                             crate::relpath::show(path)
@@ -127,7 +129,7 @@ pub fn check<R: Runner, W: Write>(
             .is_some_and(|e| e.eq_ignore_ascii_case("part"))
         {
             problem(
-                out,
+                report,
                 format!("Left by an interrupted run: {}", file.display()),
             )?;
             continue;
@@ -138,7 +140,7 @@ pub fn check<R: Runner, W: Write>(
             .is_some_and(is_written);
         if ours && !owned.contains(rel) {
             crate::ui::info(
-                out,
+                report,
                 &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
             )?;
         }
@@ -153,12 +155,12 @@ pub fn check<R: Runner, W: Write>(
             } else {
                 "its song cannot be written"
             };
-            problem(out, format!("Missing from the store, {how}: {key}"))?;
+            problem(report, format!("Missing from the store, {how}: {key}"))?;
         }
     }
     for (key, failure) in &state.failures {
         problem(
-            out,
+            report,
             format!(
                 "Failed {} time(s) to {:?}: {key}: {}",
                 failure.count, failure.step, failure.error
@@ -172,17 +174,18 @@ pub fn check<R: Runner, W: Write>(
             .filter(|l| l.kind == Kind::Media)
             .collect();
         crate::ui::info(out, &format!("Decoding {} source(s)", media.len()))?;
+        out.flush()?;
         let decoded = parallel::map(&media, parallel::builds(), |l| {
             runner.run(&decode_command(&l.path))
         });
         for (l, result) in media.iter().zip(decoded) {
             if let Err(e) = result {
-                problem(out, format!("Does not decode in full: {}: {e:#}", l.key))?;
+                problem(report, format!("Does not decode in full: {}: {e:#}", l.key))?;
             }
         }
     }
     if problems == 0 {
-        crate::ui::success(out, "No problems found")?;
+        crate::ui::success(report, "No problems found")?;
     }
     Ok(problems == 0)
 }
@@ -231,9 +234,10 @@ mod tests {
             .insert("A/changed.opus".into(), written(Some("1:1".into())));
         state.outputs.insert("A/gone.opus".into(), written(None));
         state.save(&dirs.home).unwrap();
-        let mut out = Vec::new();
-        let ok = check(&Fake::default(), &dirs, false, &mut out).unwrap();
-        let text = String::from_utf8(out).unwrap();
+        let (mut out, mut report) = (Vec::new(), Vec::new());
+        let ok = check(&Fake::default(), &dirs, false, &mut out, &mut report).unwrap();
+        assert!(out.is_empty(), "the problems are the report");
+        let text = String::from_utf8(report).unwrap();
         assert!(!ok);
         assert!(
             text.contains("Missing, `sync` writes it again: A/gone.opus"),

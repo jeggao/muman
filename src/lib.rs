@@ -193,9 +193,10 @@ fn mode(m: Matching) -> Mode {
     }
 }
 
-/// Run one command, asking LRCLIB and MusicBrainz through `http`, writing what it lists
-/// to `data` and every message to `out`. Returns whether every step
-/// succeeded.
+/// Run one command, asking LRCLIB and MusicBrainz through `http`, writing
+/// what it lists or reports, as `list`, `status`, `info` and `check` do,
+/// to `data`, and every other message to `out`. Returns whether every
+/// step succeeded.
 #[allow(clippy::too_many_lines)]
 pub fn run_with<R: Runner, W: Write, D: Write>(
     job: &Job,
@@ -214,16 +215,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         reconcile::reconcile(runner, dirs, opts, run, out)
     };
     match &job.command {
-        Command::Status => sync(
-            Options {
+        Command::Status => {
+            let opts = Options {
                 dry_run: true,
+                settling: job.settling,
                 ..Options::default()
-            },
-            None,
-            out,
-        ),
+            };
+            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(data))
+        }
         Command::Info => {
-            overview::info(dirs, job.verbose, out)?;
+            overview::info(dirs, job.verbose, data)?;
             Ok(true)
         }
         Command::List {
@@ -235,7 +236,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             list_songs(dirs, query, format.as_deref(), *keys, *removed, data)?;
             Ok(true)
         }
-        Command::Check { decode } => check::check(runner, dirs, *decode, out),
+        Command::Check { decode } => check::check(runner, dirs, *decode, out, data),
         Command::Export { output, max_size } => {
             export::export(runner, dirs, output, *max_size, out)
         }

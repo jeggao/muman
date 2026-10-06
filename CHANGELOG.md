@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **`status`, `info` and `check` report on stdout.** Their reports went
+  to stderr with every message, so `muman status | less` showed nothing;
+  what they report is on stdout, and what they do on the way, measuring
+  or decoding, stays on stderr.
 - **A bare query word matches names, not parts of keys.** A word matched
   inside any source key, so `man` picked every manual song and `tube`
   every video; it now matches a key only as the whole ID or file name.

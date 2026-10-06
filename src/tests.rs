@@ -243,10 +243,42 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
 fn status_changes_nothing() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
-    let (_, text) = s.run(&flacs(), &["status"]);
-    assert!(text.contains("Not listed yet"), "{text}");
+    let (_, report) = s.report(&flacs(), &["status"]);
+    assert!(report.contains("Not listed yet"), "{report}");
     assert!(!s.dir.path().join("home/songs.toml").exists());
     assert!(!s.dir.path().join("lib").exists());
+}
+
+#[test]
+fn status_info_and_check_report_on_stdout() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    for (args, said) in [
+        (&["status"][..], "(up to date)"),
+        (&["info"], "Up to date"),
+        (&["check"], "No problems found"),
+    ] {
+        let (_, report) = s.report(&flacs(), args);
+        assert!(report.contains(said), "{args:?}: {report}");
+    }
+}
+
+impl Setup {
+    /// What a command writes to stdout.
+    fn report(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
+        let mut data = Vec::new();
+        let ok = run_with(
+            &self.job(args),
+            fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut data,
+        )
+        .unwrap();
+        (ok, String::from_utf8(data).unwrap())
+    }
 }
 
 impl Setup {

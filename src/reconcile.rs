@@ -366,13 +366,26 @@ fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()>
 /// Bring the library in line with the song list, recording what it
 /// replaces and removes in `run`. Returns whether every song was
 /// written.
-#[allow(clippy::too_many_lines)]
 pub fn reconcile<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    opts: Options,
+    run: Option<&mut Run>,
+    out: &mut W,
+) -> Result<bool> {
+    reconcile_into(runner, dirs, opts, run, out, None)
+}
+
+/// [`reconcile`], a dry run's report written to `report` when given, apart
+/// from what it does on the way.
+#[allow(clippy::too_many_lines)]
+pub fn reconcile_into<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     opts: Options,
     mut run: Option<&mut Run>,
     out: &mut W,
+    report: Option<&mut dyn Write>,
 ) -> Result<bool> {
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
@@ -472,9 +485,17 @@ pub fn reconcile<R: Runner, W: Write>(
             failed: &failed,
             moved: &moved,
         };
-        status(&shown, &store, &listed, dirs, opts.settling, out)?;
-        if let Some(f) = &fitted {
-            fit_summary(f, out)?;
+        if let Some(mut report) = report {
+            out.flush()?;
+            status(&shown, &store, &listed, dirs, opts.settling, &mut report)?;
+            if let Some(f) = &fitted {
+                fit_summary(f, &mut report)?;
+            }
+        } else {
+            status(&shown, &store, &listed, dirs, opts.settling, out)?;
+            if let Some(f) = &fitted {
+                fit_summary(f, out)?;
+            }
         }
         drop(lock);
         return Ok(ok);
