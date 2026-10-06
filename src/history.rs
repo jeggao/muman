@@ -143,13 +143,26 @@ fn strays(home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// What a run's record says of itself, read without its outputs, which
+/// run to megabytes on a large library.
+#[derive(Debug, Default, Deserialize)]
+struct Head {
+    #[serde(default = "complete")]
+    complete: bool,
+    #[serde(default)]
+    songs_after: Option<String>,
+    #[serde(default)]
+    bytes: u64,
+}
+
+fn head(dir: &Path) -> Option<Head> {
+    serde_json::from_slice(&std::fs::read(dir.join(RECORD)).ok()?).ok()
+}
+
 /// The bytes a run's record says it keeps; for a record that does not
 /// say, what its files take.
 fn held(dir: &Path) -> u64 {
-    let said = std::fs::read(dir.join(RECORD))
-        .ok()
-        .and_then(|t| serde_json::from_slice::<Record>(&t).ok())
-        .map_or(0, |r| r.bytes);
+    let said = head(dir).map_or(0, |h| h.bytes);
     if said > 0 {
         return said;
     }
@@ -179,8 +192,9 @@ impl Run {
         );
         // As the last run left it, when one is kept: a hand edit since is
         // part of what this run applies, and undone with it.
-        let songs_before = match latest(home) {
-            Ok((_, last)) if last.complete && last.songs_after.is_some() => last.songs_after,
+        let last = runs(home)?.pop().and_then(|dir| head(&dir));
+        let songs_before = match last {
+            Some(last) if last.complete && last.songs_after.is_some() => last.songs_after,
             _ => {
                 // Read whole, not halfway through another run's save.
                 let _lock = atomic::Lock::folder(home)?;
