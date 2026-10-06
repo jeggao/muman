@@ -937,3 +937,50 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
         )]
     );
 }
+
+#[test]
+fn a_template_takes_the_first_artist_and_every_artist_as_a_list() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }}/{{ artists | length }}/{{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\
+         [song.tags]\nartist = [\"Ada Quill\", \"Marlo Venn\"]\n",
+    );
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        h.lib("Ada Quill/2/Title aaaaaaaaaaa.opus").exists(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_name_telling_two_songs_apart_is_made_safe_as_any_tag() {
+    let h = home();
+    let mut body = String::new();
+    for folder in ["a", "b"] {
+        let path = h.dirs.manual().join(folder).join("Song?.opus");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, folder).unwrap();
+        body += "[[song]]\nsources = [\"manual:";
+        body += folder;
+        body += "/Song?.opus\"]\n";
+    }
+    h.songs(&body);
+    let untagged = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "opus", "channels": 2}]}"#;
+    let (ok, text) = h.run(
+        &Fake::default().probe(".opus", untagged),
+        Options::default(),
+    );
+    assert!(ok, "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(
+        state
+            .outputs
+            .keys()
+            .all(|p| !p.to_string_lossy().contains('?')),
+        "{:?}",
+        state.outputs.keys()
+    );
+}

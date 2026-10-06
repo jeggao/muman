@@ -9,6 +9,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **A template's `artist` and `artists` are as documented.** They held
+  every artist joined into one name, so a template naming folders by
+  `{{ artist }}` made one per combination of artists; `artist` is the
+  first and `artists` the list. A custom template using them moves the
+  songs it names differently, which `undo` puts back; the default
+  template is unaffected.
 - **`status`, `info` and `check` report on stdout.** Their reports went
   to stderr with every message, so `muman status | less` showed nothing;
   what they report is on stdout, and what they do on the way, measuring
@@ -114,6 +120,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   macOS.** A song written again in another format under a name
   differing only in case had its new lyrics file deleted with the old,
   which a filesystem blind to case takes for the same file.
+- **A name telling two songs apart is made safe.** The part of a file's
+  own name added to tell two songs of one path apart was written as it
+  was, so a character Windows refuses reached the library.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

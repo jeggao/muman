@@ -332,7 +332,7 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 /// Give every song a path of its own: a later song resolving to one an
 /// earlier song took is named with its audio's ID too, and numbered
 /// when that is taken as well, as two manual files of one name are.
-fn separate(planned: &mut [(usize, Resolved)], max_name: usize) {
+fn separate(planned: &mut [(usize, Resolved)], naming: &Naming, max_name: usize) {
     // By stem, not path: a FLAC song and an Opus song of one name would
     // write the same `.lrc`.
     let lower = |r: &Resolved| crate::relpath::folded(&r.stem);
@@ -342,7 +342,8 @@ fn separate(planned: &mut [(usize, Resolved)], max_name: usize) {
             continue;
         }
         let base = r.stem.clone();
-        let id = r.plan.audio.key.short();
+        // A manual file's name may hold what a path must not.
+        let id = naming.value(&r.plan.audio.key.short());
         for n in 1.. {
             r.stem = naming::suffixed(&base, &id, n, max_name);
             if taken.insert(lower(r)) {
@@ -1114,7 +1115,11 @@ pub(crate) fn plan<W: Write>(
             }
         }
     }
-    separate(&mut planned, manifest.settings.library.max_name_bytes);
+    separate(
+        &mut planned,
+        &naming,
+        manifest.settings.library.max_name_bytes,
+    );
     Ok((planned, failed))
 }
 
