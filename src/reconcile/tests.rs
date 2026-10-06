@@ -194,8 +194,13 @@ fn a_dry_run_writes_nothing_and_says_why() {
     assert!(text.contains("(new)"), "{text}");
     assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
     assert!(text.contains("TITLE"), "{text}");
-    assert!(
-        text.contains(&format!("Unused: {}", unused.display())),
+    let shown = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Unused: "))
+        .map(PathBuf::from);
+    assert_eq!(
+        shown.as_deref(),
+        Some(unused.as_path()),
         "an unused file is shown by its whole path: {text}"
     );
 }
