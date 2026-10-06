@@ -911,3 +911,29 @@ fn a_song_rendered_to_be_measured_is_moved_into_place_not_rendered_again() {
     let state = State::load(&h.dirs.home).unwrap();
     assert_eq!(state.sizes.len(), 1, "{:?}", state.sizes);
 }
+
+#[test]
+fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
+    let h = home();
+    std::fs::create_dir_all(h.lib("A")).unwrap();
+    std::fs::write(h.lib("A/x.opus"), "old").unwrap();
+    std::fs::write(h.lib("A/X.lrc"), "new lyrics").unwrap();
+    // One file by both names, as NTFS and APFS see a name differing in case.
+    std::fs::hard_link(h.lib("A/X.lrc"), h.lib("A/x.lrc")).unwrap();
+    let written = |lyrics: &str| Written {
+        sources: Vec::new(),
+        lyrics: Some(lyrics.into()),
+        plan: None,
+        stamp: None,
+    };
+    let old = BTreeMap::from([(PathBuf::from("A/x.opus"), written("A/x.lrc"))]);
+    let now = BTreeMap::from([(PathBuf::from("A/X.flac"), written("A/X.lrc"))]);
+    let plan = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new());
+    assert_eq!(
+        plan,
+        [(
+            PathBuf::from("A/x.opus"),
+            Pruned::Removed(vec![PathBuf::from("A/x.opus")])
+        )]
+    );
+}

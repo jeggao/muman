@@ -110,6 +110,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   unfinished download in a folder per channel under `partial/`, which
   `[ytdlp] partial_days` never reached; it now does, and empty folders
   go too.
+- **A song's new lyrics survive its old name going on Windows and
+  macOS.** A song written again in another format under a name
+  differing only in case had its new lyrics file deleted with the old,
+  which a filesystem blind to case takes for the same file.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

@@ -1178,10 +1178,20 @@ fn prune_plan(
         } else if changed_since_written(library, old, path) {
             Pruned::LeftChanged
         } else {
+            // Another output's lyrics stay, whether the same name or one
+            // a filesystem blind to case takes for it.
+            let taken = |file: &PathBuf| {
+                outputs.values().filter_map(|w| w.lyrics.as_ref()).any(|l| {
+                    l == file
+                        || (crate::relpath::folded(l) == crate::relpath::folded(file)
+                            && same_file::is_same_file(library.join(l), library.join(file))
+                                .unwrap_or(false))
+                })
+            };
             Pruned::Removed(
                 std::iter::once(path)
                     .chain(&written.lyrics)
-                    .filter(|file| !outputs.values().any(|w| w.lyrics.as_ref() == Some(*file)))
+                    .filter(|file| !taken(file))
                     .cloned()
                     .collect(),
             )
