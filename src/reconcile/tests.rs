@@ -922,8 +922,10 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
     std::fs::create_dir_all(h.lib("A")).unwrap();
     std::fs::write(h.lib("A/x.opus"), "old").unwrap();
     std::fs::write(h.lib("A/X.lrc"), "new lyrics").unwrap();
-    // One file by both names, as NTFS and APFS see a name differing in case.
-    std::fs::hard_link(h.lib("A/X.lrc"), h.lib("A/x.lrc")).unwrap();
+    // One file by both names: so on NTFS and APFS already, made so here.
+    if !h.lib("A/x.lrc").exists() {
+        std::fs::hard_link(h.lib("A/X.lrc"), h.lib("A/x.lrc")).unwrap();
+    }
     let written = |lyrics: &str| Written {
         sources: Vec::new(),
         lyrics: Some(lyrics.into()),
@@ -962,14 +964,16 @@ fn a_template_takes_the_first_artist_and_every_artist_as_a_list() {
 #[test]
 fn a_name_telling_two_songs_apart_is_made_safe_as_any_tag() {
     let h = home();
-    let mut body = String::new();
+    // A replacement of the user's own, as every platform allows `#` in a
+    // file's name where it does not allow what the default ones replace.
+    let mut body = String::from("[library]\nreplace = { \"#\" = \"-\" }\n");
     for folder in ["a", "b"] {
-        let path = h.dirs.manual().join(folder).join("Song?.opus");
+        let path = h.dirs.manual().join(folder).join("Song#.opus");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, folder).unwrap();
         body += "[[song]]\nsources = [\"manual:";
         body += folder;
-        body += "/Song?.opus\"]\n";
+        body += "/Song#.opus\"]\n";
     }
     h.songs(&body);
     let untagged = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "opus", "channels": 2}]}"#;
@@ -979,12 +983,11 @@ fn a_name_telling_two_songs_apart_is_made_safe_as_any_tag() {
     );
     assert!(ok, "{text}");
     let state = State::load(&h.dirs.home).unwrap();
-    assert!(
-        state
-            .outputs
-            .keys()
-            .all(|p| !p.to_string_lossy().contains('?')),
-        "{:?}",
-        state.outputs.keys()
-    );
+    let paths: Vec<String> = state
+        .outputs
+        .keys()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    assert!(paths.iter().any(|p| p.contains("[Song-]")), "{paths:?}");
+    assert!(paths.iter().all(|p| !p.contains('#')), "{paths:?}");
 }
