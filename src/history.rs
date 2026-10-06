@@ -699,7 +699,7 @@ mod tests {
         undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
         let back = State::load(&d.home).unwrap();
         assert!(back.outputs.contains_key(Path::new("A/x.opus")));
-        assert!(runs(&d.home).unwrap().is_empty());
+        assert_eq!(runs(&d.home).unwrap(), Vec::<PathBuf>::new());
     }
 
     #[test]

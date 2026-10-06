@@ -137,7 +137,7 @@ fn deleting_every_song_opened_removes_them() {
     );
     assert!(changed, "{text}");
     let m = songs(&h);
-    assert!(m.songs.is_empty());
+    assert_eq!(m.songs, []);
     assert_eq!(m.removed.len(), 2);
 }
 
