@@ -12,6 +12,40 @@ use std::process::Command;
 pub struct DiffInfo {
     pub changed_lines: Option<HashSet<usize>>,
     pub base_file: Option<String>,
+    /// The change's hunks, which place a line of the new file in the base.
+    pub hunks: Vec<Hunk>,
+}
+
+/// One hunk of a `--unified=0` diff: the base's lines it replaces and the
+/// new file's lines it puts in their place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+}
+
+impl DiffInfo {
+    /// The base's lines a line of the new file stands where: those its
+    /// hunk replaced, or the one it was before lines were added or taken
+    /// out above it. Comparing line numbers alone would look at whatever
+    /// the shift brought there.
+    #[must_use]
+    pub fn base_span(&self, line: usize) -> (usize, usize) {
+        let mut shift: isize = 0;
+        for h in &self.hunks {
+            if line < h.new_start {
+                break;
+            }
+            if line < h.new_start + h.new_count {
+                return (h.old_start, h.old_start + h.old_count.max(1) - 1);
+            }
+            shift += h.old_count.cast_signed() - h.new_count.cast_signed();
+        }
+        let at = (line.cast_signed() + shift).max(1).cast_unsigned();
+        (at, at)
+    }
 }
 
 /// Build per-file diff info by shelling out to `git`.
@@ -21,15 +55,16 @@ pub fn for_file(repo_root: &Path, base: &str, path: &Path) -> Result<DiffInfo> {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/");
-    let changed = changed_lines(repo_root, base, &rel)?;
+    let hunks = hunks(repo_root, base, &rel)?;
     let base_file = base_blob(repo_root, base, &rel)?;
     Ok(DiffInfo {
-        changed_lines: Some(changed),
+        changed_lines: Some(changed_of(&hunks)),
         base_file,
+        hunks,
     })
 }
 
-fn changed_lines(repo_root: &Path, base: &str, rel: &str) -> Result<HashSet<usize>> {
+fn hunks(repo_root: &Path, base: &str, rel: &str) -> Result<Vec<Hunk>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
@@ -44,48 +79,51 @@ fn changed_lines(repo_root: &Path, base: &str, rel: &str) -> Result<HashSet<usiz
     // If the file is untracked or git fails, fall back to all-changed (empty
     // set); we treat the file as fully new in the worktree below.
     if !output.status.success() {
-        return Ok(HashSet::new());
+        return Ok(Vec::new());
     }
-    Ok(parse_unified_diff(&String::from_utf8_lossy(&output.stdout)))
+    Ok(parse_hunks(&String::from_utf8_lossy(&output.stdout)))
 }
 
 /// Parse `git diff --unified=0` output and return the set of line numbers in
 /// the *new* (post-image) file that were added or modified. Pure removals
 /// have no line in the new file and produce no entries.
+#[cfg(test)]
 #[must_use]
 pub fn parse_unified_diff(diff: &str) -> HashSet<usize> {
-    let mut out = HashSet::new();
-    for line in diff.lines() {
-        // Hunk header form: `@@ -<oldStart>[,<oldCount>] +<newStart>[,<newCount>] @@`.
-        let Some(rest) = line.strip_prefix("@@ ") else {
-            continue;
-        };
-        let Some(end) = rest.find(" @@") else {
-            continue;
-        };
-        let header = &rest[..end];
-        let Some(plus) = header.split_whitespace().find(|t| t.starts_with('+')) else {
-            continue;
-        };
-        let plus = &plus[1..];
-        let (start_s, count_s) = match plus.split_once(',') {
-            Some((a, b)) => (a, b),
-            None => (plus, "1"),
-        };
-        let Ok(start) = start_s.parse::<usize>() else {
-            continue;
-        };
-        let Ok(count) = count_s.parse::<usize>() else {
-            continue;
-        };
-        if count == 0 {
-            continue;
-        }
-        for n in start..start + count {
-            out.insert(n);
-        }
-    }
-    out
+    changed_of(&parse_hunks(diff))
+}
+
+/// The lines of the new file the hunks add or modify.
+fn changed_of(hunks: &[Hunk]) -> HashSet<usize> {
+    hunks
+        .iter()
+        .flat_map(|h| h.new_start..h.new_start + h.new_count)
+        .collect()
+}
+
+/// The hunks of `git diff --unified=0` output, in order.
+#[must_use]
+pub fn parse_hunks(diff: &str) -> Vec<Hunk> {
+    // Hunk header form: `@@ -<oldStart>[,<oldCount>] +<newStart>[,<newCount>] @@`.
+    let range = |token: &str| -> Option<(usize, usize)> {
+        let (start, count) = token.split_once(',').unwrap_or((token, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    };
+    diff.lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("@@ ")?;
+            let header = &rest[..rest.find(" @@")?];
+            let mut tokens = header.split_whitespace();
+            let (old_start, old_count) = range(tokens.find_map(|t| t.strip_prefix('-'))?)?;
+            let (new_start, new_count) = range(tokens.find_map(|t| t.strip_prefix('+'))?)?;
+            Some(Hunk {
+                old_start,
+                old_count,
+                new_start,
+                new_count,
+            })
+        })
+        .collect()
 }
 
 fn base_blob(repo_root: &Path, base: &str, rel: &str) -> Result<Option<String>> {
@@ -134,6 +172,35 @@ mod tests {
         let mut got: Vec<usize> = parse_unified_diff(diff).into_iter().collect();
         got.sort_unstable();
         assert_eq!(got, vec![11, 12, 22]);
+    }
+
+    #[test]
+    fn a_line_is_placed_in_the_base_past_what_was_added_above_it() {
+        let diff = "\
+@@ -3,0 +4,5 @@
++five
++lines
++added
++above
++it
+@@ -10,2 +15,1 @@
+-two
+-old
++one new
+";
+        let info = DiffInfo {
+            hunks: parse_hunks(diff),
+            ..DiffInfo::default()
+        };
+        assert_eq!(info.base_span(2), (2, 2), "above every hunk");
+        assert_eq!(info.base_span(5), (3, 3), "added after base line 3");
+        assert_eq!(info.base_span(12), (7, 7), "shifted down by five");
+        assert_eq!(info.base_span(15), (10, 11), "replacing two");
+        assert_eq!(
+            info.base_span(20),
+            (16, 16),
+            "five added, one more taken out"
+        );
     }
 
     #[test]
