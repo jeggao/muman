@@ -95,6 +95,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   dropped the leading `/` of an unused file's path, and the drive on
   Windows; a file still being copied into the manual folder is named by
   its `manual:` key.
+- **`check` finds a song's lyrics file missing**, which `sync` writes
+  again.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

@@ -96,6 +96,20 @@ pub fn check<R: Runner, W: Write, D: Write>(
                     crate::relpath::show(path)
                 ),
             )?,
+            Ok(_)
+                if written
+                    .lyrics
+                    .as_ref()
+                    .is_some_and(|l| written.plan.is_some() && !library.join(l).exists()) =>
+            {
+                problem(
+                    report,
+                    format!(
+                        "Lyrics missing, `sync` writes them again: {}",
+                        crate::relpath::show(path)
+                    ),
+                )?;
+            }
             Ok(_) if written.plan.is_none() => problem(
                 report,
                 format!(
@@ -233,6 +247,12 @@ mod tests {
             .outputs
             .insert("A/changed.opus".into(), written(Some("1:1".into())));
         state.outputs.insert("A/gone.opus".into(), written(None));
+        std::fs::write(dirs.library.join("A/sung.opus"), "x").unwrap();
+        let sung = Written {
+            lyrics: Some("A/sung.lrc".into()),
+            ..written(store::stamp_text(&dirs.library.join("A/sung.opus")))
+        };
+        state.outputs.insert("A/sung.opus".into(), sung);
         state.save(&dirs.home).unwrap();
         let (mut out, mut report) = (Vec::new(), Vec::new());
         let ok = check(&Fake::default(), &dirs, false, &mut out, &mut report).unwrap();
@@ -251,5 +271,9 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Left by an interrupted run"), "{text}");
+        assert!(
+            text.contains("Lyrics missing, `sync` writes them again: A/sung.opus"),
+            "{text}"
+        );
     }
 }
