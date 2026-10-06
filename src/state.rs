@@ -11,10 +11,12 @@
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //!
-//! An output with no plan is one muman owns but cannot vouch for, as one
-//! a run records just before writing it: a crash between the two leaves
-//! a file the next run writes again or deletes, rather than one no run
-//! would ever delete. An output whose size and time differ from those
+//! An output with no plan is one muman owns but cannot vouch for, as each
+//! a run records just before writing it, new or written over: a crash
+//! between the two leaves a file the next run writes again or deletes,
+//! rather than one no run would ever delete or one taken for changed by
+//! someone else. A run keeps each file it wrote as it goes, so a crash
+//! loses at most the last few. An output whose size and time differ from those
 //! recorded was changed by something else, a tagger or a player: it is
 //! not written over, and once no song makes it, it is left in place and
 //! dropped from `outputs`, no longer muman's. When the library folder

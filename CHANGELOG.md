@@ -14,6 +14,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `Retry-After` asks, and asked again. A service still refusing leaves
   its remaining lookups for the next run instead of recording each as
   failed and putting it off for hours.
+- **A sync stopped while writing loses nothing.** Each file a run is
+  about to write is marked muman's but unvouched for, and each it wrote
+  is kept as it goes. Before, stopping a sync that rewrote many songs
+  left every one taken for changed by someone else: never written again,
+  and left behind as a duplicate when its path changed. A library a
+  stopped run left so needs one `sync --force`.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

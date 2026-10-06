@@ -22,7 +22,7 @@ use crate::limit;
 use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::parallel;
-use crate::render::{self, Rendered};
+use crate::render;
 use crate::resolve::{self, Input, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
@@ -40,9 +40,12 @@ pub struct Options {
     pub retry: bool,
     /// How long a dropped-in file waits after arriving.
     pub settling: Duration,
+    /// How long writing runs between saves of what it wrote; unset, every
+    /// [`CHECKPOINT`].
+    pub checkpoint: Option<Duration>,
 }
 
-/// How long measuring runs between saves of what it measured.
+/// How long measuring or writing runs between saves of what it did.
 const CHECKPOINT: Duration = Duration::from_secs(30);
 
 /// What measuring does besides measuring.
@@ -111,32 +114,35 @@ pub fn measure<R: Runner, W: Write>(
     crate::ui::info(out, &format!("Measuring {} source(s)", due.len()))?;
     let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
     let mut kept = Instant::now();
-    for chunk in numbered.chunks(parallel::builds() * 8) {
-        let measured = parallel::map(chunk, parallel::builds(), |(n, l)| {
-            facts::gather(runner, l, &scratch.join(format!("facts-{n}")))
-        });
-        for ((_, located), result) in chunk.iter().zip(measured) {
-            match result {
-                Ok(f) => {
-                    state.facts.insert(located.key.clone(), f);
-                    state.clear_failure(&located.key);
-                }
-                Err(e) => {
-                    crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;
-                    state.record_failure(
-                        &located.key,
-                        Step::Measure,
-                        Some(located.rev()),
-                        format!("{e:#}"),
-                    );
+    parallel::chunked(
+        &numbered,
+        parallel::builds(),
+        |(n, l)| facts::gather(runner, l, &scratch.join(format!("facts-{n}"))),
+        |chunk, measured| {
+            for ((_, located), result) in chunk.iter().zip(measured) {
+                match result {
+                    Ok(f) => {
+                        state.facts.insert(located.key.clone(), f);
+                        state.clear_failure(&located.key);
+                    }
+                    Err(e) => {
+                        crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;
+                        state.record_failure(
+                            &located.key,
+                            Step::Measure,
+                            Some(located.rev()),
+                            format!("{e:#}"),
+                        );
+                    }
                 }
             }
-        }
-        if kept.elapsed() >= CHECKPOINT {
-            (how.checkpoint)(state)?;
-            kept = Instant::now();
-        }
-    }
+            if kept.elapsed() >= CHECKPOINT {
+                (how.checkpoint)(state)?;
+                kept = Instant::now();
+            }
+            Ok::<(), anyhow::Error>(())
+        },
+    )?;
     (how.checkpoint)(state)
 }
 
@@ -459,19 +465,23 @@ pub fn reconcile<R: Runner, W: Write>(
         run.outputs_before(&old);
     }
 
-    if !due.is_empty() {
-        // Owned before written: a crash between the two must not leave a
-        // file no run would ever delete.
-        let mut pending = state.clone();
+    // Owned before written, and no longer vouched for: a crash between the
+    // two must leave neither a file no run would delete nor a rewritten
+    // one that looks changed by someone else.
+    let mut pending = (!due.is_empty()).then(|| state.clone());
+    if let Some(pending) = pending.as_mut() {
         for (n, r) in &due {
             let path = path_of(r);
             let lyrics = Some(path.with_extension("lrc"));
-            pending.outputs.entry(path).or_insert_with(|| Written {
-                sources: manifest.songs[*n].sources.clone(),
-                lyrics,
-                plan: None,
-                stamp: None,
-            });
+            pending.outputs.insert(
+                path,
+                Written {
+                    sources: manifest.songs[*n].sources.clone(),
+                    lyrics,
+                    plan: None,
+                    stamp: None,
+                },
+            );
         }
         pending.save(home)?;
     }
@@ -488,21 +498,6 @@ pub fn reconcile<R: Runner, W: Write>(
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
     }
-    let rendered: Vec<Result<Rendered>> = parallel::map(&due, parallel::builds(), |(n, r)| {
-        if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library);
-        }
-        render::render(
-            runner,
-            &render::Job {
-                plan: &r.plan,
-                stem: &r.stem,
-                library: &dirs.library,
-                sources: &located,
-                scratch: &temp.path().join(format!("render-{n}")),
-            },
-        )
-    });
 
     let mut outputs: BTreeMap<PathBuf, Written> = BTreeMap::new();
     for (n, r) in &planned {
@@ -535,63 +530,90 @@ pub fn reconcile<R: Runner, W: Write>(
     let mut changed = false;
     let mut written = 0_usize;
     let mut learned = Vec::new();
-    for ((n, r), result) in due.iter().zip(rendered) {
-        let song = &manifest.songs[*n];
-        let name = name_of(song, Some(r), &state.facts);
-        match result {
-            Ok(done) => {
-                changed = true;
-                // A new format writes the song beside its old file, under
-                // another extension.
-                let stem = done.audio.with_extension("");
-                let before = old.get(&done.audio).or_else(|| {
-                    old.iter()
-                        .find(|(p, w)| p.with_extension("") == stem && w.sources == song.sources)
-                        .map(|(_, w)| w)
-                });
-                let verb = match before.and_then(|w| w.plan.as_ref()) {
-                    Some(p) => format!("Updated ({})", changes(p, &r.plan).join(", ")),
-                    None => "Added".to_string(),
-                };
-                crate::ui::success(
-                    out,
-                    &format!("{verb}: {}", crate::relpath::show(&done.audio)),
-                )?;
-                for problem in &done.problems {
-                    crate::ui::warning(out, &format!("  {problem}"))?;
-                }
-                written += 1;
-                // Before the stamp, so a hook that tags the file further
-                // does not make it look changed by something else.
-                let values = hooks::written_values(&dirs.library, &done.audio);
-                let values: Vec<(&str, &str)> =
-                    values.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                hooks::run(runner, &manifest.hooks, hooks::Event::Written, &values, out)?;
-                if let Some(f) = &fitted {
-                    let measured = state::Measured {
-                        source: r.plan.audio.key.clone(),
-                        audio: done.audio_bytes,
-                        lyrics: done.lyrics_bytes,
+    let every = opts.checkpoint.unwrap_or(CHECKPOINT);
+    let mut kept_at = Instant::now();
+    let render_one = |(n, r): &&PlannedSong| {
+        if let Some((folder, made)) = placed.get(n) {
+            return render::place(folder, made, &dirs.library);
+        }
+        render::render(
+            runner,
+            &render::Job {
+                plan: &r.plan,
+                stem: &r.stem,
+                library: &dirs.library,
+                sources: &located,
+                scratch: &temp.path().join(format!("render-{n}")),
+            },
+        )
+    };
+    parallel::chunked(&due, parallel::builds(), render_one, |chunk, rendered| {
+        for ((n, r), result) in chunk.iter().zip(rendered) {
+            let song = &manifest.songs[*n];
+            let name = name_of(song, Some(r), &state.facts);
+            match result {
+                Ok(done) => {
+                    changed = true;
+                    // A new format writes the song beside its old file, under
+                    // another extension.
+                    let stem = done.audio.with_extension("");
+                    let before = old.get(&done.audio).or_else(|| {
+                        old.iter()
+                            .find(|(p, w)| {
+                                p.with_extension("") == stem && w.sources == song.sources
+                            })
+                            .map(|(_, w)| w)
+                    });
+                    let verb = match before.and_then(|w| w.plan.as_ref()) {
+                        Some(p) => format!("Updated ({})", changes(p, &r.plan).join(", ")),
+                        None => "Added".to_string(),
                     };
-                    learned.push((limit::plan_key(&f.tools, &r.plan), measured));
-                }
-                outputs.insert(
-                    done.audio.clone(),
-                    Written {
+                    crate::ui::success(
+                        out,
+                        &format!("{verb}: {}", crate::relpath::show(&done.audio)),
+                    )?;
+                    for problem in &done.problems {
+                        crate::ui::warning(out, &format!("  {problem}"))?;
+                    }
+                    written += 1;
+                    // Before the stamp, so a hook that tags the file further
+                    // does not make it look changed by something else.
+                    let values = hooks::written_values(&dirs.library, &done.audio);
+                    let values: Vec<(&str, &str)> =
+                        values.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    hooks::run(runner, &manifest.hooks, hooks::Event::Written, &values, out)?;
+                    if let Some(f) = &fitted {
+                        let measured = state::Measured {
+                            source: r.plan.audio.key.clone(),
+                            audio: done.audio_bytes,
+                            lyrics: done.lyrics_bytes,
+                        };
+                        learned.push((limit::plan_key(&f.tools, &r.plan), measured));
+                    }
+                    let vouched = Written {
                         sources: song.sources.clone(),
                         lyrics: done.lyrics,
                         plan: Some(r.plan.clone()),
                         stamp: store::stamp_text(&dirs.library.join(&done.audio)),
-                    },
-                );
-            }
-            Err(e) => {
-                ok = false;
-                failed.extend(song.sources.iter().cloned());
-                crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
+                    };
+                    if let Some(pending) = pending.as_mut() {
+                        pending.outputs.insert(done.audio.clone(), vouched.clone());
+                        if kept_at.elapsed() >= every {
+                            pending.save(home)?;
+                            kept_at = Instant::now();
+                        }
+                    }
+                    outputs.insert(done.audio.clone(), vouched);
+                }
+                Err(e) => {
+                    ok = false;
+                    failed.extend(song.sources.iter().cloned());
+                    crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
+                }
             }
         }
-    }
+        Ok::<(), anyhow::Error>(())
+    })?;
     let mut keep = |rel: &Path| match run.as_deref_mut() {
         Some(run) => run.keep(&dirs.library, rel),
         None => Ok(()),
