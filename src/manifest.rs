@@ -112,6 +112,9 @@ const HEADER: &str = "\
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
 
+/// How the last line of every version's header begins.
+const HEADER_END: &str = "# Other keys muman does not know are kept.";
+
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
 
@@ -415,7 +418,14 @@ impl Manifest {
 /// those are no header or an earlier one; `None` when already current.
 /// Leading comments of the user's own are kept below it.
 fn with_header(text: &str) -> Option<String> {
-    let lead = text.lines().take_while(|l| l.starts_with('#')).count();
+    let comments = text.lines().take_while(|l| l.starts_with('#')).count();
+    // Every version's header ends on this line; a comment below it is the
+    // user's, even with no blank line between.
+    let lead = text
+        .lines()
+        .take(comments)
+        .position(|l| l.starts_with(HEADER_END))
+        .map_or(comments, |at| at + 1);
     let ours = text
         .lines()
         .next()

@@ -100,6 +100,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An upload a release takes the place of is deleted.** An upload
   fetched before YouTube Music's release replaced it stayed in the store,
   unused, for good.
+- **A comment right under the song list's header stays.** It was taken
+  for part of the header and replaced with it on the next save.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

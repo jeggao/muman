@@ -269,6 +269,16 @@ fn a_user_s_leading_comment_stays_below_the_header() {
         Some(format!("{HEADER}# mine\nversion = 1\n"))
     );
     assert_eq!(with_header(&format!("{HEADER}version = 1\n")), None);
+    let once = with_header("# mine\nversion = 1\n").unwrap();
+    assert_eq!(with_header(&once), None, "a second save keeps it too");
+    let under = format!("{HEADER}# right under it\nversion = 1\n");
+    assert_eq!(with_header(&under), None);
+    let older = "# muman's song list: an older header.\n\
+                 # Other keys muman does not know are kept.\n# mine\nversion = 1\n";
+    assert_eq!(
+        with_header(older),
+        Some(format!("{HEADER}# mine\nversion = 1\n"))
+    );
 }
 
 #[test]
