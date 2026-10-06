@@ -125,7 +125,7 @@ Every flag is in the [command reference](docs/cli.md).
 | 0 | Done, or nothing needed doing, or a change was declined |
 | 2 | ffmpeg, ffprobe or yt-dlp is missing, or the system names no home folder |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, or a problem `check` found |
-| 5 | A query matched no song, or a change needs a terminal, `-y` or `--all` |
+| 5 | A query matched no song, a change needs a terminal, `-y` or `--all`, or `undo` refused |
 
 ## Documentation
 

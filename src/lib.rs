@@ -240,9 +240,9 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             export::export(runner, dirs, output, *max_size, out)
         }
         Command::Undo { yes, dry_run } => {
-            let lines = history::describe(&dirs.home)?;
+            let planned = history::plan(dirs)?;
             ui::info(out, "Undoing the last run:")?;
-            for line in &lines {
+            for line in planned.lines() {
                 writeln!(out, "  {line}")?;
             }
             let confirm = cli::Confirm {
@@ -255,7 +255,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             }
             {
                 let _lock = Lock::folder(&dirs.home)?;
-                history::undo(dirs, out)?;
+                let again = history::plan(dirs)?;
+                if !again.same_run(&planned) {
+                    return Err(change::Refused(
+                        "Another run changed the history meanwhile; run `undo` again".into(),
+                    )
+                    .into());
+                }
+                history::undo(dirs, again, out)?;
             }
             sync(Options::default(), None, out)
         }

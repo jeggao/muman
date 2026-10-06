@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::atomic;
@@ -326,9 +326,54 @@ impl Record {
     }
 }
 
-/// What undoing the latest run would do, in words, or why it cannot.
-pub fn describe(home: &Path) -> Result<Vec<String>> {
-    let (_, record) = latest(home)?;
+/// Undoing the latest run, as planned before asking: which run, and
+/// what it would do in words.
+#[derive(Debug)]
+pub struct UndoPlan {
+    dir: PathBuf,
+    record: Record,
+    lines: Vec<String>,
+}
+
+impl UndoPlan {
+    /// What undoing would do, a line each.
+    #[must_use]
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// Whether `other` undoes the same run.
+    #[must_use]
+    pub fn same_run(&self, other: &Self) -> bool {
+        self.dir == other.dir
+    }
+}
+
+/// What undoing the latest run would do, refused as `undo` itself would
+/// be: when the song list changed since, or the run wrote another
+/// library folder.
+pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
+    let home = &dirs.home;
+    let (dir, record) = latest(home)?;
+    let songs = songs_text(home)?;
+    if songs != record.songs_after && !(record.undoing && songs == record.songs_before) {
+        return Err(crate::change::Refused(format!(
+            "The song list changed after the last run; undoing it would lose those changes. \
+             Edit {} by hand instead",
+            home.join(MANIFEST).display()
+        ))
+        .into());
+    }
+    let state = State::load(home)?;
+    if !state
+        .library
+        .as_deref()
+        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
+    {
+        return Err(
+            crate::change::Refused("The last run wrote another library folder".into()).into(),
+        );
+    }
     let mut lines = Vec::new();
     if !record.complete {
         lines.push("The run was stopped before it ended".to_string());
@@ -352,7 +397,7 @@ pub fn describe(home: &Path) -> Result<Vec<String>> {
         ));
     }
     let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
-    let added = State::load(home)?
+    let added = state
         .outputs
         .into_keys()
         .filter(|p| !record.outputs.contains_key(p) && !moved.contains(p))
@@ -360,7 +405,7 @@ pub fn describe(home: &Path) -> Result<Vec<String>> {
     if added > 0 {
         lines.push(format!("Remove {added} file(s) the run added"));
     }
-    Ok(lines)
+    Ok(UndoPlan { dir, record, lines })
 }
 
 fn latest(home: &Path) -> Result<(PathBuf, Record)> {
@@ -374,30 +419,17 @@ fn latest(home: &Path) -> Result<(PathBuf, Record)> {
     Ok((dir, record))
 }
 
-/// Put the song list and the state back as they were before the latest
-/// run, its moved files back where they were and its kept files in
-/// place, under the lock the caller holds. The sync that follows writes
-/// again what was not kept and removes what the run added. Refused when
-/// the song list changed since; an undo stopped partway finishes.
-pub fn undo<W: Write>(dirs: &Dirs, out: &mut W) -> Result<()> {
+/// Carry out `plan`, made under the lock the caller holds: the song
+/// list and the state back as they were before the run, its moved files
+/// back where they were and its kept files in place. The sync that
+/// follows writes again what was not kept and removes what the run
+/// added. An undo stopped partway finishes when run again.
+pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     let home = &dirs.home;
-    let (dir, mut record) = latest(home)?;
-    let songs = songs_text(home)?;
-    if songs != record.songs_after && !(record.undoing && songs == record.songs_before) {
-        bail!(
-            "the song list changed after the last run; undoing it would lose those changes. \
-             Edit {} by hand instead",
-            home.join(MANIFEST).display()
-        );
-    }
+    let UndoPlan {
+        dir, mut record, ..
+    } = plan;
     let mut state = State::load(home)?;
-    if !state
-        .library
-        .as_deref()
-        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
-    {
-        bail!("the last run wrote another library folder");
-    }
     if !record.undoing {
         record.undoing = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
@@ -514,8 +546,8 @@ mod tests {
         state.save(&d.home).unwrap();
         run.finish(&d.home).unwrap();
 
-        assert_eq!(describe(&d.home).unwrap().len(), 2);
-        undo(&d, &mut Vec::new()).unwrap();
+        assert_eq!(plan(&d).unwrap().lines().to_vec().len(), 2);
+        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.home.join(MANIFEST)).unwrap(),
             "before"
@@ -538,7 +570,11 @@ mod tests {
         std::fs::write(d.home.join(MANIFEST), "after").unwrap();
         run.finish(&d.home).unwrap();
         std::fs::write(d.home.join(MANIFEST), "edited by hand").unwrap();
-        let e = undo(&d, &mut Vec::new()).unwrap_err();
+        let e = plan(&d).unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::change::Refused>().is_some(),
+            "{e:#}"
+        );
         assert!(format!("{e:#}").contains("changed after"), "{e:#}");
     }
 
@@ -574,9 +610,9 @@ mod tests {
         state.save(&d.home).unwrap();
         drop(run);
 
-        let said = describe(&d.home).unwrap();
+        let said = plan(&d).unwrap().lines().to_vec();
         assert_eq!(said[0], "The run was stopped before it ended", "{said:?}");
-        undo(&d, &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
             "old"
@@ -603,11 +639,12 @@ mod tests {
         run.finish(&d.home).unwrap();
 
         assert!(
-            describe(&d.home)
+            plan(&d)
                 .unwrap()
+                .lines()
                 .contains(&"A/x.opus: moved back from B/x.opus".to_string())
         );
-        undo(&d, &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
         assert_eq!(
             std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
             "old"
@@ -637,7 +674,7 @@ mod tests {
         atomic::write(&at, RECORD, &serde_json::to_vec(&record).unwrap()).unwrap();
         std::fs::rename(at.join("files/A/x.opus"), d.library.join("A/x.opus")).unwrap();
         std::fs::write(d.home.join(MANIFEST), "before").unwrap();
-        undo(&d, &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
         let back = State::load(&d.home).unwrap();
         assert!(back.outputs.contains_key(Path::new("A/x.opus")));
         assert!(runs(&d.home).unwrap().is_empty());

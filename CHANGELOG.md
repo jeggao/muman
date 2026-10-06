@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **`undo` refuses before it asks, and exits 5.** `undo -n` showed what
+  undoing would do even when `undo` would refuse; both now refuse alike,
+  before saying anything, with exit code 5, a refused change, rather
+  than 4.
+
 ### Fixed
 
 - **LRCLIB is asked politely.** Requests to LRCLIB are spaced across a

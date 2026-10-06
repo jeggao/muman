@@ -588,7 +588,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
     )
     .unwrap();
     run.finish(&h.dirs.home).unwrap();
-    let lines = crate::history::describe(&h.dirs.home).unwrap().join("\n");
+    let lines = crate::history::plan(&h.dirs).unwrap().lines().join("\n");
     assert!(
         lines.contains("Title aaaaaaaaaaa.opus: put back"),
         "{lines}"

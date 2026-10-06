@@ -352,6 +352,30 @@ fn undo_moves_songs_back_after_a_template_edited_by_hand() {
 }
 
 #[test]
+fn undo_is_refused_before_saying_what_it_would_do() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(&songs, format!("{listed}\n# edited by hand\n")).unwrap();
+    for args in [&["undo", "-n"][..], &["undo", "-y"]] {
+        let mut out = Vec::new();
+        let e = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+    }
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

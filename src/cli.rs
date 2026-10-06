@@ -13,7 +13,8 @@ Exit codes:
      home folder
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query matched no song, or a change needs a terminal, -y or --all";
+  5  A query matched no song, a change needs a terminal, -y or --all, or
+     undo refused";
 
 #[derive(Debug, Parser)]
 #[command(
