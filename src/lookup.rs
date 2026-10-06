@@ -685,6 +685,16 @@ pub fn refetch(
         transport: http,
         throttle: &throttles.musicbrainz,
     };
+    let state = State::load(&dirs.home)?;
+    // The album the record named when kept, so it is fetched on the
+    // same release.
+    let album_of_record = |key: &SourceKey| {
+        state
+            .facts
+            .get(key)
+            .and_then(|f| f.tags.get(&Field::Album))
+            .and_then(|o| o.values.first().cloned())
+    };
     let mut failed = Vec::new();
     for key in manifest.keys() {
         let SourceKey::Remote { extractor, id } = &key else {
@@ -699,10 +709,12 @@ pub fn refetch(
                 .context("not a record ID")
                 .and_then(|id| lrclib.by_id(id))
                 .and_then(|r| r.map(|r| lrclib::keep(&dirs.lrclib(), &r)).transpose()),
-            MUSICBRAINZ => musicbrainz.by_id(id).and_then(|r| {
-                r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
-                    .transpose()
-            }),
+            MUSICBRAINZ => musicbrainz
+                .by_id(id, album_of_record(&key).as_deref())
+                .and_then(|r| {
+                    r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
+                        .transpose()
+                }),
             _ => continue,
         };
         match kept {

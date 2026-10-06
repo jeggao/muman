@@ -77,6 +77,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   alike, and an instrumental verdict is checked again after
   `recheck_days`. Songs LRCLIB found nothing or an instrumental for are
   looked up again once; full-width and half-width names now match.
+- **A MusicBrainz record fetched again keeps its album.** A record gone
+  from the store is fetched again on the release it was kept on, rather
+  than the best release of the recording, which could change the
+  song's album, track and date.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

@@ -417,8 +417,9 @@ impl Client<'_> {
         .get_text(&url, &headers, TIMEOUT)
     }
 
-    /// The record of one recording, to fetch a kept one again.
-    pub fn by_id(&self, id: &str) -> Result<Option<Record>> {
+    /// The record of one recording, to fetch a kept one again, its
+    /// release picked as a search picks it for a song on `album`.
+    pub fn by_id(&self, id: &str, album: Option<&str>) -> Result<Option<Record>> {
         let path = format!(
             "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs&fmt=json",
             music::percent_encode(id)
@@ -426,7 +427,7 @@ impl Client<'_> {
         self.get(&path)?
             .map(|b| {
                 serde_json::from_str::<Recording>(&b)
-                    .map(|r| r.record(None))
+                    .map(|r| r.record(album))
                     .context("reading MusicBrainz's answer")
             })
             .transpose()
