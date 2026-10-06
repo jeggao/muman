@@ -428,6 +428,10 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing or unreadable;
   `--decode` decodes every source in full to find a truncated download.
+- **`purge`** deletes fetched sources and lookup records no song uses,
+  which `status` and `info` name: an upload a release took the place of,
+  a source taken out of its song. A removed song's sources stay for
+  `restore`, and files of your own are never touched.
 - **`duplicates`** lists songs listed apart that are one recording, by
   their audio fingerprints: a file of an album there twice first, then a
   track and its copies on other albums, which a library of whole albums

@@ -309,6 +309,18 @@ pub enum Command {
         #[arg(short = 'n', long)]
         dry_run: bool,
     },
+    /// Delete fetched sources and lookup records no song uses: an upload
+    /// a release took the place of, a source taken out of its song. A
+    /// removed song's sources stay for `restore`, and a file of your own
+    /// is never touched. A source listed again is fetched again.
+    Purge {
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Say what would be deleted; change nothing.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
     /// Check the library against what muman recorded: files missing,
     /// empty or changed since written, left by an interrupted run, or
     /// not muman's; sources missing or unreadable.

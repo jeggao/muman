@@ -39,6 +39,7 @@ pub mod platform;
 pub mod plugins;
 pub mod probe;
 pub mod provider;
+pub mod purge;
 pub mod quality;
 pub mod query;
 pub mod reconcile;
@@ -151,7 +152,10 @@ pub fn run() -> ExitCode {
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
     let needs_ffmpeg = match &job.command {
-        Command::Info | Command::List { .. } | Command::Duplicates { .. } => false,
+        Command::Info
+        | Command::List { .. }
+        | Command::Duplicates { .. }
+        | Command::Purge { .. } => false,
         Command::Check { decode } => *decode,
         Command::Export { max_size, .. } => max_size.is_some(),
         _ => true,
@@ -231,6 +235,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Duplicates { query } => {
             duplicates::report(dirs, query, out, data)?;
+            Ok(true)
+        }
+        Command::Purge { yes, dry_run } => {
+            let confirm = cli::Confirm {
+                yes: *yes,
+                all: false,
+                dry_run: *dry_run,
+            };
+            purge::purge(dirs, &confirm, prompter, out)?;
             Ok(true)
         }
         Command::List {

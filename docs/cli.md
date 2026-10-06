@@ -34,6 +34,7 @@ Exit codes:
 * `set` — Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
+* `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
@@ -253,6 +254,19 @@ Put the song list and the library back as they were before the last run that cha
 
 * `-y`, `--yes`
 * `-n`, `--dry-run` — Say what would be put back; change nothing
+
+
+
+### `muman purge`
+
+Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
+
+**Usage:** `muman purge [OPTIONS]`
+
+**Options:**
+
+* `-y`, `--yes`
+* `-n`, `--dry-run` — Say what would be deleted; change nothing
 
 
 

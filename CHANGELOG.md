@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`muman purge`.** Deletes fetched sources and lookup records no song
+  uses, which `status` and `info` name as unused, saying first what goes
+  and how much it frees. A removed song's sources stay for `restore`,
+  and files of your own are never touched.
 - **Covers from the Cover Art Archive.** A song with no cover, or one
   too soft to look sharp (fewer than 500 px of detail, as `info`
   counts), looks up its album's front cover on the Cover Art Archive, by

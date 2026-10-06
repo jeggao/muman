@@ -113,6 +113,7 @@ muman undo
 | `export` | Write the song list and the library into a zip, fitted to a size if given |
 | `info` | Count what the library holds and what could be better, from what earlier runs measured |
 | `list` | List the songs a query matches |
+| `purge` | Delete fetched sources and lookup records no song uses |
 | `remove`, `restore` | Take songs out of the list, keeping a record so nothing adds them back; and list them again |
 | `set` | Set tags, pins or the lyrics offset on the songs a query matches |
 | `status` | Say what a sync would do, changing nothing |
