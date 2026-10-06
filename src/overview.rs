@@ -16,6 +16,7 @@ use crate::dirs::{Dirs, STATE};
 use crate::facts::Facts;
 use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
+use crate::quality::SOFT_COVER;
 use crate::reconcile;
 use crate::resolve::{Resolved, SINGLE};
 use crate::source::SourceKey;
@@ -29,9 +30,6 @@ use crate::tags::Field;
 const NARROW_HZ: f64 = 16_000.0;
 /// Clipped samples above this share are heard.
 const CLIPPED: f64 = 0.001;
-/// A cover whose detail holds up to fewer pixels than this looks soft
-/// on a large screen.
-const SOFT_COVER: u32 = 500;
 /// The label column's width.
 const LABEL: usize = 24;
 

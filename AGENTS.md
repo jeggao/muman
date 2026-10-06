@@ -55,7 +55,7 @@ src/
   plugins.rs        yt-dlp postprocessors shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   lookup.rs         lookups due by trigger; provider.rs, lrclib.rs,
-                    musicbrainz.rs
+                    musicbrainz.rs, coverart.rs
   reconcile.rs      the offline phase: measure, compare, plan, render, prune
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   quality.rs        audio and picture measures

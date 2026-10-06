@@ -462,6 +462,64 @@ impl Client<'_> {
     }
 }
 
+/// Release groups a search lists.
+#[derive(Debug, Deserialize)]
+struct Groups {
+    #[serde(default, rename = "release-groups", deserialize_with = "or_default")]
+    groups: Vec<Grouped>,
+}
+
+/// A release group as a search lists it.
+#[derive(Debug, Deserialize)]
+struct Grouped {
+    id: String,
+    #[serde(default, deserialize_with = "or_default")]
+    title: String,
+    #[serde(default, rename = "primary-type")]
+    primary: Option<String>,
+    #[serde(default, rename = "secondary-types", deserialize_with = "or_default")]
+    secondary: Vec<String>,
+    #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
+    credit: Vec<Credit>,
+    #[serde(default)]
+    score: u32,
+}
+
+impl Client<'_> {
+    /// The release group of an album by its title and its artist: of
+    /// those whose names hold both, one titled exactly the album, then an
+    /// album with no secondary type, then the best scored.
+    pub fn release_group(&self, album: &str, artist: &str) -> Result<Option<String>> {
+        let query = format!(
+            "releasegroup:{} AND artist:{}",
+            phrase(album),
+            phrase(first_artist(artist))
+        );
+        let path = format!(
+            "/ws/2/release-group?query={}&limit=25&fmt=json",
+            music::percent_encode(&query)
+        );
+        let Some(body) = self.get(&path)? else {
+            return Ok(None);
+        };
+        let found: Groups = serde_json::from_str(&body).context("reading MusicBrainz's answer")?;
+        let best = found
+            .groups
+            .iter()
+            .filter(|g| same(&names(&g.credit).join(" "), first_artist(artist)))
+            .filter_map(|g| Some((music::names_match(&g.title, album)?, g)))
+            .min_by_key(|(exact, g)| {
+                (
+                    std::cmp::Reverse(*exact),
+                    g.primary.as_deref() != Some("Album"),
+                    !g.secondary.is_empty(),
+                    std::cmp::Reverse(g.score),
+                )
+            });
+        Ok(best.map(|(_, g)| g.id.clone()))
+    }
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn whole_seconds(s: f64) -> i64 {
     s.round() as i64

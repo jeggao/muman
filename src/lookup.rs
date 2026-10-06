@@ -47,6 +47,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::acquire::{self, Acquire};
 use crate::align::Alignment;
+use crate::coverart;
 use crate::dirs::Dirs;
 use crate::download;
 use crate::facts::Facts;
@@ -55,7 +56,7 @@ use crate::manifest::{Edit, Manifest};
 use crate::music::{self, Entry};
 use crate::musicbrainz;
 use crate::parallel;
-use crate::provider::{LRCLIB, MUSICBRAINZ, Provider, When};
+use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider, When};
 use crate::reconcile::{self, Measuring, Planned};
 use crate::resolve::{self, Resolved};
 use crate::runner::Runner;
@@ -69,11 +70,12 @@ use crate::tags::Field;
 pub const ROUNDS: usize = 3;
 
 /// The providers looked up, in the order a round makes their lookups.
-pub const ORDER: [Provider; 4] = [
+pub const ORDER: [Provider; 5] = [
     Provider::YouTubeMusic,
     Provider::YouTube,
     Provider::Lrclib,
     Provider::MusicBrainz,
+    Provider::CoverArt,
 ];
 
 /// How a provider's lookups are made; a lookup made another way is due
@@ -85,6 +87,7 @@ pub fn method(p: Provider) -> &'static str {
         Provider::YouTube => "youtube/1",
         Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
+        Provider::CoverArt => "coverart/1",
         Provider::Manual => "manual",
     }
 }
@@ -107,6 +110,39 @@ fn lyrics_of(r: Option<&Resolved>, facts: &BTreeMap<SourceKey, Facts>) -> (bool,
         .and_then(|f| f.lyrics.iter().find(|x| x.at == l.at))
         .is_some_and(|x| x.timing.is_some());
     (true, timed)
+}
+
+/// Whether a song resolves to no cover, or to one with less detail than
+/// looks sharp.
+fn small_cover(r: Option<&Resolved>, facts: &BTreeMap<SourceKey, Facts>) -> bool {
+    let Some(c) = r.and_then(|r| r.plan.cover.as_ref()) else {
+        return true;
+    };
+    facts
+        .get(&c.key)
+        .and_then(|f| f.covers.iter().find(|x| x.at == c.at))
+        .and_then(|x| x.quality.as_ref())
+        .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
+}
+
+/// What a Cover Art Archive lookup asks for a resolved song: its album
+/// and album artist, and the MusicBrainz IDs it names of them.
+#[must_use]
+pub fn cover_query_of(r: &Resolved) -> Option<coverart::Query> {
+    let tag = |f: Field| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(k, _)| k == f.vorbis())
+            .and_then(|(_, v)| v.first().cloned())
+            .filter(|v| !v.trim().is_empty())
+    };
+    Some(coverart::Query {
+        album: tag(Field::Album)?,
+        album_artist: tag(Field::AlbumArtist).or_else(|| tag(Field::Artist))?,
+        release_group: tag(Field::MusicBrainzReleaseGroupId),
+        release: tag(Field::MusicBrainzAlbumId),
+    })
 }
 
 /// Whether a song resolves to an album a source or the song list names,
@@ -173,11 +209,16 @@ pub fn due(
                 When::NoLyrics => !has,
                 When::NoTimedLyrics => !timed,
                 When::NoAlbum => !album,
+                When::SmallCover => small_cover(r, &state.facts),
             };
             let Some((from, _)) = kinds.iter().find(|(_, p)| t.from.contains(p)) else {
                 continue;
             };
-            let askable = !t.find.kept() || r.and_then(|r| query_of(r, &state.facts)).is_some();
+            let askable = match t.find {
+                Provider::CoverArt => r.and_then(cover_query_of).is_some(),
+                p if p.kept() => r.and_then(|r| query_of(r, &state.facts)).is_some(),
+                _ => true,
+            };
             let days = config.settings(t.find).recheck_days;
             let open = force
                 || state
@@ -198,6 +239,7 @@ pub fn due(
 
 /// What one lookup found; short-lived, so its size matters little.
 #[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
 enum Hit {
     /// The release of an upload: the upload's entry, the release's, and
     /// how their audio compared.
@@ -208,7 +250,21 @@ enum Hit {
     Instrumental,
     /// A MusicBrainz recording.
     Tags(Box<musicbrainz::Record>),
+    /// The front of the song's album.
+    Cover(Box<coverart::Cover>),
     Nothing,
+}
+
+/// A copy of `hit` for another song that asked the same: a song of the
+/// same album.
+fn again(hit: &Result<Hit>) -> Result<Hit> {
+    match hit {
+        Ok(h) => Ok(h.clone()),
+        Err(e) => match e.downcast_ref::<Refusing>() {
+            Some(r) => Err(Refusing { service: r.service }.into()),
+            None => Err(anyhow!("{e:#}")),
+        },
+    }
 }
 
 fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
@@ -225,6 +281,7 @@ fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
 pub struct Throttles {
     pub lrclib: Throttle,
     pub musicbrainz: Throttle,
+    pub coverart: Throttle,
 }
 
 impl Throttles {
@@ -234,6 +291,7 @@ impl Throttles {
         Self {
             lrclib: lrclib::throttle(),
             musicbrainz: musicbrainz::throttle(),
+            coverart: coverart::throttle(),
         }
     }
 
@@ -243,6 +301,7 @@ impl Throttles {
         Self {
             lrclib: Throttle::none(),
             musicbrainz: Throttle::none(),
+            coverart: Throttle::none(),
         }
     }
 }
@@ -252,6 +311,7 @@ fn service_of(p: Provider) -> &'static str {
     match p {
         Provider::Lrclib => "LRCLIB",
         Provider::MusicBrainz => "MusicBrainz",
+        Provider::CoverArt => "the Cover Art Archive",
         _ => "YouTube",
     }
 }
@@ -260,6 +320,22 @@ fn service_of(p: Provider) -> &'static str {
 struct Clients<'a> {
     lrclib: lrclib::Client<'a>,
     musicbrainz: musicbrainz::Client<'a>,
+    coverart: &'a str,
+    transport: &'a (dyn HttpTransport + Sync),
+    throttle: &'a Throttle,
+}
+
+impl Clients<'_> {
+    /// The Cover Art Archive, searching MusicBrainz for what a song's
+    /// tags do not name.
+    fn coverart(&self) -> coverart::Client<'_> {
+        coverart::Client {
+            base: self.coverart,
+            transport: self.transport,
+            throttle: self.throttle,
+            musicbrainz: &self.musicbrainz,
+        }
+    }
 }
 
 /// The base address the song list sets for a provider.
@@ -277,6 +353,7 @@ fn look<R: Runner>(
     d: &Due,
     located: Option<&Located>,
     query: Option<&Query>,
+    cover: Option<&coverart::Query>,
     clients: &Clients<'_>,
     audio: &Path,
 ) -> Result<Hit> {
@@ -307,6 +384,13 @@ fn look<R: Runner>(
             Some(r) => Hit::Tags(Box::new(r)),
             None => Hit::Nothing,
         },
+        Provider::CoverArt => {
+            let cover = cover.context("the song names no album")?;
+            match clients.coverart().find(cover)? {
+                Some(c) => Hit::Cover(Box::new(c)),
+                None => Hit::Nothing,
+            }
+        }
         Provider::Manual => Hit::Nothing,
     })
 }
@@ -430,6 +514,7 @@ pub fn run<R: Runner, W: Write>(
         let bases = (
             base(&manifest, Provider::Lrclib),
             base(&manifest, Provider::MusicBrainz),
+            base(&manifest, Provider::CoverArt),
         );
         let clients = Clients {
             lrclib: lrclib::Client {
@@ -442,6 +527,9 @@ pub fn run<R: Runner, W: Write>(
                 transport: http,
                 throttle: &throttles.musicbrainz,
             },
+            coverart: &bases.2,
+            transport: http,
+            throttle: &throttles.coverart,
         };
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();
@@ -452,8 +540,28 @@ pub fn run<R: Runner, W: Write>(
                 continue;
             }
             let workers = manifest.providers.settings(p).concurrency;
+            let covers: Vec<Option<coverart::Query>> = group
+                .iter()
+                .map(|d| {
+                    resolved
+                        .get(&d.song)
+                        .filter(|_| p == Provider::CoverArt)
+                        .and_then(|r| cover_query_of(r))
+                })
+                .collect();
+            // One lookup an album: a later song of it takes the first's.
+            let first: Vec<usize> = (0..group.len())
+                .map(|i| {
+                    covers[..i]
+                        .iter()
+                        .position(|q| q.is_some() && *q == covers[i])
+                        .unwrap_or(i)
+                })
+                .collect();
+            let asking: Vec<usize> = (0..group.len()).filter(|i| first[*i] == *i).collect();
             let refusing = AtomicBool::new(false);
-            let found = parallel::map(&group, workers, |d| {
+            let asked = parallel::map(&asking, workers, |&i| {
+                let d = group[i];
                 if refusing.load(Ordering::Relaxed) {
                     return Err(Refusing {
                         service: service_of(p),
@@ -468,6 +576,7 @@ pub fn run<R: Runner, W: Write>(
                     d,
                     store.locate(&d.from).as_ref(),
                     query.as_ref(),
+                    covers[i].as_ref(),
                     &clients,
                     // A folder each: two lookups downloading one candidate
                     // at once would write one file.
@@ -481,6 +590,12 @@ pub fn run<R: Runner, W: Write>(
                 }
                 hit
             });
+            let found: Vec<Result<Hit>> = (0..group.len())
+                .map(|i| {
+                    let at = asking.binary_search(&first[i]).unwrap_or_default();
+                    again(&asked[at])
+                })
+                .collect();
             hits.extend(group.into_iter().cloned().zip(found));
         }
 
@@ -558,6 +673,25 @@ pub fn run<R: Runner, W: Write>(
                         crate::ui::info(
                             acquire.out,
                             &format!("{name}: tags from MusicBrainz, {key}{on}"),
+                        )?;
+                        join(&mut manifest, &mut acquire.known, &d.from, &key);
+                        joined += 1;
+                    }
+                    Outcome::Found(key)
+                }
+                Ok(Hit::Cover(cover)) => {
+                    let key = SourceKey::Remote {
+                        extractor: COVERART.to_string(),
+                        id: cover.id.clone(),
+                    };
+                    let folder = dirs.kept(COVERART);
+                    if !store.has(&key) && !coverart::path_of(&folder, &cover).exists() {
+                        coverart::keep(&folder, &cover)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
+                        crate::ui::info(
+                            acquire.out,
+                            &format!("{name}: a cover from the Cover Art Archive, {key}"),
                         )?;
                         join(&mut manifest, &mut acquire.known, &d.from, &key);
                         joined += 1;
@@ -673,8 +807,9 @@ pub fn run<R: Runner, W: Write>(
     Ok(ok)
 }
 
-/// Fetch again every listed LRCLIB or MusicBrainz record gone from the
-/// store, by its ID, asking each at the pace of `throttles`.
+/// Fetch again every listed LRCLIB, MusicBrainz or Cover Art Archive
+/// record gone from the store, by its ID, asking each at the pace of
+/// `throttles`.
 /// Returns each that could not be, with why.
 pub fn refetch(
     dirs: &Dirs,
@@ -696,6 +831,13 @@ pub fn refetch(
         base: &bases.1,
         transport: http,
         throttle: &throttles.musicbrainz,
+    };
+    let coverart_base = base(manifest, Provider::CoverArt);
+    let covers = coverart::Client {
+        base: &coverart_base,
+        transport: http,
+        throttle: &throttles.coverart,
+        musicbrainz: &musicbrainz,
     };
     let state = State::load(&dirs.home)?;
     // The album the record named when kept, so it is fetched on the
@@ -727,6 +869,10 @@ pub fn refetch(
                     r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
                         .transpose()
                 }),
+            COVERART => covers.by_id(id).and_then(|c| {
+                c.map(|c| coverart::keep(&dirs.kept(COVERART), &c))
+                    .transpose()
+            }),
             _ => continue,
         };
         match kept {

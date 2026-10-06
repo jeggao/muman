@@ -276,11 +276,13 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
 | `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
+| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz |
 
 A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
-`no-lyrics`, `no-timed-lyrics` or `no-album` (neither a source nor the
-song list names an album). The built-in triggers:
+`no-lyrics`, `no-timed-lyrics`, `no-album` (neither a source nor the
+song list names an album) or `small-cover` (no cover, or one with too
+little detail to look sharp, as `info` counts). The built-in triggers:
 
 | From | Finds | When |
 |---|---|---|
@@ -288,12 +290,13 @@ song list names an album). The built-in triggers:
 | `youtube-music` | `youtube` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `lrclib` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
+| `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
 Any `[[trigger]]` in the song list replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck_days` (how long a lookup that found nothing waits),
-`per_run` (the most one run makes, `0` for no limit), and for `lrclib`
-and `musicbrainz`, `url`, another server, such as a mirror:
+`per_run` (the most one run makes, `0` for no limit), and for `lrclib`,
+`musicbrainz` and `coverart`, `url`, another server, such as a mirror:
 
 ```toml
 [[trigger]]
@@ -335,6 +338,12 @@ are ranked with every other source's, as [tags](#how-the-best-of-each-is-picked)
 are: a value it agrees on with another source wins over one alone. To
 look every song up, write the built-in triggers out with `when =
 "always"` for `musicbrainz`.
+
+A cover found joins every song of its album, which asks for it once
+between them, and is picked over the songs' own pictures only by the
+measures any cover is. To take covers only where a song has none, write
+the built-in triggers out with `when = "small-cover"` changed for
+`coverart`.
 
 muman asks MusicBrainz at most once a second, as MusicBrainz asks of
 every client, and LRCLIB at most four times a second, whatever

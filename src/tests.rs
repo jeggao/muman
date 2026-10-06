@@ -581,6 +581,7 @@ fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
         state
             .lookups
             .iter()
+            .filter(|l| l.find == "lrclib")
             .all(|l| l.outcome == crate::state::Outcome::Found(record.clone())),
         "{:?}",
         state.lookups
@@ -700,7 +701,7 @@ fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
             .lock()
             .unwrap()
             .iter()
-            .any(|u| u.contains("/ws/2/")),
+            .any(|u| u.contains("/ws/2/recording")),
         "{:?}",
         server.asked
     );
@@ -720,7 +721,13 @@ fn lookups_a_refusing_service_left_wait_for_the_next_run_unrecorded() {
         text.contains("LRCLIB refuses requests for going too fast: 2 lookup(s) on lrclib wait"),
         "{text}"
     );
-    let asked = refusing.asked.lock().unwrap().len();
+    let asked = refusing
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/"))
+        .count();
     assert!(
         asked <= 8,
         "a request and three retries per lookup under way: {asked}"
@@ -993,4 +1000,38 @@ fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
         report.contains("No two songs are one recording"),
         "{report}"
     );
+}
+
+#[test]
+fn an_album_with_a_soft_cover_finds_one_on_the_cover_art_archive_once() {
+    const GROUP: &str = "00000000-0000-4000-8000-0000000000aa";
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let search = format!(
+        r#"{{"release-groups": [{{"id": "{GROUP}", "title": "Record", "primary-type": "Album",
+            "score": 100, "artist-credit": [{{"name": "Artist"}}]}}]}}"#
+    );
+    let server = Server::default()
+        .answer("/ws/2/release-group?query=", &search)
+        .answer(&format!("/release-group/{GROUP}/front-1200"), "jpeg");
+    let (ok, text) = s.run_against(&server, &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let cover = SourceKey::parse(&format!("coverart:{GROUP}")).unwrap();
+    let songs = s.songs();
+    assert!(songs.iter().all(|k| k.contains(&cover)), "{songs:?}");
+    assert!(
+        s.dir
+            .path()
+            .join(format!("home/sources/coverart/{GROUP}.jpg"))
+            .exists()
+    );
+    let asked = server.asked.lock().unwrap();
+    let count = |part: &str| asked.iter().filter(|u| u.contains(part)).count();
+    assert_eq!(
+        count("/ws/2/release-group"),
+        1,
+        "one search an album: {asked:?}"
+    );
+    assert_eq!(count("/front-1200"), 1, "{asked:?}");
 }

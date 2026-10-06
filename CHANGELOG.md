@@ -9,6 +9,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **Covers from the Cover Art Archive.** A song with no cover, or one
+  too soft to look sharp (fewer than 500 px of detail, as `info`
+  counts), looks up its album's front cover on the Cover Art Archive, by
+  its MusicBrainz release group or release ID, else by its album and
+  album artist searched on MusicBrainz. The cover joins every song of
+  the album, which asks once between them, and is picked by the same
+  measures as any cover. `[providers.coverart]` sets it like any
+  provider, and the `small-cover` condition triggers it.
 - **`muman duplicates`.** Lists songs listed apart that are one
   recording, by their audio fingerprints: a file of an album there
   twice first, then a track and its copies on other albums. It changes

@@ -10,6 +10,7 @@ pub mod check;
 pub mod clean;
 pub mod cli;
 pub mod codec;
+pub mod coverart;
 pub mod dirs;
 pub mod download;
 pub mod duplicates;

@@ -1,6 +1,6 @@
 //! The sources on disk: what yt-dlp fetched, found by the ID in each
-//! file's name, the records LRCLIB and MusicBrainz lookups kept, by
-//! theirs, and the manual folder, where a song's file brings the lyrics
+//! file's name, the records LRCLIB, MusicBrainz and Cover Art Archive
+//! lookups kept, by theirs, and the manual folder, where a song's file brings the lyrics
 //! and pictures beside it.
 //!
 //! What each kind of kept record is, its folder, its files and what it
@@ -15,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 use crate::dirs::Dirs;
-use crate::provider::{LRCLIB, MUSICBRAINZ, Provider};
+use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
 use crate::source::{SourceKey, id_of};
 
 /// A manual file this recent may still be copying in.
@@ -71,7 +71,7 @@ pub struct Kept {
 }
 
 /// Every kind of record a lookup keeps.
-pub const KEPT: [Kept; 2] = [
+pub const KEPT: [Kept; 3] = [
     Kept {
         extractor: LRCLIB,
         provider: Provider::Lrclib,
@@ -88,6 +88,15 @@ pub const KEPT: [Kept; 2] = [
         main: &["json"],
         beside: &[],
         kind: Kind::Tags,
+        valid: crate::musicbrainz::is_mbid,
+    },
+    Kept {
+        extractor: COVERART,
+        provider: Provider::CoverArt,
+        folder: "coverart",
+        main: &["jpg", "png", "webp"],
+        beside: &[],
+        kind: Kind::Image,
         valid: crate::musicbrainz::is_mbid,
     },
 ];
