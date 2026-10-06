@@ -18,12 +18,14 @@ impl Home {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        // No lookups: the test must not reach LRCLIB, AcoustID or YouTube.
+        // No lookups: the test must not reach LRCLIB, AcoustID, the Cover Art
+        // Archive or YouTube.
         std::fs::create_dir_all(root.join("home")).unwrap();
         std::fs::write(
             root.join("home").join("songs.toml"),
             "version = 1\n\n[providers.lrclib]\nenabled = false\n\n\
-             [providers.acoustid]\nenabled = false\n",
+             [providers.acoustid]\nenabled = false\n\n\
+             [providers.coverart]\nenabled = false\n",
         )
         .unwrap();
         Self { _dir: dir, root }
