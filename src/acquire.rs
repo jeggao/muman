@@ -476,6 +476,17 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                     add.replaced.push((upload_key, track_key));
                 }
             } else {
+                // Fetched before, by a run that listed it alone: no song
+                // lists it now, and the release takes its place.
+                for file in self.store.discard(
+                    std::slice::from_ref(&upload_key),
+                    &std::collections::BTreeSet::new(),
+                )? {
+                    crate::ui::info(
+                        self.out,
+                        &format!("  deleted the upload, {}", file.display()),
+                    )?;
+                }
                 add.replaced.push((upload_key, track_key));
             }
             add.proposals.push(Proposal {

@@ -173,10 +173,7 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBu
         SourceKey::Remote { extractor, id } if crate::store::kept(extractor).is_some() => {
             crate::store::kept(extractor).map_or_else(Vec::new, |k| k.files(dirs, id))
         }
-        SourceKey::Remote { id, .. } => crate::store::walk(&dirs.ytdlp(), 2)?
-            .into_iter()
-            .filter(|p| crate::source::id_of(p) == Some(id.as_str()))
-            .collect(),
+        SourceKey::Remote { id, .. } => store.fetched_files(id)?,
         SourceKey::Manual(_) => store.locate(key).map_or_else(Vec::new, |l| {
             let stem = l.path.with_extension("");
             std::iter::once(l.path.clone())

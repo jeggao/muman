@@ -641,6 +641,16 @@ pub fn run<R: Runner, W: Write>(
         }
         manifest.save()?;
         State::keep_lookups(home, &records, &replaced)?;
+        let uploads: Vec<SourceKey> = replaced.iter().map(|(upload, _)| upload.clone()).collect();
+        for file in store.discard(&uploads, &manifest.keys())? {
+            crate::ui::info(
+                acquire.out,
+                &format!(
+                    "Deleted an upload its release took the place of: {}",
+                    file.display()
+                ),
+            )?;
+        }
         for (p, (n, why)) in put_off {
             crate::ui::warning(
                 acquire.out,

@@ -174,6 +174,7 @@ pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
 #[derive(Debug, Default)]
 pub struct Store {
     manual_root: PathBuf,
+    fetched_root: PathBuf,
     /// yt-dlp's files by ID, a `.mkv` before any other.
     fetched: HashMap<String, PathBuf>,
     /// Kept records by scheme, then ID.
@@ -187,6 +188,7 @@ impl Store {
     pub fn scan(dirs: &Dirs) -> Result<Self> {
         let mut store = Self {
             manual_root: dirs.manual(),
+            fetched_root: dirs.ytdlp(),
             ..Self::default()
         };
         for file in walk(&dirs.ytdlp(), 2)? {
@@ -287,6 +289,41 @@ impl Store {
                 })
             }
         }
+    }
+
+    /// Every file yt-dlp fetched for `id`, whatever its extension.
+    pub fn fetched_files(&self, id: &str) -> Result<Vec<PathBuf>> {
+        Ok(walk(&self.fetched_root, 2)?
+            .into_iter()
+            .filter(|p| id_of(p) == Some(id))
+            .collect())
+    }
+
+    /// Delete what yt-dlp fetched for each of `keys` no song in `listed`
+    /// has, as an upload a release took the place of; returns what went.
+    pub fn discard(
+        &self,
+        keys: &[SourceKey],
+        listed: &BTreeSet<SourceKey>,
+    ) -> Result<Vec<PathBuf>> {
+        let mut gone = Vec::new();
+        for key in keys.iter().filter(|k| !listed.contains(*k)) {
+            let SourceKey::Remote { extractor, id } = key else {
+                continue;
+            };
+            if kept(extractor).is_some() {
+                continue;
+            }
+            for file in self.fetched_files(id)? {
+                match crate::atomic::remove(&file) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e).with_context(|| format!("deleting {}", file.display()));
+                    }
+                    _ => gone.push(file),
+                }
+            }
+        }
+        Ok(gone)
     }
 
     fn kept_file(&self, kind: &Kept, id: &str) -> Option<&PathBuf> {
@@ -501,6 +538,28 @@ mod tests {
         let (ready, settling) = store.unlisted(&listed, SystemTime::now(), SETTLING);
         assert_eq!(ready, []);
         assert_eq!(settling, vec![PathBuf::from("b.mp3")]);
+    }
+
+    #[test]
+    fn an_upload_no_song_lists_is_discarded_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let upload = [
+            touch(dir.path(), "sources/yt-dlp/c/Old [ooooooooooo].mkv"),
+            touch(dir.path(), "sources/yt-dlp/c/Old [ooooooooooo].webm"),
+        ];
+        let listed = touch(dir.path(), "sources/yt-dlp/c/Kept [kkkkkkkkkkk].mkv");
+        let store = Store::scan(&d).unwrap();
+        let keys = [
+            SourceKey::youtube("ooooooooooo"),
+            SourceKey::youtube("kkkkkkkkkkk"),
+        ];
+        let gone = store
+            .discard(&keys, &BTreeSet::from([SourceKey::youtube("kkkkkkkkkkk")]))
+            .unwrap();
+        assert_eq!(gone.len(), 2);
+        assert!(upload.iter().all(|p| !p.exists()));
+        assert!(listed.exists());
     }
 
     #[test]
