@@ -46,6 +46,12 @@ pub struct View {
 }
 
 impl View {
+    /// The key naming the song, by [`crate::manifest::id_of`].
+    #[must_use]
+    pub fn id(&self) -> Option<&SourceKey> {
+        crate::manifest::id_of(&self.keys)
+    }
+
     /// The values of `field`, by any of its spellings.
     #[must_use]
     pub fn values(&self, field: &str) -> Vec<String> {
@@ -216,6 +222,15 @@ impl Query {
                 .iter()
                 .filter(|t| !named(t))
                 .all(|t| t.negated != t.test.holds(view))
+    }
+
+    /// How many keys the query names.
+    #[must_use]
+    pub fn keys_named(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|t| !t.negated && matches!(t.test, Test::Key(_)))
+            .count()
     }
 
     /// Whether the query is keys alone, each naming its song.

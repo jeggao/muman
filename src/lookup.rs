@@ -30,9 +30,10 @@
 //! A YouTube Music track found later is fetched beside its upload and
 //! joins the song; the upload stays a source when the two are one
 //! recording, else the track takes its key. An LRCLIB or MusicBrainz
-//! record found is kept in the store and joins the song. A source the run
-//! already knows, listed, removed or replaced, is recorded found but never
-//! added again.
+//! record found is kept in the store and joins the song, even when
+//! another song lists it already, as another release of one recording
+//! does: a record is data songs share. A video the run already knows,
+//! listed, removed or replaced, is recorded found but never added again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
@@ -517,8 +518,10 @@ pub fn run<R: Runner, W: Write>(
                         extractor: LRCLIB.to_string(),
                         id: record.id.to_string(),
                     };
-                    if !acquire.known.contains(&key) {
+                    if !store.has(&key) {
                         lrclib::keep(&dirs.lrclib(), &record)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
                         let timed = if record.synced_lyrics.is_some() {
                             "timed"
                         } else {
@@ -538,8 +541,10 @@ pub fn run<R: Runner, W: Write>(
                         extractor: MUSICBRAINZ.to_string(),
                         id: record.id.clone(),
                     };
-                    if !acquire.known.contains(&key) {
+                    if !store.has(&key) {
                         musicbrainz::keep(&dirs.musicbrainz(), &record)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
                         let on = record
                             .release
                             .as_ref()

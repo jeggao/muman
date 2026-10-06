@@ -253,7 +253,10 @@ pub fn edit<W: Write>(
     let store = Store::scan(dirs)?;
     let mut opened = Vec::new();
     for n in &picked {
-        let id = read.views[*n].keys[0].clone();
+        let id = read.views[*n]
+            .id()
+            .context("a song lists no source")?
+            .clone();
         let Some(table) = read
             .manifest
             .tables_of(std::slice::from_ref(&id))?

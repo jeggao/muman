@@ -49,8 +49,8 @@ fn label(view: &View) -> String {
 }
 
 /// The songs among `views` the query matches: one, all of them under
-/// `--all` or when the query is keys alone, else those picked on a
-/// terminal.
+/// `--all` or when the query is keys alone, each naming one song, else
+/// those picked on a terminal.
 /// Refused when none match, or several without a terminal or `--all`.
 pub fn pick(
     views: &[View],
@@ -65,7 +65,7 @@ pub fn pick(
     if found.is_empty() {
         return refuse("No song matches the query");
     }
-    if found.len() == 1 || all || query.names_keys() {
+    if found.len() == 1 || all || (query.names_keys() && found.len() <= query.keys_named()) {
         return Ok(found);
     }
     let labels: Vec<String> = found.iter().map(|n| label(&views[*n])).collect();
@@ -222,14 +222,24 @@ pub fn remove<W: Write>(
             .state
             .outputs
             .iter()
-            .filter(|(_, w)| w.sources.iter().any(|k| view.keys.contains(k)));
+            .filter(|(_, w)| view.id().is_some_and(|id| w.sources.contains(id)));
         for (path, w) in written {
             for file in std::iter::once(path).chain(&w.lyrics) {
                 writeln!(out, "    deletes {}", dirs.library.join(file).display())?;
             }
         }
         if purge {
-            for key in &view.keys {
+            // A record another song still lists stays for that song.
+            let shared = |k: &SourceKey| {
+                manifest::shareable(k)
+                    && read
+                        .manifest
+                        .songs
+                        .iter()
+                        .enumerate()
+                        .any(|(m, s)| !picked.contains(&m) && s.has(k))
+            };
+            for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 for file in store_files(&store, dirs, key)? {
                     let how = if own { "trashes" } else { "deletes" };
@@ -244,8 +254,11 @@ pub fn remove<W: Write>(
     }
     for n in &picked {
         let view = &read.views[*n];
+        let Some(id) = view.id() else {
+            continue;
+        };
         read.manifest.edit(Edit::Remove {
-            key: view.keys[0].clone(),
+            key: id.clone(),
             note: view.name(),
         });
     }
@@ -309,8 +322,8 @@ pub fn restore<W: Write>(
     if !confirmed(confirm, prompter, out)? {
         return Ok(false);
     }
-    for n in &picked {
-        manifest.edit(Edit::Restore(views[*n].keys[0].clone()));
+    for id in picked.iter().filter_map(|n| views[*n].id()) {
+        manifest.edit(Edit::Restore(id.clone()));
     }
     manifest.save()?;
     Ok(true)
@@ -419,7 +432,7 @@ impl Assign {
                 if !song.has(&key) {
                     bail!(
                         "{key} is not a source of the song listing {}",
-                        song.sources[0]
+                        song.id().map(ToString::to_string).unwrap_or_default()
                     );
                 }
                 table.insert(pin, value(v.as_str()));
@@ -474,18 +487,19 @@ pub fn set<W: Write>(
         for a in &assigns {
             writeln!(out, "    {}", a.describe(view))?;
         }
+        let id = song.id().context("a song lists no source")?.clone();
         let Some(mut table) = read
             .manifest
-            .tables_of(&song.sources[..1])?
+            .tables_of(std::slice::from_ref(&id))?
             .into_iter()
             .next()
         else {
-            bail!("{} is no longer listed", song.sources[0]);
+            bail!("{id} is no longer listed");
         };
         for a in &assigns {
             a.apply(&mut table, song)?;
         }
-        songs.push((song.sources[0].clone(), Rewritten::Table(SongTable(table))));
+        songs.push((id, Rewritten::Table(SongTable(table))));
     }
     if !confirmed(confirm, prompter, out)? {
         return Ok(false);

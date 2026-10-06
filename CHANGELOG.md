@@ -9,6 +9,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Songs of one recording share its records.** An LRCLIB or MusicBrainz
+  record another song lists already joins the song that found it too, so
+  two releases of one recording both get its lyrics and tags. Before,
+  the second song was recorded as having found it, never got it, and
+  never looked again. A song list in which songs share a record is
+  written as format version 2, which muman 0.1 refuses; `remove --purge`
+  keeps a record another song still lists.
 - **`undo` refuses before it asks, and exits 5.** `undo -n` showed what
   undoing would do even when `undo` would refuse; both now refuse alike,
   before saying anything, with exit code 5, a refused change, rather

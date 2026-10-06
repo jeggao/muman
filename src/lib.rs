@@ -607,7 +607,7 @@ fn list<R: Runner, W: Write>(
     let mut manifest = Manifest::load(&dirs.home)?;
     for edit in edits {
         let tagged = match &edit {
-            Edit::Add { sources, .. } if !how.tags.is_empty() => sources.first().cloned(),
+            Edit::Add { sources, .. } if !how.tags.is_empty() => manifest::id_of(sources).cloned(),
             _ => None,
         };
         manifest.edit(edit);

@@ -532,6 +532,39 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     );
 }
 
+#[test]
+fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let record = SourceKey::parse("lrclib:7").unwrap();
+    let songs = s.songs();
+    assert_eq!(songs.len(), 2, "{songs:?}");
+    assert!(songs.iter().all(|k| k.contains(&record)), "{songs:?}");
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(
+        state
+            .lookups
+            .iter()
+            .all(|l| l.outcome == crate::state::Outcome::Found(record.clone())),
+        "{:?}",
+        state.lookups
+    );
+
+    let (ok, text) = s.run_against(
+        &Server::default(),
+        &["remove", "-y", "--purge", "manual:a.flac"],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        s.dir.path().join("home/sources/lrclib/7.lrc").exists(),
+        "the other song still lists it: {text}"
+    );
+}
+
 const MBID: &str = "00000000-0000-4000-8000-000000000001";
 
 /// A recording of `Song` by `Artist` on the album `Glass Orchards`, as a

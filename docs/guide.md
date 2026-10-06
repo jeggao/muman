@@ -72,7 +72,7 @@ genre = ""
 |---|---|
 | `version` | The file's format; a newer one is refused |
 | `defaults.lyrics` | Subtitle languages lyrics are taken in, most preferred first |
-| `sources` | Every source the song may be made from; a key belongs to one song only |
+| `sources` | Every source the song may be made from; a file belongs to one song only, while an `lrclib:` or `musicbrainz:` record may be listed by every song of its recording |
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
 | `lyrics_offset_ms` | Moves the lyrics later, on top of the offset measured |
@@ -98,8 +98,10 @@ The file also holds the settings tables of
 and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.
 muman edits it in place: comments, order and keys it does not know
 survive every write, and two runs at once keep each other's songs. A
-key that does not parse, a key two songs list, or a pin to a source the
-song does not list stops the run before anything is written.
+key that does not parse, a file two songs list, or a pin to a source the
+song does not list stops the run before anything is written. A song list
+in which songs share a record is written as `version = 2`, which muman
+before 0.2 refuses rather than misreads.
 
 A `[[removed]]` key no song lists is a tombstone: no playlist or dropped
 file lists it again. `muman restore`, adding its video alone by URL, or
