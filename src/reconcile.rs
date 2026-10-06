@@ -1434,7 +1434,7 @@ fn status<W: Write>(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                crate::relpath::show(&path)
+                SourceKey::Manual(path)
             ),
         )?;
     }
@@ -1445,7 +1445,7 @@ fn status<W: Write>(
         .iter()
         .filter(|p| !p.starts_with(dirs.manual()))
     {
-        crate::ui::info(out, &format!("Unused: {}", crate::relpath::show(path)))?;
+        crate::ui::info(out, &format!("Unused: {}", path.display()))?;
     }
     Ok(())
 }

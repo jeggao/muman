@@ -320,7 +320,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         new.add(&key.to_string());
     }
     for path in settling {
-        new.add(&crate::relpath::show(&path));
+        new.add(&SourceKey::Manual(path).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let mut unused = Group::default();
@@ -330,7 +330,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .iter()
         .filter(|p| !p.starts_with(c.dirs.manual()))
     {
-        unused.add(&crate::relpath::show(path));
+        unused.add(&path.display().to_string());
     }
     group(out, c.verbose, "Fetched, not listed", &unused)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;

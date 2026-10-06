@@ -179,7 +179,7 @@ fn a_lost_state_deletes_nothing_it_did_not_write() {
 fn a_dry_run_writes_nothing_and_says_why() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.fetched("ccccccccccc");
+    let unused = h.fetched("ccccccccccc");
     h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (_, text) = h.run(
@@ -195,8 +195,8 @@ fn a_dry_run_writes_nothing_and_says_why() {
     assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
     assert!(text.contains("TITLE"), "{text}");
     assert!(
-        text.contains("Unused:") && text.contains("[ccccccccccc]"),
-        "{text}"
+        text.contains(&format!("Unused: {}", unused.display())),
+        "an unused file is shown by its whole path: {text}"
     );
 }
 

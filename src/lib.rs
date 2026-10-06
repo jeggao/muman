@@ -637,7 +637,7 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                relpath::show(&path)
+                SourceKey::Manual(path)
             ),
         )?;
     }

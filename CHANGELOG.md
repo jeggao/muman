@@ -87,6 +87,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   from the store is fetched again on the release it was kept on, rather
   than the best release of the recording, which could change the
   song's album, track and date.
+- **Paths outside the library are shown whole.** `status` and `info`
+  dropped the leading `/` of an unused file's path, and the drive on
+  Windows; a file still being copied into the manual folder is named by
+  its `manual:` key.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived
