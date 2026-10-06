@@ -7,6 +7,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **Help fits the terminal.** `--help` wraps to the terminal's width,
+  up to 100 columns, and the tables after the options, the exit codes,
+  query terms and assignments, wrap with it, their text under each term
+  on a narrow terminal. Help is in color: headings green, commands,
+  flags and quoted values cyan, values to fill in yellow, defaults
+  dimmed; `NO_COLOR` turns it off.
+- **The status line fits the terminal.** Narrower than 100 columns, it
+  drops the percentage, then the bar, then the time left, so it stays
+  one line and keeps room for the songs under way. Its time left is the
+  step's rate so far, as plain lines say it.
+
+### Fixed
+
+- **One status line during lookups.** A fetch a lookup started drew a
+  second status line over the lookups' own, the two taking turns with
+  each tick, and messages after it could run into the line. The fetch
+  takes the line until it ends, then gives it back.
+
 ## [0.2.1] - 2026-10-06
 
 ### Added
