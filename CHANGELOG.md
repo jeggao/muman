@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **Each song is one block.** A song's tags are written as
+  `tags.title = …` lines under its `sources`, not as a `[song.tags]`
+  table after a blank line, so blank lines fall only between songs.
+  Album and removed songs' tags are written the same way. A
+  `[song.tags]` table still reads, and the next write turns it into
+  dotted keys, its comments kept.
+
 ## [0.2.2] - 2026-10-06
 
 ### Changed

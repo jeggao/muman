@@ -127,7 +127,7 @@ pub struct Confirm {
     pub dry_run: bool,
 }
 
-/// Tags set in `[song.tags]` of every song an `add` lists or adds to,
+/// Tags set in the `tags` of every song an `add` lists or adds to,
 /// over what its sources offer.
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Tags")]

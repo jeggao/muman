@@ -12,7 +12,7 @@ fn write(dir: &Path, body: &str) {
     std::fs::write(dir.join(MANIFEST), format!("version = 1\n{body}")).unwrap();
 }
 
-const TEMPLATE: &str = "[song.tags]\ntitle = \"\"\nartist = \"\"\nalbum = \"\"\nalbum_artist = \"\"\ngenre = \"\"\ndate = \"\"\n";
+const TEMPLATE: &str = "tags.title = \"\"\ntags.artist = \"\"\ntags.album = \"\"\ntags.album_artist = \"\"\ntags.genre = \"\"\ntags.date = \"\"\n";
 
 #[test]
 fn a_new_list_carries_its_header_defaults_and_each_song() {
@@ -28,7 +28,7 @@ fn a_new_list_carries_its_header_defaults_and_each_song() {
     assert!(t.starts_with(&format!("{HEADER}{NEW}")), "{t}");
     assert!(
         t.ends_with(&format!(
-            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n\n{TEMPLATE}"
+            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n{TEMPLATE}"
         )),
         "{t}"
     );
@@ -249,7 +249,7 @@ fn an_album_is_added_once_with_its_template() {
     assert_eq!(m.albums.len(), 1);
     assert_eq!(m.albums[0].tracks, Some(12));
     assert!(
-        text(dir.path()).contains("[album.tags]\nalbum = \"\""),
+        text(dir.path()).contains("tags.album = \"\""),
         "{}",
         text(dir.path())
     );
@@ -530,4 +530,39 @@ fn the_new_song_list_lists_every_default_as_the_code_has_it() {
         crate::settings::read(&doc).unwrap(),
         crate::settings::Settings::default()
     );
+}
+
+#[test]
+fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\n# Checked by ear.\n[song.tags]\n\
+         title = \"Paper Comets\" # as sung\nartist = \"Marlo Venn\"\n\n\
+         [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { genre = \"Folk\" }\n\n\
+         [[album]]\nsource = \"youtubetab:OLAK5uy_abcdef\"\n\n\
+         [album.tags]\nalbum = \"Lantern Weather\"\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let before = (m.songs.clone(), m.albums.clone());
+    m.save().unwrap();
+    let t = text(dir.path());
+    assert!(
+        t.contains(
+            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n# Checked by ear.\n\
+             tags.title = \"Paper Comets\" # as sung\ntags.artist = \"Marlo Venn\"\n\
+             tags.album = \"\"\n"
+        ),
+        "{t}"
+    );
+    assert!(t.contains("tags.genre = \"Folk\"\n"), "{t}");
+    assert!(t.contains("\ntags.album = \"Lantern Weather\"\n"), "{t}");
+    assert!(
+        !t.contains("[song.tags]") && !t.contains("[album.tags]"),
+        "{t}"
+    );
+    let again = Manifest::load(dir.path()).unwrap();
+    assert_eq!((again.songs, again.albums), before);
+    Manifest::load(dir.path()).unwrap().save().unwrap();
+    assert_eq!(text(dir.path()), t);
 }

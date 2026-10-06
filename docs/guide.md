@@ -76,11 +76,9 @@ lyrics = ["en", "fr"]
 sources = ["youtube:vid00000001", "manual:Marlo Venn/Paper Comets.flac"]
 cover = "manual:Marlo Venn/Paper Comets.flac"
 lyrics_offset_ms = 120
-
-[song.tags]
-artist = "Marlo Venn"
-album = "Lantern Weather"
-genre = ""
+tags.artist = "Marlo Venn"
+tags.album = "Lantern Weather"
+tags.genre = ""
 ```
 
 | Key | Means |
@@ -91,15 +89,15 @@ genre = ""
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
 | `lyrics_offset_ms` | Moves the lyrics later, on top of the offset measured |
-| `[song.tags]` | Tags set over what the sources offer; an empty value sets nothing |
-| `[[album]]` | A YouTube Music album added whole, with `[album.tags]` over what its tracks offer |
+| `tags.<name>` | Tags set over what the sources offer; an empty value sets nothing |
+| `[[album]]` | A YouTube Music album added whole, with its `tags.<name>` over what its tracks offer |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it |
 
 A song has no ID of its own: it is its sources, and any of its keys
 names it. A key is `youtube:<id>` for a video, `lrclib:<id>` for LRCLIB
 lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
 `manual:<path>` for a file under `sources/manual`.
-`[song.tags]` takes `title`, `artist`, `album`, `album_artist`, `genre`,
+`tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
 (`musicbrainz_trackid`, `musicbrainz_albumid` and the like), or any
@@ -245,7 +243,7 @@ MP4 are written as Picard writes them there.
 
 Every tag a source offers is cleaned before ranking, so `Paper Comets
 (Album Version)` agrees with `Paper Comets`. Tags you set in
-`[song.tags]` or `[album.tags]` are never cleaned. Each rule is a switch
+a song's or an album's `tags.<name>` are never cleaned. Each rule is a switch
 under `[clean.<tier>]`, and every write lists them all, so the file
 names every rule there is; `muman status` names each rule that changed
 a tag as `<tier>.<key>`.
