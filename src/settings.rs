@@ -960,19 +960,19 @@ mod tests {
             "{d}"
         );
         assert_eq!(edition_of(&d), 2);
-        assert!(stale(&d, &RAISED).is_empty());
+        assert_eq!(stale(&d, &RAISED), []);
     }
 
     #[test]
     fn a_setting_changed_by_hand_stays_and_the_edition_rises() {
         let mut d = doc("version = 1\n[audio]\nopus_kbps = 170\n");
         assert_eq!(edition_of(&d), FIRST);
-        assert!(stale(&d, &RAISED).is_empty());
+        assert_eq!(stale(&d, &RAISED), []);
         assert!(fill(&mut d, &RAISED));
         assert_eq!(edition_of(&d), 2);
         assert_eq!(read(&d).unwrap().audio.opus_kbps, 170);
         let chosen = doc("version = 1\nedition = 2\n[audio]\nopus_kbps = 128\n");
-        assert!(stale(&chosen, &RAISED).is_empty(), "set after edition 2");
+        assert_eq!(stale(&chosen, &RAISED), [], "set after edition 2");
         assert!(settings("edition = 0\n").is_err());
         assert!(settings("edition = \"one\"\n").is_err());
     }
