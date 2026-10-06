@@ -256,18 +256,18 @@ pub fn edit<W: Write>(
         return Ok(false);
     }
     let store = Store::scan(dirs)?;
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.views[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
     let mut opened = Vec::new();
     for n in &picked {
         let id = read.views[*n]
             .id()
             .context("a song lists no source")?
             .clone();
-        let Some(table) = read
-            .manifest
-            .tables_of(std::slice::from_ref(&id))?
-            .into_iter()
-            .next()
-        else {
+        let Some(table) = tables.remove(&id) else {
             bail!("{id} is no longer listed");
         };
         opened.push(Opened {

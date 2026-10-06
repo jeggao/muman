@@ -915,7 +915,15 @@ fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(Path
     // Folded, since on NTFS and APFS a path differing only in case is the
     // same file: moving onto it would overwrite another song.
     let wanted: BTreeSet<String> = planned.iter().map(|(_, r)| folded(&path_of(r))).collect();
+    // Folded once: a new template moves every song, each asking of all.
+    let outputs: Vec<(&PathBuf, &Written, String)> = state
+        .outputs
+        .iter()
+        .map(|(p, w)| (p, w, folded(p)))
+        .collect();
+    let mut held: BTreeSet<String> = outputs.iter().map(|(_, _, f)| f.clone()).collect();
     let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut moving: BTreeSet<&PathBuf> = BTreeSet::new();
     for (_, r) in planned {
         let to = path_of(r);
         if state
@@ -927,21 +935,20 @@ fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(Path
         }
         // Only onto a path nobody holds: no other output of muman's, and
         // no file of anyone's, which the render would guard.
-        let occupied = state.outputs.keys().any(|p| folded(p) == folded(&to))
-            || library.join(&to).exists()
-            || moves.iter().any(|(_, t)| folded(t) == folded(&to));
-        if occupied {
+        if held.contains(&folded(&to)) || library.join(&to).exists() {
             continue;
         }
-        let from = state.outputs.iter().find(|(p, w)| {
+        let from = outputs.iter().find(|(p, w, f)| {
             w.plan.as_ref() == Some(&r.plan)
-                && !wanted.contains(&folded(p))
-                && !moves.iter().any(|(f, _)| f == *p)
+                && !wanted.contains(f)
+                && !moving.contains(p)
                 && library.join(p).metadata().is_ok_and(|m| m.len() > 0)
                 && !changed_since_written(library, &state.outputs, p)
         });
-        if let Some((from, _)) = from {
-            moves.push((from.clone(), to));
+        if let Some((from, _, _)) = from {
+            held.insert(folded(&to));
+            moving.insert(from);
+            moves.push(((*from).clone(), to));
         }
     }
     moves

@@ -301,14 +301,20 @@ impl Manifest {
             .collect()
     }
 
-    /// The song tables listing any of `keys`, as the file holds them now.
-    pub fn tables_of(&self, keys: &[SourceKey]) -> Result<Vec<Table>> {
-        let wanted: Vec<String> = keys.iter().map(ToString::to_string).collect();
+    /// The song table each of `ids` names, as the file holds it now, read
+    /// once for them all.
+    pub fn tables_by_id(&self, ids: &[SourceKey]) -> Result<BTreeMap<SourceKey, Table>> {
+        let wanted: BTreeMap<String, &SourceKey> = ids.iter().map(|k| (k.to_string(), k)).collect();
         let doc = read(&self.dir)?;
-        Ok(tables(&doc, "song")
-            .filter(|t| listed_keys(t).iter().any(|k| wanted.contains(k)))
-            .cloned()
-            .collect())
+        let mut found = BTreeMap::new();
+        for table in tables(&doc, "song") {
+            for key in listed_keys(table) {
+                if let Some(id) = wanted.get(&key) {
+                    found.entry((*id).clone()).or_insert_with(|| table.clone());
+                }
+            }
+        }
+        Ok(found)
     }
 
     #[must_use]

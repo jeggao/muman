@@ -478,6 +478,11 @@ pub fn set<W: Write>(
         crate::ui::info(out, "Nothing set")?;
         return Ok(false);
     }
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.manifest.songs[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
     let mut songs = Vec::new();
     for n in &picked {
         let view = &read.views[*n];
@@ -487,12 +492,7 @@ pub fn set<W: Write>(
             writeln!(out, "    {}", a.describe(view))?;
         }
         let id = song.id().context("a song lists no source")?.clone();
-        let Some(mut table) = read
-            .manifest
-            .tables_of(std::slice::from_ref(&id))?
-            .into_iter()
-            .next()
-        else {
+        let Some(mut table) = tables.remove(&id) else {
             bail!("{id} is no longer listed");
         };
         for a in &assigns {
