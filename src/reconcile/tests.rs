@@ -194,10 +194,9 @@ fn a_dry_run_writes_nothing_and_says_why() {
     assert!(text.contains("(new)"), "{text}");
     assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
     assert!(text.contains("TITLE"), "{text}");
-    let shown = text
+    let shown = crate::ui::plain(&text)
         .lines()
-        .find_map(|l| l.strip_prefix("Unused: "))
-        .map(PathBuf::from);
+        .find_map(|l| l.strip_prefix("Unused: ").map(PathBuf::from));
     assert_eq!(
         shown.as_deref(),
         Some(unused.as_path()),
