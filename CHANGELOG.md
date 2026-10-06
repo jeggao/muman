@@ -102,6 +102,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   unused, for good.
 - **A comment right under the song list's header stays.** It was taken
   for part of the header and replaced with it on the next save.
+- **`edit` keeps comments inside a song, and can remove every song it
+  opened.** A comment above a key of a `[[song]]` was left out of the
+  file the editor opened, and the song counted as changed and written
+  without it; deleting every song opened did nothing.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

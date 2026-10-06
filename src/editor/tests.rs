@@ -111,6 +111,37 @@ fn a_mistake_reopens_with_what_is_wrong_and_a_fix_applies() {
 }
 
 #[test]
+fn a_comment_inside_a_song_survives_and_changes_nothing() {
+    let commented = "[[song]]\n# ripped from the second pressing\nsources = [\"manual:a.flac\", \"manual:b.flac\"]\n\n[[song]]\nsources = [\"manual:c.flac\"]\n";
+    let h = home(commented);
+    let (changed, text, seen) = edit_with(&h, &[Box::new(str::to_string)]);
+    assert!(
+        seen[0].contains("# ripped from the second pressing"),
+        "{}",
+        seen[0]
+    );
+    assert!(!changed, "{text}");
+    assert!(
+        std::fs::read_to_string(h.dirs.manifest())
+            .unwrap()
+            .contains("# ripped from the second pressing")
+    );
+}
+
+#[test]
+fn deleting_every_song_opened_removes_them() {
+    let h = home(TWO);
+    let (changed, text, _) = edit_with(
+        &h,
+        &[Box::new(|t| t[..t.find("\n# ").unwrap()].to_string())],
+    );
+    assert!(changed, "{text}");
+    let m = songs(&h);
+    assert!(m.songs.is_empty());
+    assert_eq!(m.removed.len(), 2);
+}
+
+#[test]
 fn a_deleted_song_is_removed_and_a_moved_key_split_off() {
     let h = home(TWO);
     let (changed, text, _) = edit_with(

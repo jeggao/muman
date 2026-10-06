@@ -68,12 +68,15 @@ fn render(opened: &[Opened], views: &[&View]) -> String {
     for (o, view) in opened.iter().zip(views) {
         let mut table = Table::new();
         table.insert("id", value(o.id.to_string()));
-        table.extend(
-            o.table
-                .iter()
-                .filter(|(k, _)| *k != "id")
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
+        // Each key as it is, the comments above it held in its decor.
+        for (key, item) in o
+            .table
+            .iter()
+            .filter_map(|(k, _)| o.table.get_key_value(k))
+            .filter(|(k, _)| k.get() != "id")
+        {
+            table.insert_formatted(key, item.clone());
+        }
         let mut prefix = format!("\n# {}\n", describe(view));
         if let Some(path) = &view.path {
             let _ = writeln!(prefix, "# → {}", path.display());
@@ -130,7 +133,9 @@ fn interpret(
             .cloned()
             .collect(),
     };
-    if tables.is_empty() {
+    // An empty file is an editor that wrote nothing, not every song
+    // deleted; a file left with its header and no song is.
+    if tables.is_empty() && text.trim().is_empty() {
         return Ok(None);
     }
     let mut problems = Vec::new();
