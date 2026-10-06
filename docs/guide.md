@@ -372,9 +372,13 @@ A field is any tag, or `key`, `path`, `format` (the file's extension:
   files; `--purge` also deletes fetched sources and trashes your own.
 - **`restore`** lists removed songs again, fetching any purged source.
 - **`undo`** puts the song list and library back as before the last run
-  that changed them, one run further back each time. It refuses when the
-  song list changed since. `[history]` sets how many runs and how much
-  space are kept; a file past that is written again from its sources.
+  that changed them, one run further back each time: files it wrote over
+  or removed come back, files it moved move back, and an edit you made by
+  hand before that run is undone with it. A run stopped partway, by a
+  crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
+  It refuses when the song list changed since. `[history]` sets how many
+  runs are kept and how much space they take together; a file past that
+  is written again from its sources.
 
 ```bash
 muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y

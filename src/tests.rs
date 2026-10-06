@@ -322,6 +322,36 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
 }
 
 #[test]
+fn undo_moves_songs_back_after_a_template_edited_by_hand() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        format!("{listed}\n[library]\ntemplate = \"{{{{ album }}}}/{{{{ title }}}}\"\n"),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved:"), "{text}");
+    assert!(s.dir.path().join("lib/Record/Song.flac").exists());
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved back: Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert!(!s.dir.path().join("lib/Record").exists());
+    assert_eq!(std::fs::read_to_string(&songs).unwrap(), listed);
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -20,6 +20,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   left every one taken for changed by someone else: never written again,
   and left behind as a duplicate when its path changed. A library a
   stopped run left so needs one `sync --force`.
+- **`undo` puts back what a new template moved.** A run that only moved
+  songs, as a changed `[library] template` does, left no record, so
+  `undo` undid the run before it instead. Moves are recorded, and undone.
+- **A stopped run can be undone.** A run's record is written ahead of
+  the library changes it lists, so a run stopped partway is listed as
+  interrupted and can be undone, and its kept files no longer stay in
+  `history/` forever. An undo stopped partway finishes when run again.
+- **A hand edit is undone with the run that applied it.** A run's song
+  list before is the one the last run left, so undoing a sync that
+  applied an edit to `songs.toml` puts the edit back too, instead of the
+  following sync applying it again.
+- **`[history] max_mib` holds for every kept run together**, as
+  documented, rather than for each; a run that needs room lets go of the
+  oldest runs first.
 - **`status` changes nothing and says what `sync` does.** A dry run
   keeps only what it measured: run against another library folder, it
   no longer saved the state as if the library had moved, so the next

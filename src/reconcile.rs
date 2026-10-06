@@ -426,11 +426,22 @@ pub fn reconcile<R: Runner, W: Write>(
     } else {
         (None, HashMap::new())
     };
-    let moved = relocate(&planned, &mut state, &dirs.library, opts.dry_run, out)?;
+    if let Some(run) = run.as_deref_mut() {
+        run.outputs_before(&state.outputs);
+    }
+    let moving = Moving {
+        library: &dirs.library,
+        home,
+        dry_run: opts.dry_run,
+    };
+    let moved = relocate(&planned, &mut state, &moving, run.as_deref_mut(), out)?;
     if !moved.is_empty() && !opts.dry_run {
         // The files are already at their new paths; a failure before the
         // end of the run must not leave the state naming the old ones.
         state.save(home)?;
+        if let Some(run) = run.as_deref_mut() {
+            run.checkpoint(home)?;
+        }
     }
     let old = state.outputs.clone();
     let current = |r: &Resolved| current(&dirs.library, &old, r);
@@ -457,10 +468,6 @@ pub fn reconcile<R: Runner, W: Write>(
         drop(lock);
         return Ok(ok);
     }
-    if let Some(run) = run.as_deref_mut() {
-        run.outputs_before(&old);
-    }
-
     // Owned before written, and no longer vouched for: a crash between the
     // two must leave neither a file no run would delete nor a rewritten
     // one that looks changed by someone else.
@@ -489,6 +496,9 @@ pub fn reconcile<R: Runner, W: Write>(
                     run.keep(&dirs.library, lyrics)?;
                 }
             }
+        }
+        if !due.is_empty() {
+            run.checkpoint(home)?;
         }
     }
     if due.len() > 1 {
@@ -596,6 +606,9 @@ pub fn reconcile<R: Runner, W: Write>(
                         pending.outputs.insert(done.audio.clone(), vouched.clone());
                         if kept_at.elapsed() >= every {
                             pending.save(home)?;
+                            if let Some(run) = run.as_deref_mut() {
+                                run.checkpoint(home)?;
+                            }
                             kept_at = Instant::now();
                         }
                     }
@@ -610,8 +623,13 @@ pub fn reconcile<R: Runner, W: Write>(
         }
         Ok::<(), anyhow::Error>(())
     })?;
-    let mut keep = |rel: &Path| match run.as_deref_mut() {
-        Some(run) => run.keep(&dirs.library, rel),
+    let mut keep = |files: &[PathBuf]| match run.as_deref_mut() {
+        Some(run) => {
+            for rel in files {
+                run.keep(&dirs.library, rel)?;
+            }
+            run.checkpoint(home)
+        }
         None => Ok(()),
     };
     let removed = prune(&dirs.library, &old, &mut outputs, &failed, &mut keep, out)?;
@@ -813,17 +831,9 @@ pub(crate) fn changed_since_written(
         .is_some_and(|(was, now)| *was != now)
 }
 
-/// Move each song whose plan is unchanged but whose path is not, as a
-/// new `[library]` template makes it, rather than render it again; only
-/// a file muman wrote and nobody changed since is moved, and only to a
-/// path no other song takes. `dry_run` says what would move.
-fn relocate<W: Write>(
-    planned: &[PlannedSong],
-    state: &mut State,
-    library: &Path,
-    dry_run: bool,
-    out: &mut W,
-) -> Result<BTreeSet<PathBuf>> {
+/// The moves relocating makes: each song's file from where an output of
+/// the same plan lies to the song's path, when nobody holds that path.
+fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(PathBuf, PathBuf)> {
     use crate::relpath::folded;
     // Folded, since on NTFS and APFS a path differing only in case is the
     // same file: moving onto it would overwrite another song.
@@ -857,6 +867,46 @@ fn relocate<W: Write>(
             moves.push((from.clone(), to));
         }
     }
+    moves
+}
+
+/// Where relocating moves files, and whether it only says so.
+struct Moving<'a> {
+    library: &'a Path,
+    home: &'a Path,
+    dry_run: bool,
+}
+
+/// Move each song whose plan is unchanged but whose path is not, as a
+/// new `[library]` template makes it, rather than render it again; only
+/// a file muman wrote and nobody changed since is moved, and only to a
+/// path no other song takes. Each move is recorded in `run` before it is
+/// made. A dry run says what would move.
+fn relocate<W: Write>(
+    planned: &[PlannedSong],
+    state: &mut State,
+    how: &Moving<'_>,
+    mut run: Option<&mut Run>,
+    out: &mut W,
+) -> Result<BTreeSet<PathBuf>> {
+    let (library, dry_run) = (how.library, how.dry_run);
+    let moves = moves_of(planned, state, library);
+    let lyrics_of = |from: &PathBuf, to: &Path| {
+        let written = &state.outputs[from];
+        written
+            .lyrics
+            .clone()
+            .zip(written.lyrics.as_ref().map(|_| to.with_extension("lrc")))
+    };
+    if let Some(run) = run.as_deref_mut().filter(|_| !dry_run && !moves.is_empty()) {
+        for (from, to) in &moves {
+            run.moving(from, to);
+            if let Some((a, b)) = lyrics_of(from, to) {
+                run.moving(&a, &b);
+            }
+        }
+        run.checkpoint(how.home)?;
+    }
     let mut left = Vec::new();
     let mut done = BTreeSet::new();
     for (from, to) in moves {
@@ -872,12 +922,22 @@ fn relocate<W: Write>(
                 ),
             )?;
         } else {
-            let result =
-                move_file(library, &from, &to).and_then(|()| match (&written.lyrics, &lyrics) {
-                    (Some(a), Some(b)) => move_file(library, a, b),
+            let result = move_file(library, &from, &to).and_then(|()| {
+                match (&written.lyrics, &lyrics) {
+                    // A song whose lyrics cannot follow goes back whole.
+                    (Some(a), Some(b)) => move_file(library, a, b).inspect_err(|_| {
+                        let _ = move_file(library, &to, &from);
+                    }),
                     _ => Ok(()),
-                });
+                }
+            });
             if let Err(e) = result {
+                if let Some(run) = run.as_deref_mut() {
+                    run.not_moved(&from, &to);
+                    if let (Some(a), Some(b)) = (&written.lyrics, &lyrics) {
+                        run.not_moved(a, b);
+                    }
+                }
                 crate::ui::warning(
                     out,
                     &format!(
@@ -1054,7 +1114,7 @@ fn prune_plan(
 }
 
 /// Delete every file `old` lists that `outputs` does not, unless a song
-/// that failed this run made it, which keeps it, each handed to `keep`
+/// that failed this run made it, which keeps it, all handed to `keep`
 /// first. A file changed since it was written is left, and no longer
 /// muman's. Returns what went.
 fn prune<W: Write>(
@@ -1062,11 +1122,23 @@ fn prune<W: Write>(
     old: &BTreeMap<PathBuf, Written>,
     outputs: &mut BTreeMap<PathBuf, Written>,
     failed: &BTreeSet<SourceKey>,
-    keep: &mut dyn FnMut(&Path) -> Result<()>,
+    keep: &mut dyn FnMut(&[PathBuf]) -> Result<()>,
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
-    for (path, fate) in prune_plan(library, old, outputs, failed) {
+    let plan = prune_plan(library, old, outputs, failed);
+    let doomed: Vec<PathBuf> = plan
+        .iter()
+        .filter_map(|(_, fate)| match fate {
+            Pruned::Removed(files) => Some(files.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if !doomed.is_empty() {
+        keep(&doomed)?;
+    }
+    for (path, fate) in plan {
         let files = match fate {
             Pruned::KeptForFailed => {
                 outputs.insert(path.clone(), old[&path].clone());
@@ -1086,7 +1158,6 @@ fn prune<W: Write>(
         };
         let mut held = false;
         for file in &files {
-            keep(file)?;
             match crate::atomic::remove(&library.join(file)) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                     // One file held open must not stop the run before the
@@ -1114,7 +1185,7 @@ fn prune<W: Write>(
 }
 
 /// Remove each folder a removed file leaves empty, up to the library.
-fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
+pub(crate) fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
     let mut folders: Vec<PathBuf> = removed
         .iter()
         .flat_map(|p| {

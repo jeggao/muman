@@ -49,7 +49,7 @@ names it, so a misspelling never goes unnoticed.
 | `[audio]` | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, extra arguments, muman's postprocessors, how long partial downloads are kept |
-| `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take |
+| `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
 
 The song list's own tables — `[defaults]` (lyrics languages),
 `[clean.*]` (tag cleaning), `[providers.*]`, `[[trigger]]` and

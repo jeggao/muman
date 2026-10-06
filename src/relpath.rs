@@ -61,6 +61,19 @@ pub fn folded(path: &Path) -> String {
     to_portable(path).to_lowercase()
 }
 
+/// For a path.
+pub mod portable {
+    use super::{Deserialize, Deserializer, Path, PathBuf, Serializer, from_portable, to_portable};
+
+    pub fn serialize<S: Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&to_portable(path))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PathBuf, D::Error> {
+        Ok(from_portable(&String::deserialize(d)?))
+    }
+}
+
 pub mod portable_opt {
     use super::{Deserialize, Deserializer, PathBuf, Serializer, from_portable, to_portable};
 

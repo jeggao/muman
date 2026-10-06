@@ -267,32 +267,34 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
-            let (files, urls): (Vec<&String>, Vec<&String>) =
-                inputs.iter().partition(|i| Path::new(i).exists());
-            let mut ok = true;
-            let mut proposals = import(runner, dirs, &files, out)?;
-            if !urls.is_empty() {
-                let urls: Vec<String> = urls.into_iter().cloned().collect();
-                let (fine, additions) =
-                    network(job, runner, out, |acquire| acquire.urls(&urls, !no_match))?;
-                ok &= fine;
-                proposals.extend(record(dirs, additions)?);
-            }
-            let declined: BTreeSet<SourceKey> = if *no_match {
-                proposals.iter().flat_map(|p| p.sources.clone()).collect()
-            } else {
-                BTreeSet::new()
-            };
-            let how = Listing {
-                mode: mode(*matching),
-                verbose: job.verbose,
-                tags: tags.tags(),
-            };
-            list(runner, dirs, proposals, &how, prompter, out)?;
-            ok &= look_up(job, runner, http, false, &declined, out)?;
-            ok &= sync(Options::default(), Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                let (files, urls): (Vec<&String>, Vec<&String>) =
+                    inputs.iter().partition(|i| Path::new(i).exists());
+                let mut ok = true;
+                let mut proposals = import(runner, dirs, &files, out)?;
+                if !urls.is_empty() {
+                    let urls: Vec<String> = urls.into_iter().cloned().collect();
+                    let (fine, additions) =
+                        network(job, runner, out, |acquire| acquire.urls(&urls, !no_match))?;
+                    ok &= fine;
+                    proposals.extend(record(dirs, additions)?);
+                }
+                let declined: BTreeSet<SourceKey> = if *no_match {
+                    proposals.iter().flat_map(|p| p.sources.clone()).collect()
+                } else {
+                    BTreeSet::new()
+                };
+                let how = Listing {
+                    mode: mode(*matching),
+                    verbose: job.verbose,
+                    tags: tags.tags(),
+                };
+                list(runner, dirs, proposals, &how, prompter, out)?;
+                ok &= look_up(job, runner, http, false, &declined, out)?;
+                ok &= sync(Options::default(), Some(&mut run), out)?;
+                Ok(ok)
+            })();
+            recorded(run, &dirs.home, done)
         }
         Command::Sync {
             rematch,
@@ -302,24 +304,26 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
-            let proposals = dropped_in(dirs, job.settling, out)?;
-            let manifest = Manifest::load(&dirs.home)?;
-            let mut ok = fetch_missing(job, runner, http, &manifest, *retry, out)?;
-            let how = Listing {
-                mode: mode(*matching),
-                verbose: job.verbose,
-                tags: Vec::new(),
-            };
-            list(runner, dirs, proposals, &how, prompter, out)?;
-            ok &= look_up(job, runner, http, *rematch, &BTreeSet::new(), out)?;
-            let opts = Options {
-                force: *force,
-                retry: *retry,
-                ..Options::default()
-            };
-            ok &= sync(opts, Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                let proposals = dropped_in(dirs, job.settling, out)?;
+                let manifest = Manifest::load(&dirs.home)?;
+                let mut ok = fetch_missing(job, runner, http, &manifest, *retry, out)?;
+                let how = Listing {
+                    mode: mode(*matching),
+                    verbose: job.verbose,
+                    tags: Vec::new(),
+                };
+                list(runner, dirs, proposals, &how, prompter, out)?;
+                ok &= look_up(job, runner, http, *rematch, &BTreeSet::new(), out)?;
+                let opts = Options {
+                    force: *force,
+                    retry: *retry,
+                    ..Options::default()
+                };
+                ok &= sync(opts, Some(&mut run), out)?;
+                Ok(ok)
+            })();
+            recorded(run, &dirs.home, done)
         }
         Command::Remove {
             query,
@@ -327,51 +331,65 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             confirm,
         } => {
             let mut run = Run::begin(&dirs.home)?;
-            if !change::remove(dirs, query, *purge, confirm, prompter, out)? {
-                return Ok(true);
-            }
-            let ok = sync(Options::default(), Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                if !change::remove(dirs, query, *purge, confirm, prompter, out)? {
+                    return Ok(true);
+                }
+                sync(Options::default(), Some(&mut run), out)
+            })();
+            recorded(run, &dirs.home, done)
         }
         Command::Restore { query, confirm } => {
             let mut run = Run::begin(&dirs.home)?;
-            if !change::restore(dirs, query, confirm, prompter, out)? {
-                return Ok(true);
-            }
-            let manifest = Manifest::load(&dirs.home)?;
-            let mut ok = fetch_missing(job, runner, http, &manifest, true, out)?;
-            ok &= sync(Options::default(), Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                if !change::restore(dirs, query, confirm, prompter, out)? {
+                    return Ok(true);
+                }
+                let manifest = Manifest::load(&dirs.home)?;
+                let mut ok = fetch_missing(job, runner, http, &manifest, true, out)?;
+                ok &= sync(Options::default(), Some(&mut run), out)?;
+                Ok(ok)
+            })();
+            recorded(run, &dirs.home, done)
         }
         Command::Set { terms, confirm } => {
             let mut run = Run::begin(&dirs.home)?;
-            if !change::set(dirs, terms, confirm, prompter, out)? {
-                return Ok(true);
-            }
-            let ok = sync(Options::default(), Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                if !change::set(dirs, terms, confirm, prompter, out)? {
+                    return Ok(true);
+                }
+                sync(Options::default(), Some(&mut run), out)
+            })();
+            recorded(run, &dirs.home, done)
         }
         Command::Edit { query, all } => {
             let mut run = Run::begin(&dirs.home)?;
-            let edited = editor::edit(
-                dirs,
-                query,
-                *all,
-                change::reborrow(&mut prompter),
-                &mut editor::launch,
-                out,
-            )?;
-            if !edited {
-                return Ok(true);
-            }
-            let ok = sync(Options::default(), Some(&mut run), out)?;
-            run.finish(&dirs.home)?;
-            Ok(ok)
+            let done = (|| {
+                let edited = editor::edit(
+                    dirs,
+                    query,
+                    *all,
+                    change::reborrow(&mut prompter),
+                    &mut editor::launch,
+                    out,
+                )?;
+                if !edited {
+                    return Ok(true);
+                }
+                sync(Options::default(), Some(&mut run), out)
+            })();
+            recorded(run, &dirs.home, done)
         }
     }
+}
+
+/// Finish `run` whatever became of its command, so one that stopped on
+/// an error is recorded as far as it got; the command's own error wins.
+fn recorded(run: Run, home: &Path, done: Result<bool>) -> Result<bool> {
+    let finished = run.finish(home);
+    let ok = done?;
+    finished?;
+    Ok(ok)
 }
 
 /// Write the songs the query matches to `data`, or the removed ones.
