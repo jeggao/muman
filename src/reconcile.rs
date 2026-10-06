@@ -1439,11 +1439,11 @@ fn status<W: Write>(
         )?;
     }
     // A manual file not listed is added by the next sync; only fetched
-    // files can lie unused.
+    // and kept files can lie unused.
     for path in store
         .unused(listed)
         .iter()
-        .filter(|p| p.starts_with(dirs.ytdlp()))
+        .filter(|p| !p.starts_with(dirs.manual()))
     {
         crate::ui::info(out, &format!("Unused: {}", crate::relpath::show(path)))?;
     }

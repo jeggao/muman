@@ -81,9 +81,7 @@ impl Provider {
                 } else {
                     Self::YouTube
                 }),
-                LRCLIB => Some(Self::Lrclib),
-                MUSICBRAINZ => Some(Self::MusicBrainz),
-                _ => None,
+                other => crate::store::kept(other).map(|k| k.provider),
             },
         }
     }
@@ -142,7 +140,7 @@ const MUSICBRAINZ_URL: &str = "https://musicbrainz.org";
 /// [`Provider::kept`] says.
 #[must_use]
 pub fn is_kept(key: &SourceKey) -> bool {
-    matches!(key, SourceKey::Remote { extractor, .. } if extractor == LRCLIB || extractor == MUSICBRAINZ)
+    matches!(key, SourceKey::Remote { extractor, .. } if crate::store::kept(extractor).is_some())
 }
 
 /// One provider's settings.

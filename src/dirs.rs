@@ -28,14 +28,26 @@ impl Dirs {
         self.home.join("sources").join("yt-dlp")
     }
 
+    /// A folder of sources, by its name in `sources`.
+    #[must_use]
+    pub fn sources(&self, folder: &str) -> PathBuf {
+        self.home.join("sources").join(folder)
+    }
+
     #[must_use]
     pub fn lrclib(&self) -> PathBuf {
-        self.home.join("sources").join("lrclib")
+        self.kept(crate::provider::LRCLIB)
     }
 
     #[must_use]
     pub fn musicbrainz(&self) -> PathBuf {
-        self.home.join("sources").join("musicbrainz")
+        self.kept(crate::provider::MUSICBRAINZ)
+    }
+
+    /// The folder records of a kept scheme lie in.
+    #[must_use]
+    pub fn kept(&self, extractor: &str) -> PathBuf {
+        crate::store::kept(extractor).map_or_else(|| self.sources(extractor), |k| k.dir(self))
     }
 
     #[must_use]

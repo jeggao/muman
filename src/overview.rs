@@ -195,25 +195,34 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     heading(out, "Sources")?;
     let listed = c.manifest.keys();
-    let remote = listed
+    let kept = listed
         .iter()
-        .filter(|k| matches!(k, SourceKey::Remote { .. }))
+        .filter(|k| crate::provider::is_kept(k))
+        .count();
+    let manual = listed
+        .iter()
+        .filter(|k| matches!(k, SourceKey::Manual(_)))
         .count();
     row(
         out,
         "Listed",
         &format!(
-            "{} ({remote} fetched by yt-dlp, {} manual)",
+            "{} ({} fetched by yt-dlp, {kept} kept from lookups, {manual} manual)",
             listed.len(),
-            listed.len() - remote
+            listed.len() - kept - manual
         ),
     )?;
+    let lookups: u64 = crate::store::KEPT
+        .iter()
+        .map(|k| folder_size(&k.dir(c.dirs)))
+        .sum();
     row(
         out,
         "Stored",
         &format!(
-            "{} in yt-dlp, {} manual",
+            "{} fetched by yt-dlp, {} from lookups, {} manual",
             crate::ui::bytes(folder_size(&c.dirs.ytdlp())),
+            crate::ui::bytes(lookups),
             crate::ui::bytes(folder_size(&c.dirs.manual()))
         ),
     )?;
@@ -319,7 +328,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .store
         .unused(&listed)
         .iter()
-        .filter(|p| p.starts_with(c.dirs.ytdlp()))
+        .filter(|p| !p.starts_with(c.dirs.manual()))
     {
         unused.add(&crate::relpath::show(path));
     }

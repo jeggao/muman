@@ -169,20 +169,8 @@ impl Read {
 /// ID, or a manual file with its own lyrics and pictures.
 fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBuf>> {
     Ok(match key {
-        SourceKey::Remote { extractor, id } if extractor == crate::provider::LRCLIB => {
-            ["lrc", "json"]
-                .iter()
-                .map(|ext| dirs.lrclib().join(format!("{id}.{ext}")))
-                .filter(|p| p.exists())
-                .collect()
-        }
-        SourceKey::Remote { extractor, id } if extractor == crate::provider::MUSICBRAINZ => {
-            let path = crate::musicbrainz::path_of(&dirs.musicbrainz(), id);
-            if path.exists() {
-                vec![path]
-            } else {
-                Vec::new()
-            }
+        SourceKey::Remote { extractor, id } if crate::store::kept(extractor).is_some() => {
+            crate::store::kept(extractor).map_or_else(Vec::new, |k| k.files(dirs, id))
         }
         SourceKey::Remote { id, .. } => crate::store::walk(&dirs.ytdlp(), 2)?
             .into_iter()

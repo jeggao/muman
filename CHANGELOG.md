@@ -58,6 +58,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   alone as a sync does, so a file changed by hand is shown left in
   place, not removed, and a song missing its lyrics file is shown
   written again, not up to date.
+- **`info` counts sources by where they come from.** LRCLIB and
+  MusicBrainz records were counted as fetched by yt-dlp; they are kept
+  from lookups, counted and stored apart, and one no song lists any more
+  shows as unused, as an unused download does.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived
