@@ -625,9 +625,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
                             })
                             .map(|(_, w)| w)
                     });
-                    let verb = match before.and_then(|w| w.plan.as_ref()) {
-                        Some(p) => format!("Updated ({})", changes(p, &r.plan).join(", ")),
-                        None => "Added".to_string(),
+                    let changed = before
+                        .and_then(|w| w.plan.as_ref())
+                        .map(|p| changes(p, &r.plan));
+                    // A song forced, or one a stopped run had begun, is
+                    // neither new nor changed.
+                    let verb = match (before, changed) {
+                        (_, Some(what)) if !what.is_empty() => {
+                            format!("Updated ({})", what.join(", "))
+                        }
+                        (Some(_), _) => "Written again".to_string(),
+                        (None, _) => "Added".to_string(),
                     };
                     crate::ui::success(
                         out,

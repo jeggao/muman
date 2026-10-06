@@ -149,6 +149,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Fitting `max_size` always ends.** When songs only just did not fit,
   by the margin fitting leaves for its estimates, no song was left out
   and the sync asked again for ever.
+- **A song written again says so.** A song written with nothing changed,
+  by `sync --force` or after a stopped run, was said to be updated with
+  an empty list of changes, or added.
 - **A failure ends when the step succeeds.** A source fetched again, or
   measured after failing, no longer keeps its old failure in the state
   file, and a failed fetch no longer keeps a file that has since arrived

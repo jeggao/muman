@@ -491,6 +491,10 @@ fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
     assert!(ok, "{text}");
     assert_eq!(renders(&fake), 1, "only the claimed song: {text}");
     assert!(!text.contains("changed since muman wrote it"), "{text}");
+    assert!(
+        text.contains("Written again: Chan/Title bbbbbbbbbbb"),
+        "{text}"
+    );
 }
 
 #[test]
