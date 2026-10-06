@@ -22,6 +22,7 @@ use crate::limit;
 use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::parallel;
+use crate::progress;
 use crate::render;
 use crate::resolve::{self, Input, Plan, Resolved};
 use crate::runner::Runner;
@@ -116,12 +117,16 @@ pub fn measure<R: Runner, W: Write>(
         return Ok(());
     }
     crate::ui::info(out, &format!("Measuring {} source(s)", due.len()))?;
+    let step = progress::step("Measuring", Some(due.len() as u64));
     let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
     let mut kept = Instant::now();
     parallel::chunked(
         &numbered,
         parallel::builds(),
-        |(n, l)| facts::gather(runner, l, &scratch.join(format!("facts-{n}"))),
+        |(n, l)| {
+            let _working = step.working(&progress::label(&l.path));
+            facts::gather(runner, l, &scratch.join(format!("facts-{n}")))
+        },
         |chunk, measured| {
             for ((_, located), result) in chunk.iter().zip(measured) {
                 match result {
@@ -228,10 +233,12 @@ fn compare<R: Runner, W: Write>(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    let step = progress::step("Comparing", Some(keys.len() as u64));
     let envelopes: HashMap<SourceKey, Vec<f64>> = keys
         .iter()
         .zip(parallel::map(&keys, parallel::builds(), |k| {
             let path = store.locate(k)?.path;
+            let _working = step.working(&progress::label(&path));
             runner
                 .output(&align::pcm_command(&path))
                 .ok()
@@ -593,7 +600,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let mut learned = Vec::new();
     let every = opts.checkpoint.unwrap_or(CHECKPOINT);
     let mut kept_at = Instant::now();
+    let writing = progress::step("Writing", Some(due.len() as u64));
     let render_one = |(n, r): &&PlannedSong| {
+        let _working = writing.working(&progress::label(&r.stem));
         if let Some((folder, made)) = placed.get(n) {
             return render::place(folder, made, &dirs.library);
         }

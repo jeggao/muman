@@ -16,6 +16,7 @@ muman is configured in two places, split by what a setting is about:
 |---|---|---|
 | `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path` |
+| `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
 | | `MUMAN_FFMPEG` | The ffmpeg to run |
 | | `MUMAN_FFPROBE` | The ffprobe to run |
 | | `MUMAN_YT_DLP` | The yt-dlp to run; may be a whole command, such as `python -m yt_dlp` |

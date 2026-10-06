@@ -534,6 +534,7 @@ pub fn run<R: Runner, W: Write>(
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();
         let mut hits: Vec<(Due, Result<Hit>)> = Vec::new();
+        let step = crate::progress::step("Looking up", Some(due.len() as u64));
         for p in ORDER {
             let group: Vec<&Due> = due.iter().filter(|d| d.find == p).collect();
             if group.is_empty() {
@@ -568,6 +569,11 @@ pub fn run<R: Runner, W: Write>(
                     }
                     .into());
                 }
+                let _working = step.working(&reconcile::name_of(
+                    &manifest.songs[d.song],
+                    resolved.get(&d.song).copied(),
+                    &state.facts,
+                ));
                 let query = resolved
                     .get(&d.song)
                     .and_then(|r| query_of(r, &state.facts));
@@ -590,6 +596,8 @@ pub fn run<R: Runner, W: Write>(
                 }
                 hit
             });
+            // The songs that took another's lookup are done with it.
+            step.advance((group.len() - asking.len()) as u64);
             let found: Vec<Result<Hit>> = (0..group.len())
                 .map(|i| {
                     let at = asking.binary_search(&first[i]).unwrap_or_default();

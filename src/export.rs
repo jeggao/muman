@@ -350,7 +350,9 @@ fn fit_into<R: Runner, W: Write>(
                 ),
             )?;
         }
+        let step = crate::progress::step("Encoding", Some(due.len() as u64));
         let rendered = parallel::map(&due, parallel::builds(), |(n, c)| {
+            let _working = step.working(&crate::progress::label(&songs[*n].path));
             encode(
                 runner,
                 &songs[*n],
@@ -534,9 +536,12 @@ fn encode<R: Runner>(
 
 /// Write `entries` into a new zip at `path`, each stored as it is.
 fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Result<()> {
+    let entries: Vec<&Entry> = entries.collect();
+    let step = crate::progress::step("Writing the zip", Some(entries.len() as u64));
     let file = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut zip = ZipWriter::new(file);
     for entry in entries {
+        let _working = step.working(&entry.name);
         let mut from =
             File::open(&entry.from).with_context(|| format!("reading {}", entry.from.display()))?;
         let large = from

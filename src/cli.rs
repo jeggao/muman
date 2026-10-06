@@ -54,6 +54,19 @@ pub struct Cli {
     /// close each new source came to every song it was compared with.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// How a long step says how far it has got, on stderr: `auto`, a
+    /// status line on a terminal and plain lines elsewhere; `plain`
+    /// lines; `json` events, one a line; or `none`.
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_PROGRESS",
+        value_name = "MODE",
+        value_enum,
+        default_value_t
+    )]
+    pub progress: crate::progress::Mode,
 }
 
 /// How new sources that may be a listed song are decided.

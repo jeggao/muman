@@ -21,6 +21,7 @@ deunicode = "1"
 directories = "6"
 dunce = "1"
 filetime = "0.2"
+indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 lofty = "0.25"
 minijinja = "2"

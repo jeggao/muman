@@ -70,10 +70,18 @@ impl Fetcher<'_> {
             options: self.options,
             batch: long.then_some(batch.as_path()),
         };
+        // A video is one download; a playlist or channel, how many is not
+        // known until yt-dlp lists it.
+        let videos = urls.iter().all(|u| u.contains("watch?v="));
+        let step = crate::progress::step(
+            "Fetching",
+            videos.then_some(urls.len() as u64).filter(|n| *n > 0),
+        );
         let urls = if long { &[][..] } else { urls };
         let cmd = download::ytdlp_command(&places, template, archive, urls);
         let ok = {
-            let mut relay = Relay::new(out, self.live);
+            let live = self.live && !crate::progress::drawing();
+            let mut relay = Relay::new(out, live).counting(&step);
             runner.stream(&cmd, &mut |line| relay.line(line))?
         };
         let fetched = std::fs::read_to_string(&done)

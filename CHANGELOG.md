@@ -9,6 +9,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **Progress for long steps.** Measuring, comparing, looking songs up,
+  fetching, writing, decoding and exporting say how far they have got:
+  on a terminal, one status line under the messages with the step, a
+  bar, the count, the time left and the songs under way, and the tab or
+  taskbar's progress where the terminal shows it; in a log, a plain line
+  every tenth of the way or ten seconds. `--progress` (or
+  `MUMAN_PROGRESS`) chooses `auto`, `plain`, `json` events for a program
+  to read, or `none`.
 - **`muman purge`.** Deletes fetched sources and lookup records no song
   uses, which `status` and `info` name as unused, saying first what goes
   and how much it frees. A removed song's sources stay for `restore`,

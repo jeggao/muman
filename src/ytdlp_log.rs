@@ -1,6 +1,8 @@
 //! yt-dlp's output, never passed through as it is: each line is said to
 //! come from yt-dlp, its errors and warnings become muman's own, and
-//! on a terminal its progress is one line rewritten in place.
+//! its progress goes into the run's step, counting each video it
+//! finishes; on a terminal with no status line, it is one line rewritten
+//! in place.
 
 use std::io::Write;
 
@@ -34,6 +36,10 @@ pub struct Relay<'a, W: Write> {
     /// The terminal's width in columns, which a status line must stay
     /// under or it wraps and can no longer be rewritten in place.
     columns: usize,
+    /// The step the downloads count towards.
+    step: Option<&'a crate::progress::Step>,
+    /// The video downloading now; another's progress means it is done.
+    title: Option<String>,
 }
 
 impl<'a, W: Write> Relay<'a, W> {
@@ -45,7 +51,17 @@ impl<'a, W: Write> Relay<'a, W> {
             live,
             shown: 0,
             columns,
+            step: None,
+            title: None,
         }
+    }
+
+    /// Count each video yt-dlp finishes towards `step`, and say what it is
+    /// downloading in it.
+    #[must_use]
+    pub fn counting(mut self, step: &'a crate::progress::Step) -> Self {
+        self.step = Some(step);
+        self
     }
 
     pub fn line(&mut self, line: Line<'_>) {
@@ -62,6 +78,14 @@ impl<'a, W: Write> Relay<'a, W> {
             self.settle();
             let _ = crate::ui::warning(self.out, &format!("yt-dlp: {}", rest.trim()));
         } else if let Some(progress) = text.strip_prefix(PROGRESS) {
+            if let Some(step) = self.step {
+                let title = progress.split('\t').nth(4).map(|t| t.trim().to_string());
+                if self.title.is_some() && title != self.title {
+                    step.advance(1);
+                }
+                self.title = title;
+                step.note(progress_line(progress).trim_start_matches("yt-dlp: "));
+            }
             if self.live {
                 self.status(&progress_line(progress));
             }
@@ -115,6 +139,9 @@ impl<W: Write> std::fmt::Debug for Relay<'_, W> {
 impl<W: Write> Drop for Relay<'_, W> {
     fn drop(&mut self) {
         self.settle();
+        if let Some(step) = self.step.filter(|_| self.title.is_some()) {
+            step.advance(1);
+        }
     }
 }
 

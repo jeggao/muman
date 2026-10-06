@@ -38,6 +38,7 @@ pub mod parallel;
 pub mod platform;
 pub mod plugins;
 pub mod probe;
+pub mod progress;
 pub mod provider;
 pub mod purge;
 pub mod quality;
@@ -102,6 +103,8 @@ pub struct Job {
     pub settling: Duration,
     /// The pace of every request to each service in the run.
     pub throttles: lookup::Throttles,
+    /// How long steps say how far they have got.
+    pub progress: progress::Mode,
 }
 
 impl Job {
@@ -118,6 +121,7 @@ impl Job {
             throttles: lookup::Throttles::polite(),
             cache: defaults.cache,
             live: false,
+            progress: cli.progress,
         }
     }
 }
@@ -126,7 +130,9 @@ impl Job {
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let live = std::io::stderr().is_terminal();
-    let mut err = anstream::stderr();
+    let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
+    let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
+    let mut err = progress::Console::new(anstream::stderr());
     let Some(defaults) = platform::defaults() else {
         let _ = ui::error(&mut err, "the system names no home folder for this user");
         return ExitCode::from(2);
@@ -189,6 +195,16 @@ pub fn run() -> ExitCode {
     }
 }
 
+/// Whether the terminal shows a task's progress in its tab or taskbar
+/// from `OSC 9;4`, as Windows Terminal, `ConEmu`, `WezTerm` and Ghostty do;
+/// another would print the sequence.
+fn taskbar_progress() -> bool {
+    let var = |name: &str| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned());
+    var("WT_SESSION").is_some()
+        || var("ConEmuANSI").as_deref() == Some("ON")
+        || matches!(var("TERM_PROGRAM").as_deref(), Some("WezTerm" | "ghostty"))
+}
+
 fn mode(m: Matching) -> Mode {
     if m.new {
         Mode::New
@@ -220,6 +236,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         };
         reconcile::reconcile(runner, dirs, opts, run, out)
     };
+    progress::current().plan(steps_of(&job.command));
     match &job.command {
         Command::Status => {
             let opts = Options {
@@ -407,6 +424,31 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             })();
             recorded(run, &dirs.home, done)
         }
+    }
+}
+
+/// The long steps a command may take, in the order it takes them, which
+/// number them as it goes.
+fn steps_of(command: &Command) -> &'static [&'static str] {
+    const SYNC: &[&str] = &[
+        "Fetching",
+        "Measuring",
+        "Looking up",
+        "Comparing",
+        "Writing",
+    ];
+    match command {
+        Command::Add { .. } | Command::Sync { .. } => SYNC,
+        Command::Restore { .. } => &["Fetching", "Measuring", "Comparing", "Writing"],
+        Command::Remove { .. }
+        | Command::Set { .. }
+        | Command::Edit { .. }
+        | Command::Undo { .. } => &["Measuring", "Comparing", "Writing"],
+        Command::Status => &["Measuring", "Comparing"],
+        Command::Check { .. } => &["Decoding"],
+        Command::Export { .. } => &["Encoding", "Writing the zip"],
+        Command::Duplicates { .. } => &["Comparing prints"],
+        Command::List { .. } | Command::Info | Command::Purge { .. } => &[],
     }
 }
 

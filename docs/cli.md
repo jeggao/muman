@@ -46,6 +46,20 @@ Exit codes:
 * `--home <DIR>` — The state root: the song list, the state file and the sources [default: the platform's local data folder, then `muman`]
 * `--library <DIR>` — Folder the songs are written to [default: the song list's `[library] path`, else the platform's music folder, then `muman`]
 * `-v`, `--verbose` — Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how close each new source came to every song it was compared with
+* `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line; or `none`
+
+  Default value: `auto`
+
+  Possible values:
+  - `auto`:
+    A status line on a terminal, plain lines elsewhere
+  - `plain`:
+    Plain lines, terminal or not
+  - `json`:
+    JSON events, one a line
+  - `none`:
+    Nothing
+
 
 
 

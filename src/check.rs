@@ -189,7 +189,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
             .collect();
         crate::ui::info(out, &format!("Decoding {} source(s)", media.len()))?;
         out.flush()?;
+        let step = crate::progress::step("Decoding", Some(media.len() as u64));
         let decoded = parallel::map(&media, parallel::builds(), |l| {
+            let _working = step.working(&crate::progress::label(&l.path));
             runner.run(&decode_command(&l.path))
         });
         for (l, result) in media.iter().zip(decoded) {

@@ -23,6 +23,7 @@ holds only what muman renders from it.
 | `sources/manual/` | Files you dropped in, at any depth, with lyrics and pictures beside them |
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
+| `sources/coverart/<id>.jpg` | Album covers found on the Cover Art Archive, shared by every song of the album |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -41,6 +42,17 @@ lock on the home:
 1. Write each song whose plan changed or whose file is gone; `sync
    --force` writes every song.
 1. Delete every file muman wrote that no song makes any more.
+
+A long step shows how far it has got on stderr, as `--progress` says.
+On a terminal, `auto` pins one status line under the messages, such as
+`[5/5] Writing [====>   ] 812/1546  53%  41 s left  Hurricane · Isis`:
+the step of the command's steps, the count, the time left at the rate
+so far, and the songs or files under way; terminals that show a task's
+progress in their tab or taskbar show it there too. Elsewhere, as in a
+log, `auto` and `plain` write a line every tenth of the way or ten
+seconds; `json` writes one JSON object a line, `start`, `progress` and
+`finish` events, for a program to read; `none` writes nothing. What a
+command reports, as `status` does, stays on stdout.
 
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone. A file whose size or time changed

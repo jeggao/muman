@@ -115,19 +115,23 @@ pub struct InquirePrompter;
 
 impl Prompter for InquirePrompter {
     fn ask(&mut self, question: &str) -> io::Result<bool> {
-        let answer = inquire::Confirm::new(question)
-            .with_default(false)
-            .prompt_skippable()
-            .map_err(io::Error::other)?;
+        let answer = crate::progress::suspend(|| {
+            inquire::Confirm::new(question)
+                .with_default(false)
+                .prompt_skippable()
+        })
+        .map_err(io::Error::other)?;
         Ok(answer == Some(true))
     }
 
     fn choose(&mut self, question: &str, items: &[String]) -> io::Result<Vec<usize>> {
-        let picked = inquire::MultiSelect::new(question, items.to_vec())
-            .with_all_selected_by_default()
-            .with_help_message("space toggles, → all, ← none, type to filter, enter accepts")
-            .raw_prompt_skippable()
-            .map_err(io::Error::other)?;
+        let picked = crate::progress::suspend(|| {
+            inquire::MultiSelect::new(question, items.to_vec())
+                .with_all_selected_by_default()
+                .with_help_message("space toggles, → all, ← none, type to filter, enter accepts")
+                .raw_prompt_skippable()
+        })
+        .map_err(io::Error::other)?;
         Ok(picked
             .unwrap_or_default()
             .into_iter()

@@ -64,12 +64,13 @@ pub fn report<W: Write, D: Write>(
         )?;
     }
     printed.sort_by_key(|(_, p)| p.len());
+    let step = crate::progress::step("Comparing prints", Some(printed.len() as u64));
     let pairs = parallel::map(
         &(0..printed.len()).collect::<Vec<_>>(),
         parallel::builds(),
         |&i| {
             let (_, a) = &printed[i];
-            printed[i + 1..]
+            let linked = printed[i + 1..]
                 .iter()
                 .take_while(|(_, b)| ratio(a.len(), b.len()) >= RATIO)
                 .filter(|(_, b)| {
@@ -77,7 +78,9 @@ pub fn report<W: Write, D: Write>(
                         .is_some_and(|m| m.verdict() == Verdict::Same)
                 })
                 .map(|(m, _)| (printed[i].0, *m))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            step.advance(1);
+            linked
         },
     );
     let groups = groups(manifest.songs.len(), pairs.into_iter().flatten());
