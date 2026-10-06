@@ -541,20 +541,36 @@ fn network<R: Runner, W: Write, T>(
     step(&mut acquire)
 }
 
-/// Remove what yt-dlp left unfinished longer than `days` ago; younger,
-/// a later run resumes it.
+/// Remove what yt-dlp left unfinished longer than `days` ago, in any
+/// folder its template makes, and the folders that leaves empty;
+/// younger, a later run resumes it.
 fn clear_stale(partial: &Path, days: u64) {
-    let Ok(entries) = std::fs::read_dir(partial) else {
-        return;
-    };
     let limit = std::time::Duration::from_secs(days * 24 * 3600);
-    for path in entries.filter_map(|e| Some(e.ok()?.path())) {
-        let old = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > limit));
-        if old && path.is_file() {
-            let _ = std::fs::remove_file(&path);
+    let mut folders = Vec::new();
+    let mut left = vec![partial.to_path_buf()];
+    while let Some(dir) = left.pop() {
+        for path in std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| Some(e.ok()?.path()))
+        {
+            if path.is_dir() {
+                left.push(path.clone());
+                folders.push(path);
+                continue;
+            }
+            let old = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > limit));
+            if old {
+                let _ = std::fs::remove_file(&path);
+            }
         }
+    }
+    // Deepest first; only a folder left empty goes.
+    folders.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for dir in folders {
+        let _ = std::fs::remove_dir(dir);
     }
 }
 

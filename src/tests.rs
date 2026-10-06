@@ -932,3 +932,31 @@ fn export_into_too_little_room_says_what_it_needs() {
     assert!(format!("{e:#}").contains("cannot hold"), "{e:#}");
     assert!(!zip.exists());
 }
+
+#[test]
+fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let partial = dir.path().join("partial");
+    let stale = partial.join("Chan/Song [vid00000001].f251.webm.part");
+    let fresh = partial.join("Other/Song [vid00000002].f251.webm.part");
+    for file in [&stale, &fresh] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "half").unwrap();
+    }
+    std::fs::create_dir_all(partial.join("Empty")).unwrap();
+    let month_ago = SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(month_ago)
+        .unwrap();
+    clear_stale(&partial, 14);
+    assert!(!stale.exists());
+    assert!(
+        !partial.join("Chan").exists(),
+        "the folder it leaves empty goes"
+    );
+    assert!(!partial.join("Empty").exists());
+    assert!(fresh.exists(), "a later run resumes it");
+}
