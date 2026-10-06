@@ -56,7 +56,7 @@ use crate::music;
 
 /// The record a lookup takes must be within this of the song's length: a
 /// margin for the silence a video or a rip adds around the same master.
-pub(crate) const MAX_GAP_S: f64 = 3.0;
+pub const MAX_GAP_S: f64 = 3.0;
 const TIMEOUT: Duration = Duration::from_secs(20);
 /// Recordings one search lists, the most MusicBrainz allows: a phrase
 /// search scores a famous song's many recordings alike, its original

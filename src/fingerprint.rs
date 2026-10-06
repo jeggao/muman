@@ -58,7 +58,7 @@ pub const METHOD: &str = "chromaprint-rs/1";
 const SECONDS_PER_WORD: f64 = 0.1238;
 
 /// The audio a print sent to AcoustID covers, as `fpcalc` sends.
-const SENT_S: f64 = 120.0;
+pub const SENT_S: f64 = 120.0;
 
 /// Words within this many bits of each other agree.
 const NEAR_BITS: u32 = 4;
