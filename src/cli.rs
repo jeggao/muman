@@ -5,7 +5,7 @@
 //! colored in muman's palette ([`STYLES`]): headings green, what is typed
 //! cyan, values to fill in yellow, defaults dimmed. The tables after a
 //! command's options, written laid out for 80 columns, are laid out again
-//! for the width ([`laid_out`]); [`command`] does both for `run`, while
+//! for the width (`laid_out`); [`command`] does both for `run`, while
 //! the generated reference reads [`Cli`] as written.
 
 use std::fmt::Write as _;

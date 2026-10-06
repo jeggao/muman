@@ -12,7 +12,7 @@
 //!
 //! A run has one status line, whatever steps are under way. A step begun
 //! inside another, as a fetch of what a round of lookups found, takes the
-//! line once it has shown for [`SHOW_AFTER`], and gives it back to the
+//! line once it has shown for `SHOW_AFTER`, and gives it back to the
 //! step around it when it ends; two bars drawn to one line would take
 //! turns on it with each tick. The line keeps to the terminal's width,
 //! which is read again at each update: as it narrows, the line drops its
