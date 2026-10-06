@@ -110,8 +110,11 @@ const HEADER: &str = "\
 #             of lrclib and musicbrainz.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
-#   Settings: [library], [audio], [ytdlp] and [history] lay out and name
-#             the library, set encoding and fetching, and size `undo`.
+#   Settings: [library], [audio], [quality.*], [ytdlp] and [history] lay
+#             out and name the library, set encoding, ranking and fetching,
+#             and size `undo`. `edition` names the defaults they were
+#             written from; `muman sync --update-defaults` moves the ones
+#             still at an older default to the current.
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
@@ -122,7 +125,7 @@ const HEADER_END: &str = "# Other keys muman does not know are kept.";
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
 
-/// A new home's song list: the settings, each commented out at its
+/// A new home's song list: the settings, each written out at its
 /// default, as the reference the docs point to.
 pub const NEW: &str = include_str!("manifest/new.toml");
 
@@ -213,6 +216,9 @@ pub enum Edit {
         songs: Vec<(SourceKey, Rewritten)>,
         new: Vec<SongTable>,
     },
+    /// Every setting still at an earlier edition's default moved to the
+    /// current one; see [`crate::settings::update`].
+    UpdateDefaults,
 }
 
 /// What an edited song became.
@@ -250,6 +256,9 @@ pub struct Manifest {
     pub hooks: Vec<Hook>,
     /// `[library]`, `[audio]`, `[ytdlp]` and `[history]`.
     pub settings: crate::settings::Settings,
+    /// Settings at the default of an earlier edition, which this one
+    /// changed.
+    pub stale_defaults: Vec<crate::settings::Stale>,
     edits: Vec<Edit>,
     stale: bool,
 }
@@ -270,6 +279,7 @@ impl Manifest {
             hooks: parsed.hooks,
             clean: parsed.clean,
             settings: parsed.settings,
+            stale_defaults: parsed.stale_defaults,
             edits: Vec::new(),
             stale: file.exists()
                 && (with_header(&doc.to_string()).is_some() || normalize(&mut doc.clone())),
@@ -396,7 +406,7 @@ impl Manifest {
         (self.songs, self.albums, self.lyrics, self.removed) =
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
-        self.settings = parsed.settings;
+        (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
         self.stale = false;
         Ok(Vec::new())
     }
@@ -511,6 +521,7 @@ struct Parsed {
     hooks: Vec<Hook>,
     clean: Settings,
     settings: crate::settings::Settings,
+    stale_defaults: Vec<crate::settings::Stale>,
 }
 
 /// The keys a table lists, each parsed.
@@ -637,6 +648,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         hooks: hooks::read(doc)?,
         clean: clean_of(doc)?,
         settings: crate::settings::read(doc)?,
+        stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
     })
 }
 
@@ -862,6 +874,9 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 }
             }
         }
+        Edit::UpdateDefaults => {
+            crate::settings::update(doc, &crate::settings::EDITIONS);
+        }
     }
     Ok(())
 }
@@ -967,10 +982,11 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
 
 /// Every song's, album's and removed song's `tags` as dotted keys, last
 /// in its table; each song's with the template's tags it lacks added
-/// empty; and every cleaning switch the file lacks added on. Whether
-/// anything changed.
+/// empty; every cleaning switch the file lacks added on; and every
+/// setting it lacks added at its default. Whether anything changed.
 fn normalize(doc: &mut DocumentMut) -> bool {
     let mut changed = clean_template(doc);
+    changed |= crate::settings::fill(doc, &crate::settings::EDITIONS);
     for (list, template) in [("song", true), ("album", false), ("removed", false)] {
         let Some(list) = doc.get_mut(list).and_then(Item::as_array_of_tables_mut) else {
             continue;
@@ -1078,10 +1094,11 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
         // A new table without a position prints after the one before it
         // in key order, so `clean` moves up beside `defaults`.
         let rank = |k: &str| match k {
-            "version" => 0,
-            "defaults" => 1,
-            "clean" => 2,
-            _ => 3,
+            "version" | "edition" => 0,
+            k if crate::settings::TABLES.contains(&k) => 1,
+            "defaults" => 2,
+            "clean" => 3,
+            _ => 4,
         };
         root.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
         changed = true;

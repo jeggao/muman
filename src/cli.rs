@@ -271,6 +271,12 @@ pub enum Command {
         #[arg(long)]
         retry: bool,
 
+        /// Move each setting still at the default of the edition the song
+        /// list names to this muman's default, and raise the edition;
+        /// settings you changed stay.
+        #[arg(long)]
+        update_defaults: bool,
+
         #[command(flatten)]
         matching: Matching,
     },

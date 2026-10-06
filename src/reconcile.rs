@@ -1114,6 +1114,9 @@ pub(crate) fn plan<W: Write>(
             &format!("No cleaning rule is named `{key}` in the song list; it does nothing"),
         )?;
     }
+    for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
+        crate::ui::warning(out, &line)?;
+    }
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));
     for (n, song) in manifest.songs.iter().enumerate() {
         let input = Input {

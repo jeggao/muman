@@ -356,6 +356,25 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
 }
 
 #[test]
+fn sync_fills_in_every_setting_and_updates_none_already_current() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let songs = s.dir.path().join("home/songs.toml");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(&songs, "version = 1\n\n[audio]\nopus_kbps = 192\n").unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync", "--update-defaults"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Every setting is at this muman's defaults"),
+        "{text}"
+    );
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    assert!(listed.contains("\nedition = 1\n"), "{listed}");
+    assert!(listed.contains("opus_kbps = 192"), "{listed}");
+    assert!(listed.contains("[ytdlp]"), "{listed}");
+}
+
+#[test]
 fn undo_moves_songs_back_after_a_template_edited_by_hand() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -363,9 +382,11 @@ fn undo_moves_songs_back_after_a_template_edited_by_hand() {
     assert!(ok, "{text}");
     let songs = s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    assert!(listed.contains(&default), "{listed}");
     std::fs::write(
         &songs,
-        format!("{listed}\n[library]\ntemplate = \"{{{{ album }}}}/{{{{ title }}}}\"\n"),
+        listed.replace(&default, "template = \"{{ album }}/{{ title }}\""),
     )
     .unwrap();
     let (ok, text) = s.run(&flacs(), &["sync"]);

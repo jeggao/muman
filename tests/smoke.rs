@@ -164,8 +164,8 @@ fn songs_are_added_matched_written_removed_and_put_back() {
     std::fs::write(
         &songs,
         list.replacen(
-            "version = 1\n",
-            "version = 1\n\n[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n",
+            "\ntemplate = \"{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}\"\n",
+            "\ntemplate = \"{{ artist }} - {{ title }}\"\n",
             1,
         ),
     )
