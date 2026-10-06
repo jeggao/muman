@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`muman duplicates`.** Lists songs listed apart that are one
+  recording, by their audio fingerprints: a file of an album there
+  twice first, then a track and its copies on other albums. It changes
+  nothing; a query names the groups shown. It compares only prints of
+  lengths one recording can have, so 1,500 songs take seconds.
+
 ### Changed
 
 - **A template's `artist` and `artists` are as documented.** They held

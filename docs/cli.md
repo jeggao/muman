@@ -37,6 +37,7 @@ Exit codes:
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
+* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Options:**
@@ -287,6 +288,31 @@ Write the song list and the library, as the last run left them, into one zip: so
 
   Default value: `muman.zip`
 * `--max-size <SIZE>` — The most the zip may take, such as 4GiB or 700MB
+
+
+
+### `muman duplicates`
+
+List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
+
+**Usage:** `muman duplicates [QUERY]...`
+
+```text
+Query:
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
+```
+
+**Arguments:**
+
+* `<QUERY>`
 
 
 

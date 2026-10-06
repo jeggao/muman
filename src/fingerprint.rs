@@ -275,9 +275,33 @@ impl<'a> Indexed<'a> {
     /// no sounding word.
     #[must_use]
     pub fn compare(&self, other: &Print) -> Option<Match> {
-        let (a, b) = (self.words, other.0.as_slice());
+        let b = other.0.as_slice();
         let keep_b = sounding(b);
         let sounding_b = keep_b.iter().filter(|k| **k).count();
+        self.compare_words(b, &keep_b, sounding_b)
+    }
+
+    /// [`Self::compare`] with a print readied too, as comparing every
+    /// pair of many does.
+    #[must_use]
+    pub fn compare_indexed(&self, other: &Indexed<'_>) -> Option<Match> {
+        self.compare_words(other.words, &other.keep, other.sounding)
+    }
+
+    /// The print's length in words.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.words.len()
+    }
+
+    /// Whether the print holds no word.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
+    fn compare_words(&self, b: &[u32], keep_b: &[bool], sounding_b: usize) -> Option<Match> {
+        let a = self.words;
         if self.sounding == 0 || sounding_b == 0 {
             return None;
         }
@@ -303,7 +327,7 @@ impl<'a> Indexed<'a> {
         let (words, overlap) = ranked
             .into_iter()
             .take(CANDIDATES)
-            .map(|(offset, _)| self.agreeing(b, &keep_b, offset))
+            .map(|(offset, _)| self.agreeing(b, keep_b, offset))
             .max_by_key(|(words, _)| *words)
             .unwrap_or((0, 0));
         Some(Match {

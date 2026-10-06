@@ -73,6 +73,7 @@ src/
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   check.rs, overview.rs            check and info
+  duplicates.rs     songs listed apart that are one recording
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   */tests.rs        a module's tests, when they outgrow it
 testdata/           tiny Opus, FLAC and PNG fixtures

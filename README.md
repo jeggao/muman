@@ -108,6 +108,7 @@ muman undo
 |---|---|
 | `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, then sync |
 | `check` | Compare the library and the sources with what muman recorded |
+| `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
 | `export` | Write the song list and the library into a zip, fitted to a size if given |
 | `info` | Count what the library holds and what could be better, from what earlier runs measured |

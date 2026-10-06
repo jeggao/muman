@@ -12,6 +12,7 @@ pub mod cli;
 pub mod codec;
 pub mod dirs;
 pub mod download;
+pub mod duplicates;
 pub mod editor;
 pub mod export;
 pub mod facts;
@@ -149,7 +150,7 @@ pub fn run() -> ExitCode {
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
     let needs_ffmpeg = match &job.command {
-        Command::Info | Command::List { .. } => false,
+        Command::Info | Command::List { .. } | Command::Duplicates { .. } => false,
         Command::Check { decode } => *decode,
         Command::Export { max_size, .. } => max_size.is_some(),
         _ => true,
@@ -225,6 +226,10 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Info => {
             overview::info(dirs, job.verbose, data)?;
+            Ok(true)
+        }
+        Command::Duplicates { query } => {
+            duplicates::report(dirs, query, out, data)?;
             Ok(true)
         }
         Command::List {

@@ -334,6 +334,16 @@ pub enum Command {
         #[arg(long, value_name = "SIZE", value_parser = crate::fit::parse_size)]
         max_size: Option<u64>,
     },
+    /// List the songs listed apart that are one recording, by their audio
+    /// fingerprints: a file of an album there twice, or a track and its
+    /// copies on other albums. Groups on one album come first; songs any
+    /// group holds that the query matches name the groups shown. Changes
+    /// nothing.
+    #[command(after_help = QUERY_HELP)]
+    Duplicates {
+        #[arg(value_name = "QUERY")]
+        query: Vec<String>,
+    },
     /// Count what the library holds, whether it is in step with the song
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,
     /// missing or soft covers, missing lyrics or tags. Reads only what

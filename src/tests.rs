@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::lrclib::testing::Server;
-use crate::testing::{FLAC, Fake};
+use crate::testing::{FLAC, Fake, words};
 
 fn cli(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("muman").chain(args.iter().copied())).unwrap()
@@ -959,4 +959,38 @@ fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
     );
     assert!(!partial.join("Empty").exists());
     assert!(fresh.exists(), "a later run resumes it");
+}
+
+#[test]
+fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
+    let s = Setup::new();
+    for name in ["a", "b", "c"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    let song = words(1600, 1);
+    let prints = || {
+        flacs()
+            .print("a.flac", song.clone())
+            .print("b.flac", song.clone())
+            .print("c.flac", words(1600, 2))
+    };
+    let (ok, text) = s.run(&prints(), &["sync", "--new"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 3);
+    let (ok, report) = s.report(&prints(), &["duplicates"]);
+    assert!(ok);
+    assert!(
+        report.contains("2 songs, one recording, on one album"),
+        "{report}"
+    );
+    assert!(
+        report.contains("manual:a.flac") && report.contains("manual:b.flac"),
+        "{report}"
+    );
+    assert!(!report.contains("manual:c.flac"), "{report}");
+    let (_, report) = s.report(&prints(), &["duplicates", "c.flac"]);
+    assert!(
+        report.contains("No two songs are one recording"),
+        "{report}"
+    );
 }

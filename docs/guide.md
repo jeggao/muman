@@ -419,6 +419,12 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing or unreadable;
   `--decode` decodes every source in full to find a truncated download.
+- **`duplicates`** lists songs listed apart that are one recording, by
+  their audio fingerprints: a file of an album there twice first, then a
+  track and its copies on other albums, which a library of whole albums
+  keeps on purpose. It changes nothing; to merge a group, move the
+  others' sources into one `[[song]]` with `edit`, or `remove` them. A
+  query names the groups shown.
 
 ## Export
 
