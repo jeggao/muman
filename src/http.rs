@@ -234,7 +234,8 @@ impl std::fmt::Debug for Service<'_> {
 
 impl Service<'_> {
     /// GET `url` on its turn, asking again after a refusal; `None` for a
-    /// 404, and [`Refusing`] when the refusals outlast the retries.
+    /// 404, and [`Refusing`] when the refusals outlast the retries. Any
+    /// other failure is the [`TransportError`], in the context of `url`.
     pub fn get(
         &self,
         url: &str,
@@ -258,7 +259,7 @@ impl Service<'_> {
                     refused += 1;
                     self.throttle.refused(refused, retry_after);
                 }
-                Err(e) => return Err(anyhow::anyhow!("{url}: {e}")),
+                Err(e) => return Err(anyhow::Error::new(e).context(url.to_string())),
             }
         }
     }

@@ -2,6 +2,7 @@
 //! from its sources, the best of each aspect picked by measurement, and
 //! the result written as one tagged, covered track with its lyrics.
 
+pub mod acoustid;
 pub mod acquire;
 pub mod align;
 pub mod atomic;

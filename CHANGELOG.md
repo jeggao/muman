@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **MusicBrainz tags by fingerprint.** A song without an album asks
+  AcoustID for its recording by the fingerprint of its audio before it
+  searches MusicBrainz by name, so a file with wrong tags, or none,
+  still finds its tags. The new `acoustid` provider sends the first two
+  minutes' fingerprint and the length, takes a result scored 0.5 or more
+  within 3 s of the song's length, and keeps the recording as a
+  `musicbrainz:` record. `[providers.acoustid]` sets its `key`, `url`
+  and the usual limits; `enabled = false` sends no fingerprints.
+
 ## [0.2.0] - 2026-10-06
 
 ### Added

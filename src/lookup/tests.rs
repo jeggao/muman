@@ -120,3 +120,87 @@ fn a_provider_turned_off_is_not_looked_up() {
     );
     assert_eq!(finds(&m, &s, false), []);
 }
+
+const OWN: &str = "[[song]]\nsources = [\"manual:a.flac\"]\n";
+
+/// A song list of one file of the user's own, measured `printed` or not,
+/// and its plan, which writes `tags`.
+fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, State, Planned) {
+    let (dir, manifest, mut state) = setup(OWN, &[("manual:a.flac", false)]);
+    let key = SourceKey::parse("manual:a.flac").unwrap();
+    let facts = state.facts.get_mut(&key).unwrap();
+    facts.duration = Some(240.0);
+    facts.print = printed.then(|| crate::fingerprint::Print(vec![7; 100]));
+    let plan = crate::resolve::Plan {
+        version: 1,
+        format: crate::resolve::Format::Copy {
+            codec: crate::codec::Codec::Flac,
+        },
+        audio: crate::resolve::AudioRef {
+            key,
+            rev: "1".into(),
+            index: 0,
+        },
+        cover: None,
+        lyrics: None,
+        tags: tags
+            .iter()
+            .map(|(f, v)| (f.vorbis().to_string(), vec![(*v).to_string()]))
+            .collect(),
+    };
+    let resolved = Resolved {
+        plan,
+        stem: std::path::PathBuf::new(),
+        why: crate::resolve::Why::default(),
+    };
+    (dir, manifest, state, vec![(0, resolved)])
+}
+
+fn found(manifest: &Manifest, state: &State, planned: &Planned) -> Vec<Provider> {
+    due(manifest, state, planned, NOW, false)
+        .into_iter()
+        .map(|d| d.find)
+        .collect()
+}
+
+const NAMED: [(Field, &str); 2] = [
+    (Field::Title, "Lantern Weather"),
+    (Field::Artist, "Paper Comets"),
+];
+
+#[test]
+fn a_file_without_names_is_looked_up_by_its_print() {
+    let (_d, m, s, p) = own(true, &[]);
+    assert_eq!(found(&m, &s, &p), [Provider::AcoustId]);
+    let (_d, m, s, p) = own(false, &[]);
+    assert_eq!(found(&m, &s, &p), [], "no print, no names: nothing to ask");
+}
+
+#[test]
+fn musicbrainz_waits_for_acoustid() {
+    let (_d, m, mut s, p) = own(true, &NAMED);
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::AcoustId]);
+    s.lookups = vec![Looked {
+        from: SourceKey::parse("manual:a.flac").unwrap(),
+        find: "acoustid".into(),
+        method: method(Provider::AcoustId).into(),
+        at: NOW,
+        outcome: Outcome::Nothing,
+    }];
+    assert_eq!(
+        found(&m, &s, &p),
+        [Provider::Lrclib, Provider::MusicBrainz],
+        "AcoustID found nothing: search by name"
+    );
+    let (_d, m, s, p) = own(false, &NAMED);
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::MusicBrainz]);
+}
+
+#[test]
+fn a_song_with_a_musicbrainz_record_asks_neither() {
+    let (_d, mut m, s, p) = own(true, &NAMED);
+    m.songs[0]
+        .sources
+        .push(SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap());
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib]);
+}

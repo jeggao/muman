@@ -9,6 +9,12 @@
 //! muxer needed one built with Chromaprint. Prints are of the whole
 //! track, as the muxer's were; `fpcalc` stops at two minutes.
 //!
+//! AcoustID is sent what `fpcalc` would send ([`Print::encoded`]): the
+//! words of the first two minutes, compressed as Chromaprint compresses
+//! them and written in URL-safe base64 without padding. The words of a
+//! print's start are those a print of the start alone has, so cutting a
+//! whole-track print loses nothing the server compares.
+//!
 //! Two prints of one recording share long stretches of words that agree
 //! to within a few bits; two songs that merely sound alike agree on bits
 //! only on average, and a short print slid along a long one finds such a
@@ -41,7 +47,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 
 use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Names how a print is made. A stored print made by another is made
@@ -50,6 +56,9 @@ pub const METHOD: &str = "chromaprint-rs/1";
 
 /// The audio one word stands for.
 const SECONDS_PER_WORD: f64 = 0.1238;
+
+/// The audio a print sent to AcoustID covers, as `fpcalc` sends.
+pub const SENT_S: f64 = 120.0;
 
 /// Words within this many bits of each other agree.
 const NEAR_BITS: u32 = 4;
@@ -94,6 +103,18 @@ impl Print {
 
     fn to_raw(&self) -> Vec<u8> {
         self.0.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// The print as AcoustID takes it: its first [`SENT_S`] seconds,
+    /// compressed and in URL-safe base64.
+    #[must_use]
+    pub fn encoded(&self) -> String {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let words = (SENT_S / SECONDS_PER_WORD) as usize;
+        let config = rusty_chromaprint::Configuration::preset_test2();
+        let compressed = rusty_chromaprint::FingerprintCompressor::from(&config)
+            .compress(&self.0[..words.min(self.0.len())]);
+        URL_SAFE_NO_PAD.encode(compressed)
     }
 }
 
@@ -476,5 +497,58 @@ mod tests {
     #[test]
     fn an_empty_print_compares_to_nothing() {
         assert!(compare(&Print::default(), &Print(words(5, 1))).is_none());
+    }
+
+    /// Chirping noise as 16-bit PCM at Chromaprint's rate.
+    fn pcm(seconds: usize) -> Vec<u8> {
+        let mut state = 7_u64;
+        (0..seconds * SAMPLE_RATE as usize)
+            .flat_map(|i| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                #[allow(clippy::cast_precision_loss)]
+                let t = i as f64 / f64::from(SAMPLE_RATE);
+                let tone = (t * (220.0 + 40.0 * (t * 0.7).sin()) * std::f64::consts::TAU).sin();
+                #[allow(clippy::cast_possible_truncation)]
+                let noise = f64::from((state >> 48) as u16) / 65_536.0 - 0.5;
+                #[allow(clippy::cast_possible_truncation)]
+                let sample = ((tone * 0.6 + noise * 0.2) * 20_000.0) as i16;
+                sample.to_le_bytes()
+            })
+            .collect()
+    }
+
+    fn print_of(bytes: &[u8]) -> Print {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.pcm");
+        std::fs::write(&path, bytes).unwrap();
+        compute(&path).unwrap()
+    }
+
+    #[test]
+    fn a_print_of_the_start_is_the_start_of_the_whole_print() {
+        let whole = pcm(30);
+        let all = print_of(&whole);
+        let start = print_of(&whole[..20 * SAMPLE_RATE as usize * 2]);
+        assert!(start.0.len() > 100);
+        assert_eq!(start.0, all.0[..start.0.len()]);
+    }
+
+    #[test]
+    fn acoustid_is_sent_two_minutes_compressed_in_url_safe_base64() {
+        let long = Print(words(3000, 9));
+        let sent = URL_SAFE_NO_PAD.decode(long.encoded()).unwrap();
+        assert_eq!(sent[0], 1, "the algorithm, TEST2");
+        let count = u32::from_be_bytes([0, sent[1], sent[2], sent[3]]);
+        assert_eq!(count, 969, "120 s of words");
+        assert!(
+            long.encoded()
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        );
+        let short = Print(words(10, 9));
+        let sent = URL_SAFE_NO_PAD.decode(short.encoded()).unwrap();
+        assert_eq!(u32::from_be_bytes([0, sent[1], sent[2], sent[3]]), 10);
     }
 }

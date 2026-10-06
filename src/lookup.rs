@@ -21,7 +21,12 @@
 //! the provider's other lookups that round are put off to the next run.
 //!
 //! A song makes at most one lookup per provider a run, so a release and
-//! its upload never look each other up in turn. Each round measures what
+//! its upload never look each other up in turn. Its MusicBrainz lookup
+//! waits while its AcoustID lookup is due, since both find a MusicBrainz
+//! record and the fingerprint names the recording surer than its names
+//! do; a round AcoustID answered is followed by another even when nothing
+//! joined, so a song AcoustID could not place is searched for by name in
+//! the same run. Each round measures what
 //! the triggers read, makes its lookups and fetches what they found,
 //! without holding the run's lock; what one round adds may trigger the
 //! next. A provider's `per_run` cap lets a backlog, as the first sync of
@@ -45,6 +50,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::http::{HttpTransport, Refusing, Throttle};
 use anyhow::{Context, Result, anyhow};
 
+use crate::acoustid;
 use crate::acquire::{self, Acquire};
 use crate::align::Alignment;
 use crate::coverart;
@@ -70,10 +76,11 @@ use crate::tags::Field;
 pub const ROUNDS: usize = 3;
 
 /// The providers looked up, in the order a round makes their lookups.
-pub const ORDER: [Provider; 5] = [
+pub const ORDER: [Provider; 6] = [
     Provider::YouTubeMusic,
     Provider::YouTube,
     Provider::Lrclib,
+    Provider::AcoustId,
     Provider::MusicBrainz,
     Provider::CoverArt,
 ];
@@ -87,6 +94,7 @@ pub fn method(p: Provider) -> &'static str {
         Provider::YouTube => "youtube/1",
         Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
+        Provider::AcoustId => "acoustid/1",
         Provider::CoverArt => "coverart/1",
         Provider::Manual => "manual",
     }
@@ -162,19 +170,36 @@ fn album_of(r: Option<&Resolved>) -> bool {
 /// album is asked of neither.
 #[must_use]
 pub fn query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<Query> {
-    let tag = |f: Field| {
-        r.plan
-            .tags
-            .iter()
-            .find(|(k, _)| k == f.vorbis())
-            .and_then(|(_, v)| v.first().cloned())
-    };
     Some(Query {
-        title: tag(Field::Title)?,
-        artist: tag(Field::Artist)?,
-        album: tag(Field::Album).filter(|_| album_of(Some(r))),
+        title: tag_of(r, Field::Title)?,
+        artist: tag_of(r, Field::Artist)?,
+        album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
         seconds: facts.get(&r.plan.audio.key)?.duration?,
     })
+}
+
+/// What an AcoustID lookup asks for a resolved song: the print and length
+/// of its audio, with what names and album it has. A song whose audio
+/// lacks either is not asked.
+#[must_use]
+pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<acoustid::Query> {
+    let audio = facts.get(&r.plan.audio.key)?;
+    Some(acoustid::Query {
+        print: audio.print.clone()?,
+        seconds: audio.duration?,
+        title: tag_of(r, Field::Title),
+        artist: tag_of(r, Field::Artist),
+        album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
+    })
+}
+
+/// The first value a resolved song writes for `f`.
+fn tag_of(r: &Resolved, f: Field) -> Option<String> {
+    r.plan
+        .tags
+        .iter()
+        .find(|(k, _)| k == f.vorbis())
+        .and_then(|(_, v)| v.first().cloned())
 }
 
 /// Every lookup due, a song's for each provider at most once; with
@@ -200,8 +225,9 @@ pub fn due(
         let (has, timed) = lyrics_of(r, &state.facts);
         let album = album_of(r);
         let mut taken = BTreeSet::new();
+        let mut mine = Vec::new();
         for t in config.active() {
-            if kinds.iter().any(|(_, p)| *p == t.find) || taken.contains(&t.find) {
+            if kinds.iter().any(|(_, p)| *p == t.find.yields()) || taken.contains(&t.find) {
                 continue;
             }
             let wanted = match t.when {
@@ -216,6 +242,7 @@ pub fn due(
             };
             let askable = match t.find {
                 Provider::CoverArt => r.and_then(cover_query_of).is_some(),
+                Provider::AcoustId => r.and_then(|r| print_query_of(r, &state.facts)).is_some(),
                 p if p.kept() => r.and_then(|r| query_of(r, &state.facts)).is_some(),
                 _ => true,
             };
@@ -226,13 +253,17 @@ pub fn due(
                     .is_none_or(|l| l.due(now, days, &|k| song.has(k)));
             if wanted && askable && open {
                 taken.insert(t.find);
-                found.push(Due {
+                mine.push(Due {
                     song: n,
                     from: (*from).clone(),
                     find: t.find,
                 });
             }
         }
+        if taken.contains(&Provider::AcoustId) {
+            mine.retain(|d| d.find != Provider::MusicBrainz);
+        }
+        found.extend(mine);
     }
     found
 }
@@ -281,6 +312,7 @@ fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
 pub struct Throttles {
     pub lrclib: Throttle,
     pub musicbrainz: Throttle,
+    pub acoustid: Throttle,
     pub coverart: Throttle,
 }
 
@@ -291,6 +323,7 @@ impl Throttles {
         Self {
             lrclib: lrclib::throttle(),
             musicbrainz: musicbrainz::throttle(),
+            acoustid: acoustid::throttle(),
             coverart: coverart::throttle(),
         }
     }
@@ -301,6 +334,7 @@ impl Throttles {
         Self {
             lrclib: Throttle::none(),
             musicbrainz: Throttle::none(),
+            acoustid: Throttle::none(),
             coverart: Throttle::none(),
         }
     }
@@ -311,6 +345,7 @@ fn service_of(p: Provider) -> &'static str {
     match p {
         Provider::Lrclib => "LRCLIB",
         Provider::MusicBrainz => "MusicBrainz",
+        Provider::AcoustId => "AcoustID",
         Provider::CoverArt => "the Cover Art Archive",
         _ => "YouTube",
     }
@@ -320,6 +355,7 @@ fn service_of(p: Provider) -> &'static str {
 struct Clients<'a> {
     lrclib: lrclib::Client<'a>,
     musicbrainz: musicbrainz::Client<'a>,
+    acoustid: acoustid::Client<'a>,
     coverart: &'a str,
     transport: &'a (dyn HttpTransport + Sync),
     throttle: &'a Throttle,
@@ -348,16 +384,26 @@ fn base(manifest: &Manifest, p: Provider) -> String {
         .unwrap_or_default()
 }
 
+/// What a song's lookups ask, of each kind it can be asked.
+struct Asked<'a> {
+    query: Option<&'a Query>,
+    cover: Option<&'a coverart::Query>,
+    print: Option<&'a acoustid::Query>,
+}
+
 fn look<R: Runner>(
     runner: &R,
     d: &Due,
     located: Option<&Located>,
-    query: Option<&Query>,
-    cover: Option<&coverart::Query>,
+    asked: &Asked<'_>,
     clients: &Clients<'_>,
     audio: &Path,
 ) -> Result<Hit> {
-    let query = || query.context("the song has no title, artist or length");
+    let query = || {
+        asked
+            .query
+            .context("the song has no title, artist or length")
+    };
     Ok(match d.find {
         Provider::YouTubeMusic => {
             let entry = entry_of(runner, &d.from)?;
@@ -384,8 +430,18 @@ fn look<R: Runner>(
             Some(r) => Hit::Tags(Box::new(r)),
             None => Hit::Nothing,
         },
+        Provider::AcoustId => {
+            let q = asked
+                .print
+                .context("the song's audio has no print or length")?;
+            let found = match clients.acoustid.find(q)? {
+                Some(id) => clients.musicbrainz.by_id(&id, q.album.as_deref())?,
+                None => None,
+            };
+            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
+        }
         Provider::CoverArt => {
-            let cover = cover.context("the song names no album")?;
+            let cover = asked.cover.context("the song names no album")?;
             match clients.coverart().find(cover)? {
                 Some(c) => Hit::Cover(Box::new(c)),
                 None => Hit::Nothing,
@@ -515,7 +571,14 @@ pub fn run<R: Runner, W: Write>(
             base(&manifest, Provider::Lrclib),
             base(&manifest, Provider::MusicBrainz),
             base(&manifest, Provider::CoverArt),
+            base(&manifest, Provider::AcoustId),
         );
+        let key = manifest
+            .providers
+            .settings(Provider::AcoustId)
+            .key
+            .clone()
+            .unwrap_or_default();
         let clients = Clients {
             lrclib: lrclib::Client {
                 base: &bases.0,
@@ -526,6 +589,12 @@ pub fn run<R: Runner, W: Write>(
                 base: &bases.1,
                 transport: http,
                 throttle: &throttles.musicbrainz,
+            },
+            acoustid: acoustid::Client {
+                base: &bases.3,
+                key: &key,
+                transport: http,
+                throttle: &throttles.acoustid,
             },
             coverart: &bases.2,
             transport: http,
@@ -574,15 +643,21 @@ pub fn run<R: Runner, W: Write>(
                     resolved.get(&d.song).copied(),
                     &state.facts,
                 ));
-                let query = resolved
-                    .get(&d.song)
-                    .and_then(|r| query_of(r, &state.facts));
+                let r = resolved.get(&d.song);
+                let query = r.and_then(|r| query_of(r, &state.facts));
+                let print = r
+                    .filter(|_| p == Provider::AcoustId)
+                    .and_then(|r| print_query_of(r, &state.facts));
+                let asked = Asked {
+                    query: query.as_ref(),
+                    cover: covers[i].as_ref(),
+                    print: print.as_ref(),
+                };
                 let hit = look(
                     runner,
                     d,
                     store.locate(&d.from).as_ref(),
-                    query.as_ref(),
-                    covers[i].as_ref(),
+                    &asked,
                     &clients,
                     // A folder each: two lookups downloading one candidate
                     // at once would write one file.
@@ -607,6 +682,12 @@ pub fn run<R: Runner, W: Write>(
             hits.extend(group.into_iter().cloned().zip(found));
         }
 
+        let printed = hits.iter().any(|(d, hit)| {
+            d.find == Provider::AcoustId
+                && !hit
+                    .as_ref()
+                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
+        });
         let mut replaced = Vec::new();
         let mut joined = 0_usize;
         let mut put_off: BTreeMap<Provider, (usize, String)> = BTreeMap::new();
@@ -678,9 +759,14 @@ pub fn run<R: Runner, W: Write>(
                             .release
                             .as_ref()
                             .map_or_else(String::new, |r| format!(", on {}", r.title));
+                        let by = if d.find == Provider::AcoustId {
+                            " by its fingerprint on AcoustID"
+                        } else {
+                            ""
+                        };
                         crate::ui::info(
                             acquire.out,
-                            &format!("{name}: tags from MusicBrainz, {key}{on}"),
+                            &format!("{name}: tags from MusicBrainz{by}, {key}{on}"),
                         )?;
                         join(&mut manifest, &mut acquire.known, &d.from, &key);
                         joined += 1;
@@ -801,7 +887,7 @@ pub fn run<R: Runner, W: Write>(
                 &format!("{why}: {n} lookup(s) on {p} wait for the next run"),
             )?;
         }
-        if joined == 0 {
+        if joined == 0 && !printed {
             break;
         }
         force = false;
