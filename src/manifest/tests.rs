@@ -159,11 +159,59 @@ fn a_bad_key_is_refused_rather_than_dropping_its_song() {
 #[test]
 fn another_version_is_refused_and_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(MANIFEST), "version = 2\n").unwrap();
+    std::fs::write(dir.path().join(MANIFEST), "version = 3\n").unwrap();
     assert!(format!("{:#}", Manifest::load(dir.path()).unwrap_err()).contains("newer"));
     std::fs::write(dir.path().join(MANIFEST), "version = 1\n[[song]\n").unwrap();
     assert!(Manifest::load(dir.path()).is_err());
     assert_eq!(text(dir.path()), "version = 1\n[[song]\n");
+}
+
+#[test]
+fn songs_share_a_kept_record_but_never_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"lrclib:7\", \"youtube:aaaaaaaaaaa\"]\n\
+         [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].id(), Some(&SourceKey::youtube("aaaaaaaaaaa")));
+    m.edit(Edit::Add {
+        sources: vec![
+            SourceKey::youtube("bbbbbbbbbbb"),
+            SourceKey::parse("lrclib:7").unwrap(),
+        ],
+        album: None,
+    });
+    m.edit(Edit::Tag {
+        key: SourceKey::youtube("bbbbbbbbbbb"),
+        tags: vec![("genre".into(), vec!["Folk".into()])],
+    });
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(
+        m.songs.len(),
+        2,
+        "the record joins the second song, not the first"
+    );
+    assert!(
+        m.songs
+            .iter()
+            .all(|s| s.has(&SourceKey::parse("lrclib:7").unwrap()))
+    );
+    assert!(
+        text(dir.path()).contains("version = 2"),
+        "{}",
+        text(dir.path())
+    );
+    assert!(m.songs[0].tags.is_empty() || m.songs[0].tags.iter().all(|(_, v)| v.is_empty()));
+
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
 }
 
 #[test]
@@ -221,6 +269,16 @@ fn a_user_s_leading_comment_stays_below_the_header() {
         Some(format!("{HEADER}# mine\nversion = 1\n"))
     );
     assert_eq!(with_header(&format!("{HEADER}version = 1\n")), None);
+    let once = with_header("# mine\nversion = 1\n").unwrap();
+    assert_eq!(with_header(&once), None, "a second save keeps it too");
+    let under = format!("{HEADER}# right under it\nversion = 1\n");
+    assert_eq!(with_header(&under), None);
+    let older = "# muman's song list: an older header.\n\
+                 # Other keys muman does not know are kept.\n# mine\nversion = 1\n";
+    assert_eq!(
+        with_header(older),
+        Some(format!("{HEADER}# mine\nversion = 1\n"))
+    );
 }
 
 #[test]

@@ -71,6 +71,30 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
 }
 
 #[test]
+fn sources_are_counted_by_where_they_come_from_and_kept_ones_can_lie_unused() {
+    let (_dir, dirs) = home();
+    std::fs::create_dir_all(dirs.lrclib()).unwrap();
+    for id in ["7", "8"] {
+        std::fs::write(dirs.lrclib().join(format!("{id}.lrc")), "[00:01.00] la").unwrap();
+    }
+    std::fs::write(
+        dirs.manifest(),
+        "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"lrclib:7\"]\n",
+    )
+    .unwrap();
+    let text = info_text(&dirs, true);
+    assert_eq!(
+        value(&text, "Listed"),
+        "2 (1 fetched by yt-dlp, 1 kept from lookups, 0 manual)"
+    );
+    assert!(value(&text, "Stored").contains("from lookups"), "{text}");
+    assert!(
+        text.contains("8.lrc"),
+        "an orphaned record is unused: {text}"
+    );
+}
+
+#[test]
 fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
     let (_dir, dirs) = home();
     songs(&dirs, &["aaaaaaaaaaa"]);

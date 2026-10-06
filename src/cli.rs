@@ -13,7 +13,8 @@ Exit codes:
      home folder
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query matched no song, or a change needs a terminal, -y or --all";
+  5  A query matched no song, a change needs a terminal, -y or --all, or
+     undo refused";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -53,6 +54,19 @@ pub struct Cli {
     /// close each new source came to every song it was compared with.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// How a long step says how far it has got, on stderr: `auto`, a
+    /// status line on a terminal and plain lines elsewhere; `plain`
+    /// lines; `json` events, one a line; or `none`.
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_PROGRESS",
+        value_name = "MODE",
+        value_enum,
+        default_value_t
+    )]
+    pub progress: crate::progress::Mode,
 }
 
 /// How new sources that may be a listed song are decided.
@@ -163,12 +177,13 @@ fn name_value(text: &str) -> Result<(String, String), String> {
 
 const QUERY_HELP: &str = "\
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
 
@@ -307,6 +322,18 @@ pub enum Command {
         #[arg(short = 'n', long)]
         dry_run: bool,
     },
+    /// Delete fetched sources and lookup records no song uses: an upload
+    /// a release took the place of, a source taken out of its song. A
+    /// removed song's sources stay for `restore`, and a file of your own
+    /// is never touched. A source listed again is fetched again.
+    Purge {
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Say what would be deleted; change nothing.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
     /// Check the library against what muman recorded: files missing,
     /// empty or changed since written, left by an interrupted run, or
     /// not muman's; sources missing or unreadable.
@@ -331,6 +358,16 @@ pub enum Command {
         /// The most the zip may take, such as 4GiB or 700MB.
         #[arg(long, value_name = "SIZE", value_parser = crate::fit::parse_size)]
         max_size: Option<u64>,
+    },
+    /// List the songs listed apart that are one recording, by their audio
+    /// fingerprints: a file of an album there twice, or a track and its
+    /// copies on other albums. Groups on one album come first; songs any
+    /// group holds that the query matches name the groups shown. Changes
+    /// nothing.
+    #[command(after_help = QUERY_HELP)]
+    Duplicates {
+        #[arg(value_name = "QUERY")]
+        query: Vec<String>,
     },
     /// Count what the library holds, whether it is in step with the song
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,

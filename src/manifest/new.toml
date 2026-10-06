@@ -109,7 +109,7 @@ version = 1
 
 # [history]
 # # Changing runs `undo` can put back, and the most their replaced files
-# # may take, in MiB.
+# # may take together, in MiB.
 # runs = 3
 # max_mib = 2048
 

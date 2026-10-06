@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::lrclib::testing::Server;
-use crate::testing::{FLAC, Fake};
+use crate::testing::{FLAC, Fake, words};
 
 fn cli(args: &[&str]) -> Cli {
     Cli::try_parse_from(std::iter::once("muman").chain(args.iter().copied())).unwrap()
@@ -44,7 +44,7 @@ impl Setup {
     fn job(&self, args: &[&str]) -> Job {
         let mut job = Job::from_cli(cli(args), defaults(self.dir.path()));
         job.settling = std::time::Duration::ZERO;
-        job.throttle = crate::http::Throttle::none();
+        job.throttles = crate::lookup::Throttles::none();
         job.dirs = Dirs {
             home: self.dir.path().join("home"),
             library: self.dir.path().join("lib"),
@@ -243,10 +243,42 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
 fn status_changes_nothing() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
-    let (_, text) = s.run(&flacs(), &["status"]);
-    assert!(text.contains("Not listed yet"), "{text}");
+    let (_, report) = s.report(&flacs(), &["status"]);
+    assert!(report.contains("Not listed yet"), "{report}");
     assert!(!s.dir.path().join("home/songs.toml").exists());
     assert!(!s.dir.path().join("lib").exists());
+}
+
+#[test]
+fn status_info_and_check_report_on_stdout() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    for (args, said) in [
+        (&["status"][..], "(up to date)"),
+        (&["info"], "Up to date"),
+        (&["check"], "No problems found"),
+    ] {
+        let (_, report) = s.report(&flacs(), args);
+        assert!(report.contains(said), "{args:?}: {report}");
+    }
+}
+
+impl Setup {
+    /// What a command writes to stdout.
+    fn report(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
+        let mut data = Vec::new();
+        let ok = run_with(
+            &self.job(args),
+            fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut data,
+        )
+        .unwrap();
+        (ok, String::from_utf8(data).unwrap())
+    }
 }
 
 impl Setup {
@@ -319,6 +351,84 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
     assert!(ok, "{text}");
     assert_eq!(s.songs().len(), 2);
     assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 2, "{text}");
+}
+
+#[test]
+fn undo_moves_songs_back_after_a_template_edited_by_hand() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        format!("{listed}\n[library]\ntemplate = \"{{{{ album }}}}/{{{{ title }}}}\"\n"),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved:"), "{text}");
+    assert!(s.dir.path().join("lib/Record/Song.flac").exists());
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved back: Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert!(!s.dir.path().join("lib/Record").exists());
+    assert_eq!(std::fs::read_to_string(&songs).unwrap(), listed);
+}
+
+#[test]
+fn undo_is_refused_before_saying_what_it_would_do() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(&songs, format!("{listed}\n# edited by hand\n")).unwrap();
+    for args in [&["undo", "-n"][..], &["undo", "-y"]] {
+        let mut out = Vec::new();
+        let e = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+    }
+}
+
+#[test]
+fn a_file_of_your_own_at_a_songs_path_is_written_over_only_when_forced() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mine = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "my own rip").unwrap();
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my own rip");
+
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert_ne!(std::fs::read(&mine).unwrap(), b"my own rip");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&mine).unwrap(),
+        "my own rip",
+        "{text}"
+    );
+    assert!(text.contains("Left alone, not muman's"), "{text}");
 }
 
 #[test]
@@ -454,6 +564,40 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     );
 }
 
+#[test]
+fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let record = SourceKey::parse("lrclib:7").unwrap();
+    let songs = s.songs();
+    assert_eq!(songs.len(), 2, "{songs:?}");
+    assert!(songs.iter().all(|k| k.contains(&record)), "{songs:?}");
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(
+        state
+            .lookups
+            .iter()
+            .filter(|l| l.find == "lrclib")
+            .all(|l| l.outcome == crate::state::Outcome::Found(record.clone())),
+        "{:?}",
+        state.lookups
+    );
+
+    let (ok, text) = s.run_against(
+        &Server::default(),
+        &["remove", "-y", "--purge", "manual:a.flac"],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        s.dir.path().join("home/sources/lrclib/7.lrc").exists(),
+        "the other song still lists it: {text}"
+    );
+}
+
 const MBID: &str = "00000000-0000-4000-8000-000000000001";
 
 /// A recording of `Song` by `Artist` on the album `Glass Orchards`, as a
@@ -557,9 +701,45 @@ fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
             .lock()
             .unwrap()
             .iter()
-            .any(|u| u.contains("/ws/2/")),
+            .any(|u| u.contains("/ws/2/recording")),
         "{:?}",
         server.asked
+    );
+}
+
+#[test]
+fn lookups_a_refusing_service_left_wait_for_the_next_run_unrecorded() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let refusing = Server {
+        refusing: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&refusing, &["sync"]);
+    assert!(
+        text.contains("LRCLIB refuses requests for going too fast: 2 lookup(s) on lrclib wait"),
+        "{text}"
+    );
+    let asked = refusing
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/"))
+        .count();
+    assert!(
+        asked <= 8,
+        "a request and three retries per lookup under way: {asked}"
+    );
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(state.lookups.is_empty(), "{:?}", state.lookups);
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics from LRCLIB"),
+        "asked again at once: {text}"
     );
 }
 
@@ -758,4 +938,100 @@ fn export_into_too_little_room_says_what_it_needs() {
     .unwrap_err();
     assert!(format!("{e:#}").contains("cannot hold"), "{e:#}");
     assert!(!zip.exists());
+}
+
+#[test]
+fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let partial = dir.path().join("partial");
+    let stale = partial.join("Chan/Song [vid00000001].f251.webm.part");
+    let fresh = partial.join("Other/Song [vid00000002].f251.webm.part");
+    for file in [&stale, &fresh] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "half").unwrap();
+    }
+    std::fs::create_dir_all(partial.join("Empty")).unwrap();
+    let month_ago = SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(month_ago)
+        .unwrap();
+    clear_stale(&partial, 14);
+    assert!(!stale.exists());
+    assert!(
+        !partial.join("Chan").exists(),
+        "the folder it leaves empty goes"
+    );
+    assert!(!partial.join("Empty").exists());
+    assert!(fresh.exists(), "a later run resumes it");
+}
+
+#[test]
+fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
+    let s = Setup::new();
+    for name in ["a", "b", "c"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    let song = words(1600, 1);
+    let prints = || {
+        flacs()
+            .print("a.flac", song.clone())
+            .print("b.flac", song.clone())
+            .print("c.flac", words(1600, 2))
+    };
+    let (ok, text) = s.run(&prints(), &["sync", "--new"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 3);
+    let (ok, report) = s.report(&prints(), &["duplicates"]);
+    assert!(ok);
+    assert!(
+        report.contains("2 songs, one recording, on one album"),
+        "{report}"
+    );
+    assert!(
+        report.contains("manual:a.flac") && report.contains("manual:b.flac"),
+        "{report}"
+    );
+    assert!(!report.contains("manual:c.flac"), "{report}");
+    let (_, report) = s.report(&prints(), &["duplicates", "c.flac"]);
+    assert!(
+        report.contains("No two songs are one recording"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_album_with_a_soft_cover_finds_one_on_the_cover_art_archive_once() {
+    const GROUP: &str = "00000000-0000-4000-8000-0000000000aa";
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let search = format!(
+        r#"{{"release-groups": [{{"id": "{GROUP}", "title": "Record", "primary-type": "Album",
+            "score": 100, "artist-credit": [{{"name": "Artist"}}]}}]}}"#
+    );
+    let server = Server::default()
+        .answer("/ws/2/release-group?query=", &search)
+        .answer(&format!("/release-group/{GROUP}/front-1200"), "jpeg");
+    let (ok, text) = s.run_against(&server, &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let cover = SourceKey::parse(&format!("coverart:{GROUP}")).unwrap();
+    let songs = s.songs();
+    assert!(songs.iter().all(|k| k.contains(&cover)), "{songs:?}");
+    assert!(
+        s.dir
+            .path()
+            .join(format!("home/sources/coverart/{GROUP}.jpg"))
+            .exists()
+    );
+    let asked = server.asked.lock().unwrap();
+    let count = |part: &str| asked.iter().filter(|u| u.contains(part)).count();
+    assert_eq!(
+        count("/ws/2/release-group"),
+        1,
+        "one search an album: {asked:?}"
+    );
+    assert_eq!(count("/front-1200"), 1, "{asked:?}");
 }

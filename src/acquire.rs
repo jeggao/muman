@@ -70,10 +70,18 @@ impl Fetcher<'_> {
             options: self.options,
             batch: long.then_some(batch.as_path()),
         };
+        // A video is one download; a playlist or channel, how many is not
+        // known until yt-dlp lists it.
+        let videos = urls.iter().all(|u| u.contains("watch?v="));
+        let step = crate::progress::step(
+            "Fetching",
+            videos.then_some(urls.len() as u64).filter(|n| *n > 0),
+        );
         let urls = if long { &[][..] } else { urls };
         let cmd = download::ytdlp_command(&places, template, archive, urls);
         let ok = {
-            let mut relay = Relay::new(out, self.live);
+            let live = self.live && !crate::progress::drawing();
+            let mut relay = Relay::new(out, live).counting(&step);
             runner.stream(&cmd, &mut |line| relay.line(line))?
         };
         let fetched = std::fs::read_to_string(&done)
@@ -414,7 +422,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         )?;
         let audio = self.temp().join("audio");
         let runner = self.runner;
-        let found = parallel::map(&videos, parallel::LOOKUPS, |v| lookup(runner, v, &audio));
+        // A folder each: two lookups downloading one candidate at once
+        // would write one file.
+        let found = parallel::map(&videos, parallel::LOOKUPS, |v| {
+            lookup(runner, v, &audio.join(&v.id))
+        });
         let mut ok = true;
         for (video, found) in videos.iter().zip(found) {
             let title = video.title.clone().unwrap_or_else(|| video.id.clone());
@@ -476,6 +488,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                     add.replaced.push((upload_key, track_key));
                 }
             } else {
+                self.discard_upload(&upload_key)?;
                 add.replaced.push((upload_key, track_key));
             }
             add.proposals.push(Proposal {
@@ -485,6 +498,19 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             });
         }
         Ok(ok)
+    }
+
+    /// Delete an upload a release takes the place of, fetched before by a
+    /// run that listed it alone: no song lists it now.
+    fn discard_upload(&mut self, upload: &SourceKey) -> Result<()> {
+        let none = std::collections::BTreeSet::new();
+        for file in self.store.discard(std::slice::from_ref(upload), &none)? {
+            crate::ui::info(
+                self.out,
+                &format!("  deleted the upload, {}", file.display()),
+            )?;
+        }
+        Ok(())
     }
 
     /// Fetch one source by its key's URL; whether it arrived.

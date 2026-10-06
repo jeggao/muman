@@ -42,6 +42,22 @@ pub fn map<T: Sync, U: Send>(items: &[T], workers: usize, f: impl Fn(&T) -> U + 
         .collect()
 }
 
+/// `f` over `items` in chunks of a few per worker, `workers` at a time,
+/// each chunk's results handed to `on_chunk` in item order before the
+/// next starts, so a long run can keep what it has done as it goes.
+pub fn chunked<T: Sync, U: Send, E>(
+    items: &[T],
+    workers: usize,
+    f: impl Fn(&T) -> U + Sync,
+    mut on_chunk: impl FnMut(&[T], Vec<U>) -> Result<(), E>,
+) -> Result<(), E> {
+    for chunk in items.chunks(workers.max(1) * 8) {
+        let done = map(chunk, workers, &f);
+        on_chunk(chunk, done)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,6 +70,28 @@ mod tests {
             n * 2
         });
         assert_eq!(out, items.iter().map(|n| n * 2).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn chunks_are_handed_on_in_order_each_before_the_next_runs() {
+        let items: Vec<u64> = (0..50).collect();
+        let started = std::sync::atomic::AtomicUsize::new(0);
+        let mut seen = Vec::new();
+        chunked(
+            &items,
+            2,
+            |n| {
+                started.fetch_add(1, Ordering::Relaxed);
+                n * 2
+            },
+            |chunk, done| {
+                assert_eq!(started.load(Ordering::Relaxed), seen.len() + chunk.len());
+                seen.extend(done);
+                Ok::<(), ()>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, items.iter().map(|n| n * 2).collect::<Vec<_>>());
     }
 
     #[test]

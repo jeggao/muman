@@ -20,7 +20,8 @@ Exit codes:
      home folder
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query matched no song, or a change needs a terminal, -y or --all
+  5  A query matched no song, a change needs a terminal, -y or --all, or
+     undo refused
 ```
 
 **Subcommands:**
@@ -33,9 +34,11 @@ Exit codes:
 * `set` — Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
+* `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
+* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Options:**
@@ -43,6 +46,20 @@ Exit codes:
 * `--home <DIR>` — The state root: the song list, the state file and the sources [default: the platform's local data folder, then `muman`]
 * `--library <DIR>` — Folder the songs are written to [default: the song list's `[library] path`, else the platform's music folder, then `muman`]
 * `-v`, `--verbose` — Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how close each new source came to every song it was compared with
+* `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line; or `none`
+
+  Default value: `auto`
+
+  Possible values:
+  - `auto`:
+    A status line on a terminal, plain lines elsewhere
+  - `plain`:
+    Plain lines, terminal or not
+  - `json`:
+    JSON events, one a line
+  - `none`:
+    Nothing
+
 
 
 
@@ -97,12 +114,13 @@ List the songs a query matches, one per line: its first key, then its artist, ti
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -127,12 +145,13 @@ Remove the songs a query matches: their library files go, and they are kept unde
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -158,12 +177,13 @@ List again the removed songs a query matches, fetching any source purged
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -217,12 +237,13 @@ Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -247,6 +268,19 @@ Put the song list and the library back as they were before the last run that cha
 
 * `-y`, `--yes`
 * `-n`, `--dry-run` — Say what would be put back; change nothing
+
+
+
+### `muman purge`
+
+Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
+
+**Usage:** `muman purge [OPTIONS]`
+
+**Options:**
+
+* `-y`, `--yes`
+* `-n`, `--dry-run` — Say what would be deleted; change nothing
 
 
 
@@ -282,6 +316,31 @@ Write the song list and the library, as the last run left them, into one zip: so
 
   Default value: `muman.zip`
 * `--max-size <SIZE>` — The most the zip may take, such as 4GiB or 700MB
+
+
+
+### `muman duplicates`
+
+List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
+
+**Usage:** `muman duplicates [QUERY]...`
+
+```text
+Query:
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
+```
+
+**Arguments:**
+
+* `<QUERY>`
 
 
 

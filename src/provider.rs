@@ -34,15 +34,18 @@ pub enum Provider {
     Lrclib,
     /// Tags from musicbrainz.org.
     MusicBrainz,
+    /// Covers from the Cover Art Archive.
+    CoverArt,
 }
 
 impl Provider {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Manual,
         Self::YouTube,
         Self::YouTubeMusic,
         Self::Lrclib,
         Self::MusicBrainz,
+        Self::CoverArt,
     ];
 
     #[must_use]
@@ -53,6 +56,7 @@ impl Provider {
             Self::YouTubeMusic => "youtube-music",
             Self::Lrclib => "lrclib",
             Self::MusicBrainz => "musicbrainz",
+            Self::CoverArt => "coverart",
         }
     }
 
@@ -81,9 +85,7 @@ impl Provider {
                 } else {
                     Self::YouTube
                 }),
-                LRCLIB => Some(Self::Lrclib),
-                MUSICBRAINZ => Some(Self::MusicBrainz),
-                _ => None,
+                other => crate::store::kept(other).map(|k| k.provider),
             },
         }
     }
@@ -103,6 +105,8 @@ impl Provider {
             Self::Lrclib => (7, 4, 300),
             // Its requests go a second apart whatever runs them (`musicbrainz`).
             Self::MusicBrainz => (30, 1, 200),
+            // One lookup an album, its searches on MusicBrainz's pace.
+            Self::CoverArt => (30, 1, 500),
         };
         Settings {
             enabled: true,
@@ -112,6 +116,7 @@ impl Provider {
             url: match self {
                 Self::Lrclib => Some(LRCLIB_URL.to_string()),
                 Self::MusicBrainz => Some(MUSICBRAINZ_URL.to_string()),
+                Self::CoverArt => Some(COVERART_URL.to_string()),
                 Self::Manual | Self::YouTube | Self::YouTubeMusic => None,
             },
         }
@@ -121,7 +126,7 @@ impl Provider {
     /// `sync` fetches again by ID when gone.
     #[must_use]
     pub fn kept(self) -> bool {
-        matches!(self, Self::Lrclib | Self::MusicBrainz)
+        crate::store::KEPT.iter().any(|k| k.provider == self)
     }
 }
 
@@ -137,12 +142,16 @@ const LRCLIB_URL: &str = "https://lrclib.net";
 /// The extractor name MusicBrainz's keys carry: `musicbrainz:<recording id>`.
 pub const MUSICBRAINZ: &str = "musicbrainz";
 const MUSICBRAINZ_URL: &str = "https://musicbrainz.org";
+/// The extractor name the Cover Art Archive's keys carry:
+/// `coverart:<release group or release id>`.
+pub const COVERART: &str = "coverart";
+const COVERART_URL: &str = "https://coverartarchive.org";
 
 /// Whether `key` is a record muman keeps from a lookup, as
 /// [`Provider::kept`] says.
 #[must_use]
 pub fn is_kept(key: &SourceKey) -> bool {
-    matches!(key, SourceKey::Remote { extractor, .. } if extractor == LRCLIB || extractor == MUSICBRAINZ)
+    matches!(key, SourceKey::Remote { extractor, .. } if crate::store::kept(extractor).is_some())
 }
 
 /// One provider's settings.
@@ -170,6 +179,9 @@ pub enum When {
     NoTimedLyrics,
     /// No source names the song's album, nor does the song list.
     NoAlbum,
+    /// The song has no cover, or one with less detail than
+    /// [`crate::quality::SOFT_COVER`].
+    SmallCover,
 }
 
 impl When {
@@ -179,7 +191,10 @@ impl When {
             "no-lyrics" => Self::NoLyrics,
             "no-timed-lyrics" => Self::NoTimedLyrics,
             "no-album" => Self::NoAlbum,
-            _ => bail!("`{name}` is no condition: always, no-lyrics, no-timed-lyrics, no-album"),
+            "small-cover" => Self::SmallCover,
+            _ => bail!(
+                "`{name}` is no condition: always, no-lyrics, no-timed-lyrics, no-album, small-cover"
+            ),
         })
     }
 }
@@ -202,7 +217,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        use Provider::{Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
+        use Provider::{CoverArt, Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
         Self {
             providers: Provider::ALL
                 .into_iter()
@@ -230,6 +245,11 @@ impl Default for Config {
                     from: vec![Manual, YouTube, YouTubeMusic],
                     find: MusicBrainz,
                     when: When::NoAlbum,
+                },
+                Trigger {
+                    from: vec![Manual, YouTube, YouTubeMusic],
+                    find: CoverArt,
+                    when: When::SmallCover,
                 },
             ],
         }

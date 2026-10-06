@@ -488,17 +488,30 @@ fn fit_or_leave_out(
             return Pass::Measure(unknown);
         }
         *floor = Some(at_least);
-        let least = |i: &Item| i.rungs.iter().map(|r| r.bytes).min().unwrap_or(0);
-        let mut total: u64 = now.iter().map(least).sum();
-        let mut keep = ladders.len();
-        while total > policy.max && keep > 0 {
-            keep -= 1;
-            total -= least(&now[keep]);
-        }
+        let least: Vec<u64> = now
+            .iter()
+            .map(|i| i.rungs.iter().map(|r| r.bytes).min().unwrap_or(0))
+            .collect();
+        let keep = kept_of(&least, policy.max);
         left_out.extend(planned[keep..].iter().map(|(n, _)| *n));
         ladders.truncate(keep);
         planned.truncate(keep);
     }
+}
+
+/// How many of songs taking at least `least` bytes each, the first
+/// kept longest, may stay within `max`; fewer than all, as it is asked
+/// only once they do not fit: the margin allocating adds can refuse
+/// songs whose plain sizes fit, and leaving none out would ask again for
+/// ever.
+fn kept_of(least: &[u64], max: u64) -> usize {
+    let mut total: u64 = least.iter().sum();
+    let mut keep = least.len();
+    while keep > 0 && (total > max || keep == least.len()) {
+        keep -= 1;
+        total -= least[keep];
+    }
+    keep
 }
 
 /// Where fitting renders, and from what.
@@ -664,6 +677,18 @@ pub fn library_size(state: &State, library: &Path, block: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_songs_out_leaves_out_one_at_least() {
+        assert_eq!(kept_of(&[10, 10, 10], 25), 2);
+        assert_eq!(kept_of(&[10, 10, 10], 15), 1);
+        assert_eq!(
+            kept_of(&[10, 10, 10], 30),
+            2,
+            "refused with the margin, though the sizes alone fit"
+        );
+        assert_eq!(kept_of(&[], 30), 0);
+    }
 
     #[test]
     fn a_file_takes_whole_blocks() {

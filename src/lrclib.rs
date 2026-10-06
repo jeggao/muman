@@ -6,9 +6,14 @@
 //! by title and artist. A record fits when its length is within 2 s of
 //! the song's audio, and its track and artist names hold the song's,
 //! compared as YouTube Music's are, by letters and digits without
-//! featured artists. Of those, a timed one wins, then the closest in
-//! length. Measured against lrclib.net: asking for 300 s returned a 302 s
-//! record, and a miss is a 404 `TrackNotFound`.
+//! featured artists (`music::names_match`). Of those, one with words
+//! wins over one marked instrumental, then one named exactly the song's
+//! title over one whose name only holds it, as `Rain (Live)` holds
+//! `Rain`, then a timed one, then the closest in length. A search lists
+//! a song's instrumental or off-vocal take beside it, as long, so an
+//! instrumental record is taken only when no record with words fits.
+//! Measured against lrclib.net: asking for 300 s returned a 302 s record,
+//! and a miss is a 404 `TrackNotFound`.
 //!
 //! The stated length, `[length:mm:ss.cc]` atop the `.lrc`, is what ranks
 //! the record's lyrics against the chosen audio (`resolve`): a timed
@@ -16,22 +21,37 @@
 //! lines win over untimed or missing ones. An instrumental record stops
 //! the song looking; a record deleted from the store is fetched again by
 //! its ID.
+//!
+//! LRCLIB publishes no limit, but the Cloudflare in front of lrclib.net
+//! refused about one lookup in ten of a 1,600-song run that asked four at
+//! a time, unspaced, with a 429 (error 1015). Requests go at most one per
+//! `GAP` across a run, and a refusal holds them back `BACKOFF`,
+//! doubling, as [`crate::http::Service`] does for every service.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::http::{HttpTransport, TransportError};
+use crate::http::{HttpTransport, Service, Throttle};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::clean;
 use crate::music;
 
 /// The record a lookup takes must be within this of the song's length;
 /// LRCLIB's own lookup allows as much.
 const MAX_GAP_S: f64 = 2.0;
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// The least time between two requests across a run.
+const GAP: Duration = Duration::from_millis(250);
+/// How long a refusal holds requests back, doubling with each in a row.
+const BACKOFF: Duration = Duration::from_secs(10);
+
+/// The spacing of a run's requests to LRCLIB.
+#[must_use]
+pub fn throttle() -> Throttle {
+    Throttle::new(GAP, BACKOFF)
+}
 
 /// What a lookup is told of the song.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,18 +93,26 @@ impl Record {
         self.duration.map_or(f64::MAX, |d| (d - seconds).abs())
     }
 
+    /// Whether it has words, timed or not.
+    fn has_words(&self) -> bool {
+        self.synced()
+            || self
+                .plain_lyrics
+                .as_deref()
+                .is_some_and(|l| !l.trim().is_empty())
+    }
+
+    /// How closely its name is the query's title.
+    fn titled(&self, q: &Query) -> Option<music::Exactness> {
+        music::names_match(self.track_name.as_deref().unwrap_or_default(), &q.title)
+    }
+
     /// Whether it is the query's song by its names and length.
     fn fits(&self, q: &Query) -> bool {
-        let same = |a: Option<&str>, b: &str| {
-            let (a, b) = (
-                music::normalize(clean::without_credits(a.unwrap_or_default())),
-                music::normalize(clean::without_credits(b)),
-            );
-            !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
-        };
         self.gap(q.seconds) <= MAX_GAP_S
-            && same(self.track_name.as_deref(), &q.title)
-            && same(self.artist_name.as_deref(), &q.artist)
+            && self.titled(q).is_some()
+            && music::names_match(self.artist_name.as_deref().unwrap_or_default(), &q.artist)
+                .is_some()
     }
 
     /// The `.lrc` it is kept as: timed lines when it has them, its
@@ -125,10 +153,12 @@ pub enum Found {
     Nothing,
 }
 
-/// One LRCLIB server, asked through `transport`.
+/// One LRCLIB server, asked through `transport` at the pace of
+/// `throttle`.
 pub struct Client<'a> {
     pub base: &'a str,
     pub transport: &'a (dyn HttpTransport + Sync),
+    pub throttle: &'a Throttle,
 }
 
 impl std::fmt::Debug for Client<'_> {
@@ -143,14 +173,12 @@ impl Client<'_> {
     fn get(&self, path: &str) -> Result<Option<String>> {
         let url = format!("{}{path}", self.base.trim_end_matches('/'));
         let agent = crate::http::user_agent();
-        match self
-            .transport
-            .get_json(&url, &[("User-Agent", agent.as_str())], TIMEOUT)
-        {
-            Ok(body) => Ok(Some(body)),
-            Err(TransportError::Status { code: 404, .. }) => Ok(None),
-            Err(e) => Err(anyhow::anyhow!("{url}: {e}")),
+        Service {
+            name: "LRCLIB",
+            transport: self.transport,
+            throttle: self.throttle,
         }
+        .get_text(&url, &[("User-Agent", agent.as_str())], TIMEOUT)
     }
 
     /// The record of one ID, to fetch a kept one again.
@@ -161,8 +189,8 @@ impl Client<'_> {
     }
 
     /// The song's record: asked for by all four when the album is known,
-    /// else searched for by title and artist; of those that fit, the
-    /// timed, then the closest in length.
+    /// else searched for by title and artist; of those that fit, ranked as
+    /// the module docs say.
     pub fn find(&self, q: &Query) -> Result<Found> {
         let enc = |s: &str| music::percent_encode(s);
         let mut candidates: Vec<Record> = Vec::new();
@@ -193,20 +221,15 @@ impl Client<'_> {
             }
         }
         let best = candidates.into_iter().filter(|r| r.fits(q)).min_by(|a, b| {
-            b.synced()
-                .cmp(&a.synced())
+            b.has_words()
+                .cmp(&a.has_words())
+                .then(b.titled(q).cmp(&a.titled(q)))
+                .then(b.synced().cmp(&a.synced()))
                 .then(a.gap(q.seconds).total_cmp(&b.gap(q.seconds)))
         });
         Ok(match best {
+            Some(r) if r.has_words() => Found::Lyrics(r),
             Some(r) if r.instrumental => Found::Instrumental(r),
-            Some(r)
-                if r.synced()
-                    || r.plain_lyrics
-                        .as_deref()
-                        .is_some_and(|l| !l.trim().is_empty()) =>
-            {
-                Found::Lyrics(r)
-            }
             _ => Found::Nothing,
         })
     }
@@ -242,11 +265,13 @@ pub mod testing {
     use crate::http::{HttpTransport, TransportError};
 
     /// Answers each GET from the first record whose path fragment the
-    /// URL holds; 404 for any other.
+    /// URL holds; 404 for any other. A `refusing` server answers every
+    /// GET with a 429.
     #[derive(Debug, Default)]
     pub struct Server {
         pub answers: Vec<(String, String)>,
         pub asked: Mutex<Vec<String>>,
+        pub refusing: bool,
     }
 
     impl Server {
@@ -258,21 +283,29 @@ pub mod testing {
     }
 
     impl HttpTransport for Server {
-        fn get_json(
+        fn get(
             &self,
             url: &str,
             headers: &[(&str, &str)],
             _: Duration,
-        ) -> Result<String, TransportError> {
+        ) -> Result<Vec<u8>, TransportError> {
             assert!(headers.iter().any(|(k, _)| *k == "User-Agent"));
             self.asked.lock().unwrap().push(url.to_string());
+            if self.refusing {
+                return Err(TransportError::Status {
+                    code: 429,
+                    body: "error code: 1015".into(),
+                    retry_after: None,
+                });
+            }
             self.answers
                 .iter()
                 .find(|(f, _)| url.contains(f.as_str()))
-                .map(|(_, b)| b.clone())
+                .map(|(_, b)| b.clone().into_bytes())
                 .ok_or(TransportError::Status {
                     code: 404,
                     body: "TrackNotFound".into(),
+                    retry_after: None,
                 })
         }
     }
@@ -307,6 +340,7 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         let Found::Lyrics(r) = client.find(&query()).unwrap() else {
             panic!("nothing found");
@@ -318,6 +352,41 @@ mod tests {
         );
     }
 
+    fn found(records: &str) -> Found {
+        let server = Server::default().answer("/api/search", records);
+        let client = Client {
+            base: "http://lrclib.test",
+            transport: &server,
+            throttle: &Throttle::none(),
+        };
+        client.find(&query()).unwrap()
+    }
+
+    #[test]
+    fn a_record_with_words_wins_over_an_instrumental_one() {
+        let records = r#"[
+            {"id": 8, "trackName": "Lantern Weather", "artistName": "Paper Comets", "duration": 354.0,
+             "instrumental": true},
+            {"id": 9, "trackName": "Lantern Weather", "artistName": "Paper Comets", "duration": 356.0,
+             "plainLyrics": "Is the harbor still awake?"}
+        ]"#;
+        assert!(matches!(found(records), Found::Lyrics(r) if r.id == 9));
+        let alone = r#"[{"id": 8, "trackName": "Lantern Weather (Off Vocal)", "artistName": "Paper Comets",
+            "duration": 354.0, "instrumental": true}]"#;
+        assert!(matches!(found(alone), Found::Instrumental(_)));
+    }
+
+    #[test]
+    fn the_song_named_exactly_wins_over_one_holding_its_name() {
+        let records = r#"[
+            {"id": 10, "trackName": "Lantern Weather (Live)", "artistName": "Paper Comets", "duration": 354.0,
+             "syncedLyrics": "[00:01.00] live"},
+            {"id": 11, "trackName": "Lantern Weather", "artistName": "Paper Comets", "duration": 355.0,
+             "plainLyrics": "studio"}
+        ]"#;
+        assert!(matches!(found(records), Found::Lyrics(r) if r.id == 11));
+    }
+
     #[test]
     fn nothing_fits_another_song_or_length() {
         let server = Server::default().answer(
@@ -327,12 +396,14 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         assert_eq!(client.find(&query()).unwrap(), Found::Nothing);
         let none = Server::default();
         let client = Client {
             base: "http://lrclib.test",
             transport: &none,
+            throttle: &Throttle::none(),
         };
         assert_eq!(client.find(&query()).unwrap(), Found::Nothing);
     }
@@ -346,6 +417,7 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test/",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         let q = Query {
             album: Some("Rooms of Salt".into()),

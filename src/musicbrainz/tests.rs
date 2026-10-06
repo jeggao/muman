@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::http::TransportError;
 use crate::lrclib::testing::Server;
 
 const REC: &str = "00000000-0000-0000-0000-00000000000";
@@ -191,6 +192,33 @@ fn a_recording_on_no_release_offers_its_own_names() {
 }
 
 #[test]
+fn a_record_fetched_again_keeps_the_album_it_was_kept_on() {
+    let body = recording(
+        8,
+        "Lantern Weather",
+        355_000,
+        &[
+            release(1, "Rooms of Salt", "Album", "", "2003"),
+            release(2, "Best of the Comets", "Album", "", "1999"),
+        ]
+        .join(","),
+    );
+    let server = Server::default().answer(&format!("/ws/2/recording/{REC}8?inc="), &body);
+    let throttle = Throttle::none();
+    let again = |album| {
+        client(&server, &throttle)
+            .by_id(&format!("{REC}8"), album)
+            .unwrap()
+            .unwrap()
+            .release
+            .unwrap()
+            .title
+    };
+    assert_eq!(again(None), "Best of the Comets", "the earliest, unasked");
+    assert_eq!(again(Some("Rooms of Salt")), "Rooms of Salt");
+}
+
+#[test]
 fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
     let body = format!(
         r#"{{"id": "{REC}7", "title": "Lantern Weather", "length": null, "video": false,
@@ -203,7 +231,7 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
     let server = Server::default().answer(&format!("/ws/2/recording/{REC}7?inc="), &body);
     let throttle = Throttle::none();
     let record = client(&server, &throttle)
-        .by_id(&format!("{REC}7"))
+        .by_id(&format!("{REC}7"), None)
         .unwrap()
         .unwrap();
     assert_eq!(record.isrcs, ["XX0000000002"]);
@@ -213,7 +241,9 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
         (Some(3), Some(1), None)
     );
     assert_eq!(
-        client(&Server::default(), &throttle).by_id("x").unwrap(),
+        client(&Server::default(), &throttle)
+            .by_id("x", None)
+            .unwrap(),
         None
     );
 }
@@ -227,12 +257,12 @@ struct Busy {
 }
 
 impl HttpTransport for Busy {
-    fn get_json(
+    fn get(
         &self,
         _: &str,
         headers: &[(&str, &str)],
         _: Duration,
-    ) -> Result<String, TransportError> {
+    ) -> Result<Vec<u8>, TransportError> {
         let mut asked = self.asked.lock().unwrap();
         asked.push(
             headers
@@ -244,9 +274,10 @@ impl HttpTransport for Busy {
             return Err(TransportError::Status {
                 code: 503,
                 body: "Your requests are exceeding the allowable rate limit.".into(),
+                retry_after: None,
             });
         }
-        Ok(r#"{"recordings": []}"#.into())
+        Ok(br#"{"recordings": []}"#.to_vec())
     }
 }
 
@@ -276,7 +307,29 @@ fn a_refusal_for_going_too_fast_is_asked_again_three_times() {
         ..Busy::default()
     };
     let e = client(&busier, &throttle).find(&query()).unwrap_err();
-    assert!(format!("{e:#}").contains("status 503"), "{e:#}");
+    assert!(e.downcast_ref::<crate::http::Refusing>().is_some(), "{e:#}");
+}
+
+#[test]
+fn a_recording_titled_exactly_wins_over_one_holding_the_title() {
+    let body = search(&[
+        recording(
+            1,
+            "Lantern Weather Again",
+            355_000,
+            &release(1, "Rooms of Salt", "Album", "", "2003"),
+        ),
+        recording(
+            2,
+            "Lantern Weather",
+            355_000,
+            &release(2, "Lantern Weather", "Single", "", "2004"),
+        ),
+    ]);
+    let server = Server::default().answer("/ws/2/recording?", &body);
+    let throttle = Throttle::none();
+    let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
+    assert_eq!(record.title, "Lantern Weather");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "muman"
-version = "0.1.2"
+version = "0.2.0"
 description = "Keep a music library in step with a song list, each song made from the best of its sources."
 edition = "2024"
 rust-version = "1.89"
@@ -21,6 +21,7 @@ deunicode = "1"
 directories = "6"
 dunce = "1"
 filetime = "0.2"
+indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 lofty = "0.25"
 minijinja = "2"

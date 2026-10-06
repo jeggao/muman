@@ -217,7 +217,10 @@ pub fn identify<R: Runner, W: Write>(
             None => None,
         };
         if let Some(n) = join {
-            let mut sources = vec![known[n].keys[0].clone()];
+            let mut sources: Vec<SourceKey> = crate::manifest::id_of(&known[n].keys)
+                .cloned()
+                .into_iter()
+                .collect();
             sources.extend(p.sources.iter().cloned());
             known[n].keys.extend(p.sources);
             edits.push(Edit::Add {

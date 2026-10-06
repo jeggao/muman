@@ -16,6 +16,7 @@ use crate::dirs::{Dirs, STATE};
 use crate::facts::Facts;
 use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
+use crate::quality::SOFT_COVER;
 use crate::reconcile;
 use crate::resolve::{Resolved, SINGLE};
 use crate::source::SourceKey;
@@ -29,9 +30,6 @@ use crate::tags::Field;
 const NARROW_HZ: f64 = 16_000.0;
 /// Clipped samples above this share are heard.
 const CLIPPED: f64 = 0.001;
-/// A cover whose detail holds up to fewer pixels than this looks soft
-/// on a large screen.
-const SOFT_COVER: u32 = 500;
 /// The label column's width.
 const LABEL: usize = 24;
 
@@ -74,7 +72,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let mut failures = Vec::new();
-    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut failures)?;
+    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, None, &mut failures)?;
     crate::limit::as_written(&manifest, &state, &mut planned);
     let c = Context {
         dirs,
@@ -195,25 +193,34 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     heading(out, "Sources")?;
     let listed = c.manifest.keys();
-    let remote = listed
+    let kept = listed
         .iter()
-        .filter(|k| matches!(k, SourceKey::Remote { .. }))
+        .filter(|k| crate::provider::is_kept(k))
+        .count();
+    let manual = listed
+        .iter()
+        .filter(|k| matches!(k, SourceKey::Manual(_)))
         .count();
     row(
         out,
         "Listed",
         &format!(
-            "{} ({remote} fetched by yt-dlp, {} manual)",
+            "{} ({} fetched by yt-dlp, {kept} kept from lookups, {manual} manual)",
             listed.len(),
-            listed.len() - remote
+            listed.len() - kept - manual
         ),
     )?;
+    let lookups: u64 = crate::store::KEPT
+        .iter()
+        .map(|k| folder_size(&k.dir(c.dirs)))
+        .sum();
     row(
         out,
         "Stored",
         &format!(
-            "{} in yt-dlp, {} manual",
+            "{} fetched by yt-dlp, {} from lookups, {} manual",
             crate::ui::bytes(folder_size(&c.dirs.ytdlp())),
+            crate::ui::bytes(lookups),
             crate::ui::bytes(folder_size(&c.dirs.manual()))
         ),
     )?;
@@ -311,7 +318,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         new.add(&key.to_string());
     }
     for path in settling {
-        new.add(&crate::relpath::show(&path));
+        new.add(&SourceKey::Manual(path).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let mut unused = Group::default();
@@ -319,9 +326,9 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .store
         .unused(&listed)
         .iter()
-        .filter(|p| p.starts_with(c.dirs.ytdlp()))
+        .filter(|p| !p.starts_with(c.dirs.manual()))
     {
-        unused.add(&crate::relpath::show(path));
+        unused.add(&path.display().to_string());
     }
     group(out, c.verbose, "Fetched, not listed", &unused)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;

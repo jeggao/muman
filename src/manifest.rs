@@ -7,11 +7,19 @@
 //! `version` names the format. A file of another version is refused,
 //! never rewritten by a program that cannot read it.
 //!
-//! There is no song ID: a song is the sources it lists, and a key
-//! belongs to one song only. A key that does not parse, one two songs
-//! list, and a pin outside the song's sources stop the run before
-//! anything is written, rather than a song being silently dropped and
-//! its file deleted.
+//! There is no song ID: a song is the sources it lists, and is named by
+//! the first of them that belongs to it alone ([`Song::id`]). A file
+//! fetched or dropped in belongs to one song only; a record a lookup
+//! keeps, an LRCLIB record or a MusicBrainz recording, is data any song
+//! of that recording may list, as two releases of one recording share
+//! its lyrics. A key that does not parse, a file two songs list, and a
+//! pin outside the song's sources stop the run before anything is
+//! written, rather than a song being silently dropped and its file
+//! deleted.
+//!
+//! A list in which songs share a record is format version 2, which an
+//! older muman refuses rather than misreads; any other is written as
+//! version 1, which this one reads as well.
 //!
 //! muman changes the file only by recording edits and applying them to
 //! the file as it is when saved, under the folder's lock and through a
@@ -47,9 +55,28 @@ use crate::provider;
 use crate::source::SourceKey;
 use crate::tags;
 
-/// The format this version reads and writes. Adding a key is not a new
-/// version; changing what an existing key means is.
-pub const VERSION: i64 = 1;
+/// The newest format this version reads, written only when songs share
+/// a record. Adding a key is not a new version; changing what an
+/// existing key means is.
+pub const VERSION: i64 = 2;
+
+/// The format written when no record is shared, which every version
+/// since 0.1 reads.
+const PLAIN: i64 = 1;
+
+/// Whether songs may share `key`: a record a lookup keeps, not a file of
+/// one song's.
+#[must_use]
+pub fn shareable(key: &SourceKey) -> bool {
+    provider::is_kept(key)
+}
+
+/// The key that names a song listing `keys`: the first only it lists,
+/// else the first.
+#[must_use]
+pub fn id_of(keys: &[SourceKey]) -> Option<&SourceKey> {
+    keys.iter().find(|k| !shareable(k)).or_else(|| keys.first())
+}
 
 /// How to use the file, kept at its top; rewritten whenever it differs
 /// from an earlier version's.
@@ -84,6 +111,9 @@ const HEADER: &str = "\
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
+
+/// How the last line of every version's header begins.
+const HEADER_END: &str = "# Other keys muman does not know are kept.";
 
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
@@ -122,6 +152,12 @@ impl Song {
     pub fn has(&self, key: &SourceKey) -> bool {
         self.sources.contains(key)
     }
+
+    /// The key that names this song alone, by [`id_of`].
+    #[must_use]
+    pub fn id(&self) -> Option<&SourceKey> {
+        id_of(&self.sources)
+    }
 }
 
 /// A song removed from the list, kept whole under `[[removed]]` so its
@@ -144,7 +180,8 @@ pub struct Album {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Edit {
     /// A new song, or more sources for the one already listing any key
-    /// of `sources`; its album and place are set when it has none.
+    /// of `sources` no other song may share; its album and place are set
+    /// when it has none.
     Add {
         sources: Vec<SourceKey>,
         album: Option<(SourceKey, u32)>,
@@ -163,7 +200,7 @@ pub enum Edit {
     Tag { key: SourceKey, tags: Tags },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: String },
-    /// The removed song listing `key` listed again, without any key a
+    /// The removed song listing `key` listed again, without any file a
     /// song lists meanwhile.
     Restore(SourceKey),
     /// Songs edited together: the song listing each key replaced or
@@ -264,14 +301,20 @@ impl Manifest {
             .collect()
     }
 
-    /// The song tables listing any of `keys`, as the file holds them now.
-    pub fn tables_of(&self, keys: &[SourceKey]) -> Result<Vec<Table>> {
-        let wanted: Vec<String> = keys.iter().map(ToString::to_string).collect();
+    /// The song table each of `ids` names, as the file holds it now, read
+    /// once for them all.
+    pub fn tables_by_id(&self, ids: &[SourceKey]) -> Result<BTreeMap<SourceKey, Table>> {
+        let wanted: BTreeMap<String, &SourceKey> = ids.iter().map(|k| (k.to_string(), k)).collect();
         let doc = read(&self.dir)?;
-        Ok(tables(&doc, "song")
-            .filter(|t| listed_keys(t).iter().any(|k| wanted.contains(k)))
-            .cloned()
-            .collect())
+        let mut found = BTreeMap::new();
+        for table in tables(&doc, "song") {
+            for key in listed_keys(table) {
+                if let Some(id) = wanted.get(&key) {
+                    found.entry((*id).clone()).or_insert_with(|| table.clone());
+                }
+            }
+        }
+        Ok(found)
     }
 
     #[must_use]
@@ -313,11 +356,12 @@ impl Manifest {
         let changed: Vec<SourceKey> = expected
             .iter()
             .filter(|e| {
-                !e.sources
+                !now.songs
                     .iter()
-                    .any(|k| now.songs.iter().find(|s| s.has(k)).is_some_and(|s| s == *e))
+                    .find(|s| s.id().is_some() && s.id() == e.id())
+                    .is_some_and(|s| s == *e)
             })
-            .filter_map(|e| e.sources.first().cloned())
+            .filter_map(|e| e.id().cloned())
             .collect();
         if !changed.is_empty() {
             return Ok(changed);
@@ -327,6 +371,20 @@ impl Manifest {
         }
         normalize(&mut doc);
         let parsed = parse(&doc)?;
+        let shared = parsed
+            .songs
+            .iter()
+            .flat_map(|s| &s.sources)
+            .filter(|k| shareable(k));
+        let mut seen = BTreeSet::new();
+        let version = if shared.into_iter().all(|k| seen.insert(k)) {
+            PLAIN
+        } else {
+            VERSION
+        };
+        if doc.get("version").and_then(Item::as_integer) != Some(version) {
+            doc["version"] = value(version);
+        }
         let text = doc.to_string();
         let text = with_header(&text).unwrap_or(text);
         atomic::write(&self.dir, MANIFEST, text.as_bytes())?;
@@ -366,7 +424,14 @@ impl Manifest {
 /// those are no header or an earlier one; `None` when already current.
 /// Leading comments of the user's own are kept below it.
 fn with_header(text: &str) -> Option<String> {
-    let lead = text.lines().take_while(|l| l.starts_with('#')).count();
+    let comments = text.lines().take_while(|l| l.starts_with('#')).count();
+    // Every version's header ends on this line; a comment below it is the
+    // user's, even with no blank line between.
+    let lead = text
+        .lines()
+        .take(comments)
+        .position(|l| l.starts_with(HEADER_END))
+        .map_or(comments, |at| at + 1);
     let ours = text
         .lines()
         .next()
@@ -397,7 +462,7 @@ fn read(dir: &Path) -> Result<DocumentMut> {
         .parse()
         .with_context(|| format!("{} is not valid TOML", file.display()))?;
     match doc.get("version").and_then(Item::as_integer) {
-        Some(VERSION) => {}
+        Some(PLAIN..=VERSION) => {}
         Some(v) if v > VERSION => bail!(
             "{} is format version {v}, newer than this muman's {VERSION}; \
              update muman before it changes the list",
@@ -459,6 +524,27 @@ fn keys_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
         .collect()
 }
 
+/// The keys song `n`'s table lists, refused when another song lists one
+/// of its files: `owner` has every file's song so far.
+fn owned_keys(
+    t: &Table,
+    what: &str,
+    n: usize,
+    owner: &mut BTreeMap<SourceKey, usize>,
+) -> Result<Vec<SourceKey>> {
+    let keys = keys_of(t, what)?;
+    for key in keys.iter().filter(|k| !shareable(k)) {
+        if let Some(other) = owner.insert(key.clone(), n) {
+            bail!(
+                "{key} is listed by both song {} and song {}",
+                other + 1,
+                n + 1
+            );
+        }
+    }
+    Ok(keys)
+}
+
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let lyrics = doc
         .get("defaults")
@@ -477,17 +563,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut owner: BTreeMap<SourceKey, usize> = BTreeMap::new();
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
-        let mut sources = Vec::new();
-        for key in keys_of(t, &what)? {
-            if let Some(other) = owner.insert(key.clone(), n) {
-                bail!(
-                    "{key} is listed by both song {} and song {}",
-                    other + 1,
-                    n + 1
-                );
-            }
-            sources.push(key);
-        }
+        let sources = owned_keys(t, &what, n, &mut owner)?;
         let lyrics = match t.get("lyrics") {
             None => None,
             Some(item) if item.as_bool() == Some(false) => Some(LyricsPin::None),
@@ -588,7 +664,14 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
     match edit {
         Edit::Add { sources, album } => {
             let wanted: Vec<String> = sources.iter().map(ToString::to_string).collect();
-            lift(doc, &wanted);
+            // A song is found by what only it lists; a record it shares
+            // with another names neither.
+            let own: Vec<String> = sources
+                .iter()
+                .filter(|k| !shareable(k))
+                .map(ToString::to_string)
+                .collect();
+            lift(doc, &own);
             let list = doc
                 .entry("song")
                 .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()))
@@ -596,7 +679,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 .context("`song` is not a list of tables")?;
             let found = list
                 .iter_mut()
-                .find(|t| listed_keys(t).iter().any(|k| wanted.contains(k)));
+                .find(|t| listed_keys(t).iter().any(|k| own.contains(k)));
             let song = if let Some(song) = found {
                 let mut keys = listed_keys(song);
                 for k in &wanted {
@@ -712,17 +795,16 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             song.remove("note");
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
+            let taken =
+                |k: &str| listed.contains(k) && SourceKey::parse(k).is_ok_and(|k| !shareable(&k));
             let keys: Vec<SourceKey> = listed_keys(&song)
                 .iter()
-                .filter(|k| !listed.contains(*k))
+                .filter(|k| !taken(k))
                 .filter_map(|k| SourceKey::parse(k).ok())
                 .collect();
             song.insert("sources", key_array(&keys));
             for pin in ["audio", "cover", "lyrics"] {
-                let stray = song
-                    .get(pin)
-                    .and_then(Item::as_str)
-                    .is_some_and(|k| listed.contains(k));
+                let stray = song.get(pin).and_then(Item::as_str).is_some_and(taken);
                 if stray {
                     song.remove(pin);
                 }

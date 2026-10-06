@@ -55,7 +55,7 @@ src/
   plugins.rs        yt-dlp postprocessors shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   lookup.rs         lookups due by trigger; provider.rs, lrclib.rs,
-                    musicbrainz.rs
+                    musicbrainz.rs, coverart.rs
   reconcile.rs      the offline phase: measure, compare, plan, render, prune
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   quality.rs        audio and picture measures
@@ -73,6 +73,9 @@ src/
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   check.rs, overview.rs            check and info
+  duplicates.rs     songs listed apart that are one recording
+  purge.rs          fetched sources and records no song uses, deleted
+  progress.rs       how far a long step has got, on stderr
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   */tests.rs        a module's tests, when they outgrow it
 testdata/           tiny Opus, FLAC and PNG fixtures

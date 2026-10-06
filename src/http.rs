@@ -8,6 +8,13 @@
 //! muman apart and reach whoever runs it. A [`Throttle`] spaces the
 //! requests to one service across every thread of a run, for a service
 //! that allows so many a second from one address.
+//!
+//! A [`Service`] asks through its throttle: a 429 or a 503 is a refusal
+//! for going too fast, which holds every later request back, for as long
+//! as the server's `Retry-After` says when it says, and is asked again up
+//! to [`RETRIES`] times. A service still refusing after that is
+//! [`Refusing`], so a run puts its other lookups off to the next run
+//! rather than record each as failed.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -21,6 +28,8 @@ pub enum TransportError {
     Status {
         code: u16,
         body: String,
+        /// How long its `Retry-After` asks a client to wait.
+        retry_after: Option<Duration>,
     },
 }
 
@@ -29,7 +38,7 @@ impl std::fmt::Display for TransportError {
         match self {
             Self::Timeout => f.write_str("timed out"),
             Self::Transport(e) => write!(f, "transport: {e}"),
-            Self::Status { code, body } => write!(f, "status {code}: {body}"),
+            Self::Status { code, body, .. } => write!(f, "status {code}: {body}"),
         }
     }
 }
@@ -37,13 +46,24 @@ impl std::fmt::Display for TransportError {
 impl std::error::Error for TransportError {}
 
 pub trait HttpTransport {
+    /// GET `url` and return the response body.
+    fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        timeout: Duration,
+    ) -> Result<Vec<u8>, TransportError>;
+
     /// GET `url` and return the response body as text.
     fn get_json(
         &self,
         url: &str,
         headers: &[(&str, &str)],
         timeout: Duration,
-    ) -> Result<String, TransportError>;
+    ) -> Result<String, TransportError> {
+        String::from_utf8(self.get(url, headers, timeout)?)
+            .map_err(|e| TransportError::Transport(e.to_string()))
+    }
 }
 
 /// The agent is built per call so each request's timeout is exact.
@@ -51,12 +71,12 @@ pub trait HttpTransport {
 pub struct UreqTransport;
 
 impl HttpTransport for UreqTransport {
-    fn get_json(
+    fn get(
         &self,
         url: &str,
         headers: &[(&str, &str)],
         timeout: Duration,
-    ) -> Result<String, TransportError> {
+    ) -> Result<Vec<u8>, TransportError> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false)
@@ -72,16 +92,30 @@ impl HttpTransport for UreqTransport {
             Err(e) => return Err(TransportError::Transport(e.to_string())),
         };
         let code = response.status().as_u16();
-        let body = response.body_mut().read_to_string();
         if !(200..300).contains(&code) {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(Duration::from_secs);
             return Err(TransportError::Status {
                 code,
-                body: body.unwrap_or_default(),
+                body: response.body_mut().read_to_string().unwrap_or_default(),
+                retry_after,
             });
         }
-        body.map_err(|e| TransportError::Transport(e.to_string()))
+        response
+            .body_mut()
+            .with_config()
+            .limit(MAX_BODY)
+            .read_to_vec()
+            .map_err(|e| TransportError::Transport(e.to_string()))
     }
 }
+
+/// The largest body read: a cover at full size is a few MiB.
+const MAX_BODY: u64 = 64 << 20;
 
 /// What every request names muman as: `muman/<version> ( <repository> )`.
 #[must_use]
@@ -130,9 +164,10 @@ impl Throttle {
         }
     }
 
-    /// Hold every later request back after the `times`th refusal in a row.
-    pub fn refused(&self, times: u32) {
-        self.hold(Instant::now(), times);
+    /// Hold every later request back after the `times`th refusal in a row,
+    /// at least as long as the server asked.
+    pub fn refused(&self, times: u32, asked: Option<Duration>) {
+        self.hold(Instant::now(), times, asked);
     }
 
     /// Take the next free turn at `now`; how long until it comes.
@@ -146,15 +181,98 @@ impl Throttle {
         turn - now
     }
 
-    fn hold(&self, now: Instant, times: u32) {
+    fn hold(&self, now: Instant, times: u32, asked: Option<Duration>) {
         let pause = self
             .backoff
-            .saturating_mul(1 << times.saturating_sub(1).min(16));
+            .saturating_mul(1 << times.saturating_sub(1).min(16))
+            .max(asked.unwrap_or_default().min(MAX_ASKED));
         let mut next = self
             .next
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *next = Some(next.map_or(now, |n| n.max(now)).max(now + pause));
+    }
+}
+
+/// The longest a server's `Retry-After` holds a run back; one asking for
+/// longer is refusing for this run.
+const MAX_ASKED: Duration = Duration::from_secs(120);
+
+/// Times a request refused for going too fast is asked again.
+pub const RETRIES: u32 = 3;
+
+/// A service still refusing requests for going too fast after
+/// [`RETRIES`] tries.
+#[derive(Debug)]
+pub struct Refusing {
+    pub service: &'static str,
+}
+
+impl std::fmt::Display for Refusing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} refuses requests for going too fast", self.service)
+    }
+}
+
+impl std::error::Error for Refusing {}
+
+/// One service, asked through `transport` at the pace of `throttle`.
+#[derive(Clone, Copy)]
+pub struct Service<'a> {
+    pub name: &'static str,
+    pub transport: &'a (dyn HttpTransport + Sync),
+    pub throttle: &'a Throttle,
+}
+
+impl std::fmt::Debug for Service<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Service")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Service<'_> {
+    /// GET `url` on its turn, asking again after a refusal; `None` for a
+    /// 404, and [`Refusing`] when the refusals outlast the retries.
+    pub fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        timeout: Duration,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let mut refused = 0;
+        loop {
+            self.throttle.wait();
+            match self.transport.get(url, headers, timeout) {
+                Ok(body) => return Ok(Some(body)),
+                Err(TransportError::Status { code: 404, .. }) => return Ok(None),
+                Err(TransportError::Status {
+                    code: 429 | 503,
+                    retry_after,
+                    ..
+                }) => {
+                    if refused == RETRIES || retry_after.is_some_and(|a| a > MAX_ASKED) {
+                        return Err(Refusing { service: self.name }.into());
+                    }
+                    refused += 1;
+                    self.throttle.refused(refused, retry_after);
+                }
+                Err(e) => return Err(anyhow::anyhow!("{url}: {e}")),
+            }
+        }
+    }
+
+    /// [`Self::get`] as text.
+    pub fn get_text(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        timeout: Duration,
+    ) -> anyhow::Result<Option<String>> {
+        self.get(url, headers, timeout)?
+            .map(|b| String::from_utf8(b).map_err(|e| anyhow::anyhow!("{url}: {e}")))
+            .transpose()
     }
 }
 
@@ -205,9 +323,74 @@ mod tests {
         assert_eq!(t.take(start), Duration::from_secs(2));
         let later = start + Duration::from_secs(10);
         assert_eq!(t.take(later), Duration::ZERO, "an idle gap is not saved up");
-        t.hold(later, 2);
+        t.hold(later, 2, None);
         assert_eq!(t.take(later), Duration::from_secs(4));
         assert_eq!(t.take(later), Duration::from_secs(5));
+        let after = later + Duration::from_secs(60);
+        t.hold(after, 1, Some(Duration::from_secs(30)));
+        assert_eq!(
+            t.take(after),
+            Duration::from_secs(30),
+            "the server's wait is kept"
+        );
+    }
+
+    /// Answers each request with the next of `script`, then 200.
+    struct Scripted {
+        script: Mutex<Vec<u16>>,
+        retry_after: Option<Duration>,
+    }
+
+    impl HttpTransport for Scripted {
+        fn get(&self, _: &str, _: &[(&str, &str)], _: Duration) -> Result<Vec<u8>, TransportError> {
+            let mut script = self.script.lock().unwrap();
+            if script.is_empty() {
+                return Ok(b"ok".to_vec());
+            }
+            Err(TransportError::Status {
+                code: script.remove(0),
+                body: "error code: 1015".into(),
+                retry_after: self.retry_after,
+            })
+        }
+    }
+
+    fn ask(script: &[u16], retry_after: Option<Duration>) -> anyhow::Result<Option<String>> {
+        let transport = Scripted {
+            script: Mutex::new(script.to_vec()),
+            retry_after,
+        };
+        let throttle = Throttle::none();
+        Service {
+            name: "Lumo Lyrics",
+            transport: &transport,
+            throttle: &throttle,
+        }
+        .get_text("http://lyrics.test/a", &[], Duration::from_secs(1))
+    }
+
+    #[test]
+    fn a_refusal_is_asked_again_until_the_retries_run_out() {
+        assert_eq!(ask(&[429, 503, 429], None).unwrap().as_deref(), Some("ok"));
+        let e = ask(&[429; 4], None).unwrap_err();
+        assert!(e.downcast_ref::<Refusing>().is_some(), "{e:#}");
+        assert_eq!(
+            e.to_string(),
+            "Lumo Lyrics refuses requests for going too fast"
+        );
+        assert_eq!(ask(&[404], None).unwrap(), None);
+        assert!(
+            ask(&[500], None)
+                .unwrap_err()
+                .downcast_ref::<Refusing>()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_server_asking_for_too_long_a_wait_is_refusing_at_once() {
+        let e = ask(&[429], Some(MAX_ASKED + Duration::from_secs(1))).unwrap_err();
+        assert!(e.downcast_ref::<Refusing>().is_some(), "{e:#}");
     }
 
     #[test]

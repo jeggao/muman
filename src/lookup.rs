@@ -10,10 +10,15 @@
 //!
 //! | Recorded | Made again |
 //! |---|---|
-//! | Nothing, or another `method` | At once |
-//! | Found nothing | After the provider's `recheck_days` |
+//! | Nothing | At once |
+//! | Made another way | At once, unless it found a source the song lists |
+//! | Found nothing, or an instrumental | After the provider's `recheck_days` |
 //! | Failed | After an hour, doubling with each failure, up to a week |
-//! | Found a source, an instrumental, or declined | Never |
+//! | Found a source, or declined | Never |
+//!
+//! A lookup a service refused for going too fast, after the retries
+//! [`crate::http::Service`] makes, is recorded as nothing at all: it and
+//! the provider's other lookups that round are put off to the next run.
 //!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Each round measures what
@@ -26,19 +31,23 @@
 //! A YouTube Music track found later is fetched beside its upload and
 //! joins the song; the upload stays a source when the two are one
 //! recording, else the track takes its key. An LRCLIB or MusicBrainz
-//! record found is kept in the store and joins the song. A source the run
-//! already knows, listed, removed or replaced, is recorded found but never
-//! added again.
+//! record found is kept in the store and joins the song, even when
+//! another song lists it already, as another release of one recording
+//! does: a record is data songs share. A video the run already knows,
+//! listed, removed or replaced, is recorded found but never added again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::Path;
 
-use crate::http::{HttpTransport, Throttle};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::http::{HttpTransport, Refusing, Throttle};
 use anyhow::{Context, Result, anyhow};
 
 use crate::acquire::{self, Acquire};
 use crate::align::Alignment;
+use crate::coverart;
 use crate::dirs::Dirs;
 use crate::download;
 use crate::facts::Facts;
@@ -47,7 +56,7 @@ use crate::manifest::{Edit, Manifest};
 use crate::music::{self, Entry};
 use crate::musicbrainz;
 use crate::parallel;
-use crate::provider::{LRCLIB, MUSICBRAINZ, Provider, When};
+use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider, When};
 use crate::reconcile::{self, Measuring, Planned};
 use crate::resolve::{self, Resolved};
 use crate::runner::Runner;
@@ -61,11 +70,12 @@ use crate::tags::Field;
 pub const ROUNDS: usize = 3;
 
 /// The providers looked up, in the order a round makes their lookups.
-pub const ORDER: [Provider; 4] = [
+pub const ORDER: [Provider; 5] = [
     Provider::YouTubeMusic,
     Provider::YouTube,
     Provider::Lrclib,
     Provider::MusicBrainz,
+    Provider::CoverArt,
 ];
 
 /// How a provider's lookups are made; a lookup made another way is due
@@ -75,8 +85,9 @@ pub fn method(p: Provider) -> &'static str {
     match p {
         Provider::YouTubeMusic => "youtube-music/1",
         Provider::YouTube => "youtube/1",
-        Provider::Lrclib => "lrclib/1",
+        Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
+        Provider::CoverArt => "coverart/1",
         Provider::Manual => "manual",
     }
 }
@@ -99,6 +110,39 @@ fn lyrics_of(r: Option<&Resolved>, facts: &BTreeMap<SourceKey, Facts>) -> (bool,
         .and_then(|f| f.lyrics.iter().find(|x| x.at == l.at))
         .is_some_and(|x| x.timing.is_some());
     (true, timed)
+}
+
+/// Whether a song resolves to no cover, or to one with less detail than
+/// looks sharp.
+fn small_cover(r: Option<&Resolved>, facts: &BTreeMap<SourceKey, Facts>) -> bool {
+    let Some(c) = r.and_then(|r| r.plan.cover.as_ref()) else {
+        return true;
+    };
+    facts
+        .get(&c.key)
+        .and_then(|f| f.covers.iter().find(|x| x.at == c.at))
+        .and_then(|x| x.quality.as_ref())
+        .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
+}
+
+/// What a Cover Art Archive lookup asks for a resolved song: its album
+/// and album artist, and the MusicBrainz IDs it names of them.
+#[must_use]
+pub fn cover_query_of(r: &Resolved) -> Option<coverart::Query> {
+    let tag = |f: Field| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(k, _)| k == f.vorbis())
+            .and_then(|(_, v)| v.first().cloned())
+            .filter(|v| !v.trim().is_empty())
+    };
+    Some(coverart::Query {
+        album: tag(Field::Album)?,
+        album_artist: tag(Field::AlbumArtist).or_else(|| tag(Field::Artist))?,
+        release_group: tag(Field::MusicBrainzReleaseGroupId),
+        release: tag(Field::MusicBrainzAlbumId),
+    })
 }
 
 /// Whether a song resolves to an album a source or the song list names,
@@ -165,13 +209,21 @@ pub fn due(
                 When::NoLyrics => !has,
                 When::NoTimedLyrics => !timed,
                 When::NoAlbum => !album,
+                When::SmallCover => small_cover(r, &state.facts),
             };
             let Some((from, _)) = kinds.iter().find(|(_, p)| t.from.contains(p)) else {
                 continue;
             };
-            let askable = !t.find.kept() || r.and_then(|r| query_of(r, &state.facts)).is_some();
+            let askable = match t.find {
+                Provider::CoverArt => r.and_then(cover_query_of).is_some(),
+                p if p.kept() => r.and_then(|r| query_of(r, &state.facts)).is_some(),
+                _ => true,
+            };
             let days = config.settings(t.find).recheck_days;
-            let open = force || state.looked(from, t.find).is_none_or(|l| l.due(now, days));
+            let open = force
+                || state
+                    .looked(from, t.find)
+                    .is_none_or(|l| l.due(now, days, &|k| song.has(k)));
             if wanted && askable && open {
                 taken.insert(t.find);
                 found.push(Due {
@@ -187,6 +239,7 @@ pub fn due(
 
 /// What one lookup found; short-lived, so its size matters little.
 #[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
 enum Hit {
     /// The release of an upload: the upload's entry, the release's, and
     /// how their audio compared.
@@ -197,7 +250,21 @@ enum Hit {
     Instrumental,
     /// A MusicBrainz recording.
     Tags(Box<musicbrainz::Record>),
+    /// The front of the song's album.
+    Cover(Box<coverart::Cover>),
     Nothing,
+}
+
+/// A copy of `hit` for another song that asked the same: a song of the
+/// same album.
+fn again(hit: &Result<Hit>) -> Result<Hit> {
+    match hit {
+        Ok(h) => Ok(h.clone()),
+        Err(e) => match e.downcast_ref::<Refusing>() {
+            Some(r) => Err(Refusing { service: r.service }.into()),
+            None => Err(anyhow!("{e:#}")),
+        },
+    }
 }
 
 fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
@@ -208,10 +275,67 @@ fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
         .ok_or_else(|| anyhow!("yt-dlp listed nothing for {key}"))
 }
 
+/// The pace of a run's requests to each service, shared by every
+/// thread.
+#[derive(Debug)]
+pub struct Throttles {
+    pub lrclib: Throttle,
+    pub musicbrainz: Throttle,
+    pub coverart: Throttle,
+}
+
+impl Throttles {
+    /// The pace each service asks of a client.
+    #[must_use]
+    pub fn polite() -> Self {
+        Self {
+            lrclib: lrclib::throttle(),
+            musicbrainz: musicbrainz::throttle(),
+            coverart: coverart::throttle(),
+        }
+    }
+
+    /// No spacing, for tests.
+    #[must_use]
+    pub fn none() -> Self {
+        Self {
+            lrclib: Throttle::none(),
+            musicbrainz: Throttle::none(),
+            coverart: Throttle::none(),
+        }
+    }
+}
+
+/// What a provider's service is called when it refuses.
+fn service_of(p: Provider) -> &'static str {
+    match p {
+        Provider::Lrclib => "LRCLIB",
+        Provider::MusicBrainz => "MusicBrainz",
+        Provider::CoverArt => "the Cover Art Archive",
+        _ => "YouTube",
+    }
+}
+
 /// The services a run asks, at the addresses the song list sets.
 struct Clients<'a> {
     lrclib: lrclib::Client<'a>,
     musicbrainz: musicbrainz::Client<'a>,
+    coverart: &'a str,
+    transport: &'a (dyn HttpTransport + Sync),
+    throttle: &'a Throttle,
+}
+
+impl Clients<'_> {
+    /// The Cover Art Archive, searching MusicBrainz for what a song's
+    /// tags do not name.
+    fn coverart(&self) -> coverart::Client<'_> {
+        coverart::Client {
+            base: self.coverart,
+            transport: self.transport,
+            throttle: self.throttle,
+            musicbrainz: &self.musicbrainz,
+        }
+    }
 }
 
 /// The base address the song list sets for a provider.
@@ -229,6 +353,7 @@ fn look<R: Runner>(
     d: &Due,
     located: Option<&Located>,
     query: Option<&Query>,
+    cover: Option<&coverart::Query>,
     clients: &Clients<'_>,
     audio: &Path,
 ) -> Result<Hit> {
@@ -259,6 +384,13 @@ fn look<R: Runner>(
             Some(r) => Hit::Tags(Box::new(r)),
             None => Hit::Nothing,
         },
+        Provider::CoverArt => {
+            let cover = cover.context("the song names no album")?;
+            match clients.coverart().find(cover)? {
+                Some(c) => Hit::Cover(Box::new(c)),
+                None => Hit::Nothing,
+            }
+        }
         Provider::Manual => Hit::Nothing,
     })
 }
@@ -300,7 +432,7 @@ pub fn run<R: Runner, W: Write>(
     acquire: &mut Acquire<'_, R, W>,
     dirs: &Dirs,
     http: &(dyn HttpTransport + Sync),
-    throttle: &Throttle,
+    throttles: &Throttles,
     force: bool,
     declined: &BTreeSet<SourceKey>,
 ) -> Result<bool> {
@@ -328,7 +460,18 @@ pub fn run<R: Runner, W: Write>(
             &mut how,
             acquire.out,
         )?;
-        let (planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut std::io::sink())?;
+        let on_disk: BTreeSet<SourceKey> = manifest
+            .keys()
+            .into_iter()
+            .filter(|k| store.has(k))
+            .collect();
+        let (planned, _) = reconcile::plan(
+            &manifest,
+            &state,
+            &dirs.library,
+            Some(&on_disk),
+            &mut std::io::sink(),
+        )?;
         let (refused, due): (Vec<Due>, Vec<Due>) =
             due(&manifest, &state, &planned, state::now_secs(), force)
                 .into_iter()
@@ -371,45 +514,102 @@ pub fn run<R: Runner, W: Write>(
         let bases = (
             base(&manifest, Provider::Lrclib),
             base(&manifest, Provider::MusicBrainz),
+            base(&manifest, Provider::CoverArt),
         );
         let clients = Clients {
             lrclib: lrclib::Client {
                 base: &bases.0,
                 transport: http,
+                throttle: &throttles.lrclib,
             },
             musicbrainz: musicbrainz::Client {
                 base: &bases.1,
                 transport: http,
-                throttle,
+                throttle: &throttles.musicbrainz,
             },
+            coverart: &bases.2,
+            transport: http,
+            throttle: &throttles.coverart,
         };
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();
         let mut hits: Vec<(Due, Result<Hit>)> = Vec::new();
+        let step = crate::progress::step("Looking up", Some(due.len() as u64));
         for p in ORDER {
             let group: Vec<&Due> = due.iter().filter(|d| d.find == p).collect();
             if group.is_empty() {
                 continue;
             }
             let workers = manifest.providers.settings(p).concurrency;
-            let found = parallel::map(&group, workers, |d| {
+            let covers: Vec<Option<coverart::Query>> = group
+                .iter()
+                .map(|d| {
+                    resolved
+                        .get(&d.song)
+                        .filter(|_| p == Provider::CoverArt)
+                        .and_then(|r| cover_query_of(r))
+                })
+                .collect();
+            // One lookup an album: a later song of it takes the first's.
+            let first: Vec<usize> = (0..group.len())
+                .map(|i| {
+                    covers[..i]
+                        .iter()
+                        .position(|q| q.is_some() && *q == covers[i])
+                        .unwrap_or(i)
+                })
+                .collect();
+            let asking: Vec<usize> = (0..group.len()).filter(|i| first[*i] == *i).collect();
+            let refusing = AtomicBool::new(false);
+            let asked = parallel::map(&asking, workers, |&i| {
+                let d = group[i];
+                if refusing.load(Ordering::Relaxed) {
+                    return Err(Refusing {
+                        service: service_of(p),
+                    }
+                    .into());
+                }
+                let _working = step.working(&reconcile::name_of(
+                    &manifest.songs[d.song],
+                    resolved.get(&d.song).copied(),
+                    &state.facts,
+                ));
                 let query = resolved
                     .get(&d.song)
                     .and_then(|r| query_of(r, &state.facts));
-                look(
+                let hit = look(
                     runner,
                     d,
                     store.locate(&d.from).as_ref(),
                     query.as_ref(),
+                    covers[i].as_ref(),
                     &clients,
-                    &audio,
-                )
+                    // A folder each: two lookups downloading one candidate
+                    // at once would write one file.
+                    &audio.join(format!("{}-{}", d.song, d.find)),
+                );
+                if hit
+                    .as_ref()
+                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
+                {
+                    refusing.store(true, Ordering::Relaxed);
+                }
+                hit
             });
+            // The songs that took another's lookup are done with it.
+            step.advance((group.len() - asking.len()) as u64);
+            let found: Vec<Result<Hit>> = (0..group.len())
+                .map(|i| {
+                    let at = asking.binary_search(&first[i]).unwrap_or_default();
+                    again(&asked[at])
+                })
+                .collect();
             hits.extend(group.into_iter().cloned().zip(found));
         }
 
         let mut replaced = Vec::new();
         let mut joined = 0_usize;
+        let mut put_off: BTreeMap<Provider, (usize, String)> = BTreeMap::new();
         for (d, hit) in hits {
             let name = reconcile::name_of(
                 &manifest.songs[d.song],
@@ -421,6 +621,11 @@ pub fn run<R: Runner, W: Write>(
                 // says so, rather than putting each song off for a week.
                 Err(e) if e.downcast_ref::<crate::runner::MissingTool>().is_some() => {
                     return Err(e);
+                }
+                Err(e) if e.downcast_ref::<Refusing>().is_some() => {
+                    let entry = put_off.entry(d.find).or_insert((0, e.to_string()));
+                    entry.0 += 1;
+                    continue;
                 }
                 Err(e) => {
                     crate::ui::warning(
@@ -442,8 +647,10 @@ pub fn run<R: Runner, W: Write>(
                         extractor: LRCLIB.to_string(),
                         id: record.id.to_string(),
                     };
-                    if !acquire.known.contains(&key) {
+                    if !store.has(&key) {
                         lrclib::keep(&dirs.lrclib(), &record)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
                         let timed = if record.synced_lyrics.is_some() {
                             "timed"
                         } else {
@@ -463,8 +670,10 @@ pub fn run<R: Runner, W: Write>(
                         extractor: MUSICBRAINZ.to_string(),
                         id: record.id.clone(),
                     };
-                    if !acquire.known.contains(&key) {
+                    if !store.has(&key) {
                         musicbrainz::keep(&dirs.musicbrainz(), &record)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
                         let on = record
                             .release
                             .as_ref()
@@ -472,6 +681,25 @@ pub fn run<R: Runner, W: Write>(
                         crate::ui::info(
                             acquire.out,
                             &format!("{name}: tags from MusicBrainz, {key}{on}"),
+                        )?;
+                        join(&mut manifest, &mut acquire.known, &d.from, &key);
+                        joined += 1;
+                    }
+                    Outcome::Found(key)
+                }
+                Ok(Hit::Cover(cover)) => {
+                    let key = SourceKey::Remote {
+                        extractor: COVERART.to_string(),
+                        id: cover.id.clone(),
+                    };
+                    let folder = dirs.kept(COVERART);
+                    if !store.has(&key) && !coverart::path_of(&folder, &cover).exists() {
+                        coverart::keep(&folder, &cover)?;
+                    }
+                    if !manifest.songs[d.song].has(&key) {
+                        crate::ui::info(
+                            acquire.out,
+                            &format!("{name}: a cover from the Cover Art Archive, {key}"),
                         )?;
                         join(&mut manifest, &mut acquire.known, &d.from, &key);
                         joined += 1;
@@ -557,6 +785,22 @@ pub fn run<R: Runner, W: Write>(
         }
         manifest.save()?;
         State::keep_lookups(home, &records, &replaced)?;
+        let uploads: Vec<SourceKey> = replaced.iter().map(|(upload, _)| upload.clone()).collect();
+        for file in store.discard(&uploads, &manifest.keys())? {
+            crate::ui::info(
+                acquire.out,
+                &format!(
+                    "Deleted an upload its release took the place of: {}",
+                    file.display()
+                ),
+            )?;
+        }
+        for (p, (n, why)) in put_off {
+            crate::ui::warning(
+                acquire.out,
+                &format!("{why}: {n} lookup(s) on {p} wait for the next run"),
+            )?;
+        }
         if joined == 0 {
             break;
         }
@@ -571,14 +815,15 @@ pub fn run<R: Runner, W: Write>(
     Ok(ok)
 }
 
-/// Fetch again every listed LRCLIB or MusicBrainz record gone from the
-/// store, by its ID, asking MusicBrainz at the pace of `throttle`.
+/// Fetch again every listed LRCLIB, MusicBrainz or Cover Art Archive
+/// record gone from the store, by its ID, asking each at the pace of
+/// `throttles`.
 /// Returns each that could not be, with why.
 pub fn refetch(
     dirs: &Dirs,
     manifest: &Manifest,
     http: &(dyn HttpTransport + Sync),
-    throttle: &Throttle,
+    throttles: &Throttles,
 ) -> Result<Vec<(SourceKey, String)>> {
     let store = Store::scan(dirs)?;
     let bases = (
@@ -588,11 +833,29 @@ pub fn refetch(
     let lrclib = lrclib::Client {
         base: &bases.0,
         transport: http,
+        throttle: &throttles.lrclib,
     };
     let musicbrainz = musicbrainz::Client {
         base: &bases.1,
         transport: http,
-        throttle,
+        throttle: &throttles.musicbrainz,
+    };
+    let coverart_base = base(manifest, Provider::CoverArt);
+    let covers = coverart::Client {
+        base: &coverart_base,
+        transport: http,
+        throttle: &throttles.coverart,
+        musicbrainz: &musicbrainz,
+    };
+    let state = State::load(&dirs.home)?;
+    // The album the record named when kept, so it is fetched on the
+    // same release.
+    let album_of_record = |key: &SourceKey| {
+        state
+            .facts
+            .get(key)
+            .and_then(|f| f.tags.get(&Field::Album))
+            .and_then(|o| o.values.first().cloned())
     };
     let mut failed = Vec::new();
     for key in manifest.keys() {
@@ -608,8 +871,14 @@ pub fn refetch(
                 .context("not a record ID")
                 .and_then(|id| lrclib.by_id(id))
                 .and_then(|r| r.map(|r| lrclib::keep(&dirs.lrclib(), &r)).transpose()),
-            MUSICBRAINZ => musicbrainz.by_id(id).and_then(|r| {
-                r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
+            MUSICBRAINZ => musicbrainz
+                .by_id(id, album_of_record(&key).as_deref())
+                .and_then(|r| {
+                    r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
+                        .transpose()
+                }),
+            COVERART => covers.by_id(id).and_then(|c| {
+                c.map(|c| coverart::keep(&dirs.kept(COVERART), &c))
                     .transpose()
             }),
             _ => continue,

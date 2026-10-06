@@ -179,7 +179,7 @@ fn a_lost_state_deletes_nothing_it_did_not_write() {
 fn a_dry_run_writes_nothing_and_says_why() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.fetched("ccccccccccc");
+    let unused = h.fetched("ccccccccccc");
     h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (_, text) = h.run(
@@ -194,8 +194,71 @@ fn a_dry_run_writes_nothing_and_says_why() {
     assert!(text.contains("(new)"), "{text}");
     assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
     assert!(text.contains("TITLE"), "{text}");
+    let shown = crate::ui::plain(&text)
+        .lines()
+        .find_map(|l| l.strip_prefix("Unused: ").map(PathBuf::from));
+    assert_eq!(
+        shown.as_deref(),
+        Some(unused.as_path()),
+        "an unused file is shown by its whole path: {text}"
+    );
+}
+
+#[test]
+fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let before = State::load(&h.dirs.home).unwrap();
+    h.fetched("bbbbbbbbbbb");
+    h.songs(&format!("[library]\nmax_size = \"1 GiB\"\n{TWO}"));
+    let elsewhere = Dirs {
+        library: h.dirs.home.join("phone"),
+        ..h.dirs.clone()
+    };
+    let mut out = Vec::new();
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    reconcile(
+        &infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]),
+        &elsewhere,
+        dry,
+        None,
+        &mut out,
+    )
+    .unwrap();
+    let after = State::load(&h.dirs.home).unwrap();
+    assert_eq!(after.outputs, before.outputs);
+    assert_eq!(after.library, before.library);
+    assert!(after.facts.contains_key(&SourceKey::youtube("bbbbbbbbbbb")));
+}
+
+#[test]
+fn a_dry_run_says_what_a_sync_would_remove_keep_or_write_again() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
+    std::fs::write(
+        h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus"),
+        "mine",
+    )
+    .unwrap();
+    std::fs::remove_file(h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc")).unwrap();
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let (_, text) = h.run(&infos(&["aaaaaaaaaaa"]), dry);
+    assert!(text.contains("(written again)"), "lyrics gone: {text}");
+    assert!(!text.contains("Would remove"), "{text}");
     assert!(
-        text.contains("Unused:") && text.contains("[ccccccccccc]"),
+        text.contains("Would leave in place, changed since muman wrote it"),
         "{text}"
     );
 }
@@ -389,6 +452,56 @@ fn a_file_changed_since_it_was_written_is_left_alone() {
 }
 
 #[test]
+fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
+    h.songs(&format!(
+        "[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{{rel}}\"]\n{TWO}"
+    ));
+    let mut stopping = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    stopping.on_stream = Some(Box::new(|args: &[String]| {
+        assert!(
+            !args.iter().any(|a| a.contains("bbbbbbbbbbb")),
+            "the run stops while writing the second song"
+        );
+        true
+    }));
+    let every_song = Options {
+        force: true,
+        checkpoint: Some(Duration::ZERO),
+        ..Options::default()
+    };
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h.run(&stopping, every_song)
+    }));
+    assert!(stopped.is_err());
+
+    let state = State::load(&h.dirs.home).unwrap();
+    let a = Path::new("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    let b = Path::new("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
+    assert!(state.outputs[a].plan.is_some(), "the first is vouched for");
+    assert!(!changed_since_written(&h.dirs.library, &state.outputs, a));
+    assert_eq!(
+        (&state.outputs[b].plan, &state.outputs[b].stamp),
+        (&None, &None),
+        "the second is claimed, not taken for changed by someone else"
+    );
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&fake), 1, "only the claimed song: {text}");
+    assert!(!text.contains("changed since muman wrote it"), "{text}");
+    assert!(
+        text.contains("Written again: Chan/Title bbbbbbbbbbb"),
+        "{text}"
+    );
+}
+
+#[test]
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
@@ -445,6 +558,62 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
 }
 
 #[test]
+fn a_fetch_that_failed_before_does_not_keep_a_file_now_there_from_being_read() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let mut state = State::default();
+    state.record_failure(
+        &SourceKey::youtube("aaaaaaaaaaa"),
+        Step::Fetch,
+        None,
+        "the upload did not arrive".into(),
+    );
+    state.save(&h.dirs.home).unwrap();
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(ok, "{text}");
+    assert!(!text.contains("Not reading"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(state.failures.is_empty(), "{:?}", state.failures);
+}
+
+#[test]
+fn a_song_whose_chosen_source_is_gone_is_written_from_another() {
+    let h = home();
+    let both = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n";
+    let paths = [h.fetched("aaaaaaaaaaa"), h.fetched("bbbbbbbbbbb")];
+    h.songs(both);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let chosen = |h: &Home| {
+        let state = State::load(&h.dirs.home).unwrap();
+        state
+            .outputs
+            .values()
+            .next()
+            .unwrap()
+            .plan
+            .clone()
+            .unwrap()
+            .audio
+            .key
+    };
+    let first = chosen(&h);
+    let gone = usize::from(first != SourceKey::youtube("aaaaaaaaaaa"));
+    std::fs::remove_file(&paths[gone]).unwrap();
+    h.songs(&format!("{both}tags = {{ genre = \"Folk\" }}\n"));
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_ne!(chosen(&h), first, "{text}");
+    assert!(
+        !text.contains("Comparing"),
+        "nothing to compare with a file gone: {text}"
+    );
+}
+
+#[test]
 fn a_run_keeps_what_it_replaces_and_removes() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
@@ -463,7 +632,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
     )
     .unwrap();
     run.finish(&h.dirs.home).unwrap();
-    let lines = crate::history::describe(&h.dirs.home).unwrap().join("\n");
+    let lines = crate::history::plan(&h.dirs).unwrap().lines().join("\n");
     assert!(
         lines.contains("Title aaaaaaaaaaa.opus: put back"),
         "{lines}"
@@ -749,4 +918,80 @@ fn a_song_rendered_to_be_measured_is_moved_into_place_not_rendered_again() {
     assert!(h.lib("Artist/Record/02 Song.opus").exists());
     let state = State::load(&h.dirs.home).unwrap();
     assert_eq!(state.sizes.len(), 1, "{:?}", state.sizes);
+}
+
+#[test]
+fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
+    let h = home();
+    std::fs::create_dir_all(h.lib("A")).unwrap();
+    std::fs::write(h.lib("A/x.opus"), "old").unwrap();
+    std::fs::write(h.lib("A/X.lrc"), "new lyrics").unwrap();
+    // One file by both names: so on NTFS and APFS already, made so here.
+    if !h.lib("A/x.lrc").exists() {
+        std::fs::hard_link(h.lib("A/X.lrc"), h.lib("A/x.lrc")).unwrap();
+    }
+    let written = |lyrics: &str| Written {
+        sources: Vec::new(),
+        lyrics: Some(lyrics.into()),
+        plan: None,
+        stamp: None,
+    };
+    let old = BTreeMap::from([(PathBuf::from("A/x.opus"), written("A/x.lrc"))]);
+    let now = BTreeMap::from([(PathBuf::from("A/X.flac"), written("A/X.lrc"))]);
+    let plan = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new());
+    assert_eq!(
+        plan,
+        [(
+            PathBuf::from("A/x.opus"),
+            Pruned::Removed(vec![PathBuf::from("A/x.opus")])
+        )]
+    );
+}
+
+#[test]
+fn a_template_takes_the_first_artist_and_every_artist_as_a_list() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }}/{{ artists | length }}/{{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\
+         [song.tags]\nartist = [\"Ada Quill\", \"Marlo Venn\"]\n",
+    );
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        h.lib("Ada Quill/2/Title aaaaaaaaaaa.opus").exists(),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_name_telling_two_songs_apart_is_made_safe_as_any_tag() {
+    let h = home();
+    // A replacement of the user's own, as every platform allows `#` in a
+    // file's name where it does not allow what the default ones replace.
+    let mut body = String::from("[library]\nreplace = { \"#\" = \"-\" }\n");
+    for folder in ["a", "b"] {
+        let path = h.dirs.manual().join(folder).join("Song#.opus");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, folder).unwrap();
+        body += "[[song]]\nsources = [\"manual:";
+        body += folder;
+        body += "/Song#.opus\"]\n";
+    }
+    h.songs(&body);
+    let untagged = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "opus", "channels": 2}]}"#;
+    let (ok, text) = h.run(
+        &Fake::default().probe(".opus", untagged),
+        Options::default(),
+    );
+    assert!(ok, "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let paths: Vec<String> = state
+        .outputs
+        .keys()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    assert!(paths.iter().any(|p| p.contains("[Song-]")), "{paths:?}");
+    assert!(paths.iter().all(|p| !p.contains('#')), "{paths:?}");
 }

@@ -42,6 +42,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// A cover whose detail holds up to fewer pixels than this looks soft
+/// on a large screen.
+pub const SOFT_COVER: u32 = 500;
+
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
 pub const METHOD: &str = "quality/4";

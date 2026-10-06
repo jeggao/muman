@@ -16,6 +16,7 @@ muman is configured in two places, split by what a setting is about:
 |---|---|---|
 | `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path` |
+| `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
 | | `MUMAN_FFMPEG` | The ffmpeg to run |
 | | `MUMAN_FFPROBE` | The ffprobe to run |
 | | `MUMAN_YT_DLP` | The yt-dlp to run; may be a whole command, such as `python -m yt_dlp` |
@@ -49,7 +50,7 @@ names it, so a misspelling never goes unnoticed.
 | `[audio]` | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, extra arguments, muman's postprocessors, how long partial downloads are kept |
-| `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take |
+| `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
 
 The song list's own tables — `[defaults]` (lyrics languages),
 `[clean.*]` (tag cleaning), `[providers.*]`, `[[trigger]]` and

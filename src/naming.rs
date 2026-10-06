@@ -196,7 +196,7 @@ impl Naming {
     }
 
     /// One tag value made safe for a path.
-    fn value(&self, text: &str) -> String {
+    pub(crate) fn value(&self, text: &str) -> String {
         let mut out = text.to_string();
         for (from, to) in &self.replace {
             if !from.is_empty() {

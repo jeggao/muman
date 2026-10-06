@@ -326,7 +326,9 @@ fn no_comments_on_unchanged_code(file: &ParsedFile, diff: &DiffInfo) -> Vec<Diag
         if !changed.contains(&line_no)
             || neighbor_changed(file, idx, false, changed)
             || neighbor_changed(file, idx, true, changed)
-            || base.as_ref().is_some_and(|b| base_comment_near(b, line_no))
+            || base
+                .as_ref()
+                .is_some_and(|b| base_comment_near(b, diff.base_span(line_no)))
         {
             continue;
         }
@@ -340,10 +342,11 @@ fn no_comments_on_unchanged_code(file: &ParsedFile, diff: &DiffInfo) -> Vec<Diag
     out
 }
 
-/// Whether the base had a comment within two lines: then this one was
-/// edited in place, as after a rename, rather than added.
-fn base_comment_near(base: &ParsedFile, line_no: usize) -> bool {
-    (line_no.saturating_sub(2)..=line_no + 2)
+/// Whether the base had a comment within two lines of the `span` of its
+/// lines this one stands where: then this one was edited in place, as
+/// after a rename, rather than added.
+fn base_comment_near(base: &ParsedFile, span: (usize, usize)) -> bool {
+    (span.0.saturating_sub(2)..=span.1 + 2)
         .any(|n| n >= 1 && base.lines.get(n - 1).is_some_and(|l| l.comment.is_some()))
 }
 
@@ -517,6 +520,7 @@ mod tests {
         let diff = DiffInfo {
             changed_lines: Some(HashSet::from([5])),
             base_file: Some("//! m\n\nuse x;\nfn a() {}\nfn b() {}\n".into()),
+            hunks: crate::comments::diff::parse_hunks("@@ -4,0 +5,1 @@\n+// why\n"),
         };
         let opts = Options {
             diff: Some(diff),

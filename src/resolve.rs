@@ -56,7 +56,7 @@
 //! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
 //! renders to change.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
@@ -253,8 +253,11 @@ pub struct Resolved {
 pub struct Input<'a> {
     pub song: &'a Song,
     pub album: Option<&'a Album>,
-    /// Facts of each source on disk.
+    /// Facts of each source measured.
     pub facts: &'a BTreeMap<SourceKey, Facts>,
+    /// The sources whose files are on disk, the only ones a plan may
+    /// take from; unset, every source measured is taken to be.
+    pub on_disk: Option<&'a BTreeSet<SourceKey>>,
     pub alignments: &'a [Aligned],
     pub lyrics: &'a [String],
     pub clean: &'a Settings,
@@ -283,6 +286,7 @@ impl Input<'_> {
             .sources
             .iter()
             .enumerate()
+            .filter(|(_, k)| self.on_disk.is_none_or(|d| d.contains(*k)))
             .filter_map(|(n, k)| Some((n, k, self.facts.get(k)?)))
     }
 }
@@ -320,23 +324,17 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     };
     let cover = pick_cover(input);
     let lyrics = pick_lyrics(input, &audio_key);
-    let (tags, tag_why) = resolve_tags(input);
+    let (tags, tag_why, artists) = resolve_tags(input);
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
             .and_then(|(_, v)| v.first())
             .map(String::as_str)
     };
-    let all = |field: Field| {
-        tags.iter()
-            .find(|(k, _)| k == field.vorbis())
-            .map(|(_, v)| v.iter().map(String::as_str).collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
     let id = audio_key.short();
     let stem = input.naming.stem(&naming::Tags {
         title: get(Field::Title),
-        artists: all(Field::Artist),
+        artists: artists.iter().map(String::as_str).collect(),
         album: get(Field::Album),
         album_artist: get(Field::AlbumArtist),
         genre: get(Field::Genre),
@@ -756,7 +754,9 @@ fn follow_artist(written: &mut [(String, Slot)]) {
 type Comments = Vec<(String, Vec<String>)>;
 
 /// The song's tags, and where each came from.
-fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
+/// The song's tags, why each is what it is, and its artists one by one,
+/// as the path template takes them, though ARTIST is written joined.
+fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
     for field in Field::of(Scope::Recording) {
@@ -816,7 +816,9 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
         };
         fields.insert(Field::AlbumArtist, slot);
     }
+    let mut artists = Vec::new();
     if let Some(artist) = fields.get_mut(&Field::Artist) {
+        artists.clone_from(&artist.values);
         artist.values = vec![artist.values.join(", ")];
     }
 
@@ -826,6 +828,12 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
         .collect();
     set_by_hand(input, &mut written);
     follow_artist(&mut written);
+    // Set by hand, the artists are what the song list says, a list or one.
+    if let Some((_, artist)) = written.iter().find(|(k, _)| k == Field::Artist.vorbis())
+        && artist.values != [artists.join(", ")]
+    {
+        artists.clone_from(&artist.values);
+    }
     // A single is named for its title as finally set, a hand-set one too.
     let title = written
         .iter()
@@ -850,6 +858,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>) {
     (
         written.into_iter().map(|(k, s)| (k, s.values)).collect(),
         why,
+        artists,
     )
 }
 

@@ -23,6 +23,7 @@ holds only what muman renders from it.
 | `sources/manual/` | Files you dropped in, at any depth, with lyrics and pictures beside them |
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
+| `sources/coverart/<id>.jpg` | Album covers found on the Cover Art Archive, shared by every song of the album |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -41,6 +42,17 @@ lock on the home:
 1. Write each song whose plan changed or whose file is gone; `sync
    --force` writes every song.
 1. Delete every file muman wrote that no song makes any more.
+
+A long step shows how far it has got on stderr, as `--progress` says.
+On a terminal, `auto` pins one status line under the messages, such as
+`[5/5] Writing [====>   ] 812/1546  53%  41 s left  Hurricane · Isis`:
+the step of the command's steps, the count, the time left at the rate
+so far, and the songs or files under way; terminals that show a task's
+progress in their tab or taskbar show it there too. Elsewhere, as in a
+log, `auto` and `plain` write a line every tenth of the way or ten
+seconds; `json` writes one JSON object a line, `start`, `progress` and
+`finish` events, for a program to read; `none` writes nothing. What a
+command reports, as `status` does, stays on stdout.
 
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone. A file whose size or time changed
@@ -72,7 +84,7 @@ genre = ""
 |---|---|
 | `version` | The file's format; a newer one is refused |
 | `defaults.lyrics` | Subtitle languages lyrics are taken in, most preferred first |
-| `sources` | Every source the song may be made from; a key belongs to one song only |
+| `sources` | Every source the song may be made from; a file belongs to one song only, while an `lrclib:` or `musicbrainz:` record may be listed by every song of its recording |
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
 | `lyrics_offset_ms` | Moves the lyrics later, on top of the offset measured |
@@ -98,8 +110,10 @@ The file also holds the settings tables of
 and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.
 muman edits it in place: comments, order and keys it does not know
 survive every write, and two runs at once keep each other's songs. A
-key that does not parse, a key two songs list, or a pin to a source the
-song does not list stops the run before anything is written.
+key that does not parse, a file two songs list, or a pin to a source the
+song does not list stops the run before anything is written. A song list
+in which songs share a record is written as `version = 2`, which muman
+before 0.2 refuses rather than misreads.
 
 A `[[removed]]` key no song lists is a tombstone: no playlist or dropped
 file lists it again. `muman restore`, adding its video alone by URL, or
@@ -274,11 +288,13 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
 | `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
+| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz |
 
 A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
-`no-lyrics`, `no-timed-lyrics` or `no-album` (neither a source nor the
-song list names an album). The built-in triggers:
+`no-lyrics`, `no-timed-lyrics`, `no-album` (neither a source nor the
+song list names an album) or `small-cover` (no cover, or one with too
+little detail to look sharp, as `info` counts). The built-in triggers:
 
 | From | Finds | When |
 |---|---|---|
@@ -286,12 +302,13 @@ song list names an album). The built-in triggers:
 | `youtube-music` | `youtube` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `lrclib` | `no-timed-lyrics` |
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
+| `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
 Any `[[trigger]]` in the song list replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck_days` (how long a lookup that found nothing waits),
-`per_run` (the most one run makes, `0` for no limit), and for `lrclib`
-and `musicbrainz`, `url`, another server, such as a mirror:
+`per_run` (the most one run makes, `0` for no limit), and for `lrclib`,
+`musicbrainz` and `coverart`, `url`, another server, such as a mirror:
 
 ```toml
 [[trigger]]
@@ -305,20 +322,24 @@ enabled = false
 
 | Last lookup | Made again |
 |---|---|
-| None, or made by an older method | At once |
-| Found nothing | After the provider's `recheck_days` |
+| None | At once |
+| Made by an older method | At once, unless it found a source the song lists |
+| Found nothing, or an instrumental | After the provider's `recheck_days` |
 | Failed | After an hour, doubling with each failure, up to a week |
-| Found a source, an instrumental, or declined | Never |
+| Found a source, or declined | Never |
 
 `sync --rematch` makes every lookup at once. What one round finds can
 trigger the next, as an upload's release then finds the release's
 lyrics. An LRCLIB record fits when its length is within 2 s of the
-song's and its names hold the song's; a timed record wins, then the
-closest in length. A song without a title, an artist or a measured
+song's and its names hold the song's, compared by letters and digits in
+any width; a record with words wins over one marked instrumental, then
+one named exactly the song's title over one holding it, as `Rain (Live)`
+holds `Rain`, then a timed record, then the closest in length. A song without a title, an artist or a measured
 length looks nothing up on LRCLIB or MusicBrainz.
 
 A MusicBrainz recording fits when it is no video, its length is within
-3 s of the song's and its names hold the song's. Releases rank by the
+3 s of the song's and its names hold the song's; one titled exactly the
+song's title wins over one holding it. Releases rank by the
 song's own album if it has one, then a release that is no compilation,
 live album or soundtrack, an official one, an album before an EP before
 a single. Of the recordings that fit, the one on the best release wins,
@@ -330,10 +351,20 @@ are: a value it agrees on with another source wins over one alone. To
 look every song up, write the built-in triggers out with `when =
 "always"` for `musicbrainz`.
 
+A cover found joins every song of its album, which asks for it once
+between them, and is picked over the songs' own pictures only by the
+measures any cover is. To take covers only where a song has none, write
+the built-in triggers out with `when = "small-cover"` changed for
+`coverart`.
+
 muman asks MusicBrainz at most once a second, as MusicBrainz asks of
-every client, whatever `concurrency` says; when it answers that requests
-come too fast, muman waits 2 s, doubling, and asks again up to three
-times. Each request names muman and its repository in its user agent.
+every client, and LRCLIB at most four times a second, whatever
+`concurrency` says. When a service answers that requests come too fast
+(a 429 or a 503), muman waits as long as it asks, or 2 s for MusicBrainz
+and 10 s for LRCLIB, doubling, and asks again up to three times. A
+service still refusing after that leaves its remaining lookups for the
+next run, recorded as nothing, so none waits out a failure's backoff.
+Each request names muman and its repository in its user agent.
 
 ## Choosing songs and changing them
 
@@ -343,7 +374,7 @@ are all required, case ignored:
 
 | Term | Matches |
 |---|---|
-| `paper comets` | Each word in the title, artist, album, album artist or a key |
+| `paper comets` | Each word in the title, artist, album or album artist, or a source's whole ID or file name |
 | `artist:venn` | A field containing the text |
 | `artist:="Marlo Venn"` | A field equal to the text |
 | `title::^paper` | A field matching a regular expression |
@@ -352,7 +383,9 @@ are all required, case ignored:
 
 A field is any tag, or `key`, `path`, `format` (the file's extension:
 `opus`, `ogg`, `flac`, `mp3`, `m4a`),
-`cover` and `lyrics` (`yes`, `none`).
+`cover` and `lyrics` (`yes`, `none`). A field that is no tag muman knows
+and that no song has is refused, so a misspelled one never matches
+nothing, or, negated, every song.
 
 - **`list`** writes each song's key, artist, title and album, separated
   by tabs; `-f` takes a template of `{field}`s, `--removed` lists the
@@ -368,9 +401,13 @@ A field is any tag, or `key`, `path`, `format` (the file's extension:
   files; `--purge` also deletes fetched sources and trashes your own.
 - **`restore`** lists removed songs again, fetching any purged source.
 - **`undo`** puts the song list and library back as before the last run
-  that changed them, one run further back each time. It refuses when the
-  song list changed since. `[history]` sets how many runs and how much
-  space are kept; a file past that is written again from its sources.
+  that changed them, one run further back each time: files it wrote over
+  or removed come back, files it moved move back, and an edit you made by
+  hand before that run is undone with it. A run stopped partway, by a
+  crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
+  It refuses when the song list changed since. `[history]` sets how many
+  runs are kept and how much space they take together; a file past that
+  is written again from its sources.
 
 ```bash
 muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y
@@ -403,6 +440,16 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing or unreadable;
   `--decode` decodes every source in full to find a truncated download.
+- **`purge`** deletes fetched sources and lookup records no song uses,
+  which `status` and `info` name: an upload a release took the place of,
+  a source taken out of its song. A removed song's sources stay for
+  `restore`, and files of your own are never touched.
+- **`duplicates`** lists songs listed apart that are one recording, by
+  their audio fingerprints: a file of an album there twice first, then a
+  track and its copies on other albums, which a library of whole albums
+  keeps on purpose. It changes nothing; to merge a group, move the
+  others' sources into one `[[song]]` with `edit`, or `remove` them. A
+  query names the groups shown.
 
 ## Export
 

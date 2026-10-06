@@ -18,8 +18,10 @@
 //! 1. Official, over a promotion or a bootleg.
 //! 1. An album, then an EP, then a single.
 //!
-//! Of the recordings that fit, the one whose best release ranks first
-//! wins, then the one on the most releases, then the closest in length;
+//! Of the recordings that fit, one titled exactly the song's title wins
+//! over one whose title only holds it, as `Purple Rain` holds `Rain`;
+//! then the one whose best release ranks first, then the one on the most
+//! releases, then the closest in length;
 //! of its releases, the best ranked, then the earliest. Measured against
 //! musicbrainz.org, a famous song's title and artist matched 225
 //! recordings, every one scored 100 and the first 25 live bootlegs; the
@@ -36,19 +38,19 @@
 //! MusicBrainz allows one request a second from an address, on average,
 //! and refuses every request with a 503 while a client goes faster. Every
 //! request waits its turn on one [`Throttle`] for the whole run, a second
-//! apart whatever the provider's `concurrency`; a 503 holds every later
-//! request back 2 s, doubling, and is asked again up to three times. Each
+//! apart whatever the provider's `concurrency`; a refusal holds every
+//! later request back 2 s, doubling, and is asked again, as
+//! [`crate::http::Service`] does for every service. Each
 //! request names muman by [`crate::http::user_agent`], as MusicBrainz
 //! requires of every client, and asks for JSON.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::clean;
-use crate::http::{HttpTransport, Throttle, TransportError};
+use crate::http::{HttpTransport, Service, Throttle};
 use crate::lrclib::Query;
 use crate::music;
 
@@ -60,8 +62,6 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// search scores a famous song's many recordings alike, its original
 /// among the last as often as the first.
 const LIMIT: usize = 100;
-/// Times a request refused for going too fast is asked again.
-const RETRIES: u32 = 3;
 
 /// The spacing musicbrainz.org asks of a client: a second between
 /// requests, and 2 s held back after a refusal, doubling.
@@ -253,14 +253,9 @@ fn artist_ids(credit: &[Credit]) -> Vec<String> {
         .collect()
 }
 
-/// Whether two names hold one another, by letters and digits, without
-/// featured artists.
+/// Whether two names hold one another, by [`music::names_match`].
 fn same(a: &str, b: &str) -> bool {
-    let (a, b) = (
-        music::normalize(clean::without_credits(a)),
-        music::normalize(clean::without_credits(b)),
-    );
-    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a))
+    music::names_match(a, b).is_some()
 }
 
 /// The artist a search asks for: the first of the song's, which are
@@ -356,14 +351,15 @@ impl Recording {
         })
     }
 
-    /// Its rank among the recordings that fit, smaller first: by its best
-    /// release, a recording on none last, then on the most releases, the
-    /// gap in whole seconds, the date, without a comment, the search's
-    /// score.
-    fn rank(&self, album: Option<&str>, seconds: f64) -> impl Ord + '_ {
+    /// Its rank among the recordings that fit, smaller first: titled the
+    /// song's title exactly, then by its best release, a recording on none
+    /// last, then on the most releases, the gap in whole seconds, the
+    /// date, without a comment, the search's score.
+    fn rank(&self, title: &str, album: Option<&str>, seconds: f64) -> impl Ord + '_ {
         let best = self.best(album);
         let class = best.map(|f| f.class(album));
         (
+            std::cmp::Reverse(music::names_match(&self.title, title)),
             class.is_none(),
             class,
             std::cmp::Reverse(self.releases.len()),
@@ -405,8 +401,7 @@ impl std::fmt::Debug for Client<'_> {
 }
 
 impl Client<'_> {
-    /// GET `path` on its turn, asking again after a refusal for going too
-    /// fast; `None` for a 404.
+    /// GET `path` on its turn; `None` for a 404.
     fn get(&self, path: &str) -> Result<Option<String>> {
         let url = format!("{}{path}", self.base.trim_end_matches('/'));
         let agent = crate::http::user_agent();
@@ -414,23 +409,17 @@ impl Client<'_> {
             ("User-Agent", agent.as_str()),
             ("Accept", "application/json"),
         ];
-        let mut refused = 0;
-        loop {
-            self.throttle.wait();
-            match self.transport.get_json(&url, &headers, TIMEOUT) {
-                Ok(body) => return Ok(Some(body)),
-                Err(TransportError::Status { code: 404, .. }) => return Ok(None),
-                Err(TransportError::Status { code: 503, .. }) if refused < RETRIES => {
-                    refused += 1;
-                    self.throttle.refused(refused);
-                }
-                Err(e) => return Err(anyhow!("{url}: {e}")),
-            }
+        Service {
+            name: "MusicBrainz",
+            transport: self.transport,
+            throttle: self.throttle,
         }
+        .get_text(&url, &headers, TIMEOUT)
     }
 
-    /// The record of one recording, to fetch a kept one again.
-    pub fn by_id(&self, id: &str) -> Result<Option<Record>> {
+    /// The record of one recording, to fetch a kept one again, its
+    /// release picked as a search picks it for a song on `album`.
+    pub fn by_id(&self, id: &str, album: Option<&str>) -> Result<Option<Record>> {
         let path = format!(
             "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs&fmt=json",
             music::percent_encode(id)
@@ -438,7 +427,7 @@ impl Client<'_> {
         self.get(&path)?
             .map(|b| {
                 serde_json::from_str::<Recording>(&b)
-                    .map(|r| r.record(None))
+                    .map(|r| r.record(album))
                     .context("reading MusicBrainz's answer")
             })
             .transpose()
@@ -468,8 +457,66 @@ impl Client<'_> {
             .recordings
             .iter()
             .filter(|r| r.fits(q))
-            .min_by_key(|r| r.rank(album, q.seconds));
+            .min_by_key(|r| r.rank(&q.title, album, q.seconds));
         Ok(best.map(|r| r.record(album)))
+    }
+}
+
+/// Release groups a search lists.
+#[derive(Debug, Deserialize)]
+struct Groups {
+    #[serde(default, rename = "release-groups", deserialize_with = "or_default")]
+    groups: Vec<Grouped>,
+}
+
+/// A release group as a search lists it.
+#[derive(Debug, Deserialize)]
+struct Grouped {
+    id: String,
+    #[serde(default, deserialize_with = "or_default")]
+    title: String,
+    #[serde(default, rename = "primary-type")]
+    primary: Option<String>,
+    #[serde(default, rename = "secondary-types", deserialize_with = "or_default")]
+    secondary: Vec<String>,
+    #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
+    credit: Vec<Credit>,
+    #[serde(default)]
+    score: u32,
+}
+
+impl Client<'_> {
+    /// The release group of an album by its title and its artist: of
+    /// those whose names hold both, one titled exactly the album, then an
+    /// album with no secondary type, then the best scored.
+    pub fn release_group(&self, album: &str, artist: &str) -> Result<Option<String>> {
+        let query = format!(
+            "releasegroup:{} AND artist:{}",
+            phrase(album),
+            phrase(first_artist(artist))
+        );
+        let path = format!(
+            "/ws/2/release-group?query={}&limit=25&fmt=json",
+            music::percent_encode(&query)
+        );
+        let Some(body) = self.get(&path)? else {
+            return Ok(None);
+        };
+        let found: Groups = serde_json::from_str(&body).context("reading MusicBrainz's answer")?;
+        let best = found
+            .groups
+            .iter()
+            .filter(|g| same(&names(&g.credit).join(" "), first_artist(artist)))
+            .filter_map(|g| Some((music::names_match(&g.title, album)?, g)))
+            .min_by_key(|(exact, g)| {
+                (
+                    std::cmp::Reverse(*exact),
+                    g.primary.as_deref() != Some("Album"),
+                    !g.secondary.is_empty(),
+                    std::cmp::Reverse(g.score),
+                )
+            });
+        Ok(best.map(|(_, g)| g.id.clone()))
     }
 }
 

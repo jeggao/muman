@@ -2,9 +2,13 @@
 //! from what earlier runs measured, read without running or locking
 //! anything.
 //!
-//! A bare word matches the title, artist, album, album artist or a key;
+//! A bare word matches when the title, artist, album or album artist
+//! holds it, or it is a key's ID or a manual file's name whole: never
+//! part of a key, which would take `man` for every manual song.
 //! `field:text` a field containing the text, `field:=text` one equal to
-//! it, `field::regex` one matching it; `^` before any term negates it.
+//! it, `field::regex` one matching it; `^` before any term negates it. A
+//! field that is no tag muman knows and that no song has is refused, so
+//! a misspelled one neither matches nothing nor, negated, every song.
 //! A source key, as `youtube:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case is
 //! ignored throughout.
@@ -46,6 +50,12 @@ pub struct View {
 }
 
 impl View {
+    /// The key naming the song, by [`crate::manifest::id_of`].
+    #[must_use]
+    pub fn id(&self) -> Option<&SourceKey> {
+        crate::manifest::id_of(&self.keys)
+    }
+
     /// The values of `field`, by any of its spellings.
     #[must_use]
     pub fn values(&self, field: &str) -> Vec<String> {
@@ -88,7 +98,7 @@ impl View {
 
 /// Every song as a query reads it, in song-list order.
 pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<View>> {
-    let (mut planned, _) = reconcile::plan(manifest, state, library, &mut std::io::sink())?;
+    let (mut planned, _) = reconcile::plan(manifest, state, library, None, &mut std::io::sink())?;
     crate::limit::as_written(manifest, state, &mut planned);
     let mut views: Vec<View> = manifest
         .songs
@@ -218,6 +228,39 @@ impl Query {
                 .all(|t| t.negated != t.test.holds(view))
     }
 
+    /// Refuse a field no tag muman knows is named and no song in `views`
+    /// has: a misspelling, which would match nothing, or negated, every
+    /// song.
+    pub fn check_fields(&self, views: &[View]) -> Result<()> {
+        for term in &self.0 {
+            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
+                &term.test
+            else {
+                continue;
+            };
+            let name = tags::vorbis_key(field);
+            let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
+            if !is_field(field) && !had {
+                return Err(crate::change::Refused(format!(
+                    "No song has a field `{field}`: a tag such as title, artist, album, \
+                     album_artist, genre or date, or one of {}",
+                    DERIVED.join(", ")
+                ))
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// How many keys the query names.
+    #[must_use]
+    pub fn keys_named(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|t| !t.negated && matches!(t.test, Test::Key(_)))
+            .count()
+    }
+
     /// Whether the query is keys alone, each naming its song.
     #[must_use]
     pub fn names_keys(&self) -> bool {
@@ -226,6 +269,18 @@ impl Query {
                 .0
                 .iter()
                 .all(|t| !t.negated && matches!(t.test, Test::Key(_)))
+    }
+}
+
+/// Whether `word`, lower-cased, is the key's ID or its manual file's
+/// name, with or without its extension.
+fn names_key(key: &SourceKey, word: &str) -> bool {
+    match key {
+        SourceKey::Remote { id, .. } => id.to_lowercase() == word,
+        SourceKey::Manual(path) => [path.file_name(), path.file_stem()]
+            .into_iter()
+            .flatten()
+            .any(|n| n.to_string_lossy().to_lowercase() == word),
     }
 }
 
@@ -239,9 +294,12 @@ impl Test {
             view.values(field).iter().any(|v| f(&v.to_lowercase()))
         };
         match self {
-            Self::Word(w) => ["title", "artist", "album", "album_artist", "key"]
-                .iter()
-                .any(|f| any(f, &|v| v.contains(w.as_str()))),
+            Self::Word(w) => {
+                ["title", "artist", "album", "album_artist"]
+                    .iter()
+                    .any(|f| any(f, &|v| v.contains(w.as_str())))
+                    || view.keys.iter().any(|k| names_key(k, w))
+            }
             Self::Key(k) => view.keys.contains(k),
             Self::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
             Self::Equals(f, text) => any(f, &|v| v == text),
@@ -326,6 +384,41 @@ mod tests {
         assert!(query(&["lumo", "hour"]).matches(&v));
         assert!(!query(&["lumo", "around"]).matches(&v));
         assert!(query(&[]).matches(&v));
+    }
+
+    #[test]
+    fn a_bare_word_names_a_key_only_whole() {
+        let video = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let file = view("Tide", "Ada Quill", "manual:Ada Quill/02 Tide.flac");
+        for part in ["man", "tube", "you", "aaa"] {
+            assert!(!query(&[part]).matches(&video), "{part}");
+            assert!(!query(&[part]).matches(&file), "{part}");
+        }
+        assert!(query(&["aaaaaaaaaaa"]).matches(&video));
+        assert!(query(&["02 tide.flac"]).matches(&file));
+        assert!(query(&["ada"]).matches(&file), "names still match in part");
+    }
+
+    #[test]
+    fn a_field_no_tag_names_and_no_song_has_is_refused() {
+        let v = [view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa")];
+        for term in ["artst:fenn", "^artst:fenn", "gnere::x", "composer:quill"] {
+            let e = query(&[term]).check_fields(&v).unwrap_err();
+            assert!(
+                e.downcast_ref::<crate::change::Refused>().is_some(),
+                "{term}: {e:#}"
+            );
+        }
+        for term in ["album:x", "^date:2001", "genre:house", "format:opus"] {
+            query(&[term]).check_fields(&v).unwrap();
+        }
+        let mut composed = v[0].clone();
+        composed
+            .tags
+            .push(("COMPOSER".into(), vec!["Ada Quill".into()]));
+        query(&["^composer:quill"])
+            .check_fields(&[composed])
+            .unwrap();
     }
 
     #[test]

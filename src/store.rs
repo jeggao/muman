@@ -1,7 +1,12 @@
 //! The sources on disk: what yt-dlp fetched, found by the ID in each
-//! file's name, the records LRCLIB and MusicBrainz lookups kept, by
-//! theirs, and the manual folder, where a song's file brings the lyrics
+//! file's name, the records LRCLIB, MusicBrainz and Cover Art Archive
+//! lookups kept, by theirs, and the manual folder, where a song's file brings the lyrics
 //! and pictures beside it.
+//!
+//! What each kind of kept record is, its folder, its files and what it
+//! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
+//! providers and `info` all read it there, so a provider added is one
+//! entry. A key of any other scheme is a file yt-dlp fetched.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -10,7 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 use crate::dirs::Dirs;
-use crate::provider::{LRCLIB, MUSICBRAINZ};
+use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
 use crate::source::{SourceKey, id_of};
 
 /// A manual file this recent may still be copying in.
@@ -44,6 +49,81 @@ fn kind_of(path: &Path) -> Option<Kind> {
         Some(Kind::Image)
     } else {
         None
+    }
+}
+
+/// A kind of record a lookup keeps in the store, by the scheme of its
+/// keys, `<extractor>:<id>`.
+#[derive(Debug, Clone, Copy)]
+pub struct Kept {
+    pub extractor: &'static str,
+    pub provider: Provider,
+    /// Its folder in `sources`.
+    pub folder: &'static str,
+    /// The extensions the file a key names may have, in order of
+    /// preference.
+    pub main: &'static [&'static str],
+    /// Extensions of the files kept beside it.
+    pub beside: &'static [&'static str],
+    pub kind: Kind,
+    /// Whether an ID has the shape this scheme's take.
+    pub valid: fn(&str) -> bool,
+}
+
+/// Every kind of record a lookup keeps.
+pub const KEPT: [Kept; 3] = [
+    Kept {
+        extractor: LRCLIB,
+        provider: Provider::Lrclib,
+        folder: "lrclib",
+        main: &["lrc"],
+        beside: &["json"],
+        kind: Kind::Lyrics,
+        valid: |id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()),
+    },
+    Kept {
+        extractor: MUSICBRAINZ,
+        provider: Provider::MusicBrainz,
+        folder: "musicbrainz",
+        main: &["json"],
+        beside: &[],
+        kind: Kind::Tags,
+        valid: crate::musicbrainz::is_mbid,
+    },
+    Kept {
+        extractor: COVERART,
+        provider: Provider::CoverArt,
+        folder: "coverart",
+        main: &["jpg", "png", "webp"],
+        beside: &[],
+        kind: Kind::Image,
+        valid: crate::musicbrainz::is_mbid,
+    },
+];
+
+/// The kind of record a key of `extractor` is, if a lookup keeps it.
+#[must_use]
+pub fn kept(extractor: &str) -> Option<&'static Kept> {
+    KEPT.iter().find(|k| k.extractor == extractor)
+}
+
+impl Kept {
+    /// Its folder in the home.
+    #[must_use]
+    pub fn dir(&self, dirs: &Dirs) -> PathBuf {
+        dirs.sources(self.folder)
+    }
+
+    /// The files kept for `id` that are on disk: the one a key names and
+    /// those beside it.
+    #[must_use]
+    pub fn files(&self, dirs: &Dirs, id: &str) -> Vec<PathBuf> {
+        self.main
+            .iter()
+            .chain(self.beside)
+            .map(|ext| self.dir(dirs).join(format!("{id}.{ext}")))
+            .filter(|p| p.exists())
+            .collect()
     }
 }
 
@@ -103,12 +183,11 @@ pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
 #[derive(Debug, Default)]
 pub struct Store {
     manual_root: PathBuf,
+    fetched_root: PathBuf,
     /// yt-dlp's files by ID, a `.mkv` before any other.
     fetched: HashMap<String, PathBuf>,
-    /// LRCLIB's lyrics by record ID.
-    lrclib: HashMap<String, PathBuf>,
-    /// MusicBrainz records by recording ID.
-    musicbrainz: HashMap<String, PathBuf>,
+    /// Kept records by scheme, then ID.
+    kept: HashMap<&'static str, HashMap<String, PathBuf>>,
     /// Manual files by their path in the manual folder.
     manual: BTreeMap<PathBuf, Kind>,
 }
@@ -118,6 +197,7 @@ impl Store {
     pub fn scan(dirs: &Dirs) -> Result<Self> {
         let mut store = Self {
             manual_root: dirs.manual(),
+            fetched_root: dirs.ytdlp(),
             ..Self::default()
         };
         for file in walk(&dirs.ytdlp(), 2)? {
@@ -135,23 +215,29 @@ impl Store {
                 store.fetched.insert(id, file);
             }
         }
-        for file in walk(&dirs.lrclib(), 1)? {
-            let id = file
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default();
-            if kind_of(&file) == Some(Kind::Lyrics) && id.bytes().all(|b| b.is_ascii_digit()) {
-                store.lrclib.insert(id.to_string(), file.clone());
+        for kind in &KEPT {
+            let mut found: HashMap<String, PathBuf> = HashMap::new();
+            for file in walk(&kind.dir(dirs), 1)? {
+                let (Some(id), Some(ext)) = (
+                    file.file_stem().and_then(|s| s.to_str()),
+                    file.extension().and_then(|e| e.to_str()),
+                ) else {
+                    continue;
+                };
+                let Some(rank) = kind.main.iter().position(|m| m.eq_ignore_ascii_case(ext)) else {
+                    continue;
+                };
+                let better = found.get(id).is_none_or(|have| {
+                    have.extension()
+                        .and_then(|e| e.to_str())
+                        .and_then(|e| kind.main.iter().position(|m| m.eq_ignore_ascii_case(e)))
+                        .is_none_or(|r| rank < r)
+                });
+                if (kind.valid)(id) && better {
+                    found.insert(id.to_string(), file.clone());
+                }
             }
-        }
-        for file in walk(&dirs.musicbrainz(), 1)? {
-            let json = file.extension().is_some_and(|e| e == "json");
-            if let Some(id) = file.file_stem().and_then(|s| s.to_str())
-                && json
-                && crate::musicbrainz::is_mbid(id)
-            {
-                store.musicbrainz.insert(id.to_string(), file.clone());
-            }
+            store.kept.insert(kind.extractor, found);
         }
         let root = dirs.manual();
         for file in walk(&root, usize::MAX)? {
@@ -165,13 +251,10 @@ impl Store {
     #[must_use]
     pub fn has(&self, key: &SourceKey) -> bool {
         match key {
-            SourceKey::Remote { extractor, id } if extractor == LRCLIB => {
-                self.lrclib.contains_key(id)
-            }
-            SourceKey::Remote { extractor, id } if extractor == MUSICBRAINZ => {
-                self.musicbrainz.contains_key(id)
-            }
-            SourceKey::Remote { id, .. } => self.fetched.contains_key(id),
+            SourceKey::Remote { extractor, id } => match kept(extractor) {
+                Some(kind) => self.kept_file(kind, id).is_some(),
+                None => self.fetched.contains_key(id),
+            },
             SourceKey::Manual(rel) => self.manual.contains_key(rel),
         }
     }
@@ -179,20 +262,16 @@ impl Store {
     #[must_use]
     pub fn locate(&self, key: &SourceKey) -> Option<Located> {
         match key {
-            SourceKey::Remote { extractor, id } if extractor == LRCLIB => Some(Located {
-                key: key.clone(),
-                path: self.lrclib.get(id)?.clone(),
-                kind: Kind::Lyrics,
-                lyrics: None,
-                covers: Vec::new(),
-            }),
-            SourceKey::Remote { extractor, id } if extractor == MUSICBRAINZ => Some(Located {
-                key: key.clone(),
-                path: self.musicbrainz.get(id)?.clone(),
-                kind: Kind::Tags,
-                lyrics: None,
-                covers: Vec::new(),
-            }),
+            SourceKey::Remote { extractor, id } if kept(extractor).is_some() => {
+                let kind = kept(extractor)?;
+                Some(Located {
+                    key: key.clone(),
+                    path: self.kept_file(kind, id)?.clone(),
+                    kind: kind.kind,
+                    lyrics: None,
+                    covers: Vec::new(),
+                })
+            }
             SourceKey::Remote { id, .. } => Some(Located {
                 key: key.clone(),
                 path: self.fetched.get(id)?.clone(),
@@ -219,6 +298,45 @@ impl Store {
                 })
             }
         }
+    }
+
+    /// Every file yt-dlp fetched for `id`, whatever its extension.
+    pub fn fetched_files(&self, id: &str) -> Result<Vec<PathBuf>> {
+        Ok(walk(&self.fetched_root, 2)?
+            .into_iter()
+            .filter(|p| id_of(p) == Some(id))
+            .collect())
+    }
+
+    /// Delete what yt-dlp fetched for each of `keys` no song in `listed`
+    /// has, as an upload a release took the place of; returns what went.
+    pub fn discard(
+        &self,
+        keys: &[SourceKey],
+        listed: &BTreeSet<SourceKey>,
+    ) -> Result<Vec<PathBuf>> {
+        let mut gone = Vec::new();
+        for key in keys.iter().filter(|k| !listed.contains(*k)) {
+            let SourceKey::Remote { extractor, id } = key else {
+                continue;
+            };
+            if kept(extractor).is_some() {
+                continue;
+            }
+            for file in self.fetched_files(id)? {
+                match crate::atomic::remove(&file) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(e).with_context(|| format!("deleting {}", file.display()));
+                    }
+                    _ => gone.push(file),
+                }
+            }
+        }
+        Ok(gone)
+    }
+
+    fn kept_file(&self, kind: &Kept, id: &str) -> Option<&PathBuf> {
+        self.kept.get(kind.extractor)?.get(id)
     }
 
     /// The `.lrc` and pictures that come with a manual song file.
@@ -292,8 +410,7 @@ impl Store {
         let mut unused: Vec<PathBuf> = self
             .fetched
             .values()
-            .chain(self.lrclib.values())
-            .chain(self.musicbrainz.values())
+            .chain(self.kept.values().flat_map(HashMap::values))
             .chain(
                 self.manual
                     .keys()
@@ -430,6 +547,28 @@ mod tests {
         let (ready, settling) = store.unlisted(&listed, SystemTime::now(), SETTLING);
         assert_eq!(ready, []);
         assert_eq!(settling, vec![PathBuf::from("b.mp3")]);
+    }
+
+    #[test]
+    fn an_upload_no_song_lists_is_discarded_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let upload = [
+            touch(dir.path(), "sources/yt-dlp/c/Old [ooooooooooo].mkv"),
+            touch(dir.path(), "sources/yt-dlp/c/Old [ooooooooooo].webm"),
+        ];
+        let listed = touch(dir.path(), "sources/yt-dlp/c/Kept [kkkkkkkkkkk].mkv");
+        let store = Store::scan(&d).unwrap();
+        let keys = [
+            SourceKey::youtube("ooooooooooo"),
+            SourceKey::youtube("kkkkkkkkkkk"),
+        ];
+        let gone = store
+            .discard(&keys, &BTreeSet::from([SourceKey::youtube("kkkkkkkkkkk")]))
+            .unwrap();
+        assert_eq!(gone.len(), 2);
+        assert!(upload.iter().all(|p| !p.exists()));
+        assert!(listed.exists());
     }
 
     #[test]

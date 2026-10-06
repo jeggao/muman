@@ -29,9 +29,11 @@ pub fn to_portable(path: &Path) -> String {
 }
 
 /// A path inside the library or the home as muman shows it: with `/`,
-/// as the song list and state write it, on every platform.
+/// as the song list and state write it, on every platform. A path from
+/// the root is shown as the platform writes it, by `display`.
 #[must_use]
 pub fn show(path: &Path) -> String {
+    debug_assert!(path.is_relative(), "{} is not relative", path.display());
     to_portable(path)
 }
 
@@ -59,6 +61,19 @@ pub fn normalized(path: &Path) -> PathBuf {
 #[must_use]
 pub fn folded(path: &Path) -> String {
     to_portable(path).to_lowercase()
+}
+
+/// For a path.
+pub mod portable {
+    use super::{Deserialize, Deserializer, Path, PathBuf, Serializer, from_portable, to_portable};
+
+    pub fn serialize<S: Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&to_portable(path))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PathBuf, D::Error> {
+        Ok(from_portable(&String::deserialize(d)?))
+    }
 }
 
 pub mod portable_opt {
