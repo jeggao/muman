@@ -15,6 +15,10 @@
 //! | Failed | After an hour, doubling with each failure, up to a week |
 //! | Found a source, an instrumental, or declined | Never |
 //!
+//! A lookup a service refused for going too fast, after the retries
+//! [`crate::http::Service`] makes, is recorded as nothing at all: it and
+//! the provider's other lookups that round are put off to the next run.
+//!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Each round measures what
 //! the triggers read, makes its lookups and fetches what they found,
@@ -34,7 +38,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::Path;
 
-use crate::http::{HttpTransport, Throttle};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::http::{HttpTransport, Refusing, Throttle};
 use anyhow::{Context, Result, anyhow};
 
 use crate::acquire::{self, Acquire};
@@ -208,6 +214,43 @@ fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
         .ok_or_else(|| anyhow!("yt-dlp listed nothing for {key}"))
 }
 
+/// The pace of a run's requests to each service, shared by every
+/// thread.
+#[derive(Debug)]
+pub struct Throttles {
+    pub lrclib: Throttle,
+    pub musicbrainz: Throttle,
+}
+
+impl Throttles {
+    /// The pace each service asks of a client.
+    #[must_use]
+    pub fn polite() -> Self {
+        Self {
+            lrclib: lrclib::throttle(),
+            musicbrainz: musicbrainz::throttle(),
+        }
+    }
+
+    /// No spacing, for tests.
+    #[must_use]
+    pub fn none() -> Self {
+        Self {
+            lrclib: Throttle::none(),
+            musicbrainz: Throttle::none(),
+        }
+    }
+}
+
+/// What a provider's service is called when it refuses.
+fn service_of(p: Provider) -> &'static str {
+    match p {
+        Provider::Lrclib => "LRCLIB",
+        Provider::MusicBrainz => "MusicBrainz",
+        _ => "YouTube",
+    }
+}
+
 /// The services a run asks, at the addresses the song list sets.
 struct Clients<'a> {
     lrclib: lrclib::Client<'a>,
@@ -300,7 +343,7 @@ pub fn run<R: Runner, W: Write>(
     acquire: &mut Acquire<'_, R, W>,
     dirs: &Dirs,
     http: &(dyn HttpTransport + Sync),
-    throttle: &Throttle,
+    throttles: &Throttles,
     force: bool,
     declined: &BTreeSet<SourceKey>,
 ) -> Result<bool> {
@@ -376,11 +419,12 @@ pub fn run<R: Runner, W: Write>(
             lrclib: lrclib::Client {
                 base: &bases.0,
                 transport: http,
+                throttle: &throttles.lrclib,
             },
             musicbrainz: musicbrainz::Client {
                 base: &bases.1,
                 transport: http,
-                throttle,
+                throttle: &throttles.musicbrainz,
             },
         };
         let audio = acquire.temp().join("audio");
@@ -392,24 +436,39 @@ pub fn run<R: Runner, W: Write>(
                 continue;
             }
             let workers = manifest.providers.settings(p).concurrency;
+            let refusing = AtomicBool::new(false);
             let found = parallel::map(&group, workers, |d| {
+                if refusing.load(Ordering::Relaxed) {
+                    return Err(Refusing {
+                        service: service_of(p),
+                    }
+                    .into());
+                }
                 let query = resolved
                     .get(&d.song)
                     .and_then(|r| query_of(r, &state.facts));
-                look(
+                let hit = look(
                     runner,
                     d,
                     store.locate(&d.from).as_ref(),
                     query.as_ref(),
                     &clients,
                     &audio,
-                )
+                );
+                if hit
+                    .as_ref()
+                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
+                {
+                    refusing.store(true, Ordering::Relaxed);
+                }
+                hit
             });
             hits.extend(group.into_iter().cloned().zip(found));
         }
 
         let mut replaced = Vec::new();
         let mut joined = 0_usize;
+        let mut put_off: BTreeMap<Provider, (usize, String)> = BTreeMap::new();
         for (d, hit) in hits {
             let name = reconcile::name_of(
                 &manifest.songs[d.song],
@@ -421,6 +480,11 @@ pub fn run<R: Runner, W: Write>(
                 // says so, rather than putting each song off for a week.
                 Err(e) if e.downcast_ref::<crate::runner::MissingTool>().is_some() => {
                     return Err(e);
+                }
+                Err(e) if e.downcast_ref::<Refusing>().is_some() => {
+                    let entry = put_off.entry(d.find).or_insert((0, e.to_string()));
+                    entry.0 += 1;
+                    continue;
                 }
                 Err(e) => {
                     crate::ui::warning(
@@ -557,6 +621,12 @@ pub fn run<R: Runner, W: Write>(
         }
         manifest.save()?;
         State::keep_lookups(home, &records, &replaced)?;
+        for (p, (n, why)) in put_off {
+            crate::ui::warning(
+                acquire.out,
+                &format!("{why}: {n} lookup(s) on {p} wait for the next run"),
+            )?;
+        }
         if joined == 0 {
             break;
         }
@@ -572,13 +642,13 @@ pub fn run<R: Runner, W: Write>(
 }
 
 /// Fetch again every listed LRCLIB or MusicBrainz record gone from the
-/// store, by its ID, asking MusicBrainz at the pace of `throttle`.
+/// store, by its ID, asking each at the pace of `throttles`.
 /// Returns each that could not be, with why.
 pub fn refetch(
     dirs: &Dirs,
     manifest: &Manifest,
     http: &(dyn HttpTransport + Sync),
-    throttle: &Throttle,
+    throttles: &Throttles,
 ) -> Result<Vec<(SourceKey, String)>> {
     let store = Store::scan(dirs)?;
     let bases = (
@@ -588,11 +658,12 @@ pub fn refetch(
     let lrclib = lrclib::Client {
         base: &bases.0,
         transport: http,
+        throttle: &throttles.lrclib,
     };
     let musicbrainz = musicbrainz::Client {
         base: &bases.1,
         transport: http,
-        throttle,
+        throttle: &throttles.musicbrainz,
     };
     let mut failed = Vec::new();
     for key in manifest.keys() {

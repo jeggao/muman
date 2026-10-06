@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **LRCLIB is asked politely.** Requests to LRCLIB are spaced across a
+  run, and a 429 or 503 from any service is waited out, as long as its
+  `Retry-After` asks, and asked again. A service still refusing leaves
+  its remaining lookups for the next run instead of recording each as
+  failed and putting it off for hours.
+
 ## [0.1.2] - 2026-10-05
 
 ### Added

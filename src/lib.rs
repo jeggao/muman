@@ -97,8 +97,8 @@ pub struct Job {
     /// How long a file dropped into the manual folder waits, so one still
     /// being copied in is not read half written.
     pub settling: Duration,
-    /// The pace of every request to MusicBrainz in the run.
-    pub throttle: http::Throttle,
+    /// The pace of every request to each service in the run.
+    pub throttles: lookup::Throttles,
 }
 
 impl Job {
@@ -112,7 +112,7 @@ impl Job {
             command: cli.command,
             verbose: cli.verbose,
             settling: store::SETTLING,
-            throttle: musicbrainz::throttle(),
+            throttles: lookup::Throttles::polite(),
             cache: defaults.cache,
             live: false,
         }
@@ -420,7 +420,7 @@ fn look_up<R: Runner, W: Write>(
 ) -> Result<bool> {
     let (ok, ()) = network(job, runner, out, |acquire| {
         Ok((
-            lookup::run(acquire, &job.dirs, http, &job.throttle, force, declined)?,
+            lookup::run(acquire, &job.dirs, http, &job.throttles, force, declined)?,
             (),
         ))
     })?;
@@ -442,7 +442,7 @@ fn fetch_missing<R: Runner, W: Write>(
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
     })?;
-    let records = lookup::refetch(&job.dirs, manifest, http, &job.throttle)?;
+    let records = lookup::refetch(&job.dirs, manifest, http, &job.throttles)?;
     for (key, error) in &records {
         ok = false;
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;

@@ -36,19 +36,20 @@
 //! MusicBrainz allows one request a second from an address, on average,
 //! and refuses every request with a 503 while a client goes faster. Every
 //! request waits its turn on one [`Throttle`] for the whole run, a second
-//! apart whatever the provider's `concurrency`; a 503 holds every later
-//! request back 2 s, doubling, and is asked again up to three times. Each
+//! apart whatever the provider's `concurrency`; a refusal holds every
+//! later request back 2 s, doubling, and is asked again, as
+//! [`crate::http::Service`] does for every service. Each
 //! request names muman by [`crate::http::user_agent`], as MusicBrainz
 //! requires of every client, and asks for JSON.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::clean;
-use crate::http::{HttpTransport, Throttle, TransportError};
+use crate::http::{HttpTransport, Service, Throttle};
 use crate::lrclib::Query;
 use crate::music;
 
@@ -60,8 +61,6 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// search scores a famous song's many recordings alike, its original
 /// among the last as often as the first.
 const LIMIT: usize = 100;
-/// Times a request refused for going too fast is asked again.
-const RETRIES: u32 = 3;
 
 /// The spacing musicbrainz.org asks of a client: a second between
 /// requests, and 2 s held back after a refusal, doubling.
@@ -405,8 +404,7 @@ impl std::fmt::Debug for Client<'_> {
 }
 
 impl Client<'_> {
-    /// GET `path` on its turn, asking again after a refusal for going too
-    /// fast; `None` for a 404.
+    /// GET `path` on its turn; `None` for a 404.
     fn get(&self, path: &str) -> Result<Option<String>> {
         let url = format!("{}{path}", self.base.trim_end_matches('/'));
         let agent = crate::http::user_agent();
@@ -414,19 +412,12 @@ impl Client<'_> {
             ("User-Agent", agent.as_str()),
             ("Accept", "application/json"),
         ];
-        let mut refused = 0;
-        loop {
-            self.throttle.wait();
-            match self.transport.get_json(&url, &headers, TIMEOUT) {
-                Ok(body) => return Ok(Some(body)),
-                Err(TransportError::Status { code: 404, .. }) => return Ok(None),
-                Err(TransportError::Status { code: 503, .. }) if refused < RETRIES => {
-                    refused += 1;
-                    self.throttle.refused(refused);
-                }
-                Err(e) => return Err(anyhow!("{url}: {e}")),
-            }
+        Service {
+            name: "MusicBrainz",
+            transport: self.transport,
+            throttle: self.throttle,
         }
+        .get_text(&url, &headers, TIMEOUT)
     }
 
     /// The record of one recording, to fetch a kept one again.

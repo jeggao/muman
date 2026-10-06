@@ -16,12 +16,18 @@
 //! lines win over untimed or missing ones. An instrumental record stops
 //! the song looking; a record deleted from the store is fetched again by
 //! its ID.
+//!
+//! LRCLIB publishes no limit, but the Cloudflare in front of lrclib.net
+//! refused about one lookup in ten of a 1,600-song run that asked four at
+//! a time, unspaced, with a 429 (error 1015). Requests go at most one per
+//! [`GAP`] across a run, and a refusal holds them back [`BACKOFF`],
+//! doubling, as [`crate::http::Service`] does for every service.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::http::{HttpTransport, TransportError};
+use crate::http::{HttpTransport, Service, Throttle};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +38,16 @@ use crate::music;
 /// LRCLIB's own lookup allows as much.
 const MAX_GAP_S: f64 = 2.0;
 const TIMEOUT: Duration = Duration::from_secs(20);
+/// The least time between two requests across a run.
+const GAP: Duration = Duration::from_millis(250);
+/// How long a refusal holds requests back, doubling with each in a row.
+const BACKOFF: Duration = Duration::from_secs(10);
+
+/// The spacing of a run's requests to LRCLIB.
+#[must_use]
+pub fn throttle() -> Throttle {
+    Throttle::new(GAP, BACKOFF)
+}
 
 /// What a lookup is told of the song.
 #[derive(Debug, Clone, PartialEq)]
@@ -125,10 +141,12 @@ pub enum Found {
     Nothing,
 }
 
-/// One LRCLIB server, asked through `transport`.
+/// One LRCLIB server, asked through `transport` at the pace of
+/// `throttle`.
 pub struct Client<'a> {
     pub base: &'a str,
     pub transport: &'a (dyn HttpTransport + Sync),
+    pub throttle: &'a Throttle,
 }
 
 impl std::fmt::Debug for Client<'_> {
@@ -143,14 +161,12 @@ impl Client<'_> {
     fn get(&self, path: &str) -> Result<Option<String>> {
         let url = format!("{}{path}", self.base.trim_end_matches('/'));
         let agent = crate::http::user_agent();
-        match self
-            .transport
-            .get_json(&url, &[("User-Agent", agent.as_str())], TIMEOUT)
-        {
-            Ok(body) => Ok(Some(body)),
-            Err(TransportError::Status { code: 404, .. }) => Ok(None),
-            Err(e) => Err(anyhow::anyhow!("{url}: {e}")),
+        Service {
+            name: "LRCLIB",
+            transport: self.transport,
+            throttle: self.throttle,
         }
+        .get_text(&url, &[("User-Agent", agent.as_str())], TIMEOUT)
     }
 
     /// The record of one ID, to fetch a kept one again.
@@ -242,11 +258,13 @@ pub mod testing {
     use crate::http::{HttpTransport, TransportError};
 
     /// Answers each GET from the first record whose path fragment the
-    /// URL holds; 404 for any other.
+    /// URL holds; 404 for any other. A `refusing` server answers every
+    /// GET with a 429.
     #[derive(Debug, Default)]
     pub struct Server {
         pub answers: Vec<(String, String)>,
         pub asked: Mutex<Vec<String>>,
+        pub refusing: bool,
     }
 
     impl Server {
@@ -258,21 +276,29 @@ pub mod testing {
     }
 
     impl HttpTransport for Server {
-        fn get_json(
+        fn get(
             &self,
             url: &str,
             headers: &[(&str, &str)],
             _: Duration,
-        ) -> Result<String, TransportError> {
+        ) -> Result<Vec<u8>, TransportError> {
             assert!(headers.iter().any(|(k, _)| *k == "User-Agent"));
             self.asked.lock().unwrap().push(url.to_string());
+            if self.refusing {
+                return Err(TransportError::Status {
+                    code: 429,
+                    body: "error code: 1015".into(),
+                    retry_after: None,
+                });
+            }
             self.answers
                 .iter()
                 .find(|(f, _)| url.contains(f.as_str()))
-                .map(|(_, b)| b.clone())
+                .map(|(_, b)| b.clone().into_bytes())
                 .ok_or(TransportError::Status {
                     code: 404,
                     body: "TrackNotFound".into(),
+                    retry_after: None,
                 })
         }
     }
@@ -307,6 +333,7 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         let Found::Lyrics(r) = client.find(&query()).unwrap() else {
             panic!("nothing found");
@@ -327,12 +354,14 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         assert_eq!(client.find(&query()).unwrap(), Found::Nothing);
         let none = Server::default();
         let client = Client {
             base: "http://lrclib.test",
             transport: &none,
+            throttle: &Throttle::none(),
         };
         assert_eq!(client.find(&query()).unwrap(), Found::Nothing);
     }
@@ -346,6 +375,7 @@ mod tests {
         let client = Client {
             base: "http://lrclib.test/",
             transport: &server,
+            throttle: &Throttle::none(),
         };
         let q = Query {
             album: Some("Rooms of Salt".into()),

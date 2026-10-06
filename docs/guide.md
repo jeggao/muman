@@ -331,9 +331,13 @@ look every song up, write the built-in triggers out with `when =
 "always"` for `musicbrainz`.
 
 muman asks MusicBrainz at most once a second, as MusicBrainz asks of
-every client, whatever `concurrency` says; when it answers that requests
-come too fast, muman waits 2 s, doubling, and asks again up to three
-times. Each request names muman and its repository in its user agent.
+every client, and LRCLIB at most four times a second, whatever
+`concurrency` says. When a service answers that requests come too fast
+(a 429 or a 503), muman waits as long as it asks, or 2 s for MusicBrainz
+and 10 s for LRCLIB, doubling, and asks again up to three times. A
+service still refusing after that leaves its remaining lookups for the
+next run, recorded as nothing, so none waits out a failure's backoff.
+Each request names muman and its repository in its user agent.
 
 ## Choosing songs and changing them
 

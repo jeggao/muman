@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::http::TransportError;
 use crate::lrclib::testing::Server;
 
 const REC: &str = "00000000-0000-0000-0000-00000000000";
@@ -227,12 +228,12 @@ struct Busy {
 }
 
 impl HttpTransport for Busy {
-    fn get_json(
+    fn get(
         &self,
         _: &str,
         headers: &[(&str, &str)],
         _: Duration,
-    ) -> Result<String, TransportError> {
+    ) -> Result<Vec<u8>, TransportError> {
         let mut asked = self.asked.lock().unwrap();
         asked.push(
             headers
@@ -244,9 +245,10 @@ impl HttpTransport for Busy {
             return Err(TransportError::Status {
                 code: 503,
                 body: "Your requests are exceeding the allowable rate limit.".into(),
+                retry_after: None,
             });
         }
-        Ok(r#"{"recordings": []}"#.into())
+        Ok(br#"{"recordings": []}"#.to_vec())
     }
 }
 
@@ -276,7 +278,7 @@ fn a_refusal_for_going_too_fast_is_asked_again_three_times() {
         ..Busy::default()
     };
     let e = client(&busier, &throttle).find(&query()).unwrap_err();
-    assert!(format!("{e:#}").contains("status 503"), "{e:#}");
+    assert!(e.downcast_ref::<crate::http::Refusing>().is_some(), "{e:#}");
 }
 
 #[test]

@@ -44,7 +44,7 @@ impl Setup {
     fn job(&self, args: &[&str]) -> Job {
         let mut job = Job::from_cli(cli(args), defaults(self.dir.path()));
         job.settling = std::time::Duration::ZERO;
-        job.throttle = crate::http::Throttle::none();
+        job.throttles = crate::lookup::Throttles::none();
         job.dirs = Dirs {
             home: self.dir.path().join("home"),
             library: self.dir.path().join("lib"),
@@ -560,6 +560,36 @@ fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
             .any(|u| u.contains("/ws/2/")),
         "{:?}",
         server.asked
+    );
+}
+
+#[test]
+fn lookups_a_refusing_service_left_wait_for_the_next_run_unrecorded() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let refusing = Server {
+        refusing: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&refusing, &["sync"]);
+    assert!(
+        text.contains("LRCLIB refuses requests for going too fast: 2 lookup(s) on lrclib wait"),
+        "{text}"
+    );
+    let asked = refusing.asked.lock().unwrap().len();
+    assert!(
+        asked <= 8,
+        "a request and three retries per lookup under way: {asked}"
+    );
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(state.lookups.is_empty(), "{:?}", state.lookups);
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics from LRCLIB"),
+        "asked again at once: {text}"
     );
 }
 
