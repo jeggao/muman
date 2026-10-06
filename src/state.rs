@@ -5,7 +5,7 @@
 //!
 //! | Key | Safe to lose |
 //! |---|---|
-//! | `outputs` | No: without it nothing is deleted, and every song renders again |
+//! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
 //! | `library`, `alignments`, `facts` | Yes: measured or set again |
 //! | `sizes` | Yes: songs are rendered again to measure them |
@@ -19,8 +19,10 @@
 //! loses at most the last few. An output whose size and time differ from those
 //! recorded was changed by something else, a tagger or a player: it is
 //! not written over, and once no song makes it, it is left in place and
-//! dropped from `outputs`, no longer muman's. When the library folder
-//! moves, the files in the old one are left alone.
+//! dropped from `outputs`, no longer muman's. A file at a song's path
+//! that no output names, the user's own, is not written over either
+//! unless forced, and then is kept for `undo` first. When the library
+//! folder moves, the files in the old one are left alone.
 //!
 //! A source that could not be read is not read again until its revision,
 //! each of its files' size and modification time, changes; one that could

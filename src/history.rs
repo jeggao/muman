@@ -471,6 +471,14 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     for m in &record.moves {
         outputs.remove(&m.to);
     }
+    // A file put back that was no output before is the user's again.
+    for rel in record
+        .kept
+        .iter()
+        .filter(|r| !record.outputs.contains_key(*r))
+    {
+        outputs.remove(rel);
+    }
     for (rel, before) in &record.outputs {
         let mut written = before.clone();
         if record.kept.contains(rel) {

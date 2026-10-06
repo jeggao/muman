@@ -27,6 +27,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   left every one taken for changed by someone else: never written again,
   and left behind as a duplicate when its path changed. A library a
   stopped run left so needs one `sync --force`.
+- **A file of your own is never written over unasked.** A song whose
+  path, or its lyrics' path, holds a file muman did not write leaves it
+  alone and says so; `sync --force` writes over it and keeps it, so
+  `undo` puts it back. A lost state file therefore leaves the whole
+  library alone until `sync --force`, rather than writing over it.
 - **`undo` puts back what a new template moved.** A run that only moved
   songs, as a changed `[library] template` does, left no record, so
   `undo` undid the run before it instead. Moves are recorded, and undone.

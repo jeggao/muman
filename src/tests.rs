@@ -376,6 +376,30 @@ fn undo_is_refused_before_saying_what_it_would_do() {
 }
 
 #[test]
+fn a_file_of_your_own_at_a_songs_path_is_written_over_only_when_forced() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mine = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "my own rip").unwrap();
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my own rip");
+
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert_ne!(std::fs::read(&mine).unwrap(), b"my own rip");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&mine).unwrap(),
+        "my own rip",
+        "{text}"
+    );
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

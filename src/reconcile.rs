@@ -45,6 +45,10 @@ pub struct Options {
     pub checkpoint: Option<Duration>,
 }
 
+/// Songs left alone for a file not muman's that a run names one by one;
+/// a lost state file makes every song such a one.
+const NAMED: usize = 10;
+
 /// How long measuring or writing runs between saves of what it did.
 const CHECKPOINT: Duration = Duration::from_secs(30);
 
@@ -446,16 +450,21 @@ pub fn reconcile<R: Runner, W: Write>(
     let old = state.outputs.clone();
     let current = |r: &Resolved| current(&dirs.library, &old, r);
     let changed_since = |path: &Path| changed_since_written(&dirs.library, &old, path);
+    let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
     let (due, guarded): (Vec<&PlannedSong>, Vec<&PlannedSong>) = planned
         .iter()
         .filter(|(_, r)| opts.force || current(r).is_none())
         .partition(|(_, r)| opts.force || !changed_since(&path_of(r)));
+    let (due, unowned): (Vec<&PlannedSong>, Vec<&PlannedSong>) = due
+        .into_iter()
+        .partition(|(_, r)| opts.force || foreign(r).is_empty());
 
     if opts.dry_run {
         let shown = Shown {
             manifest: &manifest,
             planned: &planned,
             guarded: &guarded,
+            unowned: &unowned,
             old: &old,
             state: &state,
             failed: &failed,
@@ -496,6 +505,10 @@ pub fn reconcile<R: Runner, W: Write>(
                     run.keep(&dirs.library, lyrics)?;
                 }
             }
+            // Written over only when forced, and then kept to put back.
+            for file in foreign(r) {
+                run.keep(&dirs.library, &file)?;
+            }
         }
         if !due.is_empty() {
             run.checkpoint(home)?;
@@ -523,6 +536,24 @@ pub fn reconcile<R: Runner, W: Write>(
                 },
             );
         }
+    }
+    for (_, r) in unowned.iter().take(NAMED) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "Left alone, not muman's: {} (`sync --force` writes over it, and `undo` puts it back)",
+                crate::relpath::show(&path_of(r))
+            ),
+        )?;
+    }
+    if unowned.len() > NAMED {
+        crate::ui::warning(
+            out,
+            &format!(
+                "… and {} more not muman's, left alone",
+                unowned.len() - NAMED
+            ),
+        )?;
     }
     for (_, r) in &guarded {
         crate::ui::warning(
@@ -633,7 +664,7 @@ pub fn reconcile<R: Runner, W: Write>(
         None => Ok(()),
     };
     let removed = prune(&dirs.library, &old, &mut outputs, &failed, &mut keep, out)?;
-    let up_to_date = planned.len() - due.len() - guarded.len();
+    let up_to_date = planned.len() - due.len() - guarded.len() - unowned.len();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
     }
@@ -818,6 +849,28 @@ fn current<'a>(
             .as_ref()
             .is_none_or(|l| library.join(l).exists());
     (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
+}
+
+/// The files at a song's path, its audio or its lyrics, that muman did
+/// not write: a file of the user's own a sync must not write over. A file
+/// that is one muman wrote under a name differing only in case, as a
+/// filesystem blind to case reports, is muman's.
+fn foreign(library: &Path, old: &BTreeMap<PathBuf, Written>, path: &Path) -> Vec<PathBuf> {
+    if old.contains_key(path) {
+        return Vec::new();
+    }
+    let lyrics = path.with_extension("lrc");
+    let owned = |rel: &Path| {
+        old.iter().any(|(p, w)| {
+            std::iter::once(p).chain(&w.lyrics).any(|o| {
+                same_file::is_same_file(library.join(o), library.join(rel)).unwrap_or(false)
+            })
+        })
+    };
+    [path.to_path_buf(), lyrics]
+        .into_iter()
+        .filter(|rel| library.join(rel).exists() && !owned(rel))
+        .collect()
 }
 
 pub(crate) fn changed_since_written(
@@ -1272,6 +1325,8 @@ struct Shown<'a> {
     planned: &'a [(usize, Resolved)],
     /// Songs due but left alone, changed since written.
     guarded: &'a [&'a PlannedSong],
+    /// Songs due but left alone, a file of someone else's at their path.
+    unowned: &'a [&'a PlannedSong],
     old: &'a BTreeMap<PathBuf, Written>,
     state: &'a State,
     failed: &'a BTreeSet<SourceKey>,
@@ -1292,6 +1347,7 @@ fn status<W: Write>(
         manifest,
         planned,
         guarded,
+        unowned,
         old,
         state,
         failed,
@@ -1310,6 +1366,8 @@ fn status<W: Write>(
             "up to date".to_string()
         } else if left_alone {
             "left alone, changed since muman wrote it".to_string()
+        } else if unowned.iter().any(|(m, _)| m == n) {
+            "left alone, not muman's".to_string()
         } else {
             match old.get(&path).and_then(|w| w.plan.as_ref()) {
                 Some(p) if p == &r.plan => "written again".to_string(),
