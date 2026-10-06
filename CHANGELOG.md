@@ -32,6 +32,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   alone and says so; `sync --force` writes over it and keeps it, so
   `undo` puts it back. A lost state file therefore leaves the whole
   library alone until `sync --force`, rather than writing over it.
+- **A song is written from the sources still on disk.** A song whose
+  chosen source's file was gone, a deleted file or a video no longer
+  online, failed until a later sync; it is written at once from its
+  other sources, and its comparisons are no longer made again, and the
+  state saved, on every sync.
 - **`undo` puts back what a new template moved.** A run that only moved
   songs, as a changed `[library] template` does, left no record, so
   `undo` undid the run before it instead. Moves are recorded, and undone.

@@ -56,7 +56,7 @@
 //! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
 //! renders to change.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
@@ -253,8 +253,11 @@ pub struct Resolved {
 pub struct Input<'a> {
     pub song: &'a Song,
     pub album: Option<&'a Album>,
-    /// Facts of each source on disk.
+    /// Facts of each source measured.
     pub facts: &'a BTreeMap<SourceKey, Facts>,
+    /// The sources whose files are on disk, the only ones a plan may
+    /// take from; unset, every source measured is taken to be.
+    pub on_disk: Option<&'a BTreeSet<SourceKey>>,
     pub alignments: &'a [Aligned],
     pub lyrics: &'a [String],
     pub clean: &'a Settings,
@@ -283,6 +286,7 @@ impl Input<'_> {
             .sources
             .iter()
             .enumerate()
+            .filter(|(_, k)| self.on_disk.is_none_or(|d| d.contains(*k)))
             .filter_map(|(n, k)| Some((n, k, self.facts.get(k)?)))
     }
 }

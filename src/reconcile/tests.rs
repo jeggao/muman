@@ -570,6 +570,42 @@ fn a_fetch_that_failed_before_does_not_keep_a_file_now_there_from_being_read() {
 }
 
 #[test]
+fn a_song_whose_chosen_source_is_gone_is_written_from_another() {
+    let h = home();
+    let both = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n";
+    let paths = [h.fetched("aaaaaaaaaaa"), h.fetched("bbbbbbbbbbb")];
+    h.songs(both);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let chosen = |h: &Home| {
+        let state = State::load(&h.dirs.home).unwrap();
+        state
+            .outputs
+            .values()
+            .next()
+            .unwrap()
+            .plan
+            .clone()
+            .unwrap()
+            .audio
+            .key
+    };
+    let first = chosen(&h);
+    let gone = usize::from(first != SourceKey::youtube("aaaaaaaaaaa"));
+    std::fs::remove_file(&paths[gone]).unwrap();
+    h.songs(&format!("{both}tags = {{ genre = \"Folk\" }}\n"));
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_ne!(chosen(&h), first, "{text}");
+    assert!(
+        !text.contains("Comparing"),
+        "nothing to compare with a file gone: {text}"
+    );
+}
+
+#[test]
 fn a_run_keeps_what_it_replaces_and_removes() {
     let h = home();
     h.fetched("aaaaaaaaaaa");

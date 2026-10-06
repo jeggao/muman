@@ -206,6 +206,7 @@ fn compare<R: Runner, W: Write>(
     let due: Vec<(SourceKey, SourceKey, (String, String))> = songs
         .iter()
         .flat_map(|s| resolve::wanted_alignments(s, &state.facts))
+        .filter(|(a, b)| store.has(a) && store.has(b))
         .filter_map(|(a, b)| {
             let revs = (rev(&a)?, rev(&b)?);
             state
@@ -397,7 +398,8 @@ pub fn reconcile<R: Runner, W: Write>(
         persist(home, &state, opts.dry_run, &lock)?;
     }
 
-    let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, out)?;
+    let on_disk: BTreeSet<SourceKey> = listed.iter().filter(|k| store.has(k)).cloned().collect();
+    let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, Some(&on_disk), out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
     let located: BTreeMap<SourceKey, Located> = listed
@@ -1054,6 +1056,7 @@ pub(crate) fn plan<W: Write>(
     manifest: &Manifest,
     state: &State,
     library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
     let naming = Naming::new(&manifest.settings.library, library)?;
@@ -1071,6 +1074,7 @@ pub(crate) fn plan<W: Write>(
             song,
             album: song.album.as_ref().and_then(|a| manifest.album(a)),
             facts: &state.facts,
+            on_disk,
             alignments: &state.alignments,
             lyrics: &manifest.lyrics,
             clean: &manifest.clean,

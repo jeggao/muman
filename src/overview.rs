@@ -74,7 +74,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let mut failures = Vec::new();
-    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut failures)?;
+    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, None, &mut failures)?;
     crate::limit::as_written(&manifest, &state, &mut planned);
     let c = Context {
         dirs,

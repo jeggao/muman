@@ -371,7 +371,18 @@ pub fn run<R: Runner, W: Write>(
             &mut how,
             acquire.out,
         )?;
-        let (planned, _) = reconcile::plan(&manifest, &state, &dirs.library, &mut std::io::sink())?;
+        let on_disk: BTreeSet<SourceKey> = manifest
+            .keys()
+            .into_iter()
+            .filter(|k| store.has(k))
+            .collect();
+        let (planned, _) = reconcile::plan(
+            &manifest,
+            &state,
+            &dirs.library,
+            Some(&on_disk),
+            &mut std::io::sink(),
+        )?;
         let (refused, due): (Vec<Due>, Vec<Due>) =
             due(&manifest, &state, &planned, state::now_secs(), force)
                 .into_iter()
