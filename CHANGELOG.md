@@ -14,6 +14,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `Retry-After` asks, and asked again. A service still refusing leaves
   its remaining lookups for the next run instead of recording each as
   failed and putting it off for hours.
+- **A failure ends when the step succeeds.** A source fetched again, or
+  measured after failing, no longer keeps its old failure in the state
+  file, and a failed fetch no longer keeps a file that has since arrived
+  from being read.
 
 ## [0.1.2] - 2026-10-05
 

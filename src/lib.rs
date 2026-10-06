@@ -448,7 +448,17 @@ fn fetch_missing<R: Runner, W: Write>(
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
     failed.extend(records);
-    if !failed.is_empty() {
+    let store = Store::scan(&job.dirs)?;
+    let arrived: Vec<SourceKey> = state
+        .failures
+        .iter()
+        .filter(|(k, f)| f.step == state::Step::Fetch && store.has(k))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for key in &arrived {
+        state.clear_failure(key);
+    }
+    if !failed.is_empty() || !arrived.is_empty() {
         for (key, error) in failed {
             state.record_failure(&key, state::Step::Fetch, None, error);
         }

@@ -90,7 +90,7 @@ pub fn measure<R: Runner, W: Write>(
             || state
                 .failures
                 .get(&l.key)
-                .is_none_or(|f| f.due(Some(&l.rev()), now))
+                .is_none_or(|f| f.step != Step::Measure || f.due(Some(&l.rev()), now))
     });
     if !failed.is_empty() {
         crate::ui::warning(
@@ -119,7 +119,7 @@ pub fn measure<R: Runner, W: Write>(
             match result {
                 Ok(f) => {
                     state.facts.insert(located.key.clone(), f);
-                    state.failures.remove(&located.key);
+                    state.clear_failure(&located.key);
                 }
                 Err(e) => {
                     crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;

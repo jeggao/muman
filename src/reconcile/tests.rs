@@ -445,6 +445,26 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
 }
 
 #[test]
+fn a_fetch_that_failed_before_does_not_keep_a_file_now_there_from_being_read() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let mut state = State::default();
+    state.record_failure(
+        &SourceKey::youtube("aaaaaaaaaaa"),
+        Step::Fetch,
+        None,
+        "the upload did not arrive".into(),
+    );
+    state.save(&h.dirs.home).unwrap();
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(ok, "{text}");
+    assert!(!text.contains("Not reading"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(state.failures.is_empty(), "{:?}", state.failures);
+}
+
+#[test]
 fn a_run_keeps_what_it_replaces_and_removes() {
     let h = home();
     h.fetched("aaaaaaaaaaa");

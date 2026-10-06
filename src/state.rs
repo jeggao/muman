@@ -23,11 +23,17 @@
 //! A source that could not be read is not read again until its revision,
 //! each of its files' size and modification time, changes; one that could
 //! not be fetched again waits an hour, doubling with each failure up to a
-//! week. A cache entry an earlier version wrote in another shape is
-//! dropped and made again; only `outputs` failing to parse refuses the
-//! file, since losing it would lose which library files are muman's.
+//! week. A failure ends when the step succeeds: a step that runs without
+//! the run's lock, as fetching and lookups do, keeps what it measured
+//! through [`State::keep_measures`], which merges it into the file as it
+//! is now by one rule, so a failure one step cleared is cleared on disk
+//! too and one another process recorded meanwhile stays.
+//!
+//! A cache entry an earlier version wrote in another shape is dropped and
+//! made again; only `outputs` failing to parse refuses the file, since
+//! losing it would lose which library files are muman's.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -72,6 +78,10 @@ pub struct State {
     /// [`crate::limit::plan_key`].
     #[serde(default, deserialize_with = "lenient_map")]
     pub sizes: BTreeMap<String, Measured>,
+    /// Sources whose failures this process cleared, for a merge to clear
+    /// on disk.
+    #[serde(skip)]
+    pub(crate) cleared: BTreeSet<SourceKey>,
 }
 
 /// A lookup of `find` made from the source `from`.
@@ -367,6 +377,28 @@ impl State {
         );
     }
 
+    /// Forget that a step failed for `key`, as its success shows.
+    pub fn clear_failure(&mut self, key: &SourceKey) {
+        if self.failures.remove(key).is_some() {
+            self.cleared.insert(key.clone());
+        }
+    }
+
+    /// Take `measured`'s facts and failures over these: a fact replaces
+    /// the one kept, a failure `measured` cleared is cleared, and one it
+    /// recorded replaces the one kept.
+    pub fn merge_caches(&mut self, measured: &Self) {
+        for (key, facts) in &measured.facts {
+            self.facts.insert(key.clone(), facts.clone());
+        }
+        for key in &measured.cleared {
+            self.failures.remove(key);
+        }
+        for (key, failure) in &measured.failures {
+            self.failures.insert(key.clone(), failure.clone());
+        }
+    }
+
     /// The lookup of `find` made from `from`.
     #[must_use]
     pub fn looked(&self, from: &SourceKey, find: Provider) -> Option<&Looked> {
@@ -407,17 +439,12 @@ impl State {
         state.save(home)
     }
 
-    /// Add what `measured` holds of facts and failures to the state file
-    /// as it is now, under its lock.
+    /// Merge what `measured` holds of facts and failures into the state
+    /// file as it is now, under its lock, by [`Self::merge_caches`].
     pub fn keep_measures(home: &Path, measured: &Self) -> Result<()> {
         let _lock = atomic::Lock::folder(home)?;
         let mut state = Self::load(home)?;
-        for (key, facts) in &measured.facts {
-            state.facts.insert(key.clone(), facts.clone());
-        }
-        for (key, failure) in &measured.failures {
-            state.failures.insert(key.clone(), failure.clone());
-        }
+        state.merge_caches(measured);
         state.save(home)
     }
 
@@ -431,6 +458,32 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_merge_clears_what_a_step_cleared_and_keeps_what_another_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            SourceKey::youtube("aaaaaaaaaaa"),
+            SourceKey::youtube("bbbbbbbbbbb"),
+            SourceKey::youtube("ccccccccccc"),
+        );
+        let mut disk = State::default();
+        disk.record_failure(&a, Step::Fetch, None, "gone".into());
+        disk.record_failure(&b, Step::Measure, Some("1".into()), "unreadable".into());
+        disk.save(dir.path()).unwrap();
+        let mut measured = State::load(dir.path()).unwrap();
+        measured.clear_failure(&a);
+        let mut meanwhile = State::load(dir.path()).unwrap();
+        meanwhile.record_failure(&c, Step::Fetch, None, "gone too".into());
+        meanwhile.save(dir.path()).unwrap();
+        State::keep_measures(dir.path(), &measured).unwrap();
+        let after = State::load(dir.path()).unwrap();
+        assert_eq!(
+            after.failures.keys().collect::<Vec<_>>(),
+            [&b, &c],
+            "a's success clears it; b and c stay"
+        );
+    }
 
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {
         let start = offset_ms.max(0);
