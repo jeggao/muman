@@ -129,6 +129,7 @@ impl Read {
         let state = State::load(&dirs.home)?;
         let views = query::views(&manifest, &state, &dirs.library)?;
         let query = Query::parse(terms, &query::extractors(&manifest))?;
+        query.check_fields(&views)?;
         Ok(Self {
             manifest,
             state,
@@ -304,6 +305,7 @@ pub fn restore<W: Write>(
     let mut manifest = Manifest::load(&dirs.home)?;
     let query = Query::parse(terms, &query::extractors(&manifest))?;
     let views: Vec<View> = manifest.removed.iter().map(query::removed_view).collect();
+    query.check_fields(&views)?;
     let picked = pick(
         &views,
         &query,

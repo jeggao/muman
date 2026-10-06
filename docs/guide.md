@@ -353,7 +353,7 @@ are all required, case ignored:
 
 | Term | Matches |
 |---|---|
-| `paper comets` | Each word in the title, artist, album, album artist or a key |
+| `paper comets` | Each word in the title, artist, album or album artist, or a source's whole ID or file name |
 | `artist:venn` | A field containing the text |
 | `artist:="Marlo Venn"` | A field equal to the text |
 | `title::^paper` | A field matching a regular expression |
@@ -362,7 +362,9 @@ are all required, case ignored:
 
 A field is any tag, or `key`, `path`, `format` (the file's extension:
 `opus`, `ogg`, `flac`, `mp3`, `m4a`),
-`cover` and `lyrics` (`yes`, `none`).
+`cover` and `lyrics` (`yes`, `none`). A field that is no tag muman knows
+and that no song has is refused, so a misspelled one never matches
+nothing, or, negated, every song.
 
 - **`list`** writes each song's key, artist, title and album, separated
   by tabs; `-f` takes a template of `{field}`s, `--removed` lists the

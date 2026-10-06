@@ -9,6 +9,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **A bare query word matches names, not parts of keys.** A word matched
+  inside any source key, so `man` picked every manual song and `tube`
+  every video; it now matches a key only as the whole ID or file name.
+- **A misspelled query field is refused.** A field that is no tag muman
+  knows and that no song has, as `artst:`, stops the command with exit
+  code 5, rather than matching nothing, or, negated, every song.
 - **Songs of one recording share its records.** An LRCLIB or MusicBrainz
   record another song lists already joins the song that found it too, so
   two releases of one recording both get its lyrics and tags. Before,

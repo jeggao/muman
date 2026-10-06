@@ -98,12 +98,13 @@ List the songs a query matches, one per line: its first key, then its artist, ti
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -128,12 +129,13 @@ Remove the songs a query matches: their library files go, and they are kept unde
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -159,12 +161,13 @@ List again the removed songs a query matches, fetching any source purged
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```
@@ -218,12 +221,13 @@ Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries
 
 ```text
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 ```

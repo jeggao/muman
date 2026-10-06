@@ -415,6 +415,7 @@ fn list_songs<D: Write>(
     } else {
         query::views(&manifest, &State::load(&dirs.home)?, &dirs.library)?
     };
+    parsed.check_fields(&views)?;
     let template = match (format, keys, removed) {
         (Some(f), _, _) => f,
         (None, true, _) => "{key}",

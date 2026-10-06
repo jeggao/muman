@@ -164,12 +164,13 @@ fn name_value(text: &str) -> Result<(String, String), String> {
 
 const QUERY_HELP: &str = "\
 Query:
-  lumo fenn          Every word in the title, artist, album or a key
-  artist:fenn        A field containing the text
-  artist:=Lumo_Fenn  A field equal to the text (quote one with spaces)
-  title::^one        A field matching a regular expression
-  ^lyrics:yes        Not matching the term
-  youtube:<id>       The song listing that source
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
 
