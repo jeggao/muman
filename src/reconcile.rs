@@ -40,8 +40,8 @@ pub struct Options {
     pub retry: bool,
     /// How long a dropped-in file waits after arriving.
     pub settling: Duration,
-    /// How long writing runs between saves of what it wrote; unset, every
-    /// [`CHECKPOINT`].
+    /// How long writing runs between saves of what it wrote; unset, as
+    /// long as measuring runs between its saves.
     pub checkpoint: Option<Duration>,
 }
 

@@ -6,7 +6,7 @@
 //! by title and artist. A record fits when its length is within 2 s of
 //! the song's audio, and its track and artist names hold the song's,
 //! compared as YouTube Music's are, by letters and digits without
-//! featured artists ([`music::names_match`]). Of those, one with words
+//! featured artists (`music::names_match`). Of those, one with words
 //! wins over one marked instrumental, then one named exactly the song's
 //! title over one whose name only holds it, as `Rain (Live)` holds
 //! `Rain`, then a timed one, then the closest in length. A search lists
@@ -25,7 +25,7 @@
 //! LRCLIB publishes no limit, but the Cloudflare in front of lrclib.net
 //! refused about one lookup in ten of a 1,600-song run that asked four at
 //! a time, unspaced, with a 429 (error 1015). Requests go at most one per
-//! [`GAP`] across a run, and a refusal holds them back [`BACKOFF`],
+//! `GAP` across a run, and a refusal holds them back `BACKOFF`,
 //! doubling, as [`crate::http::Service`] does for every service.
 
 use std::fmt::Write as _;

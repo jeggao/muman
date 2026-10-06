@@ -5,7 +5,7 @@
 //! Every pair of songs is compared as `identify` compares a new source
 //! with a song, and a pair called the same recording links the two;
 //! linked songs make a group. A pair is compared only when the shorter
-//! print is at least [`RATIO`] of the longer: the same recording spans
+//! print is at least `RATIO` of the longer: the same recording spans
 //! at least that share of the longer print, and the overlap of two prints
 //! is no longer than the shorter, so no pair left out could be one. A
 //! real library of 1,546 songs took 8 s, and found 12 groups on one album
