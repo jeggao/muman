@@ -45,22 +45,6 @@ fn decode_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
-/// Every file below `dir`, hidden ones included.
-fn files(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    for path in entries.filter_map(|e| Some(e.ok()?.path())) {
-        if path.is_dir() {
-            found.extend(files(&path));
-        } else {
-            found.push(path);
-        }
-    }
-    found
-}
-
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
 #[allow(clippy::too_many_lines)]
@@ -145,7 +129,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
             }
         }
     }
-    for file in files(library) {
+    for file in store::files_below(library, usize::MAX, |_| true)? {
         let Ok(rel) = file.strip_prefix(library) else {
             continue;
         };

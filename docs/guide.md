@@ -201,7 +201,11 @@ the folder is followed rather than listed again. A song file brings the
 `.lrc` and the JPEG, PNG or WebP pictures named as it is, as
 `Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
 `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
-listed as a source of its own.
+listed as a source of its own. A `.lrc` reads in UTF-8 or UTF-16, or in
+an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
+tells by its bytes. A folder linked into the manual folder is read as
+the folder it links to, except a link back to a folder it is inside,
+which is passed over.
 
 ### A source that changes
 

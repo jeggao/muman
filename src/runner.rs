@@ -168,7 +168,7 @@ fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
 /// `text` split into words the way Windows programs read a command line:
 /// at spaces outside double quotes, the quotes dropped, and `\` taken
 /// as it is, since it separates folders.
-fn windows_words(text: &str) -> Vec<String> {
+pub(crate) fn windows_words(text: &str) -> Vec<String> {
     let (mut words, mut word, mut quoted) = (Vec::new(), String::new(), false);
     for c in text.chars() {
         match c {

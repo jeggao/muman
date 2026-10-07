@@ -140,6 +140,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Short songs on AcoustID.** A song of 2 s or less, whose print is
   empty, is not looked up on AcoustID, which refused it as invalid and
   was asked again after every wait.
+- **A link back up, walked once.** A folder in the manual folder linking
+  to a folder it is inside listed each file in it dozens of times, under
+  ever longer paths, and `add` of such a folder copied it as often; the
+  link is now passed over, as a link to nothing is. Other linked
+  folders are read as before.
+- **Lyrics in older encodings.** A `.lrc` in GBK, Shift-JIS,
+  Windows-1252 or another older encoding read as replacement characters;
+  it is now told by its bytes and read as written.
+- **Names cut whole.** A name cut to its byte limit ends between
+  characters as a reader sees them, never inside a flag or between a
+  letter and its accent; a song whose name was cut so moves to the new
+  name.
+- **The editor on Windows.** A `$VISUAL` or `$EDITOR` holding a path, as
+  `C:\Tools\edit.exe`, lost its backslashes and did not start.
 
 ## [0.2.3] - 2026-10-07
 

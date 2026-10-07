@@ -2206,18 +2206,15 @@ pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
             }
         }
     }
-    let mut left = vec![dirs.library.clone()];
-    while let Some(dir) = left.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                left.push(path);
-            } else if path.to_string_lossy().ends_with(".part") {
-                return Err(format!("{} is left half written", path.display()));
-            }
-        }
+    let files = crate::store::files_below(&dirs.library, usize::MAX, |_| true)
+        .map_err(|e| format!("{e:#}"))?;
+    match files
+        .iter()
+        .find(|f| f.to_string_lossy().ends_with(".part"))
+    {
+        Some(part) => Err(format!("{} is left half written", part.display())),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 #[cfg(test)]

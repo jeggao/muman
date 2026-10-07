@@ -255,7 +255,9 @@ applied first and over these: `{ ":" = " -" }` turns `A: B` into
 `A - B`. A reserved device name gets `_` after it: `CON_.opus`.
 
 File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
-bytes of UTF-8, which no filesystem counts more strictly; a name keeps
+bytes of UTF-8, which no filesystem counts more strictly, and never
+inside a character as a reader sees one, such as a flag or a letter with
+its accent; a name keeps
 room for what tells it apart, so the least they take is 40 and 16. Windows
 programs and some players also stop at 260 characters for a whole path;
 `max_path` cuts each title so the full path, library folder included,

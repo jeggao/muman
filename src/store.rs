@@ -441,31 +441,51 @@ impl Store {
 /// Files below `dir`, at most `depth` folders down, without hidden ones
 /// and without downloads not yet finished.
 pub(crate) fn walk(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
-    };
-    for entry in entries {
-        let path = entry?.path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or(".");
+    files_below(dir, depth, |name| {
         let unfinished = [".part", ".crdownload", ".tmp", ".ytdl"]
             .iter()
             .any(|s| name.ends_with(s));
-        if name.starts_with('.') || unfinished {
-            continue;
-        }
-        if path.is_dir() {
-            if depth > 1 {
-                found.extend(walk(&path, depth - 1)?);
-            }
-        } else if path.is_file() {
-            found.push(path);
+        !name.starts_with('.') && !unfinished
+    })
+}
+
+/// Files below `dir`, at most `depth` folders down, in path order, each
+/// named, as is every folder between, as `keep` allows; a folder not
+/// made yet holds nothing.
+///
+/// A linked file or folder is taken as what it links to, except a link
+/// to a folder it is inside, which would hold the same files again
+/// without end; a link that leads nowhere, to nothing or round to
+/// itself, is passed over, as a file deleted during the walk is.
+pub(crate) fn files_below(
+    dir: &Path,
+    depth: usize,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let entries = walkdir::WalkDir::new(dir)
+        .follow_links(true)
+        .min_depth(1)
+        .max_depth(depth)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || keep(&e.file_name().to_string_lossy()));
+    for entry in entries {
+        match entry {
+            Ok(e) if e.file_type().is_file() => found.push(e.into_path()),
+            Ok(_) => {}
+            Err(e) if e.loop_ancestor().is_some() || e.path().is_some_and(is_link) => {}
+            Err(e)
+                if e.io_error()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) => {}
+            Err(e) => return Err(e.into()),
         }
     }
     found.sort();
     Ok(found)
+}
+
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
 #[cfg(test)]
@@ -488,6 +508,47 @@ mod tests {
 
     fn manual(rel: &str) -> SourceKey {
         SourceKey::Manual(rel.into())
+    }
+
+    /// A link at `link` to the folder `to`; `false` where the system
+    /// refuses one, as Windows does outside developer mode.
+    fn link_folder(to: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(to, link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(to, link);
+        #[cfg(not(any(unix, windows)))]
+        let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+        made.is_ok()
+    }
+
+    #[test]
+    fn a_linked_folder_is_walked_once_and_a_link_back_up_not_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let manual = d.manual();
+        touch(&manual, "Marlo Venn/Lantern Weather.flac");
+        touch(dir.path(), "elsewhere/Glass Orchards.flac");
+        let linked = link_folder(&manual, &manual.join("Marlo Venn").join("up"))
+            && link_folder(&dir.path().join("elsewhere"), &manual.join("more"))
+            && link_folder(&dir.path().join("gone"), &manual.join("gone"))
+            && link_folder(&manual.join("round"), &manual.join("round"));
+        if !linked {
+            return;
+        }
+        let store = Store::scan(&d).unwrap();
+        let found: Vec<String> = store
+            .manual
+            .keys()
+            .map(|k| crate::relpath::show(k))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "Marlo Venn/Lantern Weather.flac",
+                "more/Glass Orchards.flac"
+            ]
+        );
     }
 
     #[test]
