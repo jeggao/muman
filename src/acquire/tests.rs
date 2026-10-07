@@ -308,3 +308,66 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
     assert_eq!(keys, std::slice::from_ref(&gone), "{text}");
     assert!(text.contains("removed before"), "{text}");
 }
+
+#[test]
+fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
+    let s = setup();
+    std::fs::create_dir_all(&s.dirs.home).unwrap();
+    std::fs::write(
+        s.dirs.manifest(),
+        "version = 1\n\
+         [[song]]\nsources = [\"youtube:vid00000009\"]\n\
+         held.\"youtube:vid00000009\" = { audio = \"0123456789abcdef\", format = \"399+251\" }\n\
+         [[song]]\nsources = [\"youtube:vid00000010\"]\n\
+         [[song]]\nsources = [\"archiveorg:item0001\"]\n\
+         held.\"archiveorg:item0001\" = { audio = \"0123456789abcdef\", format = \"1\", \
+         url = \"https://archive.example/details/item0001\" }\n",
+    )
+    .unwrap();
+    let manifest = Manifest::load(&s.dirs.home).unwrap();
+    let store = Store::scan(&s.dirs).unwrap();
+    let ytdlp = s.dirs.ytdlp();
+    let temp = s.dir.path().join("temp");
+    let fetcher = Fetcher {
+        store: &ytdlp,
+        temp: &temp,
+        partial: &temp,
+        plugins: None,
+        options: &crate::settings::Ytdlp::default(),
+        live: false,
+        runs: Cell::new(0),
+    };
+    let net = Net::default();
+    let mut out = Vec::new();
+    let (_, failed) = Acquire {
+        runner: &net,
+        fetcher: &fetcher,
+        out: &mut out,
+        known: BTreeSet::new(),
+        removed: BTreeSet::new(),
+        store: &store,
+    }
+    .missing(&manifest, &BTreeMap::new(), false)
+    .unwrap();
+    let downloads = net.downloads.lock().unwrap();
+    let format_of = |url: &str| {
+        let run = downloads
+            .iter()
+            .find(|d| d.iter().any(|a| a.ends_with(url)))?;
+        let at = run.iter().position(|a| a == "--format")?;
+        Some(run[at + 1].clone())
+    };
+    assert_eq!(
+        format_of("vid00000009").as_deref(),
+        Some("399+251/bv*+251/251/bv*+ba/b"),
+        "YouTube's own IDs first"
+    );
+    assert_eq!(format_of("vid00000010").as_deref(), Some("bv*+ba/b"));
+    assert_eq!(
+        format_of("archive.example/details/item0001").as_deref(),
+        Some("bv*+ba/b"),
+        "fetched again from its page, in whatever format the site lists now"
+    );
+    assert_eq!(downloads.len(), 2);
+    assert_eq!(failed.len(), 1, "the fake fetches no page but YouTube's");
+}

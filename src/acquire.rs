@@ -51,6 +51,24 @@ impl Fetcher<'_> {
         archive: Option<&Path>,
         urls: &[String],
     ) -> Result<(bool, Vec<Fetched>)> {
+        self.fetch_as(runner, out, template, archive, urls, None)
+    }
+
+    /// [`Self::fetch`], asking for `format` in place of `[ytdlp] format`
+    /// when given.
+    pub fn fetch_as<R: Runner, W: Write>(
+        &self,
+        runner: &R,
+        out: &mut W,
+        template: &str,
+        archive: Option<&Path>,
+        urls: &[String],
+        format: Option<&str>,
+    ) -> Result<(bool, Vec<Fetched>)> {
+        let asked = format.map(|f| Ytdlp {
+            format: f.to_string(),
+            ..self.options.clone()
+        });
         let n = self.runs.get();
         self.runs.set(n + 1);
         let done = self.temp.join(format!("done-{n}"));
@@ -67,7 +85,7 @@ impl Fetcher<'_> {
             temp: self.partial,
             done: &done,
             plugins: self.plugins,
-            options: self.options,
+            options: asked.as_ref().unwrap_or(self.options),
             batch: long.then_some(batch.as_path()),
         };
         // A video is one download; a playlist or channel, how many is not
@@ -525,9 +543,10 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
     }
 
     /// Fetch again every listed source the store no longer holds that
-    /// can be fetched, the archive bypassed; one that failed lately waits
-    /// unless `retry`. Returns whether all fetched arrived, and each that
-    /// did not, with why.
+    /// can be fetched, the archive bypassed: by its key's URL or the page
+    /// its song records, in the format it records where that names one
+    /// stream. One that failed lately waits unless `retry`. Returns
+    /// whether all fetched arrived, and each that did not, with why.
     pub fn missing(
         &mut self,
         manifest: &Manifest,
@@ -536,11 +555,15 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
     ) -> Result<(bool, Vec<(SourceKey, String)>)> {
         type Urls = Vec<(SourceKey, String)>;
         let now = state::now_secs();
+        let held = |k: &SourceKey| manifest.song_with(k).and_then(|s| s.held.get(k));
         let (gone, waiting): (Urls, Urls) = manifest
             .keys()
             .into_iter()
             .filter(|k| !self.store.has(k))
-            .filter_map(|k| Some((k.clone(), k.url()?)))
+            .filter_map(|k| {
+                let url = k.url().or_else(|| held(&k)?.url.clone())?;
+                Some((k, url))
+            })
             .partition(|(k, _)| {
                 retry
                     || failures
@@ -564,14 +587,24 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             self.out,
             &format!("Fetching {} missing source(s) again", gone.len()),
         )?;
-        let urls: Vec<String> = gone.iter().map(|(_, u)| u.clone()).collect();
-        let (_, fetched) = self.fetcher.fetch(
-            self.runner,
-            self.out,
-            download::OUTPUT_TEMPLATE,
-            None,
-            &urls,
-        )?;
+        let configured = self.fetcher.options.format.clone();
+        let mut by_format: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();
+        for (key, url) in &gone {
+            let asked = held(key).and_then(|h| h.asked(key, &configured));
+            by_format.entry(asked).or_default().push(url.clone());
+        }
+        let mut fetched = Vec::new();
+        for (format, urls) in &by_format {
+            let (_, got) = self.fetcher.fetch_as(
+                self.runner,
+                self.out,
+                download::OUTPUT_TEMPLATE,
+                None,
+                urls,
+                format.as_deref(),
+            )?;
+            fetched.extend(got);
+        }
         let mut failed = Vec::new();
         for (key, _) in &gone {
             if !fetched.iter().any(|f| &f.key == key) {

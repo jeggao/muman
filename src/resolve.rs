@@ -220,6 +220,38 @@ pub struct Plan {
     pub tags: Vec<(String, Vec<String>)>,
 }
 
+impl Plan {
+    /// This plan with each part of `key` it takes named as `to` names it,
+    /// where it is named as `from` does: facts of one source's same files,
+    /// made at two times.
+    #[must_use]
+    pub fn renamed(&self, key: &SourceKey, from: &Facts, to: &Facts) -> Self {
+        let mut plan = self.clone();
+        if plan.audio.key == *key && plan.audio.rev == from.audio_rev() {
+            plan.audio.rev = to.audio_rev();
+        }
+        if let Some(c) = plan.cover.as_mut().filter(|c| c.key == *key) {
+            let was = from.covers.iter().find(|f| f.at == c.at);
+            let now = to.covers.iter().find(|f| f.at == c.at);
+            if let (Some(was), Some(now)) = (was, now)
+                && c.rev == from.cover_rev(was)
+            {
+                c.rev = to.cover_rev(now);
+            }
+        }
+        if let Some(l) = plan.lyrics.as_mut().filter(|l| l.key == *key) {
+            let was = from.lyrics.iter().find(|f| f.at == l.at);
+            let now = to.lyrics.iter().find(|f| f.at == l.at);
+            if let (Some(was), Some(now)) = (was, now)
+                && l.rev == from.lyrics_rev(was)
+            {
+                l.rev = to.lyrics_rev(now);
+            }
+        }
+        plan
+    }
+}
+
 /// Why each aspect came from where it did, for `status`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Why {
@@ -273,8 +305,8 @@ pub struct Input<'a> {
 impl Input<'_> {
     fn aligned(&self, a: &SourceKey, b: &SourceKey) -> Option<&Aligned> {
         let revs = (
-            self.facts.get(a)?.rev.clone(),
-            self.facts.get(b)?.rev.clone(),
+            self.facts.get(a)?.audio_rev(),
+            self.facts.get(b)?.audio_rev(),
         );
         self.alignments
             .iter()
@@ -350,7 +382,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             format,
             audio: AudioRef {
                 key: audio_key,
-                rev: facts.rev.clone(),
+                rev: facts.audio_rev(),
                 index: audio,
             },
             cover: cover.as_ref().map(|(c, _)| c.clone()),
@@ -508,7 +540,7 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
                 rank,
                 CoverRef {
                     key: key.clone(),
-                    rev: facts.rev.clone(),
+                    rev: facts.cover_rev(cover),
                     at: cover.at.clone(),
                     mimetype: cover.mimetype.clone(),
                     crop: q.filter(ImageQuality::is_cropped).map(|q| q.content),
@@ -612,7 +644,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                 rank,
                 LyricsRef {
                     key: key.clone(),
-                    rev: facts.rev.clone(),
+                    rev: facts.lyrics_rev(l),
                     at: l.at.clone(),
                     shift_ms: offset - input.song.lyrics_offset_ms,
                     stretch_ppm,

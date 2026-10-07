@@ -7,6 +7,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`check --upstream`** asks each site, downloading nothing, whether
+  it still serves each fetched source in the format and at the size its
+  song records, with the same tags, and names each it serves otherwise:
+  other audio, the format withdrawn, other tags, or the video taken
+  down, whose copy in the store is then the only one.
+- **What each source held, recorded.** Each song records in the song
+  list, as `held."<key>"`, a digest of each part of a built file each
+  of its sources holds, its audio, covers, lyrics and tags, and for what
+  yt-dlp fetched, the format served and its size. A source fetched again
+  that holds otherwise, as a site re-encoding a video, replacing its
+  thumbnail or editing its title, leaves its song as built, with a
+  warning naming each part changed, until `sync --accept`; a song with
+  no file left is built from it and the warning stays. A file of your
+  own that changes is followed.
+- **Fetched again as fetched.** A YouTube video fetched again, its file
+  lost, asks for the format its song records before `[ytdlp] format`,
+  so a yt-dlp that ranks formats otherwise, or a site offering new ones,
+  serves the same stream. A video of any other site records the page it
+  came from, and is fetched again from it, where it could not be at all.
+
 ### Changed
 
 - **A tag edit writes tags only.** A song whose plan changed only in its
@@ -14,6 +36,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   lyrics kept, rather than its audio encoded again: one tag on an
   encoded 15-minute song took 13.5 s and takes 0.2 s. A song moved by a
   new template has its tags written after the move the same way.
+- **Sources known by their content.** A song names each part it takes
+  from a source, its audio, cover or lyrics, by a SHA-256 digest of
+  that part's packets or file, not by the file's size and time: a
+  source fetched again, or a home copied without its file times, writes
+  no song again while it holds the same content, and a file you
+  dropped in whose tags a tagger changed has the new tags written into
+  its song rather than its audio encoded again. Sources measured before
+  are hashed once, decoding nothing, and nothing is written.
 - **Each song has its file.** Every decision a sync makes about a song,
   to keep, move, guard, write or delete its file, is made of the one
   file made from most of its own sources, and `status` says what a sync

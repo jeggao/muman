@@ -55,12 +55,81 @@ pub struct VideoInfo {
     /// The same, for captions the site generated.
     #[serde(default)]
     pub automatic_captions: BTreeMap<String, Vec<SubtitleFormat>>,
+    /// The format fetched: one ID, or a video's and an audio's joined by
+    /// `+`.
+    #[serde(default)]
+    pub format_id: Option<String>,
+    /// Every format the site offered.
+    #[serde(default)]
+    pub formats: Vec<Format>,
+    /// The page the video was fetched from.
+    #[serde(default)]
+    pub webpage_url: Option<String>,
+}
+
+/// One format a site offered, as yt-dlp lists it.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+pub struct Format {
+    #[serde(default)]
+    pub format_id: String,
+    /// Exact, where the site says it; `filesize_approx` is not read.
+    #[serde(default)]
+    pub filesize: Option<u64>,
+    #[serde(default)]
+    pub acodec: Option<String>,
+    #[serde(default)]
+    pub vcodec: Option<String>,
+}
+
+impl Format {
+    pub(crate) fn has_audio(&self) -> bool {
+        self.acodec.as_deref().is_none_or(|c| c != "none")
+    }
+
+    pub(crate) fn has_video(&self) -> bool {
+        self.vcodec.as_deref().is_some_and(|c| c != "none")
+    }
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct SubtitleFormat {
     #[serde(default)]
     pub name: Option<String>,
+}
+
+/// The fields of the info JSON a song's tags are read from.
+pub const TAG_FIELDS: [&str; 19] = [
+    "title",
+    "track",
+    "artists",
+    "artist",
+    "creators",
+    "creator",
+    "album",
+    "album_artists",
+    "album_artist",
+    "track_number",
+    "disc_number",
+    "genres",
+    "genre",
+    "release_date",
+    "release_year",
+    "upload_date",
+    "uploader",
+    "channel",
+    "id",
+];
+
+/// The digest of [`TAG_FIELDS`] in an info JSON, as they are there:
+/// the rest of it changes on every fetch, as its time and cookies do.
+#[must_use]
+pub fn tags_digest(json: &[u8]) -> Option<String> {
+    let all: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(json).ok()?;
+    let read: BTreeMap<String, serde_json::Value> = all
+        .into_iter()
+        .filter(|(k, v)| TAG_FIELDS.contains(&k.as_str()) && !v.is_null())
+        .collect();
+    Some(crate::facts::digest(&serde_json::to_vec(&read).ok()?))
 }
 
 pub fn parse(json: &[u8]) -> Result<VideoInfo> {
@@ -96,6 +165,23 @@ impl VideoInfo {
     #[must_use]
     pub fn knows_subtitles(&self) -> bool {
         !self.subtitles.is_empty() || !self.automatic_captions.is_empty()
+    }
+
+    /// The format of the audio fetched: of a video's and an audio's
+    /// joined, the one without video.
+    #[must_use]
+    pub fn audio_format(&self) -> Option<&Format> {
+        let parts: Vec<&Format> = self
+            .format_id
+            .as_deref()?
+            .split('+')
+            .filter_map(|id| self.formats.iter().find(|f| f.format_id == id))
+            .collect();
+        parts
+            .iter()
+            .find(|f| f.has_audio() && !f.has_video())
+            .or_else(|| parts.iter().find(|f| f.has_audio()))
+            .copied()
     }
 
     /// The display names yt-dlp gave the subtitles in `code`, which it

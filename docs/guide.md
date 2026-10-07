@@ -34,7 +34,10 @@ that are due; each new source is matched to the songs it may belong to
 lock on the home:
 
 1. Measure every listed source whose files changed since last measured,
-   saving progress as it goes.
+   saving progress as it goes. Each part a song takes from a source,
+   its audio, cover or lyrics, is known by a digest of its content, so
+   a source fetched again or copied without its file times writes no
+   song again while it holds the same.
 1. Compare the audio of every pair of a song's sources.
 1. Resolve each song to a plan: the best source for each aspect.
 1. Find each song's file: the one made from most of its own sources,
@@ -102,6 +105,7 @@ tags.genre = ""
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
 | `lyrics_offset` | Moves the lyrics later, on top of the offset measured, as `"120 ms"`; a negative time moves them earlier |
 | `tags.<name>` | Tags set over what the sources offer; an empty value sets nothing |
+| `held."<key>"` | What a source held when the song was built, written by muman: [a source that changes](#a-source-that-changes) |
 | `[[album]]` | A YouTube Music album added whole, with its `tags.<name>` over what its tracks offer |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it |
 
@@ -159,7 +163,11 @@ muman and are written to its cache folder on the first fetch: one keeps
 out the machine-translated captions that trip YouTube's rate limit, one
 makes a YouTube Music track's square album art its thumbnail.
 
-A listed source whose file is gone is fetched again by the next `sync`.
+A listed source whose file is gone is fetched again by the next `sync`:
+a YouTube video in the format its song records first, its audio alone
+next, then as `[ytdlp] format` says; a video of another site from the
+page its song records, as that site's formats are numbered by their
+place in its list.
 One that fails waits an hour before the next try, doubling each time;
 `sync --retry` tries at once. yt-dlp is needed only by runs that fetch.
 
@@ -175,6 +183,39 @@ the folder is followed rather than listed again. A song file brings the
 `Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
 `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
 listed as a source of its own.
+
+### A source that changes
+
+Each sync records in the song what each of its sources holds of every
+part of a built file, the audio, covers, lyrics and tags, as a digest of
+each, with the format a site served and its size for what yt-dlp
+fetched:
+
+```toml
+held."youtube:vid00000001" = { audio = "7c1cfa040b3b82c0", cover = "5be1d2a03f4c6e71", lyrics = "e04f1c7d2b9a6385", tags = "9a3c0e5f7d1b2468", format = "251", size = 3456789 }
+```
+
+A part a source does not offer is left out. A video of another site
+also records the page it came from, which its key does not name, so a
+home made again from the song list alone can fetch it.
+
+Each digest is of that part alone: audio and subtitles by their packets,
+which a remux leaves, a picture by its bytes, and tags by the fields of
+the info JSON they are read from, or a file's own tags, before muman
+cleans them. A fetched source changes only when it is fetched again,
+its file gone, and a site may then serve otherwise: the video
+re-encoded, its audio edited, another format offered or preferred, a new
+thumbnail, new subtitles, a title edited. Its song keeps the file it
+was built from, with a warning naming the source and each part that
+changed, until `sync --accept` takes what it holds now and records it;
+deleting the line does the same. A song with no file left, as in a new
+home made from the song list alone, is built from what its sources hold
+now, and the warning stays until accepted. A file of your own in
+`sources/manual`, or a picture or `.lrc` beside it, is yours to change:
+its song follows it, said in a line, and its record is written anew.
+`check --upstream` asks each site whether a fetch again would bring
+other audio or tags before any is lost
+([status, info and check](#status-info-and-check)).
 
 ### New sources
 
@@ -478,6 +519,13 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing or unreadable;
   `--decode` decodes every source in full to find a truncated download.
+  `--upstream` asks each site, downloading nothing, whether it still
+  serves each fetched source in the format and at the size its song
+  records, with the same tags, and names each it serves otherwise:
+  other audio in that format, the format no longer offered, other tags,
+  or the video taken down. The
+  copy in `sources/` is then the only one of what was fetched, and worth
+  keeping; a large library asks a site many times, as a fetch does.
 - **`purge`** deletes fetched sources and lookup records no song uses,
   which `status` and `info` name: an upload a release took the place of,
   a source taken out of its song. A removed song's sources stay for

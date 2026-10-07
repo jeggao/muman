@@ -271,6 +271,12 @@ pub enum Command {
         #[arg(long)]
         retry: bool,
 
+        /// Take what each fetched source holds now, its audio, cover,
+        /// lyrics or tags, where it differs from what its song was built
+        /// from, as after a fetch again, and record it in the song list.
+        #[arg(long)]
+        accept: bool,
+
         /// Move each setting still at the default of the edition the song
         /// list names to this muman's default, and raise the edition;
         /// settings you changed stay.
@@ -376,6 +382,12 @@ pub enum Command {
         /// Also decode every source in full, to find a truncated download.
         #[arg(long)]
         decode: bool,
+
+        /// Also ask each site whether it still serves each fetched source
+        /// as its song records, downloading nothing: a source re-encoded,
+        /// no longer served in its format, or taken down.
+        #[arg(long)]
+        upstream: bool,
     },
     /// Say what a sync would write, and for each song where each of its
     /// aspects comes from and why; change nothing.

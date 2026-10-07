@@ -104,6 +104,11 @@ const HEADER: &str = "\
 #   Cleaning: [clean.*] turns each rule cleaning what the sources offer on
 #             or off; `muman status` names the rules that changed a tag.
 #             Tags set by hand are never cleaned.
+#   Held:     held.\"<source>\" records the audio, cover, lyrics and tags
+#             each source held when the song was built. A fetched source
+#             that holds otherwise after a fetch again leaves the song as
+#             built until `muman sync --accept`; a file of your own is
+#             followed.
 #   Removed:  `muman remove` keeps a song under [[removed]], so nothing
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
@@ -156,6 +161,8 @@ pub struct Song {
     pub lyrics: Option<LyricsPin>,
     pub lyrics_offset_ms: i64,
     pub tags: Tags,
+    /// What each source held when the song was built.
+    pub held: BTreeMap<SourceKey, crate::held::Held>,
 }
 
 impl Song {
@@ -226,6 +233,11 @@ pub enum Edit {
     /// Every setting still at an earlier edition's default moved to the
     /// current one; see [`crate::settings::update`].
     UpdateDefaults,
+    /// What `key` holds recorded in the song listing it.
+    Hold {
+        key: SourceKey,
+        held: crate::held::Held,
+    },
 }
 
 /// What an edited song became.
@@ -626,6 +638,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             lyrics,
             lyrics_offset_ms: lyrics_offset(t, &what)?,
             tags: tags_of(t.get("tags")),
+            held: crate::held::read(t, &sources, &what)?,
             sources,
         };
         let pinned = [
@@ -792,6 +805,9 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                                 song.insert(pin, value(to.clone()));
                             }
                         }
+                        if let Ok(from) = SourceKey::parse(&from) {
+                            crate::held::unset(song, &from);
+                        }
                     }
                 }
             }
@@ -813,6 +829,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                                 song.remove(pin);
                             }
                         }
+                        crate::held::unset(song, key);
                     }
                 }
             }
@@ -910,6 +927,16 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         }
         Edit::UpdateDefaults => {
             crate::settings::update(doc, &crate::settings::EDITIONS);
+        }
+        Edit::Hold { key, held } => {
+            let text = key.to_string();
+            if let Some(song) = doc
+                .get_mut("song")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&text)))
+            {
+                crate::held::set(song, key, held);
+            }
         }
     }
     Ok(())
