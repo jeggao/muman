@@ -173,22 +173,35 @@ pub fn stated_length(text: &str) -> Option<i64> {
     Some(units::ms_of_seconds(seconds).round() as i64)
 }
 
-/// The text of a lyrics file, whatever wrote it: UTF-8 with or without
-/// a byte-order mark, or UTF-16 as Windows tools save it; CRLF line
+/// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
+/// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
+/// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
+/// guessed as a browser guesses a page that names none. CRLF line
 /// endings become LF.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
-    let utf16 = |b: &[u8], unit: fn([u8; 2]) -> u16| {
-        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| unit(*c)).collect();
-        String::from_utf16_lossy(&units)
+    let encoding = if is_utf8(bytes) {
+        encoding_rs::UTF_8
+    } else {
+        let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
+        detector.feed(bytes, true);
+        detector.guess(None, chardetng::Utf8Detection::Deny)
     };
-    let text = match bytes {
-        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
-        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
-        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
-        _ => String::from_utf8_lossy(bytes).into_owned(),
-    };
+    let (text, _, _) = encoding.decode(bytes);
     text.replace("\r\n", "\n")
+}
+
+/// Whether `bytes` are UTF-8, perhaps damaged: fewer bytes in error
+/// than characters past ASCII read right. Text in another encoding read
+/// as UTF-8 is almost all errors, so a damaged UTF-8 file loses only
+/// what is damaged rather than reading as another encoding throughout.
+fn is_utf8(bytes: &[u8]) -> bool {
+    let (mut read, mut bad) = (0, 0);
+    for chunk in bytes.utf8_chunks() {
+        read += chunk.valid().chars().filter(|c| !c.is_ascii()).count();
+        bad += chunk.invalid().len();
+    }
+    bad < read.max(1)
 }
 
 /// LRC without its timed lines that are no lyric; untimed lines, the
@@ -322,6 +335,40 @@ mod tests {
         for bytes in [lrc.as_bytes(), &bom, &le, &be] {
             assert_eq!(decode(bytes), lrc);
         }
+    }
+
+    #[test]
+    fn lyrics_files_in_a_legacy_encoding_decode_by_their_bytes() {
+        let texts = [
+            (
+                encoding_rs::GBK,
+                "[00:01.00]灯塔下的雨还在下\n[00:05.00]我们沿着河岸走回家\n[00:09.00]风吹过安静的街道\n",
+            ),
+            (
+                encoding_rs::SHIFT_JIS,
+                "[00:01.00]灯台の下で雨が降っている\n[00:05.00]川沿いの道を歩いて帰ろう\n[00:09.00]静かな町に風が吹く\n",
+            ),
+            (
+                encoding_rs::WINDOWS_1252,
+                "[00:01.00]Déjà la pluie sur le phare\n[00:05.00]On rentre à pied, côté rivière\n",
+            ),
+        ];
+        for (encoding, lrc) in texts {
+            let (bytes, _, lossy) = encoding.encode(lrc);
+            assert!(!lossy);
+            assert_eq!(decode(&bytes), lrc, "{}", encoding.name());
+        }
+    }
+
+    #[test]
+    fn a_damaged_utf8_file_loses_only_its_damage() {
+        let mut bytes = "[00:01.00]灯塔下的雨\n[00:05.00]Déjà vu\n"
+            .as_bytes()
+            .to_vec();
+        bytes[13] = 0xFF;
+        let text = decode(&bytes);
+        assert!(text.contains("的雨") && text.contains("Déjà vu"), "{text}");
+        assert!(text.contains('\u{FFFD}'));
     }
     use crate::info;
 

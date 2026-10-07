@@ -16,15 +16,18 @@ anstream = "1"
 anstyle = "1"
 anyhow = "1"
 base64 = "0.23"
+chardetng = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 deunicode = "1"
 directories = "6"
 dunce = "1"
+encoding_rs = "0.8"
 filetime = "0.2"
 indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 lofty = "0.25"
 minijinja = "2"
+percent-encoding = "2"
 regex = "1"
 rusty-chromaprint = "0.3"
 same-file = "1"
@@ -38,9 +41,11 @@ toml = "1"
 toml_edit = "0.25"
 trash = "5"
 unicode-normalization = "0.1"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+walkdir = "2"
 which = "8"
 zip = { version = "8", default-features = false }
 

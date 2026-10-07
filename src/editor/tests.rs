@@ -199,3 +199,12 @@ fn a_song_changed_meanwhile_is_said_and_saving_again_applies() {
     assert!(seen[1].starts_with(NOTICE), "{}", seen[1]);
     assert_eq!(songs(&h).songs[1].lyrics_offset_ms, 1);
 }
+
+#[test]
+fn a_windows_editor_keeps_the_backslashes_of_its_path() {
+    assert_eq!(
+        super::windows_words(r#"C:\Tools\edit.exe -w "C:\My Notes\x""#).unwrap(),
+        [r"C:\Tools\edit.exe", "-w", r"C:\My Notes\x"]
+    );
+    assert!(super::windows_words("  ").is_err());
+}

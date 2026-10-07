@@ -336,20 +336,17 @@ pub fn edit<W: Write>(
 
 /// Run `$VISUAL`, else `$EDITOR`, else the system's own, on `path`. On
 /// Unix the variable is a shell command, as other programs read it; on
-/// Windows it is split into words the same way and its program found
-/// with `PATHEXT`, so `code --wait` finds `code.cmd`, and the path is
-/// passed as an argument of its own rather than through cmd.exe's
-/// quoting.
+/// Windows it is split into words as Windows programs split a command
+/// line and its program found with `PATHEXT`, so `code --wait` finds
+/// `code.cmd`, and the path is passed as an argument of its own rather
+/// than through cmd.exe's quoting.
 pub fn launch(path: &Path) -> Result<()> {
     let editor = ["VISUAL", "EDITOR"]
         .iter()
         .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()))
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
     let status = if cfg!(windows) {
-        let words = shell_words::split(&editor)
-            .ok()
-            .filter(|w| !w.is_empty())
-            .with_context(|| format!("reading the editor `{editor}`"))?;
+        let words = windows_words(&editor)?;
         let program = which::which(&words[0]).unwrap_or_else(|_| words[0].clone().into());
         std::process::Command::new(program)
             .args(&words[1..])
@@ -368,6 +365,16 @@ pub fn launch(path: &Path) -> Result<()> {
         bail!("{editor} exited with {status}; nothing changed");
     }
     Ok(())
+}
+
+/// `editor` as the words a Windows program reads, so the `\` between
+/// folders in `C:\Tools\edit.exe` stays.
+fn windows_words(editor: &str) -> Result<Vec<String>> {
+    let words = crate::runner::windows_words(editor);
+    if words.is_empty() {
+        bail!("reading the editor `{editor}`: it names no program");
+    }
+    Ok(words)
 }
 
 #[cfg(test)]

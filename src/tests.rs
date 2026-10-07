@@ -419,7 +419,11 @@ fn a_song_taken_out_of_the_list_by_hand_stays_out_until_restored() {
         "{text}"
     );
     let lib = s.dir.path().join("lib");
-    let files = |dir: &Path| walk_all(dir).unwrap().len();
+    let files = |dir: &Path| {
+        crate::store::files_below(dir, usize::MAX, |_| true)
+            .unwrap()
+            .len()
+    };
     assert_eq!(files(&lib), 1, "the other song alone: {text}");
     let (_, again) = s.run(&flacs(), &["sync"]);
     assert_eq!(s.songs().len(), 1, "{again}");

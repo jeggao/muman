@@ -899,7 +899,7 @@ fn import<R: Runner, W: Write>(
 /// The song files at or under `path` in the manual folder.
 fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
     let files = if path.is_dir() {
-        walk_all(path)?
+        crate::store::files_below(path, usize::MAX, |_| true)?
     } else {
         vec![path.to_path_buf()]
     };
@@ -912,20 +912,6 @@ fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
         })
         .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
         .collect())
-}
-
-fn walk_all(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            found.extend(walk_all(&path)?);
-        } else {
-            found.push(path);
-        }
-    }
-    found.sort();
-    Ok(found)
 }
 
 /// The key of an original yt-dlp fetched, from the info JSON inside it.
@@ -970,7 +956,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
-    for file in walk_all(from)? {
+    for file in crate::store::files_below(from, usize::MAX, |_| true)? {
         let rel = file.strip_prefix(from).unwrap_or(&file);
         copy_new(&file, &to.join(rel))?;
     }

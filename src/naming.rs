@@ -9,11 +9,15 @@
 //! (hidden files) and trailing dots and spaces (which Windows drops) are
 //! trimmed; and a reserved device name such as `CON` or `nul.txt` gets a
 //! `_`. Limits are counted in UTF-8 bytes, which no filesystem's own
-//! count exceeds.
+//! count exceeds, and a name is cut between graphemes, the characters a
+//! reader sees, so a cut keeps a flag or an accented letter whole or
+//! drops it. A cut that shifts, as a newer Unicode joins characters
+//! anew, moves the song's file to its new name.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::settings::{Library, Restrict};
 use crate::template::{Fields, Template};
@@ -281,14 +285,16 @@ pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
     stem.with_file_name(format!("{}{suffix}", name.trim_end()))
 }
 
-/// `text` cut at a character boundary within `limit` bytes.
+/// `text` cut within `limit` bytes between characters as a reader
+/// counts them, so no flag is left half drawn and no accent loses its
+/// letter; between code points when even the first is longer.
 fn cut(text: &str, limit: usize) -> String {
-    let mut end = 0;
-    for (i, c) in text.char_indices() {
-        if i + c.len_utf8() > limit {
-            break;
-        }
-        end = i + c.len_utf8();
+    let fitting = |ends: &mut dyn Iterator<Item = usize>| {
+        ends.take_while(|&end| end <= limit).last().unwrap_or(0)
+    };
+    let mut end = fitting(&mut text.grapheme_indices(true).map(|(i, g)| i + g.len()));
+    if end == 0 {
+        end = fitting(&mut text.char_indices().map(|(i, c)| i + c.len_utf8()));
     }
     text[..end].to_string()
 }
@@ -446,6 +452,16 @@ mod tests {
         assert!(folder.len() <= 120 && folder.chars().all(|c| c == '雨'));
         let name = stem.file_name().unwrap().to_str().unwrap();
         assert!(name.len() <= 200 - SUFFIX_ROOM, "{}", name.len());
+    }
+
+    #[test]
+    fn a_name_is_cut_between_characters_as_a_reader_counts_them() {
+        let flags = "🇯🇵🇫🇷";
+        assert_eq!(cut(flags, 12), "🇯🇵");
+        let accented = "Cafe\u{301} Cafe\u{301}";
+        assert_eq!(cut(accented, 5), "Caf");
+        let marked = format!("Z{}", "\u{301}".repeat(20));
+        assert_eq!(cut(&marked, 5), "Z\u{301}\u{301}");
     }
 
     #[test]
