@@ -859,9 +859,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
     let any = |_: &SourceKey| true;
-    let (ids, names): (Vec<Field>, Vec<Field>) =
-        Field::of(Scope::Recording).partition(|f| f.is_id() || *f == Field::Isrc);
-    for field in names {
+    for field in Field::of(Scope::Recording) {
         if let Some(c) = best_offer(&candidates, field, &any) {
             fields.insert(field, Slot::of(c));
         }
@@ -877,7 +875,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
             .filter(|c| c.key == key)
             .all(|c| Some(tags::normalized(&c.offer.values)) == title)
     };
-    for field in ids {
+    for field in Field::of(Scope::RecordingId) {
         if let Some(c) = best_offer(&candidates, field, &named_so) {
             fields.insert(field, Slot::of(c));
         }

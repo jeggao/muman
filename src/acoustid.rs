@@ -34,7 +34,7 @@ use serde::Deserialize;
 use crate::fingerprint::Print;
 use crate::http::{HttpTransport, Service, Throttle, TransportError};
 use crate::music;
-use crate::musicbrainz::{MAX_GAP_S, first_artist, is_mbid};
+use crate::musicbrainz::{MAX_GAP_S, Mbid, first_artist, is_mbid};
 
 /// muman's application key, which AcoustID asks every client to send.
 pub const KEY: &str = "EHCiWFI8Ce";
@@ -185,7 +185,7 @@ fn message(body: &str) -> Option<String> {
 
 impl Client<'_> {
     /// The MBID of the song's recording, or `None` when no result fits.
-    pub fn find(&self, q: &Query) -> Result<Option<String>> {
+    pub fn find(&self, q: &Query) -> Result<Option<Mbid>> {
         // Clamped to 0 first, so no sign is lost.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seconds = q.seconds.round().max(0.0) as u64;
@@ -229,7 +229,7 @@ impl Client<'_> {
             .flat_map(|r| r.recordings.iter().map(move |rec| (rec, r.score)))
             .filter(|(rec, _)| rec.fits(q.seconds))
             .min_by_key(|(rec, score)| rec.rank(q, *score));
-        Ok(best.map(|(rec, _)| rec.id.clone()))
+        Ok(best.and_then(|(rec, _)| Mbid::parse(&rec.id)))
     }
 }
 

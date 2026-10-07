@@ -85,6 +85,20 @@ know.
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, extra arguments, muman's postprocessors, how long partial downloads are kept |
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
+| `[sites.*]` | The sites yt-dlp fetches from: which extractors each names its sources by, the IDs each kind of source takes, and where one is fetched again from |
+
+Each `[sites."<domain>"]` table describes one site. `extractors` maps
+each of yt-dlp's extractors, lower-cased, to the prefix its IDs take in
+a key, so a playlist YouTube's tab extractor fetched is
+`youtube.com:playlist/<id>`. Each entry of `kinds` is a kind of source
+the site holds: its `prefix`, an `id` regular expression the rest of an
+ID matches, and a `fetch` address with `{id}` where it goes, which a
+missing source is fetched again from. A song list naming a key whose ID
+no kind of its site takes is refused when read. A source of a site with
+no table is named by its page's domain and fetched again from the page
+its song records. Adding a site to `new.toml` adds it to every song list
+the next time muman writes one; list an extractor only for a site whose
+pages are its own, since a source it fetched before is named by its page.
 
 The song list's own tables — `[defaults]` (lyrics languages),
 `[clean.*]` (tag cleaning), `[providers.*]`, `[[trigger]]` and

@@ -11,6 +11,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::settings::Ytdlp;
+use crate::sites::Sites;
 use crate::source::SourceKey;
 
 /// `<handle>/<title> [<id>].mkv`. The byte limits keep a long title in
@@ -223,10 +224,11 @@ pub struct Fetched {
     pub path: PathBuf,
 }
 
-/// The files in yt-dlp's `--print-to-file` output, one per line. A line
-/// that does not parse is skipped rather than guessed at.
+/// The files in yt-dlp's `--print-to-file` output, one per line, keyed
+/// as `sites` names them. A line that does not parse is skipped rather
+/// than guessed at.
 #[must_use]
-pub fn finished(done: &str) -> Vec<Fetched> {
+pub fn finished(done: &str, sites: &Sites) -> Vec<Fetched> {
     done.lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(3, ' ');
@@ -240,7 +242,7 @@ pub fn finished(done: &str) -> Vec<Fetched> {
                 .map(|s| serde_json::from_str::<String>(s).ok());
             let (webpage, original) = (urls.next().flatten(), urls.next().flatten());
             let page = crate::source::page(extractor, webpage.as_deref(), original.as_deref());
-            let key = SourceKey::fetched(extractor, page, id)?;
+            let key = sites.fetched(extractor, page, id)?;
             Some(Fetched {
                 key,
                 path: PathBuf::from(file),
@@ -252,9 +254,9 @@ pub fn finished(done: &str) -> Vec<Fetched> {
 /// A `--download-archive` naming every key in `keys`, so a playlist's
 /// videos already kept are skipped without being looked at.
 #[must_use]
-pub fn archive_lines<'a>(keys: impl IntoIterator<Item = &'a SourceKey>) -> String {
+pub fn archive_lines<'a>(keys: impl IntoIterator<Item = &'a SourceKey>, sites: &Sites) -> String {
     keys.into_iter()
-        .filter_map(SourceKey::archive_line)
+        .filter_map(|k| sites.archive_line(k))
         .collect()
 }
 
@@ -385,7 +387,10 @@ mod tests {
             SourceKey::youtube("aaaaaaaaaaa"),
             SourceKey::Manual("x.flac".into()),
         ];
-        assert_eq!(archive_lines(&keys), "youtube aaaaaaaaaaa\n");
+        assert_eq!(
+            archive_lines(&keys, &Sites::default()),
+            "youtube aaaaaaaaaaa\n"
+        );
     }
 
     #[test]
@@ -437,7 +442,7 @@ mod tests {
                     ArchiveOrg i/P_1.mp3 \"/o/u/P_1.mp3 [i\\u29f8P_1.mp3].mp3\" \
                     \"https://archive.org/details/i\" NA\n";
         assert_eq!(
-            finished(done),
+            finished(done, &Sites::default()),
             vec![
                 Fetched {
                     key: SourceKey::youtube("aaaaaaaaaaa"),

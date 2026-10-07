@@ -54,7 +54,10 @@ fn find(body: &str, q: &Query) -> (Option<String>, Vec<String>) {
     let server = Server::default().answer("/v2/lookup?", body);
     let throttle = Throttle::none();
     let found = client(&server, &throttle).find(q).unwrap();
-    (found, server.asked.into_inner().unwrap())
+    (
+        found.map(|id| id.to_string()),
+        server.asked.into_inner().unwrap(),
+    )
 }
 
 #[test]

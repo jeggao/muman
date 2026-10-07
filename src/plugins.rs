@@ -45,7 +45,11 @@ pub fn folder(cache: &Path) -> Result<PathBuf> {
         }
         std::fs::create_dir_all(&postprocessors)
             .with_context(|| format!("creating {}", postprocessors.display()))?;
-        crate::atomic::write(&postprocessors, name, text.as_bytes())?;
+        crate::atomic::write(
+            &postprocessors,
+            &crate::atomic::Name::new(name)?,
+            text.as_bytes(),
+        )?;
     }
     Ok(root)
 }

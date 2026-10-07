@@ -109,10 +109,7 @@ impl Served {
         Some(Self {
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
-            url: info.key().map_or_else(
-                || info.page().map(str::to_string),
-                |key| crate::source::page_to_fetch(&key, info.page()),
-            ),
+            url: info.page().map(str::to_string),
         })
     }
 }

@@ -144,10 +144,11 @@ pub fn parse(json: &[u8]) -> Result<VideoInfo> {
 }
 
 impl VideoInfo {
-    /// The key it is a source under, by its extractor, page and ID.
+    /// The key it is a source under, by its extractor, page and ID, as
+    /// `sites` names it.
     #[must_use]
-    pub fn key(&self) -> Option<crate::source::SourceKey> {
-        crate::source::SourceKey::fetched(
+    pub fn key(&self, sites: &crate::sites::Sites) -> Option<crate::source::SourceKey> {
+        sites.fetched(
             self.extractor_key.as_deref()?,
             self.page(),
             self.id.as_deref()?,
@@ -262,13 +263,24 @@ mod tests {
             embedded.page(),
             Some("https://files.example/download/a.mp3")
         );
-        assert_eq!(embedded.key().unwrap().to_string(), "files.example:a");
+        assert_eq!(
+            embedded
+                .key(&crate::sites::Sites::default())
+                .unwrap()
+                .to_string(),
+            "files.example:a"
+        );
         let site = info(
             r#"{"id": "a", "extractor_key": "Funkwhale",
                 "webpage_url": "https://tunes.example/t/a",
                 "original_url": "https://m.tunes.example/t/a"}"#,
         );
-        assert_eq!(site.key().unwrap().to_string(), "tunes.example:a");
+        assert_eq!(
+            site.key(&crate::sites::Sites::default())
+                .unwrap()
+                .to_string(),
+            "tunes.example:a"
+        );
     }
 
     #[test]

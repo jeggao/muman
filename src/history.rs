@@ -15,7 +15,8 @@
 //! warning.
 //!
 //! The record is written ahead of what it records: before the run moves,
-//! writes over or removes a library file, and again as it goes, so a run
+//! writes over or removes a library file, which a sync does only through
+//! [`crate::library::Ledger`], and again as it goes, so a run
 //! stopped partway, by a crash or Ctrl-C, is still listed, as
 //! interrupted, and can be undone. A folder with no record, left by a run
 //! stopped before it wrote one, holds nothing `undo` could use and is
@@ -30,8 +31,9 @@
 //! the home holds a lock of its own from first to last, `edit` from the
 //! moment its editor closes, so a run waiting on another begins where that
 //! one ended rather than record the other's change as its own. The song
-//! list a run leaves is the one it last read or wrote, so a hand edit
-//! made while it ran, which it never read, is the next run's. `undo`
+//! list a run leaves is the one it last read or wrote, as its sync
+//! reports it ([`Run::saw`]), so a hand edit made while it ran, which it
+//! never read, is the next run's. `undo`
 //! refuses when the song list changed after the run, by hand or
 //! otherwise, rather than lose those changes. It marks the record
 //! `undoing` before it changes anything and skips each step already
@@ -118,8 +120,19 @@ pub struct Run {
     /// Whether the history could not be written: the run goes on, and
     /// cannot be undone.
     lost: bool,
+    /// The song list as the run last read or wrote it.
+    seen: Seen,
     /// Held while the run lasts, so no other begins meanwhile.
     _runs: atomic::Lock,
+}
+
+/// The song list as a run last read or wrote it, `None` for a home
+/// without one, once it has.
+#[derive(Debug, Clone, Default)]
+enum Seen {
+    #[default]
+    Not,
+    As(Option<String>),
 }
 
 fn songs_text(home: &Path) -> Result<Option<String>> {
@@ -127,15 +140,6 @@ fn songs_text(home: &Path) -> Result<Option<String>> {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).context("reading the song list"),
-    }
-}
-
-/// The song list a run leaves: as it last read or wrote it, else as it
-/// is now.
-fn songs_left(home: &Path) -> Result<Option<String>> {
-    match crate::manifest::seen(home) {
-        Some(seen) => Ok(seen),
-        None => songs_text(home),
     }
 }
 
@@ -208,7 +212,6 @@ impl Run {
         // Before anything is read: a run waiting on another begins with
         // the song list that one leaves.
         let runs_lock = atomic::Lock::runs(home)?;
-        crate::manifest::unsee(home);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
@@ -265,8 +268,24 @@ impl Run {
             others,
             limits,
             lost: false,
+            seen: Seen::Not,
             _runs: runs_lock,
         })
+    }
+
+    /// Note the song list as the run read or wrote it: the list the run
+    /// leaves, so a hand edit made while it ran, which it never read, is
+    /// the next run's.
+    pub fn saw(&mut self, manifest: &crate::manifest::Manifest) {
+        self.seen = Seen::As(manifest.text().map(str::to_string));
+    }
+
+    /// The song list the run leaves: as it last saw it, else as it is.
+    fn songs_left(&self, home: &Path) -> Result<Option<String>> {
+        match &self.seen {
+            Seen::As(text) => Ok(text.clone()),
+            Seen::Not => songs_text(home),
+        }
     }
 
     /// The outputs as they were before the run wrote or removed any.
@@ -357,7 +376,7 @@ impl Run {
     /// Write the record as it stands, ahead of the library changes it
     /// lists, so a run stopped partway can still be undone.
     pub fn checkpoint(&mut self, home: &Path) -> Result<()> {
-        self.record.songs_after = songs_left(home)?;
+        self.record.songs_after = self.songs_left(home)?;
         if !self.lost
             && let Err(e) = self.write()
         {
@@ -370,7 +389,7 @@ impl Run {
         std::fs::create_dir_all(&self.dir)
             .with_context(|| format!("creating {}", self.dir.display()))?;
         let text = serde_json::to_vec(&self.record).context("writing the run record")?;
-        atomic::write(&self.dir, RECORD, &text)
+        atomic::write(&self.dir, &atomic::Name::new(RECORD)?, &text)
     }
 
     /// Write the record when the run changed the song list or the
@@ -378,7 +397,7 @@ impl Run {
     /// folders without a record.
     pub fn finish(mut self, home: &Path) -> Result<()> {
         let _lock = atomic::Lock::folder(home)?;
-        self.record.songs_after = songs_left(home)?;
+        self.record.songs_after = self.songs_left(home)?;
         self.record.complete = true;
         if self.lost {
             return Ok(());
@@ -429,6 +448,13 @@ pub fn songs_as_last_left(home: &Path) -> Option<bool> {
 /// moved before the state could say so follows to where it went, with
 /// its lyrics if they went too, so the next run knows it as muman's.
 /// Returns how many followed.
+///
+/// The run made its moves in the order the record lists them, so those
+/// made are the ones before the first whose file is not where it went;
+/// one into a path an earlier move left is a chain, as a song moving into
+/// another's old place. They are followed all at once, from the outputs
+/// as the run began, and only when the state still says so: the paths
+/// they left that no move went into are still listed.
 pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
     let Some(dir) = runs(home).ok().and_then(|mut r| r.pop()) else {
         return 0;
@@ -442,22 +468,35 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
     if record.complete || record.undoing {
         return 0;
     }
-    let went: BTreeMap<&PathBuf, &PathBuf> =
-        record.moves.iter().map(|m| (&m.from, &m.to)).collect();
-    let mut followed = 0;
-    for m in &record.moves {
-        let moved = !library.join(&m.from).exists()
-            && library.join(&m.to).exists()
-            && !state.outputs.contains_key(&m.to);
-        let Some(mut written) = state.outputs.get(&m.from).cloned().filter(|_| moved) else {
+    let made: Vec<&Moved> = record
+        .moves
+        .iter()
+        .take_while(|m| library.join(&m.to).exists())
+        .collect();
+    // A song's move, as the outputs stood when the run began; the rest
+    // are its lyrics'.
+    let songs: Vec<&Moved> = made
+        .iter()
+        .copied()
+        .filter(|m| record.outputs.contains_key(&m.from))
+        .collect();
+    let into: BTreeSet<&PathBuf> = songs.iter().map(|m| &m.to).collect();
+    let left: Vec<&PathBuf> = songs
+        .iter()
+        .map(|m| &m.from)
+        .filter(|from| !into.contains(from))
+        .collect();
+    if left.is_empty() || !left.iter().all(|from| state.outputs.contains_key(*from)) {
+        return 0;
+    }
+    let went: BTreeMap<&PathBuf, &PathBuf> = made.iter().map(|m| (&m.from, &m.to)).collect();
+    let before = state.outputs.clone();
+    let mut followed = BTreeMap::new();
+    for m in &songs {
+        let Some(mut written) = before.get(&m.from).cloned() else {
             continue;
         };
-        if let Some(to) = written
-            .lyrics
-            .as_ref()
-            .and_then(|l| went.get(l))
-            .filter(|to| library.join(to).exists())
-        {
+        if let Some(to) = written.lyrics.as_ref().and_then(|l| went.get(l)) {
             written.lyrics = Some((*to).clone());
         } else if let Some(left) = written.lyrics.clone().filter(|l| library.join(l).exists()) {
             // Stopped between the audio and its lyrics: the lyrics follow now.
@@ -468,11 +507,14 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
                 written.lyrics = Some(to);
             }
         }
-        state.outputs.remove(&m.from);
-        state.outputs.insert(m.to.clone(), written);
-        followed += 1;
+        followed.insert(m.to.clone(), written);
     }
-    followed
+    for m in &songs {
+        state.outputs.remove(&m.from);
+    }
+    let n = followed.len();
+    state.outputs.extend(followed);
+    n
 }
 
 /// Undoing the latest run, as planned before asking: which run, and
@@ -616,7 +658,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     if !record.undoing {
         record.undoing = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
-        atomic::write(&dir, RECORD, &text)?;
+        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     // In the reverse of the order the run went: it moved a file before it
     // wrote over it where it moved to, as a song retagged and moved.
@@ -651,7 +693,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
         )?;
     }
     let left: Vec<PathBuf> = record.moves.iter().map(|m| m.to.clone()).collect();
-    crate::reconcile::remove_empty_folders(&dirs.library, &left);
+    crate::library::remove_empty_folders(&dirs.library, &left);
     let mut outputs = state.outputs.clone();
     for m in &record.moves {
         outputs.remove(&m.to);
@@ -681,8 +723,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
         .songs_before
         .as_deref()
         .unwrap_or(crate::manifest::NEW);
-    atomic::write(home, MANIFEST, before.as_bytes())?;
-    crate::manifest::saw(home, Some(before));
+    atomic::write(home, &atomic::Name::new(MANIFEST)?, before.as_bytes())?;
     state.save(home)?;
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     Ok(())
@@ -942,6 +983,68 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_of_moves_follows_whole_and_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "other").unwrap();
+        state.outputs.insert(
+            "A/y.opus".into(),
+            Written {
+                stamp: Some("2:2".into()),
+                ..written()
+            },
+        );
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        // x to a new folder, then y into the place x left.
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("A/x.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        std::fs::rename(d.library.join("A/y.opus"), d.library.join("A/x.opus")).unwrap();
+        drop(run);
+        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 2);
+        assert_eq!(
+            state.outputs[Path::new("B/x.opus")].stamp.as_deref(),
+            Some("1:1")
+        );
+        assert_eq!(
+            state.outputs[Path::new("A/x.opus")].stamp.as_deref(),
+            Some("2:2")
+        );
+        assert!(!state.outputs.contains_key(Path::new("A/y.opus")));
+        let saved = state.outputs.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state),
+            0,
+            "said so already"
+        );
+        assert_eq!(state.outputs, saved);
+    }
+
+    #[test]
+    fn a_chain_stopped_halfway_follows_the_moves_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/y.opus"), "other").unwrap();
+        state.outputs.insert("A/y.opus".into(), written());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.moving(Path::new("A/y.opus"), Path::new("A/x.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        drop(run);
+        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 1);
+        assert_eq!(
+            state.outputs.keys().collect::<Vec<_>>(),
+            [Path::new("A/y.opus"), Path::new("B/x.opus")]
+        );
+    }
+
+    #[test]
     fn a_run_waiting_on_another_begins_where_that_one_ended() {
         let dir = tempfile::tempdir().unwrap();
         let (d, _) = library(dir.path());
@@ -965,10 +1068,10 @@ mod tests {
     fn a_hand_edit_made_while_a_run_goes_is_no_part_of_it() {
         let dir = tempfile::tempdir().unwrap();
         let (d, _) = library(dir.path());
-        let run = Run::begin(&d.home).unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
         let read = "version = 1\n# read by the run\n";
         std::fs::write(d.home.join(MANIFEST), read).unwrap();
-        crate::manifest::Manifest::load(&d.home).unwrap();
+        run.saw(&crate::manifest::Manifest::load(&d.home).unwrap());
         std::fs::write(d.home.join(MANIFEST), "version = 1\n# by hand\n").unwrap();
         run.finish(&d.home).unwrap();
         let last = runs(&d.home).unwrap().pop().and_then(|r| head(&r)).unwrap();
@@ -1018,7 +1121,12 @@ mod tests {
 
         let (at, mut record) = latest(&d.home).unwrap();
         record.undoing = true;
-        atomic::write(&at, RECORD, &serde_json::to_vec(&record).unwrap()).unwrap();
+        atomic::write(
+            &at,
+            &atomic::Name::new(RECORD).unwrap(),
+            &serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
         std::fs::rename(at.join("files/A/x.opus"), d.library.join("A/x.opus")).unwrap();
         std::fs::write(d.home.join(MANIFEST), "before").unwrap();
         undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();

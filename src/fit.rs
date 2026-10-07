@@ -33,6 +33,23 @@
 //! fits: a Lagrangian sweep, `O(n log n)` over every rung of `n` songs, with
 //! no encoding to estimate. Ties go by key, so the songs' order changes
 //! nothing.
+//!
+//! **Settling.** A rung's size is an estimate until it is made and
+//! measured, and estimates miss: a VBR encoder spends more on some music
+//! than its bitrate. [`settle`] is the one loop that turns a fit on
+//! estimates into a fit on sizes measured, for `export --max-size` and
+//! `[library] max_size` alike: fit, have the caller measure each rung
+//! chosen that is still an estimate, fit again, until every rung chosen is
+//! measured, at most `passes` times. When the passes run out with
+//! estimates still chosen, as estimates corrected by what was measured
+//! keep moving, the items are fitted on measured sizes alone, a lower rung
+//! not measured counting as more than the whole room; and when that does
+//! not fit, each item's lowest rung is measured and it is fitted again.
+//! Items that cannot fit even at their least have their lowest rungs
+//! measured before the fit gives up, so no estimate decides that. A rung
+//! that could not be made saves nothing from then on. The fit returned is
+//! thereby always one of sizes measured, or of a first rung, which is the
+//! song as it stands.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -51,6 +68,8 @@ pub struct Rung {
     /// How far `bytes` may be off, one standard deviation; none for a
     /// size known.
     pub sigma: f64,
+    /// Whether `bytes` was measured rather than estimated.
+    pub known: bool,
 }
 
 /// One song to fit: its rungs, the first the best it can be written as.
@@ -413,6 +432,117 @@ pub fn allocate(items: &[Item], policy: &Policy) -> Result<Fit, u64> {
     })
 }
 
+/// How [`settle`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settled {
+    /// Every item has a rung, each lowered one measured.
+    Fit(Fit),
+    /// Even every item's lowest rung, measured, takes more than the room:
+    /// what they take at their least.
+    Over(u64),
+}
+
+/// Rungs to measure, by item and rung.
+pub type Wanted = [(usize, usize)];
+
+/// Fit `items` under `policy` on sizes measured, as the module docs say:
+/// `measure` is asked for the rungs whose sizes must be known, and sets
+/// each it can in `items`, `known` with its real bytes.
+pub fn settle(
+    items: &mut [Item],
+    policy: &Policy,
+    passes: usize,
+    measure: &mut dyn FnMut(&mut [Item], &Wanted) -> anyhow::Result<()>,
+) -> anyhow::Result<Settled> {
+    for _ in 0..passes {
+        let wanted = match allocate(items, policy) {
+            Ok(fit) => {
+                let unknown: Vec<(usize, usize)> = fit
+                    .choice
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, c)| !items[*i].rungs[**c].known)
+                    .map(|(i, c)| (i, *c))
+                    .collect();
+                if unknown.is_empty() {
+                    return Ok(Settled::Fit(fit));
+                }
+                unknown
+            }
+            Err(floor) => {
+                let lowest = lowest_unknown(items);
+                if lowest.is_empty() {
+                    return Ok(Settled::Over(floor));
+                }
+                lowest
+            }
+        };
+        learn(items, &wanted, measure)?;
+    }
+    if let Some(fit) = on_measured(items, policy) {
+        return Ok(Settled::Fit(fit));
+    }
+    let lowest = lowest_unknown(items);
+    learn(items, &lowest, measure)?;
+    match on_measured(items, policy) {
+        Some(fit) => Ok(Settled::Fit(fit)),
+        None => Ok(Settled::Over(
+            Sum::of(items.iter().map(least)).projected(policy.sigmas),
+        )),
+    }
+}
+
+/// Have `measure` learn `wanted`; a rung it could not make saves nothing
+/// from then on.
+fn learn(
+    items: &mut [Item],
+    wanted: &Wanted,
+    measure: &mut dyn FnMut(&mut [Item], &Wanted) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    measure(items, wanted)?;
+    for &(i, c) in wanted {
+        let first = items[i].rungs[0].bytes;
+        let rung = &mut items[i].rungs[c];
+        if !rung.known {
+            if c > 0 {
+                rung.bytes = first;
+            }
+            rung.sigma = 0.0;
+            rung.known = true;
+        }
+    }
+    Ok(())
+}
+
+/// Each item's lowest rung, where it is still an estimate.
+fn lowest_unknown(items: &[Item]) -> Vec<(usize, usize)> {
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            let (c, rung) = item.rungs.iter().enumerate().min_by_key(|(_, r)| r.bytes)?;
+            (!rung.known).then_some((i, c))
+        })
+        .collect()
+}
+
+/// A fit of sizes measured: each item lowered only to a rung measured, or
+/// kept at its first.
+fn on_measured(items: &[Item], policy: &Policy) -> Option<Fit> {
+    let known: Vec<Item> = items
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            for rung in item.rungs.iter_mut().skip(1).filter(|r| !r.known) {
+                rung.bytes = policy.max.saturating_add(1);
+                rung.sigma = 0.0;
+            }
+            item
+        })
+        .collect();
+    allocate(&known, policy).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +567,7 @@ mod tests {
             bytes: first_bytes,
             loss: 0.0,
             sigma: 0.0,
+            known: true,
         }];
         for format in lower(first, 2, &Audio::default()) {
             let Format::Encode { kbps: Some(k), .. } = format else {
@@ -450,6 +581,7 @@ mod tests {
                     bytes,
                     loss: loss(&source, first, format),
                     sigma: 0.0,
+                    known: false,
                 });
             }
         }
@@ -621,5 +753,118 @@ mod tests {
         let fit = allocate(&items, &policy).unwrap();
         assert!(fit.total > total(&items, &fit.choice), "a margin is kept");
         assert!(fit.total <= policy.max);
+    }
+
+    /// Measures each rung asked for as `miss` times its estimate, or fails
+    /// it where `broken` says, counting what it was asked.
+    fn measurer<'a>(
+        miss: f64,
+        broken: &'static [(usize, usize)],
+        asked: &'a std::cell::RefCell<Vec<(usize, usize)>>,
+    ) -> impl FnMut(&mut [Item], &Wanted) -> anyhow::Result<()> + 'a {
+        move |items, wanted| {
+            for &(i, c) in wanted {
+                asked.borrow_mut().push((i, c));
+                if broken.contains(&(i, c)) {
+                    continue;
+                }
+                let rung = &mut items[i].rungs[c];
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                #[allow(clippy::cast_precision_loss)]
+                let real = (rung.bytes as f64 * miss) as u64;
+                rung.bytes = real;
+                rung.sigma = 0.0;
+                rung.known = true;
+            }
+            Ok(())
+        }
+    }
+
+    fn sum_of(items: &[Item], fit: &Fit) -> u64 {
+        fit.choice
+            .iter()
+            .enumerate()
+            .map(|(i, c)| items[i].rungs[*c].bytes)
+            .sum()
+    }
+
+    #[test]
+    fn a_fit_settles_on_sizes_measured_however_estimates_miss() {
+        for miss in [0.7, 1.0, 1.44] {
+            let mut items: Vec<Item> = (0..12)
+                .map(|n| {
+                    song(
+                        &format!("s{n:02}"),
+                        Format::Copy { codec: Codec::Flac },
+                        30 * MB,
+                        true,
+                        200.0,
+                    )
+                })
+                .collect();
+            let asked = std::cell::RefCell::new(Vec::new());
+            let policy = Policy::exact(120 * MB);
+            let Settled::Fit(fit) =
+                settle(&mut items, &policy, 3, &mut measurer(miss, &[], &asked)).unwrap()
+            else {
+                panic!("over at {miss}");
+            };
+            assert!(sum_of(&items, &fit) <= 120 * MB, "{miss}");
+            for (i, c) in fit.choice.iter().enumerate() {
+                assert!(
+                    items[i].rungs[*c].known,
+                    "{miss}: song {i} rung {c} an estimate"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn songs_that_cannot_fit_have_their_lowest_measured_before_giving_up() {
+        let mut items = vec![song("a", opus(160), 4 * MB, false, 200.0)];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let over = settle(
+            &mut items,
+            &Policy::exact(MB / 10),
+            4,
+            &mut measurer(1.0, &[], &asked),
+        )
+        .unwrap();
+        assert!(matches!(over, Settled::Over(_)), "{over:?}");
+        let last = items[0].rungs.len() - 1;
+        assert!(asked.borrow().contains(&(0, last)), "{:?}", asked.borrow());
+    }
+
+    #[test]
+    fn a_rung_that_cannot_be_made_saves_nothing() {
+        let mut items = vec![
+            song(
+                "a",
+                Format::Copy { codec: Codec::Flac },
+                30 * MB,
+                true,
+                200.0,
+            ),
+            song(
+                "b",
+                Format::Copy { codec: Codec::Flac },
+                30 * MB,
+                true,
+                200.0,
+            ),
+        ];
+        let broken: &'static [(usize, usize)] = &[(0, 1), (0, 2), (0, 3)];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let Settled::Fit(fit) = settle(
+            &mut items,
+            &Policy::exact(45 * MB),
+            10,
+            &mut measurer(1.0, broken, &asked),
+        )
+        .unwrap() else {
+            panic!("over");
+        };
+        assert!(sum_of(&items, &fit) <= 45 * MB);
+        assert!(!broken.contains(&(0, fit.choice[0])), "{fit:?}");
     }
 }

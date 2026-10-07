@@ -119,6 +119,42 @@ keep_partial = "14 days"
 runs = 3
 max_size = "2 GiB"
 
+# The sites yt-dlp fetches from. Each names its sources by its domain,
+# whatever address they were found at: `extractors` are yt-dlp's
+# extractors it names, each with the prefix its IDs take; each kind of
+# source it holds has a prefix, a regular expression its IDs match and
+# the address it is fetched again from, {id} its ID. A source of a site
+# not listed is named by its page's domain and fetched again from it.
+[sites."youtube.com"]
+extractors = { youtube = "", youtubetab = "playlist/" }
+kinds = [
+    { prefix = "", id = "^[A-Za-z0-9_-]{11}$", fetch = "https://www.youtube.com/watch?v={id}" },
+    { prefix = "playlist/", id = "^[A-Za-z0-9_-]+$", fetch = "https://www.youtube.com/playlist?list={id}" },
+]
+[sites."archive.org"]
+extractors = { archiveorg = "" }
+kinds = [{ prefix = "", fetch = "https://archive.org/details/{id}" }]
+[sites."soundcloud.com"]
+extractors = { soundcloud = "" }
+[sites."bandcamp.com"]
+extractors = { bandcamp = "" }
+[sites."vimeo.com"]
+extractors = { vimeo = "" }
+[sites."dailymotion.com"]
+extractors = { dailymotion = "" }
+[sites."mixcloud.com"]
+extractors = { mixcloud = "" }
+[sites."audiomack.com"]
+extractors = { audiomack = "" }
+[sites."nicovideo.jp"]
+extractors = { niconico = "" }
+[sites."bilibili.com"]
+extractors = { bilibili = "" }
+[sites."x.com"]
+extractors = { twitter = "" }
+[sites."tiktok.com"]
+extractors = { tiktok = "" }
+
 [defaults]
 # Subtitle languages lyrics are taken in, most preferred first.
 lyrics = ["en"]

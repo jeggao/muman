@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 
 use crate::align;
 use crate::atomic::Lock;
@@ -19,6 +19,7 @@ use crate::facts::{self, Facts};
 use crate::held::Drift;
 use crate::history::Run;
 use crate::hooks;
+use crate::library::{Ledger, Owned, Relocation};
 use crate::limit;
 use crate::manifest::{Edit, Manifest, Song};
 use crate::naming::{self, Naming};
@@ -527,6 +528,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         Some(Lock::library(&dirs.library)?)
     };
     let mut manifest = Manifest::load(home)?;
+    if let Some(run) = run.as_deref_mut() {
+        run.saw(&manifest);
+    }
     let query = report
         .as_ref()
         .map(|r| Query::parse(r.query, &crate::query::extractors(&manifest)))
@@ -582,6 +586,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
             });
         }
         manifest.save_locked(&lock)?;
+        if let Some(run) = run.as_deref_mut() {
+            run.saw(&manifest);
+        }
         state.rekey(&renames)?;
         state.save(home)?;
     }
@@ -596,7 +603,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
     adopt(&mut state, &dirs.library, out)?;
     vouch_for_copies(&dirs.library, &mut state);
     if !opts.dry_run {
-        clear_leftovers(&dirs.library, &planned, &state);
+        let paths = planned
+            .iter()
+            .map(|(_, r)| path_of(r))
+            .chain(state.outputs.keys().cloned());
+        crate::library::clear_leftovers(&dirs.library, paths);
     }
     let located: BTreeMap<SourceKey, Located> = listed
         .iter()
@@ -714,18 +725,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .collect();
     moves.sort_by_key(|(order, ..)| *order);
     let moves = moves.into_iter().map(|(_, from, to)| (from, to)).collect();
-    let moving = Moving {
-        library: &dirs.library,
-        home,
-    };
-    let arrived = relocate(moves, &mut state, &moving, run.as_deref_mut(), out)?;
+    let mut ledger = Ledger::new(&dirs.library, home, run.as_deref_mut());
+    let arrived = relocate(moves, &mut state, &mut ledger, out)?;
     if !arrived.is_empty() {
         // The files are already at their new paths; a failure before the
         // end of the run must not leave the state naming the old ones.
         state.save(home)?;
-        if let Some(run) = run.as_deref_mut() {
-            run.checkpoint(home)?;
-        }
+        ledger.checkpoint()?;
     }
     // A song moved is kept, or has its tags written, at its new path; one
     // whose move failed is written there.
@@ -781,23 +787,19 @@ pub fn reconcile_into<R: Runner, W: Write>(
         pending.save(home)?;
     }
     let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
-    if let Some(run) = run.as_deref_mut() {
-        for ((_, r), _) in &due {
-            if let Some(written) = old.get(&path_of(r)) {
-                run.keep(&dirs.library, &path_of(r))?;
-                if let Some(lyrics) = &written.lyrics {
-                    run.keep(&dirs.library, lyrics)?;
-                }
-            }
-            // Written over only when forced, and then kept to put back.
-            for file in foreign(r) {
-                run.keep(&dirs.library, &file)?;
+    let mut replaced = Vec::new();
+    for ((_, r), _) in &due {
+        let path = path_of(r);
+        if let Some(written) = old.get(&path) {
+            replaced.extend(ledger.owned(&old, &path, true));
+            if let Some(lyrics) = &written.lyrics {
+                replaced.extend(ledger.owned(&old, lyrics, true));
             }
         }
-        if !due.is_empty() {
-            run.checkpoint(home)?;
-        }
+        // Written over only when forced, and then kept to put back.
+        replaced.extend(foreign(r).iter().map(|f| Ledger::taken(f)));
     }
+    ledger.replacing(&replaced)?;
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
     }
@@ -952,9 +954,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                         pending.outputs.insert(done.audio.clone(), vouched.clone());
                         if kept_at.elapsed() >= every {
                             pending.save(home)?;
-                            if let Some(run) = run.as_deref_mut() {
-                                run.checkpoint(home)?;
-                            }
+                            ledger.checkpoint()?;
                             kept_at = Instant::now();
                         }
                     }
@@ -969,24 +969,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
         Ok::<(), anyhow::Error>(())
     })?;
-    let mut keep = |files: &[PathBuf]| match run.as_deref_mut() {
-        Some(run) => {
-            for rel in files {
-                run.keep(&dirs.library, rel)?;
-            }
-            run.checkpoint(home)
-        }
-        None => Ok(()),
-    };
-    let removed = prune(
-        &dirs.library,
-        &old,
-        &mut outputs,
-        &failed,
-        opts.force,
-        &mut keep,
-        out,
-    )?;
+    let removed = prune(&mut ledger, &old, &mut outputs, &failed, opts.force, out)?;
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
@@ -1039,6 +1022,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         manifest.edit(edit);
     }
     manifest.save_locked(&lock)?;
+    if let Some(run) = run {
+        run.saw(&manifest);
+    }
     if changed || !removed.is_empty() {
         if manifest.settings.library.touch_root {
             touch(&dirs.library, out)?;
@@ -1516,114 +1502,49 @@ fn own_place(library: &Path, from: &Path, to: &Path) -> bool {
             || same_file::is_same_file(library.join(from), library.join(to)).unwrap_or(false))
 }
 
-/// The library relocating moves files in, and the home its run is kept in.
-struct Moving<'a> {
-    library: &'a Path,
-    home: &'a Path,
-}
-
 /// Make the `moves` [`decide`] chose, each a song's file to its new path,
 /// as a new `[library]` template makes them, rather than render them
 /// again. A file changed since it was written moves too, still changed:
 /// written again at the new path, it would be left at the old one, a
-/// second copy. Each move is recorded in `run` before it is made.
-/// Returns the paths moved to.
+/// second copy. The ledger records each move before it is made. Returns
+/// the paths moved to.
 fn relocate<W: Write>(
     moves: Vec<(PathBuf, PathBuf)>,
     state: &mut State,
-    how: &Moving<'_>,
-    mut run: Option<&mut Run>,
+    ledger: &mut Ledger<'_>,
     out: &mut W,
 ) -> Result<BTreeSet<PathBuf>> {
-    let library = how.library;
-    let lyrics_of = |from: &PathBuf, to: &Path| {
-        let written = &state.outputs[from];
-        written
-            .lyrics
-            .clone()
-            .zip(written.lyrics.as_ref().map(|_| to.with_extension("lrc")))
-    };
-    if let Some(run) = run.as_deref_mut().filter(|_| !moves.is_empty()) {
-        for (from, to) in &moves {
-            run.moving(from, to);
-            if let Some((a, b)) = lyrics_of(from, to) {
-                run.moving(&a, &b);
-            }
-        }
-        run.checkpoint(how.home)?;
-    }
-    let mut left = Vec::new();
+    let pairs: Vec<Relocation> = moves
+        .into_iter()
+        .map(|(from, to)| {
+            let lyrics = state.outputs[&from]
+                .lyrics
+                .clone()
+                .map(|l| (l, to.with_extension("lrc")));
+            Relocation { from, to, lyrics }
+        })
+        .collect();
+    let results = ledger.relocate(&pairs, out)?;
     let mut done = BTreeSet::new();
-    for (from, to) in moves {
-        let mut written = state.outputs[&from].clone();
-        let lyrics = written.lyrics.as_ref().map(|_| to.with_extension("lrc"));
-        let result = move_file(library, &from, &to).and_then(|()| {
-            match (&written.lyrics, &lyrics) {
-                // A song whose lyrics cannot follow goes back whole.
-                (Some(a), Some(b)) => move_file(library, a, b).inspect_err(|_| {
-                    let _ = move_file(library, &to, &from);
-                }),
-                _ => Ok(()),
-            }
-        });
+    for (m, result) in pairs.into_iter().zip(results) {
         if let Err(e) = result {
-            if let Some(run) = run.as_deref_mut() {
-                run.not_moved(&from, &to);
-                if let (Some(a), Some(b)) = (&written.lyrics, &lyrics) {
-                    run.not_moved(a, b);
-                }
-            }
             crate::ui::warning(
                 out,
                 &format!(
                     "Could not move {}: {e:#}; it is written again",
-                    crate::relpath::show(&from)
+                    crate::relpath::show(&m.from)
                 ),
             )?;
             continue;
         }
-        crate::ui::info(
-            out,
-            &format!(
-                "Moved: {} → {}",
-                crate::relpath::show(&from),
-                crate::relpath::show(&to)
-            ),
-        )?;
-        left.push(from.clone());
-        written.lyrics = lyrics;
-        state.outputs.remove(&from);
-        done.insert(to.clone());
-        state.outputs.insert(to, written);
+        let Some(mut written) = state.outputs.remove(&m.from) else {
+            continue;
+        };
+        written.lyrics = m.lyrics.map(|(_, to)| to);
+        done.insert(m.to.clone());
+        state.outputs.insert(m.to, written);
     }
-    remove_empty_folders(library, &left);
     Ok(done)
-}
-
-/// Rename a library file, creating its new folder. A rename that only
-/// changes case goes through a temporary name, which a filesystem blind
-/// to case would otherwise take for a rename onto itself.
-fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
-    let (from, to) = (library.join(from), library.join(to));
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
-    let step = |a: &Path, b: &Path| {
-        crate::atomic::rename(a, b)
-            .with_context(|| format!("moving {} to {}", a.display(), b.display()))
-    };
-    if crate::relpath::folded(&from) == crate::relpath::folded(&to) {
-        let mut temp = to.clone().into_os_string();
-        temp.push(".moving");
-        let temp = PathBuf::from(temp);
-        step(&from, &temp)?;
-        step(&temp, &to)
-    } else if to.exists() {
-        // Left by a move before it that failed.
-        Err(anyhow!("{} is taken", to.display()))
-    } else {
-        step(&from, &to)
-    }
 }
 
 /// Each song's place in the song list, and what it resolved to.
@@ -1704,28 +1625,6 @@ pub(crate) fn plan<W: Write>(
         manifest.settings.library.max_name_bytes,
     );
     Ok((planned, failed))
-}
-
-/// Remove what a run stopped partway left beside a path muman writes:
-/// a `.part` it was writing, a `.moving` it was renaming through. Only
-/// beside those paths, so a download of the user's own named so is not.
-fn clear_leftovers(library: &Path, planned: &[PlannedSong], state: &State) {
-    let paths = planned
-        .iter()
-        .map(|(_, r)| path_of(r))
-        .chain(state.outputs.keys().cloned());
-    for path in paths {
-        for file in [path.clone(), path.with_extension("lrc")] {
-            for suffix in [".part", ".moving"] {
-                let mut left = library.join(&file).into_os_string();
-                left.push(suffix);
-                let left = PathBuf::from(left);
-                if left.is_file() {
-                    let _ = crate::atomic::remove(&left);
-                }
-            }
-        }
-    }
 }
 
 /// Take each output whose size or time changed since it was written,
@@ -1870,32 +1769,29 @@ fn prune_plan(
     plan
 }
 
-/// Delete every file `old` lists that `outputs` does not, unless a song
-/// that failed this run made it, which keeps it, all handed to `keep`
-/// first. A file changed since it was written is left, and no longer
-/// muman's. Returns what went.
+/// Delete every file `old` lists that `outputs` does not, through the
+/// ledger, which keeps each first, unless a song that failed this run
+/// made it, which keeps it. A file changed since it was written is left,
+/// and no longer muman's. Returns what went.
 fn prune<W: Write>(
-    library: &Path,
+    ledger: &mut Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
     outputs: &mut BTreeMap<PathBuf, Written>,
     failed: &BTreeSet<SourceKey>,
     forced: bool,
-    keep: &mut dyn FnMut(&[PathBuf]) -> Result<()>,
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
-    let mut removed = Vec::new();
-    let plan = prune_plan(library, old, outputs, failed, forced);
-    let doomed: Vec<PathBuf> = plan
+    let plan = prune_plan(ledger.root(), old, outputs, failed, forced);
+    let doomed: Vec<Owned> = plan
         .iter()
         .filter_map(|(_, fate)| match fate {
-            Pruned::Removed(files) => Some(files.iter().cloned()),
+            Pruned::Removed(files) => Some(files.iter()),
             _ => None,
         })
         .flatten()
+        .filter_map(|file| ledger.owned(old, file, forced))
         .collect();
-    if !doomed.is_empty() {
-        keep(&doomed)?;
-    }
+    let removal = ledger.remove(&doomed)?;
     for (path, fate) in plan {
         let files = match fate {
             Pruned::KeptForFailed => {
@@ -1914,72 +1810,29 @@ fn prune<W: Write>(
             }
             Pruned::Removed(files) => files,
         };
-        let mut held = false;
-        for file in &files {
-            match crate::atomic::remove(&library.join(file)) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    // One file held open must not stop the run before the
-                    // state is saved; it stays listed and goes next time.
-                    crate::ui::warning(
-                        out,
-                        &format!(
-                            "Could not remove {}: {e}; the next sync tries again",
-                            file.display()
-                        ),
-                    )?;
-                    held = true;
-                }
-                _ => removed.push(file.clone()),
-            }
-        }
-        if held {
-            outputs.insert(path.clone(), old[&path].clone());
-            continue;
-        }
-        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
-    }
-    remove_empty_folders(library, &removed);
-    Ok(removed)
-}
-
-/// Remove each folder a removed file leaves empty, up to the library.
-pub(crate) fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
-    let mut folders: Vec<PathBuf> = removed
-        .iter()
-        .flat_map(|p| {
-            p.ancestors()
-                .skip(1)
-                .map(Path::to_path_buf)
-                .collect::<Vec<_>>()
-        })
-        .filter(|p| !p.as_os_str().is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    folders.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
-    for folder in folders {
-        let folder = library.join(folder);
-        let Ok(entries) = std::fs::read_dir(&folder) else {
-            continue;
-        };
-        let names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
-        if names
+        let stuck: Vec<&(PathBuf, String)> = removal
+            .held
             .iter()
-            .all(|n| is_desktop_clutter(&n.to_string_lossy()))
-        {
-            for name in &names {
-                let _ = std::fs::remove_file(folder.join(name));
-            }
-            // A folder that still holds anything stays; the error says so.
-            let _ = std::fs::remove_dir(&folder);
+            .filter(|(f, _)| files.contains(f))
+            .collect();
+        if stuck.is_empty() {
+            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
+            continue;
         }
+        // One file held open must not stop the run before the state is
+        // saved; it stays listed and goes next time.
+        for (file, e) in stuck {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "Could not remove {}: {e}; the next sync tries again",
+                    file.display()
+                ),
+            )?;
+        }
+        outputs.insert(path.clone(), old[&path].clone());
     }
-}
-
-/// Files a file manager leaves in a folder it showed, which keep an
-/// emptied album folder from being removed otherwise.
-fn is_desktop_clutter(name: &str) -> bool {
-    matches!(name, "desktop.ini" | "Thumbs.db" | ".DS_Store") || name.starts_with("._")
+    Ok(removal.gone)
 }
 
 /// Set a folder's time to now, so players that rescan by it notice: a

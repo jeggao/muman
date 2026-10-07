@@ -15,12 +15,14 @@ use anyhow::{Context, Result, anyhow};
 use crate::align::{self, Alignment};
 use crate::download::{self, Fetched};
 use crate::manifest::Manifest;
+use crate::music::watch_url;
 use crate::music::{self, Entry, Listing};
 use crate::parallel;
 use crate::provider::Provider;
 use crate::runner::Runner;
 use crate::settings::Ytdlp;
-use crate::source::{SourceKey, watch_url};
+use crate::sites::Sites;
+use crate::source::SourceKey;
 use crate::state::{self, Failure, Looked, Outcome, Step};
 use crate::store::Store;
 use crate::ytdlp_log::Relay;
@@ -36,6 +38,8 @@ pub struct Fetcher<'a> {
     pub partial: &'a Path,
     pub plugins: Option<&'a Path>,
     pub options: &'a Ytdlp,
+    /// The song list's `[sites]`, which name what is fetched.
+    pub sites: &'a Sites,
     /// Whether output goes to a terminal, where progress is one line.
     pub live: bool,
     pub runs: Cell<usize>,
@@ -103,7 +107,7 @@ impl Fetcher<'_> {
             runner.stream(&cmd, &mut |line| relay.line(line))?
         };
         let fetched = std::fs::read_to_string(&done)
-            .map(|s| download::finished(&s))
+            .map(|s| download::finished(&s, self.sites))
             .unwrap_or_default();
         Ok((ok, fetched))
     }
@@ -156,19 +160,20 @@ fn remote_envelope<R: Runner>(runner: &R, id: &str, dir: &Path) -> Result<Vec<f6
 /// same length stands.
 pub(crate) fn lookup<R: Runner>(
     runner: &R,
+    sites: &Sites,
     video: &Entry,
     audio: &Path,
 ) -> Result<Option<(Entry, Option<Alignment>)>> {
     let Some(search) = music::search_command(video) else {
         return Ok(None);
     };
-    let mut ids = music::ids(&runner.output(&search)?);
+    let mut ids = music::ids(&runner.output(&search)?, sites);
     // A release in a playlist finds itself.
     ids.retain(|id| *id != video.id);
     let candidates: Vec<Entry> = parallel::map(&ids, ids.len(), |id| {
         runner
             .output(&music::video_command(id))
-            .map(|json| music::entries(&json))
+            .map(|json| music::entries(&json, sites))
             .unwrap_or_default()
     })
     .into_iter()
@@ -201,6 +206,7 @@ pub(crate) fn lookup<R: Runner>(
 /// recording.
 pub(crate) fn reverse_lookup<R: Runner>(
     runner: &R,
+    sites: &Sites,
     track: &Entry,
     track_audio: &[f64],
     audio: &Path,
@@ -208,14 +214,14 @@ pub(crate) fn reverse_lookup<R: Runner>(
     let Some(search) = music::video_search_command(track) else {
         return Ok(None);
     };
-    let found = music::entries(&runner.output(&search)?);
+    let found = music::entries(&runner.output(&search)?, sites);
     let named: Vec<String> = music::uploads_of(track, &found)
         .into_iter()
         .map(|e| e.id.clone())
         .collect();
     let whole: Vec<Entry> = parallel::map(&named, named.len(), |id| {
         let json = runner.output(&music::video_command(id)).ok()?;
-        music::entries(&json).into_iter().next()
+        music::entries(&json, sites).into_iter().next()
     })
     .into_iter()
     .flatten()
@@ -250,15 +256,20 @@ pub struct Listed {
 /// that also names a playlist as the one video; a Mix, which plays on
 /// without end, goes as given, to be that one video. A URL that cannot be
 /// listed goes as given too.
-pub fn list<R: Runner, W: Write>(urls: &[String], runner: &R, out: &mut W) -> Result<Listed> {
+pub fn list<R: Runner, W: Write>(
+    urls: &[String],
+    sites: &Sites,
+    runner: &R,
+    out: &mut W,
+) -> Result<Listed> {
     let found = parallel::map(urls, parallel::LOOKUPS, |url| {
-        let listing = music::listing(&runner.output(&music::list_command(url))?)
+        let listing = music::listing(&runner.output(&music::list_command(url))?, sites)
             .ok_or_else(|| anyhow!("yt-dlp listed nothing"))?;
         let mix_video = match listing {
             Listing::Mix { .. } => runner
                 .output(&music::one_video_command(url))
                 .ok()
-                .and_then(|json| music::entries(&json).into_iter().next()),
+                .and_then(|json| music::entries(&json, sites).into_iter().next()),
             _ => None,
         };
         Ok::<_, anyhow::Error>((listing, mix_video))
@@ -352,7 +363,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
     /// Fetch what the URLs name, each upload's YouTube Music track first
     /// when `music_match`. Returns whether every download succeeded.
     pub fn urls(&mut self, urls: &[String], music_match: bool) -> Result<(bool, Additions)> {
-        let listed = list(urls, self.runner, self.out)?;
+        let listed = list(urls, self.fetcher.sites, self.runner, self.out)?;
         for id in &listed.named {
             let key = SourceKey::youtube(id);
             if self.removed.contains(&key) {
@@ -384,7 +395,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         }
         let archive = self.temp().join("archive");
         let skip: Vec<SourceKey> = self.known.iter().cloned().collect();
-        std::fs::write(&archive, download::archive_lines(&skip))?;
+        std::fs::write(&archive, download::archive_lines(&skip, self.fetcher.sites))?;
         let (fine, fetched) = self.fetcher.fetch(
             self.runner,
             self.out,
@@ -442,10 +453,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         )?;
         let audio = self.temp().join("audio");
         let runner = self.runner;
+        let sites = self.fetcher.sites;
         // A folder each: two lookups downloading one candidate at once
         // would write one file.
         let found = parallel::map(&videos, parallel::LOOKUPS, |v| {
-            lookup(runner, v, &audio.join(&v.id))
+            lookup(runner, sites, v, &audio.join(&v.id))
         });
         let mut ok = true;
         for (video, found) in videos.iter().zip(found) {
@@ -535,7 +547,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
 
     /// Fetch one source by its key's URL; whether it arrived.
     pub(crate) fn fetch_one(&mut self, template: &str, key: &SourceKey) -> Result<bool> {
-        let Some(url) = key.url() else {
+        let Some(url) = self.fetcher.sites.fetch_url(key) else {
             return Ok(false);
         };
         let (ok, fetched) = self
@@ -563,7 +575,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             .into_iter()
             .filter(|k| !self.store.has(k))
             .filter_map(|k| {
-                let url = k.url().or_else(|| held(&k)?.url.clone())?;
+                let url = self
+                    .fetcher
+                    .sites
+                    .fetch_url(&k)
+                    .or_else(|| held(&k)?.url.clone())?;
                 Some((k, url))
             })
             .partition(|(k, _)| {

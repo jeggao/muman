@@ -307,6 +307,9 @@ pub struct Manifest {
     pub respelled: BTreeMap<String, String>,
     edits: Vec<Edit>,
     stale: bool,
+    /// The file's text as this was read from it or last wrote it; `None`
+    /// for a home without one.
+    text: Option<String>,
 }
 
 /// Refuse a home whose song list is gone while the library holds songs
@@ -333,7 +336,7 @@ pub fn present(home: &Path) -> Result<()> {
 impl Manifest {
     /// The list in `home`; an empty one when there is none yet.
     pub fn load(home: &Path) -> Result<Self> {
-        let doc = read(home)?;
+        let (doc, text) = read_text(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
         let stale = file.exists()
@@ -355,7 +358,15 @@ impl Manifest {
             respelled: parsed.respelled,
             edits: Vec::new(),
             stale,
+            text,
         })
+    }
+
+    /// The file's text as this was read from it or last wrote it: what a
+    /// run that read or wrote the song list left of it.
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
     }
 
     /// What the next write renames of the source keys, if anything.
@@ -486,8 +497,8 @@ impl Manifest {
         }
         let text = doc.to_string();
         let text = with_header(&text).unwrap_or(text);
-        atomic::write(&self.dir, MANIFEST, text.as_bytes())?;
-        saw(&self.dir, Some(&text));
+        atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, text.as_bytes())?;
+        self.text = Some(text);
         self.edits.clear();
         (self.songs, self.albums, self.lyrics, self.removed) =
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
@@ -550,48 +561,21 @@ fn with_header(text: &str) -> Option<String> {
     (new != text).then_some(new)
 }
 
-/// The song list as this process last read or wrote it, by home, `None`
-/// for one missing: what a run worked from, which [`crate::history`]
-/// records as the list the run left, so a hand edit made while it ran
-/// and never read by it is no part of it.
-static SEEN: std::sync::Mutex<BTreeMap<PathBuf, Option<String>>> =
-    std::sync::Mutex::new(BTreeMap::new());
-
-/// Note the song list in `home` as read or written now.
-pub fn saw(home: &Path, text: Option<&str>) {
-    SEEN.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(home.to_path_buf(), text.map(str::to_string));
-}
-
-/// The song list in `home` as last read or written since [`unsee`], if it
-/// was.
-#[must_use]
-pub fn seen(home: &Path) -> Option<Option<String>> {
-    SEEN.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(home)
-        .cloned()
-}
-
-/// Forget what was seen of the song list in `home`.
-pub fn unsee(home: &Path) {
-    SEEN.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(home);
-}
-
 fn read(dir: &Path) -> Result<DocumentMut> {
+    read_text(dir).map(|(doc, _)| doc)
+}
+
+/// The song list in `dir` and its text as read, `None` for none.
+fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
     let file = dir.join(MANIFEST);
     let raw = match std::fs::read_to_string(&file) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
-    saw(dir, raw.as_deref());
     // Windows editors may add a byte-order mark and CRLF endings; the
     // file is written back with neither, rather than with both mixed.
-    let text = raw.map_or_else(
+    let text = raw.as_deref().map_or_else(
         || NEW.to_string(),
         |t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
     );
@@ -618,7 +602,7 @@ fn read(dir: &Path) -> Result<DocumentMut> {
             );
         }
     }
-    Ok(doc)
+    Ok((doc, raw))
 }
 
 fn key_at(t: &Table, name: &str, what: &str) -> Result<Option<SourceKey>> {
@@ -792,6 +776,8 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
                 .to_string(),
         });
     }
+    let settings = crate::settings::read(doc)?;
+    refuse_unsited(&settings.sites, &songs, &albums, &removed)?;
     Ok(Parsed {
         songs,
         albums,
@@ -800,15 +786,33 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         providers: provider::read(doc)?,
         hooks: hooks::read(doc)?,
         clean: clean_of(doc)?,
-        settings: crate::settings::read(doc)?,
+        settings,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,
         respelled,
     })
 }
 
+/// Refuse a key whose ID its site's `[sites]` table takes in no kind.
+fn refuse_unsited(
+    sites: &crate::sites::Sites,
+    songs: &[Song],
+    albums: &[Album],
+    removed: &[Removed],
+) -> Result<()> {
+    let listed = songs
+        .iter()
+        .flat_map(|s| &s.sources)
+        .chain(albums.iter().map(|a| &a.source))
+        .chain(removed.iter().flat_map(|r| &r.sources));
+    if let Some(key) = listed.into_iter().find(|k| !sites.accepts(k)) {
+        bail!("`{key}` is not a source key: its site's `[sites]` table takes no such ID");
+    }
+    Ok(())
+}
+
 /// How a key written as `text` is written now, where that differs: an
-/// extractor's name for a site [`crate::source::SITES`] names, as
+/// extractor's name for a site [`crate::source::LEGACY`] names, as
 /// `youtube:<id>`, is its domain's.
 fn spelled_now(text: &str) -> Option<String> {
     let key = SourceKey::parse(text).ok().filter(|k| k.site().is_some())?;

@@ -120,11 +120,14 @@ A fetched source's site is the domain it came from and its ID the one
 yt-dlp gives it there, as `youtube.com:vid00000001` or
 `archive.org:<id>`; a file in an archive.org item of several is
 `archive.org:<item>/<file>`, and is fetched again alone. A site yt-dlp
-reaches by several addresses has one domain: a video from YouTube Music, `youtu.be` or `m.youtube.com` is
-`youtube.com:<id>`, the one source however it was found, and a track
-on any `<artist>.bandcamp.com` is `bandcamp.com:<id>`. Which sites have
-one domain is listed in `SITES` in [src/source.rs](../src/source.rs); any other site is
-the domain of the page yt-dlp fetched, without `www.`.
+reaches by several addresses has one domain: a video from YouTube
+Music, `youtu.be` or `m.youtube.com` is `youtube.com:<id>`, the one
+source however it was found, and a track on any
+`<artist>.bandcamp.com` is `bandcamp.com:<id>`. Which sites have one
+domain, what IDs they take and where their sources are fetched again
+from is the song list's `[sites]`
+([configuration](configuration.md#settings-in-the-song-list)); any other
+site is the domain of the page yt-dlp fetched, without `www.`.
 
 An earlier muman named a source by yt-dlp's extractor, as
 `youtube:<id>`, `youtubetab:<id>` or `archiveorg:<id>`. Such a key
@@ -188,8 +191,8 @@ makes a YouTube Music track's square album art its thumbnail.
 A listed source whose file is gone is fetched again by the next `sync`:
 a YouTube video in the format its song records first, its audio alone
 next, then as `[ytdlp] format` says; a video of another site from the
-page its song records, as that site's formats are numbered by their
-place in its list.
+address its `[sites]` table gives, else the page its song records, as
+that site's formats are numbered by their place in its list.
 One that fails waits an hour before the next try, doubling each time;
 `sync --retry` tries at once. yt-dlp is needed only by runs that fetch.
 
