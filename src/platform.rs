@@ -61,12 +61,31 @@ pub fn arrived(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
     modified.max(placed)
 }
 
+/// `path` resolved through links as far as it exists, and the rest as
+/// written: a folder not made yet under a linked one, as macOS's `/var`
+/// is, resolves through that link as the folder made would.
+fn resolved(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = dunce::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, name| p.join(name));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// Whether `inner` is `outer` or a folder within it, resolved and
 /// compared as [`same_path`] compares.
 #[must_use]
 pub fn within(inner: &Path, outer: &Path) -> bool {
-    let resolve = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (inner, outer) = (resolve(inner), resolve(outer));
+    let (inner, outer) = (resolved(inner), resolved(outer));
     if cfg!(any(windows, target_os = "macos")) {
         let fold = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
         fold(&inner).starts_with(fold(&outer))
@@ -80,8 +99,7 @@ pub fn within(inner: &Path, outer: &Path) -> bool {
 /// ignore it, so `D:\Music` and `d:\music\` agree.
 #[must_use]
 pub fn same_path(a: &Path, b: &Path) -> bool {
-    let resolve = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (a, b) = (resolve(a), resolve(b));
+    let (a, b) = (resolved(a), resolved(b));
     if cfg!(any(windows, target_os = "macos")) {
         a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     } else {
@@ -141,5 +159,17 @@ mod tests {
         let lib = dir.path().join("Lib");
         std::fs::create_dir(&lib).unwrap();
         assert!(same_path(&lib, &dir.path().join("lib")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_not_made_yet_resolves_through_a_link_above_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(real.join("home")).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+        let ahead = dir.path().join("link").join("home").join("not yet made");
+        assert!(within(&ahead, &real.join("home")));
+        assert!(same_path(&ahead, &real.join("home").join("not yet made")));
     }
 }

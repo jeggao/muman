@@ -1384,8 +1384,13 @@ fn a_title_changing_only_its_case_moves_its_file() {
         "{text}"
     );
     assert!(!text.contains("Added"), "{text}");
-    assert!(s.dir.path().join("lib/Artist/Record/02 SONG.flac").exists());
-    assert!(!s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    // A filesystem that ignores case finds either spelling; the folder
+    // lists the one on disk.
+    let names: Vec<String> = std::fs::read_dir(s.dir.path().join("lib/Artist/Record"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["02 SONG.flac"]);
 }
 
 #[test]
