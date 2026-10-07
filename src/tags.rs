@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/7";
+pub const METHOD: &str = "tags/8";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -29,6 +29,12 @@ pub enum Scope {
     /// The release the song is on: every field from the one source whose
     /// album ranks best, so an album never splits and its IDs never mix.
     Release,
+    /// How loud the audio is: from the source the song's audio is, as
+    /// another's loudness is not this audio's.
+    Loudness,
+    /// How loud the audio's album is: from the source the song's audio
+    /// is, when its release fields come from it too.
+    AlbumLoudness,
 }
 
 /// A tag muman knows: how sources offer it, how a song list names it,
@@ -64,11 +70,21 @@ pub enum Field {
     MusicBrainzArtistId,
     #[serde(rename = "musicbrainz_albumartistid")]
     MusicBrainzAlbumArtistId,
+    /// ReplayGain's, in dB, against 89 dB SPL.
+    #[serde(rename = "replaygain_track_gain")]
+    TrackGain,
+    /// The highest sample, full scale 1.
+    #[serde(rename = "replaygain_track_peak")]
+    TrackPeak,
+    #[serde(rename = "replaygain_album_gain")]
+    AlbumGain,
+    #[serde(rename = "replaygain_album_peak")]
+    AlbumPeak,
 }
 
 impl Field {
     /// Every field, in the order written.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 22] = [
         Self::Title,
         Self::Artist,
         Self::Album,
@@ -87,6 +103,10 @@ impl Field {
         Self::MusicBrainzReleaseGroupId,
         Self::MusicBrainzArtistId,
         Self::MusicBrainzAlbumArtistId,
+        Self::TrackGain,
+        Self::TrackPeak,
+        Self::AlbumGain,
+        Self::AlbumPeak,
     ];
 
     /// The Vorbis comment field it is written as.
@@ -111,6 +131,10 @@ impl Field {
             Self::MusicBrainzReleaseGroupId => "MUSICBRAINZ_RELEASEGROUPID",
             Self::MusicBrainzArtistId => "MUSICBRAINZ_ARTISTID",
             Self::MusicBrainzAlbumArtistId => "MUSICBRAINZ_ALBUMARTISTID",
+            Self::TrackGain => "REPLAYGAIN_TRACK_GAIN",
+            Self::TrackPeak => "REPLAYGAIN_TRACK_PEAK",
+            Self::AlbumGain => "REPLAYGAIN_ALBUM_GAIN",
+            Self::AlbumPeak => "REPLAYGAIN_ALBUM_PEAK",
         }
     }
 
@@ -132,7 +156,14 @@ impl Field {
             Self::MusicBrainzReleaseGroupId => &["musicbrainz release group id"],
             Self::MusicBrainzArtistId => &["musicbrainz artist id"],
             Self::MusicBrainzAlbumArtistId => &["musicbrainz album artist id"],
-            Self::Title | Self::Artist | Self::Album | Self::Genre => &[],
+            Self::Title
+            | Self::Artist
+            | Self::Album
+            | Self::Genre
+            | Self::TrackGain
+            | Self::TrackPeak
+            | Self::AlbumGain
+            | Self::AlbumPeak => &[],
         }
     }
 
@@ -153,6 +184,8 @@ impl Field {
             | Self::MusicBrainzAlbumId
             | Self::MusicBrainzReleaseGroupId
             | Self::MusicBrainzAlbumArtistId => Scope::Release,
+            Self::TrackGain | Self::TrackPeak => Scope::Loudness,
+            Self::AlbumGain | Self::AlbumPeak => Scope::AlbumLoudness,
         }
     }
 
@@ -453,6 +486,11 @@ pub fn from_container(tags: &BTreeMap<String, Vec<String>>) -> Offers {
     let mut o = Offers::new();
     let mut totals = Vec::new();
     for (key, values) in tags {
+        if let Some(field) = r128(key) {
+            let gains = values.iter().filter_map(|v| r128_gain(v)).collect();
+            offer(&mut o, field, gains, true);
+            continue;
+        }
         let Some(field) = Field::named(key) else {
             continue;
         };
@@ -491,10 +529,57 @@ fn container_values(field: Field, value: &str, totals: &mut Vec<(Field, String)>
                 vec![n.to_string()]
             }
             Field::TrackTotal | Field::DiscTotal => vec![value.to_string()],
+            Field::TrackGain | Field::AlbumGain => gain(value).into_iter().collect(),
+            Field::TrackPeak | Field::AlbumPeak => peak(value).into_iter().collect(),
             f if f.is_id() => value.split([';', '/']).map(str::to_string).collect(),
             _ => vec![value.to_string()],
         }
     }
+}
+
+/// The gain field an Opus file's R128 tag stands for.
+fn r128(key: &str) -> Option<Field> {
+    match key.to_ascii_lowercase().as_str() {
+        "r128_track_gain" => Some(Field::TrackGain),
+        "r128_album_gain" => Some(Field::AlbumGain),
+        _ => None,
+    }
+}
+
+/// How far R128's reference, -23 LUFS, lies below ReplayGain's.
+pub const R128_BELOW_REPLAYGAIN_DB: f64 = 5.0;
+
+/// An R128 gain, in 1/256 dB against -23 LUFS, as a ReplayGain one.
+fn r128_gain(value: &str) -> Option<String> {
+    let steps: i16 = value.trim().parse().ok()?;
+    Some(gain_text(
+        f64::from(steps) / 256.0 + R128_BELOW_REPLAYGAIN_DB,
+    ))
+}
+
+/// A ReplayGain gain as muman writes it, `-6.12 dB`, from any spelling.
+fn gain(value: &str) -> Option<String> {
+    let number = value
+        .trim()
+        .trim_end_matches(|c: char| c.is_alphabetic() || c.is_whitespace());
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|db| db.is_finite() && db.abs() < 100.0)
+        .map(gain_text)
+}
+
+fn gain_text(db: f64) -> String {
+    format!("{db:.2} dB")
+}
+
+fn peak(value: &str) -> Option<String> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|p| p.is_finite() && *p >= 0.0)
+        .map(|p| format!("{p:.6}"))
 }
 
 /// `YYYYMMDD` as `YYYY-MM-DD`, the Vorbis comment convention; a date
@@ -663,7 +748,9 @@ mod tests {
         assert_eq!(
             Field::of(Scope::Recording).count()
                 + Field::of(Scope::RecordingId).count()
-                + Field::of(Scope::Release).count(),
+                + Field::of(Scope::Release).count()
+                + Field::of(Scope::Loudness).count()
+                + Field::of(Scope::AlbumLoudness).count(),
             Field::ALL.len()
         );
     }
@@ -795,5 +882,20 @@ mod tests {
         assert_eq!(o[&Field::Track].values, ["7"]);
         assert_eq!(o[&Field::TrackTotal].values, ["12"]);
         assert!(read_file(&dir.path().join("none.flac")).is_none());
+    }
+
+    #[test]
+    fn loudness_is_read_from_replaygain_and_r128_alike() {
+        let tags = each(BTreeMap::from([
+            ("replaygain_track_gain".to_string(), "-6.1 dB".to_string()),
+            ("replaygain_track_peak".to_string(), "0.98".to_string()),
+            ("r128_album_gain".to_string(), "-1024".to_string()),
+            ("replaygain_album_peak".to_string(), "loud".to_string()),
+        ]));
+        let o = from_container(&tags);
+        assert_eq!(o[&Field::TrackGain].values, ["-6.10 dB"]);
+        assert_eq!(o[&Field::TrackPeak].values, ["0.980000"]);
+        assert_eq!(o[&Field::AlbumGain].values, ["1.00 dB"], "-4 dB under R128");
+        assert!(!o.contains_key(&Field::AlbumPeak));
     }
 }

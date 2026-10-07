@@ -35,7 +35,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::ffmpeg::{self, Output};
+use crate::ffmpeg::{self, Input, Output};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
 use crate::lyrics::{self, Language, Timing};
@@ -48,7 +48,12 @@ use crate::tags::{self, Offers};
 /// The measures facts are made by; facts made by others are made again.
 #[must_use]
 pub fn method() -> String {
-    format!("{}+{}", quality::METHOD, fingerprint::METHOD)
+    format!(
+        "{}+{}+{}",
+        quality::METHOD,
+        fingerprint::METHOD,
+        probe::METHOD
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +79,9 @@ pub struct Facts {
     /// sooner, at [`Facts::duration`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut_from: Option<f64>,
+    /// What the source holds that a library file cannot keep.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unkept: Vec<Unkept>,
     /// What a site served, for what yt-dlp fetched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub served: Option<Served>,
@@ -189,6 +197,7 @@ impl Facts {
             release: false,
             print: None,
             cut_from: None,
+            unkept: Vec::new(),
             served: None,
             tags_digest: None,
             hash_method: HASH_METHOD.to_string(),
@@ -196,12 +205,24 @@ impl Facts {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioFacts {
     /// Absolute stream index.
     pub index: u32,
     pub codec: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     pub channels: u32,
+    /// The speakers in ffmpeg's name; `None` when the file names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
+    #[serde(default)]
+    pub sample_rate: u32,
+    /// Bits a decoded sample keeps; 0 when unknown.
+    #[serde(default)]
+    pub bits: u32,
+    #[serde(default)]
+    pub float: bool,
     pub quality: Option<AudioQuality>,
     /// The bytes of the audio stream's packets, which a copy carries.
     #[serde(default)]
@@ -214,13 +235,32 @@ impl AudioFacts {
     /// Whether the codec keeps every sample as recorded.
     #[must_use]
     pub fn is_lossless(&self) -> bool {
-        self.codec == "flac"
-            || self.codec == "alac"
-            || self.codec == "wavpack"
-            || self.codec == "ape"
-            || self.codec == "tta"
-            || self.codec.starts_with("pcm_")
+        crate::codec::is_lossless_name(&self.codec, self.profile.as_deref())
     }
+
+    /// What decides which codecs can hold this audio.
+    #[must_use]
+    pub fn shape(&self) -> crate::codec::Shape<'_> {
+        crate::codec::Shape {
+            channels: self.channels,
+            layout: self.layout.as_deref(),
+            sample_rate: self.sample_rate,
+            bits: self.bits,
+            float: self.float,
+        }
+    }
+}
+
+/// What a source holds that its library file does not keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Unkept {
+    /// Its cue sheet marks its audio pre-emphasized, as some early CDs
+    /// were mastered: a player de-emphasizes it only by that flag, which
+    /// is lost with the cue sheet, so it plays bright.
+    PreEmphasis,
+    /// A cue sheet of its name beside it, which splits an album image
+    /// into its tracks; the image is one song.
+    CueSheet,
 }
 
 /// Where a picture sits.
@@ -606,7 +646,7 @@ fn media<R: Runner>(
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
-    let mut inputs: Vec<PathBuf> = vec![located.path.clone()];
+    let mut inputs = vec![Input::from(located.path.as_path())];
     let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
         .into_iter()
         .map(|(o, part)| (o, Measured::Hash(part)))
@@ -622,8 +662,9 @@ fn media<R: Runner>(
         ));
         for (n, start) in segment_starts(probed.duration).into_iter().enumerate() {
             let path = scratch.join(format!("segment{n}"));
+            inputs.push(Input::new(quality::segment_input(start), &located.path));
             outputs.push((
-                Output::new(quality::segment_output(0, a.index, start), &path),
+                Output::new(quality::segment_output(inputs.len() - 1, a.index), &path),
                 Measured::Segment(path),
             ));
         }
@@ -653,7 +694,7 @@ fn media<R: Runner>(
         if !dumped.exists() {
             continue;
         }
-        inputs.push(dumped);
+        inputs.push(Input::from(dumped.as_path()));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
@@ -666,9 +707,8 @@ fn media<R: Runner>(
         ));
     }
 
-    let input_refs: Vec<&Path> = inputs.iter().map(PathBuf::as_path).collect();
     let mut plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
-    let mut results = ffmpeg::run_outputs(runner, &input_refs, &plain);
+    let mut results = ffmpeg::run(runner, &inputs, &plain);
     // Each picture beside the file in a run of its own: one ffmpeg cannot
     // open, as an empty file, fails every run it is an input of.
     for (n, cover) in located.covers.iter().enumerate() {
@@ -687,6 +727,11 @@ fn media<R: Runner>(
             Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover)),
         ));
     }
+    let channels = probed.audio.as_ref().map_or(1, |a| a.channels as usize);
+    let headroom = probed
+        .audio
+        .as_ref()
+        .is_some_and(|a| a.float && a.is_lossless());
     let mut segments = Vec::new();
     let mut bytes = None;
     let mut packets_end = None;
@@ -704,7 +749,7 @@ fn media<R: Runner>(
                 bytes = packet_bytes(&text);
                 packets_end = packet_seconds(&text);
             }
-            Measured::Segment(path) => segments.push(quality::read_segment(&path)),
+            Measured::Segment(path) => segments.push(quality::read_segment(&path, channels)),
             Measured::Subtitle(index, language) => {
                 if let Ok(text) = read_text(&output.path) {
                     facts.lyrics.push(LyricsFacts {
@@ -736,20 +781,111 @@ fn media<R: Runner>(
     {
         facts.duration = Some(held);
         facts.cut_from = Some(said);
-        if quality::audio(&segments, a.sample_rate).is_none() {
-            segments = measure_segments(runner, located, a.index, held, scratch);
+        if quality::audio(&segments, a.sample_rate, headroom).is_none() {
+            segments = measure_segments(runner, located, a, held, scratch);
         }
     }
+    facts.unkept = unkept(&located.path);
     facts.audio = probed.audio.map(|a| AudioFacts {
-        quality: quality::audio(&segments, a.sample_rate),
+        quality: quality::audio(&segments, a.sample_rate, headroom),
         index: a.index,
         codec: a.codec,
+        profile: a.profile,
         channels: a.channels,
+        layout: a.layout,
+        sample_rate: a.sample_rate,
+        bits: a.bits,
+        float: a.float,
         bytes,
         digest: None,
     });
     facts.take(&digests, served);
     Ok(())
+}
+
+/// What `path` holds, or has beside it, that a library file does not
+/// keep.
+fn unkept(path: &Path) -> Vec<Unkept> {
+    let cue = path.with_extension("cue");
+    let sheet = std::fs::read(&cue).ok().map(|b| crate::lyrics::decode(&b));
+    let mut unkept = Vec::new();
+    let flagged = sheet.as_deref().is_some_and(|text| {
+        text.lines().any(|l| {
+            let mut words = l.split_whitespace();
+            words
+                .next()
+                .is_some_and(|w| w.eq_ignore_ascii_case("FLAGS"))
+                && words.any(|w| w.eq_ignore_ascii_case("PRE"))
+        })
+    });
+    if flagged || flac_emphasis(path) {
+        unkept.push(Unkept::PreEmphasis);
+    }
+    if sheet.is_some() {
+        unkept.push(Unkept::CueSheet);
+    }
+    unkept
+}
+
+/// Whether a FLAC file's `CUESHEET` block marks any track pre-emphasized.
+fn flac_emphasis(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    // Metadata blocks come first and are small but for pictures, which
+    // are skipped unread.
+    let mut file = std::io::BufReader::new(file);
+    let mut magic = [0; 4];
+    if file.read_exact(&mut magic).is_err() || &magic != b"fLaC" {
+        return false;
+    }
+    loop {
+        let mut header = [0; 4];
+        if file.read_exact(&mut header).is_err() {
+            return false;
+        }
+        let last = header[0] & 0x80 != 0;
+        let kind = header[0] & 0x7f;
+        let length = u32::from_be_bytes([0, header[1], header[2], header[3]]);
+        if kind == CUESHEET {
+            let mut block = vec![0; length as usize];
+            return file.read_exact(&mut block).is_ok() && cuesheet_emphasis(&block);
+        }
+        if last
+            || std::io::copy(
+                &mut (&mut file).take(u64::from(length)),
+                &mut std::io::sink(),
+            )
+            .is_err()
+        {
+            return false;
+        }
+    }
+}
+
+const CUESHEET: u8 = 5;
+
+/// Whether a `CUESHEET` block's tracks hold one flagged pre-emphasized.
+fn cuesheet_emphasis(block: &[u8]) -> bool {
+    // The catalog number, lead-in, flags and reserved bytes, then the
+    // track count; each track its offset, number, ISRC, flags, reserved
+    // bytes and index count, then its indices.
+    const TRACKS_AT: usize = 128 + 8 + 1 + 258;
+    let Some(&count) = block.get(TRACKS_AT) else {
+        return false;
+    };
+    let mut at = TRACKS_AT + 1;
+    for _ in 0..count {
+        let (Some(&flags), Some(&indices)) = (block.get(at + 21), block.get(at + 35)) else {
+            return false;
+        };
+        if flags & 0x40 != 0 {
+            return true;
+        }
+        at += 36 + 12 * usize::from(indices);
+    }
+    false
 }
 
 /// Seconds a file's packets may fall short of what its header says
@@ -761,27 +897,29 @@ const CUT_SLACK_S: f64 = 1.0;
 fn measure_segments<R: Runner>(
     runner: &R,
     located: &Located,
-    index: u32,
+    audio: &probe::Audio,
     held: f64,
     scratch: &Path,
-) -> Vec<Vec<[f32; 2]>> {
-    let outputs: Vec<(Output, PathBuf)> = segment_starts(Some(held))
-        .into_iter()
-        .enumerate()
-        .map(|(n, start)| {
-            let path = scratch.join(format!("held{n}"));
-            (
-                Output::new(quality::segment_output(0, index, start), &path),
-                path,
-            )
-        })
+) -> Vec<quality::Segment> {
+    let starts = segment_starts(Some(held));
+    let inputs: Vec<Input> = starts
+        .iter()
+        .map(|start| Input::new(quality::segment_input(*start), &located.path))
         .collect();
-    let plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
-    ffmpeg::run_outputs(runner, &[located.path.as_path()], &plain)
+    let paths: Vec<PathBuf> = (0..starts.len())
+        .map(|n| scratch.join(format!("held{n}")))
+        .collect();
+    let outputs: Vec<Output> = paths
+        .iter()
+        .enumerate()
+        .map(|(n, path)| Output::new(quality::segment_output(n, audio.index), path))
+        .collect();
+    let channels = audio.channels as usize;
+    ffmpeg::run(runner, &inputs, &outputs)
         .into_iter()
-        .zip(outputs)
+        .zip(paths)
         .filter(|(result, _)| result.is_ok())
-        .map(|(_, (_, path))| quality::read_segment(&path))
+        .map(|(_, path)| quality::read_segment(&path, channels))
         .collect()
 }
 

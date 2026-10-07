@@ -7,13 +7,34 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+/// Names which audio stream is taken and what is read of it and of the
+/// file; facts read by another are made again, so changing any means
+/// changing this.
+pub const METHOD: &str = "probe/3";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Audio {
     /// Absolute stream index, as `-map 0:<index>` takes it.
     pub index: u32,
     pub codec: String,
+    /// The codec's profile, as `DTS-HD MA`.
+    pub profile: Option<String>,
     pub channels: u32,
+    /// The speakers in ffmpeg's name, as `5.1(side)`; `None` when the file
+    /// names none.
+    pub layout: Option<String>,
     pub sample_rate: u32,
+    /// Bits a decoded sample keeps; 0 when unknown.
+    pub bits: u32,
+    /// Whether samples decode as floating point.
+    pub float: bool,
+}
+
+impl Audio {
+    #[must_use]
+    pub fn is_lossless(&self) -> bool {
+        crate::codec::is_lossless_name(&self.codec, self.profile.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,9 +118,19 @@ struct Stream {
     #[serde(default)]
     codec_name: String,
     #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
     channels: u32,
     #[serde(default)]
+    channel_layout: Option<String>,
+    #[serde(default)]
     sample_rate: Option<String>,
+    #[serde(default)]
+    sample_fmt: String,
+    #[serde(default)]
+    bits_per_sample: u32,
+    #[serde(default)]
+    bits_per_raw_sample: Option<String>,
     #[serde(default)]
     width: u32,
     #[serde(default)]
@@ -111,6 +142,37 @@ struct Stream {
 }
 
 impl Stream {
+    fn audio(&self) -> Audio {
+        let float = matches!(self.sample_fmt.as_str(), "flt" | "fltp" | "dbl" | "dblp");
+        let raw = self
+            .bits_per_raw_sample
+            .as_deref()
+            .and_then(|b| b.parse().ok())
+            .filter(|b| *b > 0);
+        let bits = match self.sample_fmt.as_str() {
+            "dbl" | "dblp" => 64,
+            _ if float => 32,
+            _ => raw.unwrap_or(self.bits_per_sample),
+        };
+        Audio {
+            index: self.index,
+            codec: self.codec_name.clone(),
+            profile: self.profile.clone().filter(|p| !p.is_empty()),
+            channels: self.channels.max(1),
+            layout: self
+                .channel_layout
+                .clone()
+                .filter(|l| !l.is_empty() && l != "unknown"),
+            sample_rate: self
+                .sample_rate
+                .as_deref()
+                .and_then(|r| r.parse().ok())
+                .unwrap_or(48_000),
+            bits,
+            float,
+        }
+    }
+
     fn tag(&self, key: &str) -> Option<String> {
         self.tags
             .iter()
@@ -158,8 +220,9 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
-/// Parse `ffprobe -show_streams -show_format`. The first audio stream is
-/// the one a song is made from.
+/// Parse `ffprobe -show_streams -show_format`. The audio stream a song is
+/// made from is the best: lossless before lossy, then the one with the
+/// most channels, then the highest rate, then the first.
 pub fn parse(json: &[u8]) -> Result<Probed> {
     let probe: Probe = serde_json::from_slice(json).context("parsing ffprobe JSON")?;
     let mut probed = Probed {
@@ -177,6 +240,7 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
         ..Probed::default()
     };
     let mut unreadable = None;
+    let mut audio_tags = BTreeMap::new();
     for stream in probe.streams {
         match stream.codec_type.as_str() {
             // ffprobe gives a sample rate of 0 to a stream it could not
@@ -184,23 +248,17 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             "audio" if stream.sample_rate.as_deref() == Some("0") => {
                 unreadable.get_or_insert(stream.codec_name);
             }
-            "audio" if probed.audio.is_none() => {
-                for (k, v) in &stream.tags {
-                    probed
-                        .tags
-                        .entry(k.to_ascii_lowercase())
-                        .or_insert_with(|| v.clone());
+            "audio" => {
+                let audio = stream.audio();
+                let rank = |a: &Audio| (a.is_lossless(), a.channels, a.sample_rate);
+                if probed
+                    .audio
+                    .as_ref()
+                    .is_none_or(|best| rank(&audio) > rank(best))
+                {
+                    probed.audio = Some(audio);
+                    audio_tags = stream.tags;
                 }
-                probed.audio = Some(Audio {
-                    index: stream.index,
-                    codec: stream.codec_name.clone(),
-                    channels: stream.channels.max(1),
-                    sample_rate: stream
-                        .sample_rate
-                        .as_deref()
-                        .and_then(|r| r.parse().ok())
-                        .unwrap_or(48_000),
-                });
             }
             "subtitle" => probed.subtitles.push(Subtitle {
                 index: stream.index,
@@ -227,6 +285,9 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             }
             _ => {}
         }
+    }
+    for (k, v) in audio_tags {
+        probed.tags.entry(k.to_ascii_lowercase()).or_insert(v);
     }
     if let (None, Some(codec)) = (&probed.audio, unreadable) {
         bail!("its {codec} audio could not be decoded: ffprobe found no sample rate");
@@ -261,8 +322,12 @@ mod tests {
             Some(Audio {
                 index: 1,
                 codec: "opus".into(),
+                profile: None,
                 channels: 2,
+                layout: None,
                 sample_rate: 48_000,
+                bits: 0,
+                float: false,
             })
         );
         assert_eq!(o.subtitles.len(), 2);
@@ -354,5 +419,41 @@ mod tests {
     #[test]
     fn malformed_json_is_an_error() {
         assert!(parse(b"not json").is_err());
+    }
+
+    #[test]
+    fn the_best_audio_stream_is_taken() {
+        let json = r#"{"streams": [
+            {"index": 0, "codec_name": "aac", "codec_type": "audio", "channels": 2,
+             "sample_rate": "48000", "sample_fmt": "fltp", "tags": {"title": "Downmix"}},
+            {"index": 1, "codec_name": "flac", "codec_type": "audio", "channels": 6,
+             "channel_layout": "5.1(side)", "sample_rate": "96000", "sample_fmt": "s32",
+             "bits_per_raw_sample": "24", "tags": {"title": "Master"}},
+            {"index": 2, "codec_name": "flac", "codec_type": "audio", "channels": 2,
+             "sample_rate": "192000", "sample_fmt": "s16"}
+        ], "format": {}}"#;
+        let o = parse(json.as_bytes()).unwrap();
+        let audio = o.audio.unwrap();
+        assert_eq!(audio.index, 1);
+        assert_eq!(audio.layout.as_deref(), Some("5.1(side)"));
+        assert_eq!((audio.bits, audio.float), (24, false));
+        assert_eq!(o.tags["title"], "Master");
+    }
+
+    #[test]
+    fn float_and_wide_samples_are_told_apart() {
+        let audio = |fmt: &str, bits: &str| {
+            let json = format!(
+                r#"{{"streams": [{{"index": 0, "codec_name": "pcm_x", "codec_type": "audio",
+                    "channels": 2, "sample_rate": "44100", "sample_fmt": "{fmt}",
+                    "bits_per_sample": 32, "bits_per_raw_sample": "{bits}"}}], "format": {{}}}}"#
+            );
+            let a = parse(json.as_bytes()).unwrap().audio.unwrap();
+            (a.bits, a.float)
+        };
+        assert_eq!(audio("s32", "32"), (32, false));
+        assert_eq!(audio("s32", "N/A"), (32, false));
+        assert_eq!(audio("flt", "N/A"), (32, true));
+        assert_eq!(audio("dbl", "N/A"), (64, true));
     }
 }

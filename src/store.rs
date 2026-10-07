@@ -21,9 +21,10 @@ use crate::source::{SourceKey, id_of};
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
 
-const MEDIA: [&str; 22] = [
-    "flac", "wav", "aif", "aiff", "m4a", "mp3", "ogg", "oga", "opus", "wv", "ape", "tta", "aac",
-    "ac3", "eac3", "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf",
+const MEDIA: [&str; 32] = [
+    "flac", "wav", "w64", "rf64", "aif", "aiff", "aifc", "caf", "m4a", "mp3", "ogg", "oga", "opus",
+    "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd", "mlp", "mka", "mkv",
+    "mp4", "webm", "mov", "alac", "dsf", "dff",
 ];
 const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.

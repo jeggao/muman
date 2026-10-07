@@ -168,3 +168,38 @@ fn a_file_cut_off_is_as_long_as_its_packets_and_measured_within_them() {
     let facts = gather(&whole, &source, &dir.path().join("whole")).unwrap();
     assert_eq!((facts.duration, facts.cut_from), (Some(200.0), None));
 }
+
+/// A `CUESHEET` block of tracks with these flags and one index each.
+fn cuesheet(flags: &[u8]) -> Vec<u8> {
+    let mut block = vec![0; 395];
+    block.push(u8::try_from(flags.len()).unwrap());
+    for f in flags {
+        let mut track = vec![0; 36];
+        track[21] = *f;
+        track[35] = 1;
+        block.extend(track);
+        block.extend([0; 12]);
+    }
+    block
+}
+
+#[test]
+fn a_cue_sheet_flag_marks_pre_emphasis() {
+    assert!(!cuesheet_emphasis(&cuesheet(&[0, 0])));
+    assert!(cuesheet_emphasis(&cuesheet(&[0, 0x40])));
+    assert!(!cuesheet_emphasis(&cuesheet(&[0x40])[..400]), "cut short");
+}
+
+#[test]
+fn a_cue_sheet_beside_a_file_is_noted() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("Lantern Hours.flac");
+    std::fs::write(&image, b"fLaC").unwrap();
+    assert!(unkept(&image).is_empty());
+    std::fs::write(
+        dir.path().join("Lantern Hours.cue"),
+        "FILE \"Lantern Hours.flac\" WAVE\n  TRACK 01 AUDIO\n    FLAGS DCP PRE\n",
+    )
+    .unwrap();
+    assert_eq!(unkept(&image), [Unkept::PreEmphasis, Unkept::CueSheet]);
+}

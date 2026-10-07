@@ -471,7 +471,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
             .map(|e| entry_size(&e.name, size_of(&e.from)))
             .sum::<u64>()
         + entry_size(&entries[0].name, 0);
-    for format in fit::lower(song.plan.format, audio.channels, &manifest.settings.audio) {
+    for format in fit::lower(song.plan.format, &audio.shape(), &manifest.settings.audio) {
         let Format::Encode {
             kbps: Some(kbps), ..
         } = format
@@ -505,10 +505,7 @@ fn encode<R: Runner>(
         .sources
         .as_ref()
         .ok_or_else(|| anyhow!("its sources are gone"))?;
-    let plan = Plan {
-        format,
-        ..song.plan.clone()
-    };
+    let plan = song.plan.with_format(format);
     let library = scratch.join("library");
     let stem = song.path.with_extension("");
     let rendered = render::render(

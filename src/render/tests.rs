@@ -9,7 +9,7 @@ use lofty::tag::Accessor;
 use super::*;
 use crate::codec::Codec;
 use crate::quality::Rect;
-use crate::resolve::{AudioRef, RENDER_VERSION};
+use crate::resolve::{AudioRef, render_version};
 use crate::store::Kind;
 use crate::testing::Fake;
 
@@ -45,7 +45,7 @@ fn fixture() -> Fixture {
 
 fn plan(format: Format) -> Plan {
     Plan {
-        version: RENDER_VERSION,
+        version: render_version(format.codec()),
         format,
         audio: AudioRef {
             key: yt("aaaaaaaaaaa"),
@@ -183,6 +183,8 @@ fn another_lossy_codec_is_encoded_to_opus() {
         &plan(Format::Encode {
             codec: Codec::Opus,
             kbps: Some(160),
+            adapt: None,
+            mix: None,
         }),
     )
     .unwrap();
@@ -211,6 +213,8 @@ fn an_mp3_song_is_tagged_with_id3v2() {
         &tagged(Format::Encode {
             codec: Codec::Mp3,
             kbps: Some(320),
+            adapt: None,
+            mix: None,
         }),
     )
     .unwrap();
@@ -269,6 +273,8 @@ fn a_vorbis_song_keeps_vorbis_comments_in_ogg() {
         &tagged(Format::Encode {
             codec: Codec::Vorbis,
             kbps: Some(192),
+            adapt: None,
+            mix: None,
         }),
     )
     .unwrap();
@@ -360,14 +366,20 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         Format::Encode {
             codec: Codec::Vorbis,
             kbps: Some(192),
+            adapt: None,
+            mix: None,
         },
         Format::Encode {
             codec: Codec::Mp3,
             kbps: Some(320),
+            adapt: None,
+            mix: None,
         },
         Format::Encode {
             codec: Codec::Aac,
             kbps: Some(256),
+            adapt: None,
+            mix: None,
         },
     ];
     for format in formats {
@@ -408,14 +420,20 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
         Format::Encode {
             codec: Codec::Vorbis,
             kbps: Some(192),
+            adapt: None,
+            mix: None,
         },
         Format::Encode {
             codec: Codec::Mp3,
             kbps: Some(320),
+            adapt: None,
+            mix: None,
         },
         Format::Encode {
             codec: Codec::Aac,
             kbps: Some(256),
+            adapt: None,
+            mix: None,
         },
     ] {
         let mut p = plan(format);
@@ -460,4 +478,23 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             "{format:?}: a retag writes what a build would"
         );
     }
+}
+
+#[test]
+fn opus_holds_gains_as_r128_and_no_peaks() {
+    let tag = |k: &str, v: &str| (k.to_string(), vec![v.to_string()]);
+    let tags = [
+        tag("TITLE", "Lantern"),
+        tag("REPLAYGAIN_TRACK_GAIN", "-6.12 dB"),
+        tag("REPLAYGAIN_TRACK_PEAK", "0.900000"),
+        tag("REPLAYGAIN_ALBUM_GAIN", "1.00 dB"),
+    ];
+    assert_eq!(
+        opus_gains(&tags),
+        [
+            tag("TITLE", "Lantern"),
+            tag("R128_TRACK_GAIN", "-2847"),
+            tag("R128_ALBUM_GAIN", "-1024"),
+        ]
+    );
 }

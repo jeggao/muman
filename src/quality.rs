@@ -3,18 +3,24 @@
 //! upscaled image or a transcoded file claims more than it holds.
 //!
 //! Audio is measured on short excerpts at a quarter, half and three
-//! quarters of its length, decoded at the source's own rate.
+//! quarters of its length, decoded at the source's own rate, every channel
+//! as it is: a mix into two would add channels into clipping that none of
+//! them holds, and cancel channels in opposite phase.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
 //!   highest band standing 20 dB above all bands past a short guard,
-//!   in each excerpt's mean spectrum, taken low across the excerpts. A FLAC
-//!   transcoded from a 16 kHz source measures 16 kHz; a recording whose
-//!   treble fades into its noise floor shows no wall and measures full.
-//! - **Real stereo.** One minus the channels' squared correlation at the lag
-//!   within 1 ms that best aligns them: mono copied into two channels, at two
-//!   levels or a few samples apart, has next to none and counts as mono.
-//! - **Clipping.** The share of samples in runs at full scale or just under the
-//!   peak, or piled up just under full scale once a lossy codec smeared them.
+//!   in each excerpt's mean spectrum, its channels' powers summed, taken
+//!   low across the excerpts. A FLAC transcoded from a 16 kHz source
+//!   measures 16 kHz; a recording whose treble fades into its noise floor
+//!   shows no wall and measures full.
+//! - **Real stereo.** One minus the first two channels' squared
+//!   correlation at the lag within 1 ms that best aligns them: mono copied
+//!   into two channels, at two levels or a few samples apart, has next to
+//!   none and counts as mono, as one channel does.
+//! - **Clipping.** The share of samples in runs at full scale or just under
+//!   the peak, or piled up just under full scale once a lossy codec smeared
+//!   them. Float lossless audio holds samples past full scale unclipped, so
+//!   in it only runs just under its own peak count.
 //!
 //! A picture is measured in gray.
 //!
@@ -48,7 +54,7 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/4";
+pub const METHOD: &str = "quality/6";
 
 /// Seconds of audio measured at each of [`SEGMENTS`].
 pub const SEGMENT_SECONDS: f64 = 8.0;
@@ -111,6 +117,8 @@ const CLIP_LEVEL: f32 = 0.9999;
 /// over 1e-6, and no master limited below full scale measured any.
 const CLIP_OF_PEAK: f32 = 0.999;
 const CLIP_RUN: usize = 3;
+/// The most bits a sample is counted to use: a 32-bit float holds 24.
+const MOST_BITS: u32 = 24;
 /// A lossy codec smears clipped flat tops into a pile-up of samples just
 /// under full scale, rising from a valley below it and falling into the
 /// codec's overshoot above it. It is looked for from this level up, in bins
@@ -166,6 +174,10 @@ pub struct AudioQuality {
     pub incoherence: f64,
     /// The share of samples in clipped runs.
     pub clipping: f64,
+    /// The bits its samples use, at most 24: a 16-bit recording padded to
+    /// 24 bits uses 16.
+    #[serde(default)]
+    pub bits: u32,
 }
 
 impl AudioQuality {
@@ -254,19 +266,30 @@ fn real(n: usize) -> f64 {
     n as f64
 }
 
-/// The ffmpeg output options that write one measured segment of the
-/// audio stream `input:index` as 32-bit float stereo at its own rate.
+/// The ffmpeg input options that read one measured segment, from
+/// `start`: seeking on the input decodes only the segment, where seeking
+/// on the output decoded all that came before it, and every segment of a
+/// long file held in memory at once.
 #[must_use]
-pub fn segment_output(input: usize, index: u32, start: f64) -> Vec<OsString> {
+pub fn segment_input(start: f64) -> Vec<OsString> {
     [
-        "-map".to_string(),
-        format!("{input}:{index}"),
         "-ss".to_string(),
         format!("{start:.3}"),
         "-t".to_string(),
         format!("{SEGMENT_SECONDS}"),
-        "-ac".to_string(),
-        "2".to_string(),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect()
+}
+
+/// The ffmpeg output options that write the audio stream `input:index`
+/// as 32-bit float, every channel, at its own rate.
+#[must_use]
+pub fn segment_output(input: usize, index: u32) -> Vec<OsString> {
+    [
+        "-map".to_string(),
+        format!("{input}:{index}"),
         "-c:a".to_string(),
         "pcm_f32le".to_string(),
         "-f".to_string(),
@@ -298,42 +321,80 @@ pub fn gray_output(input: usize, stream: &str) -> Vec<OsString> {
     .collect()
 }
 
-/// Interleaved little-endian f32 stereo samples.
-#[must_use]
-pub fn stereo_samples(bytes: &[u8]) -> Vec<[f32; 2]> {
-    bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| {
-            [
-                f32::from_le_bytes([c[0], c[1], c[2], c[3]]),
-                f32::from_le_bytes([c[4], c[5], c[6], c[7]]),
-            ]
-        })
-        .collect()
+/// One measured segment's samples, each channel's in turn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Segment {
+    channels: usize,
+    samples: Vec<f32>,
+}
+
+impl Default for Segment {
+    fn default() -> Self {
+        Self::new(1, Vec::new())
+    }
+}
+
+impl Segment {
+    /// `samples` of `channels` interleaved; a frame cut short is dropped.
+    #[must_use]
+    pub fn new(channels: usize, mut samples: Vec<f32>) -> Self {
+        let channels = channels.max(1);
+        samples.truncate(samples.len() / channels * channels);
+        Self { channels, samples }
+    }
+
+    /// Interleaved little-endian f32 samples of `channels`.
+    #[must_use]
+    pub fn of_bytes(bytes: &[u8], channels: usize) -> Self {
+        let samples = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect();
+        Self::new(channels, samples)
+    }
+
+    fn channel(&self, c: usize) -> impl Iterator<Item = f32> + '_ {
+        self.samples.iter().skip(c).step_by(self.channels).copied()
+    }
+
+    /// The first two channels side by side; one channel is both.
+    fn front(&self) -> Vec<[f32; 2]> {
+        let right = usize::from(self.channels > 1);
+        self.samples
+            .chunks_exact(self.channels)
+            .map(|f| [f[0], f[right]])
+            .collect()
+    }
 }
 
 /// Measure decoded segments of one recording; `None` when they hold no
-/// sound at all.
+/// sound at all. With `headroom`, as float lossless audio has, samples
+/// above full scale were never clipped there, so only runs at its own
+/// peak count.
 #[must_use]
-pub fn audio(segments: &[Vec<[f32; 2]>], sample_rate: u32) -> Option<AudioQuality> {
+pub fn audio(segments: &[Segment], sample_rate: u32, headroom: bool) -> Option<AudioQuality> {
     let window: Vec<f64> = (0..FFT)
         .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * real(i) / real(FFT)).cos())
         .collect();
     let peak = segments
         .iter()
-        .flatten()
-        .fold(0.0_f32, |m, s| m.max(s[0].abs()).max(s[1].abs()));
-    let level = CLIP_LEVEL.min(peak * CLIP_OF_PEAK);
+        .flat_map(|s| &s.samples)
+        .fold(0.0_f32, |m, x| m.max(x.abs()));
+    let level = if headroom {
+        peak * CLIP_OF_PEAK
+    } else {
+        CLIP_LEVEL.min(peak * CLIP_OF_PEAK)
+    };
     let mut bandwidth: Option<f64> = None;
     let (mut clipped, mut total) = (0_usize, 0_usize);
-    for samples in segments {
-        for channel in 0..2 {
-            clipped += clipped_samples(samples.iter().map(|s| s[channel]), level);
+    for segment in segments {
+        for channel in 0..segment.channels {
+            clipped += clipped_samples(segment.channel(channel), level);
         }
-        total += samples.len() * 2;
-        if let Some(spectrum) = mean_spectrum(samples, &window) {
+        total += segment.samples.len();
+        if let Some(spectrum) = mean_spectrum(segment, &window) {
             let hz = wall(&spectrum, sample_rate);
             bandwidth = Some(bandwidth.map_or(hz, |b| b.min(hz)));
         }
@@ -344,13 +405,41 @@ pub fn audio(segments: &[Vec<[f32; 2]>], sample_rate: u32) -> Option<AudioQualit
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let reach = (f64::from(sample_rate) * STEREO_LAG).round() as usize;
-    let incoherence = incoherence(segments, reach);
+    let incoherence = if segments.iter().all(|s| s.channels == 1) {
+        0.0
+    } else {
+        let fronts: Vec<Vec<[f32; 2]>> = segments.iter().map(Segment::front).collect();
+        incoherence(&fronts, reach)
+    };
     let clipping = (real(clipped) / real(total.max(1))).max(pile_up(segments, peak, total));
     Some(AudioQuality {
         bandwidth_hz,
         incoherence,
         clipping,
+        bits: bits_used(segments),
     })
+}
+
+/// The bits the samples use, at most [`MOST_BITS`]: the place of the
+/// lowest bit any sample sets, counted from full scale. A float sample
+/// past what 24 bits hold uses them all.
+fn bits_used(segments: &[Segment]) -> u32 {
+    let scale = f64::from(1_u32 << (MOST_BITS - 1));
+    let lowest = segments
+        .iter()
+        .flat_map(|s| &s.samples)
+        .map(|x| f64::from(*x) * scale)
+        .filter(|x| *x != 0.0)
+        .map(|x| {
+            if x.fract() == 0.0 && x.abs() < 2.0 * scale {
+                #[allow(clippy::cast_possible_truncation)]
+                (x as i64).trailing_zeros()
+            } else {
+                0
+            }
+        })
+        .min();
+    lowest.map_or(0, |zeros| MOST_BITS.saturating_sub(zeros).max(1))
 }
 
 /// One minus the squared correlation of the channels at the lag within
@@ -398,7 +487,7 @@ fn incoherence(segments: &[Vec<[f32; 2]>], reach: usize) -> f64 {
 /// The share of samples from the valley under a pile-up up, as
 /// [`PILE_FROM`] describes; zero when there is none.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn pile_up(segments: &[Vec<[f32; 2]>], peak: f32, total: usize) -> f64 {
+fn pile_up(segments: &[Segment], peak: f32, total: usize) -> f64 {
     let lowest = PILE_FROM - PILE_REACH;
     let peak = f64::from(peak);
     if peak <= PILE_FROM || total == 0 {
@@ -406,7 +495,7 @@ fn pile_up(segments: &[Vec<[f32; 2]>], peak: f32, total: usize) -> f64 {
     }
     let bins = ((peak - lowest) / PILE_BIN).ceil() as usize + 1;
     let mut counts = vec![0_usize; bins];
-    for x in segments.iter().flatten().flatten() {
+    for x in segments.iter().flat_map(|s| &s.samples) {
         let a = f64::from(x.abs());
         if a >= lowest {
             counts[(((a - lowest) / PILE_BIN) as usize).min(bins - 1)] += 1;
@@ -447,25 +536,31 @@ fn clipped_samples(channel: impl Iterator<Item = f32>, level: f32) -> usize {
     }
 }
 
-/// The mean power spectrum of a segment's sounding frames, by FFT bin;
-/// `None` when every frame is silent.
-fn mean_spectrum(samples: &[[f32; 2]], window: &[f64]) -> Option<Vec<f64>> {
+/// The mean power spectrum of a segment's sounding frames, by FFT bin,
+/// each channel's power summed: channels in opposite phase cancel in a
+/// mix, and measured as silence.
+fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
     let mut sum = vec![0.0; FFT / 2];
     let mut frames = 0_usize;
-    for frame in samples.as_chunks::<FFT>().0 {
-        let mono: Vec<f64> = frame
-            .iter()
-            .map(|s| f64::midpoint(f64::from(s[0]), f64::from(s[1])))
-            .collect();
-        let rms = (mono.iter().map(|x| x * x).sum::<f64>() / real(FFT)).sqrt();
-        if rms < SILENT_RMS {
+    let width = FFT * segment.channels;
+    for frame in segment.samples.chunks_exact(width) {
+        let energy: f64 = frame.iter().map(|x| f64::from(*x).powi(2)).sum();
+        if (energy / real(width)).sqrt() < SILENT_RMS {
             continue;
         }
-        let mut re: Vec<f64> = mono.iter().zip(window).map(|(x, w)| x * w).collect();
-        let mut im = vec![0.0; FFT];
-        fft(&mut re, &mut im);
-        for (k, power) in sum.iter_mut().enumerate() {
-            *power += re[k] * re[k] + im[k] * im[k];
+        for channel in 0..segment.channels {
+            let mut re: Vec<f64> = frame
+                .iter()
+                .skip(channel)
+                .step_by(segment.channels)
+                .zip(window)
+                .map(|(x, w)| f64::from(*x) * w)
+                .collect();
+            let mut im = vec![0.0; FFT];
+            fft(&mut re, &mut im);
+            for (k, power) in sum.iter_mut().enumerate() {
+                *power += re[k] * re[k] + im[k] * im[k];
+            }
         }
         frames += 1;
     }
@@ -786,11 +881,12 @@ fn blockiness(gray: &Gray<'_>, r: Rect) -> f64 {
     ((edge / real(edges)) / (mid / real(mids)) - 1.0).max(0.0)
 }
 
-/// Reads a measured segment file, empty when it was not written.
+/// Reads a measured segment file of `channels`, empty when it was not
+/// written.
 #[must_use]
-pub fn read_segment(path: &Path) -> Vec<[f32; 2]> {
+pub fn read_segment(path: &Path, channels: usize) -> Segment {
     std::fs::read(path)
-        .map(|b| stereo_samples(&b))
+        .map(|b| Segment::of_bytes(&b, channels))
         .unwrap_or_default()
 }
 
@@ -852,11 +948,13 @@ mod tests {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-    fn stereo(left: &[f64], right: &[f64]) -> Vec<[f32; 2]> {
-        left.iter()
+    fn stereo(left: &[f64], right: &[f64]) -> Segment {
+        let samples = left
+            .iter()
             .zip(right)
-            .map(|(l, r)| [*l as f32, *r as f32])
-            .collect()
+            .flat_map(|(l, r)| [*l as f32, *r as f32])
+            .collect();
+        Segment::new(2, samples)
     }
 
     #[test]
@@ -864,10 +962,10 @@ mod tests {
         let rate = 48_000.0;
         let low = lowpassed(FFT * 40, 16_000.0, rate);
         let other = lowpassed(FFT * 40, 16_000.0, rate);
-        let q = audio(&[stereo(&low, &other)], 48_000).unwrap();
+        let q = audio(&[stereo(&low, &other)], 48_000, false).unwrap();
         assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
         let full = noise(FFT * 40, 9);
-        let q = audio(&[stereo(&full, &noise(FFT * 40, 10))], 48_000).unwrap();
+        let q = audio(&[stereo(&full, &noise(FFT * 40, 10))], 48_000, false).unwrap();
         assert!(q.bandwidth_hz > 23_000.0, "{q:?}");
     }
 
@@ -877,10 +975,10 @@ mod tests {
         // 6 dB per kHz above 2 kHz, down to a floor 80 dB below.
         let fade = |f: f64| 10_f64.powf(-((f - 2000.0).max(0.0) * 0.0003).min(4.0));
         let natural = shaped(FFT * 40, rate, fade);
-        let q = audio(&[stereo(&natural, &natural)], 48_000).unwrap();
+        let q = audio(&[stereo(&natural, &natural)], 48_000, false).unwrap();
         assert!(q.bandwidth_hz >= 24_000.0, "{q:?}");
         let encoded = shaped(FFT * 40, rate, |f| if f > 16_000.0 { 0.0 } else { fade(f) });
-        let q = audio(&[stereo(&encoded, &encoded)], 48_000).unwrap();
+        let q = audio(&[stereo(&encoded, &encoded)], 48_000, false).unwrap();
         assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
     }
 
@@ -888,13 +986,13 @@ mod tests {
     fn mono_in_two_channels_is_not_stereo() {
         let n = noise(FFT * 4, 1);
         assert!(
-            !audio(&[stereo(&n, &n)], 48_000)
+            !audio(&[stereo(&n, &n)], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
         );
         let quieter: Vec<f64> = n.iter().map(|v| v * 0.89).collect();
         assert!(
-            !audio(&[stereo(&n, &quieter)], 48_000)
+            !audio(&[stereo(&n, &quieter)], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
         );
@@ -902,7 +1000,7 @@ mod tests {
             .chain(n.iter().copied())
             .collect();
         assert!(
-            !audio(&[stereo(&n, &late)], 48_000)
+            !audio(&[stereo(&n, &late)], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
         );
@@ -910,12 +1008,12 @@ mod tests {
             .chain(n.iter().copied())
             .collect();
         assert!(
-            audio(&[stereo(&n, &far)], 48_000)
+            audio(&[stereo(&n, &far)], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
         );
         assert!(
-            audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000)
+            audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
         );
@@ -926,15 +1024,15 @@ mod tests {
         let sine: Vec<f64> = (0..FFT * 4)
             .map(|i| (1.6 * (real(i) * 0.05).sin()).clamp(-1.0, 1.0))
             .collect();
-        let q = audio(&[stereo(&sine, &sine)], 48_000).unwrap();
+        let q = audio(&[stereo(&sine, &sine)], 48_000, false).unwrap();
         assert!(q.clipping > 0.1, "{q:?}");
         assert_eq!(q.clipping_bucket(CUTOFFS), 2);
         let turned_down: Vec<f64> = sine.iter().map(|v| v * 0.89).collect();
-        let q = audio(&[stereo(&turned_down, &turned_down)], 48_000).unwrap();
+        let q = audio(&[stereo(&turned_down, &turned_down)], 48_000, false).unwrap();
         assert_eq!(q.clipping_bucket(CUTOFFS), 2, "{q:?}");
         let clean: Vec<f64> = (0..FFT * 4).map(|i| 0.8 * (real(i) * 0.05).sin()).collect();
         assert_eq!(
-            audio(&[stereo(&clean, &clean)], 48_000)
+            audio(&[stereo(&clean, &clean)], 48_000, false)
                 .unwrap()
                 .clipping_bucket(CUTOFFS),
             0
@@ -953,11 +1051,11 @@ mod tests {
             .map(|v| (v / peak * 1.6).clamp(-1.0, 1.0))
             .collect();
         let smeared = filtered(&clipped, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
-        let q = audio(&[stereo(&smeared, &smeared)], 48_000).unwrap();
+        let q = audio(&[stereo(&smeared, &smeared)], 48_000, false).unwrap();
         assert!(q.clipping_bucket(CUTOFFS) >= 1, "{q:?}");
         let hot: Vec<f64> = music.iter().map(|v| v / peak * 0.99).collect();
         let hot = filtered(&hot, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
-        let q = audio(&[stereo(&hot, &hot)], 48_000).unwrap();
+        let q = audio(&[stereo(&hot, &hot)], 48_000, false).unwrap();
         assert_eq!(q.clipping_bucket(CUTOFFS), 0, "{q:?}");
     }
 
@@ -966,13 +1064,68 @@ mod tests {
         let tone: Vec<f64> = (0..FFT * 8)
             .map(|i| 0.97 * (real(i) * 0.05).sin())
             .collect();
-        let q = audio(&[stereo(&tone, &tone)], 48_000).unwrap();
+        let q = audio(&[stereo(&tone, &tone)], 48_000, false).unwrap();
         assert_eq!(q.clipping_bucket(CUTOFFS), 0, "{q:?}");
     }
 
     #[test]
     fn silence_measures_nothing() {
-        assert!(audio(&[vec![[0.0, 0.0]; FFT * 2]], 48_000).is_none());
+        assert!(audio(&[Segment::new(2, vec![0.0; FFT * 4])], 48_000, false).is_none());
+    }
+
+    #[test]
+    fn a_channel_in_opposite_phase_still_sounds() {
+        let n = lowpassed(FFT * 40, 15_000.0, 48_000.0);
+        let inverted: Vec<f64> = n.iter().map(|x| -x).collect();
+        let q = audio(&[stereo(&n, &inverted)], 48_000, false).unwrap();
+        assert!(
+            (q.bandwidth_hz - 15_000.0).abs() < 1000.0,
+            "{}",
+            q.bandwidth_hz
+        );
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn channels(signals: &[Vec<f64>]) -> Segment {
+        let frames = signals[0].len();
+        let samples = (0..frames)
+            .flat_map(|i| signals.iter().map(move |s| s[i] as f32))
+            .collect();
+        Segment::new(signals.len(), samples)
+    }
+
+    #[test]
+    fn channels_are_measured_apart_not_mixed() {
+        // Six channels of noise at half scale, which a mix into two would
+        // push past full scale.
+        let six: Vec<Vec<f64>> = (0..6)
+            .map(|c| noise(FFT * 20, c).iter().map(|x| x * 0.5).collect())
+            .collect();
+        let q = audio(&[channels(&six)], 48_000, false).unwrap();
+        assert!(q.clipping < 1e-5, "{}", q.clipping);
+        assert!(q.is_stereo(STEREO_INCOHERENCE));
+    }
+
+    #[test]
+    fn one_channel_is_mono() {
+        let q = audio(&[channels(&[noise(FFT * 8, 3)])], 48_000, false).unwrap();
+        assert!(!q.is_stereo(STEREO_INCOHERENCE));
+    }
+
+    #[test]
+    fn float_past_full_scale_is_no_clipping() {
+        // A sine peaking at 2, as a float master holds, and the same cut
+        // at full scale.
+        let over: Vec<f64> = (0..FFT * 20)
+            .map(|i| 2.0 * (std::f64::consts::TAU * 441.0 * real(i) / 48_000.0).sin())
+            .collect();
+        let cut: Vec<f64> = over.iter().map(|x| x.clamp(-1.0, 1.0)).collect();
+        let master = audio(&[stereo(&over, &over)], 48_000, true).unwrap();
+        let clipped = audio(&[stereo(&cut, &cut)], 48_000, false).unwrap();
+        assert!(master.clipping < 0.01, "{}", master.clipping);
+        assert!(clipped.clipping > 0.5, "{}", clipped.clipping);
+        let unheld = audio(&[stereo(&over, &over)], 48_000, false).unwrap();
+        assert!(unheld.clipping > 0.5, "{}", unheld.clipping);
     }
 
     /// Doubles a picture's size as image tools do, each new pixel a
@@ -1100,5 +1253,20 @@ mod tests {
     #[test]
     fn a_short_buffer_is_no_measure() {
         assert!(image(&[0; 10], 64, 64).is_none());
+    }
+
+    #[test]
+    fn a_padded_recording_uses_the_bits_it_was_made_with() {
+        let at = |bits: u32| -> Vec<f64> {
+            let step = f64::from(1_u32 << (bits - 1));
+            noise(FFT * 4, 7)
+                .iter()
+                .map(|x| (x * 0.5 * step).round() / step)
+                .collect()
+        };
+        let bits = |n: &[f64]| audio(&[stereo(n, n)], 48_000, false).unwrap().bits;
+        assert_eq!(bits(&at(16)), 16);
+        assert_eq!(bits(&at(24)), 24);
+        assert_eq!(bits(&noise(FFT * 4, 7)), 24, "float uses them all");
     }
 }

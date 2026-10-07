@@ -22,8 +22,8 @@
 //! when a later muman changes the default. So the top-level `edition`
 //! names the defaults the file's settings were written from, as Cargo's
 //! `edition` does; a file without one was written from the first. When
-//! a default changes, [`EDITION`] rises and [`CHANGES`] records the key
-//! and its old default. A setting still at its edition's default, which
+//! a default changes, [`EDITION`] rises and [`crate::migrate::HISTORY`]
+//! records the key and its old default. A setting still at its edition's default, which
 //! a later edition changed, is stale ([`stale`]): `sync`, `status` and
 //! `check` say so, and `sync --update-defaults` moves each to the new
 //! default ([`update`]). A setting at any other value is the user's and
@@ -37,7 +37,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
-use crate::codec::Codec;
+use crate::codec::{Codec, Layout, Shape, Speakers};
 use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
@@ -215,6 +215,12 @@ pub struct Audio {
     /// `[library] max_size`, for two channels; none, the encoder's lowest.
     #[serde(rename = "min_bitrate", deserialize_with = "serde_as::kbps_opt")]
     pub min_kbps: Option<u32>,
+    /// Speaker layouts written as they are; audio in any other is mixed
+    /// into one of `downmix`.
+    pub layouts: Vec<Speakers>,
+    /// What audio in a layout `layouts` takes not is mixed into: the
+    /// first with no more channels than it has, or else the fewest.
+    pub downmix: Vec<Layout>,
 }
 
 impl Default for Audio {
@@ -229,6 +235,8 @@ impl Default for Audio {
             aac_kbps: 256,
             mp3_kbps: 320,
             min_kbps: None,
+            layouts: vec![Speakers::Any],
+            downmix: vec![Layout::STEREO],
         }
     }
 }
@@ -260,11 +268,45 @@ impl Audio {
             Codec::Vorbis => Some(scaled(self.vorbis_kbps)),
             Codec::Aac => Some(scaled(self.aac_kbps)),
             Codec::Mp3 => Some(self.mp3_kbps),
-            Codec::Flac | Codec::Alac => None,
+            Codec::Flac | Codec::Alac | Codec::WavPack => None,
         }
     }
 
+    /// The layout audio of `shape` is mixed into, if `layouts` takes not
+    /// its own, and the shape it is written in.
+    #[must_use]
+    pub fn written<'a>(&self, shape: &Shape<'a>) -> (Option<Layout>, Shape<'a>) {
+        if self.layouts.iter().any(|l| l.takes(shape)) {
+            return (None, shape.clone());
+        }
+        let fits = self.downmix.iter().find(|l| l.channels() <= shape.channels);
+        let Some(mix) = fits.or_else(|| self.downmix.iter().min_by_key(|l| l.channels())) else {
+            return (None, shape.clone());
+        };
+        let mixed = Shape {
+            channels: mix.channels(),
+            layout: Some(mix.name()),
+            ..shape.clone()
+        };
+        (Some(*mix), mixed)
+    }
+
     fn check(&self) -> Result<()> {
+        if self.downmix.is_empty() {
+            bail!("[audio] downmix names no layout to mix audio into");
+        }
+        for mix in &self.downmix {
+            let shape = Shape {
+                channels: mix.channels(),
+                layout: Some(mix.name()),
+                sample_rate: 0,
+                bits: 0,
+                float: false,
+            };
+            if !self.layouts.iter().any(|l| l.takes(&shape)) {
+                bail!("[audio] downmix names {mix}, which [audio] layouts does not take");
+            }
+        }
         if self.lossy.is_lossless() {
             bail!(
                 "[audio] lossy = \"{}\" is lossless; name a lossy codec: opus, vorbis, aac or mp3",
@@ -293,8 +335,9 @@ impl Audio {
 /// source in whole steps; a source's score is each measure's steps times
 /// its weight, summed, and the lowest wins. A measure switched off, or
 /// weighing 0, counts for nothing; one that could not be taken ranks a
-/// source after every one it was taken on. Ties go to the source listed
-/// first. See [`crate::resolve`].
+/// source after every one it was taken on. Audio scored alike is told
+/// apart as [`crate::resolve`] says; the last ties go to the source
+/// listed first.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Quality {
@@ -834,6 +877,14 @@ mod tests {
         let e = settings("[audio]\nlossy = \"flac\"\n").unwrap_err();
         assert!(format!("{e:#}").contains("lossless"), "{e:#}");
         assert!(settings("[audio]\ncodecs = [\"wma\"]\n").is_err());
+        let e = settings("[audio]\nlayouts = [\"5.1 side\"]\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("5.1(side)"),
+            "names the ones known: {e:#}"
+        );
+        let e = settings("[audio]\nlayouts = [\"stereo\"]\ndownmix = [\"5.1\"]\n").unwrap_err();
+        assert!(format!("{e:#}").contains("does not take"), "{e:#}");
+        assert!(settings("[audio]\ndownmix = []\n").is_err());
     }
 
     #[test]
@@ -922,5 +973,41 @@ mod tests {
         let home = Path::new("home");
         assert_eq!(library.folder(home), Some(home.join("music")));
         assert_eq!(Library::default().folder(home), None);
+    }
+
+    #[test]
+    fn audio_in_a_layout_not_taken_is_mixed_into_the_first_that_fits() {
+        let s = settings(
+            "[audio]\nlayouts = [\"mono\", \"stereo\", \"5.1\"]\ndownmix = [\"5.1\", \"stereo\"]\n",
+        )
+        .unwrap();
+        let mixed = |channels, layout| {
+            let shape = Shape {
+                channels,
+                layout,
+                sample_rate: 48_000,
+                bits: 24,
+                float: false,
+            };
+            s.audio.written(&shape).0.map(Layout::name)
+        };
+        assert_eq!(mixed(6, Some("5.1(side)")), None, "5.1 takes it");
+        assert_eq!(mixed(12, Some("7.1.4")), Some("5.1"));
+        assert_eq!(mixed(4, Some("4.0")), Some("stereo"), "never mixed up");
+        assert_eq!(mixed(1, None), None);
+        let mono = settings("[audio]\nlayouts = [\"stereo\"]\n").unwrap();
+        let shape = Shape {
+            channels: 1,
+            layout: Some("mono"),
+            sample_rate: 48_000,
+            bits: 16,
+            float: false,
+        };
+        let (mix, written) = mono.audio.written(&shape);
+        assert_eq!(
+            (mix, written.channels),
+            (Some(Layout::STEREO), 2),
+            "the fewest"
+        );
     }
 }

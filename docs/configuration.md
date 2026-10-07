@@ -112,10 +112,12 @@ template, moves the existing files instead of encoding them again.
 ## Codecs
 
 `[audio] codecs` lists the codecs a song's audio is copied in, packet
-for packet: `opus`, `vorbis`, `aac`, `mp3`, `flac` and `alac`. Audio in
-any other codec is encoded, lossy audio to `lossy` and lossless audio to
-`lossless`, at that codec's bitrate; audio already in the codec it would
-be encoded to is copied. Each codec has its own file:
+for packet: `opus`, `vorbis`, `aac`, `mp3`, `flac`, `alac` and
+`wavpack`. Audio in any other codec is encoded, lossy audio to `lossy`
+and lossless audio to `lossless`, at that codec's bitrate; audio already
+in the codec it would be encoded to is copied. TrueHD, MLP, DTS-HD Master
+Audio, DSD, TAK and Shorten count as lossless. Each codec has its own
+file:
 
 | Codec | File | Tags |
 |---|---|---|
@@ -124,10 +126,50 @@ be encoded to is copied. Each codec has its own file:
 | `flac` | `.flac` | Vorbis comments |
 | `mp3` | `.mp3` | ID3v2.4 |
 | `aac`, `alac` | `.m4a` (MP4) | iTunes atoms |
+| `wavpack` | `.wv` | APEv2 |
 
 In MP3 and MP4, a tag those formats name, such as the title, the track
 or the lyrics, becomes their own frame or atom; any other is kept under
 its name, as a `TXXX` frame or an iTunes freeform atom.
+
+Each codec holds some audio and not others, and muman never lets the
+encoder mix speakers anew to make it fit:
+
+| Codec | Holds |
+|---|---|
+| `flac` | Up to 8 channels, any speakers; integer samples of up to 24 bits |
+| `alac` | As FLAC, in mono, stereo, 3.0, 4.0, 5.0, 5.1, 6.1 and 7.1 (wide) alone |
+| `wavpack` | Any channels; integer samples of up to 32 bits, or 32-bit float |
+| `opus` | Any channels: Vorbis layouts as they are, side speakers named as back ones, any other with no speakers named |
+| `vorbis` | Any channels, speakers named by their count; resampled to 44.1 or 48 kHz from a rate it cannot encode at |
+| `aac` | Up to 8 channels; more are folded in |
+| `mp3` | Two channels; more are folded in |
+
+Lossless audio that `lossless` cannot hold whole is written as FLAC if
+FLAC can hold it, and as WavPack otherwise: a 7.1 master under
+`lossless = "alac"` becomes FLAC, a 32-bit or float one WavPack, so a
+float master louder than full scale keeps its peaks. 64-bit float is
+written at 32.
+
+`[audio] layouts` lists the speaker layouts a song is written in as it
+is, by ffmpeg's names; a name with no variant in parentheses takes its
+variants too, so `"5.1"` takes `5.1(side)`, and `"any"` takes every
+layout. Audio in any other layout is mixed, before it is encoded, into
+the first of `[audio] downmix` with no more channels than it has, or else
+the one with the fewest: audio is mixed up only when `downmix` holds no
+layout as small, as mono into stereo. Each layout `downmix` names must
+be one `layouts` takes. A mix is scaled so no sum of channels passes
+full scale, so it plays quieter than its source, and a source's
+ReplayGain does not hold for it and is not written. A mixed song is
+always encoded, never copied.
+
+```toml
+[audio]
+# Stereo and 5.1 as they are; 7.1 and 7.1.4 mixed into 5.1, and quad
+# or 3.0 into stereo.
+layouts = ["mono", "stereo", "5.1"]
+downmix = ["5.1", "stereo"]
+```
 
 ```toml
 [audio]
