@@ -275,7 +275,8 @@ fn ladder(
             format,
             ..plan.clone()
         };
-        let was = (!state.rebased.is_empty()).then(|| plan_key(tools, &state.as_before(&plan)));
+        let renamed = !state.rebased.is_empty() || !state.respelled.is_empty();
+        let was = renamed.then(|| plan_key(tools, &state.as_before(&plan)));
         let plan_key = plan_key(tools, &plan);
         Choice {
             format,

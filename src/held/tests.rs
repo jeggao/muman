@@ -2,7 +2,7 @@ use super::*;
 use crate::manifest::{Edit, Manifest};
 
 const SONG: &str =
-    "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"manual:a.flac\"]\n";
+    "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"manual:a.flac\"]\n";
 
 fn held(audio: &str, format: Option<&str>) -> Held {
     Held {
@@ -35,7 +35,7 @@ fn a_record_is_written_as_one_line_per_source_and_read_back() {
     let text = std::fs::read_to_string(dir.path().join("songs.toml")).unwrap();
     assert!(
         text.contains(
-            "held.\"youtube:aaaaaaaaaaa\" = { audio = \"0123456789abcdef\", tags = \"fedcba9876543210\", format = \"251\", size = 3456789 }\n"
+            "held.\"youtube.com:aaaaaaaaaaa\" = { audio = \"0123456789abcdef\", tags = \"fedcba9876543210\", format = \"251\", size = 3456789 }\n"
         ),
         "{text}"
     );
@@ -49,7 +49,8 @@ fn a_record_is_written_as_one_line_per_source_and_read_back() {
 
 #[test]
 fn a_source_renamed_or_dropped_loses_its_record() {
-    let text = format!("{SONG}held.\"youtube:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\" }}\n");
+    let text =
+        format!("{SONG}held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\" }}\n");
     for edit in [
         Edit::Drop(SourceKey::youtube("aaaaaaaaaaa")),
         Edit::Rename {
@@ -68,7 +69,7 @@ fn a_source_renamed_or_dropped_loses_its_record() {
 #[test]
 fn a_record_of_a_source_not_listed_is_ignored_and_one_unreadable_refused() {
     let (_d, m) = load(&format!(
-        "{SONG}held.\"youtube:zzzzzzzzzzz\" = {{ audio = \"0123456789abcdef\" }}\n"
+        "{SONG}held.\"youtube.com:zzzzzzzzzzz\" = {{ audio = \"0123456789abcdef\" }}\n"
     ));
     assert!(m.songs[0].held.is_empty());
     let dir = tempfile::tempdir().unwrap();
@@ -139,7 +140,7 @@ fn a_drift_names_each_part_changed_and_the_format() {
     };
     assert_eq!(
         drift.show(),
-        "youtube:aaaaaaaaaaa has changed since its song was built: \
+        "youtube.com:aaaaaaaaaaa has changed since its song was built: \
          other audio and cover, no lyrics (format 251 → 140)"
     );
 }

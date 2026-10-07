@@ -596,7 +596,13 @@ fn create(dir: &Path) -> Result<()> {
 /// about to write it renames; a list that does not read says so later.
 fn say_renamed<W: Write>(home: &Path, out: &mut W) -> Result<()> {
     if let Ok(manifest) = Manifest::load(home) {
-        for renamed in &manifest.renamed {
+        let respelled = manifest.respelled_notice();
+        for renamed in manifest
+            .renamed
+            .iter()
+            .map(ToString::to_string)
+            .chain(respelled)
+        {
             ui::info(out, &format!("Renamed in the song list: {renamed}"))?;
         }
     }
@@ -936,8 +942,7 @@ fn fetched_key<R: Runner>(runner: &R, path: &Path) -> Option<SourceKey> {
         )]))
         .ok()?;
     let info = info::parse(&std::fs::read(json).ok()?).ok()?;
-    let extractor = info.extractor_key?.to_ascii_lowercase();
-    SourceKey::parse(&format!("{extractor}:{}", info.id?)).ok()
+    info.key()
 }
 
 /// The `.lrc` and pictures named as a file is, beside it.

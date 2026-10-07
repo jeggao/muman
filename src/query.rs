@@ -9,13 +9,15 @@
 //! it, `field::regex` one matching it; `^` before any term negates it. A
 //! field that is no tag muman knows and that no song has is refused, so
 //! a misspelled one neither matches nothing nor, negated, every song.
-//! A source key, as `youtube:<id>`, names its song exactly, and several
+//! A source key, as `youtube.com:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case is
 //! ignored throughout.
 //!
-//! A term is a key when what comes before its colon is a scheme some key
-//! in the song list uses and no field's name, so `youtube:<id>` names a
-//! key where `composer:quill` names a field. A song that does not resolve
+//! A term is a key when what comes before its colon is no field's name
+//! and a site or scheme some key in the song list uses, or one
+//! [`crate::source::SITES`] names, so `youtube.com:<id>` names a key
+//! where `composer:quill` names a field; `youtube:<id>`, as keys were
+//! once named, names the same. A song that does not resolve
 //! yet, its sources not measured, offers its own `tags` and the tags of
 //! its first measured source, so a query still finds it.
 
@@ -168,8 +170,8 @@ pub struct Query(Vec<Term>);
 
 impl Query {
     /// Parse the terms of a query. `extractors` are the key schemes in
-    /// use, so `youtube:<id>` names a key where `composer:quill` names a
-    /// field.
+    /// use, so `youtube.com:<id>` names a key where `composer:quill` names
+    /// a field.
     pub fn parse(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
         let mut parsed = Vec::new();
         for raw in terms {
@@ -308,19 +310,24 @@ impl Test {
     }
 }
 
-/// The key schemes a query treats as keys: `manual`, `youtube` and
-/// every extractor the song list names.
+/// The key schemes a query treats as keys: `manual`, every site and
+/// extractor [`crate::source::SITES`] names, and every site the song
+/// list names.
 #[must_use]
 pub fn extractors(manifest: &Manifest) -> BTreeSet<String> {
-    let mut found: BTreeSet<String> = ["manual", "youtube"].map(String::from).into();
+    let mut found: BTreeSet<String> = ["manual", "youtubetab"].map(String::from).into();
+    for (extractor, site) in crate::source::SITES {
+        found.insert(extractor.to_string());
+        found.insert(site.to_string());
+    }
     let keys = manifest
         .songs
         .iter()
         .flat_map(|s| &s.sources)
         .chain(manifest.removed.iter().flat_map(|r| &r.sources));
     for key in keys {
-        if let SourceKey::Remote { extractor, .. } = key {
-            found.insert(extractor.clone());
+        if let SourceKey::Remote { site, .. } = key {
+            found.insert(site.clone());
         }
     }
     found
@@ -375,12 +382,13 @@ mod tests {
 
     fn query(terms: &[&str]) -> Query {
         let terms: Vec<String> = terms.iter().map(ToString::to_string).collect();
-        Query::parse(&terms, &["manual".into(), "youtube".into()].into()).unwrap()
+        let schemes = ["manual", "youtube.com", "youtube"].map(String::from);
+        Query::parse(&terms, &schemes.into()).unwrap()
     }
 
     #[test]
     fn bare_words_are_all_required_and_ignore_case() {
-        let v = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let v = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         assert!(query(&["lumo", "hour"]).matches(&v));
         assert!(!query(&["lumo", "around"]).matches(&v));
         assert!(query(&[]).matches(&v));
@@ -388,7 +396,7 @@ mod tests {
 
     #[test]
     fn a_bare_word_names_a_key_only_whole() {
-        let video = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let video = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         let file = view("Tide", "Ada Quill", "manual:Ada Quill/02 Tide.flac");
         for part in ["man", "tube", "you", "aaa"] {
             assert!(!query(&[part]).matches(&video), "{part}");
@@ -401,7 +409,11 @@ mod tests {
 
     #[test]
     fn a_field_no_tag_names_and_no_song_has_is_refused() {
-        let v = [view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa")];
+        let v = [view(
+            "One Lantern Hour",
+            "Lumo Fenn",
+            "youtube.com:aaaaaaaaaaa",
+        )];
         for term in ["artst:fenn", "^artst:fenn", "gnere::x", "composer:quill"] {
             let e = query(&[term]).check_fields(&v).unwrap_err();
             assert!(
@@ -423,7 +435,7 @@ mod tests {
 
     #[test]
     fn fields_match_by_text_exactly_or_by_pattern() {
-        let v = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let v = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         assert!(query(&["artist:fenn"]).matches(&v));
         assert!(!query(&["artist:=fenn"]).matches(&v));
         assert!(query(&["artist:=LUMO FENN"]).matches(&v));
@@ -435,18 +447,22 @@ mod tests {
 
     #[test]
     fn a_caret_negates_and_a_key_names_its_song() {
-        let v = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let v = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         assert!(!query(&["^lumo"]).matches(&v));
         assert!(query(&["^lyrics:yes"]).matches(&v));
-        let q = query(&["youtube:aaaaaaaaaaa"]);
+        let q = query(&["youtube.com:aaaaaaaaaaa"]);
         assert!(q.matches(&v) && q.names_keys());
-        assert!(!query(&["youtube:bbbbbbbbbbb"]).matches(&v));
-        let both = query(&["youtube:bbbbbbbbbbb", "youtube:aaaaaaaaaaa"]);
+        assert!(
+            query(&["youtube:aaaaaaaaaaa"]).matches(&v),
+            "as keys were once named"
+        );
+        assert!(!query(&["youtube.com:bbbbbbbbbbb"]).matches(&v));
+        let both = query(&["youtube.com:bbbbbbbbbbb", "youtube.com:aaaaaaaaaaa"]);
         assert!(
             both.matches(&v) && both.names_keys(),
             "keys name any of theirs"
         );
-        assert!(!query(&["youtube:aaaaaaaaaaa", "^lumo"]).matches(&v));
+        assert!(!query(&["youtube.com:aaaaaaaaaaa", "^lumo"]).matches(&v));
         assert!(
             !query(&["composer:quill"]).names_keys(),
             "an unknown scheme is a field"
@@ -463,10 +479,10 @@ mod tests {
 
     #[test]
     fn a_format_names_fields_and_escapes() {
-        let v = view("One Lantern Hour", "Lumo Fenn", "youtube:aaaaaaaaaaa");
+        let v = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         assert_eq!(
             format("{key}\\t{artist} - {title} [{genre}] {", &v),
-            "youtube:aaaaaaaaaaa\tLumo Fenn - One Lantern Hour [House; French] {"
+            "youtube.com:aaaaaaaaaaa\tLumo Fenn - One Lantern Hour [House; French] {"
         );
     }
 }

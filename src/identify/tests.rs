@@ -8,7 +8,7 @@ struct Home {
     dirs: Dirs,
 }
 
-/// A home listing one song, `youtube:aaaaaaaaaaa`, and holding the
+/// A home listing one song, `youtube.com:aaaaaaaaaaa`, and holding the
 /// manual files named.
 fn home(manual: &[&str]) -> Home {
     let dir = tempfile::tempdir().unwrap();
@@ -26,7 +26,7 @@ fn home(manual: &[&str]) -> Home {
     }
     std::fs::write(
         dirs.manifest(),
-        "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+        "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     )
     .unwrap();
     Home { _dir: dir, dirs }

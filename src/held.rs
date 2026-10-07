@@ -8,7 +8,7 @@
 //! that format's `size`. Two of them:
 //!
 //! ```toml
-//! held."youtube:vid00000001" = { audio = "7c1cfa040b3b82c0", tags = "9a3c0e5f7d1b2468" }
+//! held."youtube.com:vid00000001" = { audio = "7c1cfa040b3b82c0", tags = "9a3c0e5f7d1b2468" }
 //! ```
 //!
 //! Each digest survives a fetch again of the same thing: audio and
@@ -210,7 +210,7 @@ impl Held {
     #[must_use]
     pub fn asked(&self, key: &SourceKey, configured: &str) -> Option<String> {
         let format = self.format.as_ref()?;
-        if !matches!(key, SourceKey::Remote { extractor, .. } if extractor == "youtube") {
+        if !key.is_youtube() {
             return None;
         }
         Some(match format.split_once('+') {

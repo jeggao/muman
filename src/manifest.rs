@@ -91,9 +91,9 @@ const HEADER: &str = "\
 # changed song and deletes the library copy of anything no longer listed;
 # a song you delete here goes under [[removed]], as `muman remove` puts it.
 #
-#   sources:  every file the song may be made from, as `youtube:<id>`,
-#             `lrclib:<id>`, `musicbrainz:<id>` or `manual:<path>` under
-#             sources/manual. muman picks the best audio, cover, lyrics and
+#   sources:  every file the song may be made from: `<site>:<id>` for
+#             what yt-dlp fetched, as `youtube.com:<id>`, or `lrclib:<id>`,
+#             `musicbrainz:<id>` or `manual:<path>` under sources/manual. muman picks the best audio, cover, lyrics and
 #             tags by measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset = \"120 ms\" moves
@@ -233,6 +233,9 @@ pub enum Edit {
     /// Every setting still at an earlier edition's default moved to the
     /// current one; see [`crate::settings::update`].
     UpdateDefaults,
+    /// `from`, an extractor's name for a source, named `to` wherever it
+    /// is written, its record kept: one key, renamed.
+    Respell { from: SourceKey, to: SourceKey },
     /// What `key` holds recorded in the song listing it.
     Hold {
         key: SourceKey,
@@ -281,6 +284,9 @@ pub struct Manifest {
     /// The settings the file names by an old name, renamed when read and
     /// by the next write.
     pub renamed: Vec<crate::migrate::Renamed>,
+    /// Each source key the file names by yt-dlp's extractor, as
+    /// `youtube:<id>`, by the key the next write names by its site.
+    pub respelled: BTreeMap<String, String>,
     edits: Vec<Edit>,
     stale: bool,
 }
@@ -291,6 +297,10 @@ impl Manifest {
         let doc = read(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
+        let stale = file.exists()
+            && (with_header(&doc.to_string()).is_some()
+                || normalize(&mut doc.clone())
+                || !parsed.respelled.is_empty());
         Ok(Self {
             dir: home.to_path_buf(),
             songs: parsed.songs,
@@ -303,10 +313,20 @@ impl Manifest {
             settings: parsed.settings,
             stale_defaults: parsed.stale_defaults,
             renamed: parsed.renamed,
+            respelled: parsed.respelled,
             edits: Vec::new(),
-            stale: file.exists()
-                && (with_header(&doc.to_string()).is_some() || normalize(&mut doc.clone())),
+            stale,
         })
+    }
+
+    /// What the next write renames of the source keys, if anything.
+    #[must_use]
+    pub fn respelled_notice(&self) -> Option<String> {
+        let (old, new) = self.respelled.iter().next()?;
+        Some(format!(
+            "{} source key(s) by their site, as {old} → {new}",
+            self.respelled.len()
+        ))
     }
 
     pub fn edit(&mut self, edit: Edit) {
@@ -404,6 +424,7 @@ impl Manifest {
             return Ok(changed);
         }
         crate::migrate::rename_all(&mut doc, &crate::migrate::EDITIONS)?;
+        respell(&mut doc, &spelled_now);
         for edit in &self.edits {
             apply(&mut doc, edit)?;
         }
@@ -431,7 +452,7 @@ impl Manifest {
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
-        self.renamed = parsed.renamed;
+        (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
         self.stale = false;
         Ok(Vec::new())
     }
@@ -548,6 +569,7 @@ struct Parsed {
     settings: crate::settings::Settings,
     stale_defaults: Vec<crate::settings::Stale>,
     renamed: Vec<crate::migrate::Renamed>,
+    respelled: BTreeMap<String, String>,
 }
 
 /// The keys a table lists, each parsed.
@@ -603,6 +625,7 @@ fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut current = doc.clone();
     let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
+    let respelled = respell(&mut current, &spelled_now);
     let doc = &current;
     let lyrics = doc
         .get("defaults")
@@ -691,7 +714,73 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         settings: crate::settings::read(doc)?,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,
+        respelled,
     })
+}
+
+/// How a key written as `text` is written now, where that differs: an
+/// extractor's name for a site [`crate::source::SITES`] names, as
+/// `youtube:<id>`, is its domain's.
+fn spelled_now(text: &str) -> Option<String> {
+    let key = SourceKey::parse(text).ok().filter(|k| k.site().is_some())?;
+    Some(key.to_string()).filter(|now| now != text)
+}
+
+/// Write each source key in `doc` as `now` spells it, where it does:
+/// in each song's, album's and removed song's keys, and its records.
+/// Returns each key written otherwise, by the key written.
+fn respell(
+    doc: &mut DocumentMut,
+    now: &dyn Fn(&str) -> Option<String>,
+) -> BTreeMap<String, String> {
+    let mut written = BTreeMap::new();
+    let string = |v: &mut Value, written: &mut BTreeMap<String, String>| {
+        let Some((old, new)) = v
+            .as_str()
+            .and_then(|old| Some((old.to_string(), now(old)?)))
+        else {
+            return;
+        };
+        let decor = v.decor().clone();
+        *v = Value::from(new.as_str());
+        *v.decor_mut() = decor;
+        written.insert(old, new);
+    };
+    for list in ["song", "album", "removed"] {
+        let Some(tables) = doc.get_mut(list).and_then(Item::as_array_of_tables_mut) else {
+            continue;
+        };
+        for t in tables.iter_mut() {
+            if let Some(keys) = t.get_mut("sources").and_then(Item::as_array_mut) {
+                keys.iter_mut().for_each(|v| string(v, &mut written));
+            }
+            for name in ["source", "album", "audio", "cover", "lyrics"] {
+                if let Some(v) = t.get_mut(name).and_then(Item::as_value_mut) {
+                    string(v, &mut written);
+                }
+            }
+            let Some(held) = t.get_mut("held").and_then(Item::as_table_like_mut) else {
+                continue;
+            };
+            let entries: Vec<(String, Item)> = held
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
+            if entries.iter().all(|(k, _)| now(k).is_none()) {
+                continue;
+            }
+            held.clear();
+            for (k, v) in entries {
+                if let Some(new) = now(&k) {
+                    held.insert(&new, v);
+                    written.insert(k, new);
+                } else {
+                    held.insert(&k, v);
+                }
+            }
+        }
+    }
+    written
 }
 
 fn tables<'a>(doc: &'a DocumentMut, key: &str) -> impl Iterator<Item = &'a Table> {
@@ -927,6 +1016,10 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         }
         Edit::UpdateDefaults => {
             crate::settings::update(doc, &crate::settings::EDITIONS);
+        }
+        Edit::Respell { from, to } => {
+            let (from, to) = (from.to_string(), to.to_string());
+            respell(doc, &|k| (k == from).then(|| to.clone()));
         }
         Edit::Hold { key, held } => {
             let text = key.to_string();

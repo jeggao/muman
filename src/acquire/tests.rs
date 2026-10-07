@@ -221,7 +221,7 @@ fn missing_sources_are_fetched_again_without_the_archive() {
     std::fs::create_dir_all(&s.dirs.home).unwrap();
     std::fs::write(
         s.dirs.manifest(),
-        "version = 1\n[[song]]\nsources = [\"youtube:vid00000009\", \"manual:gone.flac\"]\n",
+        "version = 1\n[[song]]\nsources = [\"youtube.com:vid00000009\", \"manual:gone.flac\"]\n",
     )
     .unwrap();
     let manifest = Manifest::load(&s.dirs.home).unwrap();
@@ -316,9 +316,9 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
     std::fs::write(
         s.dirs.manifest(),
         "version = 1\n\
-         [[song]]\nsources = [\"youtube:vid00000009\"]\n\
-         held.\"youtube:vid00000009\" = { audio = \"0123456789abcdef\", format = \"399+251\" }\n\
-         [[song]]\nsources = [\"youtube:vid00000010\"]\n\
+         [[song]]\nsources = [\"youtube.com:vid00000009\"]\n\
+         held.\"youtube.com:vid00000009\" = { audio = \"0123456789abcdef\", format = \"399+251\" }\n\
+         [[song]]\nsources = [\"youtube.com:vid00000010\"]\n\
          [[song]]\nsources = [\"archiveorg:item0001\"]\n\
          held.\"archiveorg:item0001\" = { audio = \"0123456789abcdef\", format = \"1\", \
          url = \"https://archive.example/details/item0001\" }\n",

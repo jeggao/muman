@@ -126,7 +126,7 @@ fn renders(fake: &Fake) -> usize {
         .count()
 }
 
-const TWO: &str = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n";
+const TWO: &str = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n";
 
 #[test]
 fn a_sync_writes_every_song_once_and_then_nothing() {
@@ -171,7 +171,7 @@ fn a_changed_tag_rewrites_only_its_song() {
     h.fetched("bbbbbbbbbbb");
     h.songs(TWO);
     h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { genre = \"Ambient\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { genre = \"Ambient\" }\n");
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let (_, text) = h.run(&fake, Options::default());
     assert_eq!(
@@ -194,7 +194,7 @@ fn a_dropped_song_is_removed_with_its_folders_and_nothing_else() {
     h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
     let mine = h.lib("Chan/notes.txt");
     std::fs::write(&mine, "mine").unwrap();
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(ok, "{text}");
     assert!(
@@ -220,7 +220,7 @@ fn a_song_that_fails_keeps_its_last_file() {
     h.songs(TWO);
     h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
     std::fs::remove_file(gone).unwrap();
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { title = \"New\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"New\" }\n");
     let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(!ok);
     assert!(text.contains("Failed:"), "{text}");
@@ -243,7 +243,7 @@ fn a_lost_state_deletes_nothing_it_did_not_write() {
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     std::fs::write(&old, "old").unwrap();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let (ok, _) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(ok && old.exists());
 }
@@ -253,7 +253,7 @@ fn a_dry_run_writes_nothing_and_says_why() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     let unused = h.fetched("ccccccccccc");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (_, text) = h.run(
         &fake,
@@ -265,7 +265,7 @@ fn a_dry_run_writes_nothing_and_says_why() {
     assert_eq!(renders(&fake), 0);
     assert!(!h.lib("Chan").exists());
     assert!(text.contains("(new)"), "{text}");
-    assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
+    assert!(text.contains("audio   youtube.com:aaaaaaaaaaa"), "{text}");
     assert!(text.contains("TITLE"), "{text}");
     let shown = crate::ui::plain(&text)
         .lines()
@@ -281,7 +281,7 @@ fn a_dry_run_writes_nothing_and_says_why() {
 fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     let before = State::load(&h.dirs.home).unwrap();
     h.fetched("bbbbbbbbbbb");
@@ -322,7 +322,7 @@ fn a_dry_run_says_what_a_sync_would_remove_keep_or_write_again() {
     )
     .unwrap();
     std::fs::remove_file(h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.lrc")).unwrap();
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let dry = Options {
         dry_run: true,
         ..Options::default()
@@ -365,7 +365,7 @@ fn the_release_wins_over_its_video_by_measure_and_lends_it_lyrics() {
     let h = home();
     h.fetched("rrrrrrrrrrr");
     h.fetched("vvvvvvvvvvv");
-    h.songs("[[song]]\nsources = [\"youtube:vvvvvvvvvvv\", \"youtube:rrrrrrrrrrr\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:vvvvvvvvvvv\", \"youtube.com:rrrrrrrrrrr\"]\n");
     let song = levels(6000, 7);
     let mut video = levels(1000, 99);
     video.extend(&song);
@@ -443,7 +443,7 @@ fn manual_files_of_one_name_keep_paths_of_their_own() {
 fn tags_read_another_way_are_read_again_without_measuring() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     assert!(ok, "{text}");
     let key = SourceKey::youtube("aaaaaaaaaaa");
@@ -468,7 +468,7 @@ fn tags_read_another_way_are_read_again_without_measuring() {
 fn a_dry_run_keeps_what_it_measured() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let dry = Options {
         dry_run: true,
         ..Options::default()
@@ -492,7 +492,7 @@ fn a_file_changed_since_it_was_written_is_left_alone() {
     let b = h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
     std::fs::write(&a, "retagged by hand").unwrap();
     std::fs::write(&b, "retagged by hand").unwrap();
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (_, text) = h.run(&fake, Options::default());
     assert_eq!(renders(&fake), 0, "{text}");
@@ -578,7 +578,7 @@ fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     let rel = PathBuf::from("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
     let mut state = State::load(&h.dirs.home).unwrap();
@@ -605,12 +605,12 @@ fn an_empty_or_unfinished_file_is_written_again() {
 fn a_source_that_cannot_be_read_waits_until_it_changes() {
     let h = home();
     let path = h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
     let (ok, text) = h.run(&broken, Options::default());
     assert!(!ok);
     assert!(
-        text.contains("Could not read youtube:aaaaaaaaaaa"),
+        text.contains("Could not read youtube.com:aaaaaaaaaaa"),
         "{text}"
     );
     let broken = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", "not json");
@@ -634,7 +634,7 @@ fn a_source_that_cannot_be_read_waits_until_it_changes() {
 fn a_fetch_that_failed_before_does_not_keep_a_file_now_there_from_being_read() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let mut state = State::default();
     state.record_failure(
         &SourceKey::youtube("aaaaaaaaaaa"),
@@ -653,7 +653,7 @@ fn a_fetch_that_failed_before_does_not_keep_a_file_now_there_from_being_read() {
 #[test]
 fn a_song_whose_chosen_source_is_gone_is_written_from_another() {
     let h = home();
-    let both = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n";
+    let both = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n";
     let paths = [h.fetched("aaaaaaaaaaa"), h.fetched("bbbbbbbbbbb")];
     h.songs(both);
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
@@ -693,7 +693,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
     h.fetched("bbbbbbbbbbb");
     h.songs(TWO);
     h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
     let mut run = Run::begin(&h.dirs.home).unwrap();
     let mut out = Vec::new();
     reconcile(
@@ -721,13 +721,13 @@ fn a_run_keeps_what_it_replaces_and_removes() {
 fn a_new_template_moves_songs_without_writing_them_again() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     let before = renders(&fake);
     h.songs(
         "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
-         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
@@ -743,7 +743,7 @@ fn a_new_template_moves_songs_without_writing_them_again() {
 fn a_new_template_moves_a_file_changed_since_it_was_written() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     let before = renders(&fake);
@@ -754,7 +754,7 @@ fn a_new_template_moves_a_file_changed_since_it_was_written() {
     .unwrap();
     h.songs(
         "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
-         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
@@ -768,7 +768,7 @@ fn a_new_template_moves_a_file_changed_since_it_was_written() {
 fn a_changed_file_whose_song_changes_and_moves_waits_for_force() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     let before = renders(&fake);
@@ -776,7 +776,7 @@ fn a_changed_file_whose_song_changes_and_moves_waits_for_force() {
     std::fs::write(&old, "replay gain").unwrap();
     h.songs(
         "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
-         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n",
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n",
     );
     let (_, text) = h.run(&fake, Options::default());
     assert_eq!(renders(&fake), before, "{text}");
@@ -847,8 +847,8 @@ fn a_song_that_loses_its_told_apart_name_moves_to_the_plain_one() {
     h.fetched("aaaaaaaaaaa");
     h.fetched("bbbbbbbbbbb");
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    let same = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
-                [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n";
+    let same = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
+                [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n";
     h.songs(same);
     assert!(h.run(&fake, Options::default()).0);
     let before = files(&h.lib(""));
@@ -868,9 +868,9 @@ fn a_rename_in_case_alone_leaves_no_old_file_behind() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     let fake = infos(&["aaaaaaaaaaa"]);
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"lantern\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"lantern\" }\n");
     assert!(h.run(&fake, Options::default()).0);
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"Lantern\" }\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { title = \"Lantern\" }\n");
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
     let chan = h.lib("Chan");
@@ -888,12 +888,12 @@ fn a_rename_in_case_alone_leaves_no_old_file_behind() {
 fn status_says_a_song_would_move() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     h.songs(
         "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
-         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let (_, text) = h.run(
         &fake,
@@ -1128,7 +1128,7 @@ fn a_template_takes_the_first_artist_and_every_artist_as_a_list() {
     h.fetched("aaaaaaaaaaa");
     h.songs(
         "[library]\ntemplate = \"{{ artist }}/{{ artists | length }}/{{ title }}\"\n\
-         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
          [song.tags]\nartist = [\"Ada Quill\", \"Marlo Venn\"]\n",
     );
     let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
@@ -1230,8 +1230,8 @@ fn disturb(h: &Home, d: Disturbance) -> Vec<&'static str> {
 
 fn changed(c: Change) -> String {
     let template = "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n";
-    let tagged = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags.genre = \"Folk\"\n\
-                  [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n";
+    let tagged = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.genre = \"Folk\"\n\
+                  [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n";
     match c {
         Change::Nothing => TWO.to_string(),
         Change::Template => format!("{template}{TWO}"),
@@ -1278,7 +1278,7 @@ fn no_disturbance_and_no_change_leaves_a_second_copy_or_a_missing_one() {
 fn a_source_whose_file_times_change_writes_nothing_again() {
     let h = home();
     let source = h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     let song = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
@@ -1335,7 +1335,7 @@ fn unhashed(mut state: State) -> State {
 fn sources_measured_before_hashing_are_hashed_and_write_nothing_again() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
-    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     assert!(h.run(&fake, Options::default()).0);
     let now = State::load(&h.dirs.home).unwrap();
@@ -1394,7 +1394,7 @@ fn held_line(h: &Home, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-const ONE: &str = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n";
+const ONE: &str = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
 const FORMAT: &str = r#"{"id": "aaaaaaaaaaa", "title": "Title aaaaaaaaaaa", "uploader": "Chan",
     "format_id": "399+251", "formats": [
         {"format_id": "251", "filesize": 3456789, "acodec": "opus", "vcodec": "none"},
@@ -1407,14 +1407,14 @@ fn a_sync_records_what_each_source_held_and_the_format_served() {
     h.songs(ONE);
     let fake = Fake::default().info("aaaaaaaaaaa", FORMAT);
     assert!(h.run(&fake, Options::default()).0);
-    let line = held_line(&h, "youtube:aaaaaaaaaaa").expect("recorded");
+    let line = held_line(&h, "youtube.com:aaaaaaaaaaa").expect("recorded");
     assert!(
         line.contains("format = \"399+251\", size = 3456789 }"),
         "{line}"
     );
     let (_, text) = h.run(&fake, Options::default());
     assert_eq!(
-        held_line(&h, "youtube:aaaaaaaaaaa").unwrap(),
+        held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(),
         line,
         "{text}"
     );
@@ -1429,20 +1429,20 @@ fn a_source_fetched_again_with_other_audio_leaves_its_song_as_built_until_accept
     assert!(h.run(&fake, Options::default()).0);
     let song = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
     let built = std::fs::read(&song).unwrap();
-    let recorded = held_line(&h, "youtube:aaaaaaaaaaa").unwrap();
+    let recorded = held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap();
     std::fs::write(&source, "re-encoded by the site").unwrap();
 
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
     let plain = crate::ui::plain(&text);
     assert!(
-        plain.contains("youtube:aaaaaaaaaaa has changed since its song was built: other audio"),
+        plain.contains("youtube.com:aaaaaaaaaaa has changed since its song was built: other audio"),
         "{plain}"
     );
     assert!(plain.contains("left as built; `sync --accept`"), "{plain}");
     assert!(!plain.contains("Updated"), "{plain}");
     assert_eq!(std::fs::read(&song).unwrap(), built);
-    assert_eq!(held_line(&h, "youtube:aaaaaaaaaaa").unwrap(), recorded);
+    assert_eq!(held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(), recorded);
     let (_, again) = h.run(&fake, Options::default());
     assert!(
         again.contains("left as built"),
@@ -1462,7 +1462,7 @@ fn a_source_fetched_again_with_other_audio_leaves_its_song_as_built_until_accept
         "{text}"
     );
     assert!(text.contains("Updated"), "{text}");
-    assert_ne!(held_line(&h, "youtube:aaaaaaaaaaa").unwrap(), recorded);
+    assert_ne!(held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(), recorded);
     let (_, after) = h.run(&fake, Options::default());
     assert!(!after.contains("has changed"), "{after}");
 }
@@ -1472,7 +1472,7 @@ fn a_song_with_no_file_left_is_built_from_what_its_source_holds_and_says_so() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.songs(&format!(
-        "{ONE}held.\"youtube:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\" }}\n"
+        "{ONE}held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\" }}\n"
     ));
     let fake = infos(&["aaaaaaaaaaa"]);
     let (ok, text) = h.run(&fake, Options::default());
@@ -1484,7 +1484,7 @@ fn a_song_with_no_file_left_is_built_from_what_its_source_holds_and_says_so() {
             .exists()
     );
     assert!(
-        held_line(&h, "youtube:aaaaaaaaaaa")
+        held_line(&h, "youtube.com:aaaaaaaaaaa")
             .unwrap()
             .contains("0123456789abcdef"),
         "kept until accepted"
@@ -1528,7 +1528,7 @@ fn a_source_fetched_again_with_other_tags_alone_leaves_its_song_as_built() {
         )
     };
     assert!(h.run(&titled("Lantern Weather"), Options::default()).0);
-    let line = held_line(&h, "youtube:aaaaaaaaaaa").unwrap();
+    let line = held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap();
     for part in ["audio = ", "cover = ", "lyrics = ", "tags = "] {
         assert!(line.contains(part), "{line}");
     }
@@ -1540,11 +1540,11 @@ fn a_source_fetched_again_with_other_tags_alone_leaves_its_song_as_built() {
     assert!(ok, "{text}");
     let plain = crate::ui::plain(&text);
     assert!(
-        plain.contains("youtube:aaaaaaaaaaa has changed since its song was built: other tags;"),
+        plain.contains("youtube.com:aaaaaaaaaaa has changed since its song was built: other tags;"),
         "only the tags: {plain}"
     );
     assert_eq!(std::fs::read(&song).unwrap(), built, "{plain}");
-    assert_eq!(held_line(&h, "youtube:aaaaaaaaaaa").unwrap(), line);
+    assert_eq!(held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(), line);
 
     let (ok, text) = h.run(
         &titled("Paper Comets"),
@@ -1558,7 +1558,7 @@ fn a_source_fetched_again_with_other_tags_alone_leaves_its_song_as_built() {
         h.lib("Chan/Paper Comets/Paper Comets.opus").exists(),
         "{text}"
     );
-    assert_ne!(held_line(&h, "youtube:aaaaaaaaaaa").unwrap(), line);
+    assert_ne!(held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(), line);
 }
 
 #[test]
@@ -1597,7 +1597,7 @@ fn status_shows_each_song_a_query_matches_and_nothing_of_the_others() {
         text.contains("Title aaaaaaaaaaa.opus (up to date)"),
         "{text}"
     );
-    assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
+    assert!(text.contains("audio   youtube.com:aaaaaaaaaaa"), "{text}");
     assert!(!text.contains("bbbbbbbbbbb"), "{text}");
     assert!(!text.contains("Unused"), "files are no song: {text}");
     assert!(text.ends_with("Songs: 1 up to date\n"), "{text}");
@@ -1633,4 +1633,131 @@ fn status_refuses_a_field_no_song_has() {
         format!("{e:#}").contains("No song has a field `colour`"),
         "{e:#}"
     );
+}
+
+/// `state` as a muman that keyed sources by yt-dlp's extractor wrote
+/// it, each of `sites` named `<extractor>:<id>`, its sizes kept by the
+/// plans so named.
+fn by_extractor(mut state: State, sites: &[(&str, &str)]) -> String {
+    let tools = "ffmpeg version fake";
+    let old = |k: &SourceKey| {
+        let site = k.site()?;
+        let (_, extractor) = sites.iter().find(|(s, _)| *s == site)?;
+        SourceKey::parse(&format!("{extractor}:{}", k.id()?)).ok()
+    };
+    let mut kept = BTreeMap::new();
+    for w in state.outputs.values() {
+        let plan = w.plan.as_ref().unwrap();
+        if let Some(m) = state.sizes.get(&limit::plan_key(tools, plan)) {
+            kept.insert(limit::plan_key(tools, &plan.respelled(&old)), m.clone());
+        }
+    }
+    state.sizes = kept;
+    state.version = 1;
+    let mut text = serde_json::to_string_pretty(&state).unwrap();
+    for (site, extractor) in sites {
+        text = text.replace(&format!("\"{site}:"), &format!("\"{extractor}:"));
+    }
+    text
+}
+
+/// A fetched FLAC whose audio takes 30 MB.
+fn big_fetched() -> Fake {
+    Fake {
+        packets: vec![("aaaaaaaaaaa".into(), 30_000_000)],
+        ..infos(&["aaaaaaaaaaa"])
+    }
+    .probe(".mkv", crate::testing::FLAC)
+}
+
+#[test]
+fn a_home_keyed_by_extractor_is_keyed_by_site_and_writes_no_song_again() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs(&format!("[library]\nmax_size = \"100 kB\"\n{ONE}"));
+    let (ok, text) = h.run(&big_fetched(), Options::default());
+    assert!(
+        ok && text.contains("1 song(s) below their best format"),
+        "{text}"
+    );
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(!state.sizes.is_empty(), "a real size is kept");
+    let (sizes, outputs) = (state.sizes.clone(), state.outputs.clone());
+    let recorded = held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap();
+    let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    std::fs::write(h.dirs.manifest(), songs.replace("youtube.com:", "youtube:")).unwrap();
+    let old = by_extractor(state, &[("youtube.com", "youtube")]);
+    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+
+    let fake = big_fetched();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&fake), 0, "{text}");
+    assert!(
+        !text.contains("Added") && !text.contains("Updated"),
+        "{text}"
+    );
+    let after = State::load(&h.dirs.home).unwrap();
+    assert_eq!(after.version, crate::state::VERSION);
+    assert_eq!(after.outputs, outputs);
+    assert_eq!(after.sizes, sizes, "kept under the names plans have now");
+    let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    assert!(!songs.contains("\"youtube:"), "{songs}");
+    assert_eq!(held_line(&h, "youtube.com:aaaaaaaaaaa").unwrap(), recorded);
+}
+
+#[test]
+fn a_source_of_a_site_no_table_names_is_renamed_by_its_page() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"tunes.example:aaaaaaaaaaa\"]\n");
+    let fake = || {
+        Fake::default().info(
+            "aaaaaaaaaaa",
+            r#"{"id": "aaaaaaaaaaa", "title": "Title aaaaaaaaaaa", "uploader": "Chan",
+                "format_id": "mp3", "webpage_url": "https://www.tunes.example/t/aaaaaaaaaaa"}"#,
+        )
+    };
+    assert!(h.run(&fake(), Options::default()).0);
+    let recorded = held_line(&h, "tunes.example:aaaaaaaaaaa").unwrap();
+    assert!(
+        recorded.contains("url = \"https://www.tunes.example/t/aaaaaaaaaaa\""),
+        "{recorded}"
+    );
+    let outputs = State::load(&h.dirs.home).unwrap().outputs;
+    let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    std::fs::write(
+        h.dirs.manifest(),
+        songs.replace("tunes.example:", "funkwhale:"),
+    )
+    .unwrap();
+    let old = by_extractor(
+        State::load(&h.dirs.home).unwrap(),
+        &[("tunes.example", "funkwhale")],
+    );
+    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+
+    let dry = h.status(&fake(), &[], false);
+    assert!(dry.contains("Songs: 1 up to date"), "{dry}");
+    let fake = fake();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(
+            "Renamed by the site it came from: funkwhale:aaaaaaaaaaa → tunes.example:aaaaaaaaaaa"
+        ),
+        "{text}"
+    );
+    assert_eq!(renders(&fake), 0, "{text}");
+    assert!(
+        !text.contains("Added") && !text.contains("Updated"),
+        "{text}"
+    );
+    assert_eq!(State::load(&h.dirs.home).unwrap().outputs, outputs);
+    assert_eq!(
+        held_line(&h, "tunes.example:aaaaaaaaaaa").unwrap(),
+        recorded
+    );
+    let (_, again) = h.run(&infos(&[]), Options::default());
+    assert!(!again.contains("Renamed"), "{again}");
 }

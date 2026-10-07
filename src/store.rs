@@ -53,7 +53,7 @@ fn kind_of(path: &Path) -> Option<Kind> {
 }
 
 /// A kind of record a lookup keeps in the store, by the scheme of its
-/// keys, `<extractor>:<id>`.
+/// keys, `<provider>:<id>`.
 #[derive(Debug, Clone, Copy)]
 pub struct Kept {
     pub extractor: &'static str,
@@ -259,7 +259,7 @@ impl Store {
     #[must_use]
     pub fn has(&self, key: &SourceKey) -> bool {
         match key {
-            SourceKey::Remote { extractor, id } => match kept(extractor) {
+            SourceKey::Remote { site, id } => match kept(site) {
                 Some(kind) => self.kept_file(kind, id).is_some(),
                 None => self.fetched.contains_key(id),
             },
@@ -270,8 +270,8 @@ impl Store {
     #[must_use]
     pub fn locate(&self, key: &SourceKey) -> Option<Located> {
         match key {
-            SourceKey::Remote { extractor, id } if kept(extractor).is_some() => {
-                let kind = kept(extractor)?;
+            SourceKey::Remote { site, id } if kept(site).is_some() => {
+                let kind = kept(site)?;
                 Some(Located {
                     key: key.clone(),
                     path: self.kept_file(kind, id)?.clone(),
@@ -323,10 +323,10 @@ impl Store {
     ) -> Result<Vec<PathBuf>> {
         let mut gone = Vec::new();
         for key in keys.iter().filter(|k| !listed.contains(*k)) {
-            let SourceKey::Remote { extractor, id } = key else {
+            let SourceKey::Remote { site, id } = key else {
                 continue;
             };
-            if kept(extractor).is_some() {
+            if kept(site).is_some() {
                 continue;
             }
             for file in self.fetched_files(id)? {

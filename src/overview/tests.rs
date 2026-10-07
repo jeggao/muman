@@ -20,7 +20,7 @@ fn home() -> (tempfile::TempDir, Dirs) {
 fn songs(dirs: &Dirs, ids: &[&str]) {
     let body: String = ids
         .iter()
-        .map(|id| format!("[[song]]\nsources = [\"youtube:{id}\"]\n"))
+        .map(|id| format!("[[song]]\nsources = [\"youtube.com:{id}\"]\n"))
         .collect::<Vec<_>>()
         .concat();
     std::fs::write(dirs.manifest(), format!("version = 1\n{body}")).unwrap();
@@ -79,7 +79,7 @@ fn sources_are_counted_by_where_they_come_from_and_kept_ones_can_lie_unused() {
     }
     std::fs::write(
         dirs.manifest(),
-        "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"lrclib:7\"]\n",
+        "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"lrclib:7\"]\n",
     )
     .unwrap();
     let text = info_text(&dirs, true);
@@ -104,7 +104,7 @@ fn what_a_sync_would_do_is_counted_and_named_when_verbose() {
     let text = info_text(&dirs, true);
     assert_eq!(value(&text, "To remove"), "1");
     assert_eq!(value(&text, "Sources missing"), "1");
-    assert!(text.contains("youtube:ccccccccccc"), "{text}");
+    assert!(text.contains("youtube.com:ccccccccccc"), "{text}");
     assert_eq!(value(&text, "Sources to measure"), "1");
     assert!(text.contains("Chan/Title aaaaaaaaaaa"), "{text}");
 }

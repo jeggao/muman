@@ -182,10 +182,15 @@ impl fmt::Display for Renamed {
     }
 }
 
-/// What to say of `renamed` to a command that only read the file.
+/// What to say of `renamed`, and of `also` renamed besides, to a command
+/// that only read the file.
 #[must_use]
-pub fn notices(renamed: &[Renamed]) -> Vec<String> {
-    let mut lines: Vec<String> = renamed.iter().map(ToString::to_string).collect();
+pub fn notices(renamed: &[Renamed], also: Option<String>) -> Vec<String> {
+    let mut lines: Vec<String> = renamed
+        .iter()
+        .map(ToString::to_string)
+        .chain(also)
+        .collect();
     if !lines.is_empty() {
         lines.push("The next `sync` writes the song list with these names".into());
     }

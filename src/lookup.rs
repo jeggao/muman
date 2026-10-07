@@ -725,7 +725,7 @@ pub fn run<R: Runner, W: Write>(
                 }
                 Ok(Hit::Lyrics(record)) => {
                     let key = SourceKey::Remote {
-                        extractor: LRCLIB.to_string(),
+                        site: LRCLIB.to_string(),
                         id: record.id.to_string(),
                     };
                     if !store.has(&key) {
@@ -748,7 +748,7 @@ pub fn run<R: Runner, W: Write>(
                 }
                 Ok(Hit::Tags(record)) => {
                     let key = SourceKey::Remote {
-                        extractor: MUSICBRAINZ.to_string(),
+                        site: MUSICBRAINZ.to_string(),
                         id: record.id.clone(),
                     };
                     if !store.has(&key) {
@@ -775,7 +775,7 @@ pub fn run<R: Runner, W: Write>(
                 }
                 Ok(Hit::Cover(cover)) => {
                     let key = SourceKey::Remote {
-                        extractor: COVERART.to_string(),
+                        site: COVERART.to_string(),
                         id: cover.id.clone(),
                     };
                     let folder = dirs.kept(COVERART);
@@ -945,13 +945,13 @@ pub fn refetch(
     };
     let mut failed = Vec::new();
     for key in manifest.keys() {
-        let SourceKey::Remote { extractor, id } = &key else {
+        let SourceKey::Remote { site, id } = &key else {
             continue;
         };
         if store.has(&key) {
             continue;
         }
-        let kept = match extractor.as_str() {
+        let kept = match site.as_str() {
             LRCLIB => id
                 .parse::<u64>()
                 .context("not a record ID")

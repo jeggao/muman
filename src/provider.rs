@@ -3,7 +3,7 @@
 //! looks another up, as `[providers.*]` and `[[trigger]]` in the song
 //! list set them over the defaults.
 //!
-//! `youtube` and `youtube-music` share one key scheme, `youtube:<id>`: a
+//! `youtube` and `youtube-music` share one site, `youtube.com:<id>`: a
 //! video is a release when its info names a track or its channel is an
 //! artist's " - Topic", read with its tags, so no key changes when a
 //! video is told apart. A video not measured yet is neither.
@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::facts::Facts;
-use crate::source::SourceKey;
+use crate::source::{SourceKey, YOUTUBE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Provider {
@@ -87,14 +87,12 @@ impl Provider {
     pub fn of(key: &SourceKey, facts: Option<&Facts>) -> Option<Self> {
         match key {
             SourceKey::Manual(_) => Some(Self::Manual),
-            SourceKey::Remote { extractor, .. } => match extractor.as_str() {
-                "youtube" => Some(if facts?.release {
-                    Self::YouTubeMusic
-                } else {
-                    Self::YouTube
-                }),
-                other => crate::store::kept(other).map(|k| k.provider),
-            },
+            SourceKey::Remote { site, .. } if site == YOUTUBE => Some(if facts?.release {
+                Self::YouTubeMusic
+            } else {
+                Self::YouTube
+            }),
+            SourceKey::Remote { site, .. } => crate::store::kept(site).map(|k| k.provider),
         }
     }
 
@@ -177,7 +175,7 @@ const ACOUSTID_URL: &str = "https://api.acoustid.org";
 /// [`Provider::kept`] says.
 #[must_use]
 pub fn is_kept(key: &SourceKey) -> bool {
-    matches!(key, SourceKey::Remote { extractor, .. } if crate::store::kept(extractor).is_some())
+    matches!(key, SourceKey::Remote { site, .. } if crate::store::kept(site).is_some())
 }
 
 /// One provider's settings.
