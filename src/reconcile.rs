@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use crate::align;
 use crate::atomic::Lock;
@@ -131,6 +131,27 @@ pub fn measure<R: Runner, W: Write>(
             for ((_, located), result) in chunk.iter().zip(measured) {
                 match result {
                     Ok(f) => {
+                        if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
+                            crate::ui::warning(
+                                out,
+                                &format!(
+                                    "{} holds {held:.0} s of audio where its header says \
+                                     {said:.0} s: cut off, as a copy or a download stopped",
+                                    located.key
+                                ),
+                            )?;
+                        }
+                        if f.audio.as_ref().is_some_and(|a| a.quality.is_none()) {
+                            crate::ui::warning(
+                                out,
+                                &format!(
+                                    "{}: no part of its audio measured holds sound to judge, \
+                                     as silence or a stream that will not decode; it ranks \
+                                     after every source whose audio does",
+                                    located.key
+                                ),
+                            )?;
+                        }
                         state.facts.insert(located.key.clone(), f);
                         state.clear_failure(&located.key);
                     }
@@ -223,16 +244,21 @@ fn compare<R: Runner, W: Write>(
     if due.is_empty() {
         return Ok(false);
     }
-    crate::ui::info(
-        out,
-        &format!("Comparing {} pair(s) of recordings", due.len().div_ceil(2)),
-    )?;
     let keys: Vec<SourceKey> = due
         .iter()
         .flat_map(|(a, b, _)| [a.clone(), b.clone()])
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    // The progress counts recordings decoded, each once for all its pairs.
+    crate::ui::info(
+        out,
+        &format!(
+            "Comparing {} pair(s) of {} recording(s)",
+            due.len().div_ceil(2),
+            keys.len()
+        ),
+    )?;
     let step = progress::step("Comparing", Some(keys.len() as u64));
     let envelopes: HashMap<SourceKey, Vec<f64>> = keys
         .iter()
@@ -338,7 +364,9 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 
 /// Give every song a path of its own: a later song resolving to one an
 /// earlier song took is named with its audio's ID too, and numbered
-/// when that is taken as well, as two manual files of one name are.
+/// when that is taken as well, as two manual files of one name are. The
+/// names are the song list's alone, never how the library came to be,
+/// so one list builds one library.
 fn separate(planned: &mut [(usize, Resolved)], naming: &Naming, max_name: usize) {
     // By stem, not path: a FLAC song and an Opus song of one name would
     // write the same `.lrc`.
@@ -456,46 +484,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if let Some(run) = run.as_deref_mut() {
         run.outputs_before(&state.outputs);
     }
-    let moving = Moving {
-        library: &dirs.library,
-        home,
-        dry_run: opts.dry_run,
-    };
-    let moved = relocate(&planned, &mut state, &moving, run.as_deref_mut(), out)?;
-    if !moved.is_empty() && !opts.dry_run {
-        // The files are already at their new paths; a failure before the
-        // end of the run must not leave the state naming the old ones.
-        state.save(home)?;
-        if let Some(run) = run.as_deref_mut() {
-            run.checkpoint(home)?;
-        }
-    }
-    let old = state.outputs.clone();
-    let wanted: BTreeSet<PathBuf> = planned.iter().map(|(_, r)| path_of(r)).collect();
-    let current = |r: &Resolved| current(&dirs.library, &old, r);
-    let previous =
-        |n: usize, r: &Resolved| previous(&old, &manifest.songs[n].sources, &path_of(r), &wanted);
-    let changed_since = |path: &Path| changed_since_written(&dirs.library, &old, path);
-    let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
-    let (due, guarded): (Vec<&PlannedSong>, Vec<&PlannedSong>) = planned
-        .iter()
-        .filter(|(_, r)| opts.force || current(r).is_none())
-        .partition(|(n, r)| opts.force || !previous(*n, r).is_some_and(changed_since));
-    let (due, unowned): (Vec<&PlannedSong>, Vec<&PlannedSong>) = due
-        .into_iter()
-        .partition(|(_, r)| opts.force || foreign(r).is_empty());
+    let files = files_of(&planned, &manifest, &state.outputs);
+    let decided = decide(&planned, &files, &state.outputs, &dirs.library, opts.force);
 
     if opts.dry_run {
         let shown = Shown {
             manifest: &manifest,
             planned: &planned,
-            guarded: &guarded,
-            unowned: &unowned,
-            old: &old,
+            decided: &decided,
+            files: &files,
+            old: &state.outputs,
             state: &state,
             failed: &failed,
-            moved: &moved,
-            wanted: &wanted,
         };
         if let Some(mut report) = report {
             out.flush()?;
@@ -512,12 +512,67 @@ pub fn reconcile_into<R: Runner, W: Write>(
         drop(lock);
         return Ok(ok);
     }
+    let mut moves: Vec<(usize, PathBuf, PathBuf)> = planned
+        .iter()
+        .zip(&decided)
+        .filter_map(|((_, r), d)| match d {
+            Doing::Move { from, order, .. } => Some((*order, from.clone(), path_of(r))),
+            _ => None,
+        })
+        .collect();
+    moves.sort_by_key(|(order, ..)| *order);
+    let moves = moves.into_iter().map(|(_, from, to)| (from, to)).collect();
+    let moving = Moving {
+        library: &dirs.library,
+        home,
+    };
+    let arrived = relocate(moves, &mut state, &moving, run.as_deref_mut(), out)?;
+    if !arrived.is_empty() {
+        // The files are already at their new paths; a failure before the
+        // end of the run must not leave the state naming the old ones.
+        state.save(home)?;
+        if let Some(run) = run.as_deref_mut() {
+            run.checkpoint(home)?;
+        }
+    }
+    // A song moved is kept, or has its tags written, at its new path; one
+    // whose move failed is written there.
+    let doing: Vec<Doing> = planned
+        .iter()
+        .zip(decided)
+        .map(|((_, r), d)| match d {
+            Doing::Move { retag, .. } if arrived.contains(&path_of(r)) => {
+                if retag {
+                    Doing::Retag
+                } else {
+                    Doing::Keep
+                }
+            }
+            Doing::Move { .. }
+                if changed_since_written(&dirs.library, &state.outputs, &path_of(r)) =>
+            {
+                Doing::Guard { file: path_of(r) }
+            }
+            Doing::Move { .. } => Doing::Write,
+            d => d,
+        })
+        .collect();
+    let old = state.outputs.clone();
+    let due: Vec<(&PlannedSong, bool)> = planned
+        .iter()
+        .zip(&doing)
+        .filter_map(|(song, d)| match d {
+            Doing::Write => Some((song, false)),
+            Doing::Retag => Some((song, true)),
+            _ => None,
+        })
+        .collect();
     // Owned before written, and no longer vouched for: a crash between the
     // two must leave neither a file no run would delete nor a rewritten
     // one that looks changed by someone else.
     let mut pending = (!due.is_empty()).then(|| state.clone());
     if let Some(pending) = pending.as_mut() {
-        for (n, r) in &due {
+        for ((n, r), _) in &due {
             let path = path_of(r);
             let lyrics = Some(path.with_extension("lrc"));
             pending.outputs.insert(
@@ -532,8 +587,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
         pending.save(home)?;
     }
+    let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
     if let Some(run) = run.as_deref_mut() {
-        for (_, r) in &due {
+        for ((_, r), _) in &due {
             if let Some(written) = old.get(&path_of(r)) {
                 run.keep(&dirs.library, &path_of(r))?;
                 if let Some(lyrics) = &written.lyrics {
@@ -554,32 +610,42 @@ pub fn reconcile_into<R: Runner, W: Write>(
     }
 
     let mut outputs: BTreeMap<PathBuf, Written> = BTreeMap::new();
-    for (n, r) in &planned {
-        let kept = match current(r).filter(|_| !opts.force) {
-            Some(written) => Some((path_of(r), written)),
-            None => guarded
-                .iter()
-                .any(|(m, _)| m == n)
-                .then(|| previous(*n, r))
-                .flatten()
-                .map(|p| (p.to_path_buf(), &old[p])),
+    let mut unowned = Vec::new();
+    for ((n, r), d) in planned.iter().zip(&doing) {
+        let kept = match d {
+            Doing::Keep => Some(path_of(r)),
+            Doing::Guard { file } => {
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "Left alone, changed since muman wrote it: {} (`sync --force` writes it again)",
+                        crate::relpath::show(file)
+                    ),
+                )?;
+                Some(file.clone())
+            }
+            Doing::Unowned => {
+                unowned.push(path_of(r));
+                None
+            }
+            _ => None,
         };
-        if let Some((path, written)) = kept {
+        if let Some(written) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
             outputs.insert(
-                path,
+                written.1,
                 Written {
                     sources: manifest.songs[*n].sources.clone(),
-                    ..written.clone()
+                    ..written.0
                 },
             );
         }
     }
-    for (_, r) in unowned.iter().take(NAMED) {
+    for path in unowned.iter().take(NAMED) {
         crate::ui::warning(
             out,
             &format!(
                 "Left alone, not muman's: {} (`sync --force` writes over it, and `undo` puts it back)",
-                crate::relpath::show(&path_of(r))
+                crate::relpath::show(path)
             ),
         )?;
     }
@@ -592,26 +658,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
             ),
         )?;
     }
-    for (n, r) in &guarded {
-        let path = previous(*n, r).map_or_else(|| path_of(r), Path::to_path_buf);
-        crate::ui::warning(
-            out,
-            &format!(
-                "Left alone, changed since muman wrote it: {} (`sync --force` writes it again)",
-                crate::relpath::show(&path)
-            ),
-        )?;
-    }
     let mut changed = false;
     let mut written = 0_usize;
     let mut learned = Vec::new();
     let every = opts.checkpoint.unwrap_or(CHECKPOINT);
     let mut kept_at = Instant::now();
     let writing = progress::step("Writing", Some(due.len() as u64));
-    let render_one = |(n, r): &&PlannedSong| {
+    let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
         if let Some((folder, made)) = placed.get(n) {
             return render::place(folder, made, &dirs.library);
+        }
+        if *retag {
+            let path = path_of(r);
+            let lyrics = old.get(&path).and_then(|w| w.lyrics.as_deref());
+            return render::retag(&dirs.library, &path, lyrics, &r.plan);
         }
         render::render(
             runner,
@@ -625,7 +686,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         )
     };
     parallel::chunked(&due, parallel::builds(), render_one, |chunk, rendered| {
-        for ((n, r), result) in chunk.iter().zip(rendered) {
+        for (((n, r), _), result) in chunk.iter().zip(rendered) {
             let song = &manifest.songs[*n];
             let name = name_of(song, Some(r), &state.facts);
             match result {
@@ -720,7 +781,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &mut keep,
         out,
     )?;
-    let up_to_date = planned.len() - due.len() - guarded.len() - unowned.len();
+    let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
     }
@@ -759,6 +820,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         None => state.sizes.clear(),
     }
     state.failures.retain(|k, _| listed.contains(k));
+    state.listed = listed
+        .iter()
+        .filter(|k| matches!(k, SourceKey::Manual(_)))
+        .cloned()
+        .collect();
     state
         .alignments
         .retain(|a| kept.contains(&a.a) && kept.contains(&a.b));
@@ -940,92 +1006,228 @@ pub(crate) fn changed_since_written(
         .is_some_and(|(was, now)| *was != now)
 }
 
-/// The file `old` lists as a song's: the one at its `path`, else one
-/// made from any of its `sources` at a path no song takes now, as a song
-/// whose path changed leaves behind.
-fn previous<'a>(
-    old: &'a BTreeMap<PathBuf, Written>,
-    sources: &[SourceKey],
-    path: &Path,
-    wanted: &BTreeSet<PathBuf>,
-) -> Option<&'a Path> {
-    match old.get_key_value(path) {
-        Some((p, _)) => Some(p),
-        None => old
-            .iter()
-            .find(|(p, w)| !wanted.contains(*p) && w.sources.iter().any(|k| sources.contains(k)))
-            .map(|(p, _)| p.as_path()),
+/// Which file the state records is each song's, one file to one song:
+/// the one made from the most of the song's own sources, those no other
+/// song lists, as the state recorded them when it was written. So a song
+/// whose path, plan or sources changed still has its file, and every
+/// decision about it, to keep, move, guard, write or delete, is made of
+/// that file; a song no file was made from has none. Ties go to the song
+/// listed first, then to the path that sorts first.
+pub(crate) fn files_of(
+    planned: &[PlannedSong],
+    manifest: &Manifest,
+    old: &BTreeMap<PathBuf, Written>,
+) -> BTreeMap<usize, PathBuf> {
+    let own = |keys: &[SourceKey]| -> BTreeSet<SourceKey> {
+        keys.iter()
+            .filter(|k| !crate::provider::is_kept(k))
+            .cloned()
+            .collect()
+    };
+    let mut scored: Vec<(usize, usize, &PathBuf)> = Vec::new();
+    for (n, _) in planned {
+        let mine = own(&manifest.songs[*n].sources);
+        for (path, written) in old {
+            let shared = own(&written.sources).intersection(&mine).count();
+            if shared > 0 {
+                scored.push((shared, *n, path));
+            }
+        }
     }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+    let mut files = BTreeMap::new();
+    let mut taken: BTreeSet<&PathBuf> = BTreeSet::new();
+    for (_, n, path) in scored {
+        if !files.contains_key(&n) && taken.insert(path) {
+            files.insert(n, path.clone());
+        }
+    }
+    files
 }
 
-/// The moves relocating makes: each song's file from where an output of
-/// the same plan lies to the song's path, when nobody holds that path.
-fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(PathBuf, PathBuf)> {
+/// Whether two plans make the same audio, cover and lyrics: a file of
+/// one is a file of the other with its tags written again.
+fn media_equal(a: &Plan, b: &Plan) -> bool {
+    a.version == b.version
+        && a.format == b.format
+        && a.audio == b.audio
+        && a.cover == b.cover
+        && a.lyrics == b.lyrics
+}
+
+/// What a sync does with one song, decided for every song before any is
+/// done, so a sync does what `status` says it would.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Doing {
+    /// Its file is as it would be written.
+    Keep,
+    /// Its file moves to the song's path, its tags written again when
+    /// they changed; moves are made by `order`, as a move into a path
+    /// another move leaves runs after it.
+    Move {
+        from: PathBuf,
+        retag: bool,
+        order: usize,
+    },
+    /// Only its tags changed: they are written into its file.
+    Retag,
+    /// Written from its sources.
+    Write,
+    /// Left alone: its file, changed since muman wrote it.
+    Guard { file: PathBuf },
+    /// Left alone: a file not muman's is at its path.
+    Unowned,
+}
+
+/// What a sync does with each of `planned`, by its file in `files`:
+///
+/// | The song's file | Done |
+/// |---|---|
+/// | At its path, as it would be written | Kept |
+/// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
+/// | Changed since written, and not merely moving | Left alone until `--force` |
+/// | Any, where a changed file is at its path | Left alone until `--force` |
+/// | None, and a file not muman's at its path | Left alone until `--force` |
+/// | At its path, of the same media | Its tags written |
+/// | Otherwise, or `force` | Written |
+///
+/// A path is free when no file of anyone's is there, folded as NTFS and
+/// APFS fold names, or only a song's file that moves away first, as when
+/// two songs of one name become two of two names and the one told apart
+/// takes the plain name. Moves are listed in the order they can be made;
+/// two songs swapping paths are written instead. A changed file moves
+/// only when its tags need no writing, so nothing a tagger wrote is
+/// written over.
+fn decide(
+    planned: &[PlannedSong],
+    files: &BTreeMap<usize, PathBuf>,
+    old: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+    force: bool,
+) -> Vec<Doing> {
     use crate::relpath::folded;
-    // Folded, since on NTFS and APFS a path differing only in case is the
-    // same file: moving onto it would overwrite another song.
-    let wanted: BTreeSet<String> = planned.iter().map(|(_, r)| folded(&path_of(r))).collect();
-    // Folded once: a new template moves every song, each asking of all.
-    let outputs: Vec<(&PathBuf, &Written, String)> = state
-        .outputs
+    if force {
+        return vec![Doing::Write; planned.len()];
+    }
+    let mut decided: Vec<Option<Doing>> = planned
         .iter()
-        .map(|(p, w)| (p, w, folded(p)))
+        .map(|(_, r)| current(library, old, r).map(|_| Doing::Keep))
         .collect();
-    let mut held: BTreeSet<String> = outputs.iter().map(|(_, _, f)| f.clone()).collect();
-    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut moving: BTreeSet<&PathBuf> = BTreeSet::new();
-    for (_, r) in planned {
-        let to = path_of(r);
-        if state
-            .outputs
-            .get(&to)
-            .is_some_and(|w| w.plan.as_ref() == Some(&r.plan))
-        {
+    // Each song that could move, by what it would take and leave.
+    let mut moving: Vec<(usize, PathBuf, PathBuf, bool)> = Vec::new();
+    for (i, (n, r)) in planned.iter().enumerate() {
+        if decided[i].is_some() {
             continue;
         }
-        // Only onto a path nobody holds: no other output of muman's, and
-        // no file of anyone's, which the render would guard.
-        if held.contains(&folded(&to)) || library.join(&to).exists() {
+        let path = path_of(r);
+        let Some(from) = files.get(n).filter(|f| **f != path) else {
             continue;
-        }
-        let from = outputs.iter().find(|(p, w, f)| {
-            w.plan.as_ref() == Some(&r.plan)
-                && !wanted.contains(f)
-                && !moving.contains(p)
-                && library.join(p).metadata().is_ok_and(|m| m.len() > 0)
-        });
-        if let Some((from, _, _)) = from {
-            held.insert(folded(&to));
-            moving.insert(from);
-            moves.push(((*from).clone(), to));
+        };
+        let was = &old[from];
+        let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
+            && was.lyrics.as_ref().is_none_or(|l| library.join(l).exists());
+        let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
+        let retag = was.plan.as_ref() != Some(&r.plan);
+        let changed = changed_since_written(library, old, from);
+        if same_media && !(changed && retag) && folded(from) != folded(&path) {
+            moving.push((i, from.clone(), path, retag));
         }
     }
-    moves
+    // Made in rounds: a move lands only where nothing is, or where a move
+    // already chosen leaves, so the order chosen is an order they can run.
+    let lyrics_of = |p: &Path| p.with_extension("lrc");
+    let recorded: BTreeSet<&Path> = old
+        .iter()
+        .flat_map(|(p, w)| std::iter::once(p.as_path()).chain(w.lyrics.as_deref()))
+        .collect();
+    let mut held: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
+    let free = |held: &BTreeSet<String>, p: &Path| {
+        !held.contains(&folded(p)) && (recorded.contains(p) || !library.join(p).exists())
+    };
+    let mut order = 0;
+    loop {
+        let before = moving.len();
+        moving.retain(|(i, from, to, retag)| {
+            let lyrics = old[from].lyrics.as_deref();
+            if !free(&held, to) || lyrics.is_some() && !free(&held, &lyrics_of(to)) {
+                return true;
+            }
+            held.remove(&folded(from));
+            held.insert(folded(to));
+            if let Some(l) = lyrics {
+                held.remove(&folded(l));
+                held.insert(folded(&lyrics_of(to)));
+            }
+            decided[*i] = Some(Doing::Move {
+                from: from.clone(),
+                retag: *retag,
+                order,
+            });
+            order += 1;
+            false
+        });
+        if moving.len() == before {
+            break;
+        }
+    }
+    planned
+        .iter()
+        .zip(decided)
+        .map(|((n, r), d)| {
+            if let Some(d) = d {
+                return d;
+            }
+            let path = path_of(r);
+            let file = files.get(n);
+            let was = file.and_then(|f| old.get(f));
+            let present = file.is_some_and(|f| {
+                library.join(f).metadata().is_ok_and(|m| m.len() > 0)
+                    && was
+                        .and_then(|w| w.lyrics.as_ref())
+                        .is_none_or(|l| library.join(l).exists())
+            });
+            let same_media = present
+                && was
+                    .and_then(|w| w.plan.as_ref())
+                    .is_some_and(|p| media_equal(p, &r.plan));
+            if let Some(file) = file.filter(|f| changed_since_written(library, old, f)) {
+                return Doing::Guard { file: file.clone() };
+            }
+            // Whosever it is, a changed file at the path is not written over.
+            if changed_since_written(library, old, &path) {
+                return Doing::Guard { file: path };
+            }
+            if !foreign(library, old, &path).is_empty() {
+                return Doing::Unowned;
+            }
+            if file == Some(&path) && same_media {
+                return Doing::Retag;
+            }
+            Doing::Write
+        })
+        .collect()
 }
 
-/// Where relocating moves files, and whether it only says so.
+/// The library relocating moves files in, and the home its run is kept in.
 struct Moving<'a> {
     library: &'a Path,
     home: &'a Path,
-    dry_run: bool,
 }
 
-/// Move each song whose plan is unchanged but whose path is not, as a
-/// new `[library]` template makes it, rather than render it again; only
-/// a file muman wrote is moved, and only to a path no other song takes.
-/// A file changed since it was written moves too, still changed: written
-/// again at the new path, it would be left at the old one, a second copy.
-/// Each move is recorded in `run` before it is made. A dry run says what
-/// would move.
+/// Make the `moves` [`decide`] chose, each a song's file to its new path,
+/// as a new `[library]` template makes them, rather than render them
+/// again. A file changed since it was written moves too, still changed:
+/// written again at the new path, it would be left at the old one, a
+/// second copy. Each move is recorded in `run` before it is made.
+/// Returns the paths moved to.
 fn relocate<W: Write>(
-    planned: &[PlannedSong],
+    moves: Vec<(PathBuf, PathBuf)>,
     state: &mut State,
     how: &Moving<'_>,
     mut run: Option<&mut Run>,
     out: &mut W,
 ) -> Result<BTreeSet<PathBuf>> {
-    let (library, dry_run) = (how.library, how.dry_run);
-    let moves = moves_of(planned, state, library);
+    let library = how.library;
     let lyrics_of = |from: &PathBuf, to: &Path| {
         let written = &state.outputs[from];
         written
@@ -1033,7 +1235,7 @@ fn relocate<W: Write>(
             .clone()
             .zip(written.lyrics.as_ref().map(|_| to.with_extension("lrc")))
     };
-    if let Some(run) = run.as_deref_mut().filter(|_| !dry_run && !moves.is_empty()) {
+    if let Some(run) = run.as_deref_mut().filter(|_| !moves.is_empty()) {
         for (from, to) in &moves {
             run.moving(from, to);
             if let Some((a, b)) = lyrics_of(from, to) {
@@ -1047,51 +1249,40 @@ fn relocate<W: Write>(
     for (from, to) in moves {
         let mut written = state.outputs[&from].clone();
         let lyrics = written.lyrics.as_ref().map(|_| to.with_extension("lrc"));
-        if dry_run {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Would move: {} → {}",
-                    crate::relpath::show(&from),
-                    crate::relpath::show(&to)
-                ),
-            )?;
-        } else {
-            let result = move_file(library, &from, &to).and_then(|()| {
-                match (&written.lyrics, &lyrics) {
-                    // A song whose lyrics cannot follow goes back whole.
-                    (Some(a), Some(b)) => move_file(library, a, b).inspect_err(|_| {
-                        let _ = move_file(library, &to, &from);
-                    }),
-                    _ => Ok(()),
-                }
-            });
-            if let Err(e) = result {
-                if let Some(run) = run.as_deref_mut() {
-                    run.not_moved(&from, &to);
-                    if let (Some(a), Some(b)) = (&written.lyrics, &lyrics) {
-                        run.not_moved(a, b);
-                    }
-                }
-                crate::ui::warning(
-                    out,
-                    &format!(
-                        "Could not move {}: {e:#}; it is written again",
-                        crate::relpath::show(&from)
-                    ),
-                )?;
-                continue;
+        let result = move_file(library, &from, &to).and_then(|()| {
+            match (&written.lyrics, &lyrics) {
+                // A song whose lyrics cannot follow goes back whole.
+                (Some(a), Some(b)) => move_file(library, a, b).inspect_err(|_| {
+                    let _ = move_file(library, &to, &from);
+                }),
+                _ => Ok(()),
             }
-            crate::ui::info(
+        });
+        if let Err(e) = result {
+            if let Some(run) = run.as_deref_mut() {
+                run.not_moved(&from, &to);
+                if let (Some(a), Some(b)) = (&written.lyrics, &lyrics) {
+                    run.not_moved(a, b);
+                }
+            }
+            crate::ui::warning(
                 out,
                 &format!(
-                    "Moved: {} → {}",
-                    crate::relpath::show(&from),
-                    crate::relpath::show(&to)
+                    "Could not move {}: {e:#}; it is written again",
+                    crate::relpath::show(&from)
                 ),
             )?;
-            left.push(from.clone());
+            continue;
         }
+        crate::ui::info(
+            out,
+            &format!(
+                "Moved: {} → {}",
+                crate::relpath::show(&from),
+                crate::relpath::show(&to)
+            ),
+        )?;
+        left.push(from.clone());
         written.lyrics = lyrics;
         state.outputs.remove(&from);
         done.insert(to.clone());
@@ -1119,6 +1310,9 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
         let temp = PathBuf::from(temp);
         step(&from, &temp)?;
         step(&temp, &to)
+    } else if to.exists() {
+        // Left by a move before it that failed.
+        Err(anyhow!("{} is taken", to.display()))
     } else {
         step(&from, &to)
     }
@@ -1177,6 +1371,23 @@ pub(crate) fn plan<W: Write>(
                 let name = name_of(song, None, &state.facts);
                 crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
             }
+        }
+    }
+    if let Some(max) = manifest.settings.library.max_path {
+        let over = planned
+            .iter()
+            .filter(|(_, r)| library.join(path_of(r)).to_string_lossy().chars().count() > max)
+            .count();
+        if over > 0 {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "{over} song(s) take more than [library] max_path = {max} characters even \
+                     with their names cut short: the library folder, {}, takes {} itself",
+                    library.display(),
+                    library.to_string_lossy().chars().count()
+                ),
+            )?;
         }
     }
     separate(
@@ -1436,27 +1647,55 @@ fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
 struct Shown<'a> {
     manifest: &'a Manifest,
     planned: &'a [(usize, Resolved)],
-    /// Songs due but left alone, changed since written.
-    guarded: &'a [&'a PlannedSong],
-    /// Songs due but left alone, a file of someone else's at their path.
-    unowned: &'a [&'a PlannedSong],
+    /// What a sync would do with each of `planned`.
+    decided: &'a [Doing],
+    /// Each song's file, as [`files_of`] finds it.
+    files: &'a BTreeMap<usize, PathBuf>,
     old: &'a BTreeMap<PathBuf, Written>,
     state: &'a State,
     failed: &'a BTreeSet<SourceKey>,
-    moved: &'a BTreeSet<PathBuf>,
-    /// Every song's path.
-    wanted: &'a BTreeSet<PathBuf>,
 }
 
-impl Shown<'_> {
-    /// Where a song's file is after a sync: its path, or for a song left
-    /// alone, the file it already has.
-    fn path_after(&self, n: usize, r: &Resolved, left_alone: bool) -> PathBuf {
-        let sources = &self.manifest.songs[n].sources;
-        left_alone
-            .then(|| previous(self.old, sources, &path_of(r), self.wanted))
-            .flatten()
-            .map_or_else(|| path_of(r), Path::to_path_buf)
+/// The state as `decided`'s moves would leave it, which pruning is judged
+/// by, saying each move.
+fn would_move<W: Write>(
+    planned: &[PlannedSong],
+    decided: &[Doing],
+    old: &BTreeMap<PathBuf, Written>,
+    out: &mut W,
+) -> Result<BTreeMap<PathBuf, Written>> {
+    let mut moved = old.clone();
+    for ((_, r), d) in planned.iter().zip(decided) {
+        if let Doing::Move { from, .. } = d
+            && let Some(written) = moved.remove(from)
+        {
+            crate::ui::info(
+                out,
+                &format!(
+                    "Would move: {} → {}",
+                    crate::relpath::show(from),
+                    crate::relpath::show(&path_of(r))
+                ),
+            )?;
+            moved.insert(path_of(r), written);
+        }
+    }
+    Ok(moved)
+}
+
+/// What `status` says a sync does with a song, its file made by `before`.
+fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> String {
+    match d {
+        Doing::Keep => "up to date".to_string(),
+        Doing::Move { retag: false, .. } => "moved".to_string(),
+        Doing::Move { retag: true, .. } => "moved, changes: tags".to_string(),
+        Doing::Guard { .. } => "left alone, changed since muman wrote it".to_string(),
+        Doing::Unowned => "left alone, not muman's".to_string(),
+        Doing::Retag | Doing::Write => match before {
+            Some(p) if p == plan => "written again".to_string(),
+            Some(p) => format!("changes: {}", changes(p, plan).join(", ")),
+            None => "new".to_string(),
+        },
     }
 }
 
@@ -1473,36 +1712,26 @@ fn status<W: Write>(
     let Shown {
         manifest,
         planned,
-        guarded,
-        unowned,
+        decided,
+        files,
         old,
         state,
         failed,
-        moved,
-        ..
     } = shown;
     let library = &dirs.library;
+    let moved = would_move(planned, decided, old, out)?;
     let mut after: BTreeMap<PathBuf, Written> = BTreeMap::new();
-    for (n, r) in *planned {
+    for ((n, r), d) in planned.iter().zip(*decided) {
         let song = &manifest.songs[*n];
-        let left_alone = guarded.iter().any(|(m, _)| m == n);
-        let path = shown.path_after(*n, r, left_alone);
-        let same_plan = old.get(&path).and_then(|w| w.plan.as_ref()) == Some(&r.plan);
-        let verdict = if moved.contains(&path) && same_plan {
-            "moved".to_string()
-        } else if current(library, old, r).is_some() {
-            "up to date".to_string()
-        } else if left_alone {
-            "left alone, changed since muman wrote it".to_string()
-        } else if unowned.iter().any(|(m, _)| m == n) {
-            "left alone, not muman's".to_string()
-        } else {
-            match old.get(&path).and_then(|w| w.plan.as_ref()) {
-                Some(p) if p == &r.plan => "written again".to_string(),
-                Some(p) => format!("changes: {}", changes(p, &r.plan).join(", ")),
-                None => "new".to_string(),
-            }
-        };
+        let mut path = path_of(r);
+        let before = moved
+            .get(&path)
+            .or_else(|| files.get(n).and_then(|f| old.get(f)))
+            .and_then(|w| w.plan.as_ref());
+        if let Doing::Guard { file } = d {
+            path.clone_from(file);
+        }
+        let verdict = verdict(d, before, &r.plan);
         writeln!(
             out,
             "{}",
@@ -1514,21 +1743,21 @@ fn status<W: Write>(
             crate::ui::Style::Path.paint(&crate::relpath::show(&path))
         )?;
         show_why(r, out)?;
-        let written = if left_alone {
-            old.get(&path).cloned()
-        } else {
-            Some(Written {
+        let written = match d {
+            Doing::Keep | Doing::Guard { .. } => moved.get(&path).cloned(),
+            Doing::Unowned => None,
+            _ => Some(Written {
                 sources: song.sources.clone(),
                 lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
                 plan: Some(r.plan.clone()),
                 stamp: None,
-            })
+            }),
         };
         if let Some(written) = written {
             after.insert(path, written);
         }
     }
-    for (path, fate) in prune_plan(library, old, &after, failed, false) {
+    for (path, fate) in prune_plan(library, &moved, &after, failed, false) {
         match fate {
             Pruned::Removed(_) => crate::ui::warning(
                 out,
@@ -1548,17 +1777,19 @@ fn status<W: Write>(
     known.extend(manifest.removed_keys());
     let (unlisted, settling) = store.unlisted(&known, SystemTime::now(), settling);
     for key in unlisted {
-        crate::ui::info(
-            out,
-            &format!("Not listed yet, added by the next sync: {key}"),
-        )?;
+        let line = if state.listed.contains(&key) {
+            format!("Taken out of the song list by hand, kept out by the next sync: {key}")
+        } else {
+            format!("Not listed yet, added by the next sync: {key}")
+        };
+        crate::ui::info(out, &line)?;
     }
     for path in settling {
         crate::ui::info(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                SourceKey::Manual(path)
+                SourceKey::Manual(path.into())
             ),
         )?;
     }
@@ -1570,6 +1801,42 @@ fn status<W: Write>(
         .filter(|p| !p.starts_with(dirs.manual()))
     {
         crate::ui::info(out, &format!("Unused: {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// What every run leaves, whatever came before it: each file the state
+/// records is there, no song has two, and nothing is half written.
+#[cfg(test)]
+pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
+    let state = State::load(&dirs.home).map_err(|e| format!("{e:#}"))?;
+    let mut owners: BTreeMap<&SourceKey, &PathBuf> = BTreeMap::new();
+    for (path, written) in &state.outputs {
+        for file in std::iter::once(path).chain(&written.lyrics) {
+            if !dirs.library.join(file).exists() {
+                return Err(format!("{file:?} is recorded, not there"));
+            }
+        }
+        for key in written
+            .sources
+            .iter()
+            .filter(|k| !crate::provider::is_kept(k))
+        {
+            if let Some(other) = owners.insert(key, path) {
+                return Err(format!("{key} made both {other:?} and {path:?}"));
+            }
+        }
+    }
+    let mut left = vec![dirs.library.clone()];
+    while let Some(dir) = left.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                left.push(path);
+            } else if path.to_string_lossy().ends_with(".part") {
+                return Err(format!("{} is left half written", path.display()));
+            }
+        }
     }
     Ok(())
 }

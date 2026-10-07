@@ -84,14 +84,28 @@ const CANDIDATES: usize = 8;
 const COMMON: usize = 32;
 
 /// A source's print, kept in the state file as base64 of its words.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Print(pub Vec<u32>);
+/// Never empty: audio of 2 s or less makes no word, and a print of none
+/// matches nothing and is refused by AcoustID, so such audio has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Print(Vec<u32>);
 
 impl Print {
-    /// Raw little-endian words, as `-fp_format raw` writes them.
+    /// The print of `words`, none for no words.
     #[must_use]
-    pub fn from_raw(bytes: &[u8]) -> Self {
-        Self(
+    pub fn new(words: Vec<u32>) -> Option<Self> {
+        (!words.is_empty()).then_some(Self(words))
+    }
+
+    #[must_use]
+    pub fn words(&self) -> &[u32] {
+        &self.0
+    }
+
+    /// Raw little-endian words, as `-fp_format raw` writes them; none
+    /// for no words.
+    #[must_use]
+    pub fn from_raw(bytes: &[u8]) -> Option<Self> {
+        Self::new(
             bytes
                 .as_chunks::<4>()
                 .0
@@ -124,14 +138,16 @@ impl Serialize for Print {
     }
 }
 
-impl<'de> Deserialize<'de> for Print {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(d)?;
-        STANDARD
-            .decode(text)
-            .map(|b| Self::from_raw(&b))
-            .map_err(serde::de::Error::custom)
-    }
+/// A stored print, none for one of no words, which a muman before prints
+/// were never empty stored for short audio.
+pub fn read_stored<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Print>, D::Error> {
+    let Some(text) = Option::<String>::deserialize(d)? else {
+        return Ok(None);
+    };
+    STANDARD
+        .decode(text)
+        .map(|b| Print::from_raw(&b))
+        .map_err(serde::de::Error::custom)
 }
 
 /// The rate Chromaprint analyzes audio at.
@@ -160,7 +176,7 @@ pub fn output(input: usize, index: u32) -> Vec<OsString> {
 
 /// The print of the audio [`output`] wrote to `pcm`, read in chunks so
 /// an hour-long video never sits in memory whole.
-pub fn compute(pcm: &std::path::Path) -> anyhow::Result<Print> {
+pub fn compute(pcm: &std::path::Path) -> anyhow::Result<Vec<u32>> {
     use std::io::Read;
 
     let config = rusty_chromaprint::Configuration::preset_test2();
@@ -189,7 +205,7 @@ pub fn compute(pcm: &std::path::Path) -> anyhow::Result<Print> {
         printer.consume(&samples);
     }
     printer.finish();
-    Ok(Print(printer.fingerprint().to_vec()))
+    Ok(printer.fingerprint().to_vec())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -413,6 +429,22 @@ mod tests {
     }
 
     #[test]
+    fn a_print_stored_empty_reads_as_none() {
+        #[derive(Deserialize)]
+        struct Stored {
+            #[serde(deserialize_with = "read_stored")]
+            print: Option<Print>,
+        }
+        let stored: Stored = serde_json::from_str(r#"{"print": ""}"#).unwrap();
+        assert_eq!(stored.print, None);
+        assert_eq!(Print::new(Vec::new()), None);
+        let p = Print::new(words(10, 7)).unwrap();
+        let text = serde_json::to_string(&p).unwrap();
+        let stored: Stored = serde_json::from_str(&format!(r#"{{"print": {text}}}"#)).unwrap();
+        assert_eq!(stored.print, Some(p));
+    }
+
+    #[test]
     fn a_noisy_offset_copy_is_the_same_song() {
         let song = words(1500, 1);
         let mut video = words(150, 9);
@@ -488,15 +520,8 @@ mod tests {
     }
 
     #[test]
-    fn prints_round_trip_through_json() {
-        let p = Print(words(10, 7));
-        let json = serde_json::to_string(&p).unwrap();
-        assert_eq!(serde_json::from_str::<Print>(&json).unwrap(), p);
-    }
-
-    #[test]
     fn an_empty_print_compares_to_nothing() {
-        assert!(compare(&Print::default(), &Print(words(5, 1))).is_none());
+        assert!(compare(&Print(Vec::new()), &Print(words(5, 1))).is_none());
     }
 
     /// Chirping noise as 16-bit PCM at Chromaprint's rate.
@@ -523,7 +548,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.pcm");
         std::fs::write(&path, bytes).unwrap();
-        compute(&path).unwrap()
+        Print(compute(&path).unwrap())
     }
 
     #[test]

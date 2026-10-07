@@ -80,7 +80,14 @@ impl Setup {
             &mut Vec::new(),
         )
         .unwrap();
-        (ok, String::from_utf8(out).unwrap())
+        let text = String::from_utf8(out).unwrap();
+        let dirs = self.job(args).dirs;
+        if dirs.home.join(crate::dirs::STATE).exists()
+            && let Err(e) = crate::reconcile::invariant(&dirs)
+        {
+            panic!("{args:?}: {e}: {text}");
+        }
+        (ok, text)
     }
 
     fn songs(&self) -> Vec<Vec<SourceKey>> {
@@ -371,6 +378,54 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
     assert!(ok, "{text}");
     assert_eq!(s.songs().len(), 2);
     assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 2, "{text}");
+}
+
+#[test]
+fn a_song_taken_out_of_the_list_by_hand_stays_out_until_restored() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let (head, rest) = listed.split_once("\n[[song]]\n").unwrap();
+    let kept: Vec<&str> = rest
+        .split("\n[[song]]\n")
+        .filter(|b| !b.contains("manual:a.flac"))
+        .collect();
+    std::fs::write(
+        &songs,
+        format!("{head}\n[[song]]\n{}", kept.join("\n[[song]]\n")),
+    )
+    .unwrap();
+
+    let text = s.listed(&["status"]);
+    assert!(
+        text.contains("kept out by the next sync: manual:a.flac"),
+        "{text}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Taken out of the song list by hand, so kept out"),
+        "{text}"
+    );
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("b.flac".into())]],
+        "{text}"
+    );
+    let lib = s.dir.path().join("lib");
+    let files = |dir: &Path| walk_all(dir).unwrap().len();
+    assert_eq!(files(&lib), 1, "the other song alone: {text}");
+    let (_, again) = s.run(&flacs(), &["sync"]);
+    assert_eq!(s.songs().len(), 1, "{again}");
+
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
 }
 
 #[test]

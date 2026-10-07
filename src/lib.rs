@@ -759,12 +759,31 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
     let (mut ready, settling) = store.unlisted(&known, SystemTime::now(), wait);
+    let unlisted: Vec<SourceKey> = ready
+        .iter()
+        .filter(|k| state.listed.contains(k))
+        .cloned()
+        .collect();
+    ready.retain(|k| !unlisted.contains(k));
+    for key in unlisted {
+        ui::info(
+            out,
+            &format!(
+                "Taken out of the song list by hand, so kept out: {key}; \
+                 `muman restore` lists it again"
+            ),
+        )?;
+        manifest.edit(Edit::Tombstone {
+            note: format!("{key}, taken out of the song list by hand"),
+            key,
+        });
+    }
     for path in settling {
         ui::info(
             out,
             &format!(
                 "Still being copied in, left for a later run: {}",
-                SourceKey::Manual(path)
+                SourceKey::Manual(path.into())
             ),
         )?;
     }
@@ -870,8 +889,11 @@ fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
     };
     Ok(files
         .into_iter()
-        .filter_map(|f| f.strip_prefix(dirs.manual()).ok().map(relpath::normalized))
-        .map(SourceKey::Manual)
+        .filter_map(|f| {
+            Some(SourceKey::Manual(
+                f.strip_prefix(dirs.manual()).ok()?.into(),
+            ))
+        })
         .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
         .collect())
 }

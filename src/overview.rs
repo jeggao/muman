@@ -318,7 +318,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         new.add(&key.to_string());
     }
     for path in settling {
-        new.add(&SourceKey::Manual(path).to_string());
+        new.add(&SourceKey::Manual(path.into()).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let mut unused = Group::default();

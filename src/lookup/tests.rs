@@ -130,7 +130,7 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
     let key = SourceKey::parse("manual:a.flac").unwrap();
     let facts = state.facts.get_mut(&key).unwrap();
     facts.duration = Some(240.0);
-    facts.print = printed.then(|| crate::fingerprint::Print(vec![7; 100]));
+    facts.print = printed.then(|| crate::fingerprint::Print::new(vec![7; 100]).unwrap());
     let plan = crate::resolve::Plan {
         version: 1,
         format: crate::resolve::Format::Copy {
@@ -174,10 +174,6 @@ fn a_file_without_names_is_looked_up_by_its_print() {
     assert_eq!(found(&m, &s, &p), [Provider::AcoustId]);
     let (_d, m, s, p) = own(false, &[]);
     assert_eq!(found(&m, &s, &p), [], "no print, no names: nothing to ask");
-    let (_d, m, mut s, p) = own(true, &[]);
-    let key = SourceKey::parse("manual:a.flac").unwrap();
-    s.facts.get_mut(&key).unwrap().print = Some(crate::fingerprint::Print(Vec::new()));
-    assert_eq!(found(&m, &s, &p), [], "an empty print is refused");
 }
 
 #[test]

@@ -718,6 +718,7 @@ pub const SINGLE: &str = "a single, named for its title";
 const FIRST_ARTIST: &str = "the first artist of ";
 
 /// A tag as it will be written, and where it came from.
+#[derive(Clone)]
 struct Slot {
     values: Vec<String>,
     from: String,
@@ -734,55 +735,47 @@ impl Slot {
     }
 }
 
-/// An album artist taken from the artist follows the artist as finally
-/// set, a hand-set one too, and a song with none takes the hand-set one.
-fn follow_artist(written: &mut Vec<(String, Slot)>) {
-    let artist = written
-        .iter()
-        .find(|(k, s)| {
-            k == Field::Artist.vorbis() && (s.from == "song.tags" || s.from == "album.tags")
-        })
-        .and_then(|(_, s)| Some((s.values.first()?.clone(), s.from.clone())));
-    let Some((first, from)) = artist else {
-        return;
-    };
-    let slot = Slot {
-        values: vec![first],
-        from: format!("{FIRST_ARTIST}{from}"),
-        cleaned: Vec::new(),
-    };
-    match written
-        .iter_mut()
-        .find(|(k, _)| k == Field::AlbumArtist.vorbis())
+/// What the tags of a song, from its sources and its song list merged,
+/// lack and say all the same: an album artist, its first artist; and an
+/// album, for a song on none, its title, as a single. Derived once, from
+/// the tags as finally set, each at its field's place, so a hand-set
+/// artist or title names the song as one a source offered would.
+fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
+    fn get(w: &[(String, Slot)], f: Field) -> Option<Slot> {
+        w.iter()
+            .find(|(k, _)| k == f.vorbis())
+            .map(|(_, s)| s.clone())
+    }
+    if get(written, Field::AlbumArtist).is_none()
+        && let (Some(artist), Some(first)) = (get(written, Field::Artist), artists.first())
     {
-        Some((_, s)) if s.from.starts_with(FIRST_ARTIST) => *s = slot,
-        Some(_) => {}
-        None => written.push((Field::AlbumArtist.vorbis().to_string(), slot)),
+        let slot = Slot {
+            values: vec![first.clone()],
+            from: format!("{FIRST_ARTIST}{}", artist.from),
+            cleaned: artist.cleaned,
+        };
+        insert_in_order(written, Field::AlbumArtist, slot);
+    }
+    if get(written, Field::Album).is_none()
+        && let Some(title) = get(written, Field::Title)
+    {
+        let slot = Slot {
+            values: title.values,
+            from: SINGLE.to_string(),
+            cleaned: Vec::new(),
+        };
+        insert_in_order(written, Field::Album, slot);
     }
 }
 
-/// A single is named for its title as finally set, a hand-set one too,
-/// and a song no source names an album of is a single.
-fn name_single(written: &mut Vec<(String, Slot)>) {
-    let Some(title) = written
+/// `slot` put in `written` before the first known field after `field`.
+fn insert_in_order(written: &mut Vec<(String, Slot)>, field: Field, slot: Slot) {
+    let rank = |f: Field| Field::ALL.iter().position(|g| *g == f);
+    let at = written
         .iter()
-        .find(|(k, _)| k == Field::Title.vorbis())
-        .map(|(_, s)| s.values.clone())
-    else {
-        return;
-    };
-    match written.iter_mut().find(|(k, _)| k == Field::Album.vorbis()) {
-        Some((_, album)) if album.from == SINGLE => album.values = title,
-        Some(_) => {}
-        None => written.push((
-            Field::Album.vorbis().to_string(),
-            Slot {
-                values: title,
-                from: SINGLE.to_string(),
-                cleaned: Vec::new(),
-            },
-        )),
-    }
+        .position(|(k, _)| Field::named(k).and_then(rank) > rank(field))
+        .unwrap_or(written.len());
+    written.insert(at, (field.vorbis().to_string(), slot));
 }
 
 /// Vorbis comments in the order written, each a name and its values.
@@ -801,55 +794,30 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
     }
     // The release fields come whole from the source with the best album.
     let release = best_offer(&candidates, Field::Album, None).filter(|c| c.offer.structured);
-    match release {
-        Some(album) => {
-            for field in Field::of(Scope::Release) {
-                if let Some(c) = best_offer(&candidates, field, Some(album.key)) {
-                    fields.insert(field, Slot::of(c));
-                }
-            }
-            if !fields.contains_key(&Field::Disc)
-                && album.cleaned.contains(&clean::DISC_IN_ALBUM)
-                && let Some((_, disc)) = album.raw.values.first().and_then(|a| clean::disc_in(a))
-            {
-                fields.insert(
-                    Field::Disc,
-                    Slot {
-                        values: vec![disc.to_string()],
-                        from: album.key.to_string(),
-                        cleaned: vec![clean::DISC_IN_ALBUM],
-                    },
-                );
+    if let Some(album) = release {
+        for field in Field::of(Scope::Release) {
+            if let Some(c) = best_offer(&candidates, field, Some(album.key)) {
+                fields.insert(field, Slot::of(c));
             }
         }
-        None => {
-            if let Some(title) = fields.get(&Field::Title) {
-                let values = title.values.clone();
-                fields.insert(
-                    Field::Album,
-                    Slot {
-                        values,
-                        from: SINGLE.to_string(),
-                        cleaned: Vec::new(),
-                    },
-                );
-            }
+        if !fields.contains_key(&Field::Disc)
+            && album.cleaned.contains(&clean::DISC_IN_ALBUM)
+            && let Some((_, disc)) = album.raw.values.first().and_then(|a| clean::disc_in(a))
+        {
+            fields.insert(
+                Field::Disc,
+                Slot {
+                    values: vec![disc.to_string()],
+                    from: album.key.to_string(),
+                    cleaned: vec![clean::DISC_IN_ALBUM],
+                },
+            );
         }
     }
     if !fields.contains_key(&Field::Date)
         && let Some(c) = best_offer(&candidates, Field::Date, None)
     {
         fields.insert(Field::Date, Slot::of(c));
-    }
-    if !fields.contains_key(&Field::AlbumArtist)
-        && let Some(artist) = fields.get(&Field::Artist)
-    {
-        let slot = Slot {
-            values: artist.values.iter().take(1).cloned().collect(),
-            from: format!("{FIRST_ARTIST}{}", artist.from),
-            cleaned: artist.cleaned.clone(),
-        };
-        fields.insert(Field::AlbumArtist, slot);
     }
     let mut artists = Vec::new();
     if let Some(artist) = fields.get_mut(&Field::Artist) {
@@ -862,14 +830,13 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
         .filter_map(|f| fields.remove(f).map(|s| (f.vorbis().to_string(), s)))
         .collect();
     set_by_hand(input, &mut written);
-    follow_artist(&mut written);
     // Set by hand, the artists are what the song list says, a list or one.
     if let Some((_, artist)) = written.iter().find(|(k, _)| k == Field::Artist.vorbis())
         && artist.values != [artists.join(", ")]
     {
         artists.clone_from(&artist.values);
     }
-    name_single(&mut written);
+    derive(&mut written, &artists);
     let why = written
         .iter()
         .map(|(k, s)| TagWhy {

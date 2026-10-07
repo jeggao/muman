@@ -32,7 +32,7 @@ pub trait Runner: Sync {
     /// The Chromaprint words of the audio `fingerprint::output` decoded
     /// to `pcm`. Tests answer with chosen prints instead of computing.
     fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
-        crate::fingerprint::compute(pcm).map(|p| p.0)
+        crate::fingerprint::compute(pcm)
     }
 
     /// [`Self::stream`] with `env` added to the program's environment.

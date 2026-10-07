@@ -58,6 +58,8 @@ pub struct Fake {
     pub lrc: Option<String>,
     /// The bytes an audio stream's packets add up to, by path fragment.
     pub packets: Vec<(String, u64)>,
+    /// The whole seconds an audio stream's packets run to, by path fragment.
+    pub held: Vec<(String, u32)>,
     /// Output formats that fail.
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
@@ -192,11 +194,13 @@ impl Fake {
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),
             "flac" => SILENCE_FLAC.to_vec(),
-            // A stream's packets, as many bytes as its length at 128 kbit/s
-            // would take, unless the table says otherwise.
+            // A stream's packets, as many bytes as 200 s at 128 kbit/s, over
+            // ten hours, longer than any header, unless the tables say otherwise.
             "framecrc" => {
                 let bytes = find(&self.packets, &input).copied().unwrap_or(3_200_000);
-                format!("#tb 0: 1/48000\n0, 0, 0, 960, {bytes}, 0x00000000\n").into_bytes()
+                let ticks =
+                    find(&self.held, &input).map_or(1_728_000_000, |s| i64::from(*s) * 48_000);
+                format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
             }
             "ogg" => SILENCE_VORBIS.to_vec(),
             "mp3" => SILENCE_MP3.to_vec(),
@@ -210,7 +214,9 @@ impl Fake {
 
 impl Runner for Fake {
     fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
-        Ok(crate::fingerprint::Print::from_raw(&fs::read(pcm)?).0)
+        Ok(crate::fingerprint::Print::from_raw(&fs::read(pcm)?)
+            .map(|p| p.words().to_vec())
+            .unwrap_or_default())
     }
 
     fn run(&self, cmd: &[OsString]) -> Result<()> {

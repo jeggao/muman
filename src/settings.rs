@@ -677,8 +677,31 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
     {
         bail!("`edition` must be a whole number of {FIRST} or more");
     }
-    if settings.library.block_size.0 == 0 {
+    let library = &settings.library;
+    if library.block_size.0 == 0 {
         bail!("[library] block_size must be above 0");
+    }
+    if library
+        .template
+        .split('/')
+        .all(|part| part.trim().is_empty())
+    {
+        bail!("[library] template names no path for a song");
+    }
+    let least = [
+        (
+            "max_name_bytes",
+            library.max_name_bytes,
+            crate::naming::MIN_NAME_BYTES,
+        ),
+        (
+            "max_folder_bytes",
+            library.max_folder_bytes,
+            crate::naming::MIN_FOLDER_BYTES,
+        ),
+    ];
+    if let Some((key, _, min)) = least.iter().find(|(_, set, min)| set < min) {
+        bail!("[library] {key} must be at least {min}, room for a name and what tells it apart");
     }
     settings.audio.check()?;
     settings.quality.check()?;
@@ -717,6 +740,18 @@ mod tests {
         let e = settings("[audio]\nopus_kpbs = 192\n").unwrap_err();
         assert!(format!("{e:#}").contains("opus_kpbs"), "{e:#}");
         assert!(settings("[library]\nrestrict = \"dos\"\n").is_err());
+    }
+
+    #[test]
+    fn a_name_too_short_to_tell_apart_or_an_empty_template_is_refused() {
+        let e = settings("[library]\nmax_name_bytes = 8\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("max_name_bytes must be at least 40"),
+            "{e:#}"
+        );
+        assert!(settings("[library]\nmax_folder_bytes = 3\n").is_err());
+        assert!(settings("[library]\nmax_name_bytes = 40\nmax_folder_bytes = 16\n").is_ok());
+        assert!(settings("[library]\ntemplate = \" / / \"\n").is_err());
     }
 
     #[test]

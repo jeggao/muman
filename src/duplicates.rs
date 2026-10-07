@@ -48,20 +48,39 @@ pub fn report<W: Write, D: Write>(
     query.check_fields(&views)?;
     let (planned, _) =
         reconcile::plan(&manifest, &state, &dirs.library, None, &mut std::io::sink())?;
-    let mut printed: Vec<(usize, Indexed<'_>)> = planned
-        .iter()
-        .filter_map(|(n, r)| {
-            let print = state.facts.get(&r.plan.audio.key)?.print.as_ref()?;
-            Some((*n, Indexed::new(print)))
-        })
-        .filter(|(_, p)| !p.is_empty())
-        .collect();
-    let unprinted = manifest.songs.len() - printed.len();
-    if unprinted > 0 {
-        crate::ui::info(
-            out,
-            &format!("{unprinted} song(s) have no print to compare yet; a sync measures them"),
-        )?;
+    let (mut printed, mut short, mut still) = (Vec::new(), 0_usize, 0_usize);
+    for (n, r) in &planned {
+        match state.facts.get(&r.plan.audio.key).map(|f| f.print.as_ref()) {
+            Some(Some(print)) => {
+                let indexed = Indexed::new(print);
+                if indexed.is_empty() {
+                    still += 1;
+                } else {
+                    printed.push((*n, indexed));
+                }
+            }
+            Some(None) => short += 1,
+            None => {}
+        }
+    }
+    let unmade = manifest.songs.len() - planned.len();
+    for (count, why) in [
+        (
+            unmade,
+            "cannot be made, so have no print; `status` says why",
+        ),
+        (short, "are too short to print, 2 s or less"),
+        (
+            still,
+            "hold only silence or held notes, which any two songs share",
+        ),
+    ] {
+        if count > 0 {
+            crate::ui::info(
+                out,
+                &format!("{count} song(s) {why}; they are compared with none"),
+            )?;
+        }
     }
     printed.sort_by_key(|(_, p)| p.len());
     let step = crate::progress::step("Comparing prints", Some(printed.len() as u64));

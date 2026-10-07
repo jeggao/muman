@@ -13,7 +13,47 @@ pub enum SourceKey {
     /// What yt-dlp fetched: its extractor, lower-cased, and the ID.
     Remote { extractor: String, id: String },
     /// A file under the manual folder, by its path there.
-    Manual(PathBuf),
+    Manual(ManualKey),
+}
+
+/// A manual file's path in the manual folder, part by part in NFC: the
+/// key it is listed under, never the name it is opened by. A file named
+/// in NFD, as a Mac writes names, has the composed key, and only
+/// [`crate::store::Store::locate`] knows its name on disk; Linux and
+/// NTFS open a name by the bytes it was written with.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ManualKey(PathBuf);
+
+impl ManualKey {
+    /// The key as a path, to compare and to show: not to open.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl From<&Path> for ManualKey {
+    fn from(rel: &Path) -> Self {
+        Self(crate::relpath::normalized(rel))
+    }
+}
+
+impl From<PathBuf> for ManualKey {
+    fn from(rel: PathBuf) -> Self {
+        Self::from(rel.as_path())
+    }
+}
+
+impl From<&PathBuf> for ManualKey {
+    fn from(rel: &PathBuf) -> Self {
+        Self::from(rel.as_path())
+    }
+}
+
+impl From<&str> for ManualKey {
+    fn from(portable: &str) -> Self {
+        Self(crate::relpath::from_portable(portable))
+    }
 }
 
 impl SourceKey {
@@ -33,7 +73,7 @@ impl SourceKey {
             if !is_plain_relative(Path::new(rest)) {
                 bail!("`{text}`: a manual source is a path inside the manual folder");
             }
-            return Ok(Self::Manual(crate::relpath::from_portable(rest)));
+            return Ok(Self::Manual(rest.into()));
         }
         let extractor = scheme.to_ascii_lowercase();
         if extractor.is_empty() || !is_token(rest) || (extractor == "youtube" && !is_id(rest)) {
@@ -80,7 +120,8 @@ impl SourceKey {
     pub fn short(&self) -> String {
         match self {
             Self::Remote { id, .. } => id.clone(),
-            Self::Manual(path) => path
+            Self::Manual(key) => key
+                .path()
                 .file_stem()
                 .map_or_else(String::new, |s| s.to_string_lossy().into_owned()),
         }
@@ -91,7 +132,7 @@ impl fmt::Display for SourceKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Remote { extractor, id } => write!(f, "{extractor}:{id}"),
-            Self::Manual(path) => write!(f, "manual:{}", crate::relpath::to_portable(path)),
+            Self::Manual(key) => write!(f, "manual:{}", crate::relpath::to_portable(key.path())),
         }
     }
 }

@@ -5,11 +5,12 @@ const REC: &str = "00000000-0000-0000-0000-00000000000";
 
 fn query() -> Query {
     Query {
-        print: Print(
+        print: Print::new(
             (0..1500_u32)
                 .map(|n| n.wrapping_mul(2_654_435_761))
                 .collect(),
-        ),
+        )
+        .unwrap(),
         seconds: 241.4,
         title: Some("Lantern Weather".into()),
         artist: Some("Paper Comets, Ada Quill".into()),

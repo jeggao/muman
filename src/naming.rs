@@ -36,6 +36,11 @@ const LOOKALIKES: [(&str, &str); 9] = [
 /// Room kept in a file name for a collision suffix and the extension.
 const SUFFIX_ROOM: usize = 24;
 
+/// The fewest bytes a name is cut to, past the room for its suffix: the
+/// least `[library] max_name_bytes` and `max_folder_bytes` may say.
+pub const MIN_NAME_BYTES: usize = 16 + SUFFIX_ROOM;
+pub const MIN_FOLDER_BYTES: usize = 16;
+
 /// The longest ID a path is told apart by.
 const ID_BYTES: usize = 64;
 
@@ -89,8 +94,8 @@ impl Naming {
             template: Template::new(&settings.template)?,
             replace,
             restrict: settings.restrict,
-            max_name: settings.max_name_bytes.saturating_sub(SUFFIX_ROOM).max(16),
-            max_folder: settings.max_folder_bytes.max(16),
+            max_name: settings.max_name_bytes.saturating_sub(SUFFIX_ROOM),
+            max_folder: settings.max_folder_bytes,
             room: settings
                 .max_path
                 .map(|max| max.saturating_sub(library.to_string_lossy().chars().count() + 1)),

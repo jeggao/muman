@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/5";
+pub const METHOD: &str = "tags/6";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -207,9 +207,22 @@ pub struct Offer {
 pub type Offers = BTreeMap<Field, Offer>;
 
 fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: bool) {
+    // Every source's values pass here, so a count reads alike whatever
+    // offers it: no leading zeros, and 0, which counts nothing, is none.
+    let counts = matches!(
+        field,
+        Field::Track | Field::Disc | Field::TrackTotal | Field::DiscTotal
+    );
     let values: Vec<String> = values
         .into_iter()
-        .map(|v| v.trim().to_string())
+        .map(|v| {
+            let v = v.trim();
+            if counts && v.bytes().all(|b| b.is_ascii_digit()) {
+                v.trim_start_matches('0').to_string()
+            } else {
+                v.to_string()
+            }
+        })
         .filter(|v| !v.is_empty())
         .fold(Vec::new(), |mut seen, v| {
             if !seen.contains(&v) {
@@ -271,7 +284,6 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         &mut o,
         Field::Track,
         info.track_number
-            .filter(|n| *n > 0)
             .map(|n| n.to_string())
             .into_iter()
             .collect(),
@@ -281,7 +293,6 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         &mut o,
         Field::Disc,
         info.disc_number
-            .filter(|n| *n > 0)
             .map(|n| n.to_string())
             .into_iter()
             .collect(),
@@ -381,18 +392,69 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
 }
 
 /// What a file's own tags offer, every one structured: someone set it.
+/// A file's tags by their Vorbis comment names, each with every value
+/// it holds, as `lofty` reads them: the format's own frames and atoms
+/// named as muman writes them ([`crate::render`]), and a comment given
+/// twice, as two `TITLE`s, kept as two values where ffprobe joins them
+/// with `;`. The file's main tag first; another, as an `ID3v1` beside an
+/// `ID3v2`, adds only names the first lacks. `None` for a file `lofty`
+/// does not read, as Matroska.
+#[must_use]
+pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>> {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::{ItemValue, TagType};
+
+    let file = lofty::read_from_path(path).ok()?;
+    let mut tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let primary = file.primary_tag().map(lofty::tag::Tag::tag_type);
+    let mut ordered: Vec<&lofty::tag::Tag> = file.tags().iter().collect();
+    ordered.sort_by_key(|t| Some(t.tag_type()) != primary);
+    for tag in ordered {
+        let mut own: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for item in tag.items() {
+            let (Some(name), ItemValue::Text(text) | ItemValue::Locator(text)) =
+                (item.key().map_key(TagType::VorbisComments), item.value())
+            else {
+                continue;
+            };
+            own.entry(name.to_ascii_lowercase())
+                .or_default()
+                .push(text.clone());
+        }
+        for (name, values) in own {
+            tags.entry(name).or_insert(values);
+        }
+    }
+    Some(tags)
+}
+
 /// A track or disc written `3/12` offers its total too, unless the file
 /// names the total in a tag of its own.
 #[must_use]
-pub fn from_container(tags: &BTreeMap<String, String>) -> Offers {
-    let number = |n: &str| n.trim().trim_start_matches('0').to_string();
+pub fn from_container(tags: &BTreeMap<String, Vec<String>>) -> Offers {
     let mut o = Offers::new();
     let mut totals = Vec::new();
-    for (key, value) in tags {
+    for (key, values) in tags {
         let Some(field) = Field::named(key) else {
             continue;
         };
-        let values = match field {
+        let values = values
+            .iter()
+            .flat_map(|value| container_values(field, value, &mut totals))
+            .collect();
+        offer(&mut o, field, values, true);
+    }
+    for (field, total) in totals {
+        offer(&mut o, field, vec![total], true);
+    }
+    o
+}
+
+/// What one value of a file's `field` offers, a total it names put in
+/// `totals`.
+fn container_values(field: Field, value: &str, totals: &mut Vec<(Field, String)>) -> Vec<String> {
+    {
+        match field {
             Field::Date => value
                 .trim()
                 .split('T')
@@ -407,19 +469,14 @@ pub fn from_container(tags: &BTreeMap<String, String>) -> Offers {
                 } else {
                     Field::DiscTotal
                 };
-                totals.push((of, number(total)));
-                vec![number(n)]
+                totals.push((of, total.to_string()));
+                vec![n.to_string()]
             }
-            Field::TrackTotal | Field::DiscTotal => vec![number(value)],
+            Field::TrackTotal | Field::DiscTotal => vec![value.to_string()],
             f if f.is_id() => value.split([';', '/']).map(str::to_string).collect(),
-            _ => vec![value.clone()],
-        };
-        offer(&mut o, field, values, true);
+            _ => vec![value.to_string()],
+        }
     }
-    for (field, total) in totals {
-        offer(&mut o, field, vec![total], true);
-    }
-    o
 }
 
 /// `YYYYMMDD` as `YYYY-MM-DD`, the Vorbis comment convention; a date
@@ -492,6 +549,10 @@ mod tests {
         info::parse(json.as_bytes()).unwrap()
     }
 
+    fn each(tags: BTreeMap<String, String>) -> BTreeMap<String, Vec<String>> {
+        tags.into_iter().map(|(k, v)| (k, vec![v])).collect()
+    }
+
     #[test]
     fn a_release_offers_structured_fields() {
         let o = from_info(&info(
@@ -545,7 +606,7 @@ mod tests {
             ("date".to_string(), "2001-05-06T00:00:00".to_string()),
             ("comment".to_string(), "x".to_string()),
         ]);
-        let o = from_container(&tags);
+        let o = from_container(&each(tags));
         assert_eq!(o[&Field::Track].values, ["3"]);
         assert_eq!(o[&Field::Date].values, ["2001-05-06"]);
         assert_eq!(o[&Field::AlbumArtist].values, ["A"]);
@@ -566,7 +627,7 @@ mod tests {
             ("disc".to_string(), "1/2".to_string()),
             ("TOTALDISCS".to_string(), "3".to_string()),
         ]);
-        let o = from_container(&tags);
+        let o = from_container(&each(tags));
         assert_eq!(o[&Field::Isrc].values, ["XX0000000001"]);
         assert_eq!(o[&Field::MusicBrainzArtistId].values.len(), 2);
         assert_eq!(o[&Field::Disc].values, ["1"]);
@@ -646,5 +707,47 @@ mod tests {
             normalized(&["Lu5ivo!".into()]),
             normalized(&["lu5ivo".into()])
         );
+    }
+
+    #[test]
+    fn a_files_tags_read_alike_whatever_its_format_and_repeated_ones_apart() {
+        use lofty::config::WriteOptions;
+        use lofty::file::TaggedFileExt;
+        use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+        let dir = tempfile::tempdir().unwrap();
+        let flac = dir.path().join("a.flac");
+        std::fs::write(&flac, crate::testing::SILENCE_FLAC).unwrap();
+        let mut vorbis = Tag::new(TagType::VorbisComments);
+        for title in ["Lantern Weather", "Lantern Weather (Live)"] {
+            vorbis.push(TagItem::new(
+                ItemKey::TrackTitle,
+                ItemValue::Text(title.into()),
+            ));
+        }
+        vorbis.set_track(3);
+        vorbis.save_to_path(&flac, WriteOptions::default()).unwrap();
+        let o = from_container(&read_file(&flac).unwrap());
+        assert_eq!(
+            o[&Field::Title].values,
+            ["Lantern Weather", "Lantern Weather (Live)"]
+        );
+        assert_eq!(o[&Field::Track].values, ["3"]);
+
+        let mp3 = dir.path().join("a.mp3");
+        std::fs::write(&mp3, crate::testing::SILENCE_MP3).unwrap();
+        let mut id3 = Tag::new(TagType::Id3v2);
+        id3.set_title("Paper Comets".into());
+        id3.set_artist("Marlo Venn".into());
+        id3.set_track(7);
+        id3.set_track_total(12);
+        id3.save_to_path(&mp3, WriteOptions::default()).unwrap();
+        assert!(lofty::read_from_path(&mp3).unwrap().primary_tag().is_some());
+        let o = from_container(&read_file(&mp3).unwrap());
+        assert_eq!(o[&Field::Title].values, ["Paper Comets"]);
+        assert_eq!(o[&Field::Artist].values, ["Marlo Venn"]);
+        assert_eq!(o[&Field::Track].values, ["7"]);
+        assert_eq!(o[&Field::TrackTotal].values, ["12"]);
+        assert!(read_file(&dir.path().join("none.flac")).is_none());
     }
 }

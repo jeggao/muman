@@ -37,11 +37,20 @@ lock on the home:
    saving progress as it goes.
 1. Compare the audio of every pair of a song's sources.
 1. Resolve each song to a plan: the best source for each aspect.
-1. Move each song whose plan is unchanged but whose path changed, as a
-   new path template makes it, instead of encoding it again.
-1. Write each song whose plan changed or whose file is gone; `sync
-   --force` writes every song.
+1. Find each song's file: the one made from most of its own sources,
+   one file to one song, wherever it is now.
+1. Move each song whose file differs from its plan at most in its tags
+   but whose path changed, as a new path template makes it, instead of
+   encoding it again.
+1. Write the tags of each song whose plan changed only in its tags into
+   its file, encoding nothing; write each song whose plan changed
+   otherwise, or whose file is gone; `sync --force` writes every song.
 1. Delete every file muman wrote that no song makes any more.
+
+`status` says what these steps would do by the same decisions. A song
+moves into a path another song leaves, as `Untitled [vid00000001]`
+becomes `Untitled` once the other is renamed; two songs that trade
+paths are written again.
 
 A long step shows how far it has got on stderr, as `--progress` says.
 On a terminal, `auto` pins one status line under the messages, such as
@@ -122,6 +131,11 @@ before 0.2 refuses rather than misreads.
 A `[[removed]]` key no song lists is a tombstone: no playlist or dropped
 file lists it again. `muman restore`, adding its video alone by URL, or
 deleting the table by hand lets it back.
+
+A song deleted from the list by hand is kept out the same way: the next
+`sync` puts each of its files in `sources/manual` under `[[removed]]`,
+rather than listing them again as files dropped in, and `status` says
+so first.
 
 ## Sources
 

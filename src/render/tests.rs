@@ -350,3 +350,114 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         "[00:02.00]sung\n"
     );
 }
+
+#[test]
+fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() {
+    use lofty::file::TaggedFileExt;
+    let formats = [
+        Format::Copy { codec: Codec::Opus },
+        Format::Copy { codec: Codec::Flac },
+        Format::Encode {
+            codec: Codec::Vorbis,
+            kbps: Some(192),
+        },
+        Format::Encode {
+            codec: Codec::Mp3,
+            kbps: Some(320),
+        },
+        Format::Encode {
+            codec: Codec::Aac,
+            kbps: Some(256),
+        },
+    ];
+    for format in formats {
+        let f = fixture();
+        let mut p = plan(format);
+        if let Some(l) = p.lyrics.as_mut() {
+            l.placement = LyricsPlacement::Embedded;
+        }
+        let fake = Fake::default();
+        let first = go(&fake, &f, &p).unwrap();
+        p.tags[0] = ("TITLE".into(), vec!["Paper Comets".into()]);
+        let library = f.dir.path().join("lib");
+        let calls = fake.calls().len();
+        let again = retag(&library, &first.audio, first.lyrics.as_deref(), &p).unwrap();
+        assert_eq!(fake.calls().len(), calls, "{format:?}: nothing is run");
+        assert_eq!(again.audio, first.audio);
+        let file = lofty::read_from_path(library.join(&again.audio)).unwrap();
+        let tag = file.primary_tag().unwrap();
+        assert_eq!(tag.title().as_deref(), Some("Paper Comets"), "{format:?}");
+        assert_eq!(tag.artist().as_deref(), Some("A, B"), "{format:?}");
+        assert_eq!(tag.pictures().len(), 1, "{format:?}: the cover stays");
+        let lyrics = tag
+            .get_string(ItemKey::Lyrics)
+            .or_else(|| tag.get_string(ItemKey::UnsyncLyrics));
+        assert!(
+            lyrics.is_some_and(|l| l.contains("line")),
+            "{format:?}: the lyrics stay"
+        );
+        assert!(leftover_parts(&library.join("A/Record")).is_empty());
+    }
+}
+
+#[test]
+fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
+    for format in [
+        Format::Copy { codec: Codec::Opus },
+        Format::Copy { codec: Codec::Flac },
+        Format::Encode {
+            codec: Codec::Vorbis,
+            kbps: Some(192),
+        },
+        Format::Encode {
+            codec: Codec::Mp3,
+            kbps: Some(320),
+        },
+        Format::Encode {
+            codec: Codec::Aac,
+            kbps: Some(256),
+        },
+    ] {
+        let mut p = plan(format);
+        p.tags.extend([
+            ("GENRE".into(), vec!["Folk".into()]),
+            ("DATE".into(), vec!["1916".into()]),
+            ("TRACKNUMBER".into(), vec!["3".into()]),
+            ("TRACKTOTAL".into(), vec!["12".into()]),
+            ("ALBUMARTIST".into(), vec!["Marlo Venn".into()]),
+            (
+                "MUSICBRAINZ_TRACKID".into(),
+                vec!["00000000-0000-0000-0000-000000000001".into()],
+            ),
+            ("CUSTOMKEY".into(), vec!["x".into()]),
+        ]);
+        let built = |p: &Plan| {
+            let f = fixture();
+            let r = go(&Fake::default(), &f, p).unwrap();
+            (
+                fs::read(f.dir.path().join("lib").join(&r.audio)).unwrap(),
+                f,
+                r,
+            )
+        };
+        let (first, f, r) = built(&p);
+        for _ in 0..8 {
+            assert!(
+                built(&p).0 == first,
+                "{format:?}: the same song, other bytes"
+            );
+        }
+        let mut q = p.clone();
+        q.tags[0] = (
+            "TITLE".into(),
+            vec!["Paper Comets, a title longer than the last".into()],
+        );
+        let library = f.dir.path().join("lib");
+        retag(&library, &r.audio, r.lyrics.as_deref(), &q).unwrap();
+        let retagged = fs::read(library.join(&r.audio)).unwrap();
+        assert!(
+            retagged == built(&q).0,
+            "{format:?}: a retag writes what a build would"
+        );
+    }
+}
