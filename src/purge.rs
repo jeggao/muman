@@ -124,8 +124,8 @@ mod tests {
         ];
         std::fs::write(
             dirs.manifest(),
-            "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"lrclib:7\"]\n\
-             [[removed]]\nnote = \"Gone\"\nsources = [\"youtube:rrrrrrrrrrr\"]\n",
+            "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"lrclib:7\"]\n\
+             [[removed]]\nnote = \"Gone\"\nsources = [\"youtube.com:rrrrrrrrrrr\"]\n",
         )
         .unwrap();
         let confirm = Confirm {

@@ -52,7 +52,12 @@ use crate::provider::Provider;
 use crate::resolve::Plan;
 use crate::source::SourceKey;
 
-pub const VERSION: u32 = 1;
+/// The format written: 2 keys what yt-dlp fetched by its site, where 1
+/// keyed it by yt-dlp's extractor.
+pub const VERSION: u32 = 2;
+
+/// The first format to key what yt-dlp fetched by its site.
+const SITES: u32 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct State {
@@ -95,6 +100,10 @@ pub struct State {
     /// facts before and after.
     #[serde(skip)]
     pub(crate) rebased: Vec<(SourceKey, Facts, Facts)>,
+    /// How the file named each source key it names otherwise now, so a
+    /// plan's real size is found under the name it was kept by.
+    #[serde(skip)]
+    pub(crate) respelled: BTreeMap<SourceKey, SourceKey>,
 }
 
 /// A lookup of `find` made from the source `from`.
@@ -336,7 +345,7 @@ impl State {
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
         };
-        let state: Self = serde_json::from_slice(&text).with_context(|| {
+        let mut state: Self = serde_json::from_slice(&text).with_context(|| {
             format!(
                 "{} cannot be read; move it aside to start over, which forgets which library files are muman's",
                 file.display()
@@ -349,7 +358,57 @@ impl State {
                 state.version
             );
         }
+        if state.version < SITES {
+            let keys = state.outputs.values().flat_map(|w| &w.sources);
+            state.respelled = keys
+                .chain(state.facts.keys())
+                .filter_map(|k| Some((k.clone(), k.spelled_before()?)))
+                .collect();
+            state.version = VERSION;
+        }
         Ok(state)
+    }
+
+    /// Name each key `renames` names anew, wherever this names it: a
+    /// source an extractor's name keyed, renamed by its site.
+    pub fn rekey(&mut self, renames: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {
+        fn walk(v: &mut serde_json::Value, to: &BTreeMap<String, String>) {
+            match v {
+                serde_json::Value::String(s) => {
+                    if let Some(new) = to.get(s.as_str()) {
+                        s.clone_from(new);
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter_mut().for_each(|i| walk(i, to)),
+                serde_json::Value::Object(map) => {
+                    let old = std::mem::take(map);
+                    for (k, mut item) in old {
+                        walk(&mut item, to);
+                        map.insert(to.get(&k).cloned().unwrap_or(k), item);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if renames.is_empty() {
+            return Ok(());
+        }
+        let to: BTreeMap<String, String> = renames
+            .iter()
+            .map(|(old, new)| (old.to_string(), new.to_string()))
+            .collect();
+        let mut value = serde_json::to_value(&*self).context("renaming sources in the state")?;
+        walk(&mut value, &to);
+        let mut now: Self =
+            serde_json::from_value(value).context("renaming sources in the state")?;
+        now.cleared = std::mem::take(&mut self.cleared);
+        now.rebased = std::mem::take(&mut self.rebased);
+        now.respelled = std::mem::take(&mut self.respelled);
+        for (old, new) in renames {
+            now.respelled.insert(new.clone(), old.clone());
+        }
+        *self = now;
+        Ok(())
     }
 
     pub fn save(&self, home: &Path) -> Result<()> {
@@ -435,6 +494,7 @@ impl State {
             .iter()
             .rev()
             .fold(plan.clone(), |p, (key, old, new)| p.renamed(key, new, old))
+            .respelled(&|k| self.respelled.get(k).cloned())
     }
 
     /// Take `measured`'s facts and failures over these: a fact replaces
@@ -646,6 +706,90 @@ mod tests {
         assert_eq!(plan.audio.rev, "0123456789abcdef0123456789abcdef");
     }
 
+    #[test]
+    fn a_state_keyed_by_extractor_reads_by_site_and_names_its_plans_as_it_did() {
+        let dir = tempfile::tempdir().unwrap();
+        let (key, record) = (
+            SourceKey::youtube("aaaaaaaaaaa"),
+            SourceKey::parse("lrclib:7").unwrap(),
+        );
+        let plan = |audio: SourceKey| crate::resolve::Plan {
+            version: 1,
+            format: crate::resolve::Format::Copy {
+                codec: crate::codec::Codec::Opus,
+            },
+            audio: crate::resolve::AudioRef {
+                key: audio,
+                rev: "10:20".into(),
+                index: 1,
+            },
+            cover: None,
+            lyrics: None,
+            tags: Vec::new(),
+        };
+        let old = SourceKey::Remote {
+            site: "youtube".into(),
+            id: "aaaaaaaaaaa".into(),
+        };
+        let mut disk = State::default();
+        disk.facts
+            .insert(key.clone(), Facts::unreadable("10:20".into()));
+        disk.facts
+            .insert(record.clone(), Facts::unreadable("1:2".into()));
+        let text = serde_json::to_string(&disk)
+            .unwrap()
+            .replace("\"youtube.com:", "\"youtube:")
+            .replacen("\"version\":0", "\"version\":1", 1);
+        std::fs::write(dir.path().join(STATE), text).unwrap();
+        let state = State::load(dir.path()).unwrap();
+        assert_eq!(state.version, VERSION);
+        assert!(state.facts.contains_key(&key) && state.facts.contains_key(&record));
+        let tools = "ffmpeg version fake";
+        assert_eq!(
+            crate::limit::plan_key(tools, &state.as_before(&plan(key.clone()))),
+            crate::limit::plan_key(tools, &plan(old)),
+            "a size the plan was kept by is found"
+        );
+        disk.version = VERSION;
+        disk.save(dir.path()).unwrap();
+        let now = State::load(dir.path()).unwrap();
+        assert_eq!(
+            now.as_before(&plan(key.clone())),
+            plan(key),
+            "named so already"
+        );
+    }
+
+    #[test]
+    fn a_source_rekeyed_is_named_anew_everywhere_and_its_plans_as_before() {
+        let (old, new) = (
+            SourceKey::parse("funkwhale:abc").unwrap(),
+            SourceKey::parse("tunes.example:abc").unwrap(),
+        );
+        let mut state = State::default();
+        state
+            .facts
+            .insert(old.clone(), Facts::unreadable("1:2".into()));
+        state.listed.push(old.clone());
+        state.outputs.insert(
+            "song.opus".into(),
+            Written {
+                sources: vec![old.clone()],
+                lyrics: None,
+                plan: None,
+                stamp: None,
+            },
+        );
+        state.rekey(&[(old.clone(), new.clone())].into()).unwrap();
+        assert!(state.facts.contains_key(&new) && !state.facts.contains_key(&old));
+        assert_eq!(state.listed, std::slice::from_ref(&new));
+        assert_eq!(
+            state.outputs[Path::new("song.opus")].sources,
+            std::slice::from_ref(&new)
+        );
+        assert_eq!(state.respelled.get(&new), Some(&old));
+    }
+
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {
         let start = offset_ms.max(0);
         let end = a_ms.min(b_ms + offset_ms);
@@ -714,9 +858,9 @@ mod tests {
         std::fs::write(
             dir.path().join(STATE),
             r#"{"version": 1,
-                "outputs": {"A/B/C.opus": {"sources": ["youtube:aaaaaaaaaaa"]}},
-                "alignments": [{"a": "youtube:aaaaaaaaaaa", "old": true}],
-                "facts": {"youtube:aaaaaaaaaaa": {"rev": "1"}}}"#,
+                "outputs": {"A/B/C.opus": {"sources": ["youtube.com:aaaaaaaaaaa"]}},
+                "alignments": [{"a": "youtube.com:aaaaaaaaaaa", "old": true}],
+                "facts": {"youtube.com:aaaaaaaaaaa": {"rev": "1"}}}"#,
         )
         .unwrap();
         let state = State::load(dir.path()).unwrap();

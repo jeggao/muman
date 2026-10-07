@@ -57,7 +57,8 @@ pub struct Places<'a> {
 /// yt-dlp's argv. Everything is embedded into one `.mkv`, so a source
 /// stays a single file. Partial downloads stay in `temp` until finished,
 /// a video `archive` names is skipped unseen, and each finished file is
-/// appended to `done` as its extractor, ID and JSON-quoted path.
+/// appended to `done` as its extractor and ID, then its path, its page
+/// and the address it was reached by, each JSON-quoted.
 #[must_use]
 pub fn ytdlp_command(
     places: &Places<'_>,
@@ -102,6 +103,11 @@ pub fn ytdlp_command(
         "uploader_id",
         "^@",
         "",
+        // The info JSON leaves out the address yt-dlp was given, which a
+        // source of the generic extractor is named and fetched again by
+        // (source::page); a field of muman's own keeps it.
+        "--parse-metadata",
+        "original_url:(?P<muman_original_url>.+)",
         "--output",
     ]
     .into_iter()
@@ -150,7 +156,9 @@ pub fn ytdlp_command(
     }
     cmd.extend(crate::ytdlp_log::progress_args().map(OsString::from));
     cmd.push("--print-to-file".into());
-    cmd.push("after_move:%(extractor_key)s %(id)s %(filepath)j".into());
+    cmd.push(
+        "after_move:%(extractor_key)s %(id)s %(filepath)j %(webpage_url)j %(original_url)j".into(),
+    );
     cmd.push(places.done.as_os_str().to_os_string());
     cmd.extend(options.args.iter().map(OsString::from));
     if let Some(batch) = places.batch {
@@ -222,12 +230,20 @@ pub fn finished(done: &str) -> Vec<Fetched> {
     done.lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(3, ' ');
-            let (extractor, id, path) = (parts.next()?, parts.next()?, parts.next()?);
-            let key = SourceKey::parse(&format!("{}:{id}", extractor.to_ascii_lowercase())).ok()?;
-            let path = serde_json::from_str::<String>(path).ok()?;
+            let (extractor, id, rest) = (parts.next()?, parts.next()?, parts.next()?);
+            let mut path = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+            let file = path.next()?.ok()?;
+            // A field yt-dlp has no value for is written `NA`, unquoted; an
+            // address has no space.
+            let mut urls = rest[path.byte_offset()..]
+                .split_whitespace()
+                .map(|s| serde_json::from_str::<String>(s).ok());
+            let (webpage, original) = (urls.next().flatten(), urls.next().flatten());
+            let page = crate::source::page(extractor, webpage.as_deref(), original.as_deref());
+            let key = SourceKey::fetched(extractor, page, id)?;
             Some(Fetched {
                 key,
-                path: PathBuf::from(path),
+                path: PathBuf::from(file),
             })
         })
         .collect()
@@ -238,10 +254,7 @@ pub fn finished(done: &str) -> Vec<Fetched> {
 #[must_use]
 pub fn archive_lines<'a>(keys: impl IntoIterator<Item = &'a SourceKey>) -> String {
     keys.into_iter()
-        .filter_map(|k| match k {
-            SourceKey::Remote { extractor, id } => Some(format!("{extractor} {id}\n")),
-            SourceKey::Manual(_) => None,
-        })
+        .filter_map(SourceKey::archive_line)
         .collect()
 }
 
@@ -392,6 +405,15 @@ mod tests {
     }
 
     #[test]
+    fn the_address_given_is_kept_in_the_info_json() {
+        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        assert_eq!(
+            value_after(&cmd, "--parse-metadata"),
+            vec![&OsString::from("original_url:(?P<muman_original_url>.+)")]
+        );
+    }
+
+    #[test]
     fn subtitles_are_embedded_and_not_kept() {
         let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
         for flag in ["--embed-subs", "--write-subs"] {
@@ -405,13 +427,29 @@ mod tests {
 
     #[test]
     fn finished_files_decode_their_key_and_escaped_path() {
-        let done = "Youtube aaaaaaaaaaa \"/o/r/\\u96e8 \\u29f8 x [aaaaaaaaaaa].mkv\"\n\nnot json\nYoutube bad \"/o/b.mkv\"\n";
+        let done = "Youtube aaaaaaaaaaa \"/o/r/\\u96e8 \\u29f8 x [aaaaaaaaaaa].mkv\" \
+                    \"https://www.youtube.com/watch?v=aaaaaaaaaaa\" \
+                    \"https://music.youtube.com/watch?v=aaaaaaaaaaa\"\n\nnot json\n\
+                    Youtube bad \"/o/b.mkv\" NA NA\n\
+                    Generic a \"/o/x/a [a].mp3\" \"https://mirror7.files.example/0/a.mp3\" \
+                    \"https://www.files.example/download/a.mp3\"\n\
+                    Funkwhale b \"/o/x/b [b].mp3\" NA NA\n";
         assert_eq!(
             finished(done),
-            vec![Fetched {
-                key: SourceKey::youtube("aaaaaaaaaaa"),
-                path: PathBuf::from("/o/r/雨 ⧸ x [aaaaaaaaaaa].mkv"),
-            }]
+            vec![
+                Fetched {
+                    key: SourceKey::youtube("aaaaaaaaaaa"),
+                    path: PathBuf::from("/o/r/雨 ⧸ x [aaaaaaaaaaa].mkv"),
+                },
+                Fetched {
+                    key: SourceKey::parse("files.example:a").unwrap(),
+                    path: PathBuf::from("/o/x/a [a].mp3"),
+                },
+                Fetched {
+                    key: SourceKey::parse("funkwhale:b").unwrap(),
+                    path: PathBuf::from("/o/x/b [b].mp3"),
+                },
+            ]
         );
     }
 }

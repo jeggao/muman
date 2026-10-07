@@ -31,6 +31,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Sources named by their site.** What yt-dlp fetched is keyed
+  `<site>:<id>`, as `youtube.com:<id>` or `archive.org:<id>`, rather
+  than by yt-dlp's extractor, as `youtube:<id>`. A video found on
+  YouTube Music is the same `youtube.com:<id>`, and a YouTube playlist
+  is `youtube.com:playlist/<id>`. A song list or state an earlier muman
+  wrote reads as before and is written the new way, writing no song
+  again; a source of a site muman has no domain for is renamed by the
+  page it was fetched from. A file fetched by its address is named, and
+  fetched again, by that address rather than by the mirror that served
+  it. `state.json` is format 2, which an earlier muman refuses.
 - **`status` takes a query.** It shows only the songs a query matches,
   as `list` reads one, each in full, up to date or not. Without one it
   shows the songs a sync would change and counts the rest, which

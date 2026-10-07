@@ -250,6 +250,26 @@ impl Plan {
         }
         plan
     }
+
+    /// This plan with each source key `before` names another way named
+    /// so.
+    #[must_use]
+    pub fn respelled(&self, before: &dyn Fn(&SourceKey) -> Option<SourceKey>) -> Self {
+        let mut plan = self.clone();
+        let name = |key: &mut SourceKey| {
+            if let Some(old) = before(key) {
+                *key = old;
+            }
+        };
+        name(&mut plan.audio.key);
+        if let Some(c) = plan.cover.as_mut() {
+            name(&mut c.key);
+        }
+        if let Some(l) = plan.lyrics.as_mut() {
+            name(&mut l.key);
+        }
+        plan
+    }
 }
 
 /// Why each aspect came from where it did, for `status`.

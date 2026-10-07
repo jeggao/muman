@@ -88,7 +88,7 @@ version = 1
 lyrics = ["en", "fr"]
 
 [[song]]
-sources = ["youtube:vid00000001", "manual:Marlo Venn/Paper Comets.flac"]
+sources = ["youtube.com:vid00000001", "manual:Marlo Venn/Paper Comets.flac"]
 cover = "manual:Marlo Venn/Paper Comets.flac"
 lyrics_offset = "120 ms"
 tags.artist = "Marlo Venn"
@@ -110,9 +110,28 @@ tags.genre = ""
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it |
 
 A song has no ID of its own: it is its sources, and any of its keys
-names it. A key is `youtube:<id>` for a video, `lrclib:<id>` for LRCLIB
-lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
+names it. A key is `<site>:<id>` for what yt-dlp fetched, `lrclib:<id>`
+for LRCLIB lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
 `manual:<path>` for a file under `sources/manual`.
+
+A fetched source's site is the domain it came from and its ID the one
+yt-dlp gives it there, as `youtube.com:vid00000001` or
+`archive.org:<id>`. A site yt-dlp reaches by several addresses has one
+domain: a video from YouTube Music, `youtu.be` or `m.youtube.com` is
+`youtube.com:<id>`, the one source however it was found, and a track
+on any `<artist>.bandcamp.com` is `bandcamp.com:<id>`. Which sites have
+one domain is listed in `SITES` in [src/source.rs](../src/source.rs); any other site is
+the domain of the page yt-dlp fetched, without `www.`.
+
+An earlier muman named a source by yt-dlp's extractor, as
+`youtube:<id>`, `youtubetab:<id>` or `archiveorg:<id>`. Such a key
+still reads, in the song list and in a query, as its site's, and the
+next command that writes the song list writes it so; the library is
+not written again for it. A key of an extractor whose site muman does
+not know reads as it is until a sync renames it by the page its source
+was fetched from; one of yt-dlp's generic extractor, a file fetched by
+its address, keeps its name, since its source recorded only the mirror
+it was served from.
 `tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
@@ -192,7 +211,7 @@ each, with the format a site served and its size for what yt-dlp
 fetched:
 
 ```toml
-held."youtube:vid00000001" = { audio = "7c1cfa040b3b82c0", cover = "5be1d2a03f4c6e71", lyrics = "e04f1c7d2b9a6385", tags = "9a3c0e5f7d1b2468", format = "251", size = 3456789 }
+held."youtube.com:vid00000001" = { audio = "7c1cfa040b3b82c0", cover = "5be1d2a03f4c6e71", lyrics = "e04f1c7d2b9a6385", tags = "9a3c0e5f7d1b2468", format = "251", size = 3456789 }
 ```
 
 A part a source does not offer is left out. A video of another site
@@ -332,7 +351,7 @@ and the upload is recorded as replaced, so it is never fetched again.
 
 YouTube Music names album playlists `OLAK5uy_…`; any other playlist is
 a list of separate songs. An album added whole becomes an `[[album]]`
-keyed `youtubetab:<id>`, and each track a song with `album` and `track`
+keyed `youtube.com:playlist/<id>`, and each track a song with `album` and `track`
 set from its place in the full listing. A track already listed only
 gains its album and place.
 
@@ -458,7 +477,7 @@ are all required, case ignored:
 | `artist:="Marlo Venn"` | A field equal to the text |
 | `title::^paper` | A field matching a regular expression |
 | `^lyrics:yes` | A song the term does not match |
-| `youtube:vid00000001` | The song listing that key |
+| `youtube.com:vid00000001` | The song listing that key |
 
 A field is any tag, or `key`, `path`, `format` (the file's extension:
 `opus`, `ogg`, `flac`, `mp3`, `m4a`),

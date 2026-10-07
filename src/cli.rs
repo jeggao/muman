@@ -212,7 +212,7 @@ Query:
   'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
   title::^one           A field matching a regular expression
   ^lyrics:yes           Not matching the term
-  youtube:<id>          The song listing that source
+  youtube.com:<id>      The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
 

@@ -170,8 +170,8 @@ impl Read {
 /// ID, or a manual file with its own lyrics and pictures.
 fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBuf>> {
     Ok(match key {
-        SourceKey::Remote { extractor, id } if crate::store::kept(extractor).is_some() => {
-            crate::store::kept(extractor).map_or_else(Vec::new, |k| k.files(dirs, id))
+        SourceKey::Remote { site, id } if crate::store::kept(site).is_some() => {
+            crate::store::kept(site).map_or_else(Vec::new, |k| k.files(dirs, id))
         }
         SourceKey::Remote { id, .. } => store.fetched_files(id)?,
         SourceKey::Manual(_) => store.locate(key).map_or_else(Vec::new, |l| {
@@ -540,7 +540,7 @@ mod tests {
             "genre=House",
             "genre=French",
             "date!",
-            "audio=youtube:aaaaaaaaaaa",
+            "audio=youtube.com:aaaaaaaaaaa",
             "lyrics=false",
             "lyrics_offset_ms=120",
         ]))
@@ -551,7 +551,7 @@ mod tests {
             [
                 Assign::Tag("genre".into(), strings(&["House", "French"])),
                 Assign::Tag("date".into(), Vec::new()),
-                Assign::Pin("audio", Some("youtube:aaaaaaaaaaa".into())),
+                Assign::Pin("audio", Some("youtube.com:aaaaaaaaaaa".into())),
                 Assign::Pin("lyrics", Some("false".into())),
                 Assign::Offset(Some(120)),
             ]

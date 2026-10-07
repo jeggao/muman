@@ -65,6 +65,13 @@ pub struct VideoInfo {
     /// The page the video was fetched from.
     #[serde(default)]
     pub webpage_url: Option<String>,
+    /// The address yt-dlp was given, which an info JSON it embeds leaves
+    /// out.
+    #[serde(default)]
+    pub original_url: Option<String>,
+    /// That address, copied where the embedded info JSON keeps it.
+    #[serde(default)]
+    pub muman_original_url: Option<String>,
 }
 
 /// One format a site offered, as yt-dlp lists it.
@@ -137,6 +144,29 @@ pub fn parse(json: &[u8]) -> Result<VideoInfo> {
 }
 
 impl VideoInfo {
+    /// The key it is a source under, by its extractor, page and ID.
+    #[must_use]
+    pub fn key(&self) -> Option<crate::source::SourceKey> {
+        crate::source::SourceKey::fetched(
+            self.extractor_key.as_deref()?,
+            self.page(),
+            self.id.as_deref()?,
+        )
+    }
+
+    /// The page it names its site by and is fetched again from, as
+    /// [`crate::source::page`] picks it.
+    #[must_use]
+    pub fn page(&self) -> Option<&str> {
+        crate::source::page(
+            self.extractor_key.as_deref().unwrap_or_default(),
+            self.webpage_url.as_deref(),
+            self.original_url
+                .as_deref()
+                .or(self.muman_original_url.as_deref()),
+        )
+    }
+
     /// Whether it is a YouTube Music release: it names its track, or its
     /// channel is an artist's " - Topic", where only releases are.
     #[must_use]
@@ -219,6 +249,26 @@ mod tests {
             info(r#"{"subtitles": {"en": [{"ext": "vtt", "name": "English"}, {"ext": "srt"}]}}"#);
         assert_eq!(i.subtitle_names("en"), vec!["English"]);
         assert_eq!(i.subtitle_names("ja"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_file_fetched_by_its_address_is_named_by_it_not_its_mirror() {
+        let embedded = info(
+            r#"{"id": "a", "extractor_key": "Generic",
+                "webpage_url": "https://mirror7.files.example/0/a.mp3",
+                "muman_original_url": "https://files.example/download/a.mp3"}"#,
+        );
+        assert_eq!(
+            embedded.page(),
+            Some("https://files.example/download/a.mp3")
+        );
+        assert_eq!(embedded.key().unwrap().to_string(), "files.example:a");
+        let site = info(
+            r#"{"id": "a", "extractor_key": "Funkwhale",
+                "webpage_url": "https://tunes.example/t/a",
+                "original_url": "https://m.tunes.example/t/a"}"#,
+        );
+        assert_eq!(site.key().unwrap().to_string(), "tunes.example:a");
     }
 
     #[test]

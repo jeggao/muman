@@ -109,7 +109,7 @@ impl Served {
         Some(Self {
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
-            url: info.webpage_url.clone(),
+            url: info.page().map(str::to_string),
         })
     }
 }

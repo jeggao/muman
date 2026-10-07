@@ -20,7 +20,7 @@ use crate::held::Drift;
 use crate::history::Run;
 use crate::hooks;
 use crate::limit;
-use crate::manifest::{Manifest, Song};
+use crate::manifest::{Edit, Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::parallel;
 use crate::progress;
@@ -531,6 +531,27 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if hash(runner, &store, &listed, &mut state, temp.path(), out)? {
         persist(home, &state, opts.dry_run, &lock)?;
     }
+    let renames = sites_found(&manifest, &state);
+    for (from, to) in &renames {
+        let line = if opts.dry_run {
+            format!("Renamed by the next sync, by the site it came from: {from} → {to}")
+        } else {
+            format!("Renamed by the site it came from: {from} → {to}")
+        };
+        crate::ui::info(out, &line)?;
+    }
+    if !opts.dry_run && !renames.is_empty() {
+        for (from, to) in &renames {
+            manifest.edit(Edit::Respell {
+                from: from.clone(),
+                to: to.clone(),
+            });
+        }
+        manifest.save_locked(&lock)?;
+        state.rekey(&renames)?;
+        state.save(home)?;
+    }
+    let listed = manifest.keys();
     if compare(runner, &store, &manifest.songs, &mut state, out)? {
         persist(home, &state, opts.dry_run, &lock)?;
     }
@@ -1549,7 +1570,7 @@ pub(crate) fn plan<W: Write>(
             &format!("No cleaning rule is named `{key}` in the song list; it does nothing"),
         )?;
     }
-    for line in crate::migrate::notices(&manifest.renamed) {
+    for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
         crate::ui::info(out, &line)?;
     }
     for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
@@ -1944,6 +1965,40 @@ impl Fate {
             Self::Kept => "up to date",
         }
     }
+}
+
+/// Each listed source an extractor's name keys, as keys were once
+/// named, by the key the site of the page it was fetched from names it:
+/// one no other song lists nor another source takes, as the page its
+/// facts or its song's record recorded. A source of yt-dlp's generic extractor keeps its name: what
+/// it recorded is the mirror a redirect ended at, not the address it was
+/// fetched by.
+fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, SourceKey> {
+    let listed = manifest.keys();
+    let mut renames = BTreeMap::new();
+    for song in &manifest.songs {
+        for key in song
+            .sources
+            .iter()
+            .filter(|k| k.is_old() && k.site() != Some("generic"))
+        {
+            let page = state
+                .facts
+                .get(key)
+                .and_then(|f| f.served.as_ref()?.url.clone())
+                .or_else(|| song.held.get(key)?.url.clone());
+            let to = page
+                .as_deref()
+                .and_then(crate::source::domain_of)
+                .and_then(|site| SourceKey::parse(&format!("{site}:{}", key.id()?)).ok());
+            if let Some(to) =
+                to.filter(|t| !listed.contains(t) && !renames.values().any(|v| v == t))
+            {
+                renames.insert(key.clone(), to);
+            }
+        }
+    }
+    renames
 }
 
 /// What `status` says a sync does with a song, its file made by `before`.

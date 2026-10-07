@@ -72,7 +72,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
     report: &mut D,
 ) -> Result<bool> {
     let manifest = Manifest::load(&dirs.home)?;
-    for line in crate::migrate::notices(&manifest.renamed) {
+    for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
         crate::ui::info(report, &line)?;
     }
     for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
@@ -283,14 +283,15 @@ fn served<R: Runner, W: Write>(
     let mut lines = Vec::new();
     let mut same = 0;
     for (key, held, _) in &asked {
-        let SourceKey::Remote { extractor, id } = key else {
+        let SourceKey::Remote { site, id } = key else {
             continue;
         };
         let info = listed.iter().find(|(i, _)| {
             i.id.as_deref() == Some(id.as_str())
-                && i.extractor_key
-                    .as_deref()
-                    .is_some_and(|e| e.eq_ignore_ascii_case(extractor))
+                && (i.key().as_ref() == Some(key)
+                    || i.extractor_key
+                        .as_deref()
+                        .is_some_and(|e| e.eq_ignore_ascii_case(site)))
         });
         let Some((info, tags)) = info else {
             let why = errors
@@ -390,7 +391,7 @@ mod tests {
         std::fs::create_dir_all(&dirs.home).unwrap();
         let song = |id: &str, size: u64| {
             format!(
-                "[[song]]\nsources = [\"youtube:{id}\"]\nheld.\"youtube:{id}\" = \
+                "[[song]]\nsources = [\"youtube.com:{id}\"]\nheld.\"youtube.com:{id}\" = \
                  {{ audio = \"0123456789abcdef\", format = \"251\", size = {size} }}\n"
             )
         };
@@ -419,15 +420,15 @@ mod tests {
         assert!(!ok);
         assert!(
             text.contains(
-                "Serves other audio: youtube:bbbbbbbbbbb: format 251 is 250 bytes, 200 when fetched"
+                "Serves other audio: youtube.com:bbbbbbbbbbb: format 251 is 250 bytes, 200 when fetched"
             ),
             "{text}"
         );
         assert!(
-            text.contains("Not served now: youtube:ccccccccccc: its site listed nothing"),
+            text.contains("Not served now: youtube.com:ccccccccccc: its site listed nothing"),
             "{text}"
         );
-        assert!(!text.contains("youtube:aaaaaaaaaaa:"), "{text}");
+        assert!(!text.contains("youtube.com:aaaaaaaaaaa:"), "{text}");
         assert!(
             text.contains("1 of 3 source(s) served as fetched"),
             "{text}"
@@ -457,8 +458,8 @@ mod tests {
         std::fs::write(
             dirs.manifest(),
             format!(
-                "version = 1\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\
-                 held.\"youtube:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", tags = \"{}\", \
+                "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\
+                 held.\"youtube.com:aaaaaaaaaaa\" = {{ audio = \"0123456789abcdef\", tags = \"{}\", \
                  format = \"251\", size = 100 }}\n",
                 &was[..16]
             ),
@@ -480,7 +481,7 @@ mod tests {
         );
         let retitled = ask("Paper Comets");
         assert!(
-            retitled.contains("Serves other tags: youtube:aaaaaaaaaaa"),
+            retitled.contains("Serves other tags: youtube.com:aaaaaaaaaaa"),
             "{retitled}"
         );
         assert!(

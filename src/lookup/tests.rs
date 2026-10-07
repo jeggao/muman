@@ -33,25 +33,25 @@ fn finds(manifest: &Manifest, state: &State, force: bool) -> Vec<(SourceKey, Pro
         .collect()
 }
 
-const UPLOAD: &str = "[[song]]\nsources = [\"youtube:uuuuuuuuuuu\"]\n";
+const UPLOAD: &str = "[[song]]\nsources = [\"youtube.com:uuuuuuuuuuu\"]\n";
 
 #[test]
 fn an_upload_looks_up_its_release_and_a_release_its_upload() {
-    let (_d, m, s) = setup(UPLOAD, &[("youtube:uuuuuuuuuuu", false)]);
+    let (_d, m, s) = setup(UPLOAD, &[("youtube.com:uuuuuuuuuuu", false)]);
     assert_eq!(
         finds(&m, &s, false),
         [(yt("uuuuuuuuuuu"), Provider::YouTubeMusic)]
     );
-    let (_d, m, s) = setup(UPLOAD, &[("youtube:uuuuuuuuuuu", true)]);
+    let (_d, m, s) = setup(UPLOAD, &[("youtube.com:uuuuuuuuuuu", true)]);
     assert_eq!(
         finds(&m, &s, false),
         [(yt("uuuuuuuuuuu"), Provider::YouTube)]
     );
     let (_d, m, s) = setup(
-        "[[song]]\nsources = [\"youtube:uuuuuuuuuuu\", \"youtube:rrrrrrrrrrr\"]\n",
+        "[[song]]\nsources = [\"youtube.com:uuuuuuuuuuu\", \"youtube.com:rrrrrrrrrrr\"]\n",
         &[
-            ("youtube:uuuuuuuuuuu", false),
-            ("youtube:rrrrrrrrrrr", true),
+            ("youtube.com:uuuuuuuuuuu", false),
+            ("youtube.com:rrrrrrrrrrr", true),
         ],
     );
     assert!(
@@ -71,7 +71,7 @@ fn a_file_of_your_own_looks_nothing_up_on_youtube() {
 
 #[test]
 fn a_lookup_is_made_again_only_when_due() {
-    let (_d, m, mut s) = setup(UPLOAD, &[("youtube:uuuuuuuuuuu", false)]);
+    let (_d, m, mut s) = setup(UPLOAD, &[("youtube.com:uuuuuuuuuuu", false)]);
     let looked = |at: u64, outcome: Outcome| Looked {
         from: yt("uuuuuuuuuuu"),
         find: "youtube-music".into(),
@@ -116,7 +116,7 @@ fn a_lookup_is_made_again_only_when_due() {
 fn a_provider_turned_off_is_not_looked_up() {
     let (_d, m, s) = setup(
         &format!("[providers.youtube-music]\nenabled = false\n{UPLOAD}"),
-        &[("youtube:uuuuuuuuuuu", false)],
+        &[("youtube.com:uuuuuuuuuuu", false)],
     );
     assert_eq!(finds(&m, &s, false), []);
 }

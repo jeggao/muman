@@ -28,7 +28,7 @@ fn a_new_list_carries_its_header_defaults_and_each_song() {
     assert!(t.starts_with(&format!("{HEADER}{NEW}")), "{t}");
     assert!(
         t.ends_with(&format!(
-            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n{TEMPLATE}"
+            "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n{TEMPLATE}"
         )),
         "{t}"
     );
@@ -44,10 +44,10 @@ fn adding_a_listed_source_joins_its_song_and_sets_its_album_once() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"] # mine\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"] # mine\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
-    let album = SourceKey::parse("youtubetab:OLAK5uy_abcdef").unwrap();
+    let album = SourceKey::parse("youtube.com:playlist/OLAK5uy_abcdef").unwrap();
     m.edit(Edit::Add {
         sources: vec![yt("aaaaaaaaaaa"), SourceKey::Manual("x.flac".into())],
         album: Some((album.clone(), 3)),
@@ -71,7 +71,7 @@ fn comments_and_unknown_keys_survive_a_write() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join(MANIFEST),
-        "# mine\nversion = 1\nfuture = true\n\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"] # kept\nrating = 5\n",
+        "# mine\nversion = 1\nfuture = true\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"] # kept\nrating = 5\n",
     )
     .unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();
@@ -110,7 +110,7 @@ fn pins_tags_and_offsets_are_read() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"manual:a.flac\"]\naudio = \"manual:a.flac\"\nlyrics = false\nlyrics_offset_ms = -120\ntags = { title = \"T\", track = 3, artist = [\"A\", \"B\"], odd = true, empty = \"\" }\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"manual:a.flac\"]\naudio = \"manual:a.flac\"\nlyrics = false\nlyrics_offset_ms = -120\ntags = { title = \"T\", track = 3, artist = [\"A\", \"B\"], odd = true, empty = \"\" }\n",
     );
     let m = Manifest::load(dir.path()).unwrap();
     let s = &m.songs[0];
@@ -132,7 +132,7 @@ fn a_pin_outside_the_sources_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ncover = \"manual:x.png\"\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ncover = \"manual:x.png\"\n",
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("pins manual:x.png"), "{e:#}");
@@ -143,7 +143,7 @@ fn a_source_listed_twice_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("both song 1 and song 2"), "{e:#}");
@@ -171,8 +171,8 @@ fn songs_share_a_kept_record_but_never_a_file() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"lrclib:7\", \"youtube:aaaaaaaaaaa\"]\n\
-         [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n",
+        "[[song]]\nsources = [\"lrclib:7\", \"youtube.com:aaaaaaaaaaa\"]\n\
+         [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs[0].id(), Some(&SourceKey::youtube("aaaaaaaaaaa")));
@@ -208,7 +208,7 @@ fn songs_share_a_kept_record_but_never_a_file() {
 
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
@@ -219,7 +219,7 @@ fn a_rename_and_a_drop_follow_the_key_into_its_pins() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"manual:old.flac\", \"youtube:aaaaaaaaaaa\"]\naudio = \"manual:old.flac\"\ncover = \"youtube:aaaaaaaaaaa\"\n",
+        "[[song]]\nsources = [\"manual:old.flac\", \"youtube.com:aaaaaaaaaaa\"]\naudio = \"manual:old.flac\"\ncover = \"youtube.com:aaaaaaaaaaa\"\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     m.edit(Edit::Rename {
@@ -238,7 +238,7 @@ fn a_rename_and_a_drop_follow_the_key_into_its_pins() {
 fn an_album_is_added_once_with_its_template() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();
-    let key = SourceKey::parse("youtubetab:OLAK5uy_abcdef").unwrap();
+    let key = SourceKey::parse("youtube.com:playlist/OLAK5uy_abcdef").unwrap();
     for _ in 0..2 {
         m.edit(Edit::AddAlbum {
             source: key.clone(),
@@ -286,7 +286,7 @@ fn tags_set_replace_every_spelling_and_keep_the_rest() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { ARTIST = \"Old\", genre = \"Folk\" }\n[[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { ARTIST = \"Old\", genre = \"Folk\" }\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     let artists = vec!["Marlo Venn".to_string(), "The Glass Orchards".to_string()];
@@ -317,7 +317,7 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "\n[defaults]\nlyrics = [\"en\"]\n\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\n[clean.packaging]\nremaster = false # mine\n",
+        "\n[defaults]\nlyrics = [\"en\"]\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\n[clean.packaging]\nremaster = false # mine\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     assert!(!m.clean.is_on("packaging.remaster"));
@@ -383,7 +383,7 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\naudio = \"youtube:bbbbbbbbbbb\"\n[song.tags]\ngenre = \"Pop\"\n[[song]]\nsources = [\"youtube:ccccccccccc\"]\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\naudio = \"youtube.com:bbbbbbbbbbb\"\n[song.tags]\ngenre = \"Pop\"\n[[song]]\nsources = [\"youtube.com:ccccccccccc\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     m.edit(Edit::Remove {
@@ -412,7 +412,7 @@ fn adding_a_removed_key_lifts_it_from_its_tombstone() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[removed]]\nnote = \"x\"\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n",
+        "[[removed]]\nnote = \"x\"\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     m.edit(Edit::Add {
@@ -437,7 +437,7 @@ fn a_rewrite_finds_every_song_before_changing_any() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n[song.tags]\ngenre = \"x\"\n[[song]]\nsources = [\"youtube:ccccccccccc\"]\n[song.tags]\ngenre = \"y\"\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n[song.tags]\ngenre = \"x\"\n[[song]]\nsources = [\"youtube.com:ccccccccccc\"]\n[song.tags]\ngenre = \"y\"\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     let table = |body: &str| {
@@ -456,12 +456,12 @@ fn a_rewrite_finds_every_song_before_changing_any() {
             (
                 yt("ccccccccccc"),
                 Rewritten::Table(table(
-                    "sources = [\"youtube:ccccccccccc\", \"youtube:aaaaaaaaaaa\"]\n[song.tags]\ngenre = \"z\"",
+                    "sources = [\"youtube.com:ccccccccccc\", \"youtube.com:aaaaaaaaaaa\"]\n[song.tags]\ngenre = \"z\"",
                 )),
             ),
             (yt("aaaaaaaaaaa"), Rewritten::Removed("gone".into())),
         ],
-        new: vec![table("sources = [\"youtube:bbbbbbbbbbb\"]")],
+        new: vec![table("sources = [\"youtube.com:bbbbbbbbbbb\"]")],
     });
     m.save().unwrap();
     let lists: Vec<Vec<SourceKey>> = m.songs.iter().map(|s| s.sources.clone()).collect();
@@ -486,13 +486,13 @@ fn edits_are_not_saved_over_a_song_changed_meanwhile() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     let seen = m.songs.clone();
     write(
         dir.path(),
-        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\nlyrics_offset_ms = 5\n",
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nlyrics_offset_ms = 5\n",
     );
     m.edit(Edit::Remove {
         key: yt("aaaaaaaaaaa"),
@@ -530,10 +530,10 @@ fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\n# Checked by ear.\n[song.tags]\n\
+        "\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\n# Checked by ear.\n[song.tags]\n\
          title = \"Paper Comets\" # as sung\nartist = \"Marlo Venn\"\n\n\
-         [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { genre = \"Folk\" }\n\n\
-         [[album]]\nsource = \"youtubetab:OLAK5uy_abcdef\"\n\n\
+         [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { genre = \"Folk\" }\n\n\
+         [[album]]\nsource = \"youtube.com:playlist/OLAK5uy_abcdef\"\n\n\
          [album.tags]\nalbum = \"Lantern Weather\"\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
@@ -542,7 +542,7 @@ fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     let t = text(dir.path());
     assert!(
         t.contains(
-            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n# Checked by ear.\n\
+            "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n# Checked by ear.\n\
              tags.title = \"Paper Comets\" # as sung\ntags.artist = \"Marlo Venn\"\n\
              tags.album = \"\"\n"
         ),
@@ -558,4 +558,48 @@ fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     assert_eq!((again.songs, again.albums), before);
     Manifest::load(dir.path()).unwrap().save().unwrap();
     assert_eq!(text(dir.path()), t);
+}
+
+#[test]
+fn a_key_named_by_its_extractor_is_written_by_its_site() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"archiveorg:item0001\"] # mine\n\
+         album = \"youtubetab:OLAK5uy_abcdef\"\naudio = \"archiveorg:item0001\"\n\
+         held.\"youtube:aaaaaaaaaaa\" = { audio = \"0123456789abcdef\" }\n\n\
+         [[album]]\nsource = \"youtubetab:OLAK5uy_abcdef\"\n\n\
+         [[removed]]\nnote = \"Gone\"\nsources = [\"youtube:rrrrrrrrrrr\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.respelled.len(), 4);
+    assert_eq!(
+        m.respelled_notice().unwrap(),
+        "4 source key(s) by their site, as archiveorg:item0001 → archive.org:item0001"
+    );
+    let archived = SourceKey::parse("archive.org:item0001").unwrap();
+    assert_eq!(m.songs[0].sources, [yt("aaaaaaaaaaa"), archived.clone()]);
+    assert_eq!(m.songs[0].audio.as_ref(), Some(&archived));
+    assert!(m.songs[0].held.contains_key(&yt("aaaaaaaaaaa")));
+    m.edit(Edit::Tag {
+        key: archived,
+        tags: vec![("genre".to_string(), vec!["Folk".to_string()])],
+    });
+    m.save().unwrap();
+    let t = text(dir.path());
+    assert!(
+        t.contains(
+            "sources = [\"youtube.com:aaaaaaaaaaa\", \"archive.org:item0001\"] # mine\n\
+             album = \"youtube.com:playlist/OLAK5uy_abcdef\"\naudio = \"archive.org:item0001\"\n\
+             held.\"youtube.com:aaaaaaaaaaa\" = { audio = \"0123456789abcdef\" }\n"
+        ),
+        "{t}"
+    );
+    assert!(t.contains("tags.genre = \"Folk\""), "an edit finds it: {t}");
+    assert!(
+        t.contains("source = \"youtube.com:playlist/OLAK5uy_abcdef\""),
+        "{t}"
+    );
+    assert!(t.contains("sources = [\"youtube.com:rrrrrrrrrrr\"]"), "{t}");
+    assert!(Manifest::load(dir.path()).unwrap().respelled.is_empty());
 }
