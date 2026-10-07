@@ -42,9 +42,10 @@ touch_root = false
 block_size = "4 KiB"
 
 [audio]
-# Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac and
-# alac. Audio in any other is encoded: lossy audio to `lossy`, lossless
-# audio to `lossless`; audio already in that codec is copied.
+# Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac,
+# alac and wavpack. Audio in any other is encoded: lossy audio to `lossy`,
+# lossless audio to `lossless`, or FLAC or WavPack where that cannot keep
+# it whole; audio already in that codec is copied.
 codecs = ["opus", "flac"]
 lossy = "opus"
 lossless = "flac"
@@ -59,6 +60,13 @@ mp3_bitrate = "320 kb/s"
 # The lowest bitrate a song is lowered to for `max_size`; unset, the
 # encoder's lowest.
 # min_bitrate = "64 kb/s"
+# Speaker layouts audio is written in as it is, by ffmpeg's names, such
+# as "stereo", "5.1" or "7.1.4": "5.1" takes "5.1(side)" too, and "any"
+# takes every one. Audio in any other is mixed into the first of
+# `downmix` with no more channels than it has, else the one with the
+# fewest, scaled so it cannot clip.
+layouts = ["any"]
+downmix = ["stereo"]
 
 # How the best of a song's sources is picked. Each measure scores a
 # source in whole steps; the steps times the weight are summed, and the

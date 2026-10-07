@@ -69,12 +69,43 @@ impl Output {
     }
 }
 
+/// One file an ffmpeg run reads, and the options it is read with, as
+/// where it is read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Input {
+    pub args: Vec<OsString>,
+    pub path: PathBuf,
+}
+
+impl Input {
+    #[must_use]
+    pub fn new(args: Vec<OsString>, path: &Path) -> Self {
+        Self {
+            args,
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+impl From<&Path> for Input {
+    fn from(path: &Path) -> Self {
+        Self::new(Vec::new(), path)
+    }
+}
+
 #[must_use]
 pub fn outputs_command(inputs: &[&Path], outputs: &[Output]) -> Vec<OsString> {
+    let inputs: Vec<Input> = inputs.iter().map(|p| Input::from(*p)).collect();
+    command(&inputs, outputs)
+}
+
+#[must_use]
+pub fn command(inputs: &[Input], outputs: &[Output]) -> Vec<OsString> {
     let mut cmd = base();
     for input in inputs {
+        cmd.extend(input.args.iter().cloned());
         cmd.push("-i".into());
-        cmd.push(input.as_os_str().to_os_string());
+        cmd.push(input.path.as_os_str().to_os_string());
     }
     for output in outputs {
         cmd.extend(output.args.iter().cloned());
@@ -87,15 +118,21 @@ pub fn outputs_command(inputs: &[&Path], outputs: &[Output]) -> Vec<OsString> {
 /// bad output costs only itself and its error is its own. One result per
 /// output, in order.
 pub fn run_outputs<R: Runner>(runner: &R, inputs: &[&Path], outputs: &[Output]) -> Vec<Result<()>> {
+    let inputs: Vec<Input> = inputs.iter().map(|p| Input::from(*p)).collect();
+    run(runner, &inputs, outputs)
+}
+
+/// [`run_outputs`] of inputs read with options of their own.
+pub fn run<R: Runner>(runner: &R, inputs: &[Input], outputs: &[Output]) -> Vec<Result<()>> {
     if outputs.is_empty() {
         return Vec::new();
     }
-    match runner.run(&outputs_command(inputs, outputs)) {
+    match runner.run(&command(inputs, outputs)) {
         Ok(()) => outputs.iter().map(|_| Ok(())).collect(),
         Err(e) if outputs.len() == 1 => vec![Err(e)],
         Err(_) => outputs
             .iter()
-            .map(|o| runner.run(&outputs_command(inputs, std::slice::from_ref(o))))
+            .map(|o| runner.run(&command(inputs, std::slice::from_ref(o))))
             .collect(),
     }
 }

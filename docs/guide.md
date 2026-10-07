@@ -141,7 +141,8 @@ it was served from.
 `tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
-(`musicbrainz_trackid`, `musicbrainz_albumid` and the like), or any
+(`musicbrainz_trackid`, `musicbrainz_albumid` and the like),
+`replaygain_track_gain` and its `_peak` and `album_` kin, or any
 other Vorbis comment name; a list sets a tag several times. `add
 --artist`, `--album` and the other tag flags set these on every song an
 `add` lists. `muman status` shows each tag's value and the source it
@@ -270,7 +271,10 @@ own are ranked by what they measure. A pin is the only override, and the
 order of `sources` breaks the last tie. Measures are counted in steps,
 so noise never decides between near-equals; each step is multiplied by
 its measure's weight and the sums compared, lowest best. A source with a
-measure that could not be taken ranks after those with fewer such.
+measure that could not be taken ranks after those with fewer such. Of
+audio scored alike, lossless beats lossy, then the more bits its samples
+use, as 24 against 16 padded to 24, then the lower sample rate, which an
+upsample would only waste.
 
 The weights `songs.toml` starts with rank by each measure in turn, as
 the table lists them: each outweighs everything after it. `[quality]`
@@ -292,12 +296,19 @@ intro counts, silence does not. Bandwidth is where a lowpass cuts the
 sound off, so a FLAC transcoded from a lossy file measures as narrow as
 that file, while a recording whose treble fades on its own measures
 full. Real stereo tells stereo from mono copied into two channels, even
-at different levels or a few samples apart; clipping is the share of
-samples stuck at full scale or at the audio's own peak, or piled up just
-under full scale where a lossy encoder smeared them. The chosen audio is
+at different levels or a few samples apart, by the front two of more;
+clipping is the share of samples stuck at full scale or at the audio's
+own peak, or piled up just under full scale where a lossy encoder
+smeared them. Float lossless audio can hold samples past full scale, so
+in it only those at its own peak count. Every channel is measured as it
+is, never mixed into two. The chosen audio is
 copied when `[audio] codecs` lists its codec; any other is encoded,
 lossless audio to `[audio] lossless` and lossy audio to `[audio] lossy`,
-at the bitrate `[audio]` sets.
+at the bitrate `[audio]` sets. A file with several audio streams is made
+from the best: lossless before lossy, then the most channels, then the
+highest rate. Lossless audio a codec cannot keep whole, as 32-bit, float
+or more than eight channels in FLAC, is written in one that can, as
+[Codecs](configuration.md#codecs) says.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -322,7 +333,12 @@ is titled. The release's, album, album artist, track, disc, date, totals, countr
 the release's MusicBrainz IDs, come together from the one source whose
 album ranks best, so an album never splits across folders and one
 release's IDs never mix with another's; a song on no album is a single
-named for its title. A file's own tags offer every field by its Vorbis
+named for its title. ReplayGain's track gain and peak come only from the
+source whose audio the song is, and its album gain and peak only when
+the release's fields come from it too: another source's loudness is not
+this audio's. An Opus file holds the gains as `R128_TRACK_GAIN` and
+`R128_ALBUM_GAIN` and no peaks, as Opus players read them, and an Opus
+source's R128 gains are read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
 `3/12` offers its total too. Fields with no tag of their own in MP3 or
 MP4 are written as Picard writes them there. A value over 4 KiB is

@@ -529,7 +529,7 @@ mod tests {
             sources: Vec::new(),
             lyrics: None,
             plan: Some(crate::resolve::Plan {
-                version: crate::resolve::RENDER_VERSION,
+                version: crate::resolve::render_version(Codec::Opus),
                 format: crate::resolve::Format::Copy { codec: Codec::Opus },
                 audio: crate::resolve::AudioRef {
                     key: crate::source::SourceKey::youtube("aaaaaaaaaaa"),

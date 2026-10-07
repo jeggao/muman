@@ -54,7 +54,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use crate::codec::Codec;
+use crate::codec::{Codec, Shape};
 use crate::resolve::Format;
 use crate::settings::Audio;
 
@@ -96,7 +96,7 @@ pub fn ladder(codec: Codec) -> &'static [u32] {
         Codec::Opus => &[256, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32],
         Codec::Aac | Codec::Vorbis => &[256, 192, 160, 128, 112, 96, 80, 64],
         Codec::Mp3 => &[320, 256, 224, 192, 160, 128, 112, 96],
-        Codec::Flac | Codec::Alac => &[],
+        Codec::Flac | Codec::Alac | Codec::WavPack => &[],
     }
 }
 
@@ -149,7 +149,7 @@ fn impairment(codec: Codec) -> &'static [(f64, f64)] {
             (80.0, 26.0),
             (64.0, 35.0),
         ],
-        Codec::Flac | Codec::Alac => &[(1.0, 0.0)],
+        Codec::Flac | Codec::Alac | Codec::WavPack => &[(1.0, 0.0)],
     }
 }
 
@@ -189,6 +189,7 @@ fn per_minute(source: &Source, format: Format) -> f64 {
     let Format::Encode {
         codec,
         kbps: Some(kbps),
+        ..
     } = format
     else {
         return 0.0;
@@ -216,8 +217,11 @@ pub fn loss(source: &Source, first: Format, format: Format) -> f64 {
 /// at each bitrate of its ladder under the one `first` encodes at, and
 /// at or above `[audio] min_bitrate`.
 #[must_use]
-pub fn lower(first: Format, channels: u32, audio: &Audio) -> Vec<Format> {
+pub fn lower(first: Format, shape: &Shape<'_>, audio: &Audio) -> Vec<Format> {
     let codec = audio.lossy;
+    let (mix, shape) = audio.written(shape);
+    let channels = shape.channels;
+    let adapt = codec.adapt(&shape).flatten();
     let scale = |kbps: u32| match (audio.kbps(codec, channels), audio.kbps(codec, 2)) {
         (Some(mine), Some(two)) if two > 0 => kbps * mine / two,
         _ => kbps,
@@ -226,6 +230,7 @@ pub fn lower(first: Format, channels: u32, audio: &Audio) -> Vec<Format> {
         Format::Encode {
             codec: c,
             kbps: Some(k),
+            ..
         } if c == codec => k,
         _ => u32::MAX,
     };
@@ -237,6 +242,8 @@ pub fn lower(first: Format, channels: u32, audio: &Audio) -> Vec<Format> {
         .map(|kbps| Format::Encode {
             codec,
             kbps: Some(kbps),
+            adapt,
+            mix,
         })
         .collect()
 }
@@ -547,10 +554,20 @@ fn on_measured(items: &[Item], policy: &Policy) -> Option<Fit> {
 mod tests {
     use super::*;
 
+    const STEREO: Shape<'static> = Shape {
+        channels: 2,
+        layout: Some("stereo"),
+        sample_rate: 48_000,
+        bits: 16,
+        float: false,
+    };
+
     fn opus(kbps: u32) -> Format {
         Format::Encode {
             codec: Codec::Opus,
             kbps: Some(kbps),
+            adapt: None,
+            mix: None,
         }
     }
 
@@ -569,7 +586,7 @@ mod tests {
             sigma: 0.0,
             known: true,
         }];
-        for format in lower(first, 2, &Audio::default()) {
+        for format in lower(first, &STEREO, &Audio::default()) {
             let Format::Encode { kbps: Some(k), .. } = format else {
                 unreachable!()
             };
@@ -692,9 +709,9 @@ mod tests {
             min_kbps: Some(64),
             ..Audio::default()
         };
-        assert_eq!(lower(opus(96), 2, &floor), [opus(80), opus(64)]);
+        assert_eq!(lower(opus(96), &STEREO, &floor), [opus(80), opus(64)]);
         assert!(
-            lower(opus(96), 2, &Audio::default())
+            lower(opus(96), &STEREO, &Audio::default())
                 .iter()
                 .all(|f| matches!(
                     f,

@@ -32,9 +32,12 @@ fn audio(codec: &str, khz: f64) -> Facts {
             bandwidth_hz: khz * 1000.0,
             incoherence: 0.2,
             clipping: 0.0,
+            bits: 16,
         }),
-        bytes: None,
-        digest: None,
+        layout: Some("stereo".into()),
+        sample_rate: 48_000,
+        bits: 16,
+        ..AudioFacts::default()
     });
     f
 }
@@ -303,6 +306,8 @@ fn real_stereo_beats_mono_in_two_channels() {
         Format::Encode {
             codec: Codec::Opus,
             kbps: Some(160),
+            adapt: None,
+            mix: None,
         }
     );
 }
@@ -737,10 +742,14 @@ fn formats_follow_the_winning_codec() {
     let opus = |kbps| Format::Encode {
         codec: Codec::Opus,
         kbps: Some(kbps),
+        adapt: None,
+        mix: None,
     };
     let flac = Format::Encode {
         codec: Codec::Flac,
         kbps: None,
+        adapt: None,
+        mix: None,
     };
     for (codec, channels, format) in [
         ("alac", 2, flac),
@@ -750,7 +759,9 @@ fn formats_follow_the_winning_codec() {
     ] {
         let key = manual("x");
         let mut f = audio(codec, 20.0);
-        f.audio.as_mut().unwrap().channels = channels;
+        let a = f.audio.as_mut().unwrap();
+        a.channels = channels;
+        a.layout = Some(if channels == 6 { "5.1" } else { "stereo" }.into());
         let facts = BTreeMap::from([(key.clone(), f)]);
         assert_eq!(
             run(&song(&[key]), &facts, &[]).plan.format,
@@ -777,6 +788,8 @@ fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
             Format::Encode {
                 codec: Codec::Mp3,
                 kbps: Some(320),
+                adapt: None,
+                mix: None,
             },
         ),
         (
@@ -784,6 +797,8 @@ fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
             Format::Encode {
                 codec: Codec::Alac,
                 kbps: None,
+                adapt: None,
+                mix: None,
             },
         ),
     ] {
@@ -805,6 +820,8 @@ fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
         Format::Encode {
             codec: Codec::Aac,
             kbps: Some(256),
+            adapt: None,
+            mix: None,
         },
         "lossless audio encodes to a lossy target at its bitrate"
     );
@@ -820,6 +837,8 @@ fn plans_stored_before_other_codecs_read_as_today() {
             Format::Encode {
                 codec: Codec::Opus,
                 kbps: Some(160),
+                adapt: None,
+                mix: None,
             },
         ),
         (
@@ -827,6 +846,8 @@ fn plans_stored_before_other_codecs_read_as_today() {
             Format::Encode {
                 codec: Codec::Flac,
                 kbps: None,
+                adapt: None,
+                mix: None,
             },
         ),
     ] {
@@ -839,6 +860,8 @@ fn plans_stored_before_other_codecs_read_as_today() {
     let today = Format::Encode {
         codec: Codec::Mp3,
         kbps: Some(320),
+        adapt: None,
+        mix: None,
     };
     let json = serde_json::to_string(&today).unwrap();
     assert_eq!(serde_json::from_str::<Format>(&json).unwrap(), today);
@@ -965,4 +988,218 @@ fn a_file_cut_off_is_encoded_however_it_is_coded() {
         "{:?}",
         r.plan.format
     );
+}
+
+#[test]
+fn audio_a_codec_cannot_hold_is_written_in_one_that_can() {
+    let encoded = |codec: Codec, adapt| Format::Encode {
+        codec,
+        kbps: AUDIO.kbps(codec, 6),
+        adapt,
+        mix: None,
+    };
+    let alac = Audio {
+        lossless: Codec::Alac,
+        ..AUDIO.clone()
+    };
+    let cases = [
+        (
+            "ac3",
+            6,
+            Some("5.1(side)"),
+            16,
+            false,
+            &*AUDIO,
+            encoded(Codec::Opus, Some(Adapt::Relabel(6))),
+        ),
+        (
+            "truehd",
+            6,
+            Some("5.1(side)"),
+            24,
+            false,
+            &*AUDIO,
+            encoded(Codec::Flac, None),
+        ),
+        (
+            "pcm_s24le",
+            6,
+            Some("5.1(side)"),
+            24,
+            false,
+            &alac,
+            encoded(Codec::Flac, None),
+        ),
+        (
+            "pcm_s32le",
+            6,
+            Some("5.1"),
+            32,
+            false,
+            &*AUDIO,
+            encoded(Codec::WavPack, None),
+        ),
+        (
+            "dsd_lsbf_planar",
+            6,
+            Some("5.1"),
+            32,
+            true,
+            &*AUDIO,
+            encoded(Codec::WavPack, None),
+        ),
+        (
+            "pcm_s24le",
+            10,
+            Some("5.1.4"),
+            24,
+            false,
+            &*AUDIO,
+            encoded(Codec::WavPack, None),
+        ),
+    ];
+    for (codec, channels, layout, bits, float, settings, format) in cases {
+        let key = manual("x");
+        let mut f = audio(codec, 20.0);
+        let a = f.audio.as_mut().unwrap();
+        a.channels = channels;
+        a.layout = layout.map(str::to_string);
+        a.bits = bits;
+        a.float = float;
+        let facts = BTreeMap::from([(key.clone(), f)]);
+        let r = run_with(&song(&[key]), &facts, &[], settings, &QUALITY);
+        assert_eq!(r.plan.format, format, "{codec} {layout:?} {bits}");
+    }
+}
+
+#[test]
+fn a_wavpack_source_that_flac_holds_is_made_flac() {
+    let key = manual("x");
+    let mut f = audio("wavpack", 20.0);
+    f.audio.as_mut().unwrap().bits = 24;
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    assert_eq!(
+        run(&song(&[key]), &facts, &[]).plan.format,
+        Format::Encode {
+            codec: Codec::Flac,
+            kbps: None,
+            adapt: None,
+            mix: None,
+        }
+    );
+}
+
+#[test]
+fn loudness_comes_from_the_audio_taken_and_its_album_s_only_with_its_album() {
+    let (wide, narrow) = (manual("wide"), manual("narrow"));
+    let mut w = audio("flac", 22.0);
+    tag(&mut w, Field::TrackGain, &["-6.12 dB"], true);
+    tag(&mut w, Field::AlbumGain, &["-5.43 dB"], true);
+    let mut n = audio("flac", 16.0);
+    tag(&mut n, Field::TrackGain, &["-2.00 dB"], true);
+    tag(&mut n, Field::Album, &["Glass Orchard Suite"], true);
+    let gain = |r: &Resolved, key: &str| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    let facts = BTreeMap::from([(wide.clone(), w.clone()), (narrow.clone(), n)]);
+    let r = run(&song(&[narrow.clone(), wide.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, wide);
+    assert_eq!(
+        gain(&r, "REPLAYGAIN_TRACK_GAIN"),
+        Some(vec!["-6.12 dB".into()])
+    );
+    assert_eq!(
+        gain(&r, "REPLAYGAIN_ALBUM_GAIN"),
+        None,
+        "the album is another's"
+    );
+    tag(&mut w, Field::Album, &["Glass Orchard Suite"], true);
+    let facts = BTreeMap::from([(wide.clone(), w)]);
+    let r = run(&song(&[wide]), &facts, &[]);
+    assert_eq!(
+        gain(&r, "REPLAYGAIN_ALBUM_GAIN"),
+        Some(vec!["-5.43 dB".into()])
+    );
+}
+
+#[test]
+fn a_tie_goes_to_the_deeper_then_the_lower_rate() {
+    let with = |bits: u32, sample_rate: u32| {
+        let mut f = audio("flac", 22.0);
+        let a = f.audio.as_mut().unwrap();
+        a.quality.as_mut().unwrap().bits = bits;
+        a.sample_rate = sample_rate;
+        f
+    };
+    let (first, second) = (manual("first"), manual("second"));
+    let pick = |a: Facts, b: Facts| {
+        let facts = BTreeMap::from([(first.clone(), a), (second.clone(), b)]);
+        run(&song(&[first.clone(), second.clone()]), &facts, &[])
+            .plan
+            .audio
+            .key
+    };
+    assert_eq!(pick(with(16, 44_100), with(24, 44_100)), second, "deeper");
+    assert_eq!(
+        pick(with(24, 96_000), with(24, 44_100)),
+        second,
+        "an upsample"
+    );
+    assert_eq!(
+        pick(with(24, 44_100), with(24, 44_100)),
+        first,
+        "listed first"
+    );
+}
+
+#[test]
+fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
+    let settings = Audio {
+        layouts: vec![
+            crate::codec::Speakers::Of(Layout::STEREO),
+            crate::codec::Speakers::Of(Layout::named("5.1").unwrap()),
+        ],
+        downmix: vec![Layout::named("5.1").unwrap(), Layout::STEREO],
+        ..AUDIO.clone()
+    };
+    let key = manual("x");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::TrackGain, &["-6.12 dB"], true);
+    let a = f.audio.as_mut().unwrap();
+    a.channels = 12;
+    a.layout = Some("7.1.4".into());
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run_with(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &[],
+        &settings,
+        &QUALITY,
+    );
+    assert_eq!(
+        r.plan.format,
+        Format::Encode {
+            codec: Codec::Flac,
+            kbps: None,
+            adapt: None,
+            mix: Layout::named("5.1"),
+        }
+    );
+    assert_eq!(r.plan.format.describe(), "FLAC, mixed into 5.1");
+    assert!(
+        !r.plan
+            .tags
+            .iter()
+            .any(|(k, _)| k == "REPLAYGAIN_TRACK_GAIN")
+    );
+    let a = f.audio.as_mut().unwrap();
+    a.channels = 6;
+    a.layout = Some("5.1(side)".into());
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+    assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
 }

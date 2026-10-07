@@ -90,7 +90,7 @@ fn nominal_kbps(codec: Codec) -> f64 {
         Codec::Aac => 128.0,
         Codec::Vorbis => 160.0,
         Codec::Mp3 => 192.0,
-        Codec::Flac | Codec::Alac => 900.0,
+        Codec::Flac | Codec::Alac | Codec::WavPack => 900.0,
     }
 }
 
@@ -208,7 +208,9 @@ fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
         Format::Copy { codec } => {
             measured.map_or_else(|| guess(codec), |b| (b * (1.0 + CONTAINER), SIGMA_COPY))
         }
-        Format::Encode { codec, kbps: None } => {
+        Format::Encode {
+            codec, kbps: None, ..
+        } => {
             let lossless = audio.is_some_and(crate::facts::AudioFacts::is_lossless);
             let pcm = audio.is_some_and(|a| a.codec.starts_with("pcm_"));
             match measured.filter(|_| lossless) {
@@ -269,10 +271,7 @@ fn ladder(
             (Some(f), Some(s)) => estimate(format, f, s),
             _ => (0.0, 0.0),
         };
-        let plan = Plan {
-            format,
-            ..plan.clone()
-        };
+        let plan = plan.with_format(format);
         let renamed = !state.rebased.is_empty() || !state.respelled.is_empty();
         let was = renamed.then(|| plan_key(tools, &state.as_before(&plan)));
         let plan_key = plan_key(tools, &plan);
@@ -306,7 +305,7 @@ fn ladder(
         bandwidth_hz: audio.quality.map(|q| q.bandwidth_hz),
         seconds,
     };
-    for format in fit::lower(plan.format, audio.channels, &manifest.settings.audio) {
+    for format in fit::lower(plan.format, &audio.shape(), &manifest.settings.audio) {
         let lower = choice(format, fit::loss(&source, plan.format, format));
         if lower.estimate.saturating_mul(10) <= ladder.rungs[0].estimate.saturating_mul(9) {
             ladder.rungs.push(lower);
@@ -370,10 +369,7 @@ impl Learnt {
         )?;
         let results = parallel::map(&due, parallel::builds(), |(i, c)| {
             let (n, r) = &planned[*i];
-            let plan = Plan {
-                format: ladders[*i].rungs[*c].format,
-                ..r.plan.clone()
-            };
+            let plan = r.plan.with_format(ladders[*i].rungs[*c].format);
             let folder = at.scratch.join(format!("{n}-{c}"));
             let done = render::render(
                 runner,
@@ -544,7 +540,7 @@ pub fn fit_library<R: Runner, W: Write>(
     let mut lowered = 0;
     {
         for ((n, r), (ladder, c)) in planned.iter_mut().zip(ladders.iter().zip(&fit.choice)) {
-            r.plan.format = ladder.rungs[*c].format;
+            r.plan = r.plan.with_format(ladder.rungs[*c].format);
             if let Some(file) = learnt.made.remove(&(*n, *c)) {
                 placed.insert(*n, file);
             }
@@ -587,14 +583,10 @@ pub fn as_written(manifest: &Manifest, state: &State, planned: &mut Planned) {
             .flatten()
             .find_map(|(_, w)| {
                 let plan = w.plan.as_ref()?;
-                let same = Plan {
-                    format: r.plan.format,
-                    ..plan.clone()
-                };
-                (same == r.plan).then_some(plan.format)
+                (plan.with_format(r.plan.format) == r.plan).then_some(plan.format)
             });
         if let Some(format) = fitted {
-            r.plan.format = format;
+            r.plan = r.plan.with_format(format);
         }
     }
 }
@@ -648,10 +640,12 @@ mod tests {
     #[test]
     fn a_plan_s_key_changes_with_the_plan_and_the_tools() {
         let plan = |kbps| Plan {
-            version: crate::resolve::RENDER_VERSION,
+            version: crate::resolve::render_version(Codec::Opus),
             format: Format::Encode {
                 codec: Codec::Opus,
                 kbps: Some(kbps),
+                adapt: None,
+                mix: None,
             },
             audio: AudioRef {
                 key: SourceKey::youtube("vid00000001"),

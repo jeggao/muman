@@ -29,6 +29,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   serves the same stream. A video of any other site records the page it
   came from, and is fetched again from it, where it could not be at all.
 
+- **WavPack.** `wavpack` is a codec like the others, written as `.wv`
+  with APEv2 tags, and a source in it can be copied. `.w64`, `.rf64`,
+  `.aifc`, `.caf`, `.tak`, `.shn`, `.dts`, `.thd`, `.mlp` and `.dff`
+  files are picked up as songs.
+
+- **ReplayGain kept.** A source's `REPLAYGAIN_TRACK_GAIN` and
+  `_PEAK`, and its album's when the song's release comes from it too,
+  are written into its song, where they were dropped; an Opus file
+  holds the gains as R128's, and an Opus source's R128 gains are read.
+- **Pre-emphasis and album images said.** A source whose cue sheet,
+  in a FLAC file or a `.cue` beside it, marks it pre-emphasized is named
+  when it is measured, since its song keeps no such flag and plays
+  bright; so is an album image with a `.cue` beside it, which is one
+  song.
+
+- **Speaker layouts chosen like codecs.** `[audio] layouts` lists the
+  layouts a song is written in as it is, `"5.1"` taking `5.1(side)` too,
+  and `[audio] downmix` what audio in any other is mixed into: the first
+  with no more channels than it has. A mix is scaled so it cannot clip,
+  and drops the source's ReplayGain. Songs already written stay as
+  they are until `layouts` is changed.
+
 ### Changed
 
 - **Sites in the song list.** Which extractors each site names its
@@ -86,6 +108,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `lyrics_offset_ms` is still read and set.
 
 ### Fixed
+
+- **Opus ended 312 samples late.** Every Opus file, copied or encoded,
+  had its timestamps shifted by its encoder's delay, so it played 6.5 ms
+  of padding past its end and gapless albums gapped; Opus songs are
+  written again on the next `sync`, and no other song is.
+- **Ties broken by the audio.** Two sources the measures scored alike
+  went to the one listed first, a 16-bit copy over its 24-bit master
+  among them. Lossless audio wins, then the one whose samples use more
+  bits, then the lower sample rate.
+
+- **Surround and float audio measured as it is.** Audio was mixed into
+  two channels before it was measured, which pushed 7.1 noise at half
+  scale past full scale, and a 5.1 master measured 2.58% clipped and
+  lost to its own stereo downmix. Each channel is measured
+  apart. A float master past full scale counted its overs as clipped,
+  so a copy cut at full scale could win; overs in float lossless audio
+  are not clipping. A stereo file with one channel inverted measured as
+  silence and ranked last; each channel's spectrum is summed rather than
+  their mix. Measuring a two-hour file took 3.8 GiB in ffmpeg, which now
+  decodes only the excerpts it measures. `status` names a surround
+  source's layout. Sources are measured again on the next `sync`.
+
+- **Every channel and sample kept.** A codec no longer gets audio it
+  cannot hold. A 5.1 AC-3, E-AC-3, DTS or TrueHD source, whose decoder
+  names its speakers as side ones, failed to encode to Opus, and so did
+  4.0, 7.1 (wide) and more than eight channels; Opus names the side
+  speakers as back ones, and writes any other layout with no speakers
+  named. ALAC mixed 7.1 into 6.1 and quad into 5.0 without a word, and
+  FLAC failed past eight channels and cut 32-bit and float samples to 24
+  bits, clipping float above full scale; lossless audio either cannot
+  hold whole is written as FLAC, or else WavPack. Vorbis failed at rates
+  such as 22.05 and 96 kHz, and is resampled to 44.1 or 48 kHz from
+  them. TrueHD, MLP, DTS-HD Master Audio and DSD counted as lossy, and
+  were encoded to `[audio] lossy`. A file with several audio streams was
+  made from the first, which could be a stereo downmix beside the
+  master; it is made from the best. Sources are read again on the next
+  `sync`.
+
+- **A failing song deleted the folder another song was being written
+  into.** A song that fails leaves its folder for the sync, which
+  clears it once every song is written.
 
 - **Name limits said, not bent.** A `max_name_bytes` under 40 or a
   `max_folder_bytes` under 16 is refused, where it was raised to that

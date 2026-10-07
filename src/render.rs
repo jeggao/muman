@@ -11,7 +11,10 @@
 //! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
 //! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
 //! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
-//! name. The cover is a front-cover picture written through `lofty`: a
+//! name; in WavPack each is an APEv2 item, by the name `lofty` gives it or
+//! its own. Opus holds ReplayGain's gains as R128's and no peaks, as
+//! RFC 7845 tells its players to read them. The cover is a front-cover
+//! picture written through `lofty`: a
 //! JPEG or PNG without borders as its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
 //! metadata block holds at most 16 MiB, so a cover past it is made a JPEG
@@ -32,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use lofty::TextEncoding;
+use lofty::ape::{ApeItem, ApeTag};
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::flac::FlacFile;
@@ -51,6 +55,7 @@ use crate::runner::Runner;
 use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::store::Located;
+use crate::tags::Field;
 
 #[derive(Debug)]
 pub struct Job<'a> {
@@ -106,7 +111,12 @@ fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{index}")];
     args.extend(match format {
         Format::Copy { .. } => vec!["-c:a".into(), "copy".into()],
-        Format::Encode { codec, kbps } => codec.encoder_args(kbps),
+        Format::Encode {
+            codec,
+            kbps,
+            adapt,
+            mix,
+        } => codec.encoder_args(kbps, adapt, mix),
     });
     // Tags are written from the plan alone; ffmpeg would carry the
     // container's, chapters as comments among them.
@@ -296,11 +306,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         Err(e) => {
             let _ = fs::remove_file(&audio_part);
             let _ = fs::remove_file(&lyrics_part);
-            // The folders made for it, if nothing else is in them.
-            let mut folder = dir;
-            while folder != job.library && fs::remove_dir(folder).is_ok() {
-                folder = folder.parent().unwrap_or(job.library);
-            }
+            // Its folder stays: another song rendered at once may be
+            // writing into it. The sync clears the folders failures leave.
             Err(e)
         }
     }
@@ -598,6 +605,16 @@ fn write_tags(
             }
             ilst.save_to(&mut file, WriteOptions::default())
         }
+        Container::WavPack => {
+            let (generic, own) = generic_tag(TagType::Ape, tags, picture);
+            let mut ape = ApeTag::from(generic);
+            for (key, values) in own {
+                if let Ok(item) = ApeItem::new(key.clone(), ItemValue::Text(values.join("\0"))) {
+                    ape.insert(item);
+                }
+            }
+            ape.save_to(&mut file, WriteOptions::default())
+        }
     };
     written.with_context(|| format!("writing tags to {}", path.display()))
 }
@@ -669,6 +686,13 @@ fn vorbis_comments(
     if let Some(mask) = mask {
         comments.push(CHANNEL_MASK.to_string(), mask);
     }
+    let opus;
+    let tags = if codec == Codec::Opus {
+        opus = opus_gains(tags);
+        &opus
+    } else {
+        tags
+    };
     for (key, values) in tags {
         for value in values {
             comments.push(key.clone(), value.clone());
@@ -680,6 +704,31 @@ fn vorbis_comments(
             .context("reading the cover's dimensions")?;
     }
     Ok(comments)
+}
+
+/// `tags` as Opus holds gains: ReplayGain's gains as R128's, in 1/256 dB
+/// against -23 LUFS, and no peaks, which Opus players are told to
+/// ignore along with ReplayGain's tags.
+fn opus_gains(tags: &[(String, Vec<String>)]) -> Vec<(String, Vec<String>)> {
+    let r128 = |value: &String| {
+        let db: f64 = value.trim_end_matches(" dB").parse().ok()?;
+        let steps = ((db - crate::tags::R128_BELOW_REPLAYGAIN_DB) * 256.0).round();
+        #[allow(clippy::cast_possible_truncation)]
+        let steps = steps.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
+        Some(steps.to_string())
+    };
+    tags.iter()
+        .filter_map(|(key, values)| {
+            let renamed = match Field::named(key) {
+                Some(Field::TrackGain) => "R128_TRACK_GAIN",
+                Some(Field::AlbumGain) => "R128_ALBUM_GAIN",
+                Some(Field::TrackPeak | Field::AlbumPeak) => return None,
+                _ => return Some((key.clone(), values.clone())),
+            };
+            let values: Vec<String> = values.iter().filter_map(r128).collect();
+            (!values.is_empty()).then(|| (renamed.to_string(), values))
+        })
+        .collect()
 }
 
 /// The tags `lofty` can map into `kind`, as a generic tag holding the

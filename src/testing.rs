@@ -18,6 +18,7 @@ pub const SILENCE_FLAC: &[u8] = include_bytes!("../testdata/silence.flac");
 pub const SILENCE_VORBIS: &[u8] = include_bytes!("../testdata/silence.ogg");
 pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
 pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
+pub const SILENCE_WV: &[u8] = include_bytes!("../testdata/silence.wv");
 pub const PIXEL: &[u8] = include_bytes!("../testdata/pixel.png");
 
 /// The ffprobe JSON of a yt-dlp original: video, Opus audio, an English
@@ -233,6 +234,7 @@ impl Fake {
             "ogg" => SILENCE_VORBIS.to_vec(),
             "mp3" => SILENCE_MP3.to_vec(),
             "ipod" => SILENCE_M4A.to_vec(),
+            "wv" => SILENCE_WV.to_vec(),
             _ => return Ok(()),
         };
         fs::write(&path, bytes)?;

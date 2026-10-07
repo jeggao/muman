@@ -15,7 +15,7 @@
 //!
 //! A term is a key when what comes before its colon is no field's name
 //! and a site or scheme some key in the song list uses, or one
-//! [`crate::source::SITES`] names, so `youtube.com:<id>` names a key
+//! [`crate::sites::Sites`] names, so `youtube.com:<id>` names a key
 //! where `composer:quill` names a field; `youtube:<id>`, as keys were
 //! once named, names the same. A song that does not resolve
 //! yet, its sources not measured, offers its own `tags` and the tags of

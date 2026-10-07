@@ -663,9 +663,7 @@ mod tests {
             index: 1,
             codec: "opus".into(),
             channels: 2,
-            quality: None,
-            bytes: None,
-            digest: None,
+            ..crate::facts::AudioFacts::default()
         });
         let plan = crate::resolve::Plan {
             version: 1,

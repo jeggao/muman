@@ -1,6 +1,6 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, and which loop fits songs into a size. Each rule names the one
+//! named, which loop fits songs into a size, and where audio is mixed. Each rule names the one
 //! place a thing is done; code that does it anywhere else fails here
 //! until the rule, and the reason beside it, is changed on purpose.
 //!
@@ -77,7 +77,7 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "render.rs",
-        8,
+        7,
         "a song's new files, written beside and renamed into a path the ledger kept",
     ),
     (
@@ -236,13 +236,65 @@ fn the_song_list_is_written_by_the_manifest_and_undo_alone() {
     assert!(wrong.is_empty(), "{wrong:?}");
 }
 
+/// Every file that may mix or resample audio, and why. Anywhere else it
+/// would change what is measured or written behind the codec's back.
+const RESHAPES: &[(&str, &str)] = &[
+    (
+        "codec.rs",
+        "what a codec does so it holds a source, said by `Codec::adapt`",
+    ),
+    (
+        "fingerprint.rs",
+        "the mono copy at Chromaprint's rate that prints are made of",
+    ),
+    ("align.rs", "the mono copy two recordings are aligned on"),
+];
+
+#[test]
+fn audio_is_mixed_only_to_fit_a_codec_or_to_print_it() {
+    let allowed: Vec<&str> = RESHAPES.iter().map(|(f, _)| *f).collect();
+    let options = [
+        "\"-ac\"",
+        "\"-ar\"",
+        "channelmap",
+        "mapping_family",
+        "aformat",
+        "aresample",
+        "\"pan",
+    ];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if !allowed.contains(&file.as_str()) {
+            for line in lines_with(&text, &options) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_plan_changes_format_with_its_renderer_version() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &["plan.format = "]) {
+            wrong.push(format!("{file}: {}", line.trim()));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "set a plan's format by `Plan::with_format`, which sets its version:\n{}",
+        wrong.join("\n")
+    );
+}
+
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
     for (file, ..) in MUTATIONS {
         assert!(all.contains_key(*file), "{file}");
     }
-    for (file, _) in STATICS {
+    for (file, _) in STATICS.iter().chain(RESHAPES) {
         assert!(all.contains_key(*file), "{file}");
     }
 }

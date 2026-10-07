@@ -142,27 +142,7 @@ pub fn measure<R: Runner, W: Write>(
             for ((_, located), result) in chunk.iter().zip(measured) {
                 match result {
                     Ok(f) => {
-                        if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
-                            crate::ui::warning(
-                                out,
-                                &format!(
-                                    "{} holds {held:.0} s of audio where its header says \
-                                     {said:.0} s: cut off, as a copy or a download stopped",
-                                    located.key
-                                ),
-                            )?;
-                        }
-                        if f.audio.as_ref().is_some_and(|a| a.quality.is_none()) {
-                            crate::ui::warning(
-                                out,
-                                &format!(
-                                    "{}: no part of its audio measured holds sound to judge, \
-                                     as silence or a stream that will not decode; it ranks \
-                                     after every source whose audio does",
-                                    located.key
-                                ),
-                            )?;
-                        }
+                        warn_of(out, &located.key, &f)?;
                         if let Some(old) = state.facts.get(&located.key).cloned() {
                             state.rebase(&located.key, &old, &f);
                         }
@@ -193,6 +173,47 @@ pub fn measure<R: Runner, W: Write>(
         },
     )?;
     (how.checkpoint)(state)
+}
+
+/// What a source's measures hold that its song is worse for, said once
+/// when it is measured.
+fn warn_of<W: Write>(out: &mut W, key: &SourceKey, f: &crate::facts::Facts) -> Result<()> {
+    if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{key} holds {held:.0} s of audio where its header says \
+                 {said:.0} s: cut off, as a copy or a download stopped"
+            ),
+        )?;
+    }
+    if f.audio.as_ref().is_some_and(|a| a.quality.is_none()) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{key}: no part of its audio measured holds sound to judge, \
+                 as silence or a stream that will not decode; it ranks \
+                 after every source whose audio does"
+            ),
+        )?;
+    }
+    for unkept in &f.unkept {
+        crate::ui::warning(out, &unkept_warning(key, *unkept))?;
+    }
+    Ok(())
+}
+
+fn unkept_warning(key: &SourceKey, unkept: crate::facts::Unkept) -> String {
+    match unkept {
+        crate::facts::Unkept::PreEmphasis => format!(
+            "{key}: its cue sheet marks it pre-emphasized, which its song does not keep; \
+             it plays bright on a player that is not told to de-emphasize it"
+        ),
+        crate::facts::Unkept::CueSheet => format!(
+            "{key}: a cue sheet beside it splits it into tracks, which muman does not; \
+             it is one song"
+        ),
+    }
 }
 
 /// Read again the tags of every source whose measures still hold but
@@ -403,7 +424,8 @@ pub(crate) fn name_of(
 /// What differs between two plans, in words.
 fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     let mut what = Vec::new();
-    if old.version != new.version {
+    // Each codec has its renderer's version: a new codec says it.
+    if old.version != new.version && old.format.codec() == new.format.codec() {
         what.push("muman's rendering");
     }
     if old.audio != new.audio {
@@ -871,6 +893,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let every = opts.checkpoint.unwrap_or(CHECKPOINT);
     let mut kept_at = Instant::now();
     let writing = progress::step("Writing", Some(due.len() as u64));
+    let mut failed_at = Vec::new();
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
         if let Some((folder, made)) = placed.get(n) {
@@ -963,12 +986,14 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 Err(e) => {
                     ok = false;
                     failed.extend(song.sources.iter().cloned());
+                    failed_at.push(path_of(r));
                     crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
                 }
             }
         }
         Ok::<(), anyhow::Error>(())
     })?;
+    crate::library::remove_empty_folders(&dirs.library, &failed_at);
     let removed = prune(&mut ledger, &old, &mut outputs, &failed, opts.force, out)?;
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {

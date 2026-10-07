@@ -8,7 +8,8 @@
 //! fewer such.
 //!
 //! - Audio: least that is not the song (a video's intro or skit), then
-//!   the widest bandwidth, real stereo, least clipping.
+//!   the widest bandwidth, real stereo, least clipping; scored alike,
+//!   lossless, then the most bits used, then the lowest rate.
 //! - Cover: square content, then effective resolution, then fewest
 //!   block artifacts; borders a video frame adds are cropped off.
 //! - Lyrics: timed, in a preferred language, from a source whose audio
@@ -31,7 +32,10 @@
 //! a codec `[audio] codecs` lists is copied, and so is one already in the
 //! codec it would be encoded to; any other lossless codec is encoded to
 //! `[audio] lossless` and any other lossy one to `[audio] lossy`, at that
-//! codec's bitrate. A file cut off is encoded whatever its codec, so the
+//! codec's bitrate. Lossless audio `[audio] lossless` cannot keep whole
+//! is encoded to FLAC if FLAC can, and to WavPack otherwise; a codec that
+//! holds it only adapted, as Opus relabelling side speakers, carries the
+//! [`Adapt`] in its format. A file cut off is encoded whatever its codec, so the
 //! song ends cleanly where its source breaks off. See [`crate::codec`].
 //! This is the song at its best;
 //! under `[library] max_size`, [`crate::limit`] may lower it once every
@@ -58,8 +62,9 @@
 //!
 //! A plan is stored whole and compared whole, which is how a song renders
 //! again exactly when its sources' revisions, the picks, the tags or the
-//! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
-//! renders to change.
+//! renderer change; [`render_version`] rises for a codec when the bytes a
+//! plan in it renders to change, so only songs in that codec are written
+//! again.
 
 use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
@@ -69,7 +74,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::Codec;
+use crate::codec::{Adapt, Codec, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
@@ -80,9 +85,16 @@ use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
 
-/// Bumped whenever the bytes a plan renders to change, so every song is
-/// rendered again.
-pub const RENDER_VERSION: u32 = 3;
+/// The renderer's version for plans in `codec`, raised whenever the bytes
+/// such a plan renders to change, so the songs in it are rendered again.
+#[must_use]
+pub fn render_version(codec: Codec) -> u32 {
+    match codec {
+        // Opus ended 312 samples late, its timestamps shifted by its delay.
+        Codec::Opus => 4,
+        _ => 3,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "StoredFormat")]
@@ -95,6 +107,13 @@ pub enum Format {
         /// The bitrate encoded at, in kbit/s, for a lossy codec; a new
         /// `[audio]` setting changes the plan, so the song is encoded again.
         kbps: Option<u32>,
+        /// What is done to the audio so the codec holds it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapt: Option<Adapt>,
+        /// The layout its speakers are mixed into, where `[audio] layouts`
+        /// takes not theirs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mix: Option<Layout>,
     },
 }
 
@@ -116,47 +135,73 @@ impl Format {
         matches!(self, Self::Encode { .. })
     }
 
-    /// The format in words: `Opus 96 kbit/s`, `FLAC, copied`.
+    /// The format in words: `Opus 96 kbit/s`, `FLAC, copied`,
+    /// `FLAC, mixed into 5.1`.
     #[must_use]
     pub fn describe(self) -> String {
         match self {
             Self::Copy { codec } => format!("{}, copied", codec.label()),
             Self::Encode {
-                codec,
-                kbps: Some(kbps),
-            } => format!("{} {kbps} kbit/s", codec.label()),
-            Self::Encode { codec, kbps: None } => codec.label().to_string(),
+                codec, kbps, mix, ..
+            } => {
+                let rate = kbps.map(|k| format!(" {k} kbit/s")).unwrap_or_default();
+                let mixed = mix.map(|m| format!(", mixed into {m}")).unwrap_or_default();
+                format!("{}{rate}{mixed}", codec.label())
+            }
         }
     }
 
-    /// The format `audio` is written in under `settings`.
+    /// The layout its speakers are mixed into, if they are.
+    #[must_use]
+    pub fn mix(self) -> Option<Layout> {
+        match self {
+            Self::Encode { mix, .. } => mix,
+            Self::Copy { .. } => None,
+        }
+    }
+
+    /// The format `audio` is written in under `settings`: copied where its
+    /// codec may be and its layout is taken as it is.
     #[must_use]
     pub fn of(audio: &AudioFacts, settings: &Audio) -> Self {
+        let encoded = Self::encoded(audio, settings);
         match Codec::probed(&audio.codec) {
             Some(codec)
-                if codec == Self::target(audio, settings) || settings.codecs.contains(&codec) =>
+                if encoded.mix().is_none()
+                    && (codec == encoded.codec() || settings.codecs.contains(&codec)) =>
             {
                 Self::Copy { codec }
             }
-            _ => Self::encoded(audio, settings),
+            _ => encoded,
         }
     }
 
-    /// `audio` encoded under `settings`, whatever its codec.
+    /// `audio` encoded under `settings`, whatever its codec: mixed into
+    /// another layout where `[audio] layouts` takes not its own, then to
+    /// `[audio] lossy` or `lossless`, or where a lossless codec there
+    /// cannot keep every channel and sample, to FLAC or else WavPack.
     #[must_use]
     pub fn encoded(audio: &AudioFacts, settings: &Audio) -> Self {
-        let codec = Self::target(audio, settings);
-        Self::Encode {
-            codec,
-            kbps: settings.kbps(codec, audio.channels),
-        }
-    }
-
-    fn target(audio: &AudioFacts, settings: &Audio) -> Codec {
-        if audio.is_lossless() {
+        let (mix, shape) = settings.written(&audio.shape());
+        let wanted = if audio.is_lossless() {
             settings.lossless
         } else {
             settings.lossy
+        };
+        let fallbacks: &[Codec] = if wanted.is_lossless() {
+            &[Codec::Flac, Codec::WavPack]
+        } else {
+            &[]
+        };
+        let (codec, adapt) = std::iter::once(wanted)
+            .chain(fallbacks.iter().copied())
+            .find_map(|codec| codec.adapt(&shape).map(|adapt| (codec, adapt)))
+            .unwrap_or((Codec::WavPack, None));
+        Self::Encode {
+            codec,
+            kbps: settings.kbps(codec, shape.channels),
+            adapt,
+            mix,
         }
     }
 }
@@ -165,10 +210,21 @@ impl Format {
 /// stored before other codecs than Opus and FLAC were written.
 #[derive(Deserialize)]
 enum StoredFormat {
-    Copy { codec: Codec },
-    Encode { codec: Codec, kbps: Option<u32> },
+    Copy {
+        codec: Codec,
+    },
+    Encode {
+        codec: Codec,
+        kbps: Option<u32>,
+        #[serde(default)]
+        adapt: Option<Adapt>,
+        #[serde(default)]
+        mix: Option<Layout>,
+    },
     OpusCopy,
-    OpusEncode { kbps: u32 },
+    OpusEncode {
+        kbps: u32,
+    },
     FlacCopy,
     FlacEncode,
 }
@@ -177,16 +233,30 @@ impl From<StoredFormat> for Format {
     fn from(stored: StoredFormat) -> Self {
         match stored {
             StoredFormat::Copy { codec } => Self::Copy { codec },
-            StoredFormat::Encode { codec, kbps } => Self::Encode { codec, kbps },
+            StoredFormat::Encode {
+                codec,
+                kbps,
+                adapt,
+                mix,
+            } => Self::Encode {
+                codec,
+                kbps,
+                adapt,
+                mix,
+            },
             StoredFormat::OpusCopy => Self::Copy { codec: Codec::Opus },
             StoredFormat::OpusEncode { kbps } => Self::Encode {
                 codec: Codec::Opus,
                 kbps: Some(kbps),
+                adapt: None,
+                mix: None,
             },
             StoredFormat::FlacCopy => Self::Copy { codec: Codec::Flac },
             StoredFormat::FlacEncode => Self::Encode {
                 codec: Codec::Flac,
                 kbps: None,
+                adapt: None,
+                mix: None,
             },
         }
     }
@@ -238,6 +308,16 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// This plan written in `format`, by the renderer's version for it.
+    #[must_use]
+    pub fn with_format(&self, format: Format) -> Self {
+        Self {
+            version: render_version(format.codec()),
+            format,
+            ..self.clone()
+        }
+    }
+
     /// This plan with each part of `key` it takes named as `to` names it,
     /// where it is named as `from` does: facts of one source's same files,
     /// made at two times.
@@ -396,7 +476,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     };
     let cover = pick_cover(input);
     let lyrics = pick_lyrics(input, &audio_key);
-    let (tags, tag_why, artists) = resolve_tags(input);
+    let (tags, tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -417,7 +497,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     })?;
     Ok(Resolved {
         plan: Plan {
-            version: RENDER_VERSION,
+            version: render_version(format.codec()),
             format,
             audio: AudioRef {
                 key: audio_key,
@@ -495,7 +575,13 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                 q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
             ),
         ]);
-        let rank: Rank = vec![unknown, sum, i64::try_from(*n).unwrap_or(UNKNOWN)];
+        let rank: Rank = vec![
+            unknown,
+            sum,
+            -tie_break(facts.audio.as_ref()),
+            facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
+            i64::try_from(*n).unwrap_or(UNKNOWN),
+        ];
         let why = match (unmatched, q) {
             (u, Some(q)) => format!(
                 "{}, {:.1} kHz, {}, {:.2}% clipped",
@@ -512,11 +598,10 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                     }
                 ),
                 units::khz_of_hz(q.bandwidth_hz),
-                if q.is_stereo(input.quality.stereo.incoherence) {
-                    "stereo"
-                } else {
-                    "mono"
-                },
+                speakers(
+                    facts.audio.as_ref(),
+                    q.is_stereo(input.quality.stereo.incoherence)
+                ),
                 q.clipping * 100.0
             ),
             (_, None) => "not measured".to_string(),
@@ -527,6 +612,28 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
         .min_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, key, why)| (key, why))
         .ok_or_else(|| anyhow::anyhow!("no source of this song has audio on disk"))
+}
+
+/// What breaks a tie between sources the measures score alike, most
+/// first: lossless audio, then the bits it uses. A rate past what its
+/// bandwidth needs holds nothing more, so of two the lower wins next.
+fn tie_break(audio: Option<&AudioFacts>) -> i64 {
+    audio
+        .filter(|a| a.is_lossless())
+        .map_or(0, |a| 1 + i64::from(a.quality.map_or(0, |q| q.bits)))
+}
+
+/// The speakers audio plays on in words: its layout past two channels,
+/// as `5.1(side)`, and otherwise whether its two are really stereo.
+fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
+    match audio.filter(|a| a.channels > 2) {
+        Some(a) => a
+            .layout
+            .clone()
+            .unwrap_or_else(|| format!("{} channels", a.channels)),
+        None if stereo => "stereo".to_string(),
+        None => "mono".to_string(),
+    }
 }
 
 fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
@@ -852,10 +959,14 @@ fn insert_in_order(written: &mut Vec<(String, Slot)>, field: Field, slot: Slot) 
 /// Vorbis comments in the order written, each a name and its values.
 type Comments = Vec<(String, Vec<String>)>;
 
-/// The song's tags, and where each came from.
 /// The song's tags, why each is what it is, and its artists one by one,
 /// as the path template takes them, though ARTIST is written joined.
-fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
+/// A mix is as loud as no source measured, so `mixed` takes no loudness.
+fn resolve_tags(
+    input: &Input<'_>,
+    audio: &SourceKey,
+    mixed: bool,
+) -> (Comments, Vec<TagWhy>, Vec<String>) {
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
     let any = |_: &SourceKey| true;
@@ -900,6 +1011,18 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
                     cleaned: vec![clean::DISC_IN_ALBUM],
                 },
             );
+        }
+    }
+    let heard = |k: &SourceKey| !mixed && k == audio;
+    let album_heard = |k: &SourceKey| heard(k) && release.is_some_and(|r| r.key == audio);
+    for (scope, from) in [
+        (Scope::Loudness, &heard as &dyn Fn(&SourceKey) -> bool),
+        (Scope::AlbumLoudness, &album_heard),
+    ] {
+        for field in Field::of(scope) {
+            if let Some(c) = best_offer(&candidates, field, from) {
+                fields.insert(field, Slot::of(c));
+            }
         }
     }
     if !fields.contains_key(&Field::Date)
