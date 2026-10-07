@@ -51,7 +51,8 @@ use std::ffi::OsString;
 use serde::Deserialize;
 
 use crate::clean;
-use crate::source::{SourceKey, is_id, watch_url};
+use crate::sites::Sites;
+use crate::source::SourceKey;
 
 /// How far apart a video and its track may run, in seconds; an intro or
 /// outro on the video makes the two different cuts.
@@ -125,18 +126,17 @@ impl Entry {
             .is_none_or(|k| k == "Youtube")
     }
 
-    /// Whether it is one video or track a source key can name: YouTube's
-    /// by the shape of its ID, another site's by what its key takes. A
-    /// channel's tab or playlist is none.
+    /// Whether it is one video or track a source key can name, as
+    /// `sites` takes its ID. A channel's tab or playlist is none.
     #[must_use]
-    pub fn is_video(&self) -> bool {
+    pub fn is_video(&self, sites: &Sites) -> bool {
         if self.kind.as_deref() == Some("playlist") {
             return false;
         }
         match self.extractor_key.as_deref().or(self.ie_key.as_deref()) {
-            None | Some("Youtube") => is_id(&self.id),
+            None | Some("Youtube") => is_video_id(&self.id, sites),
             Some(other) => {
-                !other.starts_with("Youtube") && SourceKey::fetched(other, None, &self.id).is_some()
+                !other.starts_with("Youtube") && sites.fetched(other, None, &self.id).is_some()
             }
         }
     }
@@ -250,14 +250,27 @@ struct Listed {
     entries: Vec<serde_json::Value>,
 }
 
+/// YouTube's address of a video.
+#[must_use]
+pub fn watch_url(id: &str) -> String {
+    format!("https://www.youtube.com/watch?v={id}")
+}
+
+/// Whether `id` is one of a YouTube video, as `sites` takes it.
+fn is_video_id(id: &str, sites: &Sites) -> bool {
+    !id.contains('/') && sites.accepts(&SourceKey::youtube(id))
+}
+
 /// Read a [`list_command`] run; `None` when it names nothing.
 #[must_use]
-pub fn listing(json: &[u8]) -> Option<Listing> {
+pub fn listing(json: &[u8], sites: &Sites) -> Option<Listing> {
     let value: serde_json::Value = serde_json::from_slice(json).ok()?;
     let listed = Listed::deserialize(&value).ok()?;
     if listed.kind.as_deref() != Some("playlist") {
         let video = Entry::deserialize(&value).ok()?;
-        return video.is_video().then(|| Listing::Video(Box::new(video)));
+        return video
+            .is_video(sites)
+            .then(|| Listing::Video(Box::new(video)));
     }
     if listed.webpage_url_basename.as_deref() == Some("watch") {
         return Some(Listing::Mix {
@@ -269,7 +282,7 @@ pub fn listing(json: &[u8]) -> Option<Listing> {
     let all: Vec<Option<Entry>> = listed
         .entries
         .iter()
-        .map(|e| Entry::deserialize(e).ok().filter(Entry::is_video))
+        .map(|e| Entry::deserialize(e).ok().filter(|e| e.is_video(sites)))
         .collect();
     let album = listed
         .id
@@ -328,21 +341,21 @@ pub fn search_command(video: &Entry) -> Option<Vec<OsString>> {
 /// One JSON object per line; a line that does not parse, or names no
 /// video, is skipped.
 #[must_use]
-pub fn entries(jsonl: &[u8]) -> Vec<Entry> {
+pub fn entries(jsonl: &[u8], sites: &Sites) -> Vec<Entry> {
     String::from_utf8_lossy(jsonl)
         .lines()
         .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-        .filter(Entry::is_video)
+        .filter(|e| e.is_video(sites))
         .collect()
 }
 
 /// The video IDs a `--print id` run wrote, one per line.
 #[must_use]
-pub fn ids(printed: &[u8]) -> Vec<String> {
+pub fn ids(printed: &[u8], sites: &Sites) -> Vec<String> {
     String::from_utf8_lossy(printed)
         .lines()
         .map(str::trim)
-        .filter(|id| is_id(id))
+        .filter(|id| is_video_id(id, sites))
         .map(str::to_string)
         .collect()
 }
@@ -729,7 +742,7 @@ mod tests {
     #[test]
     fn subtitles_are_known_only_when_listed() {
         assert_eq!(video().has_subtitles(), None);
-        let e = |json: &str| entries(json.as_bytes()).remove(0);
+        let e = |json: &str| entries(json.as_bytes(), &Sites::default()).remove(0);
         let live = e(r#"{"id": "vid00000002", "subtitles": {"live_chat": []}}"#);
         assert_eq!(live.has_subtitles(), Some(false));
         let en = e(r#"{"id": "vid00000002", "subtitles": {"en": [{"name": "English"}]}}"#);
@@ -747,7 +760,7 @@ mod tests {
     #[test]
     fn printed_ids_skip_anything_else() {
         assert_eq!(
-            ids(b"vid00000001\nNA\n\nvid00000003\n"),
+            ids(b"vid00000001\nNA\n\nvid00000003\n", &Sites::default()),
             vec!["vid00000001", "vid00000003"]
         );
     }
@@ -758,7 +771,7 @@ mod tests {
 not json
 {"id": "UC0000000000000000000001", "title": "Videos"}
 "#;
-        let e = entries(jsonl);
+        let e = entries(jsonl, &Sites::default());
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].duration, Some(143.0));
     }
@@ -775,7 +788,7 @@ not json
             title,
             videos,
             album,
-        }) = listing(json)
+        }) = listing(json, &Sites::default())
         else {
             panic!("not a playlist");
         };
@@ -796,7 +809,7 @@ not json
             "entries": [{"id": "vid00000009"}, {"id": "[Private video]"}, {"id": "vid00000010"}]}"#;
         let Some(Listing::Playlist {
             album: Some(album), ..
-        }) = listing(json)
+        }) = listing(json, &Sites::default())
         else {
             panic!("not an album");
         };
@@ -813,13 +826,15 @@ not json
                         {"id": "item-1/Part 2.mp3", "extractor_key": "ArchiveOrg"},
                         {"_type": "playlist", "id": "more", "ie_key": "ArchiveOrg"},
                         {"_type": "url", "id": "UC0000000000000000000002", "ie_key": "YoutubeTab"}]}"#;
-        let Some(Listing::Playlist { videos, .. }) = listing(json) else {
+        let Some(Listing::Playlist { videos, .. }) = listing(json, &Sites::default()) else {
             panic!("not a playlist");
         };
         let ids: Vec<_> = videos.iter().map(|v| v.id.as_str()).collect();
         assert_eq!(ids, ["item-1/Part_1.mp3"], "a space no key takes");
         let one = br#"{"id": "item-2", "extractor_key": "ArchiveOrg"}"#;
-        assert!(matches!(listing(one), Some(Listing::Video(v)) if v.id == "item-2"));
+        assert!(
+            matches!(listing(one, &Sites::default()), Some(Listing::Video(v)) if v.id == "item-2")
+        );
     }
 
     #[test]
@@ -827,7 +842,7 @@ not json
         let json = br#"{"_type": "playlist", "webpage_url_basename": "@pellucidfox",
             "entries": [{"_type": "playlist", "id": "UC0000000000000000000002"}]}"#;
         assert!(
-            matches!(listing(json), Some(Listing::Playlist { videos, .. }) if videos.is_empty())
+            matches!(listing(json, &Sites::default()), Some(Listing::Playlist { videos, .. }) if videos.is_empty())
         );
     }
 
@@ -835,14 +850,19 @@ not json
     fn a_playlist_left_on_the_watch_page_is_a_mix() {
         let json = br#"{"_type": "playlist", "id": "RDvid00000009", "title": "Mix - M",
             "webpage_url_basename": "watch", "entries": [{"id": "vid00000009"}]}"#;
-        assert!(matches!(listing(json), Some(Listing::Mix { .. })));
+        assert!(matches!(
+            listing(json, &Sites::default()),
+            Some(Listing::Mix { .. })
+        ));
     }
 
     #[test]
     fn a_video_is_listed_whole() {
         let json = br#"{"_type": "video", "id": "vid00000009", "duration": 171.0}"#;
-        assert!(matches!(listing(json), Some(Listing::Video(v)) if v.duration == Some(171.0)));
-        assert!(listing(b"not json").is_none());
+        assert!(
+            matches!(listing(json, &Sites::default()), Some(Listing::Video(v)) if v.duration == Some(171.0))
+        );
+        assert!(listing(b"not json", &Sites::default()).is_none());
     }
 
     #[test]

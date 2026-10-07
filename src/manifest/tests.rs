@@ -153,6 +153,34 @@ fn a_source_listed_twice_is_refused() {
 fn a_bad_key_is_refused_rather_than_dropping_its_song() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "[[song]]\nsources = [\"youtube:short\"]\n");
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("[sites]"), "{e:#}");
+}
+
+#[test]
+fn a_site_the_song_list_adds_names_its_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[sites.\"tunes.example\"]\nextractors = { tunes = \"\" }\n\
+         kinds = [{ id = \"^[0-9]+$\", fetch = \"https://tunes.example/t/{id}\" }]\n\
+         [[song]]\nsources = [\"tunes.example:42\"]\n",
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    let key = SourceKey::parse("tunes.example:42").unwrap();
+    assert_eq!(
+        m.settings.sites.fetch_url(&key).as_deref(),
+        Some("https://tunes.example/t/42")
+    );
+    assert!(
+        m.settings.sites.fetch_url(&yt("vid00000001")).is_some(),
+        "the defaults stay"
+    );
+    write(
+        dir.path(),
+        "[sites.\"tunes.example\"]\nkinds = [{ id = \"^[0-9]+$\" }]\n\
+        [[song]]\nsources = [\"tunes.example:x\"]\n",
+    );
     assert!(Manifest::load(dir.path()).is_err());
 }
 

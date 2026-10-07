@@ -35,6 +35,12 @@
 //! mix too. A record deleted from the store is fetched again by its ID,
 //! its release picked again the same way.
 //!
+//! A recording's ID names its file in the store, so every ID that comes
+//! in, from a search, a lookup by ID, AcoustID or a song's tags, becomes
+//! an [`Mbid`] where it is read or is dropped there: a recording or a
+//! release group without one is no candidate, and an answer by ID whose
+//! ID is no MBID is an error.
+//!
 //! MusicBrainz allows one request a second from an address, on average,
 //! and refuses every request with a 503 while a client goes faster. Every
 //! request waits its turn on one [`Throttle`] for the whole run, a second
@@ -71,11 +77,51 @@ pub fn throttle() -> Throttle {
     Throttle::new(Duration::from_secs(1), Duration::from_secs(2))
 }
 
+/// A MusicBrainz ID, 32 hex digits in groups of 8, 4, 4, 4 and 12. It
+/// names a file in the store, so it is checked where it comes in, from a
+/// server or a tag, and a value of this type never names another path.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Mbid(String);
+
+impl Mbid {
+    /// `s` as an MBID, if it has the shape of one.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        is_mbid(s).then(|| Self(s.to_string()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Mbid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<String> for Mbid {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        Self::parse(&s).ok_or_else(|| format!("{s:?} is no MusicBrainz ID"))
+    }
+}
+
+impl From<Mbid> for String {
+    fn from(id: Mbid) -> Self {
+        id.0
+    }
+}
+
 /// What muman keeps of a recording and the release it picked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     /// The recording's MBID.
-    pub id: String,
+    pub id: Mbid,
     pub title: String,
     /// Each credited artist, as the recording credits them.
     pub artists: Vec<String>,
@@ -337,7 +383,8 @@ impl Recording {
 
     fn fits(&self, q: &Query) -> bool {
         let credited = names(&self.credit).join(" ");
-        !self.video
+        is_mbid(&self.id)
+            && !self.video
             && self.gap(q.seconds).is_some_and(|g| g <= MAX_GAP_S)
             && same(&self.title, &q.title)
             && same(&credited, first_artist(&q.artist))
@@ -373,16 +420,17 @@ impl Recording {
         )
     }
 
-    fn record(&self, album: Option<&str>) -> Record {
-        Record {
-            id: self.id.clone(),
+    /// What is kept of it; `None` when its ID is no MBID.
+    fn record(&self, album: Option<&str>) -> Option<Record> {
+        Some(Record {
+            id: Mbid::parse(&self.id)?,
             title: self.title.trim().to_string(),
             artists: names(&self.credit),
             artist_ids: artist_ids(&self.credit),
             isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
             length_ms: self.length,
             release: self.best(album).map(Found::release),
-        }
+        })
     }
 }
 
@@ -421,18 +469,23 @@ impl Client<'_> {
 
     /// The record of one recording, to fetch a kept one again, its
     /// release picked as a search picks it for a song on `album`.
-    pub fn by_id(&self, id: &str, album: Option<&str>) -> Result<Option<Record>> {
+    pub fn by_id(&self, id: &Mbid, album: Option<&str>) -> Result<Option<Record>> {
         let path = format!(
             "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs&fmt=json",
-            music::percent_encode(id)
+            music::percent_encode(id.as_str())
         );
-        self.get(&path)?
-            .map(|b| {
-                serde_json::from_str::<Recording>(&b)
-                    .map(|r| r.record(album))
-                    .context("reading MusicBrainz's answer")
-            })
-            .transpose()
+        let Some(body) = self.get(&path)? else {
+            return Ok(None);
+        };
+        let found: Recording =
+            serde_json::from_str(&body).context("reading MusicBrainz's answer")?;
+        match found.record(album) {
+            Some(record) => Ok(Some(record)),
+            None => anyhow::bail!(
+                "MusicBrainz answered with {:?}, which is no recording ID",
+                found.id
+            ),
+        }
     }
 
     /// The song's recording and the release it is best known from, or
@@ -460,7 +513,7 @@ impl Client<'_> {
             .iter()
             .filter(|r| r.fits(q))
             .min_by_key(|r| r.rank(&q.title, album, q.seconds));
-        Ok(best.map(|r| r.record(album)))
+        Ok(best.and_then(|r| r.record(album)))
     }
 }
 
@@ -491,7 +544,7 @@ impl Client<'_> {
     /// The release group of an album by its title and its artist: of
     /// those whose names hold both, one titled exactly the album, then an
     /// album with no secondary type, then the best scored.
-    pub fn release_group(&self, album: &str, artist: &str) -> Result<Option<String>> {
+    pub fn release_group(&self, album: &str, artist: &str) -> Result<Option<Mbid>> {
         let query = format!(
             "releasegroup:{} AND artist:{}",
             phrase(album),
@@ -508,6 +561,7 @@ impl Client<'_> {
         let best = found
             .groups
             .iter()
+            .filter(|g| is_mbid(&g.id))
             .filter(|g| same(&names(&g.credit).join(" "), first_artist(artist)))
             .filter_map(|g| Some((music::names_match(&g.title, album)?, g)))
             .min_by_key(|(exact, g)| {
@@ -518,7 +572,7 @@ impl Client<'_> {
                     std::cmp::Reverse(g.score),
                 )
             });
-        Ok(best.map(|(_, g)| g.id.clone()))
+        Ok(best.and_then(|(_, g)| Mbid::parse(&g.id)))
     }
 }
 
@@ -549,22 +603,16 @@ pub fn is_mbid(s: &str) -> bool {
 
 /// Where a record is kept in the store.
 #[must_use]
-pub fn path_of(folder: &Path, id: &str) -> PathBuf {
+pub fn path_of(folder: &Path, id: &Mbid) -> PathBuf {
     folder.join(format!("{id}.json"))
 }
 
 /// Keep a record in `folder`.
 pub fn keep(folder: &Path, record: &Record) -> Result<PathBuf> {
-    // The ID names the file; one a server made up could name any path.
-    if !is_mbid(&record.id) {
-        anyhow::bail!(
-            "MusicBrainz answered with {:?}, which is no recording ID",
-            record.id
-        );
-    }
     std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     let json = serde_json::to_vec_pretty(record).context("writing a MusicBrainz record")?;
-    crate::atomic::write(folder, &format!("{}.json", record.id), &json)?;
+    let name = crate::atomic::Name::new(format!("{}.json", record.id))?;
+    crate::atomic::write(folder, &name, &json)?;
     Ok(path_of(folder, &record.id))
 }
 

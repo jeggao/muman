@@ -246,12 +246,9 @@ pub fn path_of(folder: &Path, id: u64) -> PathBuf {
 pub fn keep(folder: &Path, record: &Record) -> Result<PathBuf> {
     std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     let json = serde_json::to_vec_pretty(record).context("writing an LRCLIB record")?;
-    crate::atomic::write(folder, &format!("{}.json", record.id), &json)?;
-    crate::atomic::write(
-        folder,
-        &format!("{}.lrc", record.id),
-        record.lrc().as_bytes(),
-    )?;
+    let named = |ext: &str| crate::atomic::Name::new(format!("{}.{ext}", record.id));
+    crate::atomic::write(folder, &named("json")?, &json)?;
+    crate::atomic::write(folder, &named("lrc")?, record.lrc().as_bytes())?;
     Ok(path_of(folder, record.id))
 }
 

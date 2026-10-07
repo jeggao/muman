@@ -1529,3 +1529,194 @@ fn undo_of_a_home_s_first_add_leaves_a_home_that_syncs() {
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
 }
+
+/// The library's files, by their paths in it, with their bytes.
+fn library_of(s: &Setup) -> BTreeMap<PathBuf, Vec<u8>> {
+    let lib = s.dir.path().join("lib");
+    crate::store::files_below(&lib, usize::MAX, |_| true)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| {
+            let bytes = std::fs::read(&f).unwrap();
+            (f.strip_prefix(&lib).unwrap().to_path_buf(), bytes)
+        })
+        .collect()
+}
+
+/// What a run killed partway may leave, once recovered.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ends {
+    /// The change made whole, as a run that ended makes it.
+    Whole,
+    /// The change made whole, or not made at all.
+    WholeOrNone,
+}
+
+/// Run `command` on a home `prepare` makes, killed at each change of a
+/// file under the test's folder in turn, as a crash or a Ctrl-C would stop
+/// it; `recover` then brings the home back. After each, every file the
+/// state records is there and none is half written, the library is as
+/// `ends` allows, and one more sync changes nothing.
+fn survives_a_kill_at_every_step(
+    prepare: &dyn Fn(&Setup),
+    command: &[&str],
+    recover: &dyn Fn(&Setup),
+    ends: Ends,
+) {
+    let whole = Setup::new();
+    prepare(&whole);
+    let before = library_of(&whole);
+    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), command);
+    let steps = counted.seen();
+    drop(counted);
+    recover(&whole);
+    let after = library_of(&whole);
+    assert_ne!(before, after, "{command:?} changes the library");
+    assert!(steps > 0);
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(command),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(
+            stopped.is_err(),
+            "{command:?} not stopped at step {at} of {steps}"
+        );
+        recover(&s);
+        let now = library_of(&s);
+        let fine = now == after || (ends == Ends::WholeOrNone && now == before);
+        let show = |lib: &BTreeMap<PathBuf, Vec<u8>>| {
+            lib.iter()
+                .map(|(p, b)| format!("{} {}", p.display(), crate::facts::digest(b)))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            fine,
+            "{command:?} killed at step {at} of {steps}:\nnow {:?}\nwhole {:?}\nbefore {:?}",
+            show(&now),
+            show(&after),
+            show(&before)
+        );
+        let (_, text) = s.run(&flacs(), &["sync"]);
+        for verb in ["Added", "Updated", "Written again", "Moved", "Removed"] {
+            assert!(
+                !text.contains(verb),
+                "step {at}: a sync after changed: {text}"
+            );
+        }
+    }
+}
+
+/// Two songs of one's own, synced.
+fn two_songs(s: &Setup) {
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    s.run(&flacs(), &["sync"]);
+}
+
+fn sync_again(s: &Setup) {
+    s.run(&flacs(), &["sync"]);
+}
+
+#[test]
+fn a_sync_moving_songs_to_a_new_template_survives_a_kill_anywhere() {
+    let retemplated = |s: &Setup| {
+        two_songs(s);
+        let songs = s.dir.path().join("home/songs.toml");
+        let listed = std::fs::read_to_string(&songs).unwrap();
+        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+        std::fs::write(
+            &songs,
+            listed.replace(&default, "template = \"{{ album }}/{{ title }}\""),
+        )
+        .unwrap();
+    };
+    survives_a_kill_at_every_step(&retemplated, &["sync"], &sync_again, Ends::Whole);
+}
+
+#[test]
+fn a_remove_survives_a_kill_anywhere() {
+    survives_a_kill_at_every_step(
+        &two_songs,
+        &["remove", "-y", "manual:a.flac"],
+        &sync_again,
+        Ends::WholeOrNone,
+    );
+}
+
+#[test]
+fn a_set_writing_a_song_again_survives_a_kill_anywhere() {
+    survives_a_kill_at_every_step(
+        &two_songs,
+        &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+        &sync_again,
+        Ends::WholeOrNone,
+    );
+}
+
+#[test]
+fn an_undo_survives_a_kill_anywhere_and_finishes_when_run_again() {
+    let set = |s: &Setup| {
+        two_songs(s);
+        s.run(
+            &flacs(),
+            &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+        );
+    };
+    // An undo stopped with its record still undoing is run again; one
+    // stopped after, in its sync, is synced.
+    let finish = |s: &Setup| {
+        let history = s.dir.path().join("home/history");
+        let undoing = std::fs::read_dir(&history)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| {
+                std::fs::read_to_string(e.path().join("run.json"))
+                    .is_ok_and(|t| t.contains("\"undoing\":true"))
+            });
+        if undoing {
+            s.run(&flacs(), &["undo", "-y"]);
+        } else {
+            s.run(&flacs(), &["sync"]);
+        }
+    };
+    survives_a_kill_at_every_step(&set, &["undo", "-y"], &finish, Ends::WholeOrNone);
+}
+
+#[test]
+fn songs_moving_with_their_lyrics_survive_a_kill_anywhere() {
+    let retemplated = |s: &Setup| {
+        for name in ["a", "b"] {
+            s.file(&format!("home/sources/manual/{name}.flac"));
+            let lrc = s.dir.path().join(format!("home/sources/manual/{name}.lrc"));
+            std::fs::write(&lrc, format!("[00:01.00]sung by {name}\n")).unwrap();
+        }
+        s.run(&flacs(), &["sync"]);
+        assert!(
+            library_of(s)
+                .keys()
+                .any(|p| p.extension().is_some_and(|e| e == "lrc"))
+        );
+        let songs = s.dir.path().join("home/songs.toml");
+        let listed = std::fs::read_to_string(&songs).unwrap();
+        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+        std::fs::write(
+            &songs,
+            listed.replace(&default, "template = \"{{ title }}\""),
+        )
+        .unwrap();
+    };
+    survives_a_kill_at_every_step(&retemplated, &["sync"], &sync_again, Ends::Whole);
+}

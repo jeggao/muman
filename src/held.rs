@@ -49,6 +49,7 @@ use toml_edit::{InlineTable, Item, Table, Value, value};
 
 use crate::facts::Facts;
 use crate::manifest::{Edit, Manifest};
+use crate::sites::Sites;
 use crate::source::SourceKey;
 
 /// The hex digits of a digest the song list records.
@@ -120,9 +121,10 @@ fn agree(a: &str, b: &str) -> bool {
 
 impl Held {
     /// What `key`, measured as `facts`, holds now; none with nothing
-    /// hashed.
+    /// hashed. The page is recorded only for a key `sites` gives no
+    /// address of its own.
     #[must_use]
-    pub fn now(key: &SourceKey, facts: &Facts) -> Option<Self> {
+    pub fn now(key: &SourceKey, facts: &Facts, sites: &Sites) -> Option<Self> {
         let served = facts.served.as_ref();
         let held = Self {
             audio: facts
@@ -149,7 +151,7 @@ impl Held {
             size: served.and_then(|s| s.size),
             url: served
                 .and_then(|s| s.url.clone())
-                .filter(|_| key.url().is_none()),
+                .filter(|_| sites.fetch_url(key).is_none()),
         };
         Aspect::ALL
             .iter()
@@ -452,7 +454,10 @@ pub fn drifts(manifest: &Manifest, facts: &BTreeMap<SourceKey, Facts>) -> Vec<Dr
     let mut found = Vec::new();
     for (n, song) in manifest.songs.iter().enumerate() {
         for (key, was) in &song.held {
-            let Some(now) = facts.get(key).and_then(|f| Held::now(key, f)) else {
+            let Some(now) = facts
+                .get(key)
+                .and_then(|f| Held::now(key, f, &manifest.settings.sites))
+            else {
                 continue;
             };
             let changed = was.changed(&now);
@@ -482,7 +487,10 @@ pub fn records(
     let mut edits = Vec::new();
     for song in &manifest.songs {
         for key in &song.sources {
-            let Some(now) = facts.get(key).and_then(|f| Held::now(key, f)) else {
+            let Some(now) = facts
+                .get(key)
+                .and_then(|f| Held::now(key, f, &manifest.settings.sites))
+            else {
                 continue;
             };
             let held = match song.held.get(key) {

@@ -13,7 +13,9 @@
 //! of megabytes, and still well past what a soft cover holds. A release
 //! group whose releases have no front has none; a 404 is nothing found.
 //! A body that is no JPEG, PNG or WebP, as an error page served as found
-//! is, fails the lookup rather than being kept as the cover.
+//! is, fails the lookup rather than being kept as the cover: a [`Cover`]
+//! is made only from an image. A tag's release ID that is no MBID asks
+//! the archive nothing, and the album is searched for by its names.
 //!
 //! The songs of one album ask once between them: a run looks one album
 //! up per run however many of its songs are due.
@@ -24,7 +26,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::http::{HttpTransport, Service, Throttle};
-use crate::musicbrainz;
+use crate::musicbrainz::{self, Mbid};
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// The least time between two requests to the archive across a run.
@@ -47,18 +49,42 @@ pub struct Query {
     pub release: Option<String>,
 }
 
-/// A front cover, by the ID it was found under.
+/// A front cover, by the ID it was found under: bytes a JPEG, PNG or
+/// WebP begins with, made only by [`Cover::of`], so no other answer is
+/// ever kept as a cover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cover {
-    pub id: String,
-    pub bytes: Vec<u8>,
+    id: Mbid,
+    bytes: Vec<u8>,
+    extension: &'static str,
 }
 
 impl Cover {
+    /// `bytes` as the cover of `id`, if they are an image.
+    #[must_use]
+    pub fn of(id: Mbid, bytes: Vec<u8>) -> Option<Self> {
+        let extension = image_extension(&bytes)?;
+        Some(Self {
+            id,
+            bytes,
+            extension,
+        })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &Mbid {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// The extension its bytes say it has.
     #[must_use]
     pub fn extension(&self) -> &'static str {
-        image_extension(&self.bytes).unwrap_or("jpg")
+        self.extension
     }
 }
 
@@ -95,12 +121,8 @@ impl std::fmt::Debug for Client<'_> {
 
 impl Client<'_> {
     /// The front of `id`, a release group's or a release's.
-    fn front(&self, kind: &str, id: &str) -> Result<Option<Cover>> {
-        let url = format!(
-            "{}/{kind}/{}/front-1200",
-            self.base.trim_end_matches('/'),
-            crate::music::percent_encode(id)
-        );
+    fn front(&self, kind: &str, id: &Mbid) -> Result<Option<Cover>> {
+        let url = format!("{}/{kind}/{id}/front-1200", self.base.trim_end_matches('/'));
         let agent = crate::http::user_agent();
         let service = Service {
             name: "the Cover Art Archive",
@@ -113,18 +135,15 @@ impl Client<'_> {
         else {
             return Ok(None);
         };
-        if image_extension(&bytes).is_none() {
-            bail!("{url} answered with no image");
+        match Cover::of(id.clone(), bytes) {
+            Some(cover) => Ok(Some(cover)),
+            None => bail!("{url} answered with no image"),
         }
-        Ok(Some(Cover {
-            id: id.to_string(),
-            bytes,
-        }))
     }
 
     /// The front of a kept cover's ID again, a release group's or a
     /// release's.
-    pub fn by_id(&self, id: &str) -> Result<Option<Cover>> {
+    pub fn by_id(&self, id: &Mbid) -> Result<Option<Cover>> {
         match self.front("release-group", id)? {
             Some(cover) => Ok(Some(cover)),
             None => self.front("release", id),
@@ -133,18 +152,21 @@ impl Client<'_> {
 
     /// The front of the song's album, by the IDs its tags name, else as a
     /// search finds the album.
+    /// IDs that are no MBID, as a tag may hold, are asked nothing.
     pub fn find(&self, q: &Query) -> Result<Option<Cover>> {
-        if let Some(id) = &q.release_group
+        let group = q.release_group.as_deref().and_then(Mbid::parse);
+        let release = q.release.as_deref().and_then(Mbid::parse);
+        if let Some(id) = &group
             && let Some(cover) = self.front("release-group", id)?
         {
             return Ok(Some(cover));
         }
-        if let Some(id) = &q.release
+        if let Some(id) = &release
             && let Some(cover) = self.front("release", id)?
         {
             return Ok(Some(cover));
         }
-        if q.release_group.is_some() || q.release.is_some() {
+        if group.is_some() || release.is_some() {
             return Ok(None);
         }
         match self.musicbrainz.release_group(&q.album, &q.album_artist)? {
@@ -163,10 +185,9 @@ pub fn path_of(folder: &Path, cover: &Cover) -> PathBuf {
 /// Keep `cover` in `folder`, returning its path.
 pub fn keep(folder: &Path, cover: &Cover) -> Result<PathBuf> {
     std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
-    let path = path_of(folder, cover);
-    let name = path.file_name().context("a cover has a name")?;
-    crate::atomic::write(folder, &name.to_string_lossy(), &cover.bytes)?;
-    Ok(path)
+    let name = crate::atomic::Name::new(format!("{}.{}", cover.id(), cover.extension()))?;
+    crate::atomic::write(folder, &name, cover.bytes())?;
+    Ok(path_of(folder, cover))
 }
 
 #[cfg(test)]
@@ -215,7 +236,7 @@ mod tests {
             ..query()
         };
         let cover = find(&server, &q).unwrap();
-        assert_eq!((cover.id.as_str(), cover.extension()), (GROUP, "jpg"));
+        assert_eq!((cover.id().as_str(), cover.extension()), (GROUP, "jpg"));
         let asked = server.asked.lock().unwrap();
         assert_eq!(
             *asked,
@@ -237,8 +258,28 @@ mod tests {
             .answer("/ws/2/release-group?query=", &search)
             .answer_bytes(&format!("/release-group/{GROUP}/front-1200"), b"\x89PNG");
         let cover = find(&server, &query()).unwrap();
-        assert_eq!(cover.id, GROUP, "the exact title wins");
+        assert_eq!(cover.id().as_str(), GROUP, "the exact title wins");
         assert!(find(&Server::default(), &query()).is_none());
+    }
+
+    #[test]
+    fn a_tag_s_id_that_is_no_mbid_is_searched_by_names() {
+        let search = format!(
+            r#"{{"release-groups": [{{"id": "{GROUP}", "title": "Rooms of Salt",
+                "primary-type": "Album", "score": 100,
+                "artist-credit": [{{"name": "Paper Comets"}}]}}]}}"#
+        );
+        let server = Server::default()
+            .answer("/ws/2/release-group?query=", &search)
+            .answer_bytes(&format!("/release-group/{GROUP}/front-1200"), JPEG);
+        let q = Query {
+            release_group: Some("../../state".into()),
+            ..query()
+        };
+        let cover = find(&server, &q).unwrap();
+        assert_eq!(cover.id().as_str(), GROUP);
+        let asked = server.asked.lock().unwrap();
+        assert!(!asked.iter().any(|u| u.contains("state")), "{asked:?}");
     }
 
     #[test]

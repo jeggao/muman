@@ -17,8 +17,9 @@
 //! estimates. A song's real size corrects its other estimates by as much
 //! as it missed, and the songs not encoded yet by how much all missed on
 //! average: a VBR encoder spends more on some music than its bitrate, a
-//! pure tone half again. While the total is still over, the songs are
-//! fitted again, at most `PASSES` times. A song changed since muman wrote it, or whose
+//! pure tone half again. [`fit::settle`] fits again until every song
+//! lowered is one encoded, `PASSES` times at most before it settles on
+//! sizes encoded alone. A song changed since muman wrote it, or whose
 //! sources are gone, can only be copied. Every entry is counted with what
 //! the zip spends on it, `ENTRY` bytes and its name twice.
 
@@ -309,8 +310,9 @@ struct Fitted {
     ok: bool,
 }
 
-/// Fit the songs into `budget` bytes, encoding those chosen into
-/// `scratch`, and fitting again on their real sizes while over.
+/// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
+/// chosen into `scratch`; each encoding's real size replaces its
+/// estimate, and corrects the estimates not measured yet.
 #[allow(clippy::too_many_arguments)]
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
@@ -334,31 +336,21 @@ fn fit_into<R: Runner, W: Write>(
     let mut ratios: Vec<Option<f64>> = vec![None; items.len()];
     let mut made: BTreeMap<(usize, usize), Vec<Entry>> = BTreeMap::new();
     let mut ok = true;
-    for pass in 0..PASSES {
-        let fit = fit::allocate(&items, &fit::Policy::exact(budget)).map_err(|floor| {
-            anyhow!(
-                "{} cannot hold the export: at the lowest bitrates it takes {}",
-                crate::ui::bytes(budget),
-                crate::ui::bytes(floor)
-            )
-        })?;
-        let due: Vec<(usize, usize)> = fit
-            .choice
-            .iter()
-            .enumerate()
-            .filter(|(n, c)| **c > 0 && !made.contains_key(&(*n, **c)))
-            .map(|(n, c)| (n, *c))
-            .collect();
-        if !due.is_empty() {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Encoding {} song(s) at a lower bitrate to fit{}",
-                    due.len(),
-                    if pass > 0 { ", again" } else { "" }
-                ),
-            )?;
+    let mut passes = 0_usize;
+    let mut measure = |items: &mut [Item], wanted: &fit::Wanted| -> Result<()> {
+        let due: Vec<(usize, usize)> = wanted.iter().copied().filter(|(_, c)| *c > 0).collect();
+        if due.is_empty() {
+            return Ok(());
         }
+        crate::ui::info(
+            out,
+            &format!(
+                "Encoding {} song(s) at a lower bitrate to fit{}",
+                due.len(),
+                if passes > 0 { ", again" } else { "" }
+            ),
+        )?;
+        passes += 1;
         let step = crate::progress::step("Encoding", Some(due.len() as u64));
         let rendered = parallel::map(&due, parallel::builds(), |(n, c)| {
             let _working = step.working(&crate::progress::label(&songs[*n].path));
@@ -370,14 +362,16 @@ fn fit_into<R: Runner, W: Write>(
             )
         });
         for ((n, c), result) in due.into_iter().zip(rendered) {
-            let first = items[n].rungs[0].bytes;
             match result {
                 Ok(entries) => {
                     let real = entries_size(&entries);
                     #[allow(clippy::cast_precision_loss)]
                     let ratio = real as f64 / estimates[n][c].max(1) as f64;
                     ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
-                    items[n].rungs[c].bytes = real;
+                    let rung = &mut items[n].rungs[c];
+                    rung.bytes = real;
+                    rung.sigma = 0.0;
+                    rung.known = true;
                     made.insert((n, c), entries);
                 }
                 Err(e) => {
@@ -389,127 +383,40 @@ fn fit_into<R: Runner, W: Write>(
                             relpath::show(&songs[n].path)
                         ),
                     )?;
-                    // Saving nothing, it is never chosen again.
-                    items[n].rungs[c].bytes = first;
                 }
             }
         }
-        correct(&mut items, &estimates, &ratios, &made);
-        let total: u64 = fit
-            .choice
-            .iter()
-            .enumerate()
-            .map(|(n, c)| items[n].rungs[*c].bytes)
-            .sum();
-        let done = fit
-            .choice
-            .iter()
-            .enumerate()
-            .all(|(n, c)| *c == 0 || made.contains_key(&(n, *c)));
-        if total <= budget && done {
-            let entries = fit
-                .choice
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| **c > 0)
-                .filter_map(|(n, c)| Some((n, made.remove(&(n, *c))?)))
-                .collect();
-            return Ok(Fitted { entries, ok });
-        }
-    }
-    settle(runner, songs, &mut items, &mut made, budget, scratch)
-        .map(|entries| Fitted { entries, ok })
-}
-
-/// For passes that ran out with estimates still moving: a fit of `budget`
-/// of sizes known, each song encoded already or as it is, else with every
-/// song encoded at its lowest too.
-fn settle<R: Runner>(
-    runner: &R,
-    songs: &[Song],
-    items: &mut [Item],
-    made: &mut BTreeMap<(usize, usize), Vec<Entry>>,
-    budget: u64,
-    scratch: &Path,
-) -> Result<Vec<(usize, Vec<Entry>)>> {
-    if let Some(entries) = known_fit(items, made, budget) {
-        return Ok(entries);
-    }
-    let lowest: Vec<(usize, usize)> = items
-        .iter()
-        .enumerate()
-        .map(|(n, i)| (n, i.rungs.len() - 1))
-        .filter(|(n, c)| *c > 0 && !made.contains_key(&(*n, *c)))
-        .collect();
-    let rendered = parallel::map(&lowest, parallel::builds(), |(n, c)| {
-        encode(
-            runner,
-            &songs[*n],
-            items[*n].rungs[*c].format,
-            &scratch.join(format!("{n}-{c}")),
-        )
-    });
-    for ((n, c), result) in lowest.into_iter().zip(rendered) {
-        if let Ok(entries) = result {
-            items[n].rungs[c].bytes = entries_size(&entries);
-            made.insert((n, c), entries);
-        }
-    }
-    known_fit(items, made, budget).ok_or_else(|| {
-        anyhow!(
-            "the songs could not be fitted into {} in {PASSES} tries; try a little more room",
-            crate::ui::bytes(budget)
-        )
-    })
-}
-
-/// The best fit of `budget` among sizes known: each song as it is or at a
-/// bitrate `made` holds, with the entries made for it.
-fn known_fit(
-    items: &[Item],
-    made: &BTreeMap<(usize, usize), Vec<Entry>>,
-    budget: u64,
-) -> Option<Vec<(usize, Vec<Entry>)>> {
-    let known: Vec<Item> = items
-        .iter()
-        .enumerate()
-        .map(|(n, item)| {
-            let mut item = item.clone();
-            for (c, rung) in item.rungs.iter_mut().enumerate() {
-                if c > 0 && !made.contains_key(&(n, c)) {
-                    rung.bytes = budget.saturating_add(1);
-                }
-                rung.sigma = 0.0;
-            }
-            item
-        })
-        .collect();
-    let fit = fit::allocate(&known, &fit::Policy::exact(budget)).ok()?;
-    let total: u64 = fit
+        correct(items, &estimates, &ratios);
+        Ok(())
+    };
+    let settled = fit::settle(
+        &mut items,
+        &fit::Policy::exact(budget),
+        PASSES,
+        &mut measure,
+    )?;
+    let fit = match settled {
+        fit::Settled::Fit(fit) => fit,
+        fit::Settled::Over(floor) => bail!(
+            "{} cannot hold the export: at the lowest bitrates it takes {}",
+            crate::ui::bytes(budget),
+            crate::ui::bytes(floor)
+        ),
+    };
+    let entries = fit
         .choice
         .iter()
         .enumerate()
-        .map(|(n, c)| known[n].rungs[*c].bytes)
-        .sum();
-    (total <= budget).then(|| {
-        fit.choice
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| **c > 0)
-            .filter_map(|(n, c)| Some((n, made.get(&(n, *c))?.clone())))
-            .collect()
-    })
+        .filter(|(_, c)| **c > 0)
+        .filter_map(|(n, c)| Some((n, made.remove(&(n, *c))?)))
+        .collect();
+    Ok(Fitted { entries, ok })
 }
 
 /// Scale each estimate not yet replaced by a real size by how far the
 /// song's encodings missed theirs, or, for a song not encoded yet, by how
 /// far all did on average, by their logarithms.
-fn correct(
-    items: &mut [Item],
-    estimates: &[Vec<u64>],
-    ratios: &[Option<f64>],
-    made: &BTreeMap<(usize, usize), Vec<Entry>>,
-) {
+fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
     let seen: Vec<f64> = ratios.iter().flatten().map(|r| r.ln()).collect();
     if seen.is_empty() {
         return;
@@ -519,7 +426,7 @@ fn correct(
     for (n, item) in items.iter_mut().enumerate() {
         let ratio = ratios[n].unwrap_or(mean);
         for (c, rung) in item.rungs.iter_mut().enumerate().skip(1) {
-            if !made.contains_key(&(n, c)) && rung.bytes != estimates[n][0] {
+            if !rung.known {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 #[allow(clippy::cast_sign_loss)]
                 let scaled = (estimates[n][c] as f64 * ratio) as u64;
@@ -540,6 +447,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
             bytes: first,
             loss: 0.0,
             sigma: 0.0,
+            known: true,
         }],
         churn: 0.0,
     };
@@ -579,6 +487,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
                 bytes,
                 loss: fit::loss(&source, song.plan.format, format),
                 sigma: 0.0,
+                known: false,
             });
         }
     }
@@ -653,37 +562,34 @@ mod tests {
     use super::*;
     use crate::codec::Codec;
 
-    fn rung(bytes: u64, loss: f64) -> fit::Rung {
+    fn rung(bytes: u64, known: bool) -> fit::Rung {
         fit::Rung {
             format: Format::Copy { codec: Codec::Flac },
             bytes,
-            loss,
-            sigma: 5.0,
-        }
-    }
-
-    fn item(key: &str) -> Item {
-        Item {
-            key: key.into(),
-            rungs: vec![rung(100, 0.0), rung(40, 1.0), rung(20, 2.0)],
-            churn: 0.0,
+            loss: 0.0,
+            sigma: 0.0,
+            known,
         }
     }
 
     #[test]
-    fn a_fit_of_sizes_known_takes_only_what_was_encoded() {
-        let items = [item("a"), item("b")];
-        let entry = Entry {
-            from: "a.opus".into(),
-            name: "library/a.opus".into(),
-        };
-        let made = BTreeMap::from([((0, 2), vec![entry])]);
-        assert!(
-            known_fit(&items, &made, 110).is_none(),
-            "b is known only as it is"
-        );
-        let fitted = known_fit(&items, &made, 120).unwrap();
-        assert_eq!(fitted.len(), 1);
-        assert_eq!(fitted[0].0, 0);
+    fn estimates_follow_how_far_encodings_missed() {
+        let mut items = vec![
+            Item {
+                key: "a".into(),
+                rungs: vec![rung(100, true), rung(52, true), rung(20, false)],
+                churn: 0.0,
+            },
+            Item {
+                key: "b".into(),
+                rungs: vec![rung(100, true), rung(40, false)],
+                churn: 0.0,
+            },
+        ];
+        let estimates = vec![vec![100, 40, 20], vec![100, 40]];
+        correct(&mut items, &estimates, &[Some(1.3), None]);
+        assert_eq!(items[0].rungs[1].bytes, 52, "a size encoded stays");
+        assert_eq!(items[0].rungs[2].bytes, 26, "the song's own miss");
+        assert_eq!(items[1].rungs[1].bytes, 52, "the others' miss");
     }
 }

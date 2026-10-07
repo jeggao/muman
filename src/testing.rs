@@ -323,3 +323,101 @@ impl Runner for Fake {
         Ok(self.on_stream.as_ref().is_none_or(|f| f(&args)))
     }
 }
+
+/// What a run killed by [`kill_at`] panics with.
+#[derive(Debug)]
+pub struct Killed;
+
+/// One test's kill: the change of a file under `root` it stops at, and
+/// how many it has passed.
+#[derive(Debug)]
+struct Armed {
+    root: PathBuf,
+    at: usize,
+    seen: usize,
+}
+
+/// The kills armed, a test's each, by the folder its files are under.
+static ARMED: Mutex<Vec<Armed>> = Mutex::new(Vec::new());
+
+/// Where a kill was armed; dropped, it is disarmed, and says how many
+/// changes of files under its folder it saw.
+#[derive(Debug)]
+pub struct Kill {
+    root: PathBuf,
+}
+
+impl Kill {
+    /// How many changes it saw so far.
+    #[must_use]
+    pub fn seen(&self) -> usize {
+        ARMED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|a| a.root == self.root)
+            .map_or(0, |a| a.seen)
+    }
+}
+
+impl Drop for Kill {
+    fn drop(&mut self) {
+        ARMED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|a| a.root != self.root);
+    }
+}
+
+/// Stop the run at the `at`th change of a file under `root`, before it is
+/// made, as a kill would: a panic of [`Killed`], which no message is
+/// printed for. `usize::MAX` stops at none, to count them.
+#[must_use]
+pub fn kill_at(root: &Path, at: usize) -> Kill {
+    static QUIET: std::sync::Once = std::sync::Once::new();
+    QUIET.call_once(|| {
+        let shown = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if info.payload().downcast_ref::<Killed>().is_none() {
+                shown(info);
+            }
+        }));
+    });
+    let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(Armed {
+            root: root.clone(),
+            at,
+            seen: 0,
+        });
+    Kill { root }
+}
+
+/// A change of the file at `path` about to be made: the kill armed for
+/// its folder, if any, stops it here.
+pub fn change_point(path: &Path) {
+    let path = path
+        .parent()
+        .and_then(|p| dunce::canonicalize(p).ok())
+        .map_or_else(
+            || path.to_path_buf(),
+            |p| p.join(path.file_name().unwrap_or_default()),
+        );
+    let killed = {
+        let mut armed = ARMED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        armed
+            .iter_mut()
+            .find(|a| path.starts_with(&a.root))
+            .is_some_and(|a| {
+                a.seen += 1;
+                a.seen == a.at
+            })
+    };
+    if killed {
+        std::panic::panic_any(Killed);
+    }
+}

@@ -418,7 +418,7 @@ impl State {
     pub fn save(&self, home: &Path) -> Result<()> {
         let mut text = serde_json::to_vec_pretty(self).context("writing the state")?;
         text.push(b'\n');
-        atomic::write(home, STATE, &text)
+        atomic::write(home, &atomic::Name::new(STATE)?, &text)
     }
 
     /// The comparison of `a` against `b` at these revisions, if made.

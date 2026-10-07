@@ -2,6 +2,14 @@
 //! runs take before either rewrites what the other reads, and renames
 //! and deletes that wait out a file another program holds open.
 //!
+//! Each change of a file passes a point a test can stop the run at, as
+//! a crash would (`testing::kill_at`), so the tests kill every command at
+//! every step and check what recovery makes of it.
+//!
+//! A write names its file by a [`Name`], one plain part of a path checked
+//! when the name is made, so a name built from what a server answered
+//! cannot write outside its folder.
+//!
 //! On Windows a file open in a player, the search indexer or a virus
 //! scanner cannot be replaced or deleted for a moment: the call fails
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
@@ -21,23 +29,39 @@ pub const LOCK_FILE: &str = ".lock";
 /// The lock file a command that changes the home holds throughout.
 pub const RUNS_LOCK_FILE: &str = ".run.lock";
 
+/// A file name of one plain part, checked when it is made, so a write
+/// through it stays in its folder whatever a server or a tag named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Name(String);
+
+impl Name {
+    /// `name` as one part of a path, refused when it is empty, `.`,
+    /// `..`, or holds a separator of any platform.
+    pub fn new(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        let plain = Path::new(&name)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+            && !name.contains(['/', '\\'])
+            && !name.is_empty();
+        if !plain {
+            anyhow::bail!("{name:?} is no file name");
+        }
+        Ok(Self(name))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Write `bytes` to a temporary file in `dir`, synced, and rename it
 /// over `<dir>/<name>`, so a reader sees the old file or the new. A file
 /// that is a link is written where it leads, so the link stays, and a
 /// file replaced keeps its permissions.
-pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
-    // A name of one part, so nothing a name holds writes outside `dir`.
-    let plain = Path::new(name)
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)))
-        && !name.contains(['/', '\\'])
-        && !name.is_empty();
-    if !plain {
-        anyhow::bail!(
-            "refusing to write {name:?}, which is no file name, in {}",
-            dir.display()
-        );
-    }
+pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
+    let name = name.as_str();
     let named = dir.join(name);
     let file = match std::fs::symlink_metadata(&named) {
         Ok(m) if m.file_type().is_symlink() => dunce::canonicalize(&named).unwrap_or(named),
@@ -66,7 +90,9 @@ pub fn write(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
         }
         part.as_file().sync_all()?;
         let path = part.into_temp_path();
-        rename(&path, &file)?;
+        #[cfg(test)]
+        crate::testing::change_point(&file);
+        retry(|| std::fs::rename(&path, &file))?;
         // The rename itself is durable only once its folder is synced;
         // Windows cannot open a folder for that and journals renames.
         #[cfg(unix)]
@@ -103,11 +129,15 @@ fn retry(mut op: impl FnMut() -> io::Result<()>) -> io::Result<()> {
 
 /// `std::fs::rename`, replacing `to`, waiting out a held file.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    crate::testing::change_point(to);
     retry(|| std::fs::rename(from, to))
 }
 
 /// `std::fs::remove_file`, waiting out a held file.
 pub fn remove(path: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    crate::testing::change_point(path);
     retry(|| std::fs::remove_file(path))
 }
 
@@ -262,6 +292,10 @@ fn clear_scratch(parent: &Path) {
 mod tests {
     use super::*;
 
+    fn name(s: &str) -> Name {
+        Name::new(s).unwrap()
+    }
+
     #[test]
     fn a_scratch_folder_left_behind_is_removed_and_one_in_use_kept() {
         let dir = tempfile::tempdir().unwrap();
@@ -297,7 +331,7 @@ mod tests {
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
         std::os::unix::fs::symlink(real.join("songs.toml"), home.join("songs.toml")).unwrap();
-        write(&home, "songs.toml", b"two").unwrap();
+        write(&home, &name("songs.toml"), b"two").unwrap();
         let link = std::fs::symlink_metadata(home.join("songs.toml")).unwrap();
         assert!(link.file_type().is_symlink());
         assert_eq!(std::fs::read(real.join("songs.toml")).unwrap(), b"two");
@@ -312,16 +346,16 @@ mod tests {
     fn a_name_of_more_than_one_part_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         for name in ["../state.json", "/tmp/x", "a/b", "..", "", "a\\b"] {
-            assert!(write(dir.path(), name, b"x").is_err(), "{name}");
+            assert!(Name::new(name).is_err(), "{name}");
         }
-        assert!(write(dir.path(), "state.json", b"x").is_ok());
+        assert!(write(dir.path(), &name("state.json"), b"x").is_ok());
     }
 
     #[test]
     fn a_write_replaces_the_file_and_leaves_no_part() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "a.txt", b"one").unwrap();
-        write(dir.path(), "a.txt", b"two").unwrap();
+        write(dir.path(), &name("a.txt"), b"one").unwrap();
+        write(dir.path(), &name("a.txt"), b"two").unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"two");
         let names: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -363,7 +397,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             drop(held);
         });
-        write(dir.path(), "song.opus", b"new").unwrap();
+        write(dir.path(), &name("song.opus"), b"new").unwrap();
         release.join().unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
     }

@@ -60,14 +60,15 @@ use crate::download;
 use crate::facts::Facts;
 use crate::lrclib::{self, Found, Query, Record};
 use crate::manifest::{Edit, Manifest};
+use crate::music::watch_url;
 use crate::music::{self, Entry};
-use crate::musicbrainz;
+use crate::musicbrainz::{self, Mbid};
 use crate::parallel;
 use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider, When};
 use crate::reconcile::{self, Measuring, Planned};
 use crate::resolve::{self, Resolved};
 use crate::runner::Runner;
-use crate::source::{SourceKey, watch_url};
+use crate::source::SourceKey;
 use crate::state::{self, Looked, Outcome, State};
 use crate::store::{Located, Store};
 use crate::tags::Field;
@@ -299,9 +300,9 @@ fn again(hit: &Result<Hit>) -> Result<Hit> {
     }
 }
 
-fn entry_of<R: Runner>(runner: &R, key: &SourceKey) -> Result<Entry> {
+fn entry_of<R: Runner>(runner: &R, sites: &crate::sites::Sites, key: &SourceKey) -> Result<Entry> {
     let id = key.id().context("not a video")?;
-    music::entries(&runner.output(&music::video_command(id))?)
+    music::entries(&runner.output(&music::video_command(id))?, sites)
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("yt-dlp listed nothing for {key}"))
@@ -360,6 +361,7 @@ struct Clients<'a> {
     coverart: &'a str,
     transport: &'a (dyn HttpTransport + Sync),
     throttle: &'a Throttle,
+    sites: &'a crate::sites::Sites,
 }
 
 impl Clients<'_> {
@@ -407,17 +409,17 @@ fn look<R: Runner>(
     };
     Ok(match d.find {
         Provider::YouTubeMusic => {
-            let entry = entry_of(runner, &d.from)?;
-            match acquire::lookup(runner, &entry, audio)? {
+            let entry = entry_of(runner, clients.sites, &d.from)?;
+            match acquire::lookup(runner, clients.sites, &entry, audio)? {
                 Some((track, a)) => Hit::Track(entry, track, a),
                 None => Hit::Nothing,
             }
         }
         Provider::YouTube => {
-            let entry = entry_of(runner, &d.from)?;
+            let entry = entry_of(runner, clients.sites, &d.from)?;
             let path = &located.context("its file is not in the store")?.path;
             let own = acquire::local_envelope(runner, path)?;
-            match acquire::reverse_lookup(runner, &entry, &own, audio)? {
+            match acquire::reverse_lookup(runner, clients.sites, &entry, &own, audio)? {
                 Some((upload, a)) => Hit::Upload(upload, a),
                 None => Hit::Nothing,
             }
@@ -480,6 +482,50 @@ fn template_beside(store: &Store, from: &SourceKey) -> String {
     download::template_in(&folder)
 }
 
+/// What a run has made of its lookups across its rounds, and so what a
+/// round may still make: each provider's lookups against its `per_run`,
+/// the lookups each source has made, and the providers that refused. A
+/// round asks [`ThisRun::admit`] alone, so a song makes at most one lookup
+/// per provider a run, a refusing provider is asked nothing more, and
+/// `per_run` counts the whole run.
+#[derive(Debug, Default)]
+struct ThisRun {
+    made: BTreeMap<Provider, usize>,
+    asked: BTreeSet<(SourceKey, Provider)>,
+    refusing: BTreeSet<Provider>,
+    /// Lookups the last round left past `per_run`, by provider.
+    waiting: BTreeMap<Provider, usize>,
+}
+
+impl ThisRun {
+    /// The lookups of `due` this run may still make, each counted as
+    /// made; `per_run` gives each provider's cap, 0 for none.
+    fn admit(&mut self, due: Vec<Due>, per_run: impl Fn(Provider) -> usize) -> Vec<Due> {
+        self.waiting.clear();
+        let mut admitted = Vec::new();
+        for d in due {
+            if self.refusing.contains(&d.find) || self.asked.contains(&(d.from.clone(), d.find)) {
+                continue;
+            }
+            let limit = per_run(d.find);
+            let n = self.made.entry(d.find).or_insert(0);
+            if limit > 0 && *n >= limit {
+                *self.waiting.entry(d.find).or_insert(0) += 1;
+                continue;
+            }
+            *n += 1;
+            self.asked.insert((d.from.clone(), d.find));
+            admitted.push(d);
+        }
+        admitted
+    }
+
+    /// `provider` refused for going too fast: nothing more is asked of it.
+    fn refused(&mut self, provider: Provider) {
+        self.refusing.insert(provider);
+    }
+}
+
 /// Make every lookup due, joining what is found to its song, for up to
 /// [`ROUNDS`] rounds. `force` makes the first round's lookups whatever
 /// was found before; a YouTube Music lookup from a key in `declined` is
@@ -497,10 +543,7 @@ pub fn run<R: Runner, W: Write>(
     let runner = acquire.runner;
     let mut ok = true;
     let mut force = force;
-    let mut made: BTreeMap<Provider, usize> = BTreeMap::new();
-    let mut held = BTreeMap::new();
-    let mut asked: BTreeSet<(SourceKey, Provider)> = BTreeSet::new();
-    let mut refusing_now: BTreeSet<Provider> = BTreeSet::new();
+    let mut this_run = ThisRun::default();
     for round in 0..ROUNDS {
         let mut manifest = Manifest::load(home)?;
         let mut state = State::load(home)?;
@@ -540,25 +583,7 @@ pub fn run<R: Runner, W: Write>(
             .into_iter()
             .map(|d| Looked::now(d.from, d.find, Outcome::Declined))
             .collect();
-        let mut waiting = BTreeMap::new();
-        let due: Vec<Due> = due
-            .into_iter()
-            .filter(|d| {
-                !refusing_now.contains(&d.find) && !asked.contains(&(d.from.clone(), d.find))
-            })
-            .filter(|d| {
-                let limit = manifest.providers.settings(d.find).per_run;
-                let n = made.entry(d.find).or_insert(0);
-                if limit > 0 && *n >= limit {
-                    *waiting.entry(d.find).or_insert(0_usize) += 1;
-                    return false;
-                }
-                *n += 1;
-                true
-            })
-            .collect();
-        held = waiting;
-        asked.extend(due.iter().map(|d| (d.from.clone(), d.find)));
+        let due = this_run.admit(due, |p| manifest.providers.settings(p).per_run);
         if due.is_empty() {
             State::keep_lookups(home, &records, &[])?;
             break;
@@ -607,6 +632,7 @@ pub fn run<R: Runner, W: Write>(
             coverart: &bases.2,
             transport: http,
             throttle: &throttles.coverart,
+            sites: &manifest.settings.sites,
         };
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();
@@ -757,7 +783,7 @@ pub fn run<R: Runner, W: Write>(
                 Ok(Hit::Tags(record)) => {
                     let key = SourceKey::Remote {
                         site: MUSICBRAINZ.to_string(),
-                        id: record.id.clone(),
+                        id: record.id.to_string(),
                     };
                     if !store.has(&key) {
                         musicbrainz::keep(&dirs.musicbrainz(), &record)?;
@@ -784,7 +810,7 @@ pub fn run<R: Runner, W: Write>(
                 Ok(Hit::Cover(cover)) => {
                     let key = SourceKey::Remote {
                         site: COVERART.to_string(),
-                        id: cover.id.clone(),
+                        id: cover.id().to_string(),
                     };
                     let folder = dirs.kept(COVERART);
                     if !store.has(&key) && !coverart::path_of(&folder, &cover).exists() {
@@ -890,7 +916,7 @@ pub fn run<R: Runner, W: Write>(
             )?;
         }
         for (p, (n, why)) in put_off {
-            refusing_now.insert(p);
+            this_run.refused(p);
             crate::ui::warning(
                 acquire.out,
                 &format!("{why}: {n} lookup(s) on {p} wait for the next run"),
@@ -901,7 +927,7 @@ pub fn run<R: Runner, W: Write>(
         }
         force = false;
     }
-    for (p, n) in held {
+    for (p, n) in this_run.waiting {
         crate::ui::info(
             acquire.out,
             &format!("{n} more on {p} wait for the next run, past `per_run`"),
@@ -966,16 +992,20 @@ pub fn refetch(
                 .context("not a record ID")
                 .and_then(|id| lrclib.by_id(id))
                 .and_then(|r| r.map(|r| lrclib::keep(&dirs.lrclib(), &r)).transpose()),
-            MUSICBRAINZ => musicbrainz
-                .by_id(id, album_of_record(&key).as_deref())
+            MUSICBRAINZ => Mbid::parse(id)
+                .context("not a record ID")
+                .and_then(|id| musicbrainz.by_id(&id, album_of_record(&key).as_deref()))
                 .and_then(|r| {
                     r.map(|r| musicbrainz::keep(&dirs.musicbrainz(), &r))
                         .transpose()
                 }),
-            COVERART => covers.by_id(id).and_then(|c| {
-                c.map(|c| coverart::keep(&dirs.kept(COVERART), &c))
-                    .transpose()
-            }),
+            COVERART => Mbid::parse(id)
+                .context("not a record ID")
+                .and_then(|id| covers.by_id(&id))
+                .and_then(|c| {
+                    c.map(|c| coverart::keep(&dirs.kept(COVERART), &c))
+                        .transpose()
+                }),
             _ => continue,
         };
         match kept {

@@ -3,29 +3,22 @@
 //! `<provider>:<id>` for a record a lookup keeps.
 //!
 //! A fetched source is named by the site it came from and the ID yt-dlp
-//! gives it there, so `archive.org:<id>` reads as the address it is. A
-//! site's domain is one per extractor where [`SITES`] names it, so a
+//! gives it there, so `archive.org:<id>` reads as the address it is: a
 //! video found at `music.youtube.com`, `m.youtube.com` or `youtu.be` is
-//! the one `youtube.com:<id>`, and a track at `<artist>.bandcamp.com`
-//! is `bandcamp.com:<id>`; every other site is the domain of its page,
-//! as [`page`] picks it, without `www.`. A YouTube playlist, which an
-//! album may be made from, is `youtube.com:playlist/<id>`. A file in an
-//! archive.org item of several is `archive.org:<item>/<file>`, its ID as
-//! yt-dlp gives it, and is fetched again from its own page, as the
-//! item's would fetch every file in it ([`page_to_fetch`]).
+//! the one `youtube.com:<id>`, a track at `<artist>.bandcamp.com` is
+//! `bandcamp.com:<id>`, and a file in an archive.org item of several is
+//! `archive.org:<item>/<file>`. Which extractor names which site, what
+//! IDs a site takes and where a source is fetched again from is the song
+//! list's `[sites]` ([`crate::sites`]); a key read here is checked for its
+//! shape alone, and against those where the song list is read.
 //!
 //! Keys were named by yt-dlp's extractor before, as `youtube:<id>` and
-//! `archiveorg:<id>`. Such a key of an extractor [`SITES`] names reads
+//! `archiveorg:<id>`. Such a key of an extractor [`LEGACY`] names reads
 //! as its domain's, wherever it is read, and is written so; one of any
 //! other extractor reads as it was, a source like any other, until a
 //! sync renames it by the page it recorded
 //! ([`crate::reconcile`]). [`SourceKey::spelled_before`] gives the old
 //! name back, for what an earlier muman keyed by it.
-//!
-//! An extractor added to [`SITES`] names what it fetches by the domain
-//! given there, where what it fetched before is named by each page's:
-//! add one only with a rename of those keys, or a source fetched again
-//! is listed twice.
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -39,9 +32,11 @@ pub const YOUTUBE: &str = "youtube.com";
 /// What a YouTube playlist's ID follows in its key.
 const PLAYLIST: &str = "playlist/";
 
-/// yt-dlp's extractors, by the lower-cased key it prints, whose sources
-/// are named by one domain whichever address they were found at.
-pub const SITES: [(&str, &str); 13] = [
+/// The extractors an earlier muman named keys by, lower-cased, and the
+/// domain each such key reads as: a record of what was, never added to,
+/// since a site added to `[sites]` names its keys by its domain from the
+/// first.
+pub const LEGACY: [(&str, &str); 13] = [
     ("youtube", YOUTUBE),
     ("youtubetab", YOUTUBE),
     ("archiveorg", "archive.org"),
@@ -135,20 +130,6 @@ impl SourceKey {
         }
     }
 
-    /// What yt-dlp fetched, by the extractor key it printed, the page
-    /// [`page`] picks and the ID: the extractor's site where [`SITES`]
-    /// names one, else the page's, else the extractor as keys were once
-    /// named.
-    #[must_use]
-    pub fn fetched(extractor: &str, page: Option<&str>, id: &str) -> Option<Self> {
-        let extractor = extractor.to_ascii_lowercase();
-        let site = site_of(&extractor)
-            .map(str::to_string)
-            .or_else(|| page.and_then(domain_of))
-            .unwrap_or(extractor);
-        Self::parse(&format!("{site}:{id}")).ok()
-    }
-
     pub fn parse(text: &str) -> Result<Self> {
         let Some((scheme, rest)) = text.split_once(':') else {
             bail!("`{text}` names no source: expected `youtube.com:<id>` or `manual:<path>`");
@@ -167,10 +148,7 @@ impl SourceKey {
                 rest.to_string(),
             ),
         };
-        let valid = if site == YOUTUBE {
-            id.strip_prefix(PLAYLIST)
-                .map_or_else(|| is_id(&id), is_token)
-        } else if NOT_SITES.contains(&site.as_str()) {
+        let valid = if NOT_SITES.contains(&site.as_str()) {
             is_token(&id)
         } else {
             is_site(&site) && is_remote_id(&id)
@@ -212,35 +190,6 @@ impl SourceKey {
         self.site().is_some_and(|s| !s.contains('.'))
     }
 
-    /// What to hand yt-dlp to fetch it again; only YouTube is known.
-    #[must_use]
-    pub fn url(&self) -> Option<String> {
-        match self {
-            Self::Remote { site, id } if site == YOUTUBE => Some(match id.strip_prefix(PLAYLIST) {
-                Some(list) => format!("https://www.youtube.com/playlist?list={list}"),
-                None => watch_url(id),
-            }),
-            _ => None,
-        }
-    }
-
-    /// yt-dlp's `--download-archive` line for it, `<extractor> <id>`,
-    /// where the extractor is known.
-    #[must_use]
-    pub fn archive_line(&self) -> Option<String> {
-        let (site, id) = match self {
-            Self::Remote { site, id } if self.site().is_some() && !id.starts_with(PLAYLIST) => {
-                (site, id)
-            }
-            _ => return None,
-        };
-        let extractor = SITES
-            .iter()
-            .find(|(_, s)| s == site)
-            .map_or(site.as_str(), |(e, _)| e);
-        (!extractor.contains('.')).then(|| format!("{extractor} {id}\n"))
-    }
-
     /// How an earlier muman named this key, where it named it otherwise:
     /// by yt-dlp's extractor, as `youtube:<id>`.
     #[must_use]
@@ -250,7 +199,7 @@ impl SourceKey {
         };
         let (extractor, id) = match id.strip_prefix(PLAYLIST) {
             Some(list) if site == YOUTUBE => ("youtubetab", list),
-            _ => (SITES.iter().find(|(_, s)| s == site)?.0, id.as_str()),
+            _ => (LEGACY.iter().find(|(_, s)| s == site)?.0, id.as_str()),
         };
         Some(Self::Remote {
             site: extractor.to_string(),
@@ -290,22 +239,12 @@ pub fn page<'a>(
     }
 }
 
-/// The page to fetch `key` again from: `page`, but for a file in an
-/// archive.org item, whose `page` is the item's, which would fetch every
-/// file in it, the file's own.
-#[must_use]
-pub fn page_to_fetch(key: &SourceKey, page: Option<&str>) -> Option<String> {
-    match key {
-        SourceKey::Remote { site, id } if site == "archive.org" && id.contains('/') => {
-            Some(format!("https://archive.org/details/{id}"))
-        }
-        _ => page.map(str::to_string),
-    }
-}
-
-/// The site [`SITES`] names for an extractor.
+/// The domain a key an earlier muman named by `extractor` reads as.
 fn site_of(extractor: &str) -> Option<&'static str> {
-    SITES.iter().find(|(e, _)| *e == extractor).map(|(_, s)| *s)
+    LEGACY
+        .iter()
+        .find(|(e, _)| *e == extractor)
+        .map(|(_, s)| *s)
 }
 
 /// The site a page's address names, as yt-dlp's `webpage_url_domain`
@@ -357,17 +296,6 @@ impl TryFrom<String> for SourceKey {
     fn try_from(text: String) -> Result<Self> {
         Self::parse(&text)
     }
-}
-
-#[must_use]
-pub fn watch_url(id: &str) -> String {
-    format!("https://www.youtube.com/watch?v={id}")
-}
-
-/// Whether `s` has the shape of a YouTube video ID.
-#[must_use]
-pub fn is_id(s: &str) -> bool {
-    s.len() == 11 && is_token(s)
 }
 
 /// Letters, digits, `-` and `_`: what an extractor's ID is made of.
@@ -449,39 +377,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fetched_source_is_named_by_one_site_per_extractor_else_its_page() {
-        let at = |extractor, page, id| SourceKey::fetched(extractor, page, id).unwrap().to_string();
-        assert_eq!(
-            at(
-                "Youtube",
-                Some("https://music.youtube.com/watch?v=vid00000001"),
-                "vid00000001"
-            ),
-            "youtube.com:vid00000001"
-        );
-        assert_eq!(
-            at(
-                "Bandcamp",
-                Some("https://artist.bandcamp.com/track/t"),
-                "123"
-            ),
-            "bandcamp.com:123"
-        );
-        assert_eq!(
-            at("Funkwhale", Some("https://www.Tunes.example/t/abc"), "abc"),
-            "tunes.example:abc"
-        );
-        assert_eq!(at("Funkwhale", None, "abc"), "funkwhale:abc");
-        let (mirror, given) = (
-            Some("https://mirror7.files.example/0/a.mp3"),
-            Some("https://files.example/download/a.mp3"),
-        );
-        assert_eq!(page("Generic", mirror, given), given);
-        assert_eq!(page("Funkwhale", mirror, given), mirror);
-        assert!(SourceKey::fetched("Youtube", None, "short").is_none());
-    }
-
-    #[test]
     fn a_page_names_its_site_without_www() {
         assert_eq!(
             domain_of("https://www.Example.org:8080/a?b#c").as_deref(),
@@ -502,9 +397,11 @@ mod tests {
     }
 
     #[test]
-    fn a_youtube_key_needs_a_video_or_playlist_id() {
-        assert!(SourceKey::parse("youtube.com:short").is_err());
-        assert!(SourceKey::parse("youtube:short").is_err());
+    fn a_key_is_read_by_its_shape_alone() {
+        assert!(
+            SourceKey::parse("youtube.com:short").is_ok(),
+            "[sites] decides"
+        );
         assert!(SourceKey::parse("nothing").is_err());
         assert!(SourceKey::parse("youtube.com:-dashid_123").is_ok());
         assert!(SourceKey::parse("youtube.com:playlist/").is_err());
@@ -524,53 +421,6 @@ mod tests {
         ] {
             assert!(SourceKey::parse(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn only_youtube_can_be_fetched_again() {
-        assert_eq!(
-            SourceKey::youtube("vid00000001").url().as_deref(),
-            Some("https://www.youtube.com/watch?v=vid00000001")
-        );
-        assert!(
-            SourceKey::parse("soundcloud.com:1")
-                .unwrap()
-                .url()
-                .is_none()
-        );
-        assert_eq!(
-            SourceKey::playlist("OLAK5uy_x").url().as_deref(),
-            Some("https://www.youtube.com/playlist?list=OLAK5uy_x")
-        );
-    }
-
-    #[test]
-    fn a_file_in_an_item_is_fetched_again_alone() {
-        let file = SourceKey::parse("archive.org:item-1/Part_1.mp3").unwrap();
-        let item = Some("https://archive.org/details/item-1");
-        assert_eq!(
-            page_to_fetch(&file, item).as_deref(),
-            Some("https://archive.org/details/item-1/Part_1.mp3")
-        );
-        let alone = SourceKey::parse("archive.org:item-1").unwrap();
-        assert_eq!(page_to_fetch(&alone, item).as_deref(), item);
-    }
-
-    #[test]
-    fn yt_dlp_archives_a_source_by_its_extractor_where_known() {
-        let line = |k: &str| SourceKey::parse(k).unwrap().archive_line();
-        assert_eq!(
-            line("youtube.com:vid00000001").as_deref(),
-            Some("youtube vid00000001\n")
-        );
-        assert_eq!(
-            line("archive.org:item0001").as_deref(),
-            Some("archiveorg item0001\n")
-        );
-        assert_eq!(line("funkwhale:abc").as_deref(), Some("funkwhale abc\n"));
-        assert_eq!(line("tunes.example:abc"), None);
-        assert_eq!(line("youtube.com:playlist/OLAK5uy_x"), None);
-        assert_eq!(line("lrclib:7"), None);
     }
 
     #[test]

@@ -31,6 +31,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Sites in the song list.** Which extractors each site names its
+  sources by, the IDs each kind of its sources takes and where one is
+  fetched again from are the song list's `[sites]` tables, written out
+  at their defaults like any setting; adding a site is a table, and an
+  archive.org source is fetched again from its own address.
 - **Sources named by their site.** What yt-dlp fetched is keyed
   `<site>:<id>`, as `youtube.com:<id>` or `archive.org:<id>`, rather
   than by yt-dlp's extractor, as `youtube:<id>`. A video found on
@@ -353,6 +358,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`edit` said "Changed"** for a song removed from the song list while
   the editor was open, though nothing was applied; it says the song is
   no longer listed.
+- **A tag's broken release ID** kept a song from any cover: the archive
+  was asked for that ID alone. An ID that is no MBID is passed over and
+  the album searched for by its names.
+- **`export --max-size` refused on estimates:** a zip too small for
+  the lowest bitrates as estimated was refused without encoding one;
+  the lowest are encoded and measured first, as the library's
+  `max_size` does, both fitting by one loop.
+- **A run killed between two chained moves**, a song moved to a new
+  folder and another into the place it left, was followed by neither,
+  and the first song stayed at its new path with its old tags. The
+  moves a run made are followed as the ordered list they are.
 - **A link back up, walked once.** A folder in the manual folder linking
   to a folder it is inside listed each file in it dozens of times, under
   ever longer paths, and `add` of such a folder copied it as often; the

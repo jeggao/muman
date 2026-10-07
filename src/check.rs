@@ -190,7 +190,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
                 .song_with(key)
                 .and_then(|s| s.held.get(key))
                 .is_some_and(|h| h.url.is_some());
-            let fetchable = key.url().is_some() || page || crate::provider::is_kept(key);
+            let fetchable = manifest.settings.sites.fetch_url(key).is_some()
+                || page
+                || crate::provider::is_kept(key);
             let how = if fetchable {
                 "`sync` fetches it again"
             } else {
@@ -264,7 +266,14 @@ fn served<R: Runner, W: Write>(
         .iter()
         .flat_map(|s| &s.held)
         .filter(|(k, h)| matches!(k, SourceKey::Remote { .. }) && h.format.is_some())
-        .filter_map(|(k, h)| Some((k, h, k.url().or_else(|| h.url.clone())?)))
+        .filter_map(|(k, h)| {
+            let url = manifest
+                .settings
+                .sites
+                .fetch_url(k)
+                .or_else(|| h.url.clone())?;
+            Some((k, h, url))
+        })
         .collect();
     if asked.is_empty() {
         return Ok(vec![(
@@ -300,7 +309,7 @@ fn served<R: Runner, W: Write>(
         };
         let info = listed.iter().find(|(i, _)| {
             i.id.as_deref() == Some(id.as_str())
-                && (i.key().as_ref() == Some(key)
+                && (i.key(&manifest.settings.sites).as_ref() == Some(key)
                     || i.extractor_key
                         .as_deref()
                         .is_some_and(|e| e.eq_ignore_ascii_case(site)))

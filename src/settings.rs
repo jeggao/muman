@@ -5,7 +5,8 @@
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]` and `[history]`.
+//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]`, `[history]` and
+//! `[sites]` ([`crate::sites`]).
 //! A key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored. Which machine runs what is no
 //! setting: tools and folders come from flags and `MUMAN_*` variables.
@@ -47,7 +48,7 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 5] = ["library", "audio", "quality", "ytdlp", "history"];
+pub const TABLES: [&str; 6] = ["library", "audio", "quality", "ytdlp", "history", "sites"];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -57,6 +58,7 @@ pub struct Settings {
     pub quality: Quality,
     pub ytdlp: Ytdlp,
     pub history: History,
+    pub sites: crate::sites::Sites,
 }
 
 /// The library's place and each song's path in it.

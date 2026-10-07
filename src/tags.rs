@@ -22,6 +22,10 @@ pub const METHOD: &str = "tags/7";
 pub enum Scope {
     /// The recording: each field from whichever source offers it best.
     Recording,
+    /// What identifies the recording: each field from whichever source
+    /// offers it best of those that title the recording as the song is
+    /// titled, so a record of another recording lends none.
+    RecordingId,
     /// The release the song is on: every field from the one source whose
     /// album ranks best, so an album never splits and its IDs never mix.
     Release,
@@ -135,12 +139,8 @@ impl Field {
     #[must_use]
     pub fn scope(self) -> Scope {
         match self {
-            Self::Title
-            | Self::Artist
-            | Self::Genre
-            | Self::Isrc
-            | Self::MusicBrainzTrackId
-            | Self::MusicBrainzArtistId => Scope::Recording,
+            Self::Title | Self::Artist | Self::Genre => Scope::Recording,
+            Self::Isrc | Self::MusicBrainzTrackId | Self::MusicBrainzArtistId => Scope::RecordingId,
             Self::Album
             | Self::AlbumArtist
             | Self::Track
@@ -369,7 +369,7 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     offer(
         &mut o,
         Field::MusicBrainzTrackId,
-        vec![record.id.clone()],
+        vec![record.id.to_string()],
         true,
     );
     offer(
@@ -661,15 +661,27 @@ mod tests {
             }
         }
         assert_eq!(
-            Field::of(Scope::Recording).count() + Field::of(Scope::Release).count(),
+            Field::of(Scope::Recording).count()
+                + Field::of(Scope::RecordingId).count()
+                + Field::of(Scope::Release).count(),
             Field::ALL.len()
         );
     }
 
     #[test]
+    fn an_identifier_comes_with_what_it_identifies() {
+        for f in Field::ALL
+            .iter()
+            .filter(|f| f.is_id() || **f == Field::Isrc)
+        {
+            assert_ne!(f.scope(), Scope::Recording, "{f:?} picked on its own");
+        }
+    }
+
+    #[test]
     fn an_offer_drops_controls_reordering_and_garbage() {
         let record = crate::musicbrainz::Record {
-            id: "00000000-0000-0000-0000-000000000001".into(),
+            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Esc\0ape\nTitle\u{202E}\u{1b}[2J".into(),
             artists: vec!["x".repeat(MAX_VALUE + 1), "Artist".into()],
             artist_ids: Vec::new(),
@@ -685,7 +697,7 @@ mod tests {
     #[test]
     fn a_musicbrainz_record_offers_its_release_whole() {
         let record = crate::musicbrainz::Record {
-            id: "00000000-0000-0000-0000-000000000001".into(),
+            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Song".into(),
             artists: vec!["A".into(), "B".into()],
             artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],

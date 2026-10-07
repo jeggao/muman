@@ -17,15 +17,11 @@
 //! a copy as the source's audio packets plus `CONTAINER`; a lossless
 //! encode as its source, PCM at `PCM_FLAC` of it; a lossy encode as its
 //! bitrate times its length; each with a guess at its cover, tags and
-//! lyrics. Fitting on estimates picks a rung for each song; each rung
-//! picked is rendered into a scratch folder and its real size replaces
-//! its estimate; the songs are fitted again, and so on until every rung
-//! picked is one whose real size is known, at most `PASSES` times; when
-//! they run out with estimates still in the sum, as encoders missing
-//! their bitrates keep them moving, the songs are fitted on sizes known
-//! alone, each song's lowest rendered first if that is what it takes. Each
-//! file counts whole `[library] block_size` blocks, and two standard
-//! deviations of the estimates still in the sum are kept free.
+//! lyrics. [`fit::settle`] turns the fit on estimates into one on sizes
+//! measured, `PASSES` times at most, each rung it asks for rendered into
+//! a scratch folder to measure it. Each file counts whole `[library]
+//! block_size` blocks, and two standard deviations of the estimates
+//! still in the sum are kept free.
 //!
 //! Real sizes are kept in `state.json` by [`plan_key`], the plan and the
 //! ffmpeg version together, and taken from there instead of rendering
@@ -35,10 +31,9 @@
 //! rendered to be measured is moved into the library rather than rendered
 //! twice. Sizes are taken before any hook runs.
 //!
-//! **Too little room.** When the songs cannot fit, each one's lowest rung
-//! is rendered to measure it before anything else; only when even the
-//! real lowest sizes cannot fit are songs left out, the last listed
-//! first, until the rest fit. A song left out is not written, and its
+//! **Too little room.** When even the songs' lowest rungs, measured,
+//! cannot fit, songs are left out, the last listed first, until the rest
+//! fit. A song left out is not written, and its
 //! file goes as a removed song's does.
 //!
 //! Songs changed since muman wrote them, and the files a failed song
@@ -53,7 +48,7 @@ use anyhow::Result;
 
 use crate::codec::Codec;
 use crate::facts::Facts;
-use crate::fit::{self, Fit, Item, Policy, Rung, Source};
+use crate::fit::{self, Item, Policy, Rung, Settled, Source};
 use crate::manifest::Manifest;
 use crate::parallel;
 use crate::reconcile::{Planned, changed_since_written};
@@ -332,14 +327,14 @@ fn on_disk(library: &Path, path: &Path, w: &Written, block: u64) -> u64 {
 #[derive(Debug, Default)]
 struct Learnt {
     known: HashMap<String, u64>,
-    broken: BTreeSet<String>,
     made: HashMap<(usize, usize), (PathBuf, Rendered)>,
     rendered: usize,
 }
 
 impl Learnt {
     /// Learn the real sizes of the `unknown` rungs, by ladder and rung:
-    /// from `state.sizes` where kept, else by rendering them.
+    /// from `state.sizes` where kept, else by rendering them; one that
+    /// does not render stays unknown.
     #[allow(clippy::too_many_arguments)]
     fn measure<R: Runner, W: Write>(
         &mut self,
@@ -348,12 +343,12 @@ impl Learnt {
         state: &mut State,
         planned: &Planned,
         ladders: &[Ladder],
-        unknown: Vec<(usize, usize)>,
+        unknown: &fit::Wanted,
         block: u64,
         out: &mut W,
     ) -> Result<()> {
         let mut due = Vec::new();
-        for (i, c) in unknown {
+        for &(i, c) in unknown {
             let rung = &ladders[i].rungs[c];
             match state.sizes.get(&rung.plan_key) {
                 Some(m) => {
@@ -395,7 +390,6 @@ impl Learnt {
         for ((i, c), (folder, result)) in due.into_iter().zip(results) {
             let key = ladders[i].rungs[c].plan_key.clone();
             let Ok(done) = result else {
-                self.broken.insert(key);
                 continue;
             };
             self.rendered += 1;
@@ -413,10 +407,9 @@ impl Learnt {
     }
 }
 
-/// The items to fit: each ladder's rungs at their real sizes where they
-/// are learnt, else at their estimates; a lower rung that could not be
-/// rendered saves nothing.
-fn items(ladders: &[Ladder], learnt: &Learnt) -> Vec<Item> {
+/// The items to fit, each ladder's rungs at their estimates but a song's
+/// that stays as it is, whose size is known.
+fn items(ladders: &[Ladder]) -> Vec<Item> {
     ladders
         .iter()
         .map(|l| {
@@ -426,25 +419,17 @@ fn items(ladders: &[Ladder], learnt: &Learnt) -> Vec<Item> {
                     bytes,
                     loss: 0.0,
                     sigma: 0.0,
+                    known: true,
                 }],
                 None => l
                     .rungs
                     .iter()
-                    .enumerate()
-                    .map(|(n, c)| {
-                        let (bytes, sigma) = match learnt.known.get(&c.plan_key) {
-                            Some(b) => (*b, 0.0),
-                            None if n > 0 && learnt.broken.contains(&c.plan_key) => {
-                                (l.rungs[0].estimate.saturating_mul(2), 0.0)
-                            }
-                            None => (c.estimate, c.sigma),
-                        };
-                        Rung {
-                            format: c.format,
-                            bytes,
-                            loss: c.loss,
-                            sigma,
-                        }
+                    .map(|c| Rung {
+                        format: c.format,
+                        bytes: c.estimate,
+                        loss: c.loss,
+                        sigma: c.sigma,
+                        known: false,
                     })
                     .collect(),
             };
@@ -455,130 +440,6 @@ fn items(ladders: &[Ladder], learnt: &Learnt) -> Vec<Item> {
             }
         })
         .collect()
-}
-
-/// What a pass of fitting leads to.
-enum Pass {
-    /// Every song has a rung.
-    Fit(Fit),
-    /// The songs do not fit, and these lowest rungs, by ladder and rung,
-    /// must be measured before any song is left out.
-    Measure(Vec<(usize, usize)>),
-}
-
-/// Fit `ladders`; when they cannot fit, measure each one's lowest rung
-/// first, and only once the lowest are all real sizes leave out songs,
-/// the last listed first, until the rest fit.
-fn fit_or_leave_out(
-    ladders: &mut Vec<Ladder>,
-    planned: &mut Planned,
-    learnt: &Learnt,
-    policy: &Policy,
-    left_out: &mut Vec<usize>,
-    floor: &mut Option<u64>,
-) -> Pass {
-    loop {
-        let now = items(ladders, learnt);
-        let at_least = match fit::allocate(&now, policy) {
-            Ok(fit) => return Pass::Fit(fit),
-            Err(at_least) => at_least,
-        };
-        let lowest = |i: &Item| {
-            i.rungs
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, r)| r.bytes)
-                .map_or(0, |(n, _)| n)
-        };
-        let unknown: Vec<(usize, usize)> = now
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| ladders[*i].fixed.is_none())
-            .map(|(i, item)| (i, lowest(item)))
-            .filter(|(i, c)| {
-                let key = &ladders[*i].rungs[*c].plan_key;
-                !learnt.known.contains_key(key) && !learnt.broken.contains(key)
-            })
-            .collect();
-        if !unknown.is_empty() {
-            return Pass::Measure(unknown);
-        }
-        *floor = Some(at_least);
-        let least: Vec<u64> = now
-            .iter()
-            .map(|i| i.rungs.iter().map(|r| r.bytes).min().unwrap_or(0))
-            .collect();
-        let keep = kept_of(&least, policy.max);
-        left_out.extend(planned[keep..].iter().map(|(n, _)| *n));
-        ladders.truncate(keep);
-        planned.truncate(keep);
-    }
-}
-
-/// For passes that ran out with the last fit made on estimates, as
-/// encoders missing their bitrates keep them moving: a fit on sizes
-/// measured, each song's lowest rendered first if that is what it takes.
-#[allow(clippy::too_many_arguments)]
-fn settle_measured<R: Runner, W: Write>(
-    runner: &R,
-    at: &Workshop<'_>,
-    state: &mut State,
-    planned: &Planned,
-    ladders: &[Ladder],
-    learnt: &mut Learnt,
-    policy: &Policy,
-    block: u64,
-    out: &mut W,
-) -> Result<Option<fit::Fit>> {
-    if let Some(known) = settle(ladders, learnt, policy) {
-        return Ok(Some(known));
-    }
-    let lowest: Vec<(usize, usize)> = ladders
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.fixed.is_none())
-        .filter_map(|(i, l)| {
-            let (c, rung) = l.rungs.iter().enumerate().min_by_key(|(_, r)| r.estimate)?;
-            let known =
-                learnt.known.contains_key(&rung.plan_key) || learnt.broken.contains(&rung.plan_key);
-            (!known).then_some((i, c))
-        })
-        .collect();
-    learnt.measure(runner, at, state, planned, ladders, lowest, block, out)?;
-    Ok(settle(ladders, learnt, policy))
-}
-
-/// The rungs of `fit` whose size is still an estimate.
-fn unknown_in(fit: &fit::Fit, ladders: &[Ladder], learnt: &Learnt) -> Vec<(usize, usize)> {
-    fit.choice
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| {
-            let rung = &ladders[*i].rungs[**c];
-            ladders[*i].fixed.is_none()
-                && !learnt.known.contains_key(&rung.plan_key)
-                && !learnt.broken.contains(&rung.plan_key)
-        })
-        .map(|(i, c)| (i, *c))
-        .collect()
-}
-
-/// A fit of sizes measured: each song lowered only to a rung whose real
-/// size is known, or kept at its best, estimated as a copy is closely.
-fn settle(ladders: &[Ladder], learnt: &Learnt, policy: &Policy) -> Option<fit::Fit> {
-    let mut items = items(ladders, learnt);
-    for (item, ladder) in items.iter_mut().zip(ladders) {
-        if ladder.fixed.is_some() {
-            continue;
-        }
-        for (rung, choice) in item.rungs.iter_mut().zip(&ladder.rungs).skip(1) {
-            if !learnt.known.contains_key(&choice.plan_key) {
-                rung.bytes = policy.max.saturating_add(1);
-                rung.sigma = 0.0;
-            }
-        }
-    }
-    fit::allocate(&items, policy).ok()
 }
 
 /// How many of songs taking at least `least` bytes each, the first
@@ -649,48 +510,39 @@ pub fn fit_library<R: Runner, W: Write>(
     let mut learnt = Learnt::default();
     let mut left_out = Vec::new();
     let mut floor = None;
-    let mut fit = None;
-    let mut settled = false;
-    for _ in 0..PASSES {
-        let unknown = match fit_or_leave_out(
-            &mut ladders,
-            planned,
-            &learnt,
-            &policy,
-            &mut left_out,
-            &mut floor,
-        ) {
-            Pass::Measure(lowest) => lowest,
-            Pass::Fit(chosen) => {
-                let unknown = unknown_in(&chosen, &ladders, &learnt);
-                fit = Some(chosen);
-                if unknown.is_empty() {
-                    settled = true;
-                    break;
+    let mut items = items(&ladders);
+    let fit = loop {
+        let mut measure = |items: &mut [Item], wanted: &fit::Wanted| -> Result<()> {
+            learnt.measure(runner, at, state, planned, &ladders, wanted, block, out)?;
+            for &(i, c) in wanted {
+                if let Some(bytes) = learnt.known.get(&ladders[i].rungs[c].plan_key) {
+                    let rung = &mut items[i].rungs[c];
+                    rung.bytes = *bytes;
+                    rung.sigma = 0.0;
+                    rung.known = true;
                 }
-                unknown
             }
+            Ok(())
         };
-        learnt.measure(runner, at, state, planned, &ladders, unknown, block, out)?;
-    }
-    if !settled
-        && let Some(known) = settle_measured(
-            runner,
-            at,
-            state,
-            planned,
-            &ladders,
-            &mut learnt,
-            &policy,
-            block,
-            out,
-        )?
-    {
-        fit = Some(known);
-    }
+        match fit::settle(&mut items, &policy, PASSES, &mut measure)? {
+            Settled::Fit(fit) => break fit,
+            Settled::Over(at_least) => {
+                floor = Some(at_least);
+                let least: Vec<u64> = items
+                    .iter()
+                    .map(|i| i.rungs.iter().map(|r| r.bytes).min().unwrap_or(0))
+                    .collect();
+                let keep = kept_of(&least, policy.max);
+                left_out.extend(planned[keep..].iter().map(|(n, _)| *n));
+                ladders.truncate(keep);
+                planned.truncate(keep);
+                items.truncate(keep);
+            }
+        }
+    };
     let mut placed: Made = HashMap::new();
     let mut lowered = 0;
-    if let Some(fit) = &fit {
+    {
         for ((n, r), (ladder, c)) in planned.iter_mut().zip(ladders.iter().zip(&fit.choice)) {
             r.plan.format = ladder.rungs[*c].format;
             if let Some(file) = learnt.made.remove(&(*n, *c)) {
@@ -709,7 +561,7 @@ pub fn fit_library<R: Runner, W: Write>(
     left_out.sort_unstable();
     let fitted = Fitted {
         max,
-        projected: fit.map_or(0, |f| f.total),
+        projected: fit.total,
         left_out,
         floor,
         lowered,

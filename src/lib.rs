@@ -27,6 +27,7 @@ pub mod hooks;
 pub mod http;
 pub mod identify;
 pub mod info;
+pub mod library;
 pub mod limit;
 pub mod lookup;
 pub mod lrclib;
@@ -52,6 +53,7 @@ pub mod render;
 pub mod resolve;
 pub mod runner;
 pub mod settings;
+pub mod sites;
 pub mod source;
 pub mod state;
 pub mod store;
@@ -373,7 +375,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     bail!("{missing} is no file");
                 }
                 let mut ok = true;
-                let mut proposals = import(runner, dirs, &files, out)?;
+                let sites = Manifest::load(&dirs.home)?.settings.sites;
+                let mut proposals = import(runner, dirs, &sites, &files, out)?;
                 if !urls.is_empty() {
                     let urls: Vec<String> = urls.into_iter().cloned().collect();
                     let (fine, additions) =
@@ -694,6 +697,7 @@ fn network<R: Runner, W: Write, T>(
         partial: &partial,
         plugins: plugins.as_deref(),
         options: &manifest.settings.ytdlp,
+        sites: &manifest.settings.sites,
         live: job.live,
         runs: Cell::new(0),
     };
@@ -901,6 +905,7 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
 fn import<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
+    sites: &crate::sites::Sites,
     paths: &[&String],
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
@@ -909,7 +914,7 @@ fn import<R: Runner, W: Write>(
         let name = path
             .file_name()
             .with_context(|| format!("{} names no file", path.display()))?;
-        if let Some(key) = fetched_key(runner, path) {
+        if let Some(key) = fetched_key(runner, sites, path) {
             let folder = path
                 .parent()
                 .and_then(Path::file_name)
@@ -993,7 +998,11 @@ fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
 }
 
 /// The key of an original yt-dlp fetched, from the info JSON inside it.
-fn fetched_key<R: Runner>(runner: &R, path: &Path) -> Option<SourceKey> {
+fn fetched_key<R: Runner>(
+    runner: &R,
+    sites: &crate::sites::Sites,
+    path: &Path,
+) -> Option<SourceKey> {
     id_of(path)?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(path)).ok()?).ok()?;
     let attachment = probed.attachment_named("info.json")?;
@@ -1006,7 +1015,7 @@ fn fetched_key<R: Runner>(runner: &R, path: &Path) -> Option<SourceKey> {
         )]))
         .ok()?;
     let info = info::parse(&std::fs::read(json).ok()?).ok()?;
-    info.key()
+    info.key(sites)
 }
 
 /// The `.lrc` and pictures named as a file is, beside it.

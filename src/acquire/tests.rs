@@ -94,7 +94,13 @@ impl Runner for Net {
 
 fn listed(urls: &[&str]) -> Listed {
     let urls: Vec<String> = urls.iter().map(|u| (*u).to_string()).collect();
-    list(&urls, &Net::default(), &mut Vec::new()).unwrap()
+    list(
+        &urls,
+        &crate::sites::Sites::default(),
+        &Net::default(),
+        &mut Vec::new(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -150,6 +156,7 @@ fn acquire_urls(
         temp: &temp,
         partial: &temp,
         plugins: None,
+        sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
         live: false,
         runs: Cell::new(0),
@@ -233,6 +240,7 @@ fn missing_sources_are_fetched_again_without_the_archive() {
         temp: &temp,
         partial: &temp,
         plugins: None,
+        sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
         live: false,
         runs: Cell::new(0),
@@ -283,6 +291,7 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
             temp: &temp,
             partial: &temp,
             plugins: None,
+            sites: &crate::sites::Sites::default(),
             options: &crate::settings::Ytdlp::default(),
             live: false,
             runs: Cell::new(0),
@@ -319,9 +328,10 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
          [[song]]\nsources = [\"youtube.com:vid00000009\"]\n\
          held.\"youtube.com:vid00000009\" = { audio = \"0123456789abcdef\", format = \"399+251\" }\n\
          [[song]]\nsources = [\"youtube.com:vid00000010\"]\n\
-         [[song]]\nsources = [\"archiveorg:item0001\"]\n\
-         held.\"archiveorg:item0001\" = { audio = \"0123456789abcdef\", format = \"1\", \
-         url = \"https://archive.example/details/item0001\" }\n",
+         [[song]]\nsources = [\"tunes.example:item0001\"]\n\
+         held.\"tunes.example:item0001\" = { audio = \"0123456789abcdef\", format = \"1\", \
+         url = \"https://tunes.example/t/item0001\" }\n\
+         [[song]]\nsources = [\"archive.org:item0002\"]\n",
     )
     .unwrap();
     let manifest = Manifest::load(&s.dirs.home).unwrap();
@@ -333,6 +343,7 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
         temp: &temp,
         partial: &temp,
         plugins: None,
+        sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
         live: false,
         runs: Cell::new(0),
@@ -364,10 +375,15 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
     );
     assert_eq!(format_of("vid00000010").as_deref(), Some("bv*+ba/b"));
     assert_eq!(
-        format_of("archive.example/details/item0001").as_deref(),
+        format_of("tunes.example/t/item0001").as_deref(),
         Some("bv*+ba/b"),
         "fetched again from its page, in whatever format the site lists now"
     );
+    assert_eq!(
+        format_of("https://archive.org/details/item0002").as_deref(),
+        Some("bv*+ba/b"),
+        "fetched again from the address `[sites]` gives"
+    );
     assert_eq!(downloads.len(), 2);
-    assert_eq!(failed.len(), 1, "the fake fetches no page but YouTube's");
+    assert_eq!(failed.len(), 2, "the fake fetches no page but YouTube's");
 }

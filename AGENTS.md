@@ -52,6 +52,7 @@ src/
   relpath.rs        recorded paths, written with / and in NFC
   runner.rs         the subprocess seam and tool lookup
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
+  sites.rs          the song list's [sites]: how each site names and fetches
   download.rs       yt-dlp's arguments and the files it reports
   music.rs          YouTube Music search and name matching
   plugins.rs        yt-dlp postprocessors shipped in the binary
@@ -70,6 +71,7 @@ src/
   naming.rs         safe names; template.rs, the path template
   codec.rs          output codecs: names, containers, ffmpeg arguments
   render.rs         one plan to library files
+  library.rs        the ledger: every move and removal in the library
   fit.rs            songs fitted into a size, least audible loss first
   limit.rs          the library kept under [library] max_size
   export.rs         the song list and the library into one zip
@@ -81,6 +83,7 @@ src/
   progress.rs       how far a long step has got, on stderr
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   */tests.rs        a module's tests, when they outgrow it
+tests/              the smoke test, and the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs

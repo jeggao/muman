@@ -5,6 +5,11 @@ use crate::http::TransportError;
 use crate::lrclib::testing::Server;
 
 const REC: &str = "00000000-0000-0000-0000-00000000000";
+
+/// The recording ID `REC` ends with `n`.
+fn mbid(n: &str) -> Mbid {
+    Mbid::parse(&format!("{REC}{n}")).unwrap()
+}
 const REL: &str = "00000000-0000-0000-0000-0000000000a";
 
 fn query() -> Query {
@@ -79,7 +84,7 @@ fn the_official_album_of_the_fitting_recording_is_taken() {
     let server = Server::default().answer("/ws/2/recording?", &body);
     let throttle = Throttle::none();
     let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
-    assert_eq!(record.id, format!("{REC}2"));
+    assert_eq!(record.id.as_str(), format!("{REC}2"));
     assert_eq!(record.artists, ["Paper Comets", "Ada Quill"]);
     assert_eq!(
         record.artist_ids,
@@ -139,7 +144,7 @@ fn the_recording_on_most_releases_is_the_original_whatever_its_comment() {
     let server = Server::default().answer("/ws/2/recording?", &search(&[mix, reissue, original]));
     let throttle = Throttle::none();
     let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
-    assert_eq!(record.id, format!("{REC}3"));
+    assert_eq!(record.id.as_str(), format!("{REC}3"));
     assert_eq!(record.release.unwrap().date.as_deref(), Some("1991"));
 }
 
@@ -207,7 +212,7 @@ fn a_record_fetched_again_keeps_the_album_it_was_kept_on() {
     let throttle = Throttle::none();
     let again = |album| {
         client(&server, &throttle)
-            .by_id(&format!("{REC}8"), album)
+            .by_id(&mbid("8"), album)
             .unwrap()
             .unwrap()
             .release
@@ -231,7 +236,7 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
     let server = Server::default().answer(&format!("/ws/2/recording/{REC}7?inc="), &body);
     let throttle = Throttle::none();
     let record = client(&server, &throttle)
-        .by_id(&format!("{REC}7"), None)
+        .by_id(&mbid("7"), None)
         .unwrap()
         .unwrap();
     assert_eq!(record.isrcs, ["XX0000000002"]);
@@ -242,7 +247,7 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
     );
     assert_eq!(
         client(&Server::default(), &throttle)
-            .by_id("x", None)
+            .by_id(&mbid("f"), None)
             .unwrap(),
         None
     );
@@ -343,7 +348,7 @@ fn an_mbid_has_its_shape() {
 fn a_record_is_kept_and_read_back() {
     let dir = tempfile::tempdir().unwrap();
     let record = Record {
-        id: format!("{REC}1"),
+        id: mbid("1"),
         title: "Lantern Weather".into(),
         artists: vec!["Paper Comets".into()],
         artist_ids: Vec::new(),
