@@ -164,13 +164,11 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
             formats.join(", ")
         },
     )?;
-    let written: u64 = c
-        .state
-        .outputs
-        .iter()
-        .flat_map(|(p, w)| std::iter::once(p).chain(&w.lyrics))
-        .filter_map(|p| store::stamp(&c.dirs.library.join(p)).map(|(size, _)| size))
-        .sum();
+    let written = crate::limit::library_size(
+        &c.state,
+        &c.dirs.library,
+        c.manifest.settings.library.block_size.0,
+    );
     row(
         out,
         "On disk",

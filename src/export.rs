@@ -150,6 +150,16 @@ pub fn export<R: Runner, W: Write>(
     if !list.is_file() {
         bail!("{} holds no song list to export", dirs.home.display());
     }
+    // The library is as the last run left it; a song list edited since
+    // would not describe it.
+    if crate::history::songs_as_last_left(&dirs.home) == Some(false) {
+        return Err(crate::change::Refused(
+            "The song list changed since the last run; `muman sync` first, so the export's \
+             library matches it"
+                .into(),
+        )
+        .into());
+    }
     let manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
@@ -175,7 +185,7 @@ pub fn export<R: Runner, W: Write>(
     };
     let mut ok = true;
     let mut encoded = 0_usize;
-    let scratch = tempfile::tempdir_in(folder).context("creating a scratch folder")?;
+    let scratch = crate::atomic::Scratch::within(folder)?;
     if let Some(max) = max_size {
         let fixed = entries_size(std::slice::from_ref(&list_entry)) + END;
         let budget = max
@@ -198,11 +208,9 @@ pub fn export<R: Runner, W: Write>(
         }
     }
 
-    let part = {
-        let mut name = output.clone().into_os_string();
-        name.push(".part");
-        PathBuf::from(name)
-    };
+    // In the scratch folder, so a run killed partway leaves it where the
+    // next clears it.
+    let part = scratch.path().join("export.zip.part");
     let written = write_zip(
         &part,
         std::iter::once(&list_entry).chain(files.iter().flatten()),
@@ -409,10 +417,88 @@ fn fit_into<R: Runner, W: Write>(
             return Ok(Fitted { entries, ok });
         }
     }
-    bail!(
-        "the songs could not be fitted into {} in {PASSES} tries; try a little more room",
-        crate::ui::bytes(budget)
-    )
+    settle(runner, songs, &mut items, &mut made, budget, scratch)
+        .map(|entries| Fitted { entries, ok })
+}
+
+/// For passes that ran out with estimates still moving: a fit of `budget`
+/// of sizes known, each song encoded already or as it is, else with every
+/// song encoded at its lowest too.
+fn settle<R: Runner>(
+    runner: &R,
+    songs: &[Song],
+    items: &mut [Item],
+    made: &mut BTreeMap<(usize, usize), Vec<Entry>>,
+    budget: u64,
+    scratch: &Path,
+) -> Result<Vec<(usize, Vec<Entry>)>> {
+    if let Some(entries) = known_fit(items, made, budget) {
+        return Ok(entries);
+    }
+    let lowest: Vec<(usize, usize)> = items
+        .iter()
+        .enumerate()
+        .map(|(n, i)| (n, i.rungs.len() - 1))
+        .filter(|(n, c)| *c > 0 && !made.contains_key(&(*n, *c)))
+        .collect();
+    let rendered = parallel::map(&lowest, parallel::builds(), |(n, c)| {
+        encode(
+            runner,
+            &songs[*n],
+            items[*n].rungs[*c].format,
+            &scratch.join(format!("{n}-{c}")),
+        )
+    });
+    for ((n, c), result) in lowest.into_iter().zip(rendered) {
+        if let Ok(entries) = result {
+            items[n].rungs[c].bytes = entries_size(&entries);
+            made.insert((n, c), entries);
+        }
+    }
+    known_fit(items, made, budget).ok_or_else(|| {
+        anyhow!(
+            "the songs could not be fitted into {} in {PASSES} tries; try a little more room",
+            crate::ui::bytes(budget)
+        )
+    })
+}
+
+/// The best fit of `budget` among sizes known: each song as it is or at a
+/// bitrate `made` holds, with the entries made for it.
+fn known_fit(
+    items: &[Item],
+    made: &BTreeMap<(usize, usize), Vec<Entry>>,
+    budget: u64,
+) -> Option<Vec<(usize, Vec<Entry>)>> {
+    let known: Vec<Item> = items
+        .iter()
+        .enumerate()
+        .map(|(n, item)| {
+            let mut item = item.clone();
+            for (c, rung) in item.rungs.iter_mut().enumerate() {
+                if c > 0 && !made.contains_key(&(n, c)) {
+                    rung.bytes = budget.saturating_add(1);
+                }
+                rung.sigma = 0.0;
+            }
+            item
+        })
+        .collect();
+    let fit = fit::allocate(&known, &fit::Policy::exact(budget)).ok()?;
+    let total: u64 = fit
+        .choice
+        .iter()
+        .enumerate()
+        .map(|(n, c)| known[n].rungs[*c].bytes)
+        .sum();
+    (total <= budget).then(|| {
+        fit.choice
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .filter_map(|(n, c)| Some((n, made.get(&(n, *c))?.clone())))
+            .collect()
+    })
 }
 
 /// Scale each estimate not yet replaced by a real size by how far the
@@ -560,4 +646,44 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
         .with_context(|| format!("finishing {}", path.display()))?
         .sync_all()
         .with_context(|| format!("writing {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::Codec;
+
+    fn rung(bytes: u64, loss: f64) -> fit::Rung {
+        fit::Rung {
+            format: Format::Copy { codec: Codec::Flac },
+            bytes,
+            loss,
+            sigma: 5.0,
+        }
+    }
+
+    fn item(key: &str) -> Item {
+        Item {
+            key: key.into(),
+            rungs: vec![rung(100, 0.0), rung(40, 1.0), rung(20, 2.0)],
+            churn: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_fit_of_sizes_known_takes_only_what_was_encoded() {
+        let items = [item("a"), item("b")];
+        let entry = Entry {
+            from: "a.opus".into(),
+            name: "library/a.opus".into(),
+        };
+        let made = BTreeMap::from([((0, 2), vec![entry])]);
+        assert!(
+            known_fit(&items, &made, 110).is_none(),
+            "b is known only as it is"
+        );
+        let fitted = known_fit(&items, &made, 120).unwrap();
+        assert_eq!(fitted.len(), 1);
+        assert_eq!(fitted[0].0, 0);
+    }
 }

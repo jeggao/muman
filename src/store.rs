@@ -21,9 +21,9 @@ use crate::source::{SourceKey, id_of};
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
 
-const MEDIA: [&str; 20] = [
+const MEDIA: [&str; 22] = [
     "flac", "wav", "aif", "aiff", "m4a", "mp3", "ogg", "oga", "opus", "wv", "ape", "tta", "aac",
-    "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf",
+    "ac3", "eac3", "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf",
 ];
 const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.
@@ -39,7 +39,7 @@ pub enum Kind {
     Tags,
 }
 
-fn kind_of(path: &Path) -> Option<Kind> {
+pub(crate) fn kind_of(path: &Path) -> Option<Kind> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     if MEDIA.contains(&ext.as_str()) {
         Some(Kind::Media)
@@ -142,15 +142,52 @@ pub struct Located {
 
 impl Located {
     /// What changes whenever any of its files does: their sizes and
-    /// modification times.
+    /// modification times, and where the system keeps one, the time each
+    /// last changed at all, which a tagger that puts the modification time
+    /// back, or a copy that keeps it, cannot.
     #[must_use]
     pub fn rev(&self) -> String {
         std::iter::once(&self.path)
             .chain(&self.lyrics)
             .chain(&self.covers)
-            .map(|p| stamp(p).map_or_else(|| "-".to_string(), |(size, ns)| format!("{size}:{ns}")))
+            .map(|p| {
+                let Some((size, ns)) = stamp(p) else {
+                    return "-".to_string();
+                };
+                match changed_ns(p) {
+                    Some(changed) => format!("{size}:{ns}:{changed}"),
+                    None => format!("{size}:{ns}"),
+                }
+            })
             .collect::<Vec<_>>()
             .join(";")
+    }
+}
+
+/// A revision as muman wrote it before revisions held change times.
+#[must_use]
+pub fn without_change_times(rev: &str) -> String {
+    rev.split(';')
+        .map(|part| part.splitn(3, ':').take(2).collect::<Vec<_>>().join(":"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// When `path` last changed in any way, data or name or mode, in
+/// nanoseconds; Unix keeps it, other systems not as `std` reads them.
+fn changed_ns(path: &Path) -> Option<u128> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path).ok()?;
+        let secs = u128::try_from(meta.ctime()).ok()?;
+        let ns = u128::try_from(meta.ctime_nsec()).ok()?;
+        Some(secs * 1_000_000_000 + ns)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
     }
 }
 
@@ -176,8 +213,8 @@ pub fn stamp_text(path: &Path) -> Option<String> {
 /// The size and time a revision recorded for its main file.
 #[must_use]
 pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
-    let (size, ns) = rev.split(';').next()?.split_once(':')?;
-    Some((size.parse().ok()?, ns.parse().ok()?))
+    let mut fields = rev.split(';').next()?.split(':');
+    Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
 }
 
 #[derive(Debug, Default)]
@@ -194,6 +231,9 @@ pub struct Store {
     /// decomposed name is listed composed, and Linux and NTFS open only
     /// the bytes a name was written with.
     on_disk: HashMap<PathBuf, PathBuf>,
+    /// Manual files passed over for another's name: the same once
+    /// normalized, as `café` written composed and decomposed.
+    twins: Vec<PathBuf>,
 }
 
 impl Store {
@@ -205,7 +245,7 @@ impl Store {
             ..Self::default()
         };
         for file in walk(&dirs.ytdlp(), 2)? {
-            let Some(id) = id_of(&file).map(str::to_string) else {
+            let Some(id) = id_of(&file) else {
                 continue;
             };
             if kind_of(&file) != Some(Kind::Media) {
@@ -244,9 +284,25 @@ impl Store {
             store.kept.insert(kind.extractor, found);
         }
         let root = dirs.manual();
+        // A folder linked in from the library would bring muman's own songs
+        // back as new ones, run after run.
+        let library = dunce::canonicalize(&dirs.library).ok();
+        let in_library = |file: &Path| {
+            library.as_ref().is_some_and(|lib| {
+                dunce::canonicalize(file).is_ok_and(|real| real.starts_with(lib))
+            })
+        };
         for file in walk(&root, usize::MAX)? {
+            if in_library(&file) {
+                continue;
+            }
             if let (Some(kind), Ok(rel)) = (kind_of(&file), file.strip_prefix(&root)) {
                 let key = crate::relpath::normalized(rel);
+                // The first in path order is read, the same on every run.
+                if store.manual.contains_key(&key) {
+                    store.twins.push(rel.to_path_buf());
+                    continue;
+                }
                 if key != rel {
                     store.on_disk.insert(key.clone(), rel.to_path_buf());
                 }
@@ -254,6 +310,12 @@ impl Store {
             }
         }
         Ok(store)
+    }
+
+    /// Manual files not read, for another's name, as [`Store`] keeps them.
+    #[must_use]
+    pub fn twins(&self) -> &[PathBuf] {
+        &self.twins
     }
 
     #[must_use]
@@ -310,7 +372,7 @@ impl Store {
     pub fn fetched_files(&self, id: &str) -> Result<Vec<PathBuf>> {
         Ok(walk(&self.fetched_root, 2)?
             .into_iter()
-            .filter(|p| id_of(p) == Some(id))
+            .filter(|p| id_of(p).as_deref() == Some(id))
             .collect())
     }
 
@@ -397,7 +459,13 @@ impl Store {
             let fresh = std::fs::metadata(self.manual_file(rel))
                 .ok()
                 .and_then(|m| crate::platform::arrived(&m))
-                .is_some_and(|t| now.duration_since(t).unwrap_or_default() < wait);
+                .is_some_and(|t| {
+                    // A time ahead of the clock is a skewed stamp, as a
+                    // camera or a FAT stick leaves, not a copy under way.
+                    now.duration_since(t)
+                        .unwrap_or_else(|ahead| ahead.duration())
+                        < wait
+                });
             if fresh {
                 settling.push(rel.clone());
             } else {
@@ -436,6 +504,33 @@ impl Store {
         unused.sort();
         unused
     }
+}
+
+/// Each listed manual file gone from its path that is one of `ready`,
+/// the manual files no song lists, by its size and modification time,
+/// which a move keeps: the file moved there, taken out of `ready`.
+pub fn moved_manual(
+    listed: &BTreeSet<SourceKey>,
+    state: &crate::state::State,
+    store: &Store,
+    ready: &mut Vec<SourceKey>,
+) -> BTreeMap<SourceKey, SourceKey> {
+    let mut moved = BTreeMap::new();
+    let gone = listed
+        .iter()
+        .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
+    for gone in gone {
+        let Some(was) = state.facts.get(gone).and_then(|f| stamp_of_rev(&f.rev)) else {
+            continue;
+        };
+        let at = ready
+            .iter()
+            .position(|k| store.locate(k).and_then(|l| stamp(&l.path)) == Some(was));
+        if let Some(at) = at {
+            moved.insert(gone.clone(), ready.remove(at));
+        }
+    }
+    moved
 }
 
 /// Files below `dir`, at most `depth` folders down, without hidden ones
@@ -552,6 +647,38 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_linked_in_from_the_library_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        touch(dir.path(), "lib/Marlo Venn/Lantern Weather.flac");
+        touch(&d.manual(), "Glass Orchards.flac");
+        if !link_folder(&d.library, &d.manual().join("mirror")) {
+            return;
+        }
+        let store = Store::scan(&d).unwrap();
+        let found: Vec<String> = store
+            .manual
+            .keys()
+            .map(|k| crate::relpath::show(k))
+            .collect();
+        assert_eq!(found, ["Glass Orchards.flac"]);
+    }
+
+    #[test]
+    fn two_files_of_one_name_once_normalized_are_read_once_and_said() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        touch(dir.path(), "sources/manual/Noe\u{308}l.flac");
+        touch(dir.path(), "sources/manual/No\u{eb}l.flac");
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(store.manual.len(), 1);
+        // A filesystem blind to normalization, as APFS is, holds one file.
+        if std::fs::read_dir(d.manual()).unwrap().count() == 2 {
+            assert_eq!(store.twins().len(), 1);
+        }
+    }
+
+    #[test]
     fn fetched_files_are_found_by_id_an_mkv_first() {
         let dir = tempfile::tempdir().unwrap();
         let d = dirs(dir.path());
@@ -637,6 +764,21 @@ mod tests {
     }
 
     #[test]
+    fn a_file_stamped_hours_ahead_of_the_clock_is_not_left_settling() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let file = touch(dir.path(), "sources/manual/a.flac");
+        let later = SystemTime::now() + Duration::from_secs(60);
+        let ahead = filetime::FileTime::from_system_time(later + Duration::from_secs(7200));
+        filetime::set_file_mtime(&file, ahead).unwrap();
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(
+            store.unlisted(&BTreeSet::new(), later, SETTLING),
+            (vec![manual("a.flac")], vec![])
+        );
+    }
+
+    #[test]
     fn an_upload_no_song_lists_is_discarded_whole() {
         let dir = tempfile::tempdir().unwrap();
         let d = dirs(dir.path());
@@ -669,6 +811,30 @@ mod tests {
         let store = Store::scan(&d).unwrap();
         let listed = BTreeSet::from([manual("a.flac")]);
         assert_eq!(store.unused(&listed), vec![stray, old]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_that_puts_the_time_back_changes_the_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let file = touch(dir.path(), "sources/manual/a.flac");
+        let rev = |d: &Dirs| {
+            Store::scan(d)
+                .unwrap()
+                .locate(&manual("a.flac"))
+                .unwrap()
+                .rev()
+        };
+        let before = rev(&d);
+        let modified = filetime::FileTime::from_last_modification_time(&file.metadata().unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&file, "sources/manual/A.flac").unwrap();
+        filetime::set_file_mtime(&file, modified).unwrap();
+        let after = rev(&d);
+        assert_ne!(before, after);
+        assert_eq!(stamp_of_rev(&before), stamp_of_rev(&after));
+        assert_eq!(without_change_times(&after), without_change_times(&before));
     }
 
     #[test]

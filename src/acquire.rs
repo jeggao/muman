@@ -269,7 +269,9 @@ pub fn list<R: Runner, W: Write>(urls: &[String], runner: &R, out: &mut W) -> Re
         let videos = match found {
             Ok((Listing::Video(video), _)) => {
                 listed.urls.push(url.clone());
-                listed.named.insert(video.id.clone());
+                if video.is_youtube() {
+                    listed.named.insert(video.id.clone());
+                }
                 vec![*video]
             }
             Ok((

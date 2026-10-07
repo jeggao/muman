@@ -555,6 +555,13 @@ pub fn path_of(folder: &Path, id: &str) -> PathBuf {
 
 /// Keep a record in `folder`.
 pub fn keep(folder: &Path, record: &Record) -> Result<PathBuf> {
+    // The ID names the file; one a server made up could name any path.
+    if !is_mbid(&record.id) {
+        anyhow::bail!(
+            "MusicBrainz answered with {:?}, which is no recording ID",
+            record.id
+        );
+    }
     std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     let json = serde_json::to_vec_pretty(record).context("writing a MusicBrainz record")?;
     crate::atomic::write(folder, &format!("{}.json", record.id), &json)?;

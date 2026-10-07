@@ -45,6 +45,22 @@ fn decode_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
+/// Whether `path` decodes in full: ffmpeg exits 0 past a broken frame,
+/// so any error it writes counts.
+fn decodes<R: Runner>(runner: &R, path: &Path) -> Result<()> {
+    let mut errors = Vec::new();
+    let ok = runner.stream(&decode_command(path), &mut |line| {
+        if let Line::Err(text) = line {
+            errors.push(text.trim().to_string());
+        }
+    })?;
+    match errors.first() {
+        Some(first) => anyhow::bail!("{first}"),
+        None if !ok => anyhow::bail!("ffmpeg failed"),
+        None => Ok(()),
+    }
+}
+
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
 #[allow(clippy::too_many_lines)]
@@ -62,9 +78,18 @@ pub fn check<R: Runner, W: Write, D: Write>(
     for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
         crate::ui::warning(report, &line)?;
     }
-    let state = State::load(&dirs.home)?;
+    let mut state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let library = &dirs.library;
+    crate::reconcile::vouch_for_copies(library, &mut state);
+    // What a run under way is writing is no run's leftover.
+    let busy = crate::atomic::Lock::busy(&dirs.home);
+    if busy {
+        crate::ui::info(
+            report,
+            "A muman run is under way: the files it is writing are not reported",
+        )?;
+    }
     let mut problems = 0_usize;
     let mut problem = |out: &mut D, text: String| {
         problems += 1;
@@ -105,6 +130,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
                     ),
                 )?;
             }
+            Ok(_) if written.plan.is_none() && busy => {}
             Ok(_) if written.plan.is_none() => problem(
                 report,
                 format!(
@@ -137,10 +163,12 @@ pub fn check<R: Runner, W: Write, D: Write>(
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("part"))
         {
-            problem(
-                report,
-                format!("Left by an interrupted run: {}", file.display()),
-            )?;
+            if !busy {
+                problem(
+                    report,
+                    format!("Left by an interrupted run: {}", file.display()),
+                )?;
+            }
             continue;
         }
         let ours = rel
@@ -191,7 +219,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
         let step = crate::progress::step("Decoding", Some(media.len() as u64));
         let decoded = parallel::map(&media, parallel::builds(), |l| {
             let _working = step.working(&crate::progress::label(&l.path));
-            runner.run(&decode_command(&l.path))
+            decodes(runner, &l.path)
         });
         for (l, result) in media.iter().zip(decoded) {
             if let Err(e) = result {
@@ -504,6 +532,7 @@ mod tests {
                 tags: Vec::new(),
             }),
             stamp,
+            digest: None,
         };
         let kept = store::stamp_text(&dirs.library.join("A/kept.opus"));
         state.outputs.insert("A/kept.opus".into(), written(kept));
@@ -546,5 +575,20 @@ mod tests {
             text.contains("Lyrics missing, `sync` writes them again: A/sung.opus"),
             "{text}"
         );
+
+        // While a run is under way, what it writes is its own.
+        let _held = crate::atomic::Lock::runs(&dirs.home).unwrap();
+        let mut report = Vec::new();
+        check(
+            &Fake::default(),
+            &dirs,
+            (false, false),
+            &mut Vec::new(),
+            &mut report,
+        )
+        .unwrap();
+        let text = String::from_utf8(report).unwrap();
+        assert!(text.contains("A muman run is under way"), "{text}");
+        assert!(!text.contains("Left by an interrupted run"), "{text}");
     }
 }

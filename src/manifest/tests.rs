@@ -603,3 +603,63 @@ fn a_key_named_by_its_extractor_is_written_by_its_site() {
     assert!(t.contains("sources = [\"youtube.com:rrrrrrrrrrr\"]"), "{t}");
     assert!(Manifest::load(dir.path()).unwrap().respelled.is_empty());
 }
+
+#[test]
+fn a_song_with_no_list_of_sources_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for (songs, said) in [
+        (
+            "[[song]]\nsources = \"manual:a.flac\"\n",
+            "sources must be a list",
+        ),
+        ("[[song]]\nsources = []\n", "song 1 lists no source"),
+        (
+            "[[song]]\ntags.title = \"Lantern Weather\"\n",
+            "song 1 lists no source",
+        ),
+    ] {
+        write(dir.path(), songs);
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains(said), "{songs}: {e:#}");
+    }
+}
+
+#[test]
+fn restoring_a_song_whose_sources_are_listed_again_lists_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\"]\n\n[[removed]]\nsources = [\"manual:a.flac\"]\nnote = \"gone\"\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Restore(SourceKey::Manual("a.flac".into())));
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs.len(), 1);
+    assert_eq!(m.removed.len(), 1);
+}
+
+#[test]
+fn a_record_of_what_a_source_held_goes_when_the_song_lists_it_no_more() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\"]\nheld.\"manual:a.flac\" = { audio = \"0000000000000001\" }\nheld.\"manual:b.flac\" = { audio = \"0000000000000002\" }\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.save().unwrap();
+    let t = text(dir.path());
+    assert!(t.contains("held.\"manual:a.flac\""), "{t}");
+    assert!(!t.contains("manual:b.flac"), "{t}");
+}
+
+#[test]
+fn lyrics_moved_more_than_an_hour_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\"]\nlyrics_offset = \"2 h\"\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("more than an hour"), "{e:#}");
+}

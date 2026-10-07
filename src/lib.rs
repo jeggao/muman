@@ -158,6 +158,14 @@ pub fn run() -> ExitCode {
         ..defaults
     };
     let mut job = Job::from_cli(cli, defaults);
+    // Recorded in the state, a folder named relative to where one run
+    // started would be another folder to a run started elsewhere.
+    for dir in [&mut job.dirs.home, &mut job.dirs.library] {
+        if let Ok(full) = std::path::absolute(&*dir) {
+            // Without a trailing `/` or `.`, so one folder is one spelling.
+            *dir = full.components().collect();
+        }
+    }
     job.live = live;
     let mut inquire = InquirePrompter;
     let prompter: Option<&mut dyn Prompter> =
@@ -191,6 +199,15 @@ pub fn run() -> ExitCode {
         Err(e) if e.downcast_ref::<runner::MissingTool>().is_some() => {
             let _ = ui::error(&mut err, &format!("{e:#}"));
             ExitCode::from(2)
+        }
+        // A reader that stopped early, as `| head` does, wants no more.
+        Err(e)
+            if e.chain().any(|c| {
+                c.downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+            }) =>
+        {
+            ExitCode::from(4)
         }
         Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
             let _ = ui::error(&mut err, &format!("{e:#}"));
@@ -255,10 +272,19 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             | Command::Edit { .. }
     );
     if writes {
+        crate::manifest::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
     match &job.command {
         Command::Status { query, all } => {
+            // Read only: a home not made yet is not made by asking.
+            if !dirs.home.exists() {
+                ui::info(
+                    out,
+                    &format!("No home at {}: nothing listed yet", dirs.home.display()),
+                )?;
+                return Ok(true);
+            }
             let opts = Options {
                 dry_run: true,
                 settling: job.settling,
@@ -317,6 +343,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             if !change::confirmed(&confirm, prompter, out)? {
                 return Ok(true);
             }
+            // As a run holds it, so no run begins between the undo and its sync.
+            let _runs = Lock::runs(&dirs.home)?;
             {
                 let _lock = Lock::folder(&dirs.home)?;
                 let again = history::plan(dirs)?;
@@ -341,6 +369,9 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let done = (|| {
                 let (files, urls): (Vec<&String>, Vec<&String>) =
                     inputs.iter().partition(|i| Path::new(i).exists());
+                if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
+                    bail!("{missing} is no file");
+                }
                 let mut ok = true;
                 let mut proposals = import(runner, dirs, &files, out)?;
                 if !urls.is_empty() {
@@ -440,21 +471,33 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             recorded(run, &dirs.home, done)
         }
         Command::Edit { query, all } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let done = (|| {
-                let edited = editor::edit(
-                    dirs,
-                    query,
-                    *all,
-                    change::reborrow(&mut prompter),
-                    &mut editor::launch,
-                    out,
-                )?;
-                if !edited {
-                    return Ok(true);
+            // Begun once the editor is closed, so an open editor holds no
+            // other run back.
+            let mut run: Option<Run> = None;
+            let edited = editor::edit(
+                dirs,
+                query,
+                *all,
+                change::reborrow(&mut prompter),
+                &mut editor::launch,
+                &mut || {
+                    if run.is_none() {
+                        run = Some(Run::begin(&dirs.home)?);
+                    }
+                    Ok(())
+                },
+                out,
+            );
+            let Some(mut run) = run else {
+                return edited.map(|_| true);
+            };
+            let done = edited.and_then(|edited| {
+                if edited {
+                    sync(Options::default(), Some(&mut run), out)
+                } else {
+                    Ok(true)
                 }
-                sync(Options::default(), Some(&mut run), out)
-            })();
+            });
             recorded(run, &dirs.home, done)
         }
     }
@@ -517,6 +560,7 @@ fn list_songs<D: Write>(
         (None, false, true) => "{key}\\t{title}",
         (None, false, false) => "{key}\\t{artist}\\t{title}\\t{album}",
     };
+    query::check_format(template, &views)?;
     for view in views
         .iter()
         .filter(|v| !v.keys.is_empty() && parsed.matches(v))
@@ -636,7 +680,7 @@ fn network<R: Runner, W: Write, T>(
     let manifest = Manifest::load(&job.dirs.home)?;
     let state = State::load(&job.dirs.home)?;
     let store = Store::scan(&job.dirs)?;
-    let temp = tempfile::tempdir().context("creating a temporary directory")?;
+    let temp = atomic::Scratch::new()?;
     let ytdlp = job.dirs.ytdlp();
     let partial = job.dirs.home.join("partial");
     clear_stale(&partial, manifest.settings.ytdlp.keep_partial);
@@ -774,7 +818,27 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
     let listed = manifest.keys();
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    let (mut ready, settling) = store.unlisted(&known, SystemTime::now(), wait);
+    for twin in store.twins() {
+        ui::warning(
+            out,
+            &format!(
+                "Not read, as another file in the manual folder has its name once \
+                 normalized: {}; rename one of them",
+                relpath::show(twin)
+            ),
+        )?;
+    }
+    let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), wait);
+    // A file listed before is no new one still copying in, however
+    // recently it was touched.
+    settling.retain(|path| {
+        let key = SourceKey::Manual(path.into());
+        let was_listed = state.listed.contains(&key);
+        if was_listed {
+            ready.push(key);
+        }
+        !was_listed
+    });
     let unlisted: Vec<SourceKey> = ready
         .iter()
         .filter(|k| state.listed.contains(k))
@@ -803,30 +867,23 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
             ),
         )?;
     }
-    let gone = listed
-        .iter()
-        .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
-    for gone in gone {
-        let Some(was) = state
-            .facts
-            .get(gone)
-            .and_then(|f| store::stamp_of_rev(&f.rev))
-        else {
-            continue;
-        };
-        let moved = ready
-            .iter()
-            .position(|k| store.locate(k).and_then(|l| store::stamp(&l.path)) == Some(was));
-        if let Some(at) = moved {
-            let to = ready.remove(at);
-            ui::info(out, &format!("Moved: {gone} is now {to}"))?;
-            manifest.edit(Edit::Rename {
-                from: gone.clone(),
-                to,
-            });
-        }
+    let renames = store::moved_manual(&listed, &state, &store, &mut ready);
+    for (gone, to) in &renames {
+        ui::info(out, &format!("Moved: {gone} is now {to}"))?;
+        manifest.edit(Edit::Rename {
+            from: gone.clone(),
+            to: to.clone(),
+        });
     }
     manifest.save()?;
+    // So the song's plan names its file anew and the song is not written
+    // again for a file that only moved.
+    if !renames.is_empty() {
+        let _lock = atomic::Lock::folder(&dirs.home)?;
+        let mut state = State::load(&dirs.home)?;
+        state.rekey(&renames)?;
+        state.save(&dirs.home)?;
+    }
     Ok(ready
         .into_iter()
         .map(|key| Proposal {
@@ -870,6 +927,12 @@ fn import<R: Runner, W: Write>(
             continue;
         }
         let to = dirs.manual().join(name);
+        if path.is_file() && store::kind_of(path).is_none() {
+            bail!(
+                "{} is no song, lyrics or picture muman reads",
+                path.display()
+            );
+        }
         if path.is_dir() {
             copy_tree(path, &to)?;
         } else {
@@ -896,6 +959,21 @@ fn import<R: Runner, W: Write>(
     Ok(proposals)
 }
 
+/// Whether `input`, which names nothing on disk, was meant as a path
+/// rather than an address for yt-dlp: written from a folder, or a file
+/// name muman reads, with no scheme.
+fn names_a_path(input: &str) -> bool {
+    let from_folder = ["/", "./", "../", "~"].iter().any(|p| input.starts_with(p))
+        || input.contains('\\')
+        || input.as_bytes().get(1) == Some(&b':')
+            && input
+                .as_bytes()
+                .get(2)
+                .is_some_and(|b| *b == b'/' || *b == b'\\');
+    let a_file = !input.contains("://") && store::kind_of(Path::new(input)).is_some();
+    !input.contains("://") && from_folder || a_file
+}
+
 /// The song files at or under `path` in the manual folder.
 fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
     let files = if path.is_dir() {
@@ -919,7 +997,7 @@ fn fetched_key<R: Runner>(runner: &R, path: &Path) -> Option<SourceKey> {
     id_of(path)?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(path)).ok()?).ok()?;
     let attachment = probed.attachment_named("info.json")?;
-    let temp = tempfile::tempdir().ok()?;
+    let temp = atomic::Scratch::new().ok()?;
     let json = temp.path().join("info.json");
     runner
         .run(&ffmpeg::dump_command(&[(

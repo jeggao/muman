@@ -222,8 +222,17 @@ pub fn remove<W: Write>(
             .iter()
             .filter(|(_, w)| view.id().is_some_and(|id| w.sources.contains(id)));
         for (path, w) in written {
+            // As the sync after does: a song's files stay whole when its
+            // audio changed since written.
+            let changed =
+                crate::reconcile::changed_since_written(&dirs.library, &read.state.outputs, path);
+            let how = if changed {
+                "leaves in place, changed since muman wrote it,"
+            } else {
+                "deletes"
+            };
             for file in std::iter::once(path).chain(&w.lyrics) {
-                writeln!(out, "    deletes {}", dirs.library.join(file).display())?;
+                writeln!(out, "    {how} {}", dirs.library.join(file).display())?;
             }
         }
         if purge {
@@ -392,7 +401,17 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                     .transpose()?;
                 other.push(Assign::Offset(ms));
             }
-            _ => match (tags.iter_mut().find(|(n, _)| *n == name), v) {
+            // What a query reads of a song, or how the song list names its
+            // parts, but no tag a file carries.
+            "key" | "path" | "format" | "sources" | "id" | "held" => {
+                return refuse(format!(
+                    "`{term}`: {lower} is no tag; set a tag, audio, cover, lyrics or lyrics_offset"
+                ));
+            }
+            _ => match (
+                tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
+                v,
+            ) {
                 (Some((_, values)), Some(v)) => values.push(v.to_string()),
                 (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
                 (None, v) => tags.push((
@@ -500,18 +519,26 @@ pub fn set<W: Write>(
     for n in &picked {
         let view = &read.views[*n];
         let song = &read.manifest.songs[*n];
-        writeln!(out, "  {}", label(view))?;
-        for a in &assigns {
-            writeln!(out, "    {}", a.describe(view))?;
-        }
         let id = song.id().context("a song lists no source")?.clone();
         let Some(mut table) = tables.remove(&id) else {
             bail!("{id} is no longer listed");
         };
+        let before = table.to_string();
         for a in &assigns {
             a.apply(&mut table, song)?;
         }
+        if table.to_string() == before {
+            continue;
+        }
+        writeln!(out, "  {}", label(view))?;
+        for a in &assigns {
+            writeln!(out, "    {}", a.describe(view))?;
+        }
         songs.push((id, Rewritten::Table(SongTable(table))));
+    }
+    if songs.is_empty() {
+        crate::ui::info(out, "Nothing changed: each song is so already")?;
+        return Ok(false);
     }
     if !confirmed(confirm, prompter, out)? {
         return Ok(false);
@@ -538,7 +565,7 @@ mod tests {
             "daft",
             "title:=x",
             "genre=House",
-            "genre=French",
+            "GENRE=French",
             "date!",
             "audio=youtube.com:aaaaaaaaaaa",
             "lyrics=false",
@@ -559,6 +586,8 @@ mod tests {
         assert!(split_terms(&strings(&["cover=false"])).is_err());
         assert!(split_terms(&strings(&["lyrics_offset_ms=soon"])).is_err());
         assert!(split_terms(&strings(&["genre=a", "genre!"])).is_err());
+        let e = split_terms(&strings(&["format=mp3"])).unwrap_err();
+        assert!(e.downcast_ref::<Refused>().is_some(), "{e:#}");
     }
 
     fn views(n: usize) -> Vec<View> {

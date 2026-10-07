@@ -13,7 +13,9 @@
 //! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
 //! name. The cover is a front-cover picture written through `lofty`: a
 //! JPEG or PNG without borders as its own bytes, any other converted to
-//! PNG and cropped to the content inside a video frame's bars. Lyrics are
+//! PNG and cropped to the content inside a video frame's bars. A FLAC
+//! metadata block holds at most 16 MiB, so a cover past it is made a JPEG
+//! at most 3000 pixels wide, and lyrics past it are not embedded. Lyrics are
 //! cleaned of cues, symbols and credits and moved by the plan's offset;
 //! lyrics from a `.lrc` file need no ffmpeg at all.
 //!
@@ -210,13 +212,21 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
         }
+        let flac = plan.format.codec().container() == Container::Flac;
         let picture = cover.and_then(|c| {
             let read = match failed(&c.path).filter(|_| c.by_run) {
                 Some(e) => Err(anyhow!("{e}")),
                 None => read_picture(&c.path, c.mime),
             };
-            read.map_err(|e| problems.push(format!("no cover: {e:#}")))
-                .ok()
+            read.and_then(|p| {
+                if flac {
+                    fit_flac(runner, p, &c.path, job.scratch)
+                } else {
+                    Ok(p)
+                }
+            })
+            .map_err(|e| problems.push(format!("no cover: {e:#}")))
+            .ok()
         });
         let text = match (&plan.lyrics, lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
@@ -240,9 +250,23 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .as_ref()
             .filter(|_| placement.is_some_and(LyricsPlacement::embedded))
         {
-            tags.push(("LYRICS".to_string(), vec![text.clone()]));
+            if flac && text.len() > FLAC_BLOCK {
+                problems.push(format!(
+                    "lyrics not embedded: {} is more than a FLAC file's tags hold",
+                    crate::units::Size(text.len() as u64)
+                ));
+            } else {
+                tags.push(("LYRICS".to_string(), vec![text.clone()]));
+            }
         }
-        write_tags(&audio_part, plan.format, &tags, picture)?;
+        // A cover the tags cannot hold costs the song only its cover.
+        if let Err(e) = write_tags(&audio_part, plan.format, &tags, picture.clone()) {
+            if picture.is_none() {
+                return Err(e);
+            }
+            problems.push(format!("no cover: {e:#}"));
+            write_tags(&audio_part, plan.format, &tags, None)?;
+        }
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
                 fs::write(&lyrics_part, text)
@@ -272,9 +296,62 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         Err(e) => {
             let _ = fs::remove_file(&audio_part);
             let _ = fs::remove_file(&lyrics_part);
+            // The folders made for it, if nothing else is in them.
+            let mut folder = dir;
+            while folder != job.library && fs::remove_dir(folder).is_ok() {
+                folder = folder.parent().unwrap_or(job.library);
+            }
             Err(e)
         }
     }
+}
+
+/// The most a FLAC metadata block holds, as its 24-bit length allows,
+/// less room for a picture block's own fields.
+const FLAC_BLOCK: usize = (1 << 24) - 1 - 1024;
+
+/// The widest a cover too large for FLAC is made.
+const FLAC_COVER_WIDTH: u32 = 3000;
+
+/// `picture`, read from `path`, as a FLAC file can hold it: as it is when
+/// it fits, else made a JPEG at most [`FLAC_COVER_WIDTH`] pixels wide.
+fn fit_flac<R: Runner>(
+    runner: &R,
+    picture: Picture,
+    path: &Path,
+    scratch: &Path,
+) -> Result<Picture> {
+    if picture.data().len() <= FLAC_BLOCK {
+        return Ok(picture);
+    }
+    let smaller = scratch.join("cover-fit.jpg");
+    let scale = format!("scale='min({FLAC_COVER_WIDTH},iw)':-2");
+    let output = Output::of(
+        &[
+            "-map",
+            "0:v:0",
+            "-frames:v",
+            "1",
+            "-vf",
+            &scale,
+            "-c:v",
+            "mjpeg",
+            "-q:v",
+            "2",
+            "-f",
+            "image2",
+        ],
+        &smaller,
+    );
+    runner.run(&ffmpeg::outputs_command(&[path], &[output]))?;
+    let fitted = read_picture(&smaller, MimeType::Jpeg)?;
+    if fitted.data().len() > FLAC_BLOCK {
+        return Err(anyhow!(
+            "{} even as a JPEG, more than a FLAC file holds",
+            crate::units::Size(fitted.data().len() as u64)
+        ));
+    }
+    Ok(fitted)
 }
 
 /// Write a song whose plan changed only in its tags by writing them into
@@ -286,7 +363,12 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
 
     let path = library.join(audio);
     let staged = part(&path);
-    fs::copy(&path, &staged).with_context(|| format!("copying {}", path.display()))?;
+    // Into a new file, as a song written anew is: a copy would carry over
+    // a read-only mode and refuse the tags.
+    (|| -> std::io::Result<u64> {
+        std::io::copy(&mut fs::File::open(&path)?, &mut fs::File::create(&staged)?)
+    })()
+    .with_context(|| format!("copying {}", path.display()))?;
     let result = (|| -> Result<()> {
         // The copy is the file byte for byte, and a `.part` names no format.
         let held = lofty::read_from_path(&path)
@@ -469,7 +551,8 @@ fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
 }
 
 /// Replace every comment the file carries with the plan's tags and the
-/// cover, keeping the encoder's vendor string.
+/// cover, keeping the encoder's vendor string and a FLAC's
+/// [`CHANNEL_MASK`].
 fn write_tags(
     path: &Path,
     format: Format,
@@ -542,6 +625,10 @@ fn canonical_id3(tag: Id3v2Tag) -> Id3v2Tag {
 
 /// The plan's tags and the cover as Vorbis comments, keeping the
 /// encoder's vendor string, read from `file`.
+/// The comment ffmpeg writes a FLAC's speakers in where its channel
+/// count alone does not say them, as for 5.1 with back speakers.
+const CHANNEL_MASK: &str = "WAVEFORMATEXTENSIBLE_CHANNEL_MASK";
+
 fn vorbis_comments(
     file: &mut fs::File,
     path: &Path,
@@ -551,25 +638,37 @@ fn vorbis_comments(
 ) -> Result<VorbisComments> {
     let options = ParseOptions::new();
     let reading = || format!("reading {} as {codec}", path.display());
-    let vendor = match codec {
-        Codec::Opus => OpusFile::read_from(file, options)
-            .with_context(reading)?
-            .vorbis_comments()
-            .vendor()
-            .to_string(),
-        Codec::Vorbis => VorbisFile::read_from(file, options)
-            .with_context(reading)?
-            .vorbis_comments()
-            .vendor()
-            .to_string(),
-        _ => FlacFile::read_from(file, options)
-            .with_context(reading)?
-            .vorbis_comments()
-            .map(|c| c.vendor().to_string())
-            .unwrap_or_default(),
+    let (vendor, mask) = match codec {
+        Codec::Opus => (
+            OpusFile::read_from(file, options)
+                .with_context(reading)?
+                .vorbis_comments()
+                .vendor()
+                .to_string(),
+            None,
+        ),
+        Codec::Vorbis => (
+            VorbisFile::read_from(file, options)
+                .with_context(reading)?
+                .vorbis_comments()
+                .vendor()
+                .to_string(),
+            None,
+        ),
+        _ => {
+            let flac = FlacFile::read_from(file, options).with_context(reading)?;
+            let own = flac.vorbis_comments();
+            (
+                own.map(|c| c.vendor().to_string()).unwrap_or_default(),
+                own.and_then(|c| c.get(CHANNEL_MASK)).map(str::to_string),
+            )
+        }
     };
     let mut comments = VorbisComments::default();
     comments.set_vendor(vendor);
+    if let Some(mask) = mask {
+        comments.push(CHANNEL_MASK.to_string(), mask);
+    }
     for (key, values) in tags {
         for value in values {
             comments.push(key.clone(), value.clone());

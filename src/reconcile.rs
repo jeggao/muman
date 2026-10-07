@@ -64,6 +64,9 @@ const CHECKPOINT: Duration = Duration::from_secs(30);
 pub struct Measuring<'a> {
     /// Measure again a source that could not be read at this revision.
     pub retry: bool,
+    /// Say how many sources are not read again, once a run, by its last
+    /// measuring rather than each.
+    pub say_unread: bool,
     /// Keep what has been measured so far, as a crash would lose it.
     pub checkpoint: &'a mut dyn FnMut(&State) -> Result<()>,
 }
@@ -107,7 +110,7 @@ pub fn measure<R: Runner, W: Write>(
                 .get(&l.key)
                 .is_none_or(|f| f.step != Step::Measure || f.due(Some(&l.rev()), now))
     });
-    if !failed.is_empty() {
+    if how.say_unread && !failed.is_empty() {
         crate::ui::warning(
             out,
             &format!(
@@ -164,6 +167,11 @@ pub fn measure<R: Runner, W: Write>(
                         }
                         state.facts.insert(located.key.clone(), f);
                         state.clear_failure(&located.key);
+                    }
+                    // No fault of the source's: recorded, it would wait for `--retry`.
+                    Err(e) if out_of_space(&e) => {
+                        (how.checkpoint)(state)?;
+                        return Err(e.context("the disk is full"));
                     }
                     Err(e) => {
                         crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;
@@ -503,6 +511,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
 ) -> Result<bool> {
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
+    crate::manifest::present(home)?;
+    if crate::platform::within(&dirs.library, &home.join("sources"))
+        || crate::platform::same_path(&dirs.library, home)
+    {
+        anyhow::bail!(
+            "the library {} is in the home's sources, where muman would read the songs it \
+             writes back as new ones; choose a folder outside them",
+            dirs.library.display()
+        );
+    }
+    let _library = if opts.dry_run {
+        None
+    } else {
+        Some(Lock::library(&dirs.library)?)
+    };
     let mut manifest = Manifest::load(home)?;
     let query = report
         .as_ref()
@@ -510,11 +533,22 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .transpose()?
         .filter(|q| !q.is_empty());
     let mut state = State::load(home)?;
+    if state
+        .library
+        .as_deref()
+        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
+    {
+        crate::history::follow_moves(home, &dirs.library, &mut state);
+    }
     let store = Store::scan(dirs)?;
-    let temp = tempfile::tempdir().context("creating a temporary directory")?;
+    if opts.dry_run {
+        foresee_moves(&mut manifest, &mut state, &store, opts.settling, out)?;
+    }
+    let temp = crate::atomic::Scratch::new()?;
     let listed = manifest.keys();
     let mut how = Measuring {
         retry: opts.retry,
+        say_unread: true,
         checkpoint: &mut |s: &State| persist(home, s, opts.dry_run, &lock),
     };
     measure(
@@ -560,13 +594,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, Some(&on_disk), out)?;
     let mut ok = failed.is_empty();
     adopt(&mut state, &dirs.library, out)?;
+    vouch_for_copies(&dirs.library, &mut state);
+    if !opts.dry_run {
+        clear_leftovers(&dirs.library, &planned, &state);
+    }
     let located: BTreeMap<SourceKey, Located> = listed
         .iter()
         .filter_map(|k| Some((k.clone(), store.locate(k)?)))
         .collect();
     // Beside the home rather than in the system's temporary folder, which
     // may be memory: fitting may render much of the library into it.
-    let workshop = tempfile::tempdir_in(home).context("creating a folder to fit the library in")?;
+    let workshop = crate::atomic::Scratch::within(home)?;
     let (fitted, placed) = if manifest.settings.library.max_size.is_some() {
         if sizes(runner, &store, &planned, &mut state, temp.path(), out)? {
             persist(home, &state, opts.dry_run, &lock)?;
@@ -736,6 +774,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                     lyrics,
                     plan: None,
                     stamp: None,
+                    digest: None,
                 },
             );
         }
@@ -783,6 +822,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 None
             }
             Doing::Held { file } => Some(file.clone()),
+            Doing::Blocked { file } => {
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "Left at {}: {} is not muman's (`sync --force` writes over it)",
+                        crate::relpath::show(file),
+                        crate::relpath::show(&path_of(r))
+                    ),
+                )?;
+                Some(file.clone())
+            }
             _ => None,
         };
         if let Some(written) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
@@ -896,6 +946,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                         lyrics: done.lyrics,
                         plan: Some(r.plan.clone()),
                         stamp: store::stamp_text(&dirs.library.join(&done.audio)),
+                        digest: crate::facts::digest_file(&dirs.library.join(&done.audio)),
                     };
                     if let Some(pending) = pending.as_mut() {
                         pending.outputs.insert(done.audio.clone(), vouched.clone());
@@ -1083,7 +1134,7 @@ fn left_out<W: Write>(
     crate::ui::error(
         out,
         &format!(
-            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} (raise [library] max_size or lower [audio] min_kbps)",
+            "max_size {} cannot hold the library: at the lowest bitrates it takes {}; left out: {}{} (raise [library] max_size or lower [audio] min_bitrate)",
             crate::ui::bytes(fitted.max),
             crate::ui::bytes(fitted.floor.unwrap_or(0)),
             names.join(", "),
@@ -1151,6 +1202,17 @@ fn foreign(library: &Path, old: &BTreeMap<PathBuf, Written>, path: &Path) -> Vec
         .into_iter()
         .filter(|rel| library.join(rel).exists() && !owned(rel))
         .collect()
+}
+
+/// Whether `e` is a disk full, from muman's own writes or from ffmpeg's,
+/// which reports it only in words.
+fn out_of_space(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::StorageFull)
+            || cause.to_string().contains("No space left on device")
+    })
 }
 
 pub(crate) fn changed_since_written(
@@ -1235,6 +1297,8 @@ enum Doing {
     Guard { file: PathBuf },
     /// Left alone: a file not muman's is at its path.
     Unowned,
+    /// Left where it is: a file not muman's is at the song's new path.
+    Blocked { file: PathBuf },
     /// Left as built: a source it was built from was fetched again and
     /// holds otherwise, not yet accepted.
     Held { file: PathBuf },
@@ -1317,6 +1381,7 @@ fn settled(
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
+/// | Elsewhere, and a file not muman's at its path | Left where it is until `--force` |
 /// | None, and a file not muman's at its path | Left alone until `--force` |
 /// | At its path, of the same media | Its tags written |
 /// | Otherwise, or `force` | Written |
@@ -1324,7 +1389,8 @@ fn settled(
 /// A path is free when no file of anyone's is there, folded as NTFS and
 /// APFS fold names, or only a song's file that moves away first, as when
 /// two songs of one name become two of two names and the one told apart
-/// takes the plain name. Moves are listed in the order they can be made;
+/// takes the plain name; a name changing only its case is free to its
+/// own file. Moves are listed in the order they can be made;
 /// two songs swapping paths are written instead. A changed file moves
 /// only when its tags need no writing, so nothing a tagger wrote is
 /// written over.
@@ -1357,7 +1423,7 @@ fn decide(
         let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
         let retag = was.plan.as_ref() != Some(&r.plan);
         let changed = changed_since_written(library, old, from);
-        if same_media && !(changed && retag) && folded(from) != folded(&path) {
+        if same_media && !(changed && retag) {
             moving.push((i, from.clone(), path, retag));
         }
     }
@@ -1377,7 +1443,8 @@ fn decide(
         let before = moving.len();
         moving.retain(|(i, from, to, retag)| {
             let lyrics = old[from].lyrics.as_deref();
-            if !free(&held, to) || lyrics.is_some() && !free(&held, &lyrics_of(to)) {
+            let fits = |from: &Path, to: &Path| own_place(library, from, to) || free(&held, to);
+            if !fits(from, to) || lyrics.is_some_and(|l| !fits(l, &lyrics_of(to))) {
                 return true;
             }
             held.remove(&folded(from));
@@ -1426,7 +1493,11 @@ fn decide(
                 return Doing::Guard { file: path };
             }
             if !foreign(library, old, &path).is_empty() {
-                return Doing::Unowned;
+                // Its own file stays where it is rather than go for nothing.
+                return match file.filter(|_| present) {
+                    Some(file) => Doing::Blocked { file: file.clone() },
+                    None => Doing::Unowned,
+                };
             }
             if file == Some(&path) && same_media {
                 return Doing::Retag;
@@ -1434,6 +1505,15 @@ fn decide(
             Doing::Write
         })
         .collect()
+}
+
+/// Whether moving `from` to `to` only changes the case of its name, and
+/// no other file is under the new spelling: then it takes its own place.
+fn own_place(library: &Path, from: &Path, to: &Path) -> bool {
+    use crate::relpath::folded;
+    folded(from) == folded(to)
+        && (!library.join(to).exists()
+            || same_file::is_same_file(library.join(from), library.join(to)).unwrap_or(false))
 }
 
 /// The library relocating moves files in, and the home its run is kept in.
@@ -1626,9 +1706,82 @@ pub(crate) fn plan<W: Write>(
     Ok((planned, failed))
 }
 
+/// Remove what a run stopped partway left beside a path muman writes:
+/// a `.part` it was writing, a `.moving` it was renaming through. Only
+/// beside those paths, so a download of the user's own named so is not.
+fn clear_leftovers(library: &Path, planned: &[PlannedSong], state: &State) {
+    let paths = planned
+        .iter()
+        .map(|(_, r)| path_of(r))
+        .chain(state.outputs.keys().cloned());
+    for path in paths {
+        for file in [path.clone(), path.with_extension("lrc")] {
+            for suffix in [".part", ".moving"] {
+                let mut left = library.join(&file).into_os_string();
+                left.push(suffix);
+                let left = PathBuf::from(left);
+                if left.is_file() {
+                    let _ = crate::atomic::remove(&left);
+                }
+            }
+        }
+    }
+}
+
+/// Take each output whose size or time changed since it was written,
+/// but whose bytes are the ones written, as muman's still: a backup put
+/// back or a copy made without its times. Only those are read.
+pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
+    for (path, written) in &mut state.outputs {
+        let file = library.join(path);
+        let (Some(was), Some(digest)) = (&written.stamp, &written.digest) else {
+            continue;
+        };
+        let Some(now) = store::stamp_text(&file).filter(|now| now != was) else {
+            continue;
+        };
+        if crate::facts::digest_file(&file).as_ref() == Some(digest) {
+            written.stamp = Some(now);
+        }
+    }
+}
+
+/// For a dry run, the manual files the next sync will follow to where
+/// they moved, said and followed here in memory, so the run reports on
+/// the songs as that sync will find them.
+fn foresee_moves<W: Write>(
+    manifest: &mut Manifest,
+    state: &mut State,
+    store: &Store,
+    settling: Duration,
+    out: &mut W,
+) -> Result<()> {
+    let listed = manifest.keys();
+    let mut known = listed.clone();
+    known.extend(manifest.removed_keys());
+    let (mut ready, _) = store.unlisted(&known, SystemTime::now(), settling);
+    let moved = store::moved_manual(&listed, state, store, &mut ready);
+    for (from, to) in &moved {
+        crate::ui::info(
+            out,
+            &format!("Moved, followed by the next sync: {from} is now {to}"),
+        )?;
+        for song in &mut manifest.songs {
+            song.rename(from, to);
+        }
+    }
+    if !moved.is_empty() {
+        state.rekey(&moved)?;
+    }
+    Ok(())
+}
+
 /// Take `library` as the folder the outputs are in; the files written
 /// into another before are no longer muman's to delete.
 fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
+    if library.exists() && !library.is_dir() {
+        anyhow::bail!("the library {} is a file, not a folder", library.display());
+    }
     if let Some(before) = state
         .library
         .as_deref()
@@ -2012,6 +2165,10 @@ fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
             "left alone, changed since muman wrote it".to_string(),
         ),
         Doing::Unowned => (Fate::Alone, "left alone, not muman's".to_string()),
+        Doing::Blocked { .. } => (
+            Fate::Alone,
+            "left where it is, its new path holding a file not muman's".to_string(),
+        ),
         Doing::Held { .. } => (
             Fate::Alone,
             "left as built, a source holding otherwise".to_string(),
@@ -2093,7 +2250,7 @@ fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } | Doing::Held { file } = d {
+        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file } = d {
             path.clone_from(file);
         }
         let (fate, verdict) = verdict(d, before, &r.plan);
@@ -2114,13 +2271,16 @@ fn status<W: Write>(
             show_why(r, out)?;
         }
         let written = match d {
-            Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } => moved.get(&path).cloned(),
+            Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } | Doing::Blocked { .. } => {
+                moved.get(&path).cloned()
+            }
             Doing::Unowned => None,
             _ => Some(Written {
                 sources: song.sources.clone(),
                 lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
                 plan: Some(r.plan.clone()),
                 stamp: None,
+                digest: None,
             }),
         };
         if let Some(written) = written {
@@ -2152,9 +2312,27 @@ fn status<W: Write>(
             Pruned::KeptForFailed => {}
         }
     }
+    for twin in store.twins() {
+        crate::ui::warning(
+            out,
+            &format!(
+                "Not read, as another file in the manual folder has its name once \
+                 normalized: {}; rename one of them",
+                crate::relpath::show(twin)
+            ),
+        )?;
+    }
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    let (unlisted, settling) = store.unlisted(&known, SystemTime::now(), settling);
+    let (mut unlisted, mut settling) = store.unlisted(&known, SystemTime::now(), settling);
+    settling.retain(|path| {
+        let key = SourceKey::Manual(path.into());
+        let was_listed = state.listed.contains(&key);
+        if was_listed {
+            unlisted.push(key);
+        }
+        !was_listed
+    });
     for key in unlisted {
         let line = if state.listed.contains(&key) {
             format!("Taken out of the song list by hand, kept out by the next sync: {key}")

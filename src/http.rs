@@ -14,10 +14,15 @@
 //! as the server's `Retry-After` says when it says, and is asked again up
 //! to [`RETRIES`] times. A service still refusing after that is
 //! [`Refusing`], so a run puts its other lookups off to the next run
-//! rather than record each as failed.
+//! rather than record each as failed. `Retry-After` is read in seconds
+//! or as the HTTP date RFC 9110 has servers send.
+//!
+//! An error's body is kept only as far as `ERROR_EXCERPT`, whitespace
+//! run together: a failure is recorded and printed with it, and a
+//! server's error page runs to megabytes.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum TransportError {
@@ -61,9 +66,74 @@ pub trait HttpTransport {
         headers: &[(&str, &str)],
         timeout: Duration,
     ) -> Result<String, TransportError> {
-        String::from_utf8(self.get(url, headers, timeout)?)
-            .map_err(|e| TransportError::Transport(e.to_string()))
+        text(self.get(url, headers, timeout)?).map_err(TransportError::Transport)
     }
+}
+
+/// A body as text, or why it is none: one compressed though no
+/// compression was asked for is told apart.
+fn text(body: Vec<u8>) -> Result<String, String> {
+    if body.starts_with(&[0x1f, 0x8b]) {
+        return Err("the body is gzip-compressed, which muman does not ask for".into());
+    }
+    String::from_utf8(body).map_err(|e| format!("the body is not UTF-8 text: {e}"))
+}
+
+/// How many characters of an error's body are kept.
+const ERROR_EXCERPT: usize = 200;
+
+/// The start of an error's body, whitespace run together.
+fn excerpt(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    let mut words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some((at, _)) = words.char_indices().nth(ERROR_EXCERPT) {
+        words.truncate(at);
+        words.push('…');
+    }
+    words
+}
+
+/// How long a `Retry-After` asks to wait from `now`: its seconds, or
+/// until its date.
+fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    Some(http_date(value)?.duration_since(now).unwrap_or_default())
+}
+
+/// An HTTP date in the one form RFC 9110 has servers send,
+/// `Sun, 06 Nov 1994 08:49:37 GMT`.
+fn http_date(s: &str) -> Option<SystemTime> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (_, rest) = s.split_once(", ")?;
+    let [day, month, year, time, "GMT"] = rest.split(' ').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    let month = i64::try_from(MONTHS.iter().position(|m| *m == month)? + 1).ok()?;
+    let (day, year): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
+    let hms: Vec<u64> = time
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
+    let [h, m, sec] = hms[..] else {
+        return None;
+    };
+    if !(1..=31).contains(&day) || h > 23 || m > 59 || sec > 60 {
+        return None;
+    }
+    // Days since 1970-01-01, by the proleptic Gregorian calendar's
+    // 400-year eras of 146,097 days, the year taken to begin in March.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = u64::try_from(era * 146_097 + day_of_era - 719_468).ok()?;
+    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + h * 3600 + m * 60 + sec))
 }
 
 /// The agent is built per call so each request's timeout is exact.
@@ -97,11 +167,16 @@ impl HttpTransport for UreqTransport {
                 .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(Duration::from_secs);
+                .and_then(|v| retry_after(v, SystemTime::now()));
+            let body = response
+                .body_mut()
+                .with_config()
+                .limit(ERROR_READ)
+                .read_to_vec()
+                .unwrap_or_default();
             return Err(TransportError::Status {
                 code,
-                body: response.body_mut().read_to_string().unwrap_or_default(),
+                body: excerpt(&body),
                 retry_after,
             });
         }
@@ -116,6 +191,9 @@ impl HttpTransport for UreqTransport {
 
 /// The largest body read: a cover at full size is a few MiB.
 const MAX_BODY: u64 = 64 << 20;
+
+/// The most of an error's body read, for its [`excerpt`].
+const ERROR_READ: u64 = 64 << 10;
 
 /// What every request names muman as: `muman/<version> ( <repository> )`.
 #[must_use]
@@ -272,7 +350,7 @@ impl Service<'_> {
         timeout: Duration,
     ) -> anyhow::Result<Option<String>> {
         self.get(url, headers, timeout)?
-            .map(|b| String::from_utf8(b).map_err(|e| anyhow::anyhow!("{url}: {e}")))
+            .map(|b| text(b).map_err(|e| anyhow::anyhow!("{url}: {e}")))
             .transpose()
     }
 }
@@ -392,6 +470,49 @@ mod tests {
     fn a_server_asking_for_too_long_a_wait_is_refusing_at_once() {
         let e = ask(&[429], Some(MAX_ASKED + Duration::from_secs(1))).unwrap_err();
         assert!(e.downcast_ref::<Refusing>().is_some(), "{e:#}");
+    }
+
+    #[test]
+    fn retry_after_is_read_in_seconds_or_as_a_date() {
+        let now = UNIX_EPOCH + Duration::from_secs(784_111_717);
+        assert_eq!(retry_after(" 30 ", now), Some(Duration::from_secs(30)));
+        assert_eq!(
+            retry_after("Sun, 06 Nov 1994 08:49:37 GMT", now),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            retry_after("Sun, 06 Nov 1994 08:47:37 GMT", now),
+            Some(Duration::ZERO),
+            "a date gone by asks for no wait"
+        );
+        assert_eq!(
+            http_date("Tue, 29 Feb 2028 00:00:00 GMT"),
+            Some(UNIX_EPOCH + Duration::from_secs(1_835_395_200))
+        );
+        for bad in [
+            "soon",
+            "Sun, 06 Nov 1994 08:49:37 CET",
+            "Sun, 32 Nov 1994 08:49:37 GMT",
+        ] {
+            assert_eq!(retry_after(bad, now), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_error_body_is_kept_short() {
+        let page = format!("<html>\n  <p>busy</p>\n{}</html>", "é".repeat(10_000));
+        let kept = excerpt(page.as_bytes());
+        assert!(kept.starts_with("<html> <p>busy</p> éé"), "{kept}");
+        assert_eq!(kept.chars().count(), ERROR_EXCERPT + 1);
+        assert!(kept.ends_with('…'));
+        assert_eq!(excerpt(b"TrackNotFound"), "TrackNotFound");
+    }
+
+    #[test]
+    fn a_compressed_body_is_told_apart() {
+        let err = text(vec![0x1f, 0x8b, 8, 0]).unwrap_err();
+        assert!(err.contains("gzip"), "{err}");
+        assert!(text(vec![0xff]).unwrap_err().contains("not UTF-8"));
     }
 
     #[test]

@@ -16,7 +16,10 @@
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so an album never
-//!   splits. Each field's [`tags::Scope`] says which it is.
+//!   splits. Each field's [`tags::Scope`] says which it is. A
+//!   recording's ISRC and MusicBrainz IDs come only from a source that
+//!   titles it as the song is titled, so a record of another recording,
+//!   its names outvoted, lends the song none.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -28,7 +31,9 @@
 //! a codec `[audio] codecs` lists is copied, and so is one already in the
 //! codec it would be encoded to; any other lossless codec is encoded to
 //! `[audio] lossless` and any other lossy one to `[audio] lossy`, at that
-//! codec's bitrate. See [`crate::codec`]. This is the song at its best;
+//! codec's bitrate. A file cut off is encoded whatever its codec, so the
+//! song ends cleanly where its source breaks off. See [`crate::codec`].
+//! This is the song at its best;
 //! under `[library] max_size`, [`crate::limit`] may lower it once every
 //! song is resolved. Plans stored before other codecs than Opus and FLAC
 //! were written read as the [`Format`] they mean today.
@@ -77,7 +82,7 @@ use crate::tags::{self, Field, Offer, Scope};
 
 /// Bumped whenever the bytes a plan renders to change, so every song is
 /// rendered again.
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "StoredFormat")]
@@ -127,19 +132,31 @@ impl Format {
     /// The format `audio` is written in under `settings`.
     #[must_use]
     pub fn of(audio: &AudioFacts, settings: &Audio) -> Self {
-        let target = if audio.is_lossless() {
+        match Codec::probed(&audio.codec) {
+            Some(codec)
+                if codec == Self::target(audio, settings) || settings.codecs.contains(&codec) =>
+            {
+                Self::Copy { codec }
+            }
+            _ => Self::encoded(audio, settings),
+        }
+    }
+
+    /// `audio` encoded under `settings`, whatever its codec.
+    #[must_use]
+    pub fn encoded(audio: &AudioFacts, settings: &Audio) -> Self {
+        let codec = Self::target(audio, settings);
+        Self::Encode {
+            codec,
+            kbps: settings.kbps(codec, audio.channels),
+        }
+    }
+
+    fn target(audio: &AudioFacts, settings: &Audio) -> Codec {
+        if audio.is_lossless() {
             settings.lossless
         } else {
             settings.lossy
-        };
-        match Codec::probed(&audio.codec) {
-            Some(codec) if codec == target || settings.codecs.contains(&codec) => {
-                Self::Copy { codec }
-            }
-            _ => Self::Encode {
-                codec: target,
-                kbps: settings.kbps(target, audio.channels),
-            },
         }
     }
 }
@@ -372,6 +389,8 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let facts = &input.facts[&audio_key];
     let audio = facts.audio.as_ref().map_or(0, |a| a.index);
     let format = match facts.audio.as_ref() {
+        // A file cut off breaks off mid-frame; copied, so would the song.
+        Some(a) if facts.cut_from.is_some() => Format::encoded(a, input.audio),
         Some(a) => Format::of(a, input.audio),
         None => bail!("no source of this song has audio"),
     };
@@ -729,17 +748,17 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
     all
 }
 
-/// The best offer for one field among the song's sources, by their
-/// cleaned values.
+/// The best offer for one field among the song's sources `from` takes,
+/// by their cleaned values.
 fn best_offer<'c, 'a>(
     candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
     field: Field,
-    only: Option<&SourceKey>,
+    from: &dyn Fn(&SourceKey) -> bool,
 ) -> Option<&'c Candidate<'a>> {
     let offers: Vec<&Candidate<'a>> = candidates
         .get(&field)?
         .iter()
-        .filter(|c| only.is_none_or(|o| o == c.key))
+        .filter(|c| from(c.key))
         .collect();
     let agreeing = |o: &Offer| {
         let mine = tags::normalized(&o.values);
@@ -839,16 +858,35 @@ type Comments = Vec<(String, Vec<String>)>;
 fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
-    for field in Field::of(Scope::Recording) {
-        if let Some(c) = best_offer(&candidates, field, None) {
+    let any = |_: &SourceKey| true;
+    let (ids, names): (Vec<Field>, Vec<Field>) =
+        Field::of(Scope::Recording).partition(|f| f.is_id() || *f == Field::Isrc);
+    for field in names {
+        if let Some(c) = best_offer(&candidates, field, &any) {
+            fields.insert(field, Slot::of(c));
+        }
+    }
+    let title = fields
+        .get(&Field::Title)
+        .map(|s| tags::normalized(&s.values));
+    let named_so = |key: &SourceKey| {
+        candidates
+            .get(&Field::Title)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.key == key)
+            .all(|c| Some(tags::normalized(&c.offer.values)) == title)
+    };
+    for field in ids {
+        if let Some(c) = best_offer(&candidates, field, &named_so) {
             fields.insert(field, Slot::of(c));
         }
     }
     // The release fields come whole from the source with the best album.
-    let release = best_offer(&candidates, Field::Album, None).filter(|c| c.offer.structured);
+    let release = best_offer(&candidates, Field::Album, &any).filter(|c| c.offer.structured);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
-            if let Some(c) = best_offer(&candidates, field, Some(album.key)) {
+            if let Some(c) = best_offer(&candidates, field, &|k| k == album.key) {
                 fields.insert(field, Slot::of(c));
             }
         }
@@ -867,7 +905,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
         }
     }
     if !fields.contains_key(&Field::Date)
-        && let Some(c) = best_offer(&candidates, Field::Date, None)
+        && let Some(c) = best_offer(&candidates, Field::Date, &any)
     {
         fields.insert(Field::Date, Slot::of(c));
     }

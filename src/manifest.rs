@@ -171,6 +171,24 @@ impl Song {
         self.sources.contains(key)
     }
 
+    /// `from` named `to` wherever the song names it, as a file that moved.
+    pub fn rename(&mut self, from: &SourceKey, to: &SourceKey) {
+        let follow = |k: &mut SourceKey| {
+            if k == from {
+                k.clone_from(to);
+            }
+        };
+        self.sources.iter_mut().for_each(follow);
+        self.audio.iter_mut().for_each(follow);
+        self.cover.iter_mut().for_each(follow);
+        if let Some(LyricsPin::From(k)) = &mut self.lyrics {
+            follow(k);
+        }
+        if let Some(held) = self.held.remove(from) {
+            self.held.insert(to.clone(), held);
+        }
+    }
+
     /// The key that names this song alone, by [`id_of`].
     #[must_use]
     pub fn id(&self) -> Option<&SourceKey> {
@@ -291,6 +309,27 @@ pub struct Manifest {
     stale: bool,
 }
 
+/// Refuse a home whose song list is gone while the library holds songs
+/// muman wrote: read as listing nothing, it would remove every one, and a
+/// list saved from it would list only what a command added. A song list
+/// that lists no song removes them.
+pub fn present(home: &Path) -> Result<()> {
+    let file = home.join(MANIFEST);
+    if file.exists() {
+        return Ok(());
+    }
+    let written = crate::state::State::load(home).map_or(0, |s| s.outputs.len());
+    if written == 0 {
+        return Ok(());
+    }
+    Err(crate::change::Refused(format!(
+        "{} is missing while the library holds {written} song(s) muman wrote: put it back, \
+         or `muman undo` the run that removed it. A song list that lists no song removes them",
+        file.display()
+    ))
+    .into())
+}
+
 impl Manifest {
     /// The list in `home`; an empty one when there is none yet.
     pub fn load(home: &Path) -> Result<Self> {
@@ -408,6 +447,7 @@ impl Manifest {
         if self.edits.is_empty() && !self.stale {
             return Ok(Vec::new());
         }
+        present(&self.dir)?;
         let mut doc = read(&self.dir)?;
         let now = parse(&doc)?;
         let changed: Vec<SourceKey> = expected
@@ -447,6 +487,7 @@ impl Manifest {
         let text = doc.to_string();
         let text = with_header(&text).unwrap_or(text);
         atomic::write(&self.dir, MANIFEST, text.as_bytes())?;
+        saw(&self.dir, Some(&text));
         self.edits.clear();
         (self.songs, self.albums, self.lyrics, self.removed) =
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
@@ -509,15 +550,51 @@ fn with_header(text: &str) -> Option<String> {
     (new != text).then_some(new)
 }
 
+/// The song list as this process last read or wrote it, by home, `None`
+/// for one missing: what a run worked from, which [`crate::history`]
+/// records as the list the run left, so a hand edit made while it ran
+/// and never read by it is no part of it.
+static SEEN: std::sync::Mutex<BTreeMap<PathBuf, Option<String>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Note the song list in `home` as read or written now.
+pub fn saw(home: &Path, text: Option<&str>) {
+    SEEN.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(home.to_path_buf(), text.map(str::to_string));
+}
+
+/// The song list in `home` as last read or written since [`unsee`], if it
+/// was.
+#[must_use]
+pub fn seen(home: &Path) -> Option<Option<String>> {
+    SEEN.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(home)
+        .cloned()
+}
+
+/// Forget what was seen of the song list in `home`.
+pub fn unsee(home: &Path) {
+    SEEN.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(home);
+}
+
 fn read(dir: &Path) -> Result<DocumentMut> {
     let file = dir.join(MANIFEST);
-    let text = match std::fs::read_to_string(&file) {
-        // Windows editors may add a byte-order mark and CRLF endings; the
-        // file is written back with neither, rather than with both mixed.
-        Ok(text) => text.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => NEW.to_string(),
+    let raw = match std::fs::read_to_string(&file) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
+    saw(dir, raw.as_deref());
+    // Windows editors may add a byte-order mark and CRLF endings; the
+    // file is written back with neither, rather than with both mixed.
+    let text = raw.map_or_else(
+        || NEW.to_string(),
+        |t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
+    );
     let doc: DocumentMut = text
         .parse()
         .with_context(|| format!("{} is not valid TOML", file.display()))?;
@@ -574,6 +651,9 @@ struct Parsed {
 
 /// The keys a table lists, each parsed.
 fn keys_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
+    if t.get("sources").is_some_and(|s| s.as_array().is_none()) {
+        bail!("{what}: sources must be a list, as sources = [\"manual:<path>\"]");
+    }
     t.get("sources")
         .and_then(Item::as_array)
         .into_iter()
@@ -618,8 +698,14 @@ fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
         .with_context(|| format!("{what}: `lyrics_offset` must be a time, such as \"120 ms\""))?
         .parse()
         .map_err(|e| anyhow::anyhow!("{what}: `lyrics_offset`: {e}"))?;
+    if time.0.unsigned_abs() > MAX_OFFSET_MS {
+        bail!("{what}: `lyrics_offset` moves lyrics more than an hour, longer than any song");
+    }
     Ok(time.0)
 }
+
+/// The most lyrics are moved, an hour either way.
+const MAX_OFFSET_MS: u64 = 3_600_000;
 
 /// What `doc` holds, read as the current edition writes it.
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
@@ -645,6 +731,9 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
         let sources = owned_keys(t, &what, n, &mut owner)?;
+        if sources.is_empty() {
+            bail!("{what} lists no source: give it one, or delete it");
+        }
         let lyrics = match t.get("lyrics") {
             None => None,
             Some(item) if item.as_bool() == Some(false) => Some(LyricsPin::None),
@@ -948,6 +1037,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             let Some(mut song) = take(doc, "removed", key) else {
                 return Ok(());
             };
+            let removed = song.clone();
             song.remove("note");
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
@@ -958,6 +1048,11 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 .filter(|k| !taken(k))
                 .filter_map(|k| SourceKey::parse(k).ok())
                 .collect();
+            if keys.is_empty() {
+                // Every source of it is another song's now: nothing to list.
+                tables_mut(doc, "removed")?.push(removed);
+                return Ok(());
+            }
             song.insert("sources", key_array(&keys));
             for pin in ["audio", "cover", "lyrics"] {
                 let stray = song.get(pin).and_then(Item::as_str).is_some_and(taken);
@@ -1121,16 +1216,37 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
             .map(|(k, _)| k.to_string())
             .filter(|k| tags::vorbis_key(k) == field)
             .collect();
-        for k in spellings {
-            table.remove(&k);
-        }
         let item = match values.as_slice() {
-            [] if !TAG_TEMPLATE.contains(&name.as_str()) => continue,
+            [] if !TAG_TEMPLATE.contains(&name.as_str()) => {
+                for k in &spellings {
+                    table.remove(k);
+                }
+                continue;
+            }
             [] => value(""),
             [one] => value(one.as_str()),
             many => value(many.iter().map(String::as_str).collect::<Array>()),
         };
+        // Setting what a tag holds already, however it is spelled, changes
+        // nothing.
+        if let [only] = spellings.as_slice()
+            && table.get(only).and_then(item_values) == item_values(&item)
+        {
+            continue;
+        }
+        for k in &spellings {
+            table.remove(k);
+        }
         table.insert(name, item);
+    }
+}
+
+/// The text values a tag's item holds, one or a list.
+fn item_values(item: &Item) -> Option<Vec<&str>> {
+    match item.as_value()? {
+        Value::String(s) => Some(vec![s.value().as_str()]),
+        Value::Array(a) => a.iter().map(Value::as_str).collect(),
+        _ => None,
     }
 }
 
@@ -1147,9 +1263,35 @@ fn normalize(doc: &mut DocumentMut) -> bool {
         };
         for table in list.iter_mut() {
             changed |= dot_tags(table, template);
+            if template {
+                changed |= drop_stale_held(table);
+            }
         }
     }
     changed
+}
+
+/// `held` records of sources the song no longer lists taken out, as a
+/// source moved to another song leaves; a removed song keeps its own
+/// for `restore`. Whether any was.
+fn drop_stale_held(song: &mut Table) -> bool {
+    let listed = listed_keys(song);
+    let Some(held) = song.get_mut("held").and_then(Item::as_table_like_mut) else {
+        return false;
+    };
+    let stale: Vec<String> = held
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .filter(|k| !listed.contains(k))
+        .collect();
+    for key in &stale {
+        held.remove(key);
+    }
+    let empty = held.is_empty();
+    if empty && !stale.is_empty() {
+        song.remove("held");
+    }
+    !stale.is_empty()
 }
 
 /// `table`'s `tags` as `tags.<name>` lines after its other keys, so a

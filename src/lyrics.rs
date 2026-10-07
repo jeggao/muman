@@ -180,7 +180,9 @@ pub fn stated_length(text: &str) -> Option<i64> {
 /// endings become LF.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
-    let encoding = if is_utf8(bytes) {
+    let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
+        utf16
+    } else if is_utf8(bytes) {
         encoding_rs::UTF_8
     } else {
         let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Deny);
@@ -189,6 +191,37 @@ pub fn decode(bytes: &[u8]) -> String {
     };
     let (text, _, _) = encoding.decode(bytes);
     text.replace("\r\n", "\n")
+}
+
+/// UTF-16 with no byte-order mark, told by its zero bytes: text mostly in
+/// Latin letters has one in every pair, on the side its byte order says.
+fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+    if encoding_rs::Encoding::for_bom(bytes).is_some() || bytes.len() < 4 {
+        return None;
+    }
+    let pairs = bytes.chunks_exact(2);
+    let total = pairs.len();
+    let (high, low) = pairs.fold((0, 0), |(h, l), p| {
+        (h + usize::from(p[1] == 0), l + usize::from(p[0] == 0))
+    });
+    if high * 2 > total && low * 10 < total {
+        Some(encoding_rs::UTF_16LE)
+    } else if low * 2 > total && high * 10 < total {
+        Some(encoding_rs::UTF_16BE)
+    } else {
+        None
+    }
+}
+
+/// Whether `text` reads as text: almost none of it control characters or
+/// bytes that would not decode, as a file of other data holds.
+#[must_use]
+pub fn is_text(text: &str) -> bool {
+    let odd = text
+        .chars()
+        .filter(|c| *c == '\u{FFFD}' || c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        .count();
+    odd * 50 <= text.chars().count()
 }
 
 /// Whether `bytes` are UTF-8, perhaps damaged: fewer bytes in error
@@ -300,7 +333,8 @@ fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
     let (tag, after) = s.split_once(']')?;
     let (min, sec) = tag.split_once(':')?;
-    let (whole, frac) = sec.split_once('.').unwrap_or((sec, "0"));
+    // `[01:02.50]`, or `[01:02:50]` as some tools write it.
+    let (whole, frac) = sec.split_once(['.', ':']).unwrap_or((sec, "0"));
     let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
     if !(digits(min) && digits(whole) && digits(frac)) {
         return None;
@@ -358,6 +392,26 @@ mod tests {
             assert!(!lossy);
             assert_eq!(decode(&bytes), lrc, "{}", encoding.name());
         }
+    }
+
+    #[test]
+    fn a_time_with_a_colon_before_its_fraction_reads() {
+        assert_eq!(lrc_time("01:02:50]x"), Some((62_500, "x")));
+        assert_eq!(lrc_time("01:02.50]x"), Some((62_500, "x")));
+    }
+
+    #[test]
+    fn utf16_without_a_mark_is_told_and_other_data_is_no_text() {
+        let lrc = "[00:01.00]first line\n[00:05.00]second line\n";
+        let le: Vec<u8> = lrc.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let be: Vec<u8> = lrc.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert_eq!(decode(&le), lrc);
+        assert_eq!(decode(&be), lrc);
+        assert!(is_text(lrc));
+        let noise: Vec<u8> = (0..4000_u32)
+            .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
+            .collect();
+        assert!(!is_text(&decode(&noise)));
     }
 
     #[test]

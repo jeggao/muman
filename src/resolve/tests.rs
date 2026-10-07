@@ -700,6 +700,39 @@ fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
 }
 
 #[test]
+fn a_record_titled_otherwise_lends_no_recording_ids() {
+    let (a, mb) = (
+        manual("a.flac"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+    );
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Title, &["Song Four"], true);
+    let mut fmb = Facts::unreadable("mb".into());
+    tag(&mut fmb, Field::Title, &["Song One"], true);
+    tag(&mut fmb, Field::Isrc, &["XX0000000001"], true);
+    tag(
+        &mut fmb,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000001"],
+        true,
+    );
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb.clone())]);
+    let r = run(&song(&[a.clone(), mb.clone()]), &facts, &[]);
+    let has = |r: &Resolved, k: &str| r.plan.tags.iter().any(|(t, _)| t == k);
+    assert!(
+        !has(&r, "ISRC") && !has(&r, "MUSICBRAINZ_TRACKID"),
+        "{:?}",
+        r.plan.tags
+    );
+
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Title, &["song one"], true);
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb)]);
+    let r = run(&song(&[a, mb.clone()]), &facts, &[]);
+    assert_eq!(why(&r, "ISRC").from, mb.to_string(), "titled alike");
+}
+
+#[test]
 fn formats_follow_the_winning_codec() {
     let opus = |kbps| Format::Encode {
         codec: Codec::Opus,
@@ -908,5 +941,28 @@ fn stated_lyrics_yield_to_a_subtitle_of_the_same_recording_and_need_its_length()
         r.plan.lyrics.is_none(),
         "timed to another length: {:?}",
         r.why
+    );
+}
+
+#[test]
+fn a_file_cut_off_is_encoded_however_it_is_coded() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
+    f.cut_from = Some(40.0);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert!(
+        matches!(
+            r.plan.format,
+            Format::Encode {
+                codec: Codec::Flac,
+                ..
+            }
+        ),
+        "{:?}",
+        r.plan.format
     );
 }

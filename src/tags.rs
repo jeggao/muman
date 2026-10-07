@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/6";
+pub const METHOD: &str = "tags/7";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -206,16 +206,34 @@ pub struct Offer {
 
 pub type Offers = BTreeMap<Field, Offer>;
 
+/// The longest value a source may offer, in bytes: a name runs to a few
+/// hundred, and a value past this is no name but a server's garbage,
+/// which would fail every write of the song.
+const MAX_VALUE: usize = 4096;
+
+/// Offer `values` for `field`. Every source's values pass here, so a
+/// count reads alike whatever offers it: no leading zeros, and 0, which
+/// counts nothing, is none. A control character, which cuts a C string
+/// short or moves a terminal's cursor, and one reordering the text are
+/// dropped, a line break or tab spaced.
 fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: bool) {
-    // Every source's values pass here, so a count reads alike whatever
-    // offers it: no leading zeros, and 0, which counts nothing, is none.
     let counts = matches!(
         field,
         Field::Track | Field::Disc | Field::TrackTotal | Field::DiscTotal
     );
     let values: Vec<String> = values
         .into_iter()
+        .filter(|v| v.len() <= MAX_VALUE)
         .map(|v| {
+            let v: String = v
+                .chars()
+                .filter(|c| !crate::naming::reorders(*c))
+                .filter_map(|c| match c {
+                    c if c.is_whitespace() && c.is_control() => Some(' '),
+                    c if c.is_control() => None,
+                    c => Some(c),
+                })
+                .collect();
             let v = v.trim();
             if counts && v.bytes().all(|b| b.is_ascii_digit()) {
                 v.trim_start_matches('0').to_string()
@@ -646,6 +664,22 @@ mod tests {
             Field::of(Scope::Recording).count() + Field::of(Scope::Release).count(),
             Field::ALL.len()
         );
+    }
+
+    #[test]
+    fn an_offer_drops_controls_reordering_and_garbage() {
+        let record = crate::musicbrainz::Record {
+            id: "00000000-0000-0000-0000-000000000001".into(),
+            title: "Esc\0ape\nTitle\u{202E}\u{1b}[2J".into(),
+            artists: vec!["x".repeat(MAX_VALUE + 1), "Artist".into()],
+            artist_ids: Vec::new(),
+            isrcs: Vec::new(),
+            length_ms: None,
+            release: None,
+        };
+        let o = from_record(&record);
+        assert_eq!(o[&Field::Title].values, ["Escape Title[2J"]);
+        assert_eq!(o[&Field::Artist].values, ["Artist"]);
     }
 
     #[test]

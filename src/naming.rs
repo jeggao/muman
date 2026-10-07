@@ -5,7 +5,9 @@
 //! A name is made safe the same way on every system, so a library copies
 //! between them: by default anything Windows, FAT or a phone refuses is
 //! replaced, `/` by `⧸` and the rest by their full-width lookalikes as
-//! yt-dlp does (`：？＊＂＜＞｜⧹`); control characters go; leading dots
+//! yt-dlp does (`：？＊＂＜＞｜⧹`); control characters go, and those that
+//! reorder the text around them, which can make a name read as another;
+//! a value of nothing visible counts as none; leading dots
 //! (hidden files) and trailing dots and spaces (which Windows drops) are
 //! trimmed; and a reserved device name such as `CON` or `nul.txt` gets a
 //! `_`. Limits are counted in UTF-8 bytes, which no filesystem's own
@@ -115,7 +117,13 @@ impl Naming {
         // Leading dots would hide a file or climb out of a folder.
         let safe = |s: Option<&str>| {
             let v = self.value(s.unwrap_or_default());
-            v.trim().trim_start_matches('.').trim().to_string()
+            let v = v.trim().trim_start_matches('.').trim();
+            // Nothing a reader sees, as a lone zero-width space, is blank.
+            if v.chars().all(invisible) {
+                String::new()
+            } else {
+                v.to_string()
+            }
         };
         let or = |s: String, fallback: &str| {
             if s.is_empty() {
@@ -216,7 +224,7 @@ impl Naming {
             out = deunicode::deunicode(&out);
         }
         out.chars()
-            .filter(|c| !c.is_control())
+            .filter(|c| !c.is_control() && !reorders(*c))
             .map(|c| if self.forbidden(c) { '_' } else { c })
             .collect()
     }
@@ -226,7 +234,7 @@ impl Naming {
         // What the template itself spells, values aside, is made safe too.
         let safe: String = name
             .chars()
-            .filter(|c| !c.is_control())
+            .filter(|c| !c.is_control() && !reorders(*c))
             .map(
                 |c| match LOOKALIKES.iter().find(|(f, _)| f.starts_with(c)) {
                     Some((_, to)) if self.forbidden(c) => to.chars().next().unwrap_or('_'),
@@ -245,6 +253,20 @@ impl Naming {
         }
         out.trim_end().to_string()
     }
+}
+
+/// Whether `c` shows nothing of its own: a space, a zero-width or
+/// formatting character, or a variation selector.
+fn invisible(c: char) -> bool {
+    c.is_whitespace()
+        || reorders(c)
+        || matches!(c, '\u{200B}'..='\u{200D}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{180E}')
+}
+
+/// Whether `c` reorders the text around it, as `U+202E` makes a name
+/// ending in `gpj.exe` read as one ending in `exe.jpg`.
+pub(crate) fn reorders(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// A name Windows keeps for a device, extension or not: `CON`, `nul.txt`.
@@ -270,20 +292,28 @@ fn number(text: &str) -> Option<u32> {
 /// `max_name` bytes with room for the extension and a temporary suffix.
 #[must_use]
 pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
-    let id = cut(id, ID_BYTES);
-    let suffix = if n > 1 {
-        format!(" [{} {n}]", id.trim())
+    let number = if n > 1 {
+        format!(" {n}")
     } else {
-        format!(" [{}]", id.trim())
+        String::new()
     };
+    // The extension and `.moving`, the longest temporary suffix.
+    let room = max_name.saturating_sub(".flac.moving".len());
+    // The ID cut too, so the name keeps a start of its own.
+    let id_room = room
+        .saturating_sub(" []".len() + number.len() + KEPT_BYTES)
+        .min(ID_BYTES);
+    let suffix = format!(" [{}{number}]", cut(id, id_room).trim());
     let name = stem
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    // The extension and `.moving`, the longest temporary suffix.
-    let tail = ".flac.moving".len();
-    let name = cut(&name, max_name.saturating_sub(suffix.len() + tail));
-    stem.with_file_name(format!("{}{suffix}", name.trim_end()))
+    let name = cut(&name, room.saturating_sub(suffix.len()));
+    let named = format!("{}{suffix}", name.trim_end());
+    stem.with_file_name(named.trim_start())
 }
+
+/// The least of a name a suffix telling it apart leaves.
+const KEPT_BYTES: usize = 8;
 
 /// `text` cut within `limit` bytes between characters as a reader
 /// counts them, so no flag is left half drawn and no accent loses its
@@ -462,6 +492,29 @@ mod tests {
         assert_eq!(cut(accented, 5), "Caf");
         let marked = format!("Z{}", "\u{301}".repeat(20));
         assert_eq!(cut(&marked, 5), "Z\u{301}\u{301}");
+    }
+
+    #[test]
+    fn a_long_id_telling_names_apart_leaves_room_for_the_name() {
+        let id = "i".repeat(80);
+        for n in [1, 2, 12] {
+            let named = suffixed(Path::new("A/Lantern Weather"), &id, n, MIN_NAME_BYTES);
+            let name = named.file_name().unwrap().to_str().unwrap();
+            assert!(name.starts_with("Lantern"), "{name}");
+            assert!(
+                name.len() + ".flac.moving".len() <= MIN_NAME_BYTES,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_of_nothing_visible_is_untitled_and_no_name_reorders() {
+        let n = naming(&Library::default());
+        let stem = n.stem(&tags("A", "B", "\u{200B}\u{FE0F}")).unwrap();
+        assert_eq!(stem.file_name().unwrap(), "Untitled");
+        let stem = n.stem(&tags("A", "B", "abc\u{202E}gpj.exe")).unwrap();
+        assert_eq!(stem.file_name().unwrap(), "abcgpj.exe");
     }
 
     #[test]

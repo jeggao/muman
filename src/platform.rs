@@ -61,6 +61,20 @@ pub fn arrived(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
     modified.max(placed)
 }
 
+/// Whether `inner` is `outer` or a folder within it, resolved and
+/// compared as [`same_path`] compares.
+#[must_use]
+pub fn within(inner: &Path, outer: &Path) -> bool {
+    let resolve = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (inner, outer) = (resolve(inner), resolve(outer));
+    if cfg!(any(windows, target_os = "macos")) {
+        let fold = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+        fold(&inner).starts_with(fold(&outer))
+    } else {
+        inner.starts_with(outer)
+    }
+}
+
 /// Whether two paths name the same folder: resolved through links and
 /// `.`/`..`, and without regard to case where the platform's filesystems
 /// ignore it, so `D:\Music` and `d:\music\` agree.
@@ -78,6 +92,17 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_is_within_itself_and_its_parents_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().join("home").join("sources");
+        std::fs::create_dir_all(&outer).unwrap();
+        assert!(within(&outer, &outer));
+        assert!(within(&outer.join("manual").join("not yet made"), &outer));
+        assert!(!within(&dir.path().join("home"), &outer));
+        assert!(!within(&dir.path().join("homes"), &dir.path().join("home")));
+    }
 
     #[test]
     fn a_file_with_an_old_modification_time_arrived_now() {
