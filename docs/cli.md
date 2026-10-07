@@ -40,6 +40,7 @@ Exit codes:
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
+* `completions` — Write the script that completes muman's commands, flags and paths in SHELL; the README says where each shell loads it from
 
 **Options:**
 
@@ -350,3 +351,17 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Usage:** `muman info`
+
+
+
+### `muman completions`
+
+Write the script that completes muman's commands, flags and paths in SHELL; the README says where each shell loads it from
+
+**Usage:** `muman completions <SHELL>`
+
+**Arguments:**
+
+* `<SHELL>`
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`

@@ -134,6 +134,17 @@ pub fn run() -> ExitCode {
         .and_then(|m| Cli::from_arg_matches(&m))
         .map_err(|e| e.format(&mut cli::command()))
         .unwrap_or_else(|e| e.exit());
+    // Before the home folder and the tools are looked for, so a package
+    // build with neither can still write the scripts.
+    if let Command::Completions { shell } = cli.command {
+        return match std::io::stdout().write_all(&cli::completions(shell)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                let _ = ui::error(&mut anstream::stderr(), &format!("writing the script: {e}"));
+                ExitCode::from(4)
+            }
+        };
+    }
     let live = std::io::stderr().is_terminal();
     let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
     let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
@@ -253,6 +264,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Info => {
             overview::info(dirs, job.verbose, data)?;
+            Ok(true)
+        }
+        Command::Completions { shell } => {
+            data.write_all(&cli::completions(*shell))
+                .context("writing the script")?;
             Ok(true)
         }
         Command::Duplicates { query } => {
@@ -457,7 +473,10 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         Command::Check { .. } => &["Decoding"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
         Command::Duplicates { .. } => &["Comparing prints"],
-        Command::List { .. } | Command::Info | Command::Purge { .. } => &[],
+        Command::List { .. }
+        | Command::Info
+        | Command::Purge { .. }
+        | Command::Completions { .. } => &[],
     }
 }
 

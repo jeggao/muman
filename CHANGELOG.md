@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Shell completion.** `muman completions <shell>` writes a script
+  that completes commands, flags, `--progress` modes and paths in bash,
+  zsh, fish, PowerShell or elvish; the README says where each shell
+  loads it. The Nix package installs the bash, fish and zsh scripts.
+
 ## [0.2.3] - 2026-10-07
 
 ### Added

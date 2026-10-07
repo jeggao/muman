@@ -7,12 +7,16 @@
 //! command's options, written laid out for 80 columns, are laid out again
 //! for the width (`laid_out`); [`command`] does both for `run`, while
 //! the generated reference reads [`Cli`] as written.
+//!
+//! [`completions`] reads [`Cli`] as written too: zsh and fish show each
+//! flag's help beside it, and would show the escape codes as text.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use clap::builder::styling::{AnsiColor, Effects, Styles};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
+use clap_complete::Shell;
 
 /// Help's colors, those of `ui::Style`: a heading as a success, what is
 /// typed as an accent, a value as a path, a default muted.
@@ -71,12 +75,24 @@ pub struct Cli {
 
     /// The state root: the song list, the state file and the sources
     /// [default: the platform's local data folder, then `muman`].
-    #[arg(long, global = true, env = "MUMAN_HOME", value_name = "DIR")]
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_HOME",
+        value_name = "DIR",
+        value_hint = ValueHint::DirPath
+    )]
     pub home: Option<PathBuf>,
 
     /// Folder the songs are written to [default: the song list's
     /// `[library] path`, else the platform's music folder, then `muman`].
-    #[arg(long, global = true, env = "MUMAN_LIBRARY", value_name = "DIR")]
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_LIBRARY",
+        value_name = "DIR",
+        value_hint = ValueHint::DirPath
+    )]
     pub library: Option<PathBuf>,
 
     /// Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how
@@ -235,7 +251,7 @@ pub enum Command {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
         /// or audio files and folders of them, copied into the manual
         /// folder, or originals yt-dlp fetched, into the store.
-        #[arg(required = true, value_name = "URL|FILE")]
+        #[arg(required = true, value_name = "URL|FILE", value_hint = ValueHint::AnyPath)]
         inputs: Vec<String>,
 
         /// Keep each video as uploaded, never looking for its YouTube
@@ -409,6 +425,28 @@ pub enum Command {
     /// missing or soft covers, missing lyrics or tags. Reads only what
     /// earlier runs recorded; `--verbose` names every song counted.
     Info,
+    /// Write the script that completes muman's commands, flags and paths
+    /// in SHELL; the README says where each shell loads it from.
+    Completions {
+        #[arg(value_name = "SHELL")]
+        shell: Shell,
+    },
+}
+
+/// The completion script for `shell`.
+///
+/// Written into a buffer, as `clap_complete` panics when a write fails, a
+/// closed pipe included; the caller reports that as an error.
+#[must_use]
+pub fn completions(shell: Shell) -> Vec<u8> {
+    let mut script = Vec::new();
+    clap_complete::generate(
+        shell,
+        &mut Cli::command(),
+        env!("CARGO_PKG_NAME"),
+        &mut script,
+    );
+    script
 }
 
 /// The command line as `run` parses it: [`Cli`]'s, its help colored and
@@ -745,6 +783,23 @@ Shelves hold `songs` alone."
         assert_eq!(output, PathBuf::from("out.zip"));
         assert_eq!(max_size, Some(4 << 30));
         assert!(parse(&["export", "--max-size", "lots"]).is_err());
+    }
+
+    #[test]
+    fn every_shell_gets_a_plain_script_of_every_command_and_flag() {
+        use clap::ValueEnum;
+        assert!(matches!(
+            parse(&["completions", "zsh"]).unwrap().command,
+            Command::Completions { shell: Shell::Zsh }
+        ));
+        assert!(parse(&["completions", "tcsh"]).is_err());
+        for shell in Shell::value_variants() {
+            let script = String::from_utf8(completions(*shell)).unwrap();
+            for word in ["sync", "duplicates", "progress", "dry-run"] {
+                assert!(script.contains(word), "{shell}: no {word}");
+            }
+            assert!(!script.contains('\x1b'), "{shell}: escape codes");
+        }
     }
 
     #[test]

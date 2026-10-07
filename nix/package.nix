@@ -1,9 +1,13 @@
 # muman, built from this checkout. ffmpeg, ffprobe and yt-dlp are set in
 # MUMAN_FFMPEG, MUMAN_FFPROBE and MUMAN_YT_DLP with --set-default, so the
 # user's own variables still win and hooks see the user's PATH unchanged.
+# Its bash, fish and zsh completions are written by the built muman, so
+# a cross build, which cannot run it, goes without them.
 {
   lib,
+  stdenv,
   rustPlatform,
+  installShellFiles,
   makeBinaryWrapper,
   ffmpeg-headless,
   yt-dlp,
@@ -32,7 +36,10 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [ makeBinaryWrapper ];
+  nativeBuildInputs = [
+    installShellFiles
+    makeBinaryWrapper
+  ];
 
   # The smoke test generates its audio with the ffmpeg on PATH.
   nativeCheckInputs = [ ffmpeg-headless ];
@@ -55,12 +62,19 @@ rustPlatform.buildRustPackage {
     export HOME=$(mktemp -d)
   '';
 
-  postInstall = ''
-    wrapProgram $out/bin/muman \
-      --set-default MUMAN_FFMPEG ${lib.getExe' ffmpeg-headless "ffmpeg"} \
-      --set-default MUMAN_FFPROBE ${lib.getExe' ffmpeg-headless "ffprobe"} \
-      ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"}
-  '';
+  postInstall =
+    lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+      installShellCompletion --cmd muman \
+        --bash <($out/bin/muman completions bash) \
+        --fish <($out/bin/muman completions fish) \
+        --zsh <($out/bin/muman completions zsh)
+    ''
+    + ''
+      wrapProgram $out/bin/muman \
+        --set-default MUMAN_FFMPEG ${lib.getExe' ffmpeg-headless "ffmpeg"} \
+        --set-default MUMAN_FFPROBE ${lib.getExe' ffmpeg-headless "ffprobe"} \
+        ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"}
+    '';
 
   meta = {
     inherit (manifest) description;

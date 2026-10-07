@@ -77,6 +77,21 @@ flake's `overlays.default` and install `pkgs.muman`. Without flakes,
 `nix-build` in a checkout builds the same package, from the nixpkgs
 `flake.lock` pins.
 
+### Shell completion
+
+`muman completions <shell>` writes a script that completes muman's
+commands, flags and paths. Load it where your shell starts up:
+
+| Shell | Add this line to |
+|---|---|
+| bash | `~/.bashrc`: `eval "$(muman completions bash)"` |
+| zsh | `~/.zshrc`, after `compinit`: `eval "$(muman completions zsh)"` |
+| fish | `~/.config/fish/config.fish`: `muman completions fish \| source` |
+| PowerShell | `$PROFILE`: `muman completions powershell \| Out-String \| Invoke-Expression` |
+| elvish | `~/.config/elvish/rc.elv`: `eval (muman completions elvish \| slurp)` |
+
+The Nix package installs the bash, fish and zsh scripts itself.
+
 ## Quick start
 
 ```bash
@@ -109,6 +124,7 @@ muman undo
 |---|---|
 | `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, then sync |
 | `check` | Compare the library and the sources with what muman recorded |
+| `completions` | Write the script that completes muman's commands and flags in a shell |
 | `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
 | `export` | Write the song list and the library into a zip, fitted to a size if given |
