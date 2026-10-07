@@ -125,15 +125,12 @@ pub fn ytdlp_command(
     if cfg!(unix) {
         cmd.push("--xattrs".into());
     }
-    // Machine-translated captions run to hundreds per video and trip the
-    // rate limit, where one failed track aborts the download.
-    let mut extractor = String::from("youtube:skip=translated_subs");
+    let plugins = places.plugins.filter(|_| options.plugins);
+    let extractor = extractor_args(plugins.is_some());
     // skip=translated_subs leaves the translations of the speech
     // recognition track, one per language; OriginalSubs drops them before
     // any is fetched. Without it, generated captions are not asked for.
-    if let Some(plugins) = places.plugins.filter(|_| options.plugins) {
-        // Only the web_music client lists a track's square album art.
-        extractor.push_str(";player_client=default,web_music");
+    if let Some(plugins) = plugins {
         cmd.extend(["--write-auto-subs", "--no-plugin-dirs", "--plugin-dirs"].map(OsString::from));
         cmd.push(plugins.as_os_str().to_os_string());
         for pp in ["OriginalSubs", "AlbumArt"] {
@@ -161,6 +158,45 @@ pub fn ytdlp_command(
         cmd.push(batch.as_os_str().to_os_string());
     }
     // A video ID may begin with a dash.
+    cmd.push("--".into());
+    cmd.extend(urls.iter().map(OsString::from));
+    cmd
+}
+
+/// The `--extractor-args` a fetch passes, the clients it asks with
+/// `plugins` loaded.
+fn extractor_args(plugins: bool) -> String {
+    // Machine-translated captions run to hundreds per video and trip the
+    // rate limit, where one failed track aborts the download.
+    let mut extractor = String::from("youtube:skip=translated_subs");
+    if plugins {
+        // Only the web_music client lists a track's square album art.
+        extractor.push_str(";player_client=default,web_music");
+    }
+    extractor
+}
+
+/// yt-dlp's argv that prints, one JSON object a line, what each of
+/// `urls` offers now, downloading nothing: asked as a fetch asks, so it
+/// lists the formats a fetch would choose from.
+#[must_use]
+pub fn upstream_command(options: &Ytdlp, urls: &[String]) -> Vec<OsString> {
+    let mut cmd: Vec<OsString> = [
+        "yt-dlp",
+        "--ignore-config",
+        "--skip-download",
+        "--dump-json",
+        "--no-playlist",
+        "--ignore-errors",
+        "--retry-sleep",
+        "extractor:exp=1:30",
+        "--extractor-args",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    cmd.push(extractor_args(options.plugins).into());
+    cmd.extend(options.args.iter().map(OsString::from));
     cmd.push("--".into());
     cmd.extend(urls.iter().map(OsString::from));
     cmd

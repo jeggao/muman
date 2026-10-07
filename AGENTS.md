@@ -60,6 +60,7 @@ src/
                     musicbrainz.rs, acoustid.rs, coverart.rs
   reconcile.rs      the offline phase: measure, compare, plan, render, prune
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
+  held.rs           what each source held when its song was built
   quality.rs        audio and picture measures
   fingerprint.rs    Chromaprint prints and their comparison
   align.rs          audio comparison by loudness envelopes

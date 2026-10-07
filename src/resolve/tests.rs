@@ -34,6 +34,7 @@ fn audio(codec: &str, khz: f64) -> Facts {
             clipping: 0.0,
         }),
         bytes: None,
+        digest: None,
     });
     f
 }
@@ -62,6 +63,7 @@ fn cover(f: &mut Facts, at: CoverAt, q: ImageQuality) {
         at,
         mimetype: "image/jpeg".into(),
         quality: Some(q),
+        digest: None,
     });
 }
 
@@ -75,6 +77,7 @@ fn lyrics(f: &mut Facts, at: LyricsAt, code: &str, lines: usize) {
             last_ms: 180_000,
         }),
         stated_ms: None,
+        digest: None,
     });
 }
 

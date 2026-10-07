@@ -9,11 +9,31 @@
 //! A media file costs at most three runs: ffprobe, one ffmpeg dumping
 //! its attachments, and one ffmpeg writing every measured excerpt as a
 //! separate output.
+//!
+//! Each audio stream, picture and lyrics a source offers is also known
+//! by a digest of its content, which plans name it by, so a source
+//! fetched again or copied without its file times is the same source
+//! when it holds the same content. A stream's digest is the SHA-256 of
+//! its packets, copied, not decoded: two downloads of one file a minute
+//! apart differed in 425 bytes of their container, where yt-dlp embeds
+//! the time and its cookies, and in no packet. Packets survive a remux
+//! too: Opus, AAC, FLAC and MP3 each hashed the same in their own
+//! container and in Matroska, remuxed once or twice, and a FLAC with
+//! new tags and a new cover hashed the same, where the decoded samples
+//! of the Opus, AAC and MP3 differed by container, decoders being
+//! required to agree only within a tolerance. An attachment, a sidecar
+//! and a file of its own are hashed whole. The tags a source offers are
+//! known by the fields of its info JSON they are read from, as
+//! [`info::TAG_FIELDS`] lists them, the rest of it changing on every
+//! fetch, or by a file's own tags, before any cleaning. Facts hashed by
+//! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
+//! nothing.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::ffmpeg::{self, Output};
 use crate::fingerprint::{self, Print};
@@ -54,6 +74,44 @@ pub struct Facts {
     /// sooner, at [`Facts::duration`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut_from: Option<f64>,
+    /// What a site served, for what yt-dlp fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served: Option<Served>,
+    /// The digest of the tags it offers as they are written in it, before
+    /// muman reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags_digest: Option<String>,
+    /// The [`HASH_METHOD`] each part was hashed by, or tried; empty for
+    /// facts made before muman hashed sources.
+    #[serde(default)]
+    pub hash_method: String,
+}
+
+/// What a source's digests are of; facts hashed otherwise are hashed
+/// again, decoding nothing, as [`hash`] does.
+pub const HASH_METHOD: &str = "hash/2";
+
+/// The format a site served a source in, by yt-dlp's info.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Served {
+    /// yt-dlp's format ID, as `251` or `399+251`.
+    pub format: String,
+    /// The size the site gave its audio format, where it gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// The page it was fetched from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+impl Served {
+    fn of(info: &VideoInfo) -> Option<Self> {
+        Some(Self {
+            format: info.format_id.clone()?,
+            size: info.audio_format().and_then(|f| f.filesize),
+            url: info.webpage_url.clone(),
+        })
+    }
 }
 
 impl Facts {
@@ -61,6 +119,50 @@ impl Facts {
     #[must_use]
     pub fn holds_for(&self, rev: &str) -> bool {
         self.rev == rev && self.method == method()
+    }
+
+    /// What a plan names its audio by: its digest, or, where it has
+    /// none, the revision of its files.
+    #[must_use]
+    pub fn audio_rev(&self) -> String {
+        self.audio
+            .as_ref()
+            .and_then(|a| a.digest.clone())
+            .unwrap_or_else(|| self.rev.clone())
+    }
+
+    /// What a plan names `cover` by, as [`Facts::audio_rev`] its audio.
+    #[must_use]
+    pub fn cover_rev(&self, cover: &CoverFacts) -> String {
+        cover.digest.clone().unwrap_or_else(|| self.rev.clone())
+    }
+
+    /// What a plan names `lyrics` by, as [`Facts::audio_rev`] its audio.
+    #[must_use]
+    pub fn lyrics_rev(&self, lyrics: &LyricsFacts) -> String {
+        lyrics.digest.clone().unwrap_or_else(|| self.rev.clone())
+    }
+
+    /// Take `digests` and `served`, as [`hash`] read them.
+    pub fn take(&mut self, digests: &Digests, served: Option<Served>) {
+        if let Some(a) = &mut self.audio {
+            a.digest.clone_from(&digests.audio);
+        }
+        for c in &mut self.covers {
+            c.digest = digests.cover(&c.at);
+        }
+        for l in &mut self.lyrics {
+            l.digest = digests.lyrics(&l.at);
+        }
+        self.tags_digest.clone_from(&digests.tags);
+        self.served = served;
+        self.hash_method = HASH_METHOD.to_string();
+    }
+
+    /// Whether each part was hashed as muman hashes them now.
+    #[must_use]
+    pub fn hashed(&self) -> bool {
+        self.hash_method == HASH_METHOD
     }
 
     /// Whether the tags were read the way they are now.
@@ -84,6 +186,9 @@ impl Facts {
             release: false,
             print: None,
             cut_from: None,
+            served: None,
+            tags_digest: None,
+            hash_method: HASH_METHOD.to_string(),
         }
     }
 }
@@ -98,6 +203,8 @@ pub struct AudioFacts {
     /// The bytes of the audio stream's packets, which a copy carries.
     #[serde(default)]
     pub bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 impl AudioFacts {
@@ -131,6 +238,8 @@ pub struct CoverFacts {
     pub at: CoverAt,
     pub mimetype: String,
     pub quality: Option<ImageQuality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +261,71 @@ pub struct LyricsFacts {
     /// The length of the recording an `.lrc` says it is timed to.
     #[serde(default)]
     pub stated_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+/// The digests of what one source offers, by where each part sits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Digests {
+    pub audio: Option<String>,
+    pub covers: Vec<(CoverAt, String)>,
+    pub lyrics: Vec<(LyricsAt, String)>,
+    pub tags: Option<String>,
+}
+
+impl Digests {
+    fn cover(&self, at: &CoverAt) -> Option<String> {
+        self.covers
+            .iter()
+            .find(|(a, _)| a == at)
+            .map(|(_, d)| d.clone())
+    }
+
+    fn lyrics(&self, at: &LyricsAt) -> Option<String> {
+        self.lyrics
+            .iter()
+            .find(|(a, _)| a == at)
+            .map(|(_, d)| d.clone())
+    }
+}
+
+/// The digest of `bytes`: the first 128 bits of their SHA-256 in hex,
+/// which no two contents share by chance and a person can still read.
+#[must_use]
+pub fn digest(bytes: &[u8]) -> String {
+    hex(&Sha256::digest(bytes)[..16])
+}
+
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// The digest an ffmpeg `hash` output wrote, as `SHA256=<hex>`, cut as
+/// [`digest`] cuts its own.
+fn read_hash(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let hex = text.trim().strip_prefix("SHA256=")?;
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| hex[..32].to_ascii_lowercase())
+}
+
+fn digest_file(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|b| digest(&b))
+}
+
+/// The ffmpeg output options that hash the packets of stream
+/// `input:index`, copied.
+fn hash_output(input: usize, index: u32) -> Vec<std::ffi::OsString> {
+    let map = format!("{input}:{index}");
+    ["-map", &map, "-c", "copy", "-hash", "sha256", "-f", "hash"]
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 /// Measure one located source, writing intermediates to `scratch`.
@@ -161,7 +335,10 @@ pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Resul
     match located.kind {
         Kind::Lyrics => {
             let text = read_text(&located.path)?;
-            facts.lyrics.push(lyrics_of(LyricsAt::File, &text));
+            facts.lyrics.push(LyricsFacts {
+                digest: digest_file(&located.path),
+                ..lyrics_of(LyricsAt::File, &text)
+            });
         }
         Kind::Image => {
             let out = scratch.join("file.pgm");
@@ -175,9 +352,13 @@ pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Resul
                     .next()
                     .and_then(Result::ok)
                     .and_then(|()| measure_image(&out)),
+                digest: digest_file(&located.path),
             });
         }
-        Kind::Tags => facts.tags = tags::from_record(&crate::musicbrainz::read(&located.path)?),
+        Kind::Tags => {
+            facts.tags = tags::from_record(&crate::musicbrainz::read(&located.path)?);
+            facts.tags_digest = digest_file(&located.path);
+        }
         Kind::Media => media(runner, located, scratch, &mut facts)?,
     }
     Ok(facts)
@@ -199,6 +380,23 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     let info = dump_attachments(runner, located, &probed, scratch, false);
     let release = info.as_ref().is_some_and(VideoInfo::is_release);
     Ok((tags_of(info.as_ref(), &probed, &located.path), release))
+}
+
+/// The digest of the tags a media file offers as written: of the fields
+/// of its info JSON, dumped into `scratch`, that tags are read from, for
+/// what yt-dlp fetched; else of its own tags.
+fn tags_digest(fetched: bool, probed: &Probed, path: &Path, scratch: &Path) -> Option<String> {
+    if fetched {
+        return info::tags_digest(&std::fs::read(scratch.join("info.json")).ok()?);
+    }
+    let own = tags::read_file(path).unwrap_or_else(|| {
+        probed
+            .tags
+            .iter()
+            .map(|(k, v)| (k.clone(), vec![v.clone()]))
+            .collect()
+    });
+    Some(digest(&serde_json::to_vec(&own).ok()?))
 }
 
 /// What a media file's tags offer: its info JSON's, for what yt-dlp
@@ -228,6 +426,7 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
         language: Language::Unstated,
         timing: lyrics::timing(&lyrics::clean_lrc(text)),
         stated_ms: lyrics::stated_length(text),
+        digest: None,
     }
 }
 
@@ -273,6 +472,112 @@ enum Measured {
     Segment(PathBuf),
     Subtitle(u32, Language),
     Cover(CoverAt, String),
+    Hash(Part),
+}
+
+/// A part of a source a digest is of.
+enum Part {
+    Audio,
+    Cover(CoverAt),
+    Lyrics(LyricsAt),
+}
+
+/// The outputs hashing each stream of `probed` a plan may take: its
+/// audio, its pictures and its subtitles.
+fn hash_outputs(probed: &Probed, scratch: &Path) -> Vec<(Output, Part)> {
+    let audio = probed.audio.iter().map(|a| (a.index, Part::Audio));
+    let pictures = probed
+        .pictures
+        .iter()
+        .map(|p| (p.index, Part::Cover(CoverAt::Picture { index: p.index })));
+    let subtitles = probed
+        .subtitles
+        .iter()
+        .map(|s| (s.index, Part::Lyrics(LyricsAt::Stream { index: s.index })));
+    audio
+        .chain(pictures)
+        .chain(subtitles)
+        .map(|(index, part)| {
+            let path = scratch.join(format!("hash{index}"));
+            (Output::new(hash_output(0, index), &path), part)
+        })
+        .collect()
+}
+
+/// Put the digest an output wrote under its part in `digests`.
+fn note_hash(digests: &mut Digests, part: Part, path: &Path) {
+    let Some(d) = read_hash(path) else {
+        return;
+    };
+    match part {
+        Part::Audio => digests.audio = Some(d),
+        Part::Cover(at) => digests.covers.push((at, d)),
+        Part::Lyrics(at) => digests.lyrics.push((at, d)),
+    }
+}
+
+/// The digests of the files a media source brings whole: its image
+/// attachments, dumped into `scratch`, and its sidecars.
+fn file_digests(located: &Located, probed: &Probed, scratch: &Path, digests: &mut Digests) {
+    for a in probed.image_attachments() {
+        if let Some(d) = digest_file(&scratch.join(format!("att{}", a.ordinal))) {
+            digests
+                .covers
+                .push((CoverAt::Attachment { ordinal: a.ordinal }, d));
+        }
+    }
+    for (n, cover) in located.covers.iter().enumerate() {
+        if let Some(d) = digest_file(cover) {
+            digests.covers.push((CoverAt::Sidecar(n), d));
+        }
+    }
+    if let Some(d) = located.lyrics.as_deref().and_then(digest_file) {
+        digests.lyrics.push((LyricsAt::Sidecar, d));
+    }
+}
+
+/// The digests of one located source and what a site served it in, by
+/// one ffmpeg run that copies its streams and decodes nothing: for facts
+/// measured before muman hashed sources.
+pub fn hash<R: Runner>(
+    runner: &R,
+    located: &Located,
+    scratch: &Path,
+) -> Result<(Digests, Option<Served>)> {
+    let mut digests = Digests::default();
+    match located.kind {
+        Kind::Lyrics => {
+            if let Some(d) = digest_file(&located.path) {
+                digests.lyrics.push((LyricsAt::File, d));
+            }
+            return Ok((digests, None));
+        }
+        Kind::Image => {
+            if let Some(d) = digest_file(&located.path) {
+                digests.covers.push((CoverAt::File, d));
+            }
+            return Ok((digests, None));
+        }
+        Kind::Tags => {
+            digests.tags = digest_file(&located.path);
+            return Ok((digests, None));
+        }
+        Kind::Media => {}
+    }
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
+    let info = dump_attachments(runner, located, &probed, scratch, true);
+    let outputs = hash_outputs(&probed, scratch);
+    let plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
+    let ran = ffmpeg::run_outputs(runner, &[located.path.as_path()], &plain);
+    for ((output, part), result) in outputs.into_iter().zip(ran) {
+        if result.is_ok() {
+            note_hash(&mut digests, part, &output.path);
+        }
+    }
+    file_digests(located, &probed, scratch, &mut digests);
+    digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
+    Ok((digests, info.as_ref().and_then(Served::of)))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -287,10 +592,15 @@ fn media<R: Runner>(
     let info = dump_attachments(runner, located, &probed, scratch, true);
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
+    let served = info.as_ref().and_then(Served::of);
+    let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
     let mut inputs: Vec<PathBuf> = vec![located.path.clone()];
-    let mut outputs: Vec<(Output, Measured)> = Vec::new();
+    let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
+        .into_iter()
+        .map(|(o, part)| (o, Measured::Hash(part)))
+        .collect();
     if let Some(a) = &probed.audio {
         outputs.push((
             Output::new(fingerprint::output(0, a.index), &scratch.join("print.pcm")),
@@ -362,6 +672,7 @@ fn media<R: Runner>(
     let mut segments = Vec::new();
     let mut bytes = None;
     let mut packets_end = None;
+    let mut digests = Digests::default();
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
             continue;
@@ -383,6 +694,7 @@ fn media<R: Runner>(
                         language,
                         timing: lyrics::timing(&lyrics::clean_lrc(&text)),
                         stated_ms: None,
+                        digest: None,
                     });
                 }
             }
@@ -390,9 +702,13 @@ fn media<R: Runner>(
                 at,
                 mimetype,
                 quality: measure_image(&output.path),
+                digest: None,
             }),
+            Measured::Hash(part) => note_hash(&mut digests, part, &output.path),
         }
     }
+    file_digests(located, &probed, scratch, &mut digests);
+    digests.tags = tags;
     if let Some(lrc) = &located.lyrics {
         facts
             .lyrics
@@ -413,7 +729,9 @@ fn media<R: Runner>(
         codec: a.codec,
         channels: a.channels,
         bytes,
+        digest: None,
     });
+    facts.take(&digests, served);
     Ok(())
 }
 

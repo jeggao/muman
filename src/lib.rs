@@ -21,6 +21,7 @@ pub mod facts;
 pub mod ffmpeg;
 pub mod fingerprint;
 pub mod fit;
+pub mod held;
 pub mod history;
 pub mod hooks;
 pub mod http;
@@ -169,7 +170,7 @@ pub fn run() -> ExitCode {
         | Command::List { .. }
         | Command::Duplicates { .. }
         | Command::Purge { .. } => false,
-        Command::Check { decode } => *decode,
+        Command::Check { decode, .. } => *decode,
         Command::Export { max_size, .. } => max_size.is_some(),
         _ => true,
     };
@@ -291,7 +292,9 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             list_songs(dirs, query, format.as_deref(), *keys, *removed, data)?;
             Ok(true)
         }
-        Command::Check { decode } => check::check(runner, dirs, *decode, out, data),
+        Command::Check { decode, upstream } => {
+            check::check(runner, dirs, (*decode, *upstream), out, data)
+        }
         Command::Export { output, max_size } => {
             export::export(runner, dirs, output, *max_size, out)
         }
@@ -363,6 +366,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             rematch,
             force,
             retry,
+            accept,
             update_defaults,
             matching,
         } => {
@@ -385,6 +389,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 let opts = Options {
                     force: *force,
                     retry: *retry,
+                    accept: *accept,
                     ..Options::default()
                 };
                 ok &= sync(opts, Some(&mut run), out)?;

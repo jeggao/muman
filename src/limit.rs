@@ -164,6 +164,9 @@ pub type Made = HashMap<usize, (PathBuf, Rendered)>;
 struct Choice {
     format: Format,
     plan_key: String,
+    /// The key its plan had before this run named its sources anew, by
+    /// [`State::rebase`], where that differs.
+    was_key: Option<String>,
     estimate: u64,
     sigma: f64,
     loss: f64,
@@ -272,9 +275,12 @@ fn ladder(
             format,
             ..plan.clone()
         };
+        let was = (!state.rebased.is_empty()).then(|| plan_key(tools, &state.as_before(&plan)));
+        let plan_key = plan_key(tools, &plan);
         Choice {
             format,
-            plan_key: plan_key(tools, &plan),
+            was_key: was.filter(|w| *w != plan_key),
+            plan_key,
             estimate: blocks(audio as u64 + extras, block) + blocks(lyrics, block),
             sigma,
             loss,
@@ -555,6 +561,13 @@ pub fn fit_library<R: Runner, W: Write>(
         .map(|(n, r)| ladder(manifest, state, &written, *n, &r.plan, at.library, &tools))
         .collect();
     drop(written);
+    for rung in ladders.iter().flat_map(|l| &l.rungs) {
+        if let Some(was) = rung.was_key.as_ref().and_then(|k| state.sizes.get(k))
+            && !state.sizes.contains_key(&rung.plan_key)
+        {
+            state.sizes.insert(rung.plan_key.clone(), was.clone());
+        }
+    }
     let keys: BTreeSet<String> = ladders
         .iter()
         .flat_map(|l| l.rungs.iter().map(|c| c.plan_key.clone()))

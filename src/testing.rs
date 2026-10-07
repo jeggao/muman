@@ -60,6 +60,9 @@ pub struct Fake {
     pub packets: Vec<(String, u64)>,
     /// The whole seconds an audio stream's packets run to, by path fragment.
     pub held: Vec<(String, u32)>,
+    /// What the streams of a path holding the fragment hash as, in place
+    /// of its bytes: a file fetched again holding other audio.
+    pub hashes: Vec<(String, u64)>,
     /// Output formats that fail.
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
@@ -201,6 +204,19 @@ impl Fake {
                 let ticks =
                     find(&self.held, &input).map_or(1_728_000_000, |s| i64::from(*s) * 48_000);
                 format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
+            }
+            // A stream hashes as its file's bytes and the stream mapped.
+            "hash" => {
+                let seed = find(&self.hashes, &input).copied().unwrap_or_else(|| {
+                    seed_of(&String::from_utf8_lossy(
+                        &fs::read(&input).unwrap_or_default(),
+                    ))
+                });
+                let bytes: Vec<u8> = words(8, seed ^ seed_of(map.unwrap_or_default()))
+                    .into_iter()
+                    .flat_map(u32::to_be_bytes)
+                    .collect();
+                format!("SHA256={}\n", crate::facts::hex(&bytes)).into_bytes()
             }
             "ogg" => SILENCE_VORBIS.to_vec(),
             "mp3" => SILENCE_MP3.to_vec(),

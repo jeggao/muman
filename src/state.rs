@@ -91,6 +91,10 @@ pub struct State {
     /// on disk.
     #[serde(skip)]
     pub(crate) cleared: BTreeSet<SourceKey>,
+    /// Each source [`State::rebase`] named anew this process, by its
+    /// facts before and after.
+    #[serde(skip)]
+    pub(crate) rebased: Vec<(SourceKey, Facts, Facts)>,
 }
 
 /// A lookup of `find` made from the source `from`.
@@ -399,11 +403,49 @@ impl State {
         }
     }
 
+    /// Name `key`'s parts in every kept plan and comparison as `new`
+    /// names them, where `old`, made of the same files, named them
+    /// otherwise, as facts made before muman hashed sources did: facts
+    /// made again of files that did not change write no song again.
+    pub fn rebase(&mut self, key: &SourceKey, old: &Facts, new: &Facts) {
+        if old.rev != new.rev {
+            return;
+        }
+        for written in self.outputs.values_mut() {
+            if let Some(plan) = &mut written.plan {
+                *plan = plan.renamed(key, old, new);
+            }
+        }
+        let (was, now) = (old.audio_rev(), new.audio_rev());
+        for a in &mut self.alignments {
+            if a.a == *key && a.revs.0 == was {
+                a.revs.0.clone_from(&now);
+            }
+            if a.b == *key && a.revs.1 == was {
+                a.revs.1.clone_from(&now);
+            }
+        }
+        self.rebased.push((key.clone(), old.clone(), new.clone()));
+    }
+
+    /// `plan` as it was named before this process's [`State::rebase`].
+    #[must_use]
+    pub fn as_before(&self, plan: &Plan) -> Plan {
+        self.rebased
+            .iter()
+            .rev()
+            .fold(plan.clone(), |p, (key, old, new)| p.renamed(key, new, old))
+    }
+
     /// Take `measured`'s facts and failures over these: a fact replaces
     /// the one kept, a failure `measured` cleared is cleared, and one it
-    /// recorded replaces the one kept.
+    /// recorded replaces the one kept. Plans are named as
+    /// [`State::rebase`] names them.
     pub fn merge_caches(&mut self, measured: &Self) {
         for (key, facts) in &measured.facts {
+            if let Some(old) = self.facts.get(key).filter(|f| *f != facts).cloned() {
+                self.rebase(key, &old, facts);
+            }
             self.facts.insert(key.clone(), facts.clone());
         }
         for key in &measured.cleared {
@@ -464,7 +506,8 @@ impl State {
     /// Merge every cache `measured` holds into the state file as it is
     /// now, for a caller already holding its lock: facts and failures by
     /// [`Self::merge_caches`], alignments and sizes by key. What the
-    /// library holds, `outputs` and `library`, is left as it is.
+    /// library holds, `outputs` and `library`, is left as it is, but for
+    /// the names its plans give their sources.
     pub fn keep_caches(home: &Path, measured: &Self, _lock: &atomic::Lock) -> Result<()> {
         let mut state = Self::load(home)?;
         state.merge_caches(measured);
@@ -545,6 +588,62 @@ mod tests {
             [&b, &c],
             "a's success clears it; b and c stay"
         );
+    }
+
+    #[test]
+    fn facts_hashed_elsewhere_name_the_kept_plans_by_their_digests() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = SourceKey::youtube("aaaaaaaaaaa");
+        let mut old = Facts::unreadable("10:20".into());
+        old.audio = Some(crate::facts::AudioFacts {
+            index: 1,
+            codec: "opus".into(),
+            channels: 2,
+            quality: None,
+            bytes: None,
+            digest: None,
+        });
+        let plan = crate::resolve::Plan {
+            version: 1,
+            format: crate::resolve::Format::Copy {
+                codec: crate::codec::Codec::Opus,
+            },
+            audio: crate::resolve::AudioRef {
+                key: key.clone(),
+                rev: "10:20".into(),
+                index: 1,
+            },
+            cover: None,
+            lyrics: None,
+            tags: Vec::new(),
+        };
+        let mut disk = State::default();
+        disk.facts.insert(key.clone(), old.clone());
+        disk.outputs.insert(
+            "song.opus".into(),
+            Written {
+                sources: vec![key.clone()],
+                lyrics: None,
+                plan: Some(plan),
+                stamp: None,
+            },
+        );
+        disk.save(dir.path()).unwrap();
+        let mut measured = State::load(dir.path()).unwrap();
+        let mut new = old;
+        new.audio.as_mut().unwrap().digest = Some("0123456789abcdef0123456789abcdef".into());
+        measured.facts.insert(key, new);
+        State::keep_measures(dir.path(), &measured).unwrap();
+        let after = State::load(dir.path()).unwrap();
+        let plan = after
+            .outputs
+            .values()
+            .next()
+            .unwrap()
+            .plan
+            .as_ref()
+            .unwrap();
+        assert_eq!(plan.audio.rev, "0123456789abcdef0123456789abcdef");
     }
 
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {

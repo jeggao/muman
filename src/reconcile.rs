@@ -16,6 +16,7 @@ use crate::atomic::Lock;
 use crate::clean::Albums;
 use crate::dirs::Dirs;
 use crate::facts::{self, Facts};
+use crate::held::Drift;
 use crate::history::Run;
 use crate::hooks;
 use crate::limit;
@@ -31,6 +32,8 @@ use crate::state::{self, Aligned, State, Step, Written};
 use crate::store::{self, Located, Store};
 use crate::tags::{self, Field};
 
+// Each is a flag of its own on the command line.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     /// Render every song, changed or not.
@@ -44,6 +47,9 @@ pub struct Options {
     /// How long writing runs between saves of what it wrote; unset, as
     /// long as measuring runs between its saves.
     pub checkpoint: Option<Duration>,
+    /// Take what each fetched source holds now where it differs from
+    /// what its song was built from.
+    pub accept: bool,
 }
 
 /// Songs left alone for a file not muman's that a run names one by one;
@@ -152,6 +158,9 @@ pub fn measure<R: Runner, W: Write>(
                                 ),
                             )?;
                         }
+                        if let Some(old) = state.facts.get(&located.key).cloned() {
+                            state.rebase(&located.key, &old, &f);
+                        }
                         state.facts.insert(located.key.clone(), f);
                         state.clear_failure(&located.key);
                     }
@@ -219,6 +228,55 @@ fn retag<R: Runner, W: Write>(
     Ok(true)
 }
 
+/// Hash every source whose measures still hold but were made before
+/// muman hashed sources, decoding nothing, and name its parts by their
+/// digests in every plan kept. Returns whether any were.
+fn hash<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<Located> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| {
+            state
+                .facts
+                .get(&l.key)
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.hashed())
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(out, &format!("Hashing {} source(s)", due.len()))?;
+    let step = progress::step("Hashing", Some(due.len() as u64));
+    let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
+    let read = parallel::map(&numbered, parallel::builds(), |(n, l)| {
+        let _working = step.working(&progress::label(&l.path));
+        facts::hash(runner, l, &scratch.join(format!("hash-{n}")))
+    });
+    for (located, result) in due.iter().zip(read) {
+        let Some(old) = state.facts.get(&located.key).cloned() else {
+            continue;
+        };
+        let mut new = old.clone();
+        match result {
+            Ok((digests, served)) => new.take(&digests, served),
+            Err(e) => {
+                crate::ui::warning(out, &format!("Could not hash {}: {e:#}", located.key))?;
+                new.hash_method = facts::HASH_METHOD.to_string();
+            }
+        }
+        state.rebase(&located.key, &old, &new);
+        state.facts.insert(located.key.clone(), new);
+    }
+    Ok(true)
+}
+
 /// Make every comparison the songs' resolving may ask for that is not
 /// made already at the sources' revisions. Returns whether any was.
 fn compare<R: Runner, W: Write>(
@@ -228,7 +286,7 @@ fn compare<R: Runner, W: Write>(
     state: &mut State,
     out: &mut W,
 ) -> Result<bool> {
-    let rev = |k: &SourceKey| state.facts.get(k).map(|f| f.rev.clone());
+    let rev = |k: &SourceKey| state.facts.get(k).map(Facts::audio_rev);
     let due: Vec<(SourceKey, SourceKey, (String, String))> = songs
         .iter()
         .flat_map(|s| resolve::wanted_alignments(s, &state.facts))
@@ -443,6 +501,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &mut how,
         out,
     )?;
+    // Here rather than in every measuring, so the plans' real sizes are
+    // named anew by the fitting that reads them.
+    if hash(runner, &store, &listed, &mut state, temp.path(), out)? {
+        persist(home, &state, opts.dry_run, &lock)?;
+    }
     if compare(runner, &store, &manifest.songs, &mut state, out)? {
         persist(home, &state, opts.dry_run, &lock)?;
     }
@@ -485,7 +548,26 @@ pub fn reconcile_into<R: Runner, W: Write>(
         run.outputs_before(&state.outputs);
     }
     let files = files_of(&planned, &manifest, &state.outputs);
-    let decided = decide(&planned, &files, &state.outputs, &dirs.library, opts.force);
+    let drifts = crate::held::drifts(&manifest, &state.facts);
+    let (taken, kept): (Vec<&Drift>, Vec<&Drift>) =
+        drifts.iter().partition(|d| opts.accept || d.followed());
+    let holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    let decided = decide(
+        &planned,
+        &files,
+        &state.outputs,
+        &dirs.library,
+        opts.force,
+        &holding,
+    );
+    say_drifts(
+        &taken,
+        &kept,
+        &planned,
+        &decided,
+        (opts.accept, opts.force),
+        out,
+    )?;
 
     if opts.dry_run {
         let shown = Shown {
@@ -628,6 +710,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 unowned.push(path_of(r));
                 None
             }
+            Doing::Held { file } => Some(file.clone()),
             _ => None,
         };
         if let Some(written) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
@@ -829,6 +912,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .alignments
         .retain(|a| kept.contains(&a.a) && kept.contains(&a.b));
     state.save(home)?;
+    for edit in crate::held::records(&manifest, &state.facts, &taken) {
+        manifest.edit(edit);
+    }
     manifest.save_locked(&lock)?;
     if changed || !removed.is_empty() {
         if manifest.settings.library.touch_root {
@@ -1077,13 +1163,85 @@ enum Doing {
     Guard { file: PathBuf },
     /// Left alone: a file not muman's is at its path.
     Unowned,
+    /// Left as built: a source it was built from was fetched again and
+    /// holds otherwise, not yet accepted.
+    Held { file: PathBuf },
 }
 
-/// What a sync does with each of `planned`, by its file in `files`:
+/// Say what each source holding otherwise than its song was built
+/// from does to the song: followed or taken, or left as built while its
+/// file is there.
+fn say_drifts<W: Write>(
+    taken: &[&Drift],
+    kept: &[&Drift],
+    planned: &[PlannedSong],
+    decided: &[Doing],
+    (accept, force): (bool, bool),
+    out: &mut W,
+) -> Result<()> {
+    for d in taken {
+        let how = if accept && !d.followed() {
+            "taken, as `--accept` asks"
+        } else {
+            "its song follows it, a file of your own"
+        };
+        crate::ui::info(out, &format!("{}; {how}", d.show()))?;
+    }
+    for d in kept {
+        let doing = planned
+            .iter()
+            .zip(decided)
+            .find(|((n, _), _)| *n == d.song)
+            .map(|(_, doing)| doing);
+        let what = match doing {
+            Some(Doing::Held { .. } | Doing::Keep) => {
+                "its song is left as built; `sync --accept` takes what it holds now"
+            }
+            Some(_) if force => {
+                "its song is written from it, as `--force` asks; `sync --accept` records it"
+            }
+            Some(_) => {
+                "its song is built from it, no file built before being left; \
+                 `sync --accept` records it"
+            }
+            None => "`sync --accept` takes it",
+        };
+        crate::ui::warning(out, &format!("{}; {what}", d.show()))?;
+    }
+    Ok(())
+}
+
+/// Each of `planned` kept as it is, decided before any moves: its file
+/// as it would be written, or one built before from what a source in
+/// `holding` no longer holds.
+fn settled(
+    planned: &[PlannedSong],
+    files: &BTreeMap<usize, PathBuf>,
+    old: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+    holding: &BTreeSet<usize>,
+) -> Vec<Option<Doing>> {
+    planned
+        .iter()
+        .map(|(n, r)| {
+            if current(library, old, r).is_some() {
+                return Some(Doing::Keep);
+            }
+            files
+                .get(n)
+                .filter(|f| holding.contains(n) && library.join(f).exists())
+                .map(|f| Doing::Held { file: f.clone() })
+        })
+        .collect()
+}
+
+/// What a sync does with each of `planned`, by its file in `files`, as
+/// [`settled`] first keeps or holds it:
 ///
 /// | The song's file | Done |
 /// |---|---|
 /// | At its path, as it would be written | Kept |
+/// | Built from what a source in `holding` no longer holds | Left as built until `--accept` |
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
@@ -1104,15 +1262,13 @@ fn decide(
     old: &BTreeMap<PathBuf, Written>,
     library: &Path,
     force: bool,
+    holding: &BTreeSet<usize>,
 ) -> Vec<Doing> {
     use crate::relpath::folded;
     if force {
         return vec![Doing::Write; planned.len()];
     }
-    let mut decided: Vec<Option<Doing>> = planned
-        .iter()
-        .map(|(_, r)| current(library, old, r).map(|_| Doing::Keep))
-        .collect();
+    let mut decided = settled(planned, files, old, library, holding);
     // Each song that could move, by what it would take and leave.
     let mut moving: Vec<(usize, PathBuf, PathBuf, bool)> = Vec::new();
     for (i, (n, r)) in planned.iter().enumerate() {
@@ -1691,6 +1847,7 @@ fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> String {
         Doing::Move { retag: true, .. } => "moved, changes: tags".to_string(),
         Doing::Guard { .. } => "left alone, changed since muman wrote it".to_string(),
         Doing::Unowned => "left alone, not muman's".to_string(),
+        Doing::Held { .. } => "left as built, a source holding otherwise".to_string(),
         Doing::Retag | Doing::Write => match before {
             Some(p) if p == plan => "written again".to_string(),
             Some(p) => format!("changes: {}", changes(p, plan).join(", ")),
@@ -1728,7 +1885,7 @@ fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } = d {
+        if let Doing::Guard { file } | Doing::Held { file } = d {
             path.clone_from(file);
         }
         let verdict = verdict(d, before, &r.plan);
@@ -1744,7 +1901,7 @@ fn status<W: Write>(
         )?;
         show_why(r, out)?;
         let written = match d {
-            Doing::Keep | Doing::Guard { .. } => moved.get(&path).cloned(),
+            Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } => moved.get(&path).cloned(),
             Doing::Unowned => None,
             _ => Some(Written {
                 sources: song.sources.clone(),
