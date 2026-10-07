@@ -9,6 +9,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **A tag edit writes tags only.** A song whose plan changed only in its
+  tags has them written into its library file, its cover and embedded
+  lyrics kept, rather than its audio encoded again: one tag on an
+  encoded 15-minute song took 13.5 s and takes 0.2 s. A song moved by a
+  new template has its tags written after the move the same way.
+- **Each song has its file.** Every decision a sync makes about a song,
+  to keep, move, guard, write or delete its file, is made of the one
+  file made from most of its own sources, and `status` says what a sync
+  does by the same decisions.
 - **Settings take their units.** Sizes, bitrates, times, frequencies
   and shares are written with a unit, read by one parser for each kind:
   `opus_bitrate = "160 kb/s"`, `[quality.purity] step = "2 s"`,
@@ -28,6 +37,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Name limits said, not bent.** A `max_name_bytes` under 40 or a
+  `max_folder_bytes` under 16 is refused, where it was raised to that
+  without a word; an empty template is refused; and a sync warns of the
+  songs `max_path` cannot fit.
+- **Comparisons counted.** The comparing step names its pairs and the
+  recordings it decodes, which its progress counts.
+- **A song deleted by hand stays deleted.** A song taken out of
+  `songs.toml` by hand whose file is in `sources/manual` is kept under
+  `[[removed]]` by the next sync, as `muman remove` keeps it, where it
+  was listed again at once as a file dropped in.
+- **A freed path is moved into.** A song whose path another song
+  leaves in the same sync, as `Untitled [vid00000001]` becomes
+  `Untitled` once the other is renamed, is moved there, where it was
+  written again.
+- **The same MP3 every time.** An MP3's ID3 frames are written in one
+  order, where the same song could be written with them in another
+  order from one run to the next.
+- **Repeated tags.** A file with a tag given twice, as two `TITLE`s, is
+  read as two values, the first naming the file, where its title was
+  both joined with `;`. A file's tags are read as muman writes them, the
+  same names for ID3, MP4 and Vorbis comments.
+- **Cut-off files.** A file whose audio stops before its header says, as
+  an interrupted copy leaves, is as long as its audio, is measured
+  within it, and is warned of; it was measured past its end and ranked
+  last without a word. Audio with nothing to judge, as silence, is
+  warned of too.
+- **Why a song has no print.** `duplicates` says which songs are too
+  short to print, hold only silence, or cannot be made, where it said a
+  sync would measure them.
 - **Bitrates out of range.** A bitrate of 0 is refused when the song
   list is read, where libopus chose its own; an Opus bitrate above
   256 kb/s a channel, which libopus refuses, is held to it.

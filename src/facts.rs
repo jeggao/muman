@@ -48,7 +48,12 @@ pub struct Facts {
     /// channel; read with the tags.
     #[serde(default)]
     pub release: bool,
+    #[serde(default, deserialize_with = "fingerprint::read_stored")]
     pub print: Option<Print>,
+    /// The length a cut-off file's header said, where its packets end
+    /// sooner, at [`Facts::duration`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_from: Option<f64>,
 }
 
 impl Facts {
@@ -78,6 +83,7 @@ impl Facts {
             tags_method: tags::METHOD.to_string(),
             release: false,
             print: None,
+            cut_from: None,
         }
     }
 }
@@ -192,13 +198,22 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
     let info = dump_attachments(runner, located, &probed, scratch, false);
     let release = info.as_ref().is_some_and(VideoInfo::is_release);
-    Ok((tags_of(info.as_ref(), &probed), release))
+    Ok((tags_of(info.as_ref(), &probed, &located.path), release))
 }
 
-fn tags_of(info: Option<&VideoInfo>, probed: &Probed) -> Offers {
+/// What a media file's tags offer: its info JSON's, for what yt-dlp
+/// fetched; else its own, as `lofty` reads them, or as ffprobe does for a
+/// format `lofty` does not read.
+fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
     match info {
         Some(info) => tags::from_info(info),
-        None => tags::from_container(&probed.tags),
+        None => tags::from_container(&tags::read_file(path).unwrap_or_else(|| {
+            probed
+                .tags
+                .iter()
+                .map(|(k, v)| (k.clone(), vec![v.clone()]))
+                .collect()
+        })),
     }
 }
 
@@ -270,7 +285,7 @@ fn media<R: Runner>(
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
     facts.duration = probed.duration;
     let info = dump_attachments(runner, located, &probed, scratch, true);
-    facts.tags = tags_of(info.as_ref(), &probed);
+    facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
     let info = info.unwrap_or_default();
 
@@ -346,15 +361,20 @@ fn media<R: Runner>(
     let results = ffmpeg::run_outputs(runner, &input_refs, &plain);
     let mut segments = Vec::new();
     let mut bytes = None;
+    let mut packets_end = None;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
             continue;
         }
         match measured {
             Measured::Print => {
-                facts.print = runner.fingerprint(&output.path).ok().map(Print);
+                facts.print = runner.fingerprint(&output.path).ok().and_then(Print::new);
             }
-            Measured::Packets => bytes = read_packets(&output.path),
+            Measured::Packets => {
+                let text = std::fs::read_to_string(&output.path).unwrap_or_default();
+                bytes = packet_bytes(&text);
+                packets_end = packet_seconds(&text);
+            }
             Measured::Segment(path) => segments.push(quality::read_segment(&path)),
             Measured::Subtitle(index, language) => {
                 if let Ok(text) = read_text(&output.path) {
@@ -378,6 +398,15 @@ fn media<R: Runner>(
             .lyrics
             .push(lyrics_of(LyricsAt::Sidecar, &read_text(lrc)?));
     }
+    if let (Some(said), Some(held), Some(a)) = (facts.duration, packets_end, &probed.audio)
+        && held + CUT_SLACK_S < said
+    {
+        facts.duration = Some(held);
+        facts.cut_from = Some(said);
+        if quality::audio(&segments, a.sample_rate).is_none() {
+            segments = measure_segments(runner, located, a.index, held, scratch);
+        }
+    }
     facts.audio = probed.audio.map(|a| AudioFacts {
         quality: quality::audio(&segments, a.sample_rate),
         index: a.index,
@@ -386,6 +415,39 @@ fn media<R: Runner>(
         bytes,
     });
     Ok(())
+}
+
+/// Seconds a file's packets may fall short of what its header says
+/// before it counts as cut off: a container rounds its length.
+const CUT_SLACK_S: f64 = 1.0;
+
+/// The segments of a source's audio `held` seconds long, decoded again
+/// where its header said it ran longer.
+fn measure_segments<R: Runner>(
+    runner: &R,
+    located: &Located,
+    index: u32,
+    held: f64,
+    scratch: &Path,
+) -> Vec<Vec<[f32; 2]>> {
+    let outputs: Vec<(Output, PathBuf)> = segment_starts(Some(held))
+        .into_iter()
+        .enumerate()
+        .map(|(n, start)| {
+            let path = scratch.join(format!("held{n}"));
+            (
+                Output::new(quality::segment_output(0, index, start), &path),
+                path,
+            )
+        })
+        .collect();
+    let plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
+    ffmpeg::run_outputs(runner, &[located.path.as_path()], &plain)
+        .into_iter()
+        .zip(outputs)
+        .filter(|(result, _)| result.is_ok())
+        .map(|(_, (_, path))| quality::read_segment(&path))
+        .collect()
 }
 
 /// The ffmpeg output options that list every packet of the audio stream
@@ -412,6 +474,28 @@ pub fn packet_bytes(text: &str) -> Option<u64> {
 
 fn read_packets(path: &Path) -> Option<u64> {
     packet_bytes(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Where the last packet a `framecrc` list holds ends, in seconds: the
+/// length of the audio the file holds, whatever its header says.
+#[must_use]
+pub fn packet_seconds(text: &str) -> Option<f64> {
+    let (num, den) = text
+        .lines()
+        .find_map(|l| l.strip_prefix("#tb 0:"))?
+        .trim()
+        .split_once('/')?;
+    let (num, den): (f64, f64) = (num.trim().parse().ok()?, den.trim().parse().ok()?);
+    let end = text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .filter_map(|l| {
+            let mut fields = l.split(',').skip(2).map(|f| f.trim().parse::<i64>().ok());
+            Some(fields.next()?? + fields.next()??)
+        })
+        .max()?;
+    #[allow(clippy::cast_precision_loss)]
+    (den > 0.0).then(|| end as f64 * num / den)
 }
 
 /// The bytes of a located source's audio stream `index`, by one ffmpeg

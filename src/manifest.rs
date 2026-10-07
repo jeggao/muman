@@ -89,7 +89,7 @@ const HEADER: &str = "\
 # muman adds a [[song]] for each song it keeps. Edit by hand, then run
 # `muman sync` to apply: it fetches any missing source, rebuilds every
 # changed song and deletes the library copy of anything no longer listed;
-# a file in sources/manual is listed again unless `muman remove` drops it.
+# a song you delete here goes under [[removed]], as `muman remove` puts it.
 #
 #   sources:  every file the song may be made from, as `youtube:<id>`,
 #             `lrclib:<id>`, `musicbrainz:<id>` or `manual:<path>` under
@@ -211,6 +211,9 @@ pub enum Edit {
     Tag { key: SourceKey, tags: Tags },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: String },
+    /// `key`, which no song lists, kept under `[[removed]]`, named by
+    /// `note`, as a song taken out by hand.
+    Tombstone { key: SourceKey, note: String },
     /// The removed song listing `key` listed again, without any file a
     /// song lists meanwhile.
     Restore(SourceKey),
@@ -828,6 +831,11 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             let Some(song) = take(doc, "song", key) else {
                 return Ok(());
             };
+            tables_mut(doc, "removed")?.push(tombstone(song, note));
+        }
+        Edit::Tombstone { key, note } => {
+            let mut song = Table::new();
+            song.insert("sources", key_array(std::slice::from_ref(key)));
             tables_mut(doc, "removed")?.push(tombstone(song, note));
         }
         Edit::Restore(key) => {

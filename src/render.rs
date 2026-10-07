@@ -277,6 +277,55 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     }
 }
 
+/// Write a song whose plan changed only in its tags by writing them into
+/// the file it has at `audio`, with the cover and the embedded lyrics
+/// that file holds: what [`render`] would write, without decoding or
+/// encoding anything. Through `.part`, as [`render`] writes.
+pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -> Result<Rendered> {
+    use lofty::file::TaggedFileExt;
+
+    let path = library.join(audio);
+    let staged = part(&path);
+    fs::copy(&path, &staged).with_context(|| format!("copying {}", path.display()))?;
+    let result = (|| -> Result<()> {
+        // The copy is the file byte for byte, and a `.part` names no format.
+        let held = lofty::read_from_path(&path)
+            .with_context(|| format!("reading the tags of {}", path.display()))?;
+        let tag = held.primary_tag();
+        let picture = tag.and_then(|t| {
+            t.pictures()
+                .iter()
+                .find(|p| p.pic_type() == PictureType::CoverFront)
+                .or_else(|| t.pictures().first())
+                .cloned()
+        });
+        let mut tags = plan.tags.clone();
+        let embedded = plan.lyrics.as_ref().is_some_and(|l| l.placement.embedded());
+        if let Some(text) = tag
+            .and_then(|t| {
+                t.get_string(ItemKey::Lyrics)
+                    .or_else(|| t.get_string(ItemKey::UnsyncLyrics))
+            })
+            .filter(|_| embedded)
+        {
+            tags.push(("LYRICS".to_string(), vec![text.to_string()]));
+        }
+        write_tags(&staged, plan.format, &tags, picture)
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_file(&staged);
+        return Err(e);
+    }
+    rename(&staged, &path)?;
+    Ok(Rendered {
+        audio_bytes: size_of(&path),
+        lyrics_bytes: lyrics.map_or(0, |l| size_of(&library.join(l))),
+        audio: audio.to_path_buf(),
+        lyrics: lyrics.map(Path::to_path_buf),
+        problems: Vec::new(),
+    })
+}
+
 fn size_of(path: &Path) -> u64 {
     fs::metadata(path).map_or(0, |m| m.len())
 }
@@ -449,7 +498,7 @@ fn write_tags(
                     values.join("\0"),
                 )));
             }
-            id3.save_to(&mut file, WriteOptions::default())
+            canonical_id3(id3).save_to(&mut file, WriteOptions::default())
         }
         Container::Mp4 => {
             let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
@@ -468,6 +517,27 @@ fn write_tags(
         }
     };
     written.with_context(|| format!("writing tags to {}", path.display()))
+}
+
+/// `tag` with its frames in one order, by ID and a user frame's
+/// description: converted from a generic tag, lofty orders them anew on
+/// each run, so one song wrote different bytes from one build to the
+/// next.
+fn canonical_id3(tag: Id3v2Tag) -> Id3v2Tag {
+    let order = |f: &Frame<'_>| {
+        let detail = match f {
+            Frame::UserText(t) => t.description.to_string(),
+            _ => String::new(),
+        };
+        (f.id_str().to_string(), detail)
+    };
+    let mut frames: Vec<Frame<'static>> = tag.into_iter().collect();
+    frames.sort_by_key(order);
+    let mut sorted = Id3v2Tag::new();
+    for frame in frames {
+        sorted.insert(frame);
+    }
+    sorted
 }
 
 /// The plan's tags and the cover as Vorbis comments, keeping the

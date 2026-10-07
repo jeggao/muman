@@ -263,7 +263,7 @@ impl Store {
                 Some(kind) => self.kept_file(kind, id).is_some(),
                 None => self.fetched.contains_key(id),
             },
-            SourceKey::Manual(rel) => self.manual.contains_key(rel),
+            SourceKey::Manual(rel) => self.manual.contains_key(rel.path()),
         }
     }
 
@@ -287,7 +287,8 @@ impl Store {
                 lyrics: None,
                 covers: Vec::new(),
             }),
-            SourceKey::Manual(rel) => {
+            SourceKey::Manual(manual) => {
+                let rel = manual.path();
                 let kind = *self.manual.get(rel)?;
                 let (lyrics, covers) = if kind == Kind::Media {
                     self.sidecars(rel)
@@ -389,7 +390,7 @@ impl Store {
     ) -> (Vec<SourceKey>, Vec<PathBuf>) {
         let (mut ready, mut settling) = (Vec::new(), Vec::new());
         for (rel, kind) in &self.manual {
-            let key = SourceKey::Manual(rel.clone());
+            let key = SourceKey::Manual(rel.into());
             if *kind != Kind::Media || listed.contains(&key) {
                 continue;
             }

@@ -82,6 +82,11 @@ pub struct State {
     /// [`crate::limit::plan_key`].
     #[serde(default, deserialize_with = "lenient_map")]
     pub sizes: BTreeMap<String, Measured>,
+    /// The manual files the song list listed when the library was last
+    /// brought in line with it: one the list has not listed since, still
+    /// in the manual folder, was taken out of it by hand.
+    #[serde(default, deserialize_with = "lenient_list")]
+    pub listed: Vec<SourceKey>,
     /// Sources whose failures this process cleared, for a merge to clear
     /// on disk.
     #[serde(skip)]

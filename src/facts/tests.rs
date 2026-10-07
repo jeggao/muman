@@ -25,7 +25,7 @@ fn an_original_s_facts_take_three_runs() {
     let audio = facts.audio.unwrap();
     assert_eq!((audio.index, audio.codec.as_str()), (1, "opus"));
     assert!(audio.quality.unwrap().bandwidth_hz > 20_000.0);
-    assert_eq!(facts.print.unwrap().0.len(), 1600);
+    assert_eq!(facts.print.unwrap().words().len(), 1600);
     assert_eq!(facts.covers.len(), 1);
     assert_eq!(facts.covers[0].at, CoverAt::Attachment { ordinal: 1 });
     assert_eq!(facts.covers[0].quality.unwrap().width, 64);
@@ -134,4 +134,33 @@ fn facts_round_trip_through_json() {
         )
     );
     assert!(back.holds_for(&source.rev()));
+}
+
+#[test]
+fn a_file_cut_off_is_as_long_as_its_packets_and_measured_within_them() {
+    let real = "#tb 0: 1/44100\n#media_type 0: audio\n\
+                0,    2195456,    2195456,     4096,     5610, 0x1517d997\n\
+                0,    2199552,    2199552,     4096,     2234, 0x74706144\n";
+    let held = packet_seconds(real).unwrap();
+    assert!((held - 49.97).abs() < 0.01, "{held}");
+    assert_eq!(
+        packet_seconds("0, 0, 0, 960, 1, 0x0\n"),
+        None,
+        "no time base"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let fake = Fake {
+        held: vec![("Song.flac".into(), 50)],
+        ..Fake::default()
+    }
+    .probe("Song.flac", crate::testing::FLAC);
+    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    assert_eq!(facts.duration, Some(50.0));
+    assert_eq!(facts.cut_from, Some(200.0));
+    assert!(facts.audio.unwrap().quality.is_some());
+    let whole = Fake::default().probe("Song.flac", crate::testing::FLAC);
+    let facts = gather(&whole, &source, &dir.path().join("whole")).unwrap();
+    assert_eq!((facts.duration, facts.cut_from), (Some(200.0), None));
 }

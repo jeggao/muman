@@ -277,7 +277,7 @@ impl Query {
 fn names_key(key: &SourceKey, word: &str) -> bool {
     match key {
         SourceKey::Remote { id, .. } => id.to_lowercase() == word,
-        SourceKey::Manual(path) => [path.file_name(), path.file_stem()]
+        SourceKey::Manual(key) => [key.path().file_name(), key.path().file_stem()]
             .into_iter()
             .flatten()
             .any(|n| n.to_string_lossy().to_lowercase() == word),

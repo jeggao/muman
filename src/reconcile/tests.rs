@@ -32,12 +32,56 @@ impl Home {
     fn run(&self, fake: &Fake, opts: Options) -> (bool, String) {
         let mut out = Vec::new();
         let ok = reconcile(fake, &self.dirs, opts, None, &mut out).unwrap();
-        (ok, String::from_utf8(out).unwrap())
+        let text = String::from_utf8(out).unwrap();
+        if !opts.dry_run {
+            self.holds(&text);
+        }
+        (ok, text)
+    }
+
+    fn holds(&self, text: &str) {
+        if let Err(e) = invariant(&self.dirs) {
+            panic!("{e}: {text}");
+        }
+    }
+
+    /// The library holds the files the state records and `yours`, which
+    /// muman does not own, and nothing else.
+    fn audit(&self, yours: &[&str], text: &str) {
+        let state = State::load(&self.dirs.home).unwrap();
+        let mut recorded: BTreeSet<PathBuf> = yours.iter().map(PathBuf::from).collect();
+        for (path, written) in &state.outputs {
+            recorded.insert(path.clone());
+            recorded.extend(written.lyrics.clone());
+        }
+        let on_disk: BTreeSet<PathBuf> = files(&self.dirs.library)
+            .into_iter()
+            .map(|p| p.strip_prefix(&self.dirs.library).unwrap().to_path_buf())
+            .collect();
+        assert_eq!(on_disk, recorded, "{text}");
     }
 
     fn lib(&self, rel: &str) -> PathBuf {
         self.dirs.library.join(rel)
     }
+}
+
+/// Every file below `dir`.
+fn files(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut left = vec![dir.to_path_buf()];
+    while let Some(d) = left.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                left.push(path);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 /// An info JSON naming each upload by its ID.
@@ -105,7 +149,11 @@ fn a_changed_tag_rewrites_only_its_song() {
     h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { genre = \"Ambient\" }\n");
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let (_, text) = h.run(&fake, Options::default());
-    assert_eq!(renders(&fake), 1, "{text}");
+    assert_eq!(
+        renders(&fake),
+        0,
+        "its tags are written into its file: {text}"
+    );
     assert!(
         text.contains("Updated (tags): Chan/Title bbbbbbbbbbb"),
         "{text}"
@@ -728,26 +776,66 @@ fn a_changed_file_whose_song_changes_and_moves_waits_for_force() {
 }
 
 #[test]
-fn a_move_never_lands_on_a_file_another_song_holds() {
+fn a_move_lands_where_another_song_leaves_and_never_on_its_file() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.fetched("bbbbbbbbbbb");
     h.songs(TWO);
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     assert!(h.run(&fake, Options::default()).0);
-    let theirs = h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
-    std::fs::write(&theirs, "edited by a tagger").unwrap();
+    let (a, b) = (
+        "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus",
+        "Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus",
+    );
+    std::fs::write(h.lib(b), "edited by a tagger").unwrap();
+    let written = std::fs::read(h.lib(a)).unwrap();
     h.songs(&format!(
         "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}Chan/Title bbbbbbbbbbb/Title \
          bbbbbbbbbbb{{% else %}}moved/{{{{ title }}}}{{% endif %}}\"\n{TWO}"
     ));
-    let (_, text) = h.run(&fake, Options::default());
-    assert!(!text.contains("Moved: Chan/Title aaaaaaaaaaa"), "{text}");
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
     assert_eq!(
-        std::fs::read_to_string(&theirs).unwrap(),
+        std::fs::read_to_string(h.lib("moved/Title bbbbbbbbbbb.opus")).unwrap(),
+        "edited by a tagger",
+        "the edited file moves first: {text}"
+    );
+    assert_eq!(std::fs::read(h.lib(b)).unwrap(), written, "{text}");
+    assert!(!text.contains("Wrote"), "{text}");
+    // Two songs trading paths have nowhere to go first.
+    h.songs(&format!(
+        "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}moved/Title bbbbbbbbbbb\
+         {{% else %}}Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb{{% endif %}}\"\n{TWO}"
+    ));
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(!text.contains("Moved"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(h.lib("moved/Title bbbbbbbbbbb.opus")).unwrap(),
         "edited by a tagger",
         "{text}"
     );
+}
+
+#[test]
+fn a_song_that_loses_its_told_apart_name_moves_to_the_plain_one() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let same = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { title = \"Same\" }\n\
+                [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { title = \"Same\" }\n";
+    h.songs(same);
+    assert!(h.run(&fake, Options::default()).0);
+    let before = files(&h.lib(""));
+    h.songs(&same.replacen("Same", "Other", 1));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("Wrote"),
+        "both move, neither is written: {text}"
+    );
+    let after = files(&h.lib(""));
+    assert_eq!(after.len(), before.len(), "{before:?} → {after:?}");
 }
 
 #[test]
@@ -1055,4 +1143,108 @@ fn a_name_telling_two_songs_apart_is_made_safe_as_any_tag() {
         .collect();
     assert!(paths.iter().any(|p| p.contains("[Song-]")), "{paths:?}");
     assert!(paths.iter().all(|p| !p.contains('#')), "{paths:?}");
+}
+
+/// What happens to the library between two syncs.
+#[derive(Debug, Clone, Copy)]
+enum Disturbance {
+    Nothing,
+    /// A copy or a restore set every file's time.
+    Touched,
+    /// A tagger rewrote one file.
+    Retagged,
+    /// A file was deleted.
+    Deleted,
+    /// A file of the user's own sits where a song is going.
+    Theirs,
+}
+
+/// What the song list changes between the two syncs.
+#[derive(Debug, Clone, Copy)]
+enum Change {
+    Nothing,
+    Template,
+    Tag,
+    Codec,
+    TemplateAndTag,
+}
+
+const PAPER: &str = "Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus";
+
+fn disturb(h: &Home, d: Disturbance) -> Vec<&'static str> {
+    let song = h.lib(PAPER);
+    match d {
+        Disturbance::Nothing => Vec::new(),
+        Disturbance::Touched => {
+            for file in files(&h.dirs.library) {
+                let later = std::time::SystemTime::now() + Duration::from_secs(5);
+                std::fs::File::options()
+                    .write(true)
+                    .open(&file)
+                    .unwrap()
+                    .set_modified(later)
+                    .unwrap();
+            }
+            Vec::new()
+        }
+        Disturbance::Retagged => {
+            std::fs::write(&song, "replay gain").unwrap();
+            Vec::new()
+        }
+        Disturbance::Deleted => {
+            std::fs::remove_file(&song).unwrap();
+            Vec::new()
+        }
+        Disturbance::Theirs => {
+            let theirs = h.lib("Chan - Title aaaaaaaaaaa.opus");
+            std::fs::write(theirs, "mine").unwrap();
+            vec!["Chan - Title aaaaaaaaaaa.opus"]
+        }
+    }
+}
+
+fn changed(c: Change) -> String {
+    let template = "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n";
+    let tagged = "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags.genre = \"Folk\"\n\
+                  [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\n";
+    match c {
+        Change::Nothing => TWO.to_string(),
+        Change::Template => format!("{template}{TWO}"),
+        Change::Tag => tagged.to_string(),
+        Change::Codec => format!("[audio]\ncodecs = [\"flac\"]\nlossy = \"vorbis\"\n{TWO}"),
+        Change::TemplateAndTag => format!("{template}{tagged}"),
+    }
+}
+
+#[test]
+fn no_disturbance_and_no_change_leaves_a_second_copy_or_a_missing_one() {
+    use Change as C;
+    use Disturbance as D;
+    let disturbances = [D::Nothing, D::Touched, D::Retagged, D::Deleted, D::Theirs];
+    let changes = [C::Nothing, C::Template, C::Tag, C::Codec, C::TemplateAndTag];
+    for d in disturbances {
+        for c in changes {
+            let h = home();
+            h.fetched("aaaaaaaaaaa");
+            h.fetched("bbbbbbbbbbb");
+            h.songs(TWO);
+            let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+            assert!(h.run(&fake, Options::default()).0);
+            let yours = disturb(&h, d);
+            h.songs(&changed(c));
+            let (_, text) = h.run(&fake, Options::default());
+            let case = format!("{d:?} then {c:?}: {text}");
+            h.audit(&yours, &case);
+            let before = fake.calls().len();
+            let (_, again) = h.run(&fake, Options::default());
+            h.audit(&yours, &format!("{case}\nagain: {again}"));
+            let rendered = fake.calls()[before..]
+                .iter()
+                .any(|c| c.iter().any(|a| a == "opus" || a == "ogg"));
+            assert!(
+                !rendered,
+                "the next sync writes nothing: {case}\nagain: {again}"
+            );
+        }
+    }
 }
