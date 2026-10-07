@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,8 +176,14 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             .collect(),
         ..Probed::default()
     };
+    let mut unreadable = None;
     for stream in probe.streams {
         match stream.codec_type.as_str() {
+            // ffprobe gives a sample rate of 0 to a stream it could not
+            // decode a frame of, as a file cut off or misnamed holds.
+            "audio" if stream.sample_rate.as_deref() == Some("0") => {
+                unreadable.get_or_insert(stream.codec_name);
+            }
             "audio" if probed.audio.is_none() => {
                 for (k, v) in &stream.tags {
                     probed
@@ -221,6 +227,9 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             }
             _ => {}
         }
+    }
+    if let (None, Some(codec)) = (&probed.audio, unreadable) {
+        bail!("its {codec} audio could not be decoded: ffprobe found no sample rate");
     }
     Ok(probed)
 }
@@ -304,6 +313,19 @@ mod tests {
             "tags": {"LANGUAGE": "jpn", "TITLE": "Japanese"}}]}"#;
         let o = parse(json.as_bytes()).unwrap();
         assert_eq!(o.subtitles[0].language.as_deref(), Some("jpn"));
+    }
+
+    // Trimmed from ffprobe on a text file named `.flac`.
+    #[test]
+    fn audio_ffprobe_could_not_decode_is_an_error() {
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
+            "sample_rate": "0", "channels": 0}], "format": {}}"#;
+        assert!(parse(json.as_bytes()).is_err());
+        let json = r#"{"streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "flac", "sample_rate": "0"},
+            {"index": 1, "codec_type": "audio", "codec_name": "opus", "sample_rate": "48000",
+             "channels": 2}]}"#;
+        assert_eq!(parse(json.as_bytes()).unwrap().audio.unwrap().index, 1);
     }
 
     #[test]

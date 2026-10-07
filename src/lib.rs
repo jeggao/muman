@@ -846,7 +846,7 @@ fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
     };
     Ok(files
         .into_iter()
-        .filter_map(|f| f.strip_prefix(dirs.manual()).ok().map(Path::to_path_buf))
+        .filter_map(|f| f.strip_prefix(dirs.manual()).ok().map(relpath::normalized))
         .map(SourceKey::Manual)
         .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
         .collect())

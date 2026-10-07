@@ -471,13 +471,16 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
     }
     let old = state.outputs.clone();
+    let wanted: BTreeSet<PathBuf> = planned.iter().map(|(_, r)| path_of(r)).collect();
     let current = |r: &Resolved| current(&dirs.library, &old, r);
+    let previous =
+        |n: usize, r: &Resolved| previous(&old, &manifest.songs[n].sources, &path_of(r), &wanted);
     let changed_since = |path: &Path| changed_since_written(&dirs.library, &old, path);
     let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
     let (due, guarded): (Vec<&PlannedSong>, Vec<&PlannedSong>) = planned
         .iter()
         .filter(|(_, r)| opts.force || current(r).is_none())
-        .partition(|(_, r)| opts.force || !changed_since(&path_of(r)));
+        .partition(|(n, r)| opts.force || !previous(*n, r).is_some_and(changed_since));
     let (due, unowned): (Vec<&PlannedSong>, Vec<&PlannedSong>) = due
         .into_iter()
         .partition(|(_, r)| opts.force || foreign(r).is_empty());
@@ -492,6 +495,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             state: &state,
             failed: &failed,
             moved: &moved,
+            wanted: &wanted,
         };
         if let Some(mut report) = report {
             out.flush()?;
@@ -551,16 +555,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
 
     let mut outputs: BTreeMap<PathBuf, Written> = BTreeMap::new();
     for (n, r) in &planned {
-        let kept = current(r).filter(|_| !opts.force).or_else(|| {
-            guarded
+        let kept = match current(r).filter(|_| !opts.force) {
+            Some(written) => Some((path_of(r), written)),
+            None => guarded
                 .iter()
                 .any(|(m, _)| m == n)
-                .then(|| old.get(&path_of(r)))
+                .then(|| previous(*n, r))
                 .flatten()
-        });
-        if let Some(written) = kept {
+                .map(|p| (p.to_path_buf(), &old[p])),
+        };
+        if let Some((path, written)) = kept {
             outputs.insert(
-                path_of(r),
+                path,
                 Written {
                     sources: manifest.songs[*n].sources.clone(),
                     ..written.clone()
@@ -586,12 +592,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
             ),
         )?;
     }
-    for (_, r) in &guarded {
+    for (n, r) in &guarded {
+        let path = previous(*n, r).map_or_else(|| path_of(r), Path::to_path_buf);
         crate::ui::warning(
             out,
             &format!(
                 "Left alone, changed since muman wrote it: {} (`sync --force` writes it again)",
-                crate::relpath::show(&path_of(r))
+                crate::relpath::show(&path)
             ),
         )?;
     }
@@ -704,7 +711,15 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
         None => Ok(()),
     };
-    let removed = prune(&dirs.library, &old, &mut outputs, &failed, &mut keep, out)?;
+    let removed = prune(
+        &dirs.library,
+        &old,
+        &mut outputs,
+        &failed,
+        opts.force,
+        &mut keep,
+        out,
+    )?;
     let up_to_date = planned.len() - due.len() - guarded.len() - unowned.len();
     if up_to_date > 0 {
         crate::ui::info(out, &format!("Up to date: {up_to_date} song(s)"))?;
@@ -925,6 +940,24 @@ pub(crate) fn changed_since_written(
         .is_some_and(|(was, now)| *was != now)
 }
 
+/// The file `old` lists as a song's: the one at its `path`, else one
+/// made from any of its `sources` at a path no song takes now, as a song
+/// whose path changed leaves behind.
+fn previous<'a>(
+    old: &'a BTreeMap<PathBuf, Written>,
+    sources: &[SourceKey],
+    path: &Path,
+    wanted: &BTreeSet<PathBuf>,
+) -> Option<&'a Path> {
+    match old.get_key_value(path) {
+        Some((p, _)) => Some(p),
+        None => old
+            .iter()
+            .find(|(p, w)| !wanted.contains(*p) && w.sources.iter().any(|k| sources.contains(k)))
+            .map(|(p, _)| p.as_path()),
+    }
+}
+
 /// The moves relocating makes: each song's file from where an output of
 /// the same plan lies to the song's path, when nobody holds that path.
 fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(PathBuf, PathBuf)> {
@@ -960,7 +993,6 @@ fn moves_of(planned: &[PlannedSong], state: &State, library: &Path) -> Vec<(Path
                 && !wanted.contains(f)
                 && !moving.contains(p)
                 && library.join(p).metadata().is_ok_and(|m| m.len() > 0)
-                && !changed_since_written(library, &state.outputs, p)
         });
         if let Some((from, _, _)) = from {
             held.insert(folded(&to));
@@ -980,9 +1012,11 @@ struct Moving<'a> {
 
 /// Move each song whose plan is unchanged but whose path is not, as a
 /// new `[library]` template makes it, rather than render it again; only
-/// a file muman wrote and nobody changed since is moved, and only to a
-/// path no other song takes. Each move is recorded in `run` before it is
-/// made. A dry run says what would move.
+/// a file muman wrote is moved, and only to a path no other song takes.
+/// A file changed since it was written moves too, still changed: written
+/// again at the new path, it would be left at the old one, a second copy.
+/// Each move is recorded in `run` before it is made. A dry run says what
+/// would move.
 fn relocate<W: Write>(
     planned: &[PlannedSong],
     state: &mut State,
@@ -1183,12 +1217,15 @@ enum Pruned {
 }
 
 /// What pruning `old` against `outputs` does to each file, deciding
-/// alone, for a sync to carry out and a dry run to show.
+/// alone, for a sync to carry out and a dry run to show. A `forced` run
+/// wrote every song again, so a changed file of a song now written
+/// elsewhere goes, kept for `undo` as any file written over is.
 fn prune_plan(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     outputs: &BTreeMap<PathBuf, Written>,
     failed: &BTreeSet<SourceKey>,
+    forced: bool,
 ) -> Vec<(PathBuf, Pruned)> {
     let now: BTreeMap<String, PathBuf> = outputs
         .keys()
@@ -1207,7 +1244,12 @@ fn prune_plan(
         }
         let fate = if written.sources.iter().any(|k| failed.contains(k)) {
             Pruned::KeptForFailed
-        } else if changed_since_written(library, old, path) {
+        } else if changed_since_written(library, old, path)
+            && !(forced
+                && outputs
+                    .values()
+                    .any(|w| w.sources.iter().any(|k| written.sources.contains(k))))
+        {
             Pruned::LeftChanged
         } else {
             // Another output's lyrics stay, whether the same name or one
@@ -1242,11 +1284,12 @@ fn prune<W: Write>(
     old: &BTreeMap<PathBuf, Written>,
     outputs: &mut BTreeMap<PathBuf, Written>,
     failed: &BTreeSet<SourceKey>,
+    forced: bool,
     keep: &mut dyn FnMut(&[PathBuf]) -> Result<()>,
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
-    let plan = prune_plan(library, old, outputs, failed);
+    let plan = prune_plan(library, old, outputs, failed, forced);
     let doomed: Vec<PathBuf> = plan
         .iter()
         .filter_map(|(_, fate)| match fate {
@@ -1398,6 +1441,20 @@ struct Shown<'a> {
     state: &'a State,
     failed: &'a BTreeSet<SourceKey>,
     moved: &'a BTreeSet<PathBuf>,
+    /// Every song's path.
+    wanted: &'a BTreeSet<PathBuf>,
+}
+
+impl Shown<'_> {
+    /// Where a song's file is after a sync: its path, or for a song left
+    /// alone, the file it already has.
+    fn path_after(&self, n: usize, r: &Resolved, left_alone: bool) -> PathBuf {
+        let sources = &self.manifest.songs[n].sources;
+        left_alone
+            .then(|| previous(self.old, sources, &path_of(r), self.wanted))
+            .flatten()
+            .map_or_else(|| path_of(r), Path::to_path_buf)
+    }
 }
 
 /// Say what a sync would do, by the decisions it would make: each song's
@@ -1419,13 +1476,14 @@ fn status<W: Write>(
         state,
         failed,
         moved,
+        ..
     } = shown;
     let library = &dirs.library;
     let mut after: BTreeMap<PathBuf, Written> = BTreeMap::new();
     for (n, r) in *planned {
         let song = &manifest.songs[*n];
-        let path = path_of(r);
         let left_alone = guarded.iter().any(|(m, _)| m == n);
+        let path = shown.path_after(*n, r, left_alone);
         let same_plan = old.get(&path).and_then(|w| w.plan.as_ref()) == Some(&r.plan);
         let verdict = if moved.contains(&path) && same_plan {
             "moved".to_string()
@@ -1467,7 +1525,7 @@ fn status<W: Write>(
             after.insert(path, written);
         }
     }
-    for (path, fate) in prune_plan(library, old, &after, failed) {
+    for (path, fate) in prune_plan(library, old, &after, failed, false) {
         match fate {
             Pruned::Removed(_) => crate::ui::warning(
                 out,

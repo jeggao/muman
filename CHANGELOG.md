@@ -7,6 +7,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **No second copy when the template changes.** A library file whose
+  size or time changed since muman wrote it, as a ReplayGain scanner,
+  a backup restore or a copy that resets times changes it, moves to its
+  new path with the song. It was written again at the new path and left
+  at the old, so a new template could double the library; `sync
+  --force` did the same. When the song changed too, the file is left
+  where it is until `sync --force`, which deletes it once the song is
+  written again.
+
+- **Decomposed file names.** A manual file whose name is in Unicode NFD,
+  as files copied from a Mac often are, is listed by `add` with the tags
+  it was given, and read on Linux and Windows, where it was listed but
+  never found.
+- **Unreadable audio.** A file whose audio ffprobe cannot decode, such
+  as one cut off in its first bytes or a misnamed text file, is reported
+  as unreadable when measured and waits for `sync --retry`, rather than
+  failing in ffmpeg on every run.
+- **Hand-set names on untagged files.** A song whose sources name no
+  artist or title takes its album artist from a hand-set artist, and its
+  album from a hand-set title as a single, instead of
+  `Unknown Artist` and `Unknown Album`.
+- **Track 0.** A track or disc numbered 0 in yt-dlp's info, as
+  archive.org items have, is no number, not `00` before the title.
+- **Short songs on AcoustID.** A song of 2 s or less, whose print is
+  empty, is not looked up on AcoustID, which refused it as invalid and
+  was asked again after every wait.
+
 ## [0.2.3] - 2026-10-07
 
 ### Added

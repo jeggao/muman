@@ -730,23 +730,53 @@ impl Slot {
 }
 
 /// An album artist taken from the artist follows the artist as finally
-/// set, a hand-set one too.
-fn follow_artist(written: &mut [(String, Slot)]) {
+/// set, a hand-set one too, and a song with none takes the hand-set one.
+fn follow_artist(written: &mut Vec<(String, Slot)>) {
     let artist = written
         .iter()
         .find(|(k, s)| {
             k == Field::Artist.vorbis() && (s.from == "song.tags" || s.from == "album.tags")
         })
         .and_then(|(_, s)| Some((s.values.first()?.clone(), s.from.clone())));
-    if let (Some((first, from)), Some((_, slot))) = (
-        artist,
-        written
-            .iter_mut()
-            .find(|(k, s)| k == Field::AlbumArtist.vorbis() && s.from.starts_with(FIRST_ARTIST)),
-    ) {
-        slot.values = vec![first];
-        slot.from = format!("{FIRST_ARTIST}{from}");
-        slot.cleaned.clear();
+    let Some((first, from)) = artist else {
+        return;
+    };
+    let slot = Slot {
+        values: vec![first],
+        from: format!("{FIRST_ARTIST}{from}"),
+        cleaned: Vec::new(),
+    };
+    match written
+        .iter_mut()
+        .find(|(k, _)| k == Field::AlbumArtist.vorbis())
+    {
+        Some((_, s)) if s.from.starts_with(FIRST_ARTIST) => *s = slot,
+        Some(_) => {}
+        None => written.push((Field::AlbumArtist.vorbis().to_string(), slot)),
+    }
+}
+
+/// A single is named for its title as finally set, a hand-set one too,
+/// and a song no source names an album of is a single.
+fn name_single(written: &mut Vec<(String, Slot)>) {
+    let Some(title) = written
+        .iter()
+        .find(|(k, _)| k == Field::Title.vorbis())
+        .map(|(_, s)| s.values.clone())
+    else {
+        return;
+    };
+    match written.iter_mut().find(|(k, _)| k == Field::Album.vorbis()) {
+        Some((_, album)) if album.from == SINGLE => album.values = title,
+        Some(_) => {}
+        None => written.push((
+            Field::Album.vorbis().to_string(),
+            Slot {
+                values: title,
+                from: SINGLE.to_string(),
+                cleaned: Vec::new(),
+            },
+        )),
     }
 }
 
@@ -834,19 +864,7 @@ fn resolve_tags(input: &Input<'_>) -> (Comments, Vec<TagWhy>, Vec<String>) {
     {
         artists.clone_from(&artist.values);
     }
-    // A single is named for its title as finally set, a hand-set one too.
-    let title = written
-        .iter()
-        .find(|(k, _)| k == Field::Title.vorbis())
-        .map(|(_, s)| s.values.clone());
-    if let (Some(title), Some((_, album))) = (
-        title,
-        written
-            .iter_mut()
-            .find(|(k, s)| k == Field::Album.vorbis() && s.from == SINGLE),
-    ) {
-        album.values = title;
-    }
+    name_single(&mut written);
     let why = written
         .iter()
         .map(|(k, s)| TagWhy {

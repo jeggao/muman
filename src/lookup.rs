@@ -180,12 +180,13 @@ pub fn query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<Quer
 
 /// What an AcoustID lookup asks for a resolved song: the print and length
 /// of its audio, with what names and album it has. A song whose audio
-/// lacks either is not asked.
+/// lacks either is not asked, nor one whose print is empty, as audio of
+/// 2 s or less prints, which AcoustID refuses as invalid.
 #[must_use]
 pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<acoustid::Query> {
     let audio = facts.get(&r.plan.audio.key)?;
     Some(acoustid::Query {
-        print: audio.print.clone()?,
+        print: audio.print.clone().filter(|p| !p.0.is_empty())?,
         seconds: audio.duration?,
         title: tag_of(r, Field::Title),
         artist: tag_of(r, Field::Artist),

@@ -174,6 +174,10 @@ fn a_file_without_names_is_looked_up_by_its_print() {
     assert_eq!(found(&m, &s, &p), [Provider::AcoustId]);
     let (_d, m, s, p) = own(false, &[]);
     assert_eq!(found(&m, &s, &p), [], "no print, no names: nothing to ask");
+    let (_d, m, mut s, p) = own(true, &[]);
+    let key = SourceKey::parse("manual:a.flac").unwrap();
+    s.facts.get_mut(&key).unwrap().print = Some(crate::fingerprint::Print(Vec::new()));
+    assert_eq!(found(&m, &s, &p), [], "an empty print is refused");
 }
 
 #[test]

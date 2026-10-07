@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/4";
+pub const METHOD: &str = "tags/5";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -271,6 +271,7 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         &mut o,
         Field::Track,
         info.track_number
+            .filter(|n| *n > 0)
             .map(|n| n.to_string())
             .into_iter()
             .collect(),
@@ -280,6 +281,7 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         &mut o,
         Field::Disc,
         info.disc_number
+            .filter(|n| *n > 0)
             .map(|n| n.to_string())
             .into_iter()
             .collect(),
@@ -523,6 +525,15 @@ mod tests {
         );
         assert!(!o.contains_key(&Field::Album));
         assert!(!o[&Field::Date].structured);
+    }
+
+    #[test]
+    fn a_track_or_disc_numbered_0_offers_none() {
+        let o = from_info(&info(
+            r#"{"title": "Song", "track_number": 0, "disc_number": 0}"#,
+        ));
+        assert!(!o.contains_key(&Field::Track));
+        assert!(!o.contains_key(&Field::Disc));
     }
 
     #[test]

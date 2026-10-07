@@ -98,6 +98,24 @@ fn flacs() -> Fake {
 }
 
 #[test]
+fn an_added_file_with_a_decomposed_name_is_listed_composed_with_its_tags() {
+    let s = Setup::new();
+    let song = s.file("rips/Noe\u{308}l.flac");
+    let (ok, text) = s.run(&flacs(), &["add", "--artist", "Marlo Venn", &song]);
+    assert!(ok, "{text}");
+    let songs = Manifest::load(&s.dir.path().join("home")).unwrap().songs;
+    assert_eq!(songs.len(), 1, "{text}");
+    assert_eq!(
+        songs[0].sources,
+        [SourceKey::Manual("No\u{eb}l.flac".into())]
+    );
+    assert_eq!(
+        songs[0].tags,
+        [("artist".to_string(), vec!["Marlo Venn".to_string()])]
+    );
+}
+
+#[test]
 fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
     let s = Setup::new();
     let song = s.file("rips/Song.flac");
