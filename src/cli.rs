@@ -390,8 +390,17 @@ pub enum Command {
         upstream: bool,
     },
     /// Say what a sync would write, and for each song where each of its
-    /// aspects comes from and why; change nothing.
-    Status,
+    /// aspects comes from and why; change nothing. A song a sync leaves
+    /// as it is is counted, not shown, unless a query matches it.
+    #[command(after_help = QUERY_HELP)]
+    Status {
+        #[arg(value_name = "QUERY")]
+        query: Vec<String>,
+
+        /// Show every song, those up to date too.
+        #[arg(long)]
+        all: bool,
+    },
     /// Write the song list and the library, as the last run left them,
     /// into one zip: songs.toml at its root, the songs under library/.
     /// With --max-size, songs are encoded again at lower bitrates, the
@@ -764,7 +773,7 @@ Shelves hold `songs` alone."
         assert!(parse(&[]).is_err());
         assert!(matches!(
             parse(&["status"]).unwrap().command,
-            Command::Status
+            Command::Status { .. }
         ));
     }
 }

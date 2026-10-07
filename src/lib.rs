@@ -258,13 +258,18 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         say_renamed(&dirs.home, out)?;
     }
     match &job.command {
-        Command::Status => {
+        Command::Status { query, all } => {
             let opts = Options {
                 dry_run: true,
                 settling: job.settling,
                 ..Options::default()
             };
-            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(data))
+            let report = reconcile::Report {
+                out: data,
+                query,
+                all: *all,
+            };
+            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))
         }
         Command::Info => {
             overview::info(dirs, job.verbose, data)?;
@@ -472,7 +477,7 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         | Command::Set { .. }
         | Command::Edit { .. }
         | Command::Undo { .. } => &["Measuring", "Comparing", "Writing"],
-        Command::Status => &["Measuring", "Comparing"],
+        Command::Status { .. } => &["Measuring", "Comparing"],
         Command::Check { .. } => &["Decoding"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
         Command::Duplicates { .. } => &["Comparing prints"],
