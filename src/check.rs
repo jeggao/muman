@@ -67,6 +67,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
     report: &mut D,
 ) -> Result<bool> {
     let manifest = Manifest::load(&dirs.home)?;
+    for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
+        crate::ui::warning(report, &line)?;
+    }
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let library = &dirs.library;

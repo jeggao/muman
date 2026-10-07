@@ -11,7 +11,7 @@
 //! Offers are cleaned at each resolve, never when read: the raw offers
 //! stay in the state, so changing a rule or a switch needs nothing read
 //! again, and a song whose tags it changes renders again. Tags set in
-//! `[song.tags]` or `[album.tags]` are never cleaned.
+//! a song's or an album's `tags` are never cleaned.
 //!
 //! A *structured* value comes from a field kept for it: a release's track
 //! and artists, a file's own tags. A *derived* one is read off a video's

@@ -12,7 +12,7 @@ fn write(dir: &Path, body: &str) {
     std::fs::write(dir.join(MANIFEST), format!("version = 1\n{body}")).unwrap();
 }
 
-const TEMPLATE: &str = "[song.tags]\ntitle = \"\"\nartist = \"\"\nalbum = \"\"\nalbum_artist = \"\"\ngenre = \"\"\ndate = \"\"\n";
+const TEMPLATE: &str = "tags.title = \"\"\ntags.artist = \"\"\ntags.album = \"\"\ntags.album_artist = \"\"\ntags.genre = \"\"\ntags.date = \"\"\n";
 
 #[test]
 fn a_new_list_carries_its_header_defaults_and_each_song() {
@@ -28,7 +28,7 @@ fn a_new_list_carries_its_header_defaults_and_each_song() {
     assert!(t.starts_with(&format!("{HEADER}{NEW}")), "{t}");
     assert!(
         t.ends_with(&format!(
-            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n\n{TEMPLATE}"
+            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\", \"youtube:bbbbbbbbbbb\"]\n{TEMPLATE}"
         )),
         "{t}"
     );
@@ -249,7 +249,7 @@ fn an_album_is_added_once_with_its_template() {
     assert_eq!(m.albums.len(), 1);
     assert_eq!(m.albums[0].tracks, Some(12));
     assert!(
-        text(dir.path()).contains("[album.tags]\nalbum = \"\""),
+        text(dir.path()).contains("tags.album = \"\""),
         "{}",
         text(dir.path())
     );
@@ -507,22 +507,10 @@ fn edits_are_not_saved_over_a_song_changed_meanwhile() {
 }
 
 #[test]
-fn the_new_song_list_lists_every_default_as_the_code_has_it() {
-    // Uncommenting every setting must change nothing: the file is the
-    // reference, and must not drift from the defaults it shows.
-    let mut tables = false;
-    let mut uncommented = String::new();
-    for l in NEW.lines() {
-        tables = (tables || l.starts_with("# [")) && (l.is_empty() || l.starts_with('#'));
-        let l = if tables {
-            l.strip_prefix("# ").unwrap_or(l)
-        } else {
-            l
-        };
-        uncommented.push_str(l);
-        uncommented.push('\n');
-    }
-    let doc: toml_edit::DocumentMut = uncommented.parse().unwrap();
+fn the_new_song_list_sets_every_default_as_the_code_has_it() {
+    // The file is the reference the docs point to, and the defaults an
+    // older list is filled from: it must not drift from the code.
+    let mut doc: DocumentMut = NEW.parse().unwrap();
     for table in crate::settings::TABLES {
         assert!(doc.contains_key(table), "{table} is not shown");
     }
@@ -530,4 +518,44 @@ fn the_new_song_list_lists_every_default_as_the_code_has_it() {
         crate::settings::read(&doc).unwrap(),
         crate::settings::Settings::default()
     );
+    assert_eq!(
+        doc.get("edition").and_then(Item::as_integer),
+        Some(crate::settings::EDITION)
+    );
+    assert!(!crate::settings::fill(&mut doc, &crate::settings::EDITIONS));
+}
+
+#[test]
+fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "\n[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n\n# Checked by ear.\n[song.tags]\n\
+         title = \"Paper Comets\" # as sung\nartist = \"Marlo Venn\"\n\n\
+         [[song]]\nsources = [\"youtube:bbbbbbbbbbb\"]\ntags = { genre = \"Folk\" }\n\n\
+         [[album]]\nsource = \"youtubetab:OLAK5uy_abcdef\"\n\n\
+         [album.tags]\nalbum = \"Lantern Weather\"\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let before = (m.songs.clone(), m.albums.clone());
+    m.save().unwrap();
+    let t = text(dir.path());
+    assert!(
+        t.contains(
+            "[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n# Checked by ear.\n\
+             tags.title = \"Paper Comets\" # as sung\ntags.artist = \"Marlo Venn\"\n\
+             tags.album = \"\"\n"
+        ),
+        "{t}"
+    );
+    assert!(t.contains("tags.genre = \"Folk\"\n"), "{t}");
+    assert!(t.contains("\ntags.album = \"Lantern Weather\"\n"), "{t}");
+    assert!(
+        !t.contains("[song.tags]") && !t.contains("[album.tags]"),
+        "{t}"
+    );
+    let again = Manifest::load(dir.path()).unwrap();
+    assert_eq!((again.songs, again.albums), before);
+    Manifest::load(dir.path()).unwrap().save().unwrap();
+    assert_eq!(text(dir.path()), t);
 }

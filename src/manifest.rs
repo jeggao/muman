@@ -31,8 +31,12 @@
 //!
 //! Every write puts the usage comment atop the file, replacing one an
 //! earlier version wrote, while the user's own comments below it stay;
-//! and it gives each song a `[song.tags]` table with the common keys it
-//! lacks added empty, so the file shows what can be set. A key under
+//! and it gives each song the common `tags.<name>` keys it lacks, added
+//! empty, so the file shows what can be set. Tags are dotted keys last
+//! in their song, not a `[song.tags]` table, so each song reads as one
+//! block between blank lines; a `[song.tags]` written by hand is read
+//! the same and written back dotted. Anything a song gains later takes
+//! a dotted prefix of its own in the same block, never a table. A key under
 //! `[clean]` naming no rule is kept and warned about, so a misspelled
 //! switch is never silently ignored.
 //!
@@ -45,7 +49,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Key, Table, Value, value};
 
 use crate::atomic::{self, Lock};
 use crate::clean::{self, Settings};
@@ -92,7 +96,7 @@ const HEADER: &str = "\
 #             tags by measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset_ms moves them later.
-#   Tags:     fill in [song.tags]; an empty value keeps what the sources
+#   Tags:     fill in tags.<name>; an empty value keeps what the sources
 #             offer. Any other Vorbis comment name works too; a list sets
 #             several. `muman status` shows what was picked and why.
 #   Cleaning: [clean.*] turns each rule cleaning what the sources offer on
@@ -106,8 +110,11 @@ const HEADER: &str = "\
 #             of lrclib and musicbrainz.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
-#   Settings: [library], [audio], [ytdlp] and [history] lay out and name
-#             the library, set encoding and fetching, and size `undo`.
+#   Settings: [library], [audio], [quality.*], [ytdlp] and [history] lay
+#             out and name the library, set encoding, ranking and fetching,
+#             and size `undo`. `edition` names the defaults they were
+#             written from; `muman sync --update-defaults` moves the ones
+#             still at an older default to the current.
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
@@ -118,11 +125,11 @@ const HEADER_END: &str = "# Other keys muman does not know are kept.";
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
 
-/// A new home's song list: the settings, each commented out at its
+/// A new home's song list: the settings, each written out at its
 /// default, as the reference the docs point to.
 pub const NEW: &str = include_str!("manifest/new.toml");
 
-/// The tags every song's `[song.tags]` offers to fill in.
+/// The tags every song's `tags.<name>` keys offer to fill in.
 const TAG_TEMPLATE: [&str; 6] = ["title", "artist", "album", "album_artist", "genre", "date"];
 
 /// Tags by name, each with its values.
@@ -195,7 +202,7 @@ pub enum Edit {
     Rename { from: SourceKey, to: SourceKey },
     /// A key dropped from the song listing it.
     Drop(SourceKey),
-    /// Tags set in `[song.tags]` of the song listing `key`, over any it
+    /// Tags set in the `tags` of the song listing `key`, over any it
     /// sets already under another spelling of their names.
     Tag { key: SourceKey, tags: Tags },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
@@ -209,6 +216,9 @@ pub enum Edit {
         songs: Vec<(SourceKey, Rewritten)>,
         new: Vec<SongTable>,
     },
+    /// Every setting still at an earlier edition's default moved to the
+    /// current one; see [`crate::settings::update`].
+    UpdateDefaults,
 }
 
 /// What an edited song became.
@@ -246,6 +256,9 @@ pub struct Manifest {
     pub hooks: Vec<Hook>,
     /// `[library]`, `[audio]`, `[ytdlp]` and `[history]`.
     pub settings: crate::settings::Settings,
+    /// Settings at the default of an earlier edition, which this one
+    /// changed.
+    pub stale_defaults: Vec<crate::settings::Stale>,
     edits: Vec<Edit>,
     stale: bool,
 }
@@ -266,6 +279,7 @@ impl Manifest {
             hooks: parsed.hooks,
             clean: parsed.clean,
             settings: parsed.settings,
+            stale_defaults: parsed.stale_defaults,
             edits: Vec::new(),
             stale: file.exists()
                 && (with_header(&doc.to_string()).is_some() || normalize(&mut doc.clone())),
@@ -392,7 +406,7 @@ impl Manifest {
         (self.songs, self.albums, self.lyrics, self.removed) =
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
-        self.settings = parsed.settings;
+        (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
         self.stale = false;
         Ok(Vec::new())
     }
@@ -507,6 +521,7 @@ struct Parsed {
     hooks: Vec<Hook>,
     clean: Settings,
     settings: crate::settings::Settings,
+    stale_defaults: Vec<crate::settings::Stale>,
 }
 
 /// The keys a table lists, each parsed.
@@ -633,6 +648,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         hooks: hooks::read(doc)?,
         clean: clean_of(doc)?,
         settings: crate::settings::read(doc)?,
+        stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
     })
 }
 
@@ -858,6 +874,9 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 }
             }
         }
+        Edit::UpdateDefaults => {
+            crate::settings::update(doc, &crate::settings::EDITIONS);
+        }
     }
     Ok(())
 }
@@ -930,7 +949,7 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
     }
 }
 
-/// Set `tags` in a song table's `[song.tags]`, over any it sets under
+/// Set `tags` in a song table's `tags`, over any it sets under
 /// another spelling of their names; a tag with no values is cleared.
 pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     let table = song
@@ -961,42 +980,76 @@ pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     }
 }
 
-/// Every song's `tags` as a table of its own, never inline, with the
-/// template's tags it lacks added empty, and every cleaning switch the
-/// file lacks added on. Whether anything changed.
+/// Every song's, album's and removed song's `tags` as dotted keys, last
+/// in its table; each song's with the template's tags it lacks added
+/// empty; every cleaning switch the file lacks added on; and every
+/// setting it lacks added at its default. Whether anything changed.
 fn normalize(doc: &mut DocumentMut) -> bool {
     let mut changed = clean_template(doc);
-    let Some(list) = doc.get_mut("song").and_then(Item::as_array_of_tables_mut) else {
-        return changed;
-    };
-    for song in list.iter_mut() {
-        let mut tags = match song.remove("tags") {
-            Some(Item::Table(t)) => t,
-            Some(item) => {
-                changed = true;
-                match item.into_table() {
-                    Ok(t) => t,
-                    // Not a table at all: left as the user wrote it.
-                    Err(item) => {
-                        song.insert("tags", item);
-                        continue;
-                    }
-                }
-            }
-            None => {
-                changed = true;
-                Table::new()
-            }
+    changed |= crate::settings::fill(doc, &crate::settings::EDITIONS);
+    for (list, template) in [("song", true), ("album", false), ("removed", false)] {
+        let Some(list) = doc.get_mut(list).and_then(Item::as_array_of_tables_mut) else {
+            continue;
         };
-        for key in TAG_TEMPLATE {
-            if !tags.contains_key(key) {
-                tags.insert(key, value(""));
+        for table in list.iter_mut() {
+            changed |= dot_tags(table, template);
+        }
+    }
+    changed
+}
+
+/// `table`'s `tags` as `tags.<name>` lines after its other keys, so a
+/// song reads as one block; a comment above a `[song.tags]` header moves
+/// above the first. With `template`, the template's tags it lacks are
+/// added empty. Whether anything changed.
+fn dot_tags(table: &mut Table, template: bool) -> bool {
+    let last = table.iter().last().is_some_and(|(k, _)| k == "tags");
+    let (key, mut tags) = match table.remove_entry("tags") {
+        Some((key, Item::Table(t))) if t.is_dotted() => (key, t),
+        Some((_, Item::Table(t))) => (Key::new("tags"), t),
+        Some((key, item)) => match item.into_table() {
+            Ok(t) => (Key::new("tags"), t),
+            // Not a table at all: left as the user wrote it.
+            Err(item) => {
+                table.insert_formatted(&key, item);
+                return false;
+            }
+        },
+        None if template => (Key::new("tags"), Table::new()),
+        None => return false,
+    };
+    let mut changed = !last || !tags.is_dotted();
+    if !tags.is_dotted() {
+        let above = decor_prefix(tags.decor())
+            .trim_start_matches('\n')
+            .to_string();
+        tags.decor_mut().clear();
+        tags.set_position(None);
+        tags.set_dotted(true);
+        let first = tags.iter().next().map(|(k, _)| k.to_string());
+        if let Some(mut first) = first.and_then(|k| tags.key_mut(&k))
+            && !above.is_empty()
+        {
+            let own = decor_prefix(first.leaf_decor())
+                .trim_start_matches('\n')
+                .to_string();
+            first.leaf_decor_mut().set_prefix(format!("{above}{own}"));
+        }
+    }
+    if template {
+        for name in TAG_TEMPLATE {
+            if !tags.contains_key(name) {
+                tags.insert(name, value(""));
                 changed = true;
             }
         }
-        song.insert("tags", Item::Table(tags));
     }
+    table.insert_formatted(&key, Item::Table(tags));
     changed
+}
+
+fn decor_prefix(decor: &toml_edit::Decor) -> &str {
+    decor.prefix().and_then(|p| p.as_str()).unwrap_or("")
 }
 
 /// The cleaning switches the file sets. A key naming no rule is kept,
@@ -1041,10 +1094,11 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
         // A new table without a position prints after the one before it
         // in key order, so `clean` moves up beside `defaults`.
         let rank = |k: &str| match k {
-            "version" => 0,
-            "defaults" => 1,
-            "clean" => 2,
-            _ => 3,
+            "version" | "edition" => 0,
+            k if crate::settings::TABLES.contains(&k) => 1,
+            "defaults" => 2,
+            "clean" => 3,
+            _ => 4,
         };
         root.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
         changed = true;

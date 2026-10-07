@@ -7,6 +7,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Every setting written out.** A new song list holds each setting at
+  its default, not commented out, and a list made earlier gains the
+  ones it lacks on its next write. `edition` names the defaults they
+  were written from. When a later muman changes a default, `sync`,
+  `status` and `check` name each setting still at the old one, and
+  `sync --update-defaults` moves them to the new default; settings you
+  changed stay.
+
+### Changed
+
+- **Each song is one block.** A song's tags are written as
+  `tags.title = …` lines under its `sources`, not as a `[song.tags]`
+  table after a blank line, so blank lines fall only between songs.
+  Album and removed songs' tags are written the same way. A
+  `[song.tags]` table still reads, and the next write turns it into
+  dotted keys, its comments kept.
+
 ## [0.2.2] - 2026-10-06
 
 ### Changed

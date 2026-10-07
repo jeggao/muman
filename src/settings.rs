@@ -5,20 +5,36 @@
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]` and `[history]`;
-//! every key is
-//! optional, and `new.toml`, the file a new home starts from, lists each
-//! with its default. A key these tables do not know is an error naming
-//! it, so a misspelled setting is never silently ignored. Which machine
-//! runs what is no setting: tools and folders come from flags and
-//! `MUMAN_*` variables.
+//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]` and `[history]`.
+//! A key these tables do not know is an error naming it, so a misspelled
+//! setting is never silently ignored. Which machine runs what is no
+//! setting: tools and folders come from flags and `MUMAN_*` variables.
+//!
+//! Every setting is written out, so the file shows what each is set to.
+//! `new.toml`, the file a new home starts from, holds each at its
+//! default with the comments explaining it, and every write adds a key
+//! the file lacks from there ([`fill`]). A key read as missing takes the
+//! default all the same. A setting with no default, such as the library
+//! folder, stays a comment: TOML has no null to write it as.
+//!
+//! A default written out looks like a value chosen, and would stay put
+//! when a later muman changes the default. So the top-level `edition`
+//! names the defaults the file's settings were written from, as Cargo's
+//! `edition` does; a file without one was written from the first. When
+//! a default changes, [`EDITION`] rises and [`CHANGES`] records the key
+//! and its old default. A setting still at its edition's default, which
+//! a later edition changed, is stale ([`stale`]): `sync`, `status` and
+//! `check` say so, and `sync --update-defaults` moves each to the new
+//! default ([`update`]). A setting at any other value is the user's and
+//! stays. The edition rises on any write that finds nothing stale, so a
+//! value set later to an old default is not taken for one left behind.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use toml_edit::DocumentMut;
+use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use crate::codec::Codec;
 use crate::quality;
@@ -526,6 +542,273 @@ impl Default for History {
     }
 }
 
+/// The defaults a song list's settings are written from. Raised, with a
+/// [`Change`] for each default that differs, whenever a default changes.
+pub const EDITION: i64 = 1;
+
+/// Each default changed since the first edition, oldest first.
+pub const CHANGES: &[Change] = &[];
+
+/// The editions this muman knows: the current one and what changed.
+pub const EDITIONS: Editions = Editions {
+    current: EDITION,
+    changes: CHANGES,
+};
+
+/// The edition a song list without `edition` was written from.
+const FIRST: i64 = 1;
+
+/// A default an edition changed.
+#[derive(Debug, Clone, Copy)]
+pub struct Change {
+    /// The edition the new default came in.
+    pub edition: i64,
+    /// The key as `audio.opus_kbps` or `quality.stereo.weight`.
+    pub key: &'static str,
+    /// Its default in the edition before, as TOML.
+    pub was: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Editions {
+    pub current: i64,
+    pub changes: &'static [Change],
+}
+
+/// A setting still at the default of the edition its song list was
+/// written from, which a later edition changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stale {
+    /// The key as `audio.opus_kbps`.
+    pub key: String,
+    /// The file's value, that edition's default.
+    pub was: String,
+    pub now: String,
+}
+
+impl std::fmt::Display for Stale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (table, key) = self.key.rsplit_once('.').unwrap_or(("", &self.key));
+        write!(f, "[{table}] {key} = {}", self.was)
+    }
+}
+
+/// What to warn of for `stale`: each setting, then how to update them.
+#[must_use]
+pub fn stale_warnings(stale: &[Stale]) -> Vec<String> {
+    let mut lines: Vec<String> = stale
+        .iter()
+        .map(|s| format!("`{s}` was the default; it is {} now", s.now))
+        .collect();
+    if !lines.is_empty() {
+        lines.push(
+            "`muman sync --update-defaults` moves these settings to the current defaults".into(),
+        );
+    }
+    lines
+}
+
+/// The settings tables as `new.toml` writes them: every default, each
+/// with its comments.
+fn defaults() -> DocumentMut {
+    crate::manifest::NEW
+        .parse()
+        .unwrap_or_else(|_| DocumentMut::new())
+}
+
+/// The edition `doc` names, the first when it names none.
+#[must_use]
+pub fn edition_of(doc: &DocumentMut) -> i64 {
+    doc.get("edition")
+        .and_then(Item::as_integer)
+        .unwrap_or(FIRST)
+}
+
+/// Every key the settings tables of `table` hold a value at, with its
+/// path from the root.
+fn leaves<'a>(path: &[&'a str], table: &'a Table, out: &mut Vec<(Vec<&'a str>, &'a Value)>) {
+    for (key, item) in table {
+        let mut at = path.to_vec();
+        at.push(key);
+        match item {
+            Item::Table(t) => leaves(&at, t, out),
+            Item::Value(v) => out.push((at, v)),
+            Item::None | Item::ArrayOfTables(_) => {}
+        }
+    }
+}
+
+fn value_at<'a>(doc: &'a DocumentMut, path: &[&str]) -> Option<&'a Value> {
+    path.iter()
+        .try_fold(doc.as_item(), |item, key| item.get(key))?
+        .as_value()
+}
+
+fn value_at_mut<'a>(doc: &'a mut DocumentMut, path: &[&str]) -> Option<&'a mut Value> {
+    path.iter()
+        .try_fold(doc.as_item_mut(), |item, key| item.get_mut(key))?
+        .as_value_mut()
+}
+
+/// `value` without its formatting, for comparing.
+fn plain(value: &Value) -> Option<toml::Value> {
+    toml::from_str::<toml::Table>(&format!("v = {}", text(value)))
+        .ok()?
+        .remove("v")
+}
+
+fn text(value: &Value) -> String {
+    let mut value = value.clone();
+    value.decor_mut().clear();
+    value.to_string()
+}
+
+/// Each setting of `doc` still at the default of the edition it names,
+/// where a later edition changed that default.
+#[must_use]
+pub fn stale(doc: &DocumentMut, editions: &Editions) -> Vec<Stale> {
+    let file = edition_of(doc);
+    let defaults = defaults();
+    let mut keys = Vec::new();
+    for table in TABLES {
+        if let Some(t) = defaults.get(table).and_then(Item::as_table) {
+            leaves(&[table], t, &mut keys);
+        }
+    }
+    let mut stale = Vec::new();
+    for (path, now) in keys {
+        let key = path.join(".");
+        let Some(then) = editions
+            .changes
+            .iter()
+            .filter(|c| c.edition > file && c.key == key)
+            .min_by_key(|c| c.edition)
+        else {
+            continue;
+        };
+        let Some(value) = value_at(doc, &path).and_then(plain) else {
+            continue;
+        };
+        let then_value = toml::from_str::<toml::Table>(&format!("v = {}", then.was))
+            .ok()
+            .and_then(|mut t| t.remove("v"));
+        if then_value.as_ref() == Some(&value) && plain(now).as_ref() != Some(&value) {
+            stale.push(Stale {
+                key,
+                was: then.was.to_string(),
+                now: text(now),
+            });
+        }
+    }
+    stale
+}
+
+/// Every setting [`stale`] finds moved to its current default, keeping
+/// its comments, and `edition` raised to the current. What moved.
+pub fn update(doc: &mut DocumentMut, editions: &Editions) -> Vec<Stale> {
+    let stale = stale(doc, editions);
+    let defaults = defaults();
+    for s in &stale {
+        let path: Vec<&str> = s.key.split('.').collect();
+        let Some(now) = value_at(&defaults, &path).cloned() else {
+            continue;
+        };
+        if let Some(value) = value_at_mut(doc, &path) {
+            let decor = value.decor().clone();
+            *value = now;
+            *value.decor_mut() = decor;
+        }
+    }
+    if edition_of(doc) < editions.current {
+        doc["edition"] = value(editions.current);
+    }
+    stale
+}
+
+/// Every setting `doc` lacks added at its current default, with the
+/// comments `new.toml` gives it: a missing table whole, ahead of the
+/// file's own tables, and a missing key at the end of its table. Then
+/// `edition` written, raised to the current when no setting is
+/// [`stale`]. Whether anything changed.
+pub fn fill(doc: &mut DocumentMut, editions: &Editions) -> bool {
+    let defaults = defaults();
+    let mut changed = false;
+    for name in TABLES {
+        let Some(default) = defaults.get(name).and_then(Item::as_table) else {
+            continue;
+        };
+        match doc.get_mut(name) {
+            None => {
+                let mut table = default.clone();
+                ahead(&mut table);
+                doc.insert(name, Item::Table(table));
+                changed = true;
+            }
+            Some(item) => changed |= fill_item(item, default),
+        }
+    }
+    let file = edition_of(doc);
+    let edition = if stale(doc, editions).is_empty() {
+        file.max(editions.current)
+    } else {
+        file
+    };
+    if doc.get("edition").and_then(Item::as_integer) != Some(edition) {
+        doc["edition"] = value(edition);
+        changed = true;
+    }
+    changed
+}
+
+/// The keys of `default` that `item`, a table, lacks, added.
+fn fill_item(item: &mut Item, default: &Table) -> bool {
+    let mut changed = false;
+    if let Some(table) = item.as_table_mut() {
+        for (key, want) in default {
+            match (table.get_mut(key), want) {
+                (Some(have @ Item::Table(_)), Item::Table(want)) => {
+                    changed |= fill_item(have, want);
+                }
+                (Some(_), _) => {}
+                (None, want) => {
+                    let mut want = want.clone();
+                    if let Some(t) = want.as_table_mut() {
+                        ahead(t);
+                    }
+                    if let Some(key) = default.key(key) {
+                        table.insert_formatted(key, want);
+                    }
+                    changed = true;
+                }
+            }
+        }
+    } else if let Some(table) = item.as_inline_table_mut() {
+        for (key, want) in default {
+            if !table.contains_key(key)
+                && let Ok(want) = want.clone().into_value()
+            {
+                table.insert(key, want);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// `table` and the tables in it placed before every table a file read
+/// holds, whose places count up from 0, in the order `new.toml` has them.
+fn ahead(table: &mut Table) {
+    table.set_position(table.position().map(|at| at - AHEAD));
+    for (_, item) in table.iter_mut() {
+        if let Some(t) = item.as_table_mut() {
+            ahead(t);
+        }
+    }
+}
+
+/// How far before the file's own tables [`ahead`] places the defaults'.
+const AHEAD: isize = 1 << 20;
+
 /// The library folder the song list in `home` names, if it names one.
 pub fn library_folder(home: &Path) -> Result<Option<PathBuf>> {
     let file = home.join(crate::dirs::MANIFEST);
@@ -549,6 +832,12 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
         }
     }
     let settings: Settings = toml::from_str(&only.to_string()).context("reading the settings")?;
+    if doc
+        .get("edition")
+        .is_some_and(|e| e.as_integer().is_none_or(|e| e < FIRST))
+    {
+        bail!("`edition` must be a whole number of {FIRST} or more");
+    }
     if settings.library.block_size.0 == 0 {
         bail!("[library] block_size must be above 0");
     }
@@ -633,6 +922,97 @@ mod tests {
         let e = settings("[library]\nmax_size = \"lots\"\n").unwrap_err();
         assert!(format!("{e:#}").contains("lots"), "{e:#}");
         assert!(settings("[library]\nblock_size = 0\n").is_err());
+    }
+
+    /// A second edition that raised `opus_kbps` to today's default.
+    const RAISED: Editions = Editions {
+        current: 2,
+        changes: &[Change {
+            edition: 2,
+            key: "audio.opus_kbps",
+            was: "128",
+        }],
+    };
+
+    fn doc(text: &str) -> DocumentMut {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_setting_at_its_editions_old_default_is_stale_until_updated() {
+        let mut d = doc("version = 1\nedition = 1\n[audio]\nopus_kbps = 128 # as written\n");
+        let found = stale(&d, &RAISED);
+        assert_eq!(
+            found,
+            [Stale {
+                key: "audio.opus_kbps".into(),
+                was: "128".into(),
+                now: "160".into(),
+            }]
+        );
+        assert_eq!(found[0].to_string(), "[audio] opus_kbps = 128");
+        assert_eq!(stale_warnings(&found).len(), 2);
+        fill(&mut d, &RAISED);
+        assert_eq!(edition_of(&d), 1, "a stale setting holds the edition");
+        assert_eq!(update(&mut d, &RAISED), found);
+        assert!(
+            d.to_string().contains("opus_kbps = 160 # as written"),
+            "{d}"
+        );
+        assert_eq!(edition_of(&d), 2);
+        assert_eq!(stale(&d, &RAISED), []);
+    }
+
+    #[test]
+    fn a_setting_changed_by_hand_stays_and_the_edition_rises() {
+        let mut d = doc("version = 1\n[audio]\nopus_kbps = 170\n");
+        assert_eq!(edition_of(&d), FIRST);
+        assert_eq!(stale(&d, &RAISED), []);
+        assert!(fill(&mut d, &RAISED));
+        assert_eq!(edition_of(&d), 2);
+        assert_eq!(read(&d).unwrap().audio.opus_kbps, 170);
+        let chosen = doc("version = 1\nedition = 2\n[audio]\nopus_kbps = 128\n");
+        assert_eq!(stale(&chosen, &RAISED), [], "set after edition 2");
+        assert!(settings("edition = 0\n").is_err());
+        assert!(settings("edition = \"one\"\n").is_err());
+    }
+
+    #[test]
+    fn every_setting_a_list_lacks_is_added_ahead_of_its_own_tables() {
+        let mut d = doc(
+            "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n\n[audio]\n# Mine.\nopus_kbps = 192\n\n\
+             [quality.stereo]\nweight = 0\n",
+        );
+        assert!(fill(&mut d, &EDITIONS));
+        let text = d.to_string();
+        let mut again = doc(&text);
+        assert!(!fill(&mut again, &EDITIONS), "{text}");
+        assert_eq!(again.to_string(), text);
+        assert!(text.starts_with("version = 1\nedition = 1\n"), "{text}");
+        assert!(text.find("[library]") < text.find("[defaults]"), "{text}");
+        assert!(text.contains("# Mine.\nopus_kbps = 192\n"), "{text}");
+        let s = read(&again).unwrap();
+        assert_eq!(s.audio.opus_kbps, 192);
+        assert_eq!(s.quality.stereo.weight, 0);
+        assert_eq!(
+            Settings {
+                audio: Audio::default(),
+                quality: Quality::default(),
+                ..s
+            },
+            Settings::default()
+        );
+        for table in TABLES {
+            assert!(again.contains_key(table), "{table} is not shown");
+        }
+        let defaults = defaults();
+        let mut keys = Vec::new();
+        for table in TABLES {
+            leaves(&[table], defaults[table].as_table().unwrap(), &mut keys);
+        }
+        for (path, _) in keys {
+            assert!(value_at(&again, &path).is_some(), "{path:?} is not set");
+        }
     }
 
     #[test]

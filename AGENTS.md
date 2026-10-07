@@ -125,8 +125,10 @@ latest stable, which can be newer than yours.
   deletes in the library through `atomic::rename` and `atomic::remove`,
   which wait out a file Windows reports as held open.
 - **Settings:** a new setting goes in `settings.rs`, with its default
-  shown commented in `manifest/new.toml`; a test keeps the two equal. A
-  setting that changes a written file must change the song's `Plan`.
+  written out in `manifest/new.toml`; a test keeps the two equal. A
+  changed default raises `settings::EDITION` and adds a `Change` with
+  the old value. A setting that changes a written file must change the
+  song's `Plan`.
 - **Formats:** `songs.toml` and `state.json` carry a `version`; changing
   what an existing key means is a new version, adding a key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the
@@ -149,7 +151,7 @@ since the last release collect under `[Unreleased]`.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md) |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md) |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How sources, picking, lookups, editing or hooks behave for a user | [docs/guide.md](docs/guide.md) |
 | A module's design or a constant's reason | That module's `//!` docs |

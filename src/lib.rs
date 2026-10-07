@@ -349,11 +349,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             rematch,
             force,
             retry,
+            update_defaults,
             matching,
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
             let done = (|| {
+                if *update_defaults {
+                    update_settings(&dirs.home, out)?;
+                }
                 let proposals = dropped_in(dirs, job.settling, out)?;
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = fetch_missing(job, runner, http, &manifest, *retry, out)?;
@@ -562,6 +566,22 @@ fn fetch_missing<R: Runner, W: Write>(
 
 fn create(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
+}
+
+/// Move the song list's settings still at an earlier edition's default
+/// to the current one, saying which moved.
+fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
+    let mut manifest = Manifest::load(home)?;
+    let moved = manifest.stale_defaults.clone();
+    manifest.edit(Edit::UpdateDefaults);
+    manifest.save()?;
+    if moved.is_empty() {
+        ui::info(out, "Every setting is at this muman's defaults")?;
+    }
+    for s in &moved {
+        ui::info(out, &format!("Updated: `{s}` to {}", s.now))?;
+    }
+    Ok(())
 }
 
 /// Run one network step with a fetcher into the store, and every key a

@@ -101,6 +101,7 @@ Bring the library in line with the song list: fetch any missing source, add file
 * `--rematch` — Make every lookup now, whatever an earlier one found: an upload on YouTube Music for its track, a track on YouTube for an upload with subtitles, a song on LRCLIB for its lyrics, a song on MusicBrainz for its album
 * `--force` — Write every song again, changed or not, a library file changed since muman wrote it included
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to
+* `--update-defaults` — Move each setting still at the default of the edition the song list names to this muman's default, and raise the edition; settings you changed stay
 * `-y`, `--yes` — Add a new source to the listed song it may be the same recording as without asking
 * `--new` — Make every new source a song of its own, without comparing it
 

@@ -38,11 +38,21 @@ use.
 
 ## Settings in the song list
 
-A new home's `songs.toml` starts with every setting commented out at
-its default: [`src/manifest/new.toml`](../src/manifest/new.toml) is
-that file and the reference for every key. Uncomment a table and the
-keys you change. A key a settings table does not know is an error that
-names it, so a misspelling never goes unnoticed.
+A new home's `songs.toml` starts with every setting written out at its
+default: [`src/manifest/new.toml`](../src/manifest/new.toml) is that
+file and the reference for every key. Change the values you want. A
+song list made by an earlier muman gains each setting it lacks, at its
+default, the next time muman writes it. A setting with no default, such
+as the library folder, stays a comment until you set it. A key a
+settings table does not know is an error that names it, so a
+misspelling never goes unnoticed.
+
+`edition`, beside `version`, names the defaults the settings were
+written from. When a later muman changes a default, `sync`, `status`
+and `check` name each setting still at the old one, and
+`muman sync --update-defaults` moves those to the new default and
+raises `edition`. A setting you changed stays as you set it. A list
+without `edition` counts as edition 1.
 
 | Table | Sets |
 |---|---|

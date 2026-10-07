@@ -1,117 +1,121 @@
 version = 1
+edition = 1
 
-# Settings. Every key below is shown with its default; uncomment a table
-# and the keys to change. A key a table does not know is an error.
+# Settings, each written at its default; change any. `edition` names the
+# defaults they were written from: when a later muman changes a default,
+# `muman sync --update-defaults` moves each setting still at the old one
+# to the new, and leaves the ones you changed. A key a table does not
+# know is an error.
 
-# [library]
-# # The library folder: absolute, ~/..., or relative to this file's folder.
-# # Unset, it is the platform's music folder, then `muman`; --library and
-# # MUMAN_LIBRARY override it on one machine.
-# # path = "~/Music/muman"
-# # Each song's path without its extension, as a MiniJinja template. See
-# # docs/configuration.md for the variables and filters.
-# template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
-# # What is replaced in tag values before they make a path; set "none" to
-# # replace only "/", or "ascii" to transliterate everything to ASCII.
-# restrict = "windows"
-# # Replacements merged over the defaults, such as { ":" = " -" }.
-# replace = {}
-# max_name_bytes = 200
-# max_folder_bytes = 120
-# # The longest whole path in characters, library folder included; unset,
-# # there is no limit. 250 keeps a library usable on Windows.
-# # max_path = 250
-# unknown_artist = "Unknown Artist"
-# unknown_album = "Unknown Album"
-# untitled = "Untitled"
-# # Where lyrics go: "sidecar" (.lrc beside the song), "embedded" or "both".
-# lyrics = "sidecar"
-# # Set the library folder's time after a change, for players that rescan
-# # only when it is newer.
-# touch_root = false
-# # The most the library may take, such as "32 GiB"; songs are encoded at
-# # lower bitrates of `[audio] lossy` to fit, the least audible first.
-# # Unset, there is no limit.
-# # max_size = "32 GiB"
-# # Each file counts rounded up to this: "32 KiB" on a FAT32 card.
-# block_size = "4 KiB"
+[library]
+# The library folder: absolute, ~/..., or relative to this file's folder.
+# Unset, it is the platform's music folder, then `muman`; --library and
+# MUMAN_LIBRARY override it on one machine.
+# path = "~/Music/muman"
+# Each song's path without its extension, as a MiniJinja template. See
+# docs/configuration.md for the variables and filters.
+template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
+# What is replaced in tag values before they make a path; set "none" to
+# replace only "/", or "ascii" to transliterate everything to ASCII.
+restrict = "windows"
+# Replacements merged over the defaults, such as { ":" = " -" }.
+replace = {}
+max_name_bytes = 200
+max_folder_bytes = 120
+# The longest whole path in characters, library folder included; unset,
+# there is no limit. 250 keeps a library usable on Windows.
+# max_path = 250
+unknown_artist = "Unknown Artist"
+unknown_album = "Unknown Album"
+untitled = "Untitled"
+# Where lyrics go: "sidecar" (.lrc beside the song), "embedded" or "both".
+lyrics = "sidecar"
+# Set the library folder's time after a change, for players that rescan
+# only when it is newer.
+touch_root = false
+# The most the library may take, such as "32 GiB"; songs are encoded at
+# lower bitrates of `[audio] lossy` to fit, the least audible first.
+# Unset, there is no limit.
+# max_size = "32 GiB"
+# Each file counts rounded up to this: "32 KiB" on a FAT32 card.
+block_size = "4 KiB"
 
-# [audio]
-# # Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac and
-# # alac. Audio in any other is encoded: lossy audio to `lossy`, lossless
-# # audio to `lossless`; audio already in that codec is copied.
-# codecs = ["opus", "flac"]
-# lossy = "opus"
-# lossless = "flac"
-# # Bitrates in kbit/s for audio that is encoded rather than copied. Vorbis
-# # and AAC are raised in proportion past two channels; MP3 holds two.
-# opus_kbps = 160
-# opus_surround_kbps = 256
-# vorbis_kbps = 192
-# aac_kbps = 256
-# mp3_kbps = 320
-# # The lowest bitrate in kbit/s a song is lowered to for `max_size`;
-# # unset, the encoder's lowest.
-# # min_kbps = 64
+[audio]
+# Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac and
+# alac. Audio in any other is encoded: lossy audio to `lossy`, lossless
+# audio to `lossless`; audio already in that codec is copied.
+codecs = ["opus", "flac"]
+lossy = "opus"
+lossless = "flac"
+# Bitrates in kbit/s for audio that is encoded rather than copied. Vorbis
+# and AAC are raised in proportion past two channels; MP3 holds two.
+opus_kbps = 160
+opus_surround_kbps = 256
+vorbis_kbps = 192
+aac_kbps = 256
+mp3_kbps = 320
+# The lowest bitrate in kbit/s a song is lowered to for `max_size`;
+# unset, the encoder's lowest.
+# min_kbps = 64
 
-# # How the best of a song's sources is picked. Each measure scores a
-# # source in whole steps; the steps times the weight are summed, and the
-# # lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
-# # The weights below rank by each measure in turn, top first.
-# [quality.purity]
-# # Sound beyond the song, such as a video's intro, in steps of step_ms.
-# enabled = true
-# weight = 10000
-# step_ms = 2000
-# [quality.bandwidth]
-# # Where a lowpass cuts the audio off, a step per step_hz lower.
-# enabled = true
-# weight = 10
-# step_hz = 500
-# [quality.stereo]
-# # One step for mono: the channels' energy no gain or lag between them
-# # explains is at most `incoherence`.
-# enabled = true
-# weight = 5
-# incoherence = 0.01
-# [quality.clipping]
-# # A step for each share of clipped samples reached.
-# enabled = true
-# weight = 1
-# cutoffs = [0.001, 0.01]
-# [quality.square]
-# # One step for a cover that is not square within `tolerance`, the log
-# # of its sides' ratio.
-# enabled = true
-# weight = 10000
-# tolerance = 0.03
-# [quality.resolution]
-# # A cover's detail, a step per `step` (0.1 is 10%) less resolution.
-# enabled = true
-# weight = 20
-# step = 0.1
-# [quality.blockiness]
-# # A cover's JPEG block artifacts, a step per `step`, ten at most.
-# enabled = true
-# weight = 1
-# step = 0.1
+# How the best of a song's sources is picked. Each measure scores a
+# source in whole steps; the steps times the weight are summed, and the
+# lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
+# The weights below rank by each measure in turn, top first.
+[quality.purity]
+# Sound beyond the song, such as a video's intro, in steps of step_ms.
+enabled = true
+weight = 10000
+step_ms = 2000
+[quality.bandwidth]
+# Where a lowpass cuts the audio off, a step per step_hz lower.
+enabled = true
+weight = 10
+step_hz = 500
+[quality.stereo]
+# One step for mono: the channels' energy no gain or lag between them
+# explains is at most `incoherence`.
+enabled = true
+weight = 5
+incoherence = 0.01
+[quality.clipping]
+# A step for each share of clipped samples reached.
+enabled = true
+weight = 1
+cutoffs = [0.001, 0.01]
+[quality.square]
+# One step for a cover that is not square within `tolerance`, the log
+# of its sides' ratio.
+enabled = true
+weight = 10000
+tolerance = 0.03
+[quality.resolution]
+# A cover's detail, a step per `step` (0.1 is 10%) less resolution.
+enabled = true
+weight = 20
+step = 0.1
+[quality.blockiness]
+# A cover's JPEG block artifacts, a step per `step`, ten at most.
+enabled = true
+weight = 1
+step = 0.1
 
-# [ytdlp]
-# format = "bv*+ba/b"
-# sub_langs = "all,-live_chat"
-# concurrent_fragments = 4
-# # muman's postprocessors: no generated captions, square album art.
-# plugins = true
-# # More arguments, such as ["--cookies-from-browser", "firefox"].
-# args = []
-# # Days an unfinished download is kept to resume.
-# partial_days = 14
+[ytdlp]
+format = "bv*+ba/b"
+sub_langs = "all,-live_chat"
+concurrent_fragments = 4
+# muman's postprocessors: no generated captions, square album art.
+plugins = true
+# More arguments, such as ["--cookies-from-browser", "firefox"].
+args = []
+# Days an unfinished download is kept to resume.
+partial_days = 14
 
-# [history]
-# # Changing runs `undo` can put back, and the most their replaced files
-# # may take together, in MiB.
-# runs = 3
-# max_mib = 2048
+[history]
+# Changing runs `undo` can put back, and the most their replaced files
+# may take together, in MiB.
+runs = 3
+max_mib = 2048
 
 [defaults]
 # Subtitle languages lyrics are taken in, most preferred first.

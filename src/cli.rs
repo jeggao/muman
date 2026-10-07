@@ -127,7 +127,7 @@ pub struct Confirm {
     pub dry_run: bool,
 }
 
-/// Tags set in `[song.tags]` of every song an `add` lists or adds to,
+/// Tags set in the `tags` of every song an `add` lists or adds to,
 /// over what its sources offer.
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Tags")]
@@ -270,6 +270,12 @@ pub enum Command {
         /// again at once those that failed to.
         #[arg(long)]
         retry: bool,
+
+        /// Move each setting still at the default of the edition the song
+        /// list names to this muman's default, and raise the edition;
+        /// settings you changed stay.
+        #[arg(long)]
+        update_defaults: bool,
 
         #[command(flatten)]
         matching: Matching,
