@@ -10,6 +10,7 @@
 //! subtitles, and it is the weaker match: yt-dlp tags Filipino `fin`,
 //! the code for Finnish.
 
+use crate::units;
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
@@ -169,7 +170,7 @@ pub fn stated_length(text: &str) -> Option<i64> {
         seconds = seconds * 60.0 + part.trim().parse::<f64>().ok()?;
     }
     #[allow(clippy::cast_possible_truncation)]
-    Some((seconds * 1000.0).round() as i64)
+    Some(units::ms_of_seconds(seconds).round() as i64)
 }
 
 /// The text of a lyrics file, whatever wrote it: UTF-8 with or without
@@ -280,7 +281,7 @@ fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
     if stretch_ppm == 0 {
         return ms;
     }
-    (ms as f64 / (1.0 + stretch_ppm as f64 / 1e6)).round() as i64
+    (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
 }
 
 fn lrc_time(s: &str) -> Option<(i64, &str)> {

@@ -214,7 +214,7 @@ Assignments:
   audio=<key>        Pin the audio, cover or lyrics to one of its sources
   lyrics=false       Take no lyrics
   audio!             Unpin
-  lyrics_offset_ms=120
+  lyrics_offset=80ms Move the lyrics later; a negative time, earlier
 Every other word is a query, as `muman list` reads it.
 ```
 

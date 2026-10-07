@@ -189,7 +189,7 @@ fn per_minute(source: &Source, format: Format) -> f64 {
 /// points times minutes.
 #[must_use]
 pub fn loss(source: &Source, first: Format, format: Format) -> f64 {
-    let minutes = source.seconds / 60.0;
+    let minutes = crate::units::minutes_of_seconds(source.seconds);
     ((per_minute(source, format) - per_minute(source, first)) * minutes).max(0.0)
 }
 
@@ -413,43 +413,6 @@ pub fn allocate(items: &[Item], policy: &Policy) -> Result<Fit, u64> {
     })
 }
 
-/// A size given as a number of bytes with an optional unit: `4GiB`,
-/// `700 MB`, `1.5G`. `K`, `M`, `G` and `T` alone are binary, as `KiB`;
-/// `KB`, `MB`, `GB` and `TB` decimal.
-pub fn parse_size(text: &str) -> Result<u64, String> {
-    let text = text.trim();
-    let split = text
-        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .unwrap_or(text.len());
-    let (number, unit) = text.split_at(split);
-    let number: f64 = number
-        .parse()
-        .map_err(|_| format!("`{text}` is not a size, such as 4GiB or 700MB"))?;
-    let scale: f64 = match unit.trim().to_ascii_lowercase().as_str() {
-        "" | "b" => 1.0,
-        "k" | "kib" => 1024.0,
-        "m" | "mib" => 1024.0_f64.powi(2),
-        "g" | "gib" => 1024.0_f64.powi(3),
-        "t" | "tib" => 1024.0_f64.powi(4),
-        "kb" => 1e3,
-        "mb" => 1e6,
-        "gb" => 1e9,
-        "tb" => 1e12,
-        other => {
-            return Err(format!(
-                "`{other}` is not a unit of size; use B, KiB, MiB, GiB, KB, MB or GB"
-            ));
-        }
-    };
-    let bytes = (number * scale).floor();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    if (0.0..1.8e19).contains(&bytes) {
-        Ok(bytes as u64)
-    } else {
-        Err(format!("`{text}` is too large a size"))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,16 +621,5 @@ mod tests {
         let fit = allocate(&items, &policy).unwrap();
         assert!(fit.total > total(&items, &fit.choice), "a margin is kept");
         assert!(fit.total <= policy.max);
-    }
-
-    #[test]
-    fn sizes_read_with_their_units() {
-        assert_eq!(parse_size("4096"), Ok(4096));
-        assert_eq!(parse_size("4GiB"), Ok(4 << 30));
-        assert_eq!(parse_size("4 G"), Ok(4 << 30));
-        assert_eq!(parse_size("700MB"), Ok(700_000_000));
-        assert_eq!(parse_size("1.5k"), Ok(1536));
-        assert!(parse_size("4 XB").is_err());
-        assert!(parse_size("GB").is_err());
     }
 }

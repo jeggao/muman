@@ -44,6 +44,7 @@
 //! request names muman by [`crate::http::user_agent`], as MusicBrainz
 //! requires of every client, and asks for JSON.
 
+use crate::units;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -330,7 +331,8 @@ impl Recording {
     /// The gap to the song's length in seconds, when the recording has one.
     fn gap(&self, seconds: f64) -> Option<f64> {
         #[allow(clippy::cast_precision_loss)]
-        self.length.map(|ms| (ms as f64 / 1000.0 - seconds).abs())
+        self.length
+            .map(|ms| (units::seconds_of_ms(ms as f64) - seconds).abs())
     }
 
     fn fits(&self, q: &Query) -> bool {
@@ -436,7 +438,7 @@ impl Client<'_> {
     /// The song's recording and the release it is best known from, or
     /// `None` when no recording fits.
     pub fn find(&self, q: &Query) -> Result<Option<Record>> {
-        let ms = |s: f64| whole_seconds(s * 1000.0).max(0);
+        let ms = |s: f64| whole_seconds(units::ms_of_seconds(s)).max(0);
         let query = format!(
             "recording:{} AND artist:{} AND dur:[{} TO {}]",
             phrase(&q.title),

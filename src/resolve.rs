@@ -56,6 +56,7 @@
 //! renderer change; `RENDER_VERSION` is bumped when the bytes a plan
 //! renders to change.
 
+use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -429,13 +430,17 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                 "{}, {:.1} kHz, {}, {:.2}% clipped",
                 u.map_or_else(
                     || "no other recording to compare".to_string(),
-                    |ms| format!(
-                        "{}.{} s of sound beyond the song",
-                        ms / 1000,
-                        ms % 1000 / 100
-                    )
+                    |ms| {
+                        // A song's milliseconds are far below 2^52, held exactly.
+                        #[allow(clippy::cast_precision_loss)]
+                        let seconds = units::seconds_of_ms(ms as f64);
+                        format!(
+                            "{:.1} s of sound beyond the song",
+                            (seconds * 10.0).floor() / 10.0
+                        )
+                    }
                 ),
-                q.bandwidth_hz / 1000.0,
+                units::khz_of_hz(q.bandwidth_hz),
                 if q.is_stereo(input.quality.stereo.incoherence) {
                     "stereo"
                 } else {
@@ -539,7 +544,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         .facts
         .get(audio)
         .and_then(|f| f.duration)
-        .map_or(0.0, |d| d * 1000.0);
+        .map_or(0.0, units::ms_of_seconds);
     let mut best: Option<(Rank, LyricsRef, String)> = None;
     for (n, key, facts) in input.present() {
         if pin.is_some_and(|p| p != key) {

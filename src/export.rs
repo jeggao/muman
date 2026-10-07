@@ -22,6 +22,7 @@
 //! sources are gone, can only be copied. Every entry is counted with what
 //! the zip spends on it, `ENTRY` bytes and its name twice.
 
+use crate::units;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -469,7 +470,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
         bandwidth_hz: audio.quality.map(|q| q.bandwidth_hz),
         seconds,
     };
-    item.churn = CHURN_PER_MINUTE * seconds / 60.0;
+    item.churn = CHURN_PER_MINUTE * units::minutes_of_seconds(seconds);
     let besides = extras(&entries[0].from)
         + entries[1..]
             .iter()
@@ -484,7 +485,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
             continue;
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let stream = (f64::from(kbps) * 125.0 * seconds * (1.0 + CONTAINER)) as u64;
+        let stream = (units::stream_bytes(f64::from(kbps), seconds) * (1.0 + CONTAINER)) as u64;
         let bytes = stream + besides;
         if bytes.saturating_mul(10) <= first.saturating_mul(9) {
             item.rungs.push(Rung {

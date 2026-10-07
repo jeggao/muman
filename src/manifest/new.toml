@@ -1,11 +1,12 @@
 version = 1
-edition = 1
+edition = 2
 
-# Settings, each written at its default; change any. `edition` names the
-# defaults they were written from: when a later muman changes a default,
-# `muman sync --update-defaults` moves each setting still at the old one
-# to the new, and leaves the ones you changed. A key a table does not
-# know is an error.
+# Settings, each written at its default; change any. A size, bitrate,
+# time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
+# `edition` names the settings' names and defaults the file was written
+# to: a later muman renames what it renamed, and `muman sync
+# --update-defaults` moves each setting still at a default it changed,
+# leaving the ones you changed. A key a table does not know is an error.
 
 [library]
 # The library folder: absolute, ~/..., or relative to this file's folder.
@@ -47,42 +48,43 @@ block_size = "4 KiB"
 codecs = ["opus", "flac"]
 lossy = "opus"
 lossless = "flac"
-# Bitrates in kbit/s for audio that is encoded rather than copied. Vorbis
-# and AAC are raised in proportion past two channels; MP3 holds two.
-opus_kbps = 160
-opus_surround_kbps = 256
-vorbis_kbps = 192
-aac_kbps = 256
-mp3_kbps = 320
-# The lowest bitrate in kbit/s a song is lowered to for `max_size`;
-# unset, the encoder's lowest.
-# min_kbps = 64
+# Bitrates for audio that is encoded rather than copied. Vorbis and AAC
+# are raised in proportion past two channels; MP3 holds two, and Opus at
+# most 256 kb/s a channel.
+opus_bitrate = "160 kb/s"
+opus_surround_bitrate = "256 kb/s"
+vorbis_bitrate = "192 kb/s"
+aac_bitrate = "256 kb/s"
+mp3_bitrate = "320 kb/s"
+# The lowest bitrate a song is lowered to for `max_size`; unset, the
+# encoder's lowest.
+# min_bitrate = "64 kb/s"
 
 # How the best of a song's sources is picked. Each measure scores a
 # source in whole steps; the steps times the weight are summed, and the
 # lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
 # The weights below rank by each measure in turn, top first.
 [quality.purity]
-# Sound beyond the song, such as a video's intro, in steps of step_ms.
+# Sound beyond the song, such as a video's intro, in steps of `step`.
 enabled = true
 weight = 10000
-step_ms = 2000
+step = "2 s"
 [quality.bandwidth]
-# Where a lowpass cuts the audio off, a step per step_hz lower.
+# Where a lowpass cuts the audio off, a step per `step` lower.
 enabled = true
 weight = 10
-step_hz = 500
+step = "500 Hz"
 [quality.stereo]
 # One step for mono: the channels' energy no gain or lag between them
 # explains is at most `incoherence`.
 enabled = true
 weight = 5
-incoherence = 0.01
+incoherence = "1 %"
 [quality.clipping]
 # A step for each share of clipped samples reached.
 enabled = true
 weight = 1
-cutoffs = [0.001, 0.01]
+cutoffs = ["0.1 %", "1 %"]
 [quality.square]
 # One step for a cover that is not square within `tolerance`, the log
 # of its sides' ratio.
@@ -90,10 +92,10 @@ enabled = true
 weight = 10000
 tolerance = 0.03
 [quality.resolution]
-# A cover's detail, a step per `step` (0.1 is 10%) less resolution.
+# A cover's detail, a step per `step` less resolution.
 enabled = true
 weight = 20
-step = 0.1
+step = "10 %"
 [quality.blockiness]
 # A cover's JPEG block artifacts, a step per `step`, ten at most.
 enabled = true
@@ -108,14 +110,14 @@ concurrent_fragments = 4
 plugins = true
 # More arguments, such as ["--cookies-from-browser", "firefox"].
 args = []
-# Days an unfinished download is kept to resume.
-partial_days = 14
+# How long an unfinished download is kept to resume.
+keep_partial = "14 days"
 
 [history]
 # Changing runs `undo` can put back, and the most their replaced files
-# may take together, in MiB.
+# may take together.
 runs = 3
-max_mib = 2048
+max_size = "2 GiB"
 
 [defaults]
 # Subtitle languages lyrics are taken in, most preferred first.

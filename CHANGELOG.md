@@ -7,8 +7,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings take their units.** Sizes, bitrates, times, frequencies
+  and shares are written with a unit, read by one parser for each kind:
+  `opus_bitrate = "160 kb/s"`, `[quality.purity] step = "2 s"`,
+  `[quality.bandwidth] step = "500 Hz"`, `[ytdlp] keep_partial =
+  "14 days"`, `[history] max_size = "2 GiB"`, `[providers.*] recheck =
+  "30 days"`, `incoherence = "1 %"`. Each unit is known by its symbol
+  and its name, as `"2 gibibytes"` or `"3 hours"`.
+- **Old setting names are renamed for you.** A song list of an earlier
+  edition reads as the current one: `opus_kbps = 160` reads as
+  `opus_bitrate = "160 kb/s"`, and the next `sync` writes it so, its
+  comments kept; `status` and `check` name each one meanwhile. A
+  setting named both ways is an error. A song list this muman wrote is
+  refused by an earlier one, which names the setting it does not know.
+- **Lyrics offsets are times.** A song's `lyrics_offset = "-120 ms"`
+  moves its lyrics earlier, and `set lyrics_offset=80ms` sets it;
+  `lyrics_offset_ms` is still read and set.
+
 ### Fixed
 
+- **Bitrates out of range.** A bitrate of 0 is refused when the song
+  list is read, where libopus chose its own; an Opus bitrate above
+  256 kb/s a channel, which libopus refuses, is held to it.
 - **No second copy when the template changes.** A library file whose
   size or time changed since muman wrote it, as a ReplayGain scanner,
   a backup restore or a copy that resets times changes it, moves to its

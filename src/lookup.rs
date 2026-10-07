@@ -12,7 +12,7 @@
 //! |---|---|
 //! | Nothing | At once |
 //! | Made another way | At once, unless it found a source the song lists |
-//! | Found nothing, or an instrumental | After the provider's `recheck_days` |
+//! | Found nothing, or an instrumental | After the provider's `recheck` |
 //! | Failed | After an hour, doubling with each failure, up to a week |
 //! | Found a source, or declined | Never |
 //!
@@ -247,11 +247,11 @@ pub fn due(
                 p if p.kept() => r.and_then(|r| query_of(r, &state.facts)).is_some(),
                 _ => true,
             };
-            let days = config.settings(t.find).recheck_days;
+            let recheck = config.settings(t.find).recheck;
             let open = force
                 || state
                     .looked(from, t.find)
-                    .is_none_or(|l| l.due(now, days, &|k| song.has(k)));
+                    .is_none_or(|l| l.due(now, recheck, &|k| song.has(k)));
             if wanted && askable && open {
                 taken.insert(t.find);
                 mine.push(Due {

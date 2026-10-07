@@ -34,10 +34,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, Table, Value, value};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::codec::Codec;
+use crate::migrate::FIRST;
+pub use crate::migrate::{
+    EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
+};
 use crate::quality;
+pub use crate::units::Size;
+use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
@@ -136,30 +142,6 @@ impl Library {
     }
 }
 
-/// A number of bytes, written in `songs.toml` as an integer or as text
-/// with a unit: `"32 GiB"`, `"700MB"`; see [`crate::fit::parse_size`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "SizeText")]
-pub struct Size(pub u64);
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum SizeText {
-    Bytes(u64),
-    Text(String),
-}
-
-impl TryFrom<SizeText> for Size {
-    type Error = String;
-
-    fn try_from(text: SizeText) -> Result<Self, String> {
-        match text {
-            SizeText::Bytes(n) => Ok(Self(n)),
-            SizeText::Text(t) => crate::fit::parse_size(&t).map(Self),
-        }
-    }
-}
-
 /// How strictly names are made safe, beyond replacing `/` and control
 /// characters, which every filesystem refuses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,17 +195,23 @@ pub struct Audio {
     pub lossless: Codec,
     /// Opus bitrate for mono and stereo, in kbit/s; at or above what
     /// YouTube serves, so encoding loses nothing audible.
+    #[serde(rename = "opus_bitrate", deserialize_with = "serde_as::kbps")]
     pub opus_kbps: u32,
     /// Opus bitrate for more than two channels.
+    #[serde(rename = "opus_surround_bitrate", deserialize_with = "serde_as::kbps")]
     pub opus_surround_kbps: u32,
     /// Vorbis and AAC bitrates for two channels, raised in proportion for
     /// more.
+    #[serde(rename = "vorbis_bitrate", deserialize_with = "serde_as::kbps")]
     pub vorbis_kbps: u32,
+    #[serde(rename = "aac_bitrate", deserialize_with = "serde_as::kbps")]
     pub aac_kbps: u32,
     /// MP3 bitrate, constant; MP3 holds two channels at most.
+    #[serde(rename = "mp3_bitrate", deserialize_with = "serde_as::kbps")]
     pub mp3_kbps: u32,
     /// The lowest bitrate a song is lowered to so the library fits
     /// `[library] max_size`, for two channels; none, the encoder's lowest.
+    #[serde(rename = "min_bitrate", deserialize_with = "serde_as::kbps_opt")]
     pub min_kbps: Option<u32>,
 }
 
@@ -243,9 +231,12 @@ impl Default for Audio {
     }
 }
 
+/// The most libopus encodes a channel at, in kbit/s: it refuses more.
+const OPUS_KBPS_A_CHANNEL: u32 = 256;
+
 impl Audio {
     /// The bitrate `codec` encodes `channels` at, in kbit/s; none for a
-    /// lossless codec.
+    /// lossless codec. Opus is held to what libopus takes for the channels.
     #[must_use]
     pub fn kbps(&self, codec: Codec, channels: u32) -> Option<u32> {
         let scaled = |kbps: u32| {
@@ -256,8 +247,14 @@ impl Audio {
             }
         };
         match codec {
-            Codec::Opus if channels > 2 => Some(self.opus_surround_kbps),
-            Codec::Opus => Some(self.opus_kbps),
+            Codec::Opus => {
+                let kbps = if channels > 2 {
+                    self.opus_surround_kbps
+                } else {
+                    self.opus_kbps
+                };
+                Some(kbps.min(OPUS_KBPS_A_CHANNEL * channels.max(1)))
+            }
             Codec::Vorbis => Some(scaled(self.vorbis_kbps)),
             Codec::Aac => Some(scaled(self.aac_kbps)),
             Codec::Mp3 => Some(self.mp3_kbps),
@@ -272,11 +269,19 @@ impl Audio {
                 self.lossy
             );
         }
-        if self.min_kbps == Some(0) {
-            bail!("[audio] min_kbps must be above 0");
+        let rates = [
+            ("opus_bitrate", Some(self.opus_kbps)),
+            ("opus_surround_bitrate", Some(self.opus_surround_kbps)),
+            ("vorbis_bitrate", Some(self.vorbis_kbps)),
+            ("aac_bitrate", Some(self.aac_kbps)),
+            ("mp3_bitrate", Some(self.mp3_kbps)),
+            ("min_bitrate", self.min_kbps),
+        ];
+        if let Some((name, _)) = rates.iter().find(|(_, kbps)| *kbps == Some(0)) {
+            bail!("[audio] {name} must be above 0");
         }
         if self.mp3_kbps > 320 {
-            bail!("[audio] mp3_kbps is over 320, the most MP3 holds");
+            bail!("[audio] mp3_bitrate is over 320 kb/s, the most MP3 holds");
         }
         Ok(())
     }
@@ -303,8 +308,8 @@ pub struct Quality {
 impl Quality {
     fn check(&self) -> Result<()> {
         let steps = [
-            ("purity.step_ms", f64::from(self.purity.step_ms)),
-            ("bandwidth.step_hz", f64::from(self.bandwidth.step_hz)),
+            ("purity.step", f64::from(self.purity.step_ms)),
+            ("bandwidth.step", f64::from(self.bandwidth.step_hz)),
             ("resolution.step", self.resolution.step),
             ("blockiness.step", self.blockiness.step),
         ];
@@ -339,6 +344,7 @@ pub struct Purity {
     pub weight: u32,
     /// Sound beyond the song is judged in steps this long: a fade differs
     /// by less, an intro or a skit by more.
+    #[serde(rename = "step", deserialize_with = "serde_as::ms")]
     pub step_ms: u32,
 }
 
@@ -359,6 +365,7 @@ pub struct Bandwidth {
     pub enabled: bool,
     pub weight: u32,
     /// Wide enough that noise never decides between near-equals.
+    #[serde(rename = "step", deserialize_with = "serde_as::hz")]
     pub step_hz: u32,
 }
 
@@ -381,6 +388,7 @@ pub struct Stereo {
     /// The share of the channels' energy no gain or lag between them
     /// explains, at or below which audio counts as mono; see
     /// [`quality::STEREO_INCOHERENCE`].
+    #[serde(deserialize_with = "serde_as::share")]
     pub incoherence: f64,
 }
 
@@ -402,6 +410,7 @@ pub struct Clipping {
     pub weight: u32,
     /// Shares of clipped samples, each one reached a step: by order of
     /// magnitude from the inaudible.
+    #[serde(deserialize_with = "serde_as::shares")]
     pub cutoffs: Vec<f64>,
 }
 
@@ -442,6 +451,7 @@ pub struct Resolution {
     pub enabled: bool,
     pub weight: u32,
     /// Each step is this share more resolution: 0.1 is 10%.
+    #[serde(deserialize_with = "serde_as::share")]
     pub step: f64,
 }
 
@@ -506,8 +516,9 @@ pub struct Ytdlp {
     pub plugins: bool,
     /// More arguments, such as `["--cookies-from-browser", "firefox"]`.
     pub args: Vec<String>,
-    /// Days an unfinished download is kept to resume.
-    pub partial_days: u64,
+    /// How long an unfinished download is kept to resume.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub keep_partial: std::time::Duration,
 }
 
 impl Default for Ytdlp {
@@ -518,7 +529,7 @@ impl Default for Ytdlp {
             concurrent_fragments: 4,
             plugins: true,
             args: Vec::new(),
-            partial_days: 14,
+            keep_partial: crate::units::Time::days(14).duration(),
         }
     }
 }
@@ -529,200 +540,25 @@ impl Default for Ytdlp {
 pub struct History {
     /// The changing runs kept.
     pub runs: usize,
-    /// The most the kept runs' replaced files may take, in MiB.
-    pub max_mib: u64,
+    /// The most the kept runs' replaced files may take.
+    pub max_size: Size,
 }
 
 impl Default for History {
     fn default() -> Self {
         Self {
             runs: 3,
-            max_mib: 2048,
+            max_size: Size(2 << 30),
         }
     }
-}
-
-/// The defaults a song list's settings are written from. Raised, with a
-/// [`Change`] for each default that differs, whenever a default changes.
-pub const EDITION: i64 = 1;
-
-/// Each default changed since the first edition, oldest first.
-pub const CHANGES: &[Change] = &[];
-
-/// The editions this muman knows: the current one and what changed.
-pub const EDITIONS: Editions = Editions {
-    current: EDITION,
-    changes: CHANGES,
-};
-
-/// The edition a song list without `edition` was written from.
-const FIRST: i64 = 1;
-
-/// A default an edition changed.
-#[derive(Debug, Clone, Copy)]
-pub struct Change {
-    /// The edition the new default came in.
-    pub edition: i64,
-    /// The key as `audio.opus_kbps` or `quality.stereo.weight`.
-    pub key: &'static str,
-    /// Its default in the edition before, as TOML.
-    pub was: &'static str,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Editions {
-    pub current: i64,
-    pub changes: &'static [Change],
-}
-
-/// A setting still at the default of the edition its song list was
-/// written from, which a later edition changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stale {
-    /// The key as `audio.opus_kbps`.
-    pub key: String,
-    /// The file's value, that edition's default.
-    pub was: String,
-    pub now: String,
-}
-
-impl std::fmt::Display for Stale {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (table, key) = self.key.rsplit_once('.').unwrap_or(("", &self.key));
-        write!(f, "[{table}] {key} = {}", self.was)
-    }
-}
-
-/// What to warn of for `stale`: each setting, then how to update them.
-#[must_use]
-pub fn stale_warnings(stale: &[Stale]) -> Vec<String> {
-    let mut lines: Vec<String> = stale
-        .iter()
-        .map(|s| format!("`{s}` was the default; it is {} now", s.now))
-        .collect();
-    if !lines.is_empty() {
-        lines.push(
-            "`muman sync --update-defaults` moves these settings to the current defaults".into(),
-        );
-    }
-    lines
 }
 
 /// The settings tables as `new.toml` writes them: every default, each
 /// with its comments.
-fn defaults() -> DocumentMut {
+pub(crate) fn defaults() -> DocumentMut {
     crate::manifest::NEW
         .parse()
         .unwrap_or_else(|_| DocumentMut::new())
-}
-
-/// The edition `doc` names, the first when it names none.
-#[must_use]
-pub fn edition_of(doc: &DocumentMut) -> i64 {
-    doc.get("edition")
-        .and_then(Item::as_integer)
-        .unwrap_or(FIRST)
-}
-
-/// Every key the settings tables of `table` hold a value at, with its
-/// path from the root.
-fn leaves<'a>(path: &[&'a str], table: &'a Table, out: &mut Vec<(Vec<&'a str>, &'a Value)>) {
-    for (key, item) in table {
-        let mut at = path.to_vec();
-        at.push(key);
-        match item {
-            Item::Table(t) => leaves(&at, t, out),
-            Item::Value(v) => out.push((at, v)),
-            Item::None | Item::ArrayOfTables(_) => {}
-        }
-    }
-}
-
-fn value_at<'a>(doc: &'a DocumentMut, path: &[&str]) -> Option<&'a Value> {
-    path.iter()
-        .try_fold(doc.as_item(), |item, key| item.get(key))?
-        .as_value()
-}
-
-fn value_at_mut<'a>(doc: &'a mut DocumentMut, path: &[&str]) -> Option<&'a mut Value> {
-    path.iter()
-        .try_fold(doc.as_item_mut(), |item, key| item.get_mut(key))?
-        .as_value_mut()
-}
-
-/// `value` without its formatting, for comparing.
-fn plain(value: &Value) -> Option<toml::Value> {
-    toml::from_str::<toml::Table>(&format!("v = {}", text(value)))
-        .ok()?
-        .remove("v")
-}
-
-fn text(value: &Value) -> String {
-    let mut value = value.clone();
-    value.decor_mut().clear();
-    value.to_string()
-}
-
-/// Each setting of `doc` still at the default of the edition it names,
-/// where a later edition changed that default.
-#[must_use]
-pub fn stale(doc: &DocumentMut, editions: &Editions) -> Vec<Stale> {
-    let file = edition_of(doc);
-    let defaults = defaults();
-    let mut keys = Vec::new();
-    for table in TABLES {
-        if let Some(t) = defaults.get(table).and_then(Item::as_table) {
-            leaves(&[table], t, &mut keys);
-        }
-    }
-    let mut stale = Vec::new();
-    for (path, now) in keys {
-        let key = path.join(".");
-        let Some(then) = editions
-            .changes
-            .iter()
-            .filter(|c| c.edition > file && c.key == key)
-            .min_by_key(|c| c.edition)
-        else {
-            continue;
-        };
-        let Some(value) = value_at(doc, &path).and_then(plain) else {
-            continue;
-        };
-        let then_value = toml::from_str::<toml::Table>(&format!("v = {}", then.was))
-            .ok()
-            .and_then(|mut t| t.remove("v"));
-        if then_value.as_ref() == Some(&value) && plain(now).as_ref() != Some(&value) {
-            stale.push(Stale {
-                key,
-                was: then.was.to_string(),
-                now: text(now),
-            });
-        }
-    }
-    stale
-}
-
-/// Every setting [`stale`] finds moved to its current default, keeping
-/// its comments, and `edition` raised to the current. What moved.
-pub fn update(doc: &mut DocumentMut, editions: &Editions) -> Vec<Stale> {
-    let stale = stale(doc, editions);
-    let defaults = defaults();
-    for s in &stale {
-        let path: Vec<&str> = s.key.split('.').collect();
-        let Some(now) = value_at(&defaults, &path).cloned() else {
-            continue;
-        };
-        if let Some(value) = value_at_mut(doc, &path) {
-            let decor = value.decor().clone();
-            *value = now;
-            *value.decor_mut() = decor;
-        }
-    }
-    if edition_of(doc) < editions.current {
-        doc["edition"] = value(editions.current);
-    }
-    stale
 }
 
 /// Every setting `doc` lacks added at its current default, with the
@@ -732,7 +568,7 @@ pub fn update(doc: &mut DocumentMut, editions: &Editions) -> Vec<Stale> {
 /// [`stale`]. Whether anything changed.
 pub fn fill(doc: &mut DocumentMut, editions: &Editions) -> bool {
     let defaults = defaults();
-    let mut changed = false;
+    let mut changed = crate::migrate::rename_all(doc, editions).is_ok_and(|r| !r.is_empty());
     for name in TABLES {
         let Some(default) = defaults.get(name).and_then(Item::as_table) else {
             continue;
@@ -831,7 +667,10 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
             only.insert(table, item.clone());
         }
     }
-    let settings: Settings = toml::from_str(&only.to_string()).context("reading the settings")?;
+    crate::migrate::rename_all(&mut only, &EDITIONS)?;
+    let settings: Settings = toml::from_str(&only.to_string())
+        .context("reading the settings")
+        .map_err(|e| crate::migrate::explain(e, doc))?;
     if doc
         .get("edition")
         .is_some_and(|e| e.as_integer().is_none_or(|e| e < FIRST))
@@ -881,6 +720,20 @@ mod tests {
     }
 
     #[test]
+    fn a_bitrate_is_above_0_and_opus_within_what_libopus_takes() {
+        let e = settings("[audio]\nopus_kbps = 0\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("opus_bitrate must be above 0"),
+            "{e:#}"
+        );
+        assert!(settings("[audio]\nmin_kbps = 0\n").is_err());
+        let s = settings("[audio]\nopus_kbps = 400\nopus_surround_kbps = 2000\n").unwrap();
+        assert_eq!(s.audio.kbps(Codec::Opus, 1), Some(256));
+        assert_eq!(s.audio.kbps(Codec::Opus, 2), Some(400));
+        assert_eq!(s.audio.kbps(Codec::Opus, 6), Some(1536));
+    }
+
+    #[test]
     fn codecs_are_named_and_a_lossy_target_must_be_lossy() {
         let s = settings(
             "[audio]\ncodecs = [\"aac\", \"mp3\", \"alac\"]\nlossy = \"mp3\"\nlossless = \"alac\"\n",
@@ -924,63 +777,14 @@ mod tests {
         assert!(settings("[library]\nblock_size = 0\n").is_err());
     }
 
-    /// A second edition that raised `opus_kbps` to today's default.
-    const RAISED: Editions = Editions {
-        current: 2,
-        changes: &[Change {
-            edition: 2,
-            key: "audio.opus_kbps",
-            was: "128",
-        }],
-    };
-
     fn doc(text: &str) -> DocumentMut {
         text.parse().unwrap()
     }
 
     #[test]
-    fn a_setting_at_its_editions_old_default_is_stale_until_updated() {
-        let mut d = doc("version = 1\nedition = 1\n[audio]\nopus_kbps = 128 # as written\n");
-        let found = stale(&d, &RAISED);
-        assert_eq!(
-            found,
-            [Stale {
-                key: "audio.opus_kbps".into(),
-                was: "128".into(),
-                now: "160".into(),
-            }]
-        );
-        assert_eq!(found[0].to_string(), "[audio] opus_kbps = 128");
-        assert_eq!(stale_warnings(&found).len(), 2);
-        fill(&mut d, &RAISED);
-        assert_eq!(edition_of(&d), 1, "a stale setting holds the edition");
-        assert_eq!(update(&mut d, &RAISED), found);
-        assert!(
-            d.to_string().contains("opus_kbps = 160 # as written"),
-            "{d}"
-        );
-        assert_eq!(edition_of(&d), 2);
-        assert_eq!(stale(&d, &RAISED), []);
-    }
-
-    #[test]
-    fn a_setting_changed_by_hand_stays_and_the_edition_rises() {
-        let mut d = doc("version = 1\n[audio]\nopus_kbps = 170\n");
-        assert_eq!(edition_of(&d), FIRST);
-        assert_eq!(stale(&d, &RAISED), []);
-        assert!(fill(&mut d, &RAISED));
-        assert_eq!(edition_of(&d), 2);
-        assert_eq!(read(&d).unwrap().audio.opus_kbps, 170);
-        let chosen = doc("version = 1\nedition = 2\n[audio]\nopus_kbps = 128\n");
-        assert_eq!(stale(&chosen, &RAISED), [], "set after edition 2");
-        assert!(settings("edition = 0\n").is_err());
-        assert!(settings("edition = \"one\"\n").is_err());
-    }
-
-    #[test]
     fn every_setting_a_list_lacks_is_added_ahead_of_its_own_tables() {
         let mut d = doc(
-            "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n\n[audio]\n# Mine.\nopus_kbps = 192\n\n\
+            "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n\n[audio]\n# Mine.\nopus_bitrate = \"192 kb/s\"\n\n\
              [quality.stereo]\nweight = 0\n",
         );
         assert!(fill(&mut d, &EDITIONS));
@@ -988,9 +792,12 @@ mod tests {
         let mut again = doc(&text);
         assert!(!fill(&mut again, &EDITIONS), "{text}");
         assert_eq!(again.to_string(), text);
-        assert!(text.starts_with("version = 1\nedition = 1\n"), "{text}");
+        assert!(text.starts_with("version = 1\nedition = 2\n"), "{text}");
         assert!(text.find("[library]") < text.find("[defaults]"), "{text}");
-        assert!(text.contains("# Mine.\nopus_kbps = 192\n"), "{text}");
+        assert!(
+            text.contains("# Mine.\nopus_bitrate = \"192 kb/s\"\n"),
+            "{text}"
+        );
         let s = read(&again).unwrap();
         assert_eq!(s.audio.opus_kbps, 192);
         assert_eq!(s.quality.stereo.weight, 0);
@@ -1008,10 +815,13 @@ mod tests {
         let defaults = defaults();
         let mut keys = Vec::new();
         for table in TABLES {
-            leaves(&[table], defaults[table].as_table().unwrap(), &mut keys);
+            crate::migrate::leaves(&[table], defaults[table].as_table().unwrap(), &mut keys);
         }
         for (path, _) in keys {
-            assert!(value_at(&again, &path).is_some(), "{path:?} is not set");
+            assert!(
+                crate::migrate::value_at(&again, &path).is_some(),
+                "{path:?} is not set"
+            );
         }
     }
 

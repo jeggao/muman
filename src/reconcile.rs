@@ -1148,6 +1148,9 @@ pub(crate) fn plan<W: Write>(
             &format!("No cleaning rule is named `{key}` in the song list; it does nothing"),
         )?;
     }
+    for line in crate::migrate::notices(&manifest.renamed) {
+        crate::ui::info(out, &line)?;
+    }
     for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
         crate::ui::warning(out, &line)?;
     }
