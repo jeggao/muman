@@ -408,7 +408,10 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
             lyrics.is_some_and(|l| l.contains("line")),
             "{format:?}: the lyrics stay"
         );
-        assert!(leftover_parts(&library.join("A/Record")).is_empty());
+        assert_eq!(
+            leftover_parts(&library.join("A/Record")),
+            [] as [PathBuf; 0]
+        );
     }
 }
 

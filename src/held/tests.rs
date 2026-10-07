@@ -95,10 +95,9 @@ fn a_record_of_a_source_not_listed_is_ignored_and_one_unreadable_refused() {
 #[test]
 fn a_part_is_the_same_as_far_as_both_digests_go_and_one_not_recorded_no_change() {
     let short = held("0123456789abcdef", None);
-    assert!(
-        short
-            .changed(&held("0123456789abcdef0011223344556677", None))
-            .is_empty()
+    assert_eq!(
+        short.changed(&held("0123456789abcdef0011223344556677", None)),
+        []
     );
     assert_eq!(
         short.changed(&held("0123456789abcdee", None)),

@@ -195,7 +195,7 @@ fn a_cue_sheet_beside_a_file_is_noted() {
     let dir = tempfile::tempdir().unwrap();
     let image = dir.path().join("Lantern Hours.flac");
     std::fs::write(&image, b"fLaC").unwrap();
-    assert!(unkept(&image).is_empty());
+    assert_eq!(unkept(&image), []);
     std::fs::write(
         dir.path().join("Lantern Hours.cue"),
         "FILE \"Lantern Hours.flac\" WAVE\n  TRACK 01 AUDIO\n    FLAGS DCP PRE\n",
