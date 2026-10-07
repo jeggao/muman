@@ -80,7 +80,7 @@ fn unused_files(
     for path in store.unused(known) {
         if path.starts_with(dirs.ytdlp()) {
             if let Some(id) = id_of(&path) {
-                doomed.extend(store.fetched_files(id)?);
+                doomed.extend(store.fetched_files(&id)?);
             }
             continue;
         }

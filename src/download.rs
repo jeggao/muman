@@ -433,7 +433,9 @@ mod tests {
                     Youtube bad \"/o/b.mkv\" NA NA\n\
                     Generic a \"/o/x/a [a].mp3\" \"https://mirror7.files.example/0/a.mp3\" \
                     \"https://www.files.example/download/a.mp3\"\n\
-                    Funkwhale b \"/o/x/b [b].mp3\" NA NA\n";
+                    Funkwhale b \"/o/x/b [b].mp3\" NA NA\n\
+                    ArchiveOrg i/P_1.mp3 \"/o/u/P_1.mp3 [i\\u29f8P_1.mp3].mp3\" \
+                    \"https://archive.org/details/i\" NA\n";
         assert_eq!(
             finished(done),
             vec![
@@ -448,6 +450,10 @@ mod tests {
                 Fetched {
                     key: SourceKey::parse("funkwhale:b").unwrap(),
                     path: PathBuf::from("/o/x/b [b].mp3"),
+                },
+                Fetched {
+                    key: SourceKey::parse("archive.org:i/P_1.mp3").unwrap(),
+                    path: PathBuf::from("/o/u/P_1.mp3 [i⧸P_1.mp3].mp3"),
                 },
             ]
         );

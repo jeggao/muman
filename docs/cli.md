@@ -16,12 +16,12 @@ A new source the same recording as a listed song, by its fingerprint, is added t
 Exit codes:
   0  Every song was written, or nothing needed to be; or a change was
      declined
-  2  yt-dlp, ffmpeg or ffprobe is missing, or the system names no
-     home folder
+  2  yt-dlp, ffmpeg or ffprobe is missing, the system names no home
+     folder, or the command line does not parse
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query matched no song, a change needs a terminal, -y or --all, or
-     undo refused
+  5  A query did not read or matched no song, a change needs a terminal,
+     -y or --all, or a change or undo was refused
 ```
 
 **Subcommands:**
@@ -36,7 +36,7 @@ Exit codes:
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
-* `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing. A song a sync leaves as it is is counted, not shown, unless a query matches it
+* `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
@@ -98,7 +98,7 @@ Bring the library in line with the song list: fetch any missing source, add file
 
 **Options:**
 
-* `--rematch` — Make every lookup now, whatever an earlier one found: an upload on YouTube Music for its track, a track on YouTube for an upload with subtitles, a song on LRCLIB for its lyrics, a song on MusicBrainz for its album
+* `--rematch` — Make every lookup now, whatever an earlier one found, but none on a provider the song has a source from already: an upload on YouTube Music for its track, a track on YouTube for an upload with subtitles, a song on LRCLIB for its lyrics, a song on MusicBrainz for its album
 * `--force` — Write every song again, changed or not, a library file changed since muman wrote it included
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to
 * `--accept` — Take what each fetched source holds now, its audio, cover, lyrics or tags, where it differs from what its song was built from, as after a fetch again, and record it in the song list
@@ -301,7 +301,7 @@ Check the library against what muman recorded: files missing, empty or changed s
 
 ### `muman status`
 
-Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing. A song a sync leaves as it is is counted, not shown, unless a query matches it
+Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 
 **Usage:** `muman status [OPTIONS] [QUERY]...`
 

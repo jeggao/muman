@@ -209,8 +209,14 @@ fn interpret(
     Ok(Some(edit))
 }
 
-/// Say what an edit does, song by song.
-fn summarize<W: Write>(edit: &Edit, opened: &[Opened], out: &mut W) -> Result<()> {
+/// Say what an edit does, song by song; one in `gone`, removed from the
+/// song list while it was open, takes none of it.
+fn summarize<W: Write>(
+    edit: &Edit,
+    opened: &[Opened],
+    gone: &[SourceKey],
+    out: &mut W,
+) -> Result<()> {
     let Edit::Rewrite { songs, new } = edit else {
         return Ok(());
     };
@@ -220,6 +226,9 @@ fn summarize<W: Write>(edit: &Edit, opened: &[Opened], out: &mut W) -> Result<()
             .find(|o| &o.id == id)
             .map_or_else(|| id.to_string(), |o| o.name.clone());
         match to {
+            _ if gone.contains(id) => {
+                crate::ui::warning(out, &format!("Not changed: {name}, no longer listed"))?;
+            }
             Rewritten::Table(_) => crate::ui::info(out, &format!("Changed: {name}"))?,
             Rewritten::Removed(_) => crate::ui::warning(out, &format!("Removed: {name}"))?,
         }
@@ -231,13 +240,15 @@ fn summarize<W: Write>(edit: &Edit, opened: &[Opened], out: &mut W) -> Result<()
 }
 
 /// Open the songs the query picks in an editor, run by `editor` on the
-/// file's path, and apply what changed. Returns whether anything did.
+/// file's path, and apply what changed, calling `before_save` first each
+/// time it saves. Returns whether anything did.
 pub fn edit<W: Write>(
     dirs: &Dirs,
     terms: &[String],
     all: bool,
     mut prompter: Option<&mut dyn Prompter>,
     editor: &mut dyn FnMut(&Path) -> Result<()>,
+    before_save: &mut dyn FnMut() -> Result<()>,
     out: &mut W,
 ) -> Result<bool> {
     if prompter.is_none() {
@@ -282,15 +293,21 @@ pub fn edit<W: Write>(
     let file = dir.path().join("songs.toml");
     let mut shown = first.clone();
     let mut expected = read.songs(&picked);
+    let mut gone = Vec::new();
     loop {
         std::fs::write(&file, &shown).with_context(|| format!("writing {}", file.display()))?;
+        let modified = |f: &Path| std::fs::metadata(f).and_then(|m| m.modified()).ok();
+        let written = modified(&file);
         editor(&file)?;
         // An editor on Windows may save with CRLF line endings, which
         // would otherwise count as a change to every line.
         let text = std::fs::read_to_string(&file)
             .with_context(|| format!("reading {}", file.display()))?
             .replace("\r\n", "\n");
-        if without_notes(&text) == without_notes(&first) {
+        // Quit without saving, whatever was shown last: the file as
+        // written, untouched since.
+        let saved = modified(&file) != written || text != shown;
+        if !saved || without_notes(&text) == without_notes(&first) {
             crate::ui::info(out, "Nothing changed")?;
             return Ok(false);
         }
@@ -305,13 +322,19 @@ pub fn edit<W: Write>(
                 continue;
             }
         };
+        before_save()?;
         read.manifest.edit(edit.clone());
         let changed = read.manifest.save_if_unchanged(&expected)?;
         if changed.is_empty() {
-            summarize(&edit, &opened, out)?;
+            summarize(&edit, &opened, &gone, out)?;
             return Ok(true);
         }
         read.manifest = crate::manifest::Manifest::load(&dirs.home)?;
+        gone = opened
+            .iter()
+            .filter(|o| read.manifest.song_with(&o.id).is_none())
+            .map(|o| o.id.clone())
+            .collect();
         expected = changed
             .iter()
             .filter_map(|k| read.manifest.song_with(k).cloned())

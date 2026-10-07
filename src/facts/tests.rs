@@ -68,7 +68,11 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
     source.covers = vec![cover];
     let fake = Fake::default().probe("Song.flac", FLAC);
     let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
-    assert_eq!(fake.calls().len(), 2, "no attachments to dump");
+    assert_eq!(
+        fake.calls().len(),
+        3,
+        "no attachments to dump, the cover alone"
+    );
     assert_eq!(facts.tags[&tags::Field::Album].values, ["Record"]);
     assert_eq!(facts.tags[&tags::Field::Track].values, ["2"]);
     let at: Vec<&CoverAt> = facts.covers.iter().map(|c| &c.at).collect();

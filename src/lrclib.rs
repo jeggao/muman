@@ -269,15 +269,20 @@ pub mod testing {
     /// GET with a 429.
     #[derive(Debug, Default)]
     pub struct Server {
-        pub answers: Vec<(String, String)>,
+        pub answers: Vec<(String, Vec<u8>)>,
         pub asked: Mutex<Vec<String>>,
         pub refusing: bool,
     }
 
     impl Server {
         #[must_use]
-        pub fn answer(mut self, fragment: &str, body: &str) -> Self {
-            self.answers.push((fragment.into(), body.into()));
+        pub fn answer(self, fragment: &str, body: &str) -> Self {
+            self.answer_bytes(fragment, body.as_bytes())
+        }
+
+        #[must_use]
+        pub fn answer_bytes(mut self, fragment: &str, body: &[u8]) -> Self {
+            self.answers.push((fragment.into(), body.to_vec()));
             self
         }
     }
@@ -301,7 +306,7 @@ pub mod testing {
             self.answers
                 .iter()
                 .find(|(f, _)| url.contains(f.as_str()))
-                .map(|(_, b)| b.clone().into_bytes())
+                .map(|(_, b)| b.clone())
                 .ok_or(TransportError::Status {
                     code: 404,
                     body: "TrackNotFound".into(),

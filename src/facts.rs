@@ -109,7 +109,10 @@ impl Served {
         Some(Self {
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
-            url: info.page().map(str::to_string),
+            url: info.key().map_or_else(
+                || info.page().map(str::to_string),
+                |key| crate::source::page_to_fetch(&key, info.page()),
+            ),
         })
     }
 }
@@ -118,7 +121,10 @@ impl Facts {
     /// Whether these still describe a source at revision `rev`.
     #[must_use]
     pub fn holds_for(&self, rev: &str) -> bool {
-        self.rev == rev && self.method == method()
+        // Facts recorded before revisions held change times hold while
+        // the sizes and modification times do, as they did then.
+        let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
+        same && self.method == method()
     }
 
     /// What a plan names its audio by: its digest, or, where it has
@@ -314,8 +320,11 @@ fn read_hash(path: &Path) -> Option<String> {
         .then(|| hex[..32].to_ascii_lowercase())
 }
 
-fn digest_file(path: &Path) -> Option<String> {
-    std::fs::read(path).ok().map(|b| digest(&b))
+/// [`digest`] of a file's bytes, read a block at a time.
+pub(crate) fn digest_file(path: &Path) -> Option<String> {
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path).ok()?, &mut hasher).ok()?;
+    Some(hex(&hasher.finalize()[..16]))
 }
 
 /// The ffmpeg output options that hash the packets of stream
@@ -417,7 +426,11 @@ fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
 
 fn read_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(crate::lyrics::decode(&bytes))
+    let text = crate::lyrics::decode(&bytes);
+    if !crate::lyrics::is_text(&text) {
+        anyhow::bail!("{} holds no text", path.display());
+    }
+    Ok(text)
 }
 
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
@@ -655,20 +668,28 @@ fn media<R: Runner>(
             ),
         ));
     }
+
+    let input_refs: Vec<&Path> = inputs.iter().map(PathBuf::as_path).collect();
+    let mut plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
+    let mut results = ffmpeg::run_outputs(runner, &input_refs, &plain);
+    // Each picture beside the file in a run of its own: one ffmpeg cannot
+    // open, as an empty file, fails every run it is an input of.
     for (n, cover) in located.covers.iter().enumerate() {
-        inputs.push(cover.clone());
+        let output = Output::new(
+            quality::gray_output(0, "v:0"),
+            &scratch.join(format!("side{n}.pgm")),
+        );
+        results.extend(ffmpeg::run_outputs(
+            runner,
+            &[cover.as_path()],
+            std::slice::from_ref(&output),
+        ));
+        plain.push(output.clone());
         outputs.push((
-            Output::new(
-                quality::gray_output(inputs.len() - 1, "v:0"),
-                &scratch.join(format!("side{n}.pgm")),
-            ),
+            output,
             Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover)),
         ));
     }
-
-    let input_refs: Vec<&Path> = inputs.iter().map(PathBuf::as_path).collect();
-    let plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
-    let results = ffmpeg::run_outputs(runner, &input_refs, &plain);
     let mut segments = Vec::new();
     let mut bytes = None;
     let mut packets_end = None;
@@ -709,10 +730,9 @@ fn media<R: Runner>(
     }
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
-    if let Some(lrc) = &located.lyrics {
-        facts
-            .lyrics
-            .push(lyrics_of(LyricsAt::Sidecar, &read_text(lrc)?));
+    // Lyrics beside a song that do not read cost the song only them.
+    if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
+        facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
     }
     if let (Some(said), Some(held), Some(a)) = (facts.duration, packets_end, &probed.audio)
         && held + CUT_SLACK_S < said

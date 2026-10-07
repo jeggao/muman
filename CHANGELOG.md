@@ -140,6 +140,219 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Short songs on AcoustID.** A song of 2 s or less, whose print is
   empty, is not looked up on AcoustID, which refused it as invalid and
   was asked again after every wait.
+- **A song list gone missing removes nothing.** With `songs.toml`
+  deleted or moved away, a `sync` read it as listing no song and removed
+  the whole library, and `add` wrote a new list holding only what it
+  added. Every command that changes the song list now refuses, naming
+  how many songs the library holds; a song list that lists no song
+  still removes them.
+- **Undo history kept for runs that did something.** A dry run, a
+  refused or declined change, or a command that failed before reaching
+  the library kept a run with no outputs, which pushed real runs out of
+  `[history] runs`, and undoing it would have removed every song.
+- **Undo over a file you edited.** `undo` put the file a run replaced
+  back over one edited since the run wrote it; it now refuses, as it
+  does when the song list changed.
+- **`edit`, quit without saving.** Quitting after muman reopened the
+  file, for a mistake or for a song list changed meanwhile, applied the
+  text anyway or reopened it again without end; it now changes nothing.
+- **A library named relatively.** `--library lib` was recorded as typed,
+  so a run started in another folder took the library as moved and
+  every file in it as not muman's; folders are now recorded whole. A
+  library that is a file is refused before the old one is forgotten.
+- **A song taken out while its file was fresh.** A song deleted from the
+  song list by hand within ten seconds of its file being touched was
+  listed again by the next sync; it is now kept out.
+- **A file stamped in the future.** A dropped file whose time is ahead of
+  the clock, as a camera or a FAT stick can leave, waited as "still
+  being copied in" until the clock caught up; it is now read at once.
+- **An empty picture beside a song.** A zero-byte `.jpg` or `.png` beside
+  a song, or as its folder's cover, left the song's audio unmeasured and
+  unfingerprinted, ranking it last; each picture is now measured alone,
+  and one that does not open costs only itself.
+- **Covers too large for FLAC.** A cover over the 16 MiB a FLAC metadata
+  block holds failed the song's write on every sync and left an empty
+  folder; it is now made a JPEG at most 3000 pixels wide. Lyrics that
+  large are not embedded, said so, and a failed write leaves no empty
+  folders.
+- **A file cut off.** A source cut off partway, as a copy or a download
+  stopped, was copied into the library broken; it is now encoded, so the
+  song ends cleanly where the source breaks off. `check --decode` now
+  names such a file: ffmpeg exits 0 past a broken frame, so every error
+  it writes counts.
+- **Undo of a song retagged and moved.** Undoing a run that moved a
+  song and wrote its new tags, as a changed album does, left the new
+  file at the song's path and the old one beside it; the library now
+  comes back as it was.
+- **A run killed while moving files.** Files a killed run had moved
+  before it could record them were no longer muman's; the next run
+  follows them by the run's own record.
+- **What a killed run leaves behind.** A run killed while measuring left
+  its scratch folder, hundreds of MB, in the temporary folder, and a
+  killed `export` its partial zip; the next run removes them. A `.part`
+  or `.moving` left beside a song's path is removed by the next sync. A
+  disk that fills while measuring stops the run, rather than marking each
+  source unreadable until `sync --retry`.
+- **A read-only song file.** A tag change to a library file made
+  read-only failed on every sync; it is written as a new file.
+- **A song that lists no source.** `sources = "manual:…"`, a string
+  rather than a list, was read as no source, and a song listing none
+  failed on every sync yet exited 0; both are now refused when the song
+  list is read, naming the song. `restore` of a song whose sources other
+  songs list now keeps it removed instead of listing it with none.
+- **`set` that changes nothing** rewrote the song list and the state and
+  said what it pinned; it now says nothing changed. `genre=a GENRE=b`
+  sets both values, and `format=mp3` or `key=…`, which are no tags, are
+  refused rather than written as tags.
+- **Queries.** A key typed in another case, as `MANUAL:…`, names its
+  song. A query that does not read, as a bad pattern, now exits 5 like
+  one naming no field.
+- **Smaller points.** `add --date` refuses what is no date. `remove -n`
+  says which files stay because they changed since muman wrote them. A
+  reader that stops early, as `| head` does, ends the output quietly.
+  The exit codes list a command line that does not parse under 2.
+- **A source edited without a new time.** A file in the manual folder
+  changed in place with its size and modification time kept, as some
+  taggers or `cp -p` leave it, was never measured again; on Linux and
+  macOS the time a file last changed at all now counts too.
+- **A library put back from a copy.** Files copied back without their
+  times were taken as changed by hand and no longer followed the song
+  list; one whose bytes are still the ones muman wrote is its own again.
+  This covers files written from now on.
+- **A dropped file moved.** Moving a file in the manual folder rewrote
+  its song, though nothing in it changed.
+- **`export` of an edited song list.** An export after the song list was
+  edited, before a sync, put a song list in the zip that its library did
+  not follow; it is now refused until a sync.
+- **Stale records.** A source taken out of its song left its
+  `held."<key>"` line behind; it now goes with it.
+- **A library in the sources.** A library inside the home's sources, as
+  the manual folder, read every song it wrote back as a new one, run
+  after run; it is now refused.
+- **A move onto a file of your own.** A song whose new path, after a
+  tag change, held a file not muman's lost its file from the library; it
+  now stays where it was, with a warning, until `sync --force`.
+- **Names at the smallest limits.** At `max_name_bytes` near 40, two
+  songs told apart by a long source ID lost their title and went past
+  the limit; the ID is now cut to leave the name a start. A limit above
+  255, which no filesystem holds, is refused.
+- **A title changing only its case** moves its file, as other renames
+  do, rather than writing the song again.
+- **Invisible and reordering names.** A title of nothing visible, as a
+  lone zero-width space, counts as none; characters that reorder text,
+  which can make a name read as another, are left out of file names. A
+  template's `{{ track }}` with no track writes nothing, not `none`.
+- **Two files of one name.** Two files in the manual folder whose names
+  differ only in Unicode normalization, as `café` composed and
+  decomposed, are said; one was passed over silently.
+- **`list` one line a song.** A file name holding a newline or tab broke
+  `list`'s lines.
+- **A song list behind a link.** A `songs.toml` that is a link was
+  replaced by a file on the next write, and every rewritten file of the
+  home lost its permissions; the link is now written through and the
+  permissions kept.
+- **Settings errors name their line.** An error in a setting named a
+  line counted without the song list's opening comments; it now names
+  the line in the file.
+- **Lyrics files.** UTF-16 without a byte-order mark is read; a `.lrc`
+  of other data is no lyrics rather than garbled ones, and costs its
+  song only them; `[mm:ss:xx]` times read as timed.
+- **`add` mistakes.** A path that names nothing is said so rather than
+  handed to yt-dlp as an address, and a file that is no song, lyrics or
+  picture is refused rather than copied in. A `lyrics_offset` past an
+  hour is refused. The `max_size` advice names `min_bitrate`.
+- **`export --max-size` gave up** at a size it could reach, as 3 MiB
+  for songs whose lowest bitrates take 2.1 MiB, when its estimates kept
+  moving; it now settles on the sizes it has encoded.
+- **One library, one spelling.** `--library lib/` and `--library lib`
+  were recorded apart, rewriting the state on a run that changed
+  nothing.
+- **A history that cannot be written** no longer stops a command halfway,
+  its song list changed and its library not: the run goes on, with a
+  warning that it cannot be undone.
+- **`status` after a dropped file moved** said its song failed and the
+  file was new; it now says the next sync follows the move.
+- **Smaller points.** The notice of sources not read again is given once
+  a run. `cover:` and `lyrics:` in a query take `yes` or `none` and
+  refuse anything else, and a `list --format` naming a field no song has
+  is refused, as a query naming one is.
+- **Two homes, one library.** Two homes syncing into one library at once
+  wrote over each other's partial files; a run now waits for any other
+  writing the same library, by a lock kept in the system's temporary
+  folder.
+- **A cover the tags cannot hold.** A cover ffmpeg reads but a song's
+  tags cannot take, as a picture whose header is cut, failed the song's
+  write on every sync; the song is now written without it, said so.
+- **`status` of a home not made yet** no longer makes it.
+- **A record's ID named its file.** A MusicBrainz server answering with
+  an ID such as `../../state` had muman write the record over
+  `state.json`, or anywhere else; an ID that is no MusicBrainz ID is now
+  refused, and no file muman keeps is written outside its folder.
+- **Runs at once kept apart in the history.** A command that waited on
+  another, as two `set`s or a `sync` beside an `undo`, recorded the
+  other's change to the song list as its own, so undoing it undid both,
+  or brought back what an undo had removed. Each command that changes the
+  home now holds it from first to last, `edit` once its editor closes.
+- **Undo over a file of your own.** `undo` put a file the run had removed
+  back over a file you had put in its place since, and wrote again over
+  a file you had edited when the history had no room to keep it; it now
+  refuses both. An undo stopped partway finishes when run again; one
+  after a library put back from a copy is no longer refused.
+- **Undo of a home's first `add`** left no song list, and every command
+  after it refused for the songs the library still held.
+- **A history budget below one file** let go of every other run's
+  record and kept the file anyway; such a file is now written again
+  instead, as the guide says.
+- **A run killed between a song and its lyrics** left the lyrics at the
+  old path for good; the next run moves them after it.
+- **A link from the manual folder into the library** read the library's
+  songs back in as new ones on every sync; such files are passed over.
+- **`check` during a sync** reported what that sync was writing as left
+  by an interrupted run; it now says a run is under way.
+- **A new song list** was made readable by its owner alone.
+- **`[library] max_size` left the library over its limit** for good when
+  encoders kept missing their bitrates, as Opus did by a third: the last
+  fit was made on estimates and the sizes measured after it never fitted
+  again. A fit whose passes run out now settles on sizes measured.
+- **An archive.org item of several files** was fetched whole and listed
+  no song: its files' IDs, `<item>/<file>`, were taken for no key's, so
+  the files were left in the store where `purge` did not see them. Each
+  file is now a song, fetched again from its own page, and an item of
+  one file is listed without a warning.
+- **A web page served as a cover** was embedded as the album art and
+  recorded as found; a body that is no JPEG, PNG or WebP now fails the
+  lookup.
+- **An error page in every warning:** a failed request printed and
+  recorded the server's whole body, megabytes of it; only its first
+  200 characters are kept.
+- **A refusing service asked again in the same run:** a later round
+  made the lookups a refusal had put off, and a provider whose
+  `recheck` is 0 was asked twice a run. Neither is now.
+- **`Retry-After` as a date** was ignored; it is read as RFC 9110 has
+  servers send it. A gzip body no one asked for now says so, rather than
+  "invalid utf-8".
+- **`sync --rematch`'s help** promised every lookup; it says now that a
+  song with a source from a provider asks it nothing.
+- **Another recording's IDs:** a MusicBrainz record whose title and
+  artist lost to the song's own still gave it its ISRC and IDs; they now
+  come only from a source titling the recording as the song is titled.
+- **A 10 MB title** from a server failed the song's write on every
+  run; a value over 4 KiB is offered by no source. A NUL in a value no
+  longer cuts the tag short, and characters reordering text no longer
+  reach the tags or `list`.
+- **`info`'s library size** added up bytes where `sync` counts whole
+  `[library] block_size` blocks, so the two disagreed on whether the
+  library fit; `info` counts blocks too.
+- **A 5.1 FLAC** lost the channel mask ffmpeg writes for it, and played
+  as 5.1 with side speakers; every song is written once more for it.
+  AC-3 files in the manual folder are listed, where they were passed
+  over without a word.
+- **A hand edit made while a run went** was recorded as that run's, and
+  its `undo` dropped it without a word; a run records the song list it
+  last read or wrote, so `undo` refuses instead.
+- **`edit` said "Changed"** for a song removed from the song list while
+  the editor was open, though nothing was applied; it says the song is
+  no longer listed.
 - **A link back up, walked once.** A folder in the manual folder linking
   to a folder it is inside listed each file in it dozens of times, under
   ever longer paths, and `add` of such a folder copied it as often; the

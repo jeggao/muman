@@ -668,7 +668,9 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
         }
     }
     crate::migrate::rename_all(&mut only, &EDITIONS)?;
-    let settings: Settings = toml::from_str(&only.to_string())
+    let text = only.to_string();
+    let settings: Settings = toml::from_str(&text)
+        .map_err(|e| at_line(&e, &text, &doc.to_string()))
         .context("reading the settings")
         .map_err(|e| crate::migrate::explain(e, doc))?;
     if doc
@@ -703,10 +705,46 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
     if let Some((key, _, min)) = least.iter().find(|(_, set, min)| set < min) {
         bail!("[library] {key} must be at least {min}, room for a name and what tells it apart");
     }
+    if let Some((key, _, _)) = least.iter().find(|(_, set, _)| *set > MOST_NAME_BYTES) {
+        bail!(
+            "[library] {key} must be at most {MOST_NAME_BYTES}, the most a name may take on \
+             any filesystem muman writes to"
+        );
+    }
     settings.audio.check()?;
     settings.quality.check()?;
     Ok(settings)
 }
+
+/// `error`, which names a line of `text`, the settings alone, named by
+/// its line in `whole`, the song list as written: under the same table
+/// header, the first line that reads the same.
+fn at_line(error: &toml::de::Error, text: &str, whole: &str) -> anyhow::Error {
+    let message = error.message();
+    let Some(at) = error.span().map(|s| s.start.min(text.len())) else {
+        return anyhow::anyhow!("{message}");
+    };
+    let start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+    let line = text[start..end].trim();
+    let header = text[..start]
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| l.starts_with('['));
+    let lines: Vec<&str> = whole.lines().collect();
+    let from = header
+        .and_then(|h| lines.iter().position(|l| l.trim() == h))
+        .unwrap_or(0);
+    match lines[from..].iter().position(|l| l.trim() == line) {
+        Some(n) => anyhow::anyhow!("line {}, `{line}`: {message}", from + n + 1),
+        None => anyhow::anyhow!("`{line}`: {message}"),
+    }
+}
+
+/// The bytes a file or folder name may take on ext4, NTFS, APFS and
+/// FAT alike.
+const MOST_NAME_BYTES: usize = 255;
 
 #[cfg(test)]
 mod tests {
@@ -743,6 +781,16 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_that_does_not_read_is_named_by_its_line() {
+        let text = "# muman's song list\n# more words\n\n[history]\nruns = 3\n\n[library]\nblock_size = \"1e3 KiB\"\n";
+        let e = settings(text).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("line 8, `block_size = \"1e3 KiB\"`"),
+            "{e:#}"
+        );
+    }
+
+    #[test]
     fn a_name_too_short_to_tell_apart_or_an_empty_template_is_refused() {
         let e = settings("[library]\nmax_name_bytes = 8\n").unwrap_err();
         assert!(
@@ -752,6 +800,9 @@ mod tests {
         assert!(settings("[library]\nmax_folder_bytes = 3\n").is_err());
         assert!(settings("[library]\nmax_name_bytes = 40\nmax_folder_bytes = 16\n").is_ok());
         assert!(settings("[library]\ntemplate = \" / / \"\n").is_err());
+        let e = settings("[library]\nmax_folder_bytes = 1000\n").unwrap_err();
+        assert!(format!("{e:#}").contains("at most 255"), "{e:#}");
+        assert!(settings("[library]\nmax_name_bytes = 255\n").is_ok());
     }
 
     #[test]

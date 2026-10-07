@@ -220,6 +220,10 @@ pub struct Written {
     /// changed since is told from one muman wrote.
     #[serde(default)]
     pub stamp: Option<String>,
+    /// A digest of its bytes when written, by which a copy of it with new
+    /// times, as a backup put back, is still the file muman wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 /// What a plan renders to, as rendered once: its audio file and its
@@ -686,6 +690,7 @@ mod tests {
                 lyrics: None,
                 plan: Some(plan),
                 stamp: None,
+                digest: None,
             },
         );
         disk.save(dir.path()).unwrap();
@@ -778,6 +783,7 @@ mod tests {
                 lyrics: None,
                 plan: None,
                 stamp: None,
+                digest: None,
             },
         );
         state.rekey(&[(old.clone(), new.clone())].into()).unwrap();

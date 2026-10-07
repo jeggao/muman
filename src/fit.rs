@@ -195,7 +195,7 @@ pub fn loss(source: &Source, first: Format, format: Format) -> f64 {
 
 /// The formats below `first` a song may be lowered to: `[audio] lossy`
 /// at each bitrate of its ladder under the one `first` encodes at, and
-/// at or above `[audio] min_kbps`.
+/// at or above `[audio] min_bitrate`.
 #[must_use]
 pub fn lower(first: Format, channels: u32, audio: &Audio) -> Vec<Format> {
     let codec = audio.lossy;

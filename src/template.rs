@@ -6,7 +6,7 @@
 //! | `title`, `album`, `album_artist`, `genre`, `date` | The resolved tag, or the fallback name for a missing title, album or album artist |
 //! | `artist`, `artists` | The first artist, and every artist as a list |
 //! | `year` | The first four digits of `date`, or empty |
-//! | `track`, `disc` | The track and disc numbers, or none |
+//! | `track`, `disc` | The track and disc numbers, or none, which writes nothing |
 //! | `disc_track` | `"03 "` on a first disc, `"2-03 "` on a later one, `""` without a track |
 //! | `id` | The ID or file name of the song's audio source |
 //!
@@ -51,8 +51,17 @@ impl Template {
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Strict);
         env.set_keep_trailing_newline(false);
+        // A missing track or disc writes nothing, not `none`.
+        env.set_formatter(|out, state, value| {
+            if value.is_none() {
+                Ok(())
+            } else {
+                minijinja::escape_formatter(out, state, value)
+            }
+        });
         env.add_filter("pad", |n: Value, width: usize| match n.as_i64() {
             Some(n) => format!("{n:0width$}"),
+            None if n.is_none() => String::new(),
             None => n.to_string(),
         });
         env.add_filter("truncate", |s: String, n: usize| {
@@ -80,6 +89,16 @@ impl Template {
 mod tests {
     use super::*;
     use crate::settings::DEFAULT_TEMPLATE;
+
+    #[test]
+    fn a_missing_number_writes_nothing() {
+        let t = Template::new("{{ track }}-{{ disc | pad(2) }}-{{ title }}").unwrap();
+        let none = Fields {
+            title: "Tide".into(),
+            ..Fields::default()
+        };
+        assert_eq!(t.render(&none).unwrap(), "--Tide");
+    }
 
     fn fields() -> Fields {
         Fields {

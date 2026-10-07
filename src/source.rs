@@ -9,7 +9,10 @@
 //! the one `youtube.com:<id>`, and a track at `<artist>.bandcamp.com`
 //! is `bandcamp.com:<id>`; every other site is the domain of its page,
 //! as [`page`] picks it, without `www.`. A YouTube playlist, which an
-//! album may be made from, is `youtube.com:playlist/<id>`.
+//! album may be made from, is `youtube.com:playlist/<id>`. A file in an
+//! archive.org item of several is `archive.org:<item>/<file>`, its ID as
+//! yt-dlp gives it, and is fetched again from its own page, as the
+//! item's would fetch every file in it ([`page_to_fetch`]).
 //!
 //! Keys were named by yt-dlp's extractor before, as `youtube:<id>` and
 //! `archiveorg:<id>`. Such a key of an extractor [`SITES`] names reads
@@ -167,8 +170,10 @@ impl SourceKey {
         let valid = if site == YOUTUBE {
             id.strip_prefix(PLAYLIST)
                 .map_or_else(|| is_id(&id), is_token)
+        } else if NOT_SITES.contains(&site.as_str()) {
+            is_token(&id)
         } else {
-            is_site(&site) && is_token(&id)
+            is_site(&site) && is_remote_id(&id)
         };
         if !valid {
             bail!("`{text}` is not a source key");
@@ -285,6 +290,19 @@ pub fn page<'a>(
     }
 }
 
+/// The page to fetch `key` again from: `page`, but for a file in an
+/// archive.org item, whose `page` is the item's, which would fetch every
+/// file in it, the file's own.
+#[must_use]
+pub fn page_to_fetch(key: &SourceKey, page: Option<&str>) -> Option<String> {
+    match key {
+        SourceKey::Remote { site, id } if site == "archive.org" && id.contains('/') => {
+            Some(format!("https://archive.org/details/{id}"))
+        }
+        _ => page.map(str::to_string),
+    }
+}
+
 /// The site [`SITES`] names for an extractor.
 fn site_of(extractor: &str) -> Option<&'static str> {
     SITES.iter().find(|(e, _)| *e == extractor).map(|(_, s)| *s)
@@ -359,12 +377,29 @@ fn is_token(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// The ID a downloaded file is named with, `<title> [<id>].<ext>`.
+/// What another site's ID is made of: tokens of letters, digits and
+/// `-_.()+,=@!'&~`, joined by `/`, as archive.org names a file in an
+/// item `<item>/<file>`. Each is a character yt-dlp keeps as it is in a
+/// file's name, but for `/`, and none is a space, which would split the
+/// list of files finished.
+fn is_remote_id(s: &str) -> bool {
+    s.split('/').all(|part| {
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.()+,=@!'&~".contains(&b))
+    })
+}
+
+/// The ID a downloaded file is named with, `<title> [<id>].<ext>`, a
+/// `/` in it written `⧸`, as yt-dlp writes it in a name.
 #[must_use]
-pub fn id_of(file: &Path) -> Option<&str> {
+pub fn id_of(file: &Path) -> Option<String> {
     let stem = file.file_stem()?.to_str()?.strip_suffix(']')?;
-    let id = &stem[stem.rfind('[')? + 1..];
-    is_token(id).then_some(id)
+    let id = stem[stem.rfind('[')? + 1..].replace('⧸', "/");
+    is_remote_id(&id).then_some(id)
 }
 
 /// A path that stays inside the folder it is joined to.
@@ -473,7 +508,22 @@ mod tests {
         assert!(SourceKey::parse("nothing").is_err());
         assert!(SourceKey::parse("youtube.com:-dashid_123").is_ok());
         assert!(SourceKey::parse("youtube.com:playlist/").is_err());
-        assert!(SourceKey::parse("archive.org:a/b").is_err());
+    }
+
+    #[test]
+    fn another_sites_id_may_name_a_file_in_an_item() {
+        assert!(SourceKey::parse("archive.org:item-1/Part_1.mp3").is_ok());
+        for bad in [
+            "archive.org:a//b",
+            "archive.org:../a",
+            "archive.org:a/",
+            "archive.org:a b",
+            "archive.org:a[1]",
+            "lrclib:a/b",
+            "musicbrainz:../a",
+        ] {
+            assert!(SourceKey::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -492,6 +542,18 @@ mod tests {
             SourceKey::playlist("OLAK5uy_x").url().as_deref(),
             Some("https://www.youtube.com/playlist?list=OLAK5uy_x")
         );
+    }
+
+    #[test]
+    fn a_file_in_an_item_is_fetched_again_alone() {
+        let file = SourceKey::parse("archive.org:item-1/Part_1.mp3").unwrap();
+        let item = Some("https://archive.org/details/item-1");
+        assert_eq!(
+            page_to_fetch(&file, item).as_deref(),
+            Some("https://archive.org/details/item-1/Part_1.mp3")
+        );
+        let alone = SourceKey::parse("archive.org:item-1").unwrap();
+        assert_eq!(page_to_fetch(&alone, item).as_deref(), item);
     }
 
     #[test]
@@ -514,9 +576,12 @@ mod tests {
     #[test]
     fn a_file_is_named_with_its_id() {
         let p = Path::new("/o/chan/Song [x] ⧸ B [vid00000001].mkv");
-        assert_eq!(id_of(p), Some("vid00000001"));
+        assert_eq!(id_of(p).as_deref(), Some("vid00000001"));
         assert_eq!(id_of(Path::new("/o/chan/Song.mkv")), None);
         assert_eq!(id_of(Path::new("/o/chan/Song [a b].mkv")), None);
+        let item = Path::new("/o/unknown/Part 1.mp3 [item-1⧸Part_1.mp3].mp3");
+        assert_eq!(id_of(item).as_deref(), Some("item-1/Part_1.mp3"));
+        assert_eq!(id_of(Path::new("/o/c/A [x⧸..].mkv")), None);
     }
 
     #[test]

@@ -37,12 +37,12 @@ pub const EXIT_CODES_HELP: &str = "\
 Exit codes:
   0  Every song was written, or nothing needed to be; or a change was
      declined
-  2  yt-dlp, ffmpeg or ffprobe is missing, or the system names no
-     home folder
+  2  yt-dlp, ffmpeg or ffprobe is missing, the system names no home
+     folder, or the command line does not parse
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query matched no song, a change needs a terminal, -y or --all, or
-     undo refused";
+  5  A query did not read or matched no song, a change needs a terminal,
+     -y or --all, or a change or undo was refused";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -150,7 +150,7 @@ pub struct TagArgs {
     pub genre: Vec<String>,
 
     /// The release date, as YYYY-MM-DD or a year.
-    #[arg(long, value_name = "DATE")]
+    #[arg(long, value_name = "DATE", value_parser = date)]
     pub date: Option<String>,
 
     #[arg(long, value_name = "N")]
@@ -204,6 +204,15 @@ fn name_value(text: &str) -> Result<(String, String), String> {
     }
 }
 
+fn date(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    if text.len() == 4 && text.bytes().all(|b| b.is_ascii_digit()) {
+        return Ok(text.to_string());
+    }
+    crate::tags::iso_date(text)
+        .ok_or_else(|| format!("`{text}` is no date: give YYYY-MM-DD or a year"))
+}
+
 const QUERY_HELP: &str = "\
 Query:
   lumo fenn             Every word in the title, artist, album or album
@@ -254,8 +263,9 @@ pub enum Command {
     /// lookup due, write every song whose sources or tags changed, and
     /// delete what no song makes.
     Sync {
-        /// Make every lookup now, whatever an earlier one found: an upload
-        /// on YouTube Music for its track, a track on YouTube for an upload
+        /// Make every lookup now, whatever an earlier one found, but none
+        /// on a provider the song has a source from already: an upload on
+        /// YouTube Music for its track, a track on YouTube for an upload
         /// with subtitles, a song on LRCLIB for its lyrics, a song on
         /// MusicBrainz for its album.
         #[arg(long)]
@@ -390,8 +400,10 @@ pub enum Command {
         upstream: bool,
     },
     /// Say what a sync would write, and for each song where each of its
-    /// aspects comes from and why; change nothing. A song a sync leaves
-    /// as it is is counted, not shown, unless a query matches it.
+    /// aspects comes from and why; the song list and the library are left
+    /// as they are, and what it measures is kept for the next sync. A song
+    /// a sync leaves as it is is counted, not shown, unless a query
+    /// matches it.
     #[command(after_help = QUERY_HELP)]
     Status {
         #[arg(value_name = "QUERY")]
@@ -745,6 +757,14 @@ Shelves hold `songs` alone."
     fn yes_and_new_exclude_each_other() {
         assert!(parse(&["sync", "-y", "--new"]).is_err());
         assert!(parse(&["add", "-y", "u"]).is_ok());
+    }
+
+    #[test]
+    fn a_date_is_a_year_or_a_day() {
+        assert_eq!(date("2004").unwrap(), "2004");
+        assert_eq!(date("2004-06-07").unwrap(), "2004-06-07");
+        assert_eq!(date("20040607").unwrap(), "2004-06-07");
+        assert!(date("20xx").is_err());
     }
 
     #[test]

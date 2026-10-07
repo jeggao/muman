@@ -75,7 +75,9 @@ since muman wrote it, as a tagger rewrites it, is left with a warning
 until `sync --force`: a new path template still moves it, your change
 with it, but a change to the song itself leaves it where it is, and
 `sync --force` writes the song again and deletes it, `undo` putting it
-back. Each file is written under a temporary name and
+back. A file whose time changed but whose bytes are still the ones
+written, as a backup put back or a copy made without its times, is
+muman's still. Each file is written under a temporary name and
 renamed into place, so a player never sees half a track. Library paths
 in messages use `/` on every system.
 
@@ -116,8 +118,9 @@ for LRCLIB lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
 
 A fetched source's site is the domain it came from and its ID the one
 yt-dlp gives it there, as `youtube.com:vid00000001` or
-`archive.org:<id>`. A site yt-dlp reaches by several addresses has one
-domain: a video from YouTube Music, `youtu.be` or `m.youtube.com` is
+`archive.org:<id>`; a file in an archive.org item of several is
+`archive.org:<item>/<file>`, and is fetched again alone. A site yt-dlp
+reaches by several addresses has one domain: a video from YouTube Music, `youtu.be` or `m.youtube.com` is
 `youtube.com:<id>`, the one source however it was found, and a track
 on any `<artist>.bandcamp.com` is `bandcamp.com:<id>`. Which sites have
 one domain is listed in `SITES` in [src/source.rs](../src/source.rs); any other site is
@@ -310,15 +313,18 @@ inside it or both is a `[library]` setting.
 
 **Tags.** Each field describes the recording or the release. The
 recording's, title, artist, genre, ISRC and the recording's and artists'
-MusicBrainz IDs, each come from whichever source offers it best. The
-release's, album, album artist, track, disc, date, totals, country and
+MusicBrainz IDs, each come from whichever source offers it best, the
+ISRC and IDs only from a source that titles the recording as the song
+is titled. The release's, album, album artist, track, disc, date, totals, country and
 the release's MusicBrainz IDs, come together from the one source whose
 album ranks best, so an album never splits across folders and one
 release's IDs never mix with another's; a song on no album is a single
 named for its title. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
 `3/12` offers its total too. Fields with no tag of their own in MP3 or
-MP4 are written as Picard writes them there.
+MP4 are written as Picard writes them there. A value over 4 KiB is
+offered by no source, and control characters and those that reorder
+text are dropped from every value.
 
 ### Cleaning
 
@@ -415,9 +421,11 @@ enabled = false
 | Failed | After an hour, doubling with each failure, up to a week |
 | Found a source, or declined | Never |
 
-`sync --rematch` makes every lookup at once. What one round finds can
-trigger the next, as an upload's release then finds the release's
-lyrics. An LRCLIB record fits when its length is within 2 s of the
+`sync --rematch` makes every lookup at once, whatever its record says,
+but a song with a source from a provider still asks that provider
+nothing: one whose found source was taken out of it asks again. What
+one round finds can trigger the next, as an upload's release then finds
+the release's lyrics. An LRCLIB record fits when its length is within 2 s of the
 song's and its names hold the song's, compared by letters and digits in
 any width; a record with words wins over one marked instrumental, then
 one named exactly the song's title over one holding it, as `Rain (Live)`
@@ -462,8 +470,10 @@ muman asks MusicBrainz at most once a second, as MusicBrainz asks of
 every client, AcoustID at most three times a second, as AcoustID asks,
 and LRCLIB at most four times a second, whatever `concurrency` says.
 When a service answers that requests come too fast (a 429 or a 503),
-muman waits as long as it asks, or 2 s for MusicBrainz and AcoustID and
-10 s for LRCLIB, doubling, and asks again up to three times. A
+muman waits 2 s for MusicBrainz and AcoustID and 10 s for LRCLIB,
+doubling, or longer where the service's `Retry-After` asks, in seconds
+or by a date, and asks again up to three times; one asking for more
+than two minutes is refusing at once. A
 service still refusing after that leaves its remaining lookups for the
 next run, recorded as nothing, so none waits out a failure's backoff.
 Each request names muman and its repository in its user agent.
@@ -530,7 +540,8 @@ refuses the save.
 
 ## Status, info and check
 
-- **`status`** runs the offline phase without writing: what would be
+- **`status`** runs the offline phase without changing the song list or
+  the library, keeping what it measures for the next sync: what would be
   written, moved or deleted, and for each song where each aspect comes
   from and why, and, under `[library] max_size`, which songs are
   written below their best format to fit; see

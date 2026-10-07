@@ -86,10 +86,11 @@ pub fn identify<R: Runner, W: Write>(
             .cloned()
             .chain(proposals.iter().flat_map(|p| p.sources.iter().cloned()))
             .collect();
-        let temp = tempfile::tempdir()?;
+        let temp = crate::atomic::Scratch::new()?;
         let home = &dirs.home;
         let mut how = reconcile::Measuring {
             retry: false,
+            say_unread: false,
             checkpoint: &mut |s: &State| State::keep_measures(home, s),
         };
         reconcile::measure(

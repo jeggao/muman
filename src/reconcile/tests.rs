@@ -1109,6 +1109,7 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
         lyrics: Some(lyrics.into()),
         plan: None,
         stamp: None,
+        digest: None,
     };
     let old = BTreeMap::from([(PathBuf::from("A/x.opus"), written("A/x.lrc"))]);
     let now = BTreeMap::from([(PathBuf::from("A/X.flac"), written("A/X.lrc"))]);
@@ -1760,4 +1761,40 @@ fn a_source_of_a_site_no_table_names_is_renamed_by_its_page() {
     );
     let (_, again) = h.run(&infos(&[]), Options::default());
     assert!(!again.contains("Renamed"), "{again}");
+}
+
+#[test]
+fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib");
+    std::fs::write(&file, "not a folder").unwrap();
+    let mut state = State {
+        library: Some(dir.path().join("music")),
+        ..State::default()
+    };
+    state.outputs.insert(
+        "A/x.flac".into(),
+        Written {
+            sources: vec![],
+            lyrics: None,
+            plan: None,
+            stamp: None,
+            digest: None,
+        },
+    );
+    assert!(adopt(&mut state, &file, &mut Vec::new()).is_err());
+    assert_eq!(state.outputs.len(), 1);
+    assert_eq!(state.library, Some(dir.path().join("music")));
+}
+
+#[test]
+fn a_full_disk_is_told_from_a_source_that_does_not_read() {
+    let full = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::StorageFull));
+    assert!(out_of_space(&full.context("creating facts-1")));
+    assert!(out_of_space(&anyhow::anyhow!(
+        "ffmpeg failed (exit 1): Error writing trailer: No space left on device"
+    )));
+    assert!(!out_of_space(&anyhow::anyhow!(
+        "ffprobe failed (exit 1): Invalid data"
+    )));
 }

@@ -93,6 +93,18 @@ pub fn words(n: usize, seed: u64) -> Vec<u32> {
         .collect()
 }
 
+/// [`seed_of`] a path below the test's temporary folder, so a fake's
+/// pictures, prints and noise are the same on every run of a test, as a
+/// real file's measures are.
+fn seed_of_path(path: &str) -> u64 {
+    let parts: Vec<&str> = path.split(['/', '\\']).collect();
+    let temporary = |part: &&str| part.starts_with(".tmp") || part.starts_with(".muman-scratch-");
+    match parts.iter().rposition(temporary) {
+        Some(at) => seed_of(&parts[at + 1..].join("/")),
+        None => seed_of(path),
+    }
+}
+
 fn seed_of(path: &str) -> u64 {
     path.bytes().fold(1_469_598_103_934_665_603_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(1_099_511_628_211)
@@ -178,13 +190,13 @@ impl Fake {
             // `fingerprint` hands back as it is.
             "s16le" => find(&self.prints, &input)
                 .cloned()
-                .unwrap_or_else(|| words(1600, seed_of(&input)))
+                .unwrap_or_else(|| words(1600, seed_of_path(&input)))
                 .into_iter()
                 .flat_map(u32::to_le_bytes)
                 .collect(),
             "f32le" => find(&self.segments, &input)
                 .cloned()
-                .unwrap_or_else(|| noise_bytes(seed_of(&input))),
+                .unwrap_or_else(|| noise_bytes(seed_of_path(&input))),
             "lrc" => self
                 .lrc
                 .clone()
@@ -192,7 +204,7 @@ impl Fake {
                 .into_bytes(),
             "image2" if args[..at].iter().any(|a| a == "pgm") => {
                 let (w, h) = find(&self.pictures, &input).copied().unwrap_or((64, 64));
-                pgm(w, h, seed_of(&input))
+                pgm(w, h, seed_of_path(&input))
             }
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),

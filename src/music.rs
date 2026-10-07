@@ -51,7 +51,7 @@ use std::ffi::OsString;
 use serde::Deserialize;
 
 use crate::clean;
-use crate::source::{is_id, watch_url};
+use crate::source::{SourceKey, is_id, watch_url};
 
 /// How far apart a video and its track may run, in seconds; an intro or
 /// outro on the video makes the two different cuts.
@@ -97,6 +97,9 @@ pub struct Entry {
     /// The extractor a playlist's flat entry is for.
     #[serde(default)]
     pub ie_key: Option<String>,
+    /// `playlist` for a flat entry that lists more.
+    #[serde(rename = "_type", default)]
+    pub kind: Option<String>,
 }
 
 impl Entry {
@@ -120,6 +123,22 @@ impl Entry {
             .as_deref()
             .or(self.ie_key.as_deref())
             .is_none_or(|k| k == "Youtube")
+    }
+
+    /// Whether it is one video or track a source key can name: YouTube's
+    /// by the shape of its ID, another site's by what its key takes. A
+    /// channel's tab or playlist is none.
+    #[must_use]
+    pub fn is_video(&self) -> bool {
+        if self.kind.as_deref() == Some("playlist") {
+            return false;
+        }
+        match self.extractor_key.as_deref().or(self.ie_key.as_deref()) {
+            None | Some("Youtube") => is_id(&self.id),
+            Some(other) => {
+                !other.starts_with("Youtube") && SourceKey::fetched(other, None, &self.id).is_some()
+            }
+        }
     }
 
     /// Whether a person wrote subtitles for it; `None` when the entry
@@ -238,7 +257,7 @@ pub fn listing(json: &[u8]) -> Option<Listing> {
     let listed = Listed::deserialize(&value).ok()?;
     if listed.kind.as_deref() != Some("playlist") {
         let video = Entry::deserialize(&value).ok()?;
-        return is_id(&video.id).then(|| Listing::Video(Box::new(video)));
+        return video.is_video().then(|| Listing::Video(Box::new(video)));
     }
     if listed.webpage_url_basename.as_deref() == Some("watch") {
         return Some(Listing::Mix {
@@ -250,7 +269,7 @@ pub fn listing(json: &[u8]) -> Option<Listing> {
     let all: Vec<Option<Entry>> = listed
         .entries
         .iter()
-        .map(|e| Entry::deserialize(e).ok().filter(|e| is_id(&e.id)))
+        .map(|e| Entry::deserialize(e).ok().filter(Entry::is_video))
         .collect();
     let album = listed
         .id
@@ -313,7 +332,7 @@ pub fn entries(jsonl: &[u8]) -> Vec<Entry> {
     String::from_utf8_lossy(jsonl)
         .lines()
         .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-        .filter(|e| is_id(&e.id))
+        .filter(Entry::is_video)
         .collect()
 }
 
@@ -784,6 +803,23 @@ not json
         assert_eq!(album.id, "OLAK5uy_abc");
         assert_eq!(album.tracks, 3);
         assert_eq!(album.places["vid00000010"], 3);
+    }
+
+    #[test]
+    fn an_item_of_another_site_lists_its_files() {
+        let json = br#"{"_type": "playlist", "id": "item-1", "title": "Item",
+            "webpage_url": "https://archive.org/details/item-1",
+            "entries": [{"id": "item-1/Part_1.mp3", "extractor_key": "ArchiveOrg"},
+                        {"id": "item-1/Part 2.mp3", "extractor_key": "ArchiveOrg"},
+                        {"_type": "playlist", "id": "more", "ie_key": "ArchiveOrg"},
+                        {"_type": "url", "id": "UC0000000000000000000002", "ie_key": "YoutubeTab"}]}"#;
+        let Some(Listing::Playlist { videos, .. }) = listing(json) else {
+            panic!("not a playlist");
+        };
+        let ids: Vec<_> = videos.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, ["item-1/Part_1.mp3"], "a space no key takes");
+        let one = br#"{"id": "item-2", "extractor_key": "ArchiveOrg"}"#;
+        assert!(matches!(listing(one), Some(Listing::Video(v)) if v.id == "item-2"));
     }
 
     #[test]

@@ -18,7 +18,8 @@
 //!
 //! A lookup a service refused for going too fast, after the retries
 //! [`crate::http::Service`] makes, is recorded as nothing at all: it and
-//! the provider's other lookups that round are put off to the next run.
+//! the provider's other lookups that run, in its later rounds too, are put
+//! off to the next run.
 //!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Its MusicBrainz lookup
@@ -498,6 +499,8 @@ pub fn run<R: Runner, W: Write>(
     let mut force = force;
     let mut made: BTreeMap<Provider, usize> = BTreeMap::new();
     let mut held = BTreeMap::new();
+    let mut asked: BTreeSet<(SourceKey, Provider)> = BTreeSet::new();
+    let mut refusing_now: BTreeSet<Provider> = BTreeSet::new();
     for round in 0..ROUNDS {
         let mut manifest = Manifest::load(home)?;
         let mut state = State::load(home)?;
@@ -505,6 +508,7 @@ pub fn run<R: Runner, W: Write>(
         let scratch = acquire.temp().join(format!("lookup-{round}"));
         let mut how = Measuring {
             retry: false,
+            say_unread: false,
             checkpoint: &mut |s: &State| State::keep_measures(home, s),
         };
         reconcile::measure(
@@ -540,6 +544,9 @@ pub fn run<R: Runner, W: Write>(
         let due: Vec<Due> = due
             .into_iter()
             .filter(|d| {
+                !refusing_now.contains(&d.find) && !asked.contains(&(d.from.clone(), d.find))
+            })
+            .filter(|d| {
                 let limit = manifest.providers.settings(d.find).per_run;
                 let n = made.entry(d.find).or_insert(0);
                 if limit > 0 && *n >= limit {
@@ -551,6 +558,7 @@ pub fn run<R: Runner, W: Write>(
             })
             .collect();
         held = waiting;
+        asked.extend(due.iter().map(|d| (d.from.clone(), d.find)));
         if due.is_empty() {
             State::keep_lookups(home, &records, &[])?;
             break;
@@ -882,6 +890,7 @@ pub fn run<R: Runner, W: Write>(
             )?;
         }
         for (p, (n, why)) in put_off {
+            refusing_now.insert(p);
             crate::ui::warning(
                 acquire.out,
                 &format!("{why}: {n} lookup(s) on {p} wait for the next run"),

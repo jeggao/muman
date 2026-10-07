@@ -28,6 +28,13 @@ const TWO: &str = "[[song]]\nsources = [\"manual:a.flac\", \"manual:b.flac\"]\n\
 /// What one opening of the editor makes of the file.
 type Step = Box<dyn Fn(&str) -> String>;
 
+/// A step's answer for quitting without saving.
+const QUIT: &str = "\0quit";
+
+fn quit() -> Step {
+    Box::new(|_| QUIT.to_string())
+}
+
 /// Edit with each step in turn, one per time the editor opens.
 fn edit_with(h: &Home, steps: &[Step]) -> (bool, String, Vec<String>) {
     let mut prompter = crate::ui::MockPrompter::new();
@@ -39,7 +46,14 @@ fn edit_with(h: &Home, steps: &[Step]) -> (bool, String, Vec<String>) {
         let n = step.get();
         step.set(n + 1);
         let f = steps.get(n).expect("the editor opened once too often");
-        std::fs::write(path, f(&text))?;
+        let saved = f(&text);
+        if saved == QUIT {
+            return Ok(());
+        }
+        std::fs::write(path, saved)?;
+        // A save a human makes lands on a later tick of the clock.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+        filetime::set_file_mtime(path, filetime::FileTime::from_system_time(later))?;
         Ok(())
     };
     let mut out = Vec::new();
@@ -49,6 +63,7 @@ fn edit_with(h: &Home, steps: &[Step]) -> (bool, String, Vec<String>) {
         false,
         Some(&mut prompter),
         &mut editor,
+        &mut || Ok(()),
         &mut out,
     )
     .unwrap();
@@ -198,6 +213,79 @@ fn a_song_changed_meanwhile_is_said_and_saving_again_applies() {
     assert!(changed);
     assert!(seen[1].starts_with(NOTICE), "{}", seen[1]);
     assert_eq!(songs(&h).songs[1].lyrics_offset_ms, 1);
+}
+
+#[test]
+fn a_song_removed_meanwhile_is_not_said_to_change() {
+    let h = home(TWO);
+    let manifest = h.dirs.manifest();
+    let (_, text, seen) = edit_with(
+        &h,
+        &[
+            Box::new(move |t| {
+                let now = std::fs::read_to_string(&manifest).unwrap();
+                let at = now.rfind("[[song]]").unwrap();
+                std::fs::write(&manifest, &now[..at]).unwrap();
+                t.replace(
+                    "[\"manual:c.flac\"]",
+                    "[\"manual:c.flac\"]\nlyrics_offset_ms = 1",
+                )
+            }),
+            Box::new(str::to_string),
+        ],
+    );
+    assert!(seen[1].starts_with(NOTICE), "{}", seen[1]);
+    assert!(text.contains("Not changed:"), "{text}");
+    assert!(!text.contains("Changed:"), "{text}");
+}
+
+#[test]
+fn quitting_after_the_song_list_changed_keeps_it_as_it_is() {
+    let h = home(TWO);
+    let manifest = h.dirs.manifest();
+    let (changed, _, seen) = edit_with(
+        &h,
+        &[
+            Box::new(move |t| {
+                let now = std::fs::read_to_string(&manifest).unwrap();
+                std::fs::write(
+                    &manifest,
+                    now.replace(
+                        "[\"manual:c.flac\"]",
+                        "[\"manual:c.flac\"]\nlyrics_offset_ms = 9",
+                    ),
+                )
+                .unwrap();
+                t.replace(
+                    "[\"manual:c.flac\"]",
+                    "[\"manual:c.flac\"]\nlyrics_offset_ms = 1",
+                )
+            }),
+            quit(),
+        ],
+    );
+    assert!(!changed);
+    assert!(seen[1].starts_with(NOTICE), "{}", seen[1]);
+    assert_eq!(songs(&h).songs[1].lyrics_offset_ms, 9);
+}
+
+#[test]
+fn quitting_after_a_mistake_changes_nothing() {
+    let h = home(TWO);
+    let (changed, text, seen) = edit_with(
+        &h,
+        &[
+            Box::new(|t| t.replace("\"manual:c.flac\"]", "\"manual:nowhere.flac\"]")),
+            quit(),
+        ],
+    );
+    assert!(!changed);
+    assert!(seen[1].starts_with(PROBLEM), "{}", seen[1]);
+    assert!(text.contains("Nothing changed"), "{text}");
+    assert_eq!(
+        songs(&h).songs[1].sources,
+        [SourceKey::Manual("c.flac".into())]
+    );
 }
 
 #[test]

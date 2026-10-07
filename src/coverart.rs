@@ -12,6 +12,8 @@
 //! `front-1200` is the largest short of the original, which can be tens
 //! of megabytes, and still well past what a soft cover holds. A release
 //! group whose releases have no front has none; a 404 is nothing found.
+//! A body that is no JPEG, PNG or WebP, as an error page served as found
+//! is, fails the lookup rather than being kept as the cover.
 //!
 //! The songs of one album ask once between them: a run looks one album
 //! up per run however many of its songs are due.
@@ -19,7 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::http::{HttpTransport, Service, Throttle};
 use crate::musicbrainz;
@@ -56,14 +58,21 @@ impl Cover {
     /// The extension its bytes say it has.
     #[must_use]
     pub fn extension(&self) -> &'static str {
-        let b = self.bytes.as_slice();
-        if b.starts_with(b"\x89PNG") {
-            "png"
-        } else if b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP".as_slice()) {
-            "webp"
-        } else {
-            "jpg"
-        }
+        image_extension(&self.bytes).unwrap_or("jpg")
+    }
+}
+
+/// The extension of an image by its first bytes, if it is a JPEG, PNG
+/// or WebP.
+fn image_extension(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(b"\xFF\xD8\xFF") {
+        Some("jpg")
+    } else if b.starts_with(b"\x89PNG") {
+        Some("png")
+    } else if b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP".as_slice()) {
+        Some("webp")
+    } else {
+        None
     }
 }
 
@@ -98,13 +107,19 @@ impl Client<'_> {
             transport: self.transport,
             throttle: self.throttle,
         };
-        Ok(service
+        let Some(bytes) = service
             .get(&url, &[("User-Agent", agent.as_str())], TIMEOUT)?
             .filter(|b| !b.is_empty())
-            .map(|bytes| Cover {
-                id: id.to_string(),
-                bytes,
-            }))
+        else {
+            return Ok(None);
+        };
+        if image_extension(&bytes).is_none() {
+            bail!("{url} answered with no image");
+        }
+        Ok(Some(Cover {
+            id: id.to_string(),
+            bytes,
+        }))
     }
 
     /// The front of a kept cover's ID again, a release group's or a
@@ -160,8 +175,13 @@ mod tests {
     use crate::lrclib::testing::Server;
 
     const GROUP: &str = "00000000-0000-4000-8000-0000000000aa";
+    const JPEG: &[u8] = b"\xFF\xD8\xFF\xE0";
 
     fn find(server: &Server, q: &Query) -> Option<Cover> {
+        found(server, q).unwrap()
+    }
+
+    fn found(server: &Server, q: &Query) -> Result<Option<Cover>> {
         let throttle = Throttle::none();
         let musicbrainz = musicbrainz::Client {
             base: "http://mb.test",
@@ -175,7 +195,6 @@ mod tests {
             musicbrainz: &musicbrainz,
         }
         .find(q)
-        .unwrap()
     }
 
     fn query() -> Query {
@@ -190,7 +209,7 @@ mod tests {
     #[test]
     fn an_album_s_id_is_asked_for_its_front_without_a_search() {
         let server =
-            Server::default().answer(&format!("/release-group/{GROUP}/front-1200"), "jpeg");
+            Server::default().answer_bytes(&format!("/release-group/{GROUP}/front-1200"), JPEG);
         let q = Query {
             release_group: Some(GROUP.into()),
             ..query()
@@ -216,9 +235,23 @@ mod tests {
         );
         let server = Server::default()
             .answer("/ws/2/release-group?query=", &search)
-            .answer(&format!("/release-group/{GROUP}/front-1200"), "\u{89}PNG");
+            .answer_bytes(&format!("/release-group/{GROUP}/front-1200"), b"\x89PNG");
         let cover = find(&server, &query()).unwrap();
         assert_eq!(cover.id, GROUP, "the exact title wins");
         assert!(find(&Server::default(), &query()).is_none());
+    }
+
+    #[test]
+    fn a_page_served_for_a_cover_fails_the_lookup() {
+        let server = Server::default().answer(
+            &format!("/release-group/{GROUP}/front-1200"),
+            "<html>busy</html>",
+        );
+        let q = Query {
+            release_group: Some(GROUP.into()),
+            ..query()
+        };
+        let err = found(&server, &q).unwrap_err();
+        assert!(format!("{err:#}").contains("no image"), "{err:#}");
     }
 }

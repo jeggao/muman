@@ -173,6 +173,11 @@ impl Query {
     /// use, so `youtube.com:<id>` names a key where `composer:quill` names
     /// a field.
     pub fn parse(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
+        Self::parse_terms(terms, extractors)
+            .map_err(|e| crate::change::Refused(format!("{e:#}")).into())
+    }
+
+    fn parse_terms(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
         let mut parsed = Vec::new();
         for raw in terms {
             let (negated, body) = match raw.strip_prefix('^') {
@@ -185,10 +190,13 @@ impl Query {
             let test = match body.split_once(':') {
                 None => Test::Word(body.to_lowercase()),
                 Some(("", _)) => bail!("`{raw}` names no field"),
-                Some((scheme, _))
+                Some((scheme, rest))
                     if extractors.contains(&scheme.to_ascii_lowercase()) && !is_field(scheme) =>
                 {
-                    Test::Key(SourceKey::parse(body)?)
+                    Test::Key(SourceKey::parse(&format!(
+                        "{}:{rest}",
+                        scheme.to_ascii_lowercase()
+                    ))?)
                 }
                 Some((field, rest)) => {
                     let field = field.to_string();
@@ -198,10 +206,21 @@ impl Query {
                             .build()
                             .with_context(|| format!("`{raw}`"))?;
                         Test::Matches(field, re)
-                    } else if let Some(exact) = rest.strip_prefix('=') {
-                        Test::Equals(field, exact.to_lowercase())
                     } else {
-                        Test::Contains(field, rest.to_lowercase())
+                        let (exact, text) = match rest.strip_prefix('=') {
+                            Some(text) => (true, text.to_lowercase()),
+                            None => (false, rest.to_lowercase()),
+                        };
+                        let yes_no =
+                            ["cover", "lyrics"].contains(&field.to_ascii_lowercase().as_str());
+                        if yes_no && text != "yes" && text != "none" {
+                            bail!("`{raw}`: {field} is yes or none");
+                        }
+                        if exact {
+                            Test::Equals(field, text)
+                        } else {
+                            Test::Contains(field, text)
+                        }
                     }
                 }
             };
@@ -272,6 +291,29 @@ impl Query {
                 .iter()
                 .all(|t| !t.negated && matches!(t.test, Test::Key(_)))
     }
+}
+
+/// Refuse a `list` format naming a field that is no tag muman knows and
+/// that no song has, as [`Query::check_fields`] refuses a query's.
+pub fn check_format(template: &str, views: &[View]) -> Result<()> {
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let field = &after[..close];
+        let name = tags::vorbis_key(field);
+        let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
+        if !is_field(field) && !had {
+            return Err(crate::change::Refused(format!(
+                "The format names `{{{field}}}`, which no song has: a tag such as title, \
+                 artist or album, or one of {}",
+                DERIVED.join(", ")
+            ))
+            .into());
+        }
+        rest = &after[close + 1..];
+    }
+    Ok(())
 }
 
 /// Whether `word`, lower-cased, is the key's ID or its manual file's
@@ -354,7 +396,12 @@ pub fn format(template: &str, view: &View) -> String {
         } else {
             view.values(field)
         };
-        out.push_str(&values.join("; "));
+        // One song a line, whatever its values hold, a file's name too.
+        let flat: Vec<String> = values
+            .iter()
+            .map(|v| v.replace(['\t', '\n', '\r'], " "))
+            .collect();
+        out.push_str(&flat.join("; "));
         rest = &after[close + 1..];
     }
     out.push_str(rest);
@@ -405,6 +452,33 @@ mod tests {
         assert!(query(&["aaaaaaaaaaa"]).matches(&video));
         assert!(query(&["02 tide.flac"]).matches(&file));
         assert!(query(&["ada"]).matches(&file), "names still match in part");
+    }
+
+    #[test]
+    fn a_key_names_its_song_whatever_the_case_of_its_scheme() {
+        let file = view("Tide", "Ada Quill", "manual:Ada Quill/02 Tide.flac");
+        assert!(query(&["MANUAL:Ada Quill/02 Tide.flac"]).matches(&file));
+        let terms = ["title::(".to_string()];
+        let e = Query::parse(&terms, &BTreeSet::new()).unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::change::Refused>().is_some(),
+            "{e:#}"
+        );
+    }
+
+    #[test]
+    fn cover_and_lyrics_are_yes_or_none_and_a_format_names_known_fields() {
+        let none = BTreeSet::new();
+        assert!(Query::parse(&["lyrics:maybe".to_string()], &none).is_err());
+        assert!(Query::parse(&["lyrics:=none".to_string()], &none).is_ok());
+        assert!(Query::parse(&["cover:yes".to_string()], &none).is_ok());
+        let v = [view("Tide", "Ada Quill", "manual:a.flac")];
+        assert!(check_format("{key}\\t{title} {genre}", &v).is_ok());
+        let e = check_format("{key} {nosuch}", &v).unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::change::Refused>().is_some(),
+            "{e:#}"
+        );
     }
 
     #[test]
@@ -483,6 +557,11 @@ mod tests {
         assert_eq!(
             format("{key}\\t{artist} - {title} [{genre}] {", &v),
             "youtube.com:aaaaaaaaaaa\tLumo Fenn - One Lantern Hour [House; French] {"
+        );
+        let odd = view("Tide", "Ada Quill", "manual:Ada\nQuill/02 Tide.flac");
+        assert_eq!(
+            format("{key}\t{title}", &odd),
+            "manual:Ada Quill/02 Tide.flac\tTide"
         );
     }
 }
