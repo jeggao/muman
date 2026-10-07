@@ -36,7 +36,7 @@ Exit codes:
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
-* `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
+* `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
@@ -301,9 +301,30 @@ Check the library against what muman recorded: files missing, empty or changed s
 
 ### `muman status`
 
-Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing
+Say what a sync would write, and for each song where each of its aspects comes from and why; change nothing. A song a sync leaves as it is is counted, not shown, unless a query matches it
 
-**Usage:** `muman status`
+**Usage:** `muman status [OPTIONS] [QUERY]...`
+
+```text
+Query:
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube:<id>          The song listing that source
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
+```
+
+**Arguments:**
+
+* `<QUERY>`
+
+**Options:**
+
+* `--all` — Show every song, those up to date too
 
 
 

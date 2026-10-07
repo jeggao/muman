@@ -511,7 +511,12 @@ refuses the save.
   written, moved or deleted, and for each song where each aspect comes
   from and why, and, under `[library] max_size`, which songs are
   written below their best format to fit; see
-  [configuration](configuration.md#library-size).
+  [configuration](configuration.md#library-size). A song a sync leaves
+  as it is is only counted, unless `--all` is given. A query, as `list`
+  reads it, shows each song it matches, up to date or not, and leaves
+  out the files to remove or left unused, which are no song's. A
+  last line counts the songs shown by what a sync does with each, such
+  as `Songs: 2 new, 1 changed, 1 moved, 1240 up to date`.
 - **`info`** counts what the library holds, whether it is in step, the
   lookups due, and what could be better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It

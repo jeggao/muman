@@ -31,6 +31,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **`status` takes a query.** It shows only the songs a query matches,
+  as `list` reads one, each in full, up to date or not. Without one it
+  shows the songs a sync would change and counts the rest, which
+  `--all` shows too; a last line counts the songs by what a sync does
+  with them.
 - **A tag edit writes tags only.** A song whose plan changed only in its
   tags has them written into its library file, its cover and embedded
   lyrics kept, rather than its audio encoded again: one tag on an

@@ -282,7 +282,8 @@ fn status_info_and_check_report_on_stdout() {
     s.file("home/sources/manual/a.flac");
     s.run(&flacs(), &["sync"]);
     for (args, said) in [
-        (&["status"][..], "(up to date)"),
+        (&["status"][..], "Songs: 1 up to date"),
+        (&["status", "--all"], "(up to date)"),
         (&["info"], "Up to date"),
         (&["check"], "No problems found"),
     ] {

@@ -39,6 +39,31 @@ impl Home {
         (ok, text)
     }
 
+    /// What `status` with `query` and `--all` when `all` reports.
+    fn status(&self, fake: &Fake, query: &[&str], all: bool) -> String {
+        let query: Vec<String> = query.iter().map(ToString::to_string).collect();
+        let mut report = Vec::new();
+        let opts = Options {
+            dry_run: true,
+            ..Options::default()
+        };
+        let shown = Report {
+            out: &mut report,
+            query: &query,
+            all,
+        };
+        reconcile_into(
+            fake,
+            &self.dirs,
+            opts,
+            None,
+            &mut std::io::sink(),
+            Some(shown),
+        )
+        .unwrap();
+        crate::ui::plain(&String::from_utf8(report).unwrap())
+    }
+
     fn holds(&self, text: &str) {
         if let Err(e) = invariant(&self.dirs) {
             panic!("{e}: {text}");
@@ -1534,4 +1559,78 @@ fn a_source_fetched_again_with_other_tags_alone_leaves_its_song_as_built() {
         "{text}"
     );
     assert_ne!(held_line(&h, "youtube:aaaaaaaaaaa").unwrap(), line);
+}
+
+#[test]
+fn status_counts_the_songs_up_to_date_and_shows_those_a_sync_changes() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(ONE);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs(TWO);
+    let text = h.status(&fake, &[], false);
+    assert!(!text.contains("Title aaaaaaaaaaa"), "{text}");
+    assert!(text.contains("Title bbbbbbbbbbb.opus (new)"), "{text}");
+    assert!(
+        text.contains("Songs: 1 new, 1 up to date; `--all` or a query shows those up to date"),
+        "{text}"
+    );
+    let all = h.status(&fake, &[], true);
+    assert!(all.contains("Title aaaaaaaaaaa.opus (up to date)"), "{all}");
+    assert!(all.contains("Songs: 1 new, 1 up to date\n"), "{all}");
+}
+
+#[test]
+fn status_shows_each_song_a_query_matches_and_nothing_of_the_others() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.fetched("ccccccccccc");
+    h.songs(ONE);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
+    assert!(h.run(&fake, Options::default()).0);
+    h.songs(TWO);
+    let text = h.status(&fake, &["title:aaaaaaaaaaa"], false);
+    assert!(
+        text.contains("Title aaaaaaaaaaa.opus (up to date)"),
+        "{text}"
+    );
+    assert!(text.contains("audio   youtube:aaaaaaaaaaa"), "{text}");
+    assert!(!text.contains("bbbbbbbbbbb"), "{text}");
+    assert!(!text.contains("Unused"), "files are no song: {text}");
+    assert!(text.ends_with("Songs: 1 up to date\n"), "{text}");
+    let none = h.status(&fake, &["title:zzz"], false);
+    assert_eq!(none, "No song matches the query\n");
+}
+
+#[test]
+fn status_refuses_a_field_no_song_has() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs(ONE);
+    let query = vec!["colour:red".to_string()];
+    let shown = Report {
+        out: &mut Vec::new(),
+        query: &query,
+        all: false,
+    };
+    let opts = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let e = reconcile_into(
+        &infos(&["aaaaaaaaaaa"]),
+        &h.dirs,
+        opts,
+        None,
+        &mut std::io::sink(),
+        Some(shown),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("No song has a field `colour`"),
+        "{e:#}"
+    );
 }

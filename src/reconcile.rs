@@ -24,6 +24,7 @@ use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::parallel;
 use crate::progress;
+use crate::query::Query;
 use crate::render;
 use crate::resolve::{self, Input, Plan, Resolved};
 use crate::runner::Runner;
@@ -470,8 +471,27 @@ pub fn reconcile<R: Runner, W: Write>(
     reconcile_into(runner, dirs, opts, run, out, None)
 }
 
+/// Where a dry run writes what a sync would do, and of which songs.
+pub struct Report<'a> {
+    pub out: &'a mut dyn Write,
+    /// The terms of a query; a song it matches is shown even when a sync
+    /// leaves it as it is.
+    pub query: &'a [String],
+    /// Show every song, those up to date too.
+    pub all: bool,
+}
+
+impl std::fmt::Debug for Report<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Report")
+            .field("query", &self.query)
+            .field("all", &self.all)
+            .finish_non_exhaustive()
+    }
+}
+
 /// [`reconcile`], a dry run's report written to `report` when given, apart
-/// from what it does on the way.
+/// from what it does on the way; without one, every song to `out`.
 #[allow(clippy::too_many_lines)]
 pub fn reconcile_into<R: Runner, W: Write>(
     runner: &R,
@@ -479,11 +499,16 @@ pub fn reconcile_into<R: Runner, W: Write>(
     opts: Options,
     mut run: Option<&mut Run>,
     out: &mut W,
-    report: Option<&mut dyn Write>,
+    report: Option<Report<'_>>,
 ) -> Result<bool> {
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
     let mut manifest = Manifest::load(home)?;
+    let query = report
+        .as_ref()
+        .map(|r| Query::parse(r.query, &crate::query::extractors(&manifest)))
+        .transpose()?
+        .filter(|q| !q.is_empty());
     let mut state = State::load(home)?;
     let store = Store::scan(dirs)?;
     let temp = tempfile::tempdir().context("creating a temporary directory")?;
@@ -579,15 +604,41 @@ pub fn reconcile_into<R: Runner, W: Write>(
             state: &state,
             failed: &failed,
         };
-        if let Some(mut report) = report {
+        // Matched here, once measuring has given each song its tags.
+        let matched = match &query {
+            Some(q) => {
+                let views = crate::query::views(&manifest, &state, &dirs.library)?;
+                q.check_fields(&views)?;
+                let n = views.iter().enumerate().filter(|(_, v)| q.matches(v));
+                Some(n.map(|(n, _)| n).collect())
+            }
+            None => None,
+        };
+        let showing = Showing {
+            matched,
+            all: report.as_ref().is_none_or(|r| r.all),
+        };
+        let fit = fitted.as_ref().filter(|_| showing.matched.is_none());
+        if let Some(Report {
+            out: mut report, ..
+        }) = report
+        {
             out.flush()?;
-            status(&shown, &store, &listed, dirs, opts.settling, &mut report)?;
-            if let Some(f) = &fitted {
+            status(
+                &shown,
+                &showing,
+                &store,
+                &listed,
+                dirs,
+                opts.settling,
+                &mut report,
+            )?;
+            if let Some(f) = fit {
                 fit_summary(f, &mut report)?;
             }
         } else {
-            status(&shown, &store, &listed, dirs, opts.settling, out)?;
-            if let Some(f) = &fitted {
+            status(&shown, &showing, &store, &listed, dirs, opts.settling, out)?;
+            if let Some(f) = fit {
                 fit_summary(f, out)?;
             }
         }
@@ -1818,48 +1869,149 @@ fn would_move<W: Write>(
     planned: &[PlannedSong],
     decided: &[Doing],
     old: &BTreeMap<PathBuf, Written>,
+    showing: &Showing,
     out: &mut W,
 ) -> Result<BTreeMap<PathBuf, Written>> {
     let mut moved = old.clone();
-    for ((_, r), d) in planned.iter().zip(decided) {
+    for ((n, r), d) in planned.iter().zip(decided) {
         if let Doing::Move { from, .. } = d
             && let Some(written) = moved.remove(from)
         {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Would move: {} → {}",
-                    crate::relpath::show(from),
-                    crate::relpath::show(&path_of(r))
-                ),
-            )?;
+            if showing.matches(*n) {
+                crate::ui::info(
+                    out,
+                    &format!(
+                        "Would move: {} → {}",
+                        crate::relpath::show(from),
+                        crate::relpath::show(&path_of(r))
+                    ),
+                )?;
+            }
             moved.insert(path_of(r), written);
         }
     }
     Ok(moved)
 }
 
+/// Which songs `status` shows.
+struct Showing {
+    /// The songs a query matched; every song without one.
+    matched: Option<BTreeSet<usize>>,
+    /// Show the songs a sync leaves as they are, as a query does.
+    all: bool,
+}
+
+impl Showing {
+    fn matches(&self, n: usize) -> bool {
+        self.matched.as_ref().is_none_or(|m| m.contains(&n))
+    }
+
+    fn shows(&self, n: usize, fate: Fate) -> bool {
+        self.matched
+            .as_ref()
+            .map_or(self.all || fate != Fate::Kept, |m| m.contains(&n))
+    }
+}
+
+/// What a sync does with a song, as `status` counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Fate {
+    New,
+    Changed,
+    Again,
+    Moved,
+    Alone,
+    Kept,
+}
+
+impl Fate {
+    const ALL: [Self; 6] = [
+        Self::New,
+        Self::Changed,
+        Self::Again,
+        Self::Moved,
+        Self::Alone,
+        Self::Kept,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Changed => "changed",
+            Self::Again => "written again",
+            Self::Moved => "moved",
+            Self::Alone => "left alone",
+            Self::Kept => "up to date",
+        }
+    }
+}
+
 /// What `status` says a sync does with a song, its file made by `before`.
-fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> String {
+fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
     match d {
-        Doing::Keep => "up to date".to_string(),
-        Doing::Move { retag: false, .. } => "moved".to_string(),
-        Doing::Move { retag: true, .. } => "moved, changes: tags".to_string(),
-        Doing::Guard { .. } => "left alone, changed since muman wrote it".to_string(),
-        Doing::Unowned => "left alone, not muman's".to_string(),
-        Doing::Held { .. } => "left as built, a source holding otherwise".to_string(),
+        Doing::Keep => (Fate::Kept, "up to date".to_string()),
+        Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),
+        Doing::Move { retag: true, .. } => (Fate::Moved, "moved, changes: tags".to_string()),
+        Doing::Guard { .. } => (
+            Fate::Alone,
+            "left alone, changed since muman wrote it".to_string(),
+        ),
+        Doing::Unowned => (Fate::Alone, "left alone, not muman's".to_string()),
+        Doing::Held { .. } => (
+            Fate::Alone,
+            "left as built, a source holding otherwise".to_string(),
+        ),
         Doing::Retag | Doing::Write => match before {
-            Some(p) if p == plan => "written again".to_string(),
-            Some(p) => format!("changes: {}", changes(p, plan).join(", ")),
-            None => "new".to_string(),
+            Some(p) if p == plan => (Fate::Again, "written again".to_string()),
+            Some(p) => (
+                Fate::Changed,
+                format!("changes: {}", changes(p, plan).join(", ")),
+            ),
+            None => (Fate::New, "new".to_string()),
         },
     }
 }
 
-/// Say what a sync would do, by the decisions it would make: each song's
-/// file and where each aspect comes from, then what it would remove.
+/// How many of the songs `showing` matches a sync does each thing with,
+/// and how many it cannot plan; those up to date it hides it says how
+/// to show.
+fn tally<W: Write>(
+    fates: &BTreeMap<Fate, usize>,
+    failed: usize,
+    showing: &Showing,
+    out: &mut W,
+) -> Result<()> {
+    let mut parts: Vec<String> = Fate::ALL
+        .iter()
+        .filter_map(|f| Some(format!("{} {}", fates.get(f)?, f.name())))
+        .collect();
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if parts.is_empty() {
+        if showing.matched.is_some() {
+            crate::ui::info(out, "No song matches the query")?;
+        }
+        return Ok(());
+    }
+    let hidden = showing.matched.is_none() && !showing.all && fates.contains_key(&Fate::Kept);
+    let hint = if hidden {
+        "; `--all` or a query shows those up to date"
+    } else {
+        ""
+    };
+    crate::ui::info(out, &format!("Songs: {}{hint}", parts.join(", ")))?;
+    Ok(())
+}
+
+/// Say what a sync would do, by the decisions it would make: each song
+/// `showing` shows, its file and where each aspect comes from, then how
+/// many songs it does each thing with. Without a query, then also what
+/// it would remove and the files no song lists.
+#[allow(clippy::too_many_lines)]
 fn status<W: Write>(
     shown: &Shown<'_>,
+    showing: &Showing,
     store: &Store,
     listed: &BTreeSet<SourceKey>,
     dirs: &Dirs,
@@ -1876,8 +2028,9 @@ fn status<W: Write>(
         failed,
     } = shown;
     let library = &dirs.library;
-    let moved = would_move(planned, decided, old, out)?;
+    let moved = would_move(planned, decided, old, showing, out)?;
     let mut after: BTreeMap<PathBuf, Written> = BTreeMap::new();
+    let mut fates: BTreeMap<Fate, usize> = BTreeMap::new();
     for ((n, r), d) in planned.iter().zip(*decided) {
         let song = &manifest.songs[*n];
         let mut path = path_of(r);
@@ -1888,18 +2041,23 @@ fn status<W: Write>(
         if let Doing::Guard { file } | Doing::Held { file } = d {
             path.clone_from(file);
         }
-        let verdict = verdict(d, before, &r.plan);
-        writeln!(
-            out,
-            "{}",
-            crate::ui::Style::Accent.paint(&name_of(song, Some(r), &state.facts))
-        )?;
-        writeln!(
-            out,
-            "  → {} ({verdict})",
-            crate::ui::Style::Path.paint(&crate::relpath::show(&path))
-        )?;
-        show_why(r, out)?;
+        let (fate, verdict) = verdict(d, before, &r.plan);
+        if showing.matches(*n) {
+            *fates.entry(fate).or_default() += 1;
+        }
+        if showing.shows(*n, fate) {
+            writeln!(
+                out,
+                "{}",
+                crate::ui::Style::Accent.paint(&name_of(song, Some(r), &state.facts))
+            )?;
+            writeln!(
+                out,
+                "  → {} ({verdict})",
+                crate::ui::Style::Path.paint(&crate::relpath::show(&path))
+            )?;
+            show_why(r, out)?;
+        }
         let written = match d {
             Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } => moved.get(&path).cloned(),
             Doing::Unowned => None,
@@ -1913,6 +2071,15 @@ fn status<W: Write>(
         if let Some(written) = written {
             after.insert(path, written);
         }
+    }
+    let planned_songs: BTreeSet<usize> = planned.iter().map(|(n, _)| *n).collect();
+    let unplanned = (0..manifest.songs.len())
+        .filter(|n| showing.matches(*n) && !planned_songs.contains(n))
+        .count();
+    tally(&fates, unplanned, showing, out)?;
+    // What a query matches is songs; these are files.
+    if showing.matched.is_some() {
+        return Ok(());
     }
     for (path, fate) in prune_plan(library, &moved, &after, failed, false) {
         match fate {
