@@ -78,7 +78,7 @@ lyrics = ["en", "fr"]
 [[song]]
 sources = ["youtube:vid00000001", "manual:Marlo Venn/Paper Comets.flac"]
 cover = "manual:Marlo Venn/Paper Comets.flac"
-lyrics_offset_ms = 120
+lyrics_offset = "120 ms"
 tags.artist = "Marlo Venn"
 tags.album = "Lantern Weather"
 tags.genre = ""
@@ -91,7 +91,7 @@ tags.genre = ""
 | `sources` | Every source the song may be made from; a file belongs to one song only, while an `lrclib:` or `musicbrainz:` record may be listed by every song of its recording |
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
-| `lyrics_offset_ms` | Moves the lyrics later, on top of the offset measured |
+| `lyrics_offset` | Moves the lyrics later, on top of the offset measured, as `"120 ms"`; a negative time moves them earlier |
 | `tags.<name>` | Tags set over what the sources offer; an empty value sets nothing |
 | `[[album]]` | A YouTube Music album added whole, with its `tags.<name>` over what its tracks offer |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it |
@@ -312,7 +312,8 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 
 Any `[[trigger]]` in the song list replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
-once), `recheck_days` (how long a lookup that found nothing waits),
+once), `recheck` (how long a lookup that found nothing waits, as
+`"30 days"`),
 `per_run` (the most one run makes, `0` for no limit), for `lrclib`,
 `musicbrainz`, `acoustid` and `coverart`, `url`, another server, such as
 a mirror, and for `acoustid`, `key`, the application key it is asked
@@ -332,7 +333,7 @@ enabled = false
 |---|---|
 | None | At once |
 | Made by an older method | At once, unless it found a source the song lists |
-| Found nothing, or an instrumental | After the provider's `recheck_days` |
+| Found nothing, or an instrumental | After the provider's `recheck` |
 | Failed | After an hour, doubling with each failure, up to a week |
 | Found a source, or declined | Never |
 
@@ -413,7 +414,7 @@ nothing, or, negated, every song.
 - **`list`** writes each song's key, artist, title and album, separated
   by tabs; `-f` takes a template of `{field}`s, `--removed` lists the
   tombstones.
-- **`set`** sets tags, pins and `lyrics_offset_ms`: `genre=Folk` sets,
+- **`set`** sets tags, pins and `lyrics_offset`: `genre=Folk` sets,
   `genre!` clears so the sources' value shows, `audio=<key>` pins,
   `audio!` unpins, `lyrics=false` takes none.
 - **`edit`** opens the songs' entries in `$VISUAL` or `$EDITOR`. Delete

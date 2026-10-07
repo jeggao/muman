@@ -91,7 +91,7 @@ impl Alignment {
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn stretch(&self) -> f64 {
-        1.0 + self.stretch_ppm as f64 / 1e6
+        1.0 + crate::units::ratio_of_ppm(self.stretch_ppm as f64)
     }
 }
 
@@ -399,7 +399,7 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     #[allow(clippy::cast_possible_truncation)]
     let drifting = Alignment {
         offset_ms: (start.round() as i64) * FRAME_MS,
-        stretch_ppm: ((stretch - 1.0) * 1e6).round() as i64,
+        stretch_ppm: crate::units::ppm_of_ratio(stretch - 1.0).round() as i64,
         score,
         coverage,
     };

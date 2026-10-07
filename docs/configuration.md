@@ -47,12 +47,36 @@ as the library folder, stays a comment until you set it. A key a
 settings table does not know is an error that names it, so a
 misspelling never goes unnoticed.
 
-`edition`, beside `version`, names the defaults the settings were
-written from. When a later muman changes a default, `sync`, `status`
-and `check` name each setting still at the old one, and
-`muman sync --update-defaults` moves those to the new default and
-raises `edition`. A setting you changed stays as you set it. A list
-without `edition` counts as edition 1.
+A setting that is a quantity takes its unit, written after the number,
+the space optional:
+
+| Kind | Such as | Settings |
+|---|---|---|
+| Size | `"32 GiB"`, `"700 MB"`, `"4K"` | `[library] max_size`, `block_size`, `[history] max_size` |
+| Bitrate | `"160 kb/s"`, `"160 kbps"`, `"160k"` | `[audio] *_bitrate` |
+| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[quality.purity] step`, `[ytdlp] keep_partial`, `[providers.*] recheck`, a song's `lyrics_offset` |
+| Frequency | `"500 Hz"`, `"1.5 kHz"` | `[quality.bandwidth] step` |
+| Share | `"1 %"`, or `0.01` | `[quality.stereo] incoherence`, `[quality.clipping] cutoffs`, `[quality.resolution] step` |
+
+Every unit is also known by its name, singular or plural, as
+`"2 gibibytes"` or `"3 hours"`. `K`, `M`, `G` and `T` alone are binary
+sizes, as `KiB`; `KB`, `MB` and `GB` are decimal. A size counts bytes
+without a unit, a frequency hertz and a share a fraction; a bitrate or
+a time has no bare number.
+
+`edition`, beside `version`, names the settings' names, units and
+defaults the file was written to. A song list of an earlier edition
+reads as the current one: a setting named the old way, such as
+`opus_kbps = 160`, reads as its new name and unit, `opus_bitrate =
+"160 kb/s"`, and the next `sync` writes it so, its comments kept;
+`status` and `check` name each one meanwhile. Naming a setting both
+ways is an error. When a later muman changes a default, `sync`,
+`status` and `check` name each setting still at the old one, however
+it is spelled, and `muman sync --update-defaults` moves those to the
+new default and raises `edition`. A setting you changed stays as you
+set it. A list without `edition` counts as edition 1; one of a later
+edition than this muman knows reads while it sets nothing it does not
+know.
 
 | Table | Sets |
 |---|---|
@@ -118,7 +142,7 @@ source's steps times their weights are summed, and the lowest sum wins.
 # 500 Hz. Clipping counts for nothing.
 [quality.bandwidth]
 weight = 10
-step_hz = 500
+step = "500 Hz"
 [quality.stereo]
 weight = 50
 [quality.clipping]
@@ -134,7 +158,7 @@ a measure against the steps of those it should trade with.
 `[library] max_size` caps what the files muman writes may take, such as
 `"32 GiB"` for a card. Each `sync` fits the library under it: a song
 that does not fit at its best is written at a lower bitrate of
-`[audio] lossy`, never below `[audio] min_kbps`. The songs lowered are
+`[audio] lossy`, never below `[audio] min_bitrate`. The songs lowered are
 those that lose the least audible quality for each byte saved: lossless
 songs first, which an encoder at a high bitrate loses nothing of, and
 lossy songs last, since encoding them again costs a generation.

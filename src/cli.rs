@@ -223,7 +223,7 @@ Assignments:
   audio=<key>        Pin the audio, cover or lyrics to one of its sources
   lyrics=false       Take no lyrics
   audio!             Unpin
-  lyrics_offset_ms=120
+  lyrics_offset=80ms Move the lyrics later; a negative time, earlier
 Every other word is a query, as `muman list` reads it.";
 
 #[derive(Debug, Subcommand)]
@@ -391,7 +391,7 @@ pub enum Command {
         output: PathBuf,
 
         /// The most the zip may take, such as 4GiB or 700MB.
-        #[arg(long, value_name = "SIZE", value_parser = crate::fit::parse_size)]
+        #[arg(long, value_name = "SIZE", value_parser = crate::units::parse_size)]
         max_size: Option<u64>,
     },
     /// List the songs listed apart that are one recording, by their audio

@@ -88,14 +88,16 @@ const HEADER: &str = "\
 # muman's song list: every song in the library and what it is made from.
 # muman adds a [[song]] for each song it keeps. Edit by hand, then run
 # `muman sync` to apply: it fetches any missing source, rebuilds every
-# changed song and deletes the library copy of anything no longer listed.
+# changed song and deletes the library copy of anything no longer listed;
+# a file in sources/manual is listed again unless `muman remove` drops it.
 #
 #   sources:  every file the song may be made from, as `youtube:<id>`,
 #             `lrclib:<id>`, `musicbrainz:<id>` or `manual:<path>` under
 #             sources/manual. muman picks the best audio, cover, lyrics and
 #             tags by measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
-#             lyrics = false for none. lyrics_offset_ms moves them later.
+#             lyrics = false for none. lyrics_offset = \"120 ms\" moves
+#             them later, a negative time earlier.
 #   Tags:     fill in tags.<name>; an empty value keeps what the sources
 #             offer. Any other Vorbis comment name works too; a list sets
 #             several. `muman status` shows what was picked and why.
@@ -106,15 +108,17 @@ const HEADER: &str = "\
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
 #             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck_days, per_run, and the url
+#             enabled, concurrency, recheck = \"30 days\", per_run, and the url
 #             of lrclib and musicbrainz.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
 #   Settings: [library], [audio], [quality.*], [ytdlp] and [history] lay
 #             out and name the library, set encoding, ranking and fetching,
-#             and size `undo`. `edition` names the defaults they were
-#             written from; `muman sync --update-defaults` moves the ones
-#             still at an older default to the current.
+#             and size `undo`; sizes, bitrates, times and shares take a
+#             unit, as \"2 GiB\" or \"1 %\". `edition` names the settings'
+#             names and defaults the file was written to: muman renames
+#             old names itself, and `muman sync --update-defaults` moves
+#             settings still at an older default to the current.
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
@@ -259,6 +263,9 @@ pub struct Manifest {
     /// Settings at the default of an earlier edition, which this one
     /// changed.
     pub stale_defaults: Vec<crate::settings::Stale>,
+    /// The settings the file names by an old name, renamed when read and
+    /// by the next write.
+    pub renamed: Vec<crate::migrate::Renamed>,
     edits: Vec<Edit>,
     stale: bool,
 }
@@ -280,6 +287,7 @@ impl Manifest {
             clean: parsed.clean,
             settings: parsed.settings,
             stale_defaults: parsed.stale_defaults,
+            renamed: parsed.renamed,
             edits: Vec::new(),
             stale: file.exists()
                 && (with_header(&doc.to_string()).is_some() || normalize(&mut doc.clone())),
@@ -380,6 +388,7 @@ impl Manifest {
         if !changed.is_empty() {
             return Ok(changed);
         }
+        crate::migrate::rename_all(&mut doc, &crate::migrate::EDITIONS)?;
         for edit in &self.edits {
             apply(&mut doc, edit)?;
         }
@@ -407,6 +416,7 @@ impl Manifest {
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
+        self.renamed = parsed.renamed;
         self.stale = false;
         Ok(Vec::new())
     }
@@ -522,6 +532,7 @@ struct Parsed {
     clean: Settings,
     settings: crate::settings::Settings,
     stale_defaults: Vec<crate::settings::Stale>,
+    renamed: Vec<crate::migrate::Renamed>,
 }
 
 /// The keys a table lists, each parsed.
@@ -560,7 +571,24 @@ fn owned_keys(
     Ok(keys)
 }
 
+/// A song's `lyrics_offset`, in milliseconds.
+fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
+    let Some(item) = t.get("lyrics_offset") else {
+        return Ok(0);
+    };
+    let time: crate::units::Time = item
+        .as_str()
+        .with_context(|| format!("{what}: `lyrics_offset` must be a time, such as \"120 ms\""))?
+        .parse()
+        .map_err(|e| anyhow::anyhow!("{what}: `lyrics_offset`: {e}"))?;
+    Ok(time.0)
+}
+
+/// What `doc` holds, read as the current edition writes it.
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
+    let mut current = doc.clone();
+    let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
+    let doc = &current;
     let lyrics = doc
         .get("defaults")
         .and_then(|d| d.get("lyrics"))
@@ -593,10 +621,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             audio: key_at(t, "audio", &what)?,
             cover: key_at(t, "cover", &what)?,
             lyrics,
-            lyrics_offset_ms: t
-                .get("lyrics_offset_ms")
-                .and_then(Item::as_integer)
-                .unwrap_or(0),
+            lyrics_offset_ms: lyrics_offset(t, &what)?,
             tags: tags_of(t.get("tags")),
             sources,
         };
@@ -649,6 +674,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         clean: clean_of(doc)?,
         settings: crate::settings::read(doc)?,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
+        renamed,
     })
 }
 

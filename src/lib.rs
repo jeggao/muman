@@ -31,6 +31,7 @@ pub mod lookup;
 pub mod lrclib;
 pub mod lyrics;
 pub mod manifest;
+pub mod migrate;
 pub mod music;
 pub mod musicbrainz;
 pub mod naming;
@@ -58,6 +59,7 @@ pub mod template;
 #[cfg(test)]
 mod testing;
 pub mod ui;
+pub mod units;
 pub mod ytdlp_log;
 
 use std::cell::Cell;
@@ -242,6 +244,18 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         reconcile::reconcile(runner, dirs, opts, run, out)
     };
     progress::current().plan(steps_of(&job.command));
+    let writes = matches!(
+        job.command,
+        Command::Add { .. }
+            | Command::Sync { .. }
+            | Command::Remove { .. }
+            | Command::Restore { .. }
+            | Command::Set { .. }
+            | Command::Edit { .. }
+    );
+    if writes {
+        say_renamed(&dirs.home, out)?;
+    }
     match &job.command {
         Command::Status => {
             let opts = Options {
@@ -568,6 +582,17 @@ fn create(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
 }
 
+/// Say each setting the song list names the old way, which the command
+/// about to write it renames; a list that does not read says so later.
+fn say_renamed<W: Write>(home: &Path, out: &mut W) -> Result<()> {
+    if let Ok(manifest) = Manifest::load(home) {
+        for renamed in &manifest.renamed {
+            ui::info(out, &format!("Renamed in the song list: {renamed}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Move the song list's settings still at an earlier edition's default
 /// to the current one, saying which moved.
 fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
@@ -598,7 +623,7 @@ fn network<R: Runner, W: Write, T>(
     let temp = tempfile::tempdir().context("creating a temporary directory")?;
     let ytdlp = job.dirs.ytdlp();
     let partial = job.dirs.home.join("partial");
-    clear_stale(&partial, manifest.settings.ytdlp.partial_days);
+    clear_stale(&partial, manifest.settings.ytdlp.keep_partial);
     let plugins = match &job.cache {
         Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
         _ => None,
@@ -630,8 +655,7 @@ fn network<R: Runner, W: Write, T>(
 /// Remove what yt-dlp left unfinished longer than `days` ago, in any
 /// folder its template makes, and the folders that leaves empty;
 /// younger, a later run resumes it.
-fn clear_stale(partial: &Path, days: u64) {
-    let limit = std::time::Duration::from_secs(days * 24 * 3600);
+fn clear_stale(partial: &Path, limit: std::time::Duration) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];
     while let Some(dir) = left.pop() {

@@ -383,13 +383,34 @@ fn sync_fills_in_every_setting_and_updates_none_already_current() {
     let (ok, text) = s.run(&flacs(), &["sync", "--update-defaults"]);
     assert!(ok, "{text}");
     assert!(
+        text.contains("Renamed in the song list: [audio] `opus_kbps = 192`"),
+        "{text}"
+    );
+    assert!(
         text.contains("Every setting is at this muman's defaults"),
         "{text}"
     );
     let listed = std::fs::read_to_string(&songs).unwrap();
-    assert!(listed.contains("\nedition = 1\n"), "{listed}");
-    assert!(listed.contains("opus_kbps = 192"), "{listed}");
+    assert!(listed.contains("\nedition = 2\n"), "{listed}");
+    assert!(listed.contains("opus_bitrate = \"192 kb/s\""), "{listed}");
+    assert!(!listed.contains("opus_kbps"), "{listed}");
     assert!(listed.contains("[ytdlp]"), "{listed}");
+}
+
+#[test]
+fn status_names_each_old_setting_and_changes_nothing() {
+    let s = Setup::new();
+    let songs = s.dir.path().join("home/songs.toml");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let old = "version = 1\n\n[history]\nmax_mib = 1024\n";
+    std::fs::write(&songs, old).unwrap();
+    let (ok, text) = s.run(&flacs(), &["status"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("[history] `max_mib = 1024` is `max_size = \"1 GiB\"` now"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&songs).unwrap(), old);
 }
 
 #[test]
@@ -999,7 +1020,7 @@ fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
         .unwrap()
         .set_modified(month_ago)
         .unwrap();
-    clear_stale(&partial, 14);
+    clear_stale(&partial, std::time::Duration::from_secs(14 * 24 * 3600));
     assert!(!stale.exists());
     assert!(
         !partial.join("Chan").exists(),

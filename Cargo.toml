@@ -38,6 +38,7 @@ toml_edit = "0.25"
 trash = "5"
 unicode-normalization = "0.1"
 unicode-width = "0.2"
+uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 which = "8"
 zip = { version = "8", default-features = false }

@@ -62,21 +62,9 @@ pub fn plain(text: &str) -> String {
 }
 
 /// `n` bytes in the largest binary unit that keeps it at least one.
-#[allow(clippy::cast_precision_loss)]
 #[must_use]
 pub fn bytes(n: u64) -> String {
-    let units = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = n as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < units.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} B")
-    } else {
-        format!("{value:.1} {}", units[unit])
-    }
+    crate::units::Size(n).to_string()
 }
 
 pub fn info<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {

@@ -41,6 +41,7 @@
 //! Songs changed since muman wrote them, and the files a failed song
 //! keeps, are counted as they are and never moved: they are yours.
 
+use crate::units;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -196,7 +197,12 @@ fn by_audio(state: &State) -> ByAudio<'_> {
 fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
     let audio = facts.audio.as_ref();
     let measured = audio.and_then(|a| a.bytes).map(|b| b as f64);
-    let guess = |codec: Codec| (nominal_kbps(codec) * 125.0 * seconds, SIGMA_GUESS);
+    let guess = |codec: Codec| {
+        (
+            units::stream_bytes(nominal_kbps(codec), seconds),
+            SIGMA_GUESS,
+        )
+    };
     let (bytes, sigma) = match format {
         Format::Copy { codec } => {
             measured.map_or_else(|| guess(codec), |b| (b * (1.0 + CONTAINER), SIGMA_COPY))
@@ -213,7 +219,7 @@ fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
         Format::Encode {
             kbps: Some(kbps), ..
         } => (
-            f64::from(kbps) * 125.0 * seconds * (1.0 + CONTAINER),
+            units::stream_bytes(f64::from(kbps), seconds) * (1.0 + CONTAINER),
             SIGMA_ENCODE,
         ),
     };

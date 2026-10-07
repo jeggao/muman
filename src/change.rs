@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ui::Prompter;
 use anyhow::{Context, Result, bail};
-use toml_edit::{Item, Table, value};
+use toml_edit::{Table, value};
 
 use crate::cli::Confirm;
 use crate::dirs::Dirs;
@@ -372,6 +372,17 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                 }
                 other.push(Assign::Pin(pin, v.map(str::to_string)));
             }
+            "lyrics_offset" => {
+                let ms = v
+                    .map(|v| {
+                        v.parse::<crate::units::Time>()
+                            .map(|t| t.0)
+                            .map_err(|e| anyhow::anyhow!("`{term}`: {e}"))
+                    })
+                    .transpose()?;
+                other.push(Assign::Offset(ms));
+            }
+            // The name before times took their unit, in milliseconds.
             "lyrics_offset_ms" => {
                 let ms = v
                     .map(|v| {
@@ -440,10 +451,12 @@ impl Assign {
                 table.remove(pin);
             }
             Self::Offset(Some(ms)) => {
-                table.insert("lyrics_offset_ms", Item::Value((*ms).into()));
+                table.remove("lyrics_offset_ms");
+                table.insert("lyrics_offset", value(crate::units::Time(*ms).exact()));
             }
             Self::Offset(None) => {
                 table.remove("lyrics_offset_ms");
+                table.remove("lyrics_offset");
             }
         }
         Ok(())

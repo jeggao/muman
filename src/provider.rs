@@ -121,7 +121,7 @@ impl Provider {
     /// The defaults its `[providers.*]` table is read over.
     #[must_use]
     pub fn defaults(self) -> Settings {
-        let (recheck_days, concurrency, per_run) = match self {
+        let (days, concurrency, per_run) = match self {
             Self::Manual => (0, 1, 0),
             Self::YouTube | Self::YouTubeMusic => (14, 4, 50),
             Self::Lrclib => (7, 4, 300),
@@ -134,7 +134,7 @@ impl Provider {
         Settings {
             enabled: true,
             concurrency,
-            recheck_days,
+            recheck: crate::units::Time::days(days).duration(),
             per_run,
             url: match self {
                 Self::Lrclib => Some(LRCLIB_URL.to_string()),
@@ -186,8 +186,8 @@ pub struct Settings {
     pub enabled: bool,
     /// Lookups at once.
     pub concurrency: usize,
-    /// Days before a lookup that found nothing is made again.
-    pub recheck_days: u64,
+    /// How long a lookup that found nothing waits to be made again.
+    pub recheck: std::time::Duration,
     /// Lookups one run makes at most, so a backlog drains over several
     /// runs rather than at once on a free service; 0 for no limit.
     pub per_run: usize,
@@ -338,7 +338,20 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
             "concurrency" => {
                 s.concurrency = usize::try_from(number()?.max(1)).unwrap_or(1);
             }
-            "recheck_days" => s.recheck_days = number()?,
+            "recheck" => {
+                let t: crate::units::Time = item
+                    .as_str()
+                    .with_context(|| {
+                        format!("{what}: `recheck` must be a length of time, such as \"30 days\"")
+                    })?
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("{what}: `recheck`: {e}"))?;
+                s.recheck = t.duration();
+            }
+            "recheck_days" => {
+                let days = i64::try_from(number()?).unwrap_or(i64::MAX);
+                s.recheck = crate::units::Time::days(days).duration();
+            }
             "per_run" => s.per_run = usize::try_from(number()?).unwrap_or(usize::MAX),
             "url" if p.served() => {
                 let url = item
@@ -437,8 +450,14 @@ mod tests {
     fn without_tables_the_defaults_hold() {
         let c = config("version = 1\n").unwrap();
         assert_eq!(c, Config::default());
-        assert_eq!(c.settings(Provider::Lrclib).recheck_days, 7);
-        assert_eq!(c.settings(Provider::YouTubeMusic).recheck_days, 14);
+        assert_eq!(
+            c.settings(Provider::Lrclib).recheck,
+            crate::units::Time::days(7).duration()
+        );
+        assert_eq!(
+            c.settings(Provider::YouTubeMusic).recheck,
+            crate::units::Time::days(14).duration()
+        );
         let lrclib = c
             .triggers
             .iter()
@@ -464,7 +483,7 @@ mod tests {
     #[test]
     fn tables_set_over_the_defaults_and_triggers_replace_them() {
         let c = config(
-            "[providers.lrclib]\nrecheck_days = 3\nurl = \"lrclib.example:8080\"\n\
+            "[providers.lrclib]\nrecheck = \"3 days\"\nurl = \"lrclib.example:8080\"\n\
              [providers.youtube-music]\nenabled = false\n\
              [providers.musicbrainz]\nurl = \"https://mb.example/\"\n\
              [providers.acoustid]\nkey = \"0wnK3y\"\nurl = \"https://aid.example\"\n\
@@ -476,7 +495,10 @@ mod tests {
             Some("https://mb.example")
         );
         let l = c.settings(Provider::Lrclib);
-        assert_eq!((l.recheck_days, l.concurrency, l.per_run), (3, 4, 300));
+        assert_eq!(
+            (l.recheck, l.concurrency, l.per_run),
+            (crate::units::Time::days(3).duration(), 4, 300)
+        );
         assert_eq!(l.url.as_deref(), Some("http://lrclib.example:8080"));
         let acoustid = c.settings(Provider::AcoustId);
         assert_eq!(acoustid.key.as_deref(), Some("0wnK3y"));

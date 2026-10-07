@@ -43,6 +43,8 @@ src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   cli.rs            the command line (clap derive), exit codes
   settings.rs       [library], [audio], [quality], [ytdlp], [history]
+  migrate.rs        older song lists brought up to this edition
+  units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
   manifest/new.toml a new home's song list, the reference for every setting
   state.rs          state.json: files written, measures, comparisons
@@ -126,8 +128,9 @@ latest stable, which can be newer than yours.
   which wait out a file Windows reports as held open.
 - **Settings:** a new setting goes in `settings.rs`, with its default
   written out in `manifest/new.toml`; a test keeps the two equal. A
-  changed default raises `settings::EDITION` and adds a `Change` with
-  the old value. A setting that changes a written file must change the
+  renamed setting, or one given a unit, and a changed default each add
+  a step to a new edition in `migrate::HISTORY`, raising
+  `migrate::EDITION`. A setting that changes a written file must change the
   song's `Plan`.
 - **Formats:** `songs.toml` and `state.json` carry a `version`; changing
   what an existing key means is a new version, adding a key is not.
@@ -151,7 +154,7 @@ since the last release collect under `[Unreleased]`.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md) |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md); a rename or a changed default, an edition in `migrate.rs` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How sources, picking, lookups, editing or hooks behave for a user | [docs/guide.md](docs/guide.md) |
 | A module's design or a constant's reason | That module's `//!` docs |

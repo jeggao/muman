@@ -248,7 +248,7 @@ impl Run {
         if !self.record.touched.insert(rel.to_path_buf()) {
             return Ok(());
         }
-        let budget = self.limits.max_mib.saturating_mul(1 << 20);
+        let budget = self.limits.max_size.0;
         let others = |o: &[(PathBuf, u64)]| o.iter().map(|(_, b)| b).sum::<u64>();
         while self.record.bytes + meta.len() + others(&self.others) > budget
             && !self.others.is_empty()

@@ -67,6 +67,9 @@ pub fn check<R: Runner, W: Write, D: Write>(
     report: &mut D,
 ) -> Result<bool> {
     let manifest = Manifest::load(&dirs.home)?;
+    for line in crate::migrate::notices(&manifest.renamed) {
+        crate::ui::info(report, &line)?;
+    }
     for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
         crate::ui::warning(report, &line)?;
     }
