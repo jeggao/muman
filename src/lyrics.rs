@@ -199,9 +199,9 @@ fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     if encoding_rs::Encoding::for_bom(bytes).is_some() || bytes.len() < 4 {
         return None;
     }
-    let pairs = bytes.chunks_exact(2);
+    let (pairs, _) = bytes.as_chunks::<2>();
     let total = pairs.len();
-    let (high, low) = pairs.fold((0, 0), |(h, l), p| {
+    let (high, low) = pairs.iter().fold((0, 0), |(h, l), p| {
         (h + usize::from(p[1] == 0), l + usize::from(p[0] == 0))
     });
     if high * 2 > total && low * 10 < total {

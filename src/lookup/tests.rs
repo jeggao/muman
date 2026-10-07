@@ -299,7 +299,7 @@ fn the_docs_say_when_a_lookup_is_made_again_as_it_is() {
     };
     let due = |l: &Looked, listed: bool| l.due(NOW, recheck, &|_| listed);
     let (_dir, m, s) = setup(UPLOAD, &[("youtube.com:uuuuuuuuuuu", false)]);
-    assert!(s.lookups.is_empty());
+    assert_eq!(s.lookups, []);
     assert!(!finds(&m, &s, false).is_empty(), "nothing recorded");
     let found = Outcome::Found(SourceKey::parse("lrclib:7").unwrap());
     let mut other = at(found.clone(), 0);

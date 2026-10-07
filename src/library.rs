@@ -348,7 +348,7 @@ mod tests {
             .remove(&[Ledger::taken(Path::new("A/B/x.opus"))])
             .unwrap();
         assert_eq!(removal.gone, [PathBuf::from("A/B/x.opus")]);
-        assert!(removal.held.is_empty());
+        assert_eq!(removal.held, []);
         assert!(!root.join("A").exists());
     }
 

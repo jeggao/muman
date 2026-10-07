@@ -112,7 +112,6 @@ impl From<&str> for ManualKey {
 }
 
 impl SourceKey {
-    /// A YouTube video, by its ID.
     #[must_use]
     pub fn youtube(id: &str) -> Self {
         Self::Remote {

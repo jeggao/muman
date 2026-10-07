@@ -724,7 +724,7 @@ mod tests {
         let located = store.locate(&key).unwrap();
         assert!(located.path.is_file());
         assert_eq!((located.path, located.lyrics), (song, Some(lrc)));
-        assert!(store.unused(&BTreeSet::from([key])).is_empty());
+        assert_eq!(store.unused(&BTreeSet::from([key])), [] as [PathBuf; 0]);
     }
 
     #[test]

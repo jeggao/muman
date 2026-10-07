@@ -4,7 +4,9 @@
 //! Every file is written as `<name>.part` and renamed into place, the
 //! audio last, so a player scanning the library never sees half a track.
 //! A cover or lyrics that fail are reported and the song is written
-//! without them.
+//! without them. A song that fails leaves the folders made for it, since
+//! another song rendered at the same time may be writing into one; the
+//! sync clears the folders failures leave once every song is written.
 //!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
@@ -306,8 +308,6 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         Err(e) => {
             let _ = fs::remove_file(&audio_part);
             let _ = fs::remove_file(&lyrics_part);
-            // Its folder stays: another song rendered at once may be
-            // writing into it. The sync clears the folders failures leave.
             Err(e)
         }
     }
