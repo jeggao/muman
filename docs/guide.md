@@ -60,7 +60,10 @@ command reports, as `status` does, stays on stdout.
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone. A file whose size or time changed
 since muman wrote it, as a tagger rewrites it, is left with a warning
-until `sync --force`. Each file is written under a temporary name and
+until `sync --force`: a new path template still moves it, your change
+with it, but a change to the song itself leaves it where it is, and
+`sync --force` writes the song again and deletes it, `undo` putting it
+back. Each file is written under a temporary name and
 renamed into place, so a player never sees half a track. Library paths
 in messages use `/` on every system.
 

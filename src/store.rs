@@ -190,6 +190,10 @@ pub struct Store {
     kept: HashMap<&'static str, HashMap<String, PathBuf>>,
     /// Manual files by their path in the manual folder.
     manual: BTreeMap<PathBuf, Kind>,
+    /// The name on disk of each manual file whose key differs from it: a
+    /// decomposed name is listed composed, and Linux and NTFS open only
+    /// the bytes a name was written with.
+    on_disk: HashMap<PathBuf, PathBuf>,
 }
 
 impl Store {
@@ -242,7 +246,11 @@ impl Store {
         let root = dirs.manual();
         for file in walk(&root, usize::MAX)? {
             if let (Some(kind), Ok(rel)) = (kind_of(&file), file.strip_prefix(&root)) {
-                store.manual.insert(crate::relpath::normalized(rel), kind);
+                let key = crate::relpath::normalized(rel);
+                if key != rel {
+                    store.on_disk.insert(key.clone(), rel.to_path_buf());
+                }
+                store.manual.insert(key, kind);
             }
         }
         Ok(store)
@@ -288,13 +296,10 @@ impl Store {
                 };
                 Some(Located {
                     key: key.clone(),
-                    path: self.manual_root.join(rel),
+                    path: self.manual_file(rel),
                     kind,
-                    lyrics: lyrics.map(|l| self.manual_root.join(l)),
-                    covers: covers
-                        .into_iter()
-                        .map(|c| self.manual_root.join(c))
-                        .collect(),
+                    lyrics: lyrics.map(|l| self.manual_file(&l)),
+                    covers: covers.iter().map(|c| self.manual_file(c)).collect(),
                 })
             }
         }
@@ -333,6 +338,12 @@ impl Store {
             }
         }
         Ok(gone)
+    }
+
+    /// Where the manual file listed as `rel` is on disk.
+    fn manual_file(&self, rel: &Path) -> PathBuf {
+        self.manual_root
+            .join(self.on_disk.get(rel).map_or(rel, PathBuf::as_path))
     }
 
     fn kept_file(&self, kind: &Kept, id: &str) -> Option<&PathBuf> {
@@ -382,7 +393,7 @@ impl Store {
             if *kind != Kind::Media || listed.contains(&key) {
                 continue;
             }
-            let fresh = std::fs::metadata(self.manual_root.join(rel))
+            let fresh = std::fs::metadata(self.manual_file(rel))
                 .ok()
                 .and_then(|m| crate::platform::arrived(&m))
                 .is_some_and(|t| now.duration_since(t).unwrap_or_default() < wait);
@@ -414,7 +425,7 @@ impl Store {
             .chain(
                 self.manual
                     .keys()
-                    .map(|r| self.manual_root.join(r))
+                    .map(|r| self.manual_file(r))
                     .collect::<Vec<_>>()
                     .iter(),
             )
@@ -510,6 +521,20 @@ mod tests {
         let located = store.locate(&key).unwrap();
         assert_eq!((located.path, located.kind), (json, Kind::Tags));
         assert!(!store.has(&SourceKey::parse("musicbrainz:not-an-id").unwrap()));
+    }
+
+    #[test]
+    fn a_decomposed_manual_name_is_listed_composed_and_opened_as_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let song = touch(dir.path(), "sources/manual/Cafe\u{301}/Noe\u{308}l.flac");
+        let lrc = touch(dir.path(), "sources/manual/Cafe\u{301}/Noe\u{308}l.lrc");
+        let store = Store::scan(&d).unwrap();
+        let key = manual("Caf\u{e9}/No\u{eb}l.flac");
+        let located = store.locate(&key).unwrap();
+        assert!(located.path.is_file());
+        assert_eq!((located.path, located.lyrics), (song, Some(lrc)));
+        assert!(store.unused(&BTreeSet::from([key])).is_empty());
     }
 
     #[test]

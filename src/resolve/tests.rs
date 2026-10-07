@@ -561,6 +561,24 @@ fn an_album_artist_taken_from_the_artist_follows_a_hand_set_one() {
 }
 
 #[test]
+fn a_song_whose_sources_name_nothing_is_named_by_its_hand_set_tags() {
+    let key = manual("a.flac");
+    let facts = BTreeMap::from([(key.clone(), audio("flac", 22.0))]);
+    let mut s = song(&[key]);
+    s.tags = vec![
+        ("title".into(), vec!["Paper Comets".into()]),
+        ("artist".into(), vec!["Marlo Venn".into()]),
+    ];
+    let r = run(&s, &facts, &[]);
+    assert_eq!(
+        r.stem,
+        PathBuf::from("Marlo Venn/Paper Comets/Paper Comets")
+    );
+    assert_eq!(why(&r, "ALBUM").from, SINGLE);
+    assert_eq!(why(&r, "ALBUMARTIST").from, "the first artist of song.tags");
+}
+
+#[test]
 fn hand_set_tags_and_the_album_win_last() {
     let (mut s, facts, alignments) = release_and_video();
     let album = Album {

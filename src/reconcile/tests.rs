@@ -667,6 +667,67 @@ fn a_new_template_moves_songs_without_writing_them_again() {
 }
 
 #[test]
+fn a_new_template_moves_a_file_changed_since_it_was_written() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let before = renders(&fake);
+    std::fs::write(
+        h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus"),
+        "replay gain",
+    )
+    .unwrap();
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n",
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&fake), before, "{text}");
+    let moved = h.lib("Chan - Title aaaaaaaaaaa.opus");
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), "replay gain");
+    assert!(!h.lib("Chan").exists(), "no copy is left behind: {text}");
+}
+
+#[test]
+fn a_changed_file_whose_song_changes_and_moves_waits_for_force() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    assert!(h.run(&fake, Options::default()).0);
+    let before = renders(&fake);
+    let old = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    std::fs::write(&old, "replay gain").unwrap();
+    h.songs(
+        "[library]\ntemplate = \"{{ artist }} - {{ title }}\"\n\
+         [[song]]\nsources = [\"youtube:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n",
+    );
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), before, "{text}");
+    assert!(
+        text.contains("Left alone, changed since muman wrote it: Chan/Title aaaaaaaaaaa/"),
+        "{text}"
+    );
+    assert!(old.exists(), "{text}");
+    assert!(!h.lib("Chan - Title aaaaaaaaaaa.opus").exists(), "{text}");
+
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&fake, forced);
+    assert!(ok, "{text}");
+    assert!(h.lib("Chan - Title aaaaaaaaaaa.opus").exists(), "{text}");
+    assert!(
+        !old.exists(),
+        "written again elsewhere, the old file goes: {text}"
+    );
+}
+
+#[test]
 fn a_move_never_lands_on_a_file_another_song_holds() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
@@ -938,7 +999,7 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
     };
     let old = BTreeMap::from([(PathBuf::from("A/x.opus"), written("A/x.lrc"))]);
     let now = BTreeMap::from([(PathBuf::from("A/X.flac"), written("A/X.lrc"))]);
-    let plan = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new());
+    let plan = prune_plan(&h.dirs.library, &old, &now, &BTreeSet::new(), false);
     assert_eq!(
         plan,
         [(
