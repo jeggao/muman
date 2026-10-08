@@ -501,3 +501,173 @@ fn opus_holds_gains_as_r128_and_no_peaks() {
         ]
     );
 }
+
+/// One value for every field, two where a field takes several.
+fn every_field() -> Vec<(String, Vec<String>)> {
+    Field::ALL
+        .into_iter()
+        .map(|field| {
+            let values: &[&str] = match field {
+                Field::Title => &["Lantern Weather"],
+                Field::Artist => &["Marlo Venn", "Kiri Ashdown"],
+                Field::Album => &["The Glass Orchards"],
+                Field::AlbumArtist => &["Marlo Venn"],
+                Field::Track => &["3"],
+                Field::Disc => &["1"],
+                Field::Date => &["2004-05-06"],
+                Field::Genre => &["House", "Disco"],
+                Field::Isrc => &["XX0000000001"],
+                Field::TrackTotal => &["12"],
+                Field::DiscTotal => &["2"],
+                Field::ReleaseCountry => &["XW"],
+                Field::MusicBrainzTrackId => &["00000000-0000-0000-0000-000000000001"],
+                Field::MusicBrainzReleaseTrackId => &["00000000-0000-0000-0000-000000000002"],
+                Field::MusicBrainzAlbumId => &["00000000-0000-0000-0000-000000000003"],
+                Field::MusicBrainzReleaseGroupId => &["00000000-0000-0000-0000-000000000004"],
+                Field::MusicBrainzArtistId => &[
+                    "00000000-0000-0000-0000-000000000005",
+                    "00000000-0000-0000-0000-000000000006",
+                ],
+                Field::MusicBrainzAlbumArtistId => &["00000000-0000-0000-0000-000000000005"],
+                Field::TrackGain => &["-6.12 dB"],
+                Field::TrackPeak => &["0.900000"],
+                Field::AlbumGain => &["-5.00 dB"],
+                Field::AlbumPeak => &["0.950000"],
+            };
+            (
+                field.vorbis().to_string(),
+                values.iter().map(ToString::to_string).collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_field_reads_back_as_written_in_every_container() {
+    let dir = tempfile::tempdir().unwrap();
+    let tags = every_field();
+    for (codec, bytes) in [
+        (Codec::Opus, crate::testing::SILENCE_OPUS),
+        (Codec::Vorbis, crate::testing::SILENCE_VORBIS),
+        (Codec::Flac, crate::testing::SILENCE_FLAC),
+        (Codec::Mp3, crate::testing::SILENCE_MP3),
+        (Codec::Aac, crate::testing::SILENCE_M4A),
+        (Codec::WavPack, crate::testing::SILENCE_WV),
+    ] {
+        let path = dir.path().join(format!("a.{}", codec.extension()));
+        fs::write(&path, bytes).unwrap();
+        write_tags(&path, Format::Copy { codec }, &tags, None).unwrap();
+        let read = crate::tags::from_container(&crate::tags::read_file(&path).unwrap());
+        for (key, values) in &tags {
+            let field = Field::named(key).unwrap();
+            let peak = matches!(field, Field::TrackPeak | Field::AlbumPeak);
+            if codec == Codec::Opus && peak {
+                assert!(!read.contains_key(&field), "Opus holds no peaks");
+                continue;
+            }
+            assert_eq!(
+                read.get(&field).map(|o| &o.values),
+                Some(values),
+                "{codec} {key}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mp3_and_m4a_name_their_tags_as_picard_and_beets_read_them() {
+    use lofty::id3::v2::Frame;
+    use lofty::mp4::{AtomData, AtomIdent};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut tags = every_field();
+    tags.push(("LABEL".into(), vec!["Orchard Lights Rècords".into()]));
+    tags.push(("COMMENT".into(), vec!["two\u{2028}lines".into()]));
+
+    let mp3 = dir.path().join("a.mp3");
+    fs::write(&mp3, crate::testing::SILENCE_MP3).unwrap();
+    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &tags, None).unwrap();
+    let mut file = fs::File::open(&mp3).unwrap();
+    let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
+        .unwrap()
+        .id3v2()
+        .unwrap()
+        .clone();
+    let mut frames = Vec::new();
+    let mut users = Vec::new();
+    let mut ids = BTreeMap::new();
+    for frame in &id3 {
+        frames.push(frame.id_str().to_string());
+        match frame {
+            Frame::UserText(t) => users.push(t.description.to_string()),
+            Frame::UniqueFileIdentifier(u) => {
+                ids.insert(u.owner.to_string(), u.identifier.to_vec());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        ids.get("http://musicbrainz.org").map(Vec::as_slice),
+        Some(&b"00000000-0000-0000-0000-000000000001"[..]),
+        "the recording's MBID in a UFID frame"
+    );
+    for description in [
+        "MusicBrainz Release Track Id",
+        "MusicBrainz Album Id",
+        "MusicBrainz Release Group Id",
+        "MusicBrainz Artist Id",
+        "MusicBrainz Album Artist Id",
+        "MusicBrainz Album Release Country",
+        "REPLAYGAIN_TRACK_GAIN",
+        "REPLAYGAIN_TRACK_PEAK",
+        "REPLAYGAIN_ALBUM_GAIN",
+        "REPLAYGAIN_ALBUM_PEAK",
+    ] {
+        assert!(users.iter().any(|u| u == description), "TXXX:{description}");
+    }
+    for id in ["TPE2", "TPOS", "TRCK", "TSRC", "TDRC", "TPUB", "COMM"] {
+        assert!(frames.iter().any(|f| f == id), "{id}");
+    }
+    let generic = lofty::tag::Tag::from(id3);
+    assert_eq!(
+        generic.get_string(lofty::tag::ItemKey::Publisher),
+        Some("Orchard Lights Rècords")
+    );
+    assert_eq!(
+        generic.get_string(lofty::tag::ItemKey::Comment),
+        Some("two\u{2028}lines")
+    );
+
+    let m4a = dir.path().join("a.m4a");
+    fs::write(&m4a, crate::testing::SILENCE_M4A).unwrap();
+    write_tags(&m4a, Format::Copy { codec: Codec::Aac }, &tags, None).unwrap();
+    let mut file = fs::File::open(&m4a).unwrap();
+    let mp4 = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+    let ilst = mp4.ilst().unwrap();
+    let freeform = |name: &str| {
+        ilst.get(&AtomIdent::Freeform {
+            mean: "com.apple.iTunes".into(),
+            name: name.to_string().into(),
+        })
+        .and_then(|a| a.data().next().cloned())
+    };
+    for (name, value) in [
+        (
+            "MusicBrainz Track Id",
+            "00000000-0000-0000-0000-000000000001",
+        ),
+        (
+            "MusicBrainz Album Id",
+            "00000000-0000-0000-0000-000000000003",
+        ),
+        ("MusicBrainz Album Release Country", "XW"),
+        ("ISRC", "XX0000000001"),
+        ("replaygain_track_gain", "-6.12 dB"),
+        ("replaygain_album_peak", "0.950000"),
+        ("LABEL", "Orchard Lights Rècords"),
+    ] {
+        assert_eq!(freeform(name), Some(AtomData::UTF8(value.into())), "{name}");
+    }
+    assert_eq!(ilst.track(), Some(3));
+    assert_eq!(ilst.disk_total(), Some(2));
+}

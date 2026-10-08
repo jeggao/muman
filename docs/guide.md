@@ -339,8 +339,12 @@ the release's fields come from it too: another source's loudness is not
 this audio's. An Opus file holds the gains as `R128_TRACK_GAIN` and
 `R128_ALBUM_GAIN` and no peaks, as Opus players read them, and an Opus
 source's R128 gains are read as ReplayGain's. A file's own tags offer every field by its Vorbis
-name or the name Picard gives it in MP3 and MP4, and a track written
-`3/12` offers its total too. Fields with no tag of their own in MP3 or
+name, the names other taggers give it there, as `DISCC` for `DISCTOTAL`,
+or the name Picard gives it in MP3 and MP4, and a track written
+`3/12` offers its total too. A date reads alike however a tagger wrote
+it, `2016/11/01`, `20161101` or with a time after it, as `2016-11-01`. A
+track or disc offers the number it starts with, and none when it starts
+with no digit, as a vinyl side's `A1`. Fields with no tag of their own in MP3 or
 MP4 are written as Picard writes them there. A value over 4 KiB is
 offered by no source, and control characters and those that reorder
 text are dropped from every value.

@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/8";
+pub const METHOD: &str = "tags/9";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -139,16 +139,17 @@ impl Field {
     }
 
     /// Its other names, lower-cased: the common spellings a song list may
-    /// use, and the names ffprobe reports for MP3 and MP4 files.
+    /// use, the names ffprobe reports for MP3 and MP4 files, and the
+    /// Vorbis comments other taggers write.
     fn aliases(self) -> &'static [&'static str] {
         match self {
-            Self::AlbumArtist => &["album_artist"],
+            Self::AlbumArtist => &["album_artist", "album artist"],
             Self::Track => &["track", "track_number"],
             Self::Disc => &["disc", "disc_number"],
             Self::Date => &["year"],
             Self::Isrc => &["tsrc"],
-            Self::TrackTotal => &["track_total", "totaltracks"],
-            Self::DiscTotal => &["disc_total", "totaldiscs"],
+            Self::TrackTotal => &["track_total", "totaltracks", "trackc"],
+            Self::DiscTotal => &["disc_total", "totaldiscs", "discc"],
             Self::ReleaseCountry => &["release_country", "musicbrainz album release country"],
             Self::MusicBrainzTrackId => &["musicbrainz track id"],
             Self::MusicBrainzReleaseTrackId => &["musicbrainz release track id"],
@@ -245,10 +246,12 @@ pub type Offers = BTreeMap<Field, Offer>;
 const MAX_VALUE: usize = 4096;
 
 /// Offer `values` for `field`. Every source's values pass here, so a
-/// count reads alike whatever offers it: no leading zeros, and 0, which
-/// counts nothing, is none. A control character, which cuts a C string
-/// short or moves a terminal's cursor, and one reordering the text are
-/// dropped, a line break or tab spaced.
+/// count reads alike whatever offers it: the number it starts with, as
+/// `3 of 12` means 3, with no leading zeros; a count of 0, which counts
+/// nothing, or one starting with no digit, as a vinyl side's `A1`, is
+/// none, as no MP3 or MP4 file can hold it. A control character, which
+/// cuts a C string short or moves a terminal's cursor, and one
+/// reordering the text are dropped, a line break or tab spaced.
 fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: bool) {
     let counts = matches!(
         field,
@@ -268,8 +271,9 @@ fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: boo
                 })
                 .collect();
             let v = v.trim();
-            if counts && v.bytes().all(|b| b.is_ascii_digit()) {
-                v.trim_start_matches('0').to_string()
+            if counts {
+                let digits = v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len());
+                v[..digits].trim_start_matches('0').to_string()
             } else {
                 v.to_string()
             }
@@ -447,9 +451,11 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
 /// it holds, as `lofty` reads them: the format's own frames and atoms
 /// named as muman writes them ([`crate::render`]), and a comment given
 /// twice, as two `TITLE`s, kept as two values where ffprobe joins them
-/// with `;`. The file's main tag first; another, as an `ID3v1` beside an
-/// `ID3v2`, adds only names the first lacks. `None` for a file `lofty`
-/// does not read, as Matroska.
+/// with `;`. Vorbis comments are read as written, so one `lofty` maps to
+/// no field of its own, as another tagger's `DISC` or `DISCC`, is kept.
+/// The file's main tag first; another, as an `ID3v1` beside an `ID3v2`,
+/// adds only names the first lacks. `None` for a file `lofty` does not
+/// read, as Matroska.
 #[must_use]
 pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>> {
     use lofty::file::TaggedFileExt;
@@ -460,7 +466,14 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
     let primary = file.primary_tag().map(lofty::tag::Tag::tag_type);
     let mut ordered: Vec<&lofty::tag::Tag> = file.tags().iter().collect();
     ordered.sort_by_key(|t| Some(t.tag_type()) != primary);
+    let comments = vorbis_comments(path, file.file_type());
     for tag in ordered {
+        if let (TagType::VorbisComments, Some(comments)) = (tag.tag_type(), &comments) {
+            for (name, values) in comments {
+                tags.entry(name.clone()).or_insert_with(|| values.clone());
+            }
+            continue;
+        }
         let mut own: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for item in tag.items() {
             let (Some(name), ItemValue::Text(text) | ItemValue::Locator(text)) =
@@ -477,6 +490,53 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
         }
     }
     Some(tags)
+}
+
+/// Every Vorbis comment of a file of `kind` that holds them, by its name
+/// lower-cased.
+fn vorbis_comments(
+    path: &std::path::Path,
+    kind: lofty::file::FileType,
+) -> Option<BTreeMap<String, Vec<String>>> {
+    use lofty::file::{AudioFile, FileType};
+    use lofty::ogg::tag::VorbisComments;
+    use lofty::ogg::{OpusFile, SpeexFile, VorbisFile};
+
+    let named = |comments: &VorbisComments| {
+        let mut tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (name, value) in comments.items() {
+            tags.entry(name.to_ascii_lowercase())
+                .or_default()
+                .push(value.to_string());
+        }
+        tags
+    };
+    let mut file = std::fs::File::open(path).ok()?;
+    let options = lofty::config::ParseOptions::new()
+        .read_properties(false)
+        .read_cover_art(false);
+    match kind {
+        FileType::Flac => lofty::flac::FlacFile::read_from(&mut file, options)
+            .ok()?
+            .vorbis_comments()
+            .map(named),
+        FileType::Opus => Some(named(
+            OpusFile::read_from(&mut file, options)
+                .ok()?
+                .vorbis_comments(),
+        )),
+        FileType::Vorbis => Some(named(
+            VorbisFile::read_from(&mut file, options)
+                .ok()?
+                .vorbis_comments(),
+        )),
+        FileType::Speex => Some(named(
+            SpeexFile::read_from(&mut file, options)
+                .ok()?
+                .vorbis_comments(),
+        )),
+        _ => None,
+    }
 }
 
 /// A track or disc written `3/12` offers its total too, unless the file
@@ -511,13 +571,7 @@ pub fn from_container(tags: &BTreeMap<String, Vec<String>>) -> Offers {
 fn container_values(field: Field, value: &str, totals: &mut Vec<(Field, String)>) -> Vec<String> {
     {
         match field {
-            Field::Date => value
-                .trim()
-                .split('T')
-                .next()
-                .map(|d| iso_date(d).unwrap_or_else(|| d.to_string()))
-                .into_iter()
-                .collect(),
+            Field::Date => vec![file_date(value)],
             Field::Track | Field::Disc => {
                 let (n, total) = value.split_once('/').unwrap_or((value, ""));
                 let of = if field == Field::Track {
@@ -580,6 +634,32 @@ fn peak(value: &str) -> Option<String> {
         .ok()
         .filter(|p| p.is_finite() && *p >= 0.0)
         .map(|p| format!("{p:.6}"))
+}
+
+/// A file's date as the Vorbis comment convention writes it, `YYYY`,
+/// `YYYY-MM` or `YYYY-MM-DD`, read as taggers write it: a time after it
+/// dropped, whether a `T` parts them, as the iTunes Store writes, or a
+/// space; slashes for dashes; or `YYYYMMDD`. A value of another shape is
+/// offered as it is.
+fn file_date(value: &str) -> String {
+    let value = value.trim();
+    let day = value
+        .split(['T', ' '])
+        .next()
+        .unwrap_or_default()
+        .replace('/', "-");
+    if let Some(date) = iso_date(&day) {
+        return date;
+    }
+    let partial = matches!(day.len(), 4 | 7)
+        && day.bytes().enumerate().all(|(i, b)| {
+            if i == 4 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
+    if partial { day } else { value.to_string() }
 }
 
 /// `YYYYMMDD` as `YYYY-MM-DD`, the Vorbis comment convention; a date
@@ -897,5 +977,147 @@ mod tests {
         assert_eq!(o[&Field::TrackPeak].values, ["0.980000"]);
         assert_eq!(o[&Field::AlbumGain].values, ["1.00 dB"], "-4 dB under R128");
         assert!(!o.contains_key(&Field::AlbumPeak));
+    }
+
+    #[test]
+    fn another_tagger_s_vorbis_names_are_read_in_ogg_and_flac() {
+        use lofty::config::WriteOptions;
+        use lofty::ogg::tag::VorbisComments;
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("a.flac", crate::testing::SILENCE_FLAC),
+            ("a.ogg", crate::testing::SILENCE_VORBIS),
+            ("a.opus", crate::testing::SILENCE_OPUS),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let mut comments = VorbisComments::default();
+            for (key, value) in [
+                ("TRACK", "7"),
+                ("TRACKC", "9"),
+                ("DISC", "4"),
+                ("DISCC", "5"),
+                ("ALBUM ARTIST", "Marlo Venn"),
+            ] {
+                comments.push(key.into(), value.into());
+            }
+            comments
+                .save_to_path(&path, WriteOptions::default())
+                .unwrap();
+            let o = from_container(&read_file(&path).unwrap());
+            assert_eq!(o[&Field::Track].values, ["7"], "{name}");
+            assert_eq!(o[&Field::TrackTotal].values, ["9"], "{name}");
+            assert_eq!(o[&Field::Disc].values, ["4"], "{name}");
+            assert_eq!(o[&Field::DiscTotal].values, ["5"], "{name}");
+            assert_eq!(o[&Field::AlbumArtist].values, ["Marlo Venn"], "{name}");
+        }
+    }
+
+    #[test]
+    fn a_file_s_date_reads_alike_however_a_tagger_wrote_it() {
+        for (written, read) in [
+            ("20161101", "2016-11-01"),
+            ("2016-11-01", "2016-11-01"),
+            ("2016/11/01", "2016-11-01"),
+            ("2016-11", "2016-11"),
+            ("2016", "2016"),
+            ("2016-11-01T12:00:00", "2016-11-01"),
+            ("1987-03-31T08:00:00Z", "1987-03-31"),
+            ("2009-09-04 12:00:00", "2009-09-04"),
+            ("Spring 2016", "Spring 2016"),
+        ] {
+            let tags = each(BTreeMap::from([("date".to_string(), written.to_string())]));
+            assert_eq!(
+                from_container(&tags)[&Field::Date].values,
+                [read],
+                "{written}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_is_the_number_it_starts_with() {
+        for (written, read) in [
+            ("20", Some("20")),
+            ("05 ", Some("5")),
+            ("3 of 12", Some("3")),
+            ("12abc", Some("12")),
+            ("0", None),
+            ("A1", None),
+            ("something", None),
+            ("-", None),
+        ] {
+            let tags = each(BTreeMap::from([(
+                "tracknumber".to_string(),
+                written.to_string(),
+            )]));
+            let o = from_container(&tags);
+            assert_eq!(
+                o.get(&Field::Track).map(|t| t.values[0].as_str()),
+                read,
+                "{written}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_value_offers_nothing() {
+        let tags = BTreeMap::from([
+            ("genre".to_string(), vec![String::new(), " ".to_string()]),
+            ("title".to_string(), Vec::new()),
+        ]);
+        assert_eq!(from_container(&tags), Offers::new());
+    }
+
+    #[test]
+    fn a_file_that_is_no_media_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("corrupt.mp3", &b""[..]),
+            ("corrupt.m4a", b""),
+            ("corrupt.flac", b"fLaC"),
+            ("corrupt.ogg", b"OggS\x01vorbis"),
+            ("corrupt.opus", b"OggS"),
+            ("corrupt.wv", b"wvpk"),
+            ("corrupt.ape", b"MAC "),
+            ("nothing.xml", b"ftyp"),
+            ("something.unknown", b"Marlo Venn"),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(read_file(&path), None, "{name}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("gone.flac");
+        std::os::unix::fs::symlink(dir.path().join("does-not-exist.flac"), &link).unwrap();
+        assert_eq!(read_file(&link), None);
+    }
+
+    #[test]
+    fn reading_a_file_leaves_it_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("a.mp3", crate::testing::SILENCE_MP3),
+            ("a.flac", crate::testing::SILENCE_FLAC),
+            ("a.m4a", crate::testing::SILENCE_M4A),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+            assert!(read_file(&path).is_some(), "{name}");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name}");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().modified().unwrap(),
+                modified,
+                "{name}"
+            );
+        }
     }
 }

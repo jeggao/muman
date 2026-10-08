@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **Other taggers' tags read.** A FLAC, Ogg or Opus file's `DISC`,
+  `TRACK`, `DISCC` and `TRACKC` comments, which were dropped, offer the
+  disc, track and their totals. A file's date written with slashes, or
+  with a time after a space, reads as `YYYY-MM-DD`. A track or disc
+  that starts with no digit, as `A1`, is offered by no file, and one
+  written `3 of 12` offers 3.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added
