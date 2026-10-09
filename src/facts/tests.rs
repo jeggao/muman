@@ -20,9 +20,19 @@ fn an_original_s_facts_take_three_runs() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
     let fake = Fake::default();
-    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(
+        &fake,
+        &source,
+        &dir.path().join("scratch"),
+        &[analysis::Kind::Loudness],
+    )
+    .unwrap();
     assert_eq!(fake.calls().len(), 3, "{:#?}", fake.calls());
     let audio = facts.audio.unwrap();
+    assert!(
+        audio.analysis.loudness().is_some(),
+        "analyzed in the same run"
+    );
     assert_eq!((audio.index, audio.codec.as_str()), (1, "opus"));
     assert!(audio.quality.unwrap().bandwidth_hz > 20_000.0);
     assert_eq!(facts.print.unwrap().words().len(), 1600);
@@ -67,7 +77,7 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
     source.lyrics = Some(lrc);
     source.covers = vec![cover];
     let fake = Fake::default().probe("Song.flac", FLAC);
-    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
     assert_eq!(
         fake.calls().len(),
         3,
@@ -96,7 +106,7 @@ fn a_failed_measure_costs_only_itself() {
         failing: vec!["lrc".into()],
         ..Fake::default()
     };
-    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
     assert_eq!(facts.lyrics, []);
     assert!(facts.print.is_some() && facts.audio.unwrap().quality.is_some());
     assert!(fake.calls().len() > 3, "the outputs were retried alone");
@@ -109,7 +119,7 @@ fn a_standalone_lrc_is_lyrics_only() {
     std::fs::write(&source.path, "[00:01.00]a\n").unwrap();
     source.kind = Kind::Lyrics;
     let fake = Fake::default();
-    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
     assert_eq!(fake.calls(), Vec::<Vec<String>>::new());
     assert_eq!(facts.lyrics[0].at, LyricsAt::File);
     assert!(facts.audio.is_none());
@@ -126,7 +136,7 @@ fn segments_stay_inside_the_recording() {
 fn facts_round_trip_through_json() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
-    let facts = gather(&Fake::default(), &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(&Fake::default(), &source, &dir.path().join("scratch"), &[]).unwrap();
     let back: Facts = serde_json::from_str(&serde_json::to_string(&facts).unwrap()).unwrap();
     assert_eq!(
         (&back.covers[0].at, &back.lyrics, &back.tags, &back.print),
@@ -160,12 +170,12 @@ fn a_file_cut_off_is_as_long_as_its_packets_and_measured_within_them() {
         ..Fake::default()
     }
     .probe("Song.flac", crate::testing::FLAC);
-    let facts = gather(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
     assert_eq!(facts.duration, Some(50.0));
     assert_eq!(facts.cut_from, Some(200.0));
     assert!(facts.audio.unwrap().quality.is_some());
     let whole = Fake::default().probe("Song.flac", crate::testing::FLAC);
-    let facts = gather(&whole, &source, &dir.path().join("whole")).unwrap();
+    let facts = gather(&whole, &source, &dir.path().join("whole"), &[]).unwrap();
     assert_eq!((facts.duration, facts.cut_from), (Some(200.0), None));
 }
 
@@ -202,4 +212,41 @@ fn a_cue_sheet_beside_a_file_is_noted() {
     )
     .unwrap();
     assert_eq!(unkept(&image), [Unkept::PreEmphasis, Unkept::CueSheet]);
+}
+
+#[test]
+fn an_analysis_whose_run_fails_starts_over_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let wanted = [analysis::Kind::Loudness];
+    let whole = gather(&Fake::default(), &source, &dir.path().join("a"), &wanted).unwrap();
+    let failing = Fake {
+        failing: vec!["wav".into()],
+        ..Fake::default()
+    };
+    let facts = gather(&failing, &source, &dir.path().join("b"), &wanted).unwrap();
+    let analysis = |f: &Facts| f.audio.as_ref().unwrap().analysis.clone();
+    assert_eq!(analysis(&facts), analysis(&whole));
+    assert!(facts.print.is_some(), "the other outputs ran alone");
+}
+
+#[test]
+fn an_analysis_caught_up_takes_one_run_and_reads_the_opus_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let fake = Fake::default();
+    let facts = gather(&fake, &source, &dir.path().join("a"), &[]).unwrap();
+    let audio = facts.audio.unwrap();
+    assert!(audio.analysis.loudness.is_none() && !fake.ran(ffmpeg::PIPE));
+    let before = fake.calls().len();
+    let a = analyze(
+        &fake,
+        &source,
+        &audio,
+        &[analysis::Kind::Loudness],
+        &dir.path().join("b"),
+    )
+    .unwrap();
+    assert_eq!(fake.calls().len(), before + 1);
+    assert_eq!(a.loudness().map(|m| m.opus_gain), Some(0));
 }

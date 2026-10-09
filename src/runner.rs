@@ -29,6 +29,13 @@ pub trait Runner: Sync {
     /// `on_line` as it arrives. Returns whether it exited successfully.
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool>;
 
+    /// Run to completion with stdout handed to `on_bytes` as it arrives,
+    /// in pieces of any size; an error carries the tail of stderr. One
+    /// that cannot stream hands it over whole at the end.
+    fn pipe(&self, cmd: &[OsString], on_bytes: &mut dyn FnMut(&[u8])) -> Result<()> {
+        self.output(cmd).map(|out| on_bytes(&out))
+    }
+
     /// The Chromaprint words of the audio `fingerprint::output` decoded
     /// to `pcm`. Tests answer with chosen prints instead of computing.
     fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
@@ -200,14 +207,42 @@ impl Runner for System {
         if out.status.success() {
             return Ok(out.stdout);
         }
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let lines: Vec<&str> = stderr.lines().collect();
-        let tail = lines[lines.len().saturating_sub(10)..].join("\n");
-        Err(anyhow!(
-            "{} failed (exit {}): {tail}",
-            name(cmd),
-            out.status.code().unwrap_or(-1)
-        ))
+        Err(failed(cmd, out.status, &out.stderr))
+    }
+
+    fn pipe(&self, cmd: &[OsString], on_bytes: &mut dyn FnMut(&[u8])) -> Result<()> {
+        let mut child = self
+            .command(cmd)?
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("spawning {}", name(cmd)))?;
+        // Drained apart, so a program writing much to stderr never stalls.
+        let stderr = child.stderr.take().map(|mut e| {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = e.read_to_end(&mut bytes);
+                bytes
+            })
+        });
+        if let Some(mut out) = child.stdout.take() {
+            let mut buf = vec![0; 64 * 1024];
+            loop {
+                match out.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => on_bytes(&buf[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e).with_context(|| format!("reading {}", name(cmd))),
+                }
+            }
+        }
+        let stderr = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+        let status = child.wait()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(failed(cmd, status, &stderr))
+        }
     }
 
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
@@ -246,6 +281,18 @@ impl Runner for System {
     }
 }
 
+/// The error of `cmd` exiting with `status`, naming the tail of `stderr`.
+fn failed(cmd: &[OsString], status: std::process::ExitStatus, stderr: &[u8]) -> anyhow::Error {
+    let stderr = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    let tail = lines[lines.len().saturating_sub(10)..].join("\n");
+    anyhow!(
+        "{} failed (exit {}): {tail}",
+        name(cmd),
+        status.code().unwrap_or(-1)
+    )
+}
+
 /// A runner that says each command, as a shell would read it, before
 /// running it.
 #[derive(Debug)]
@@ -276,6 +323,11 @@ impl<R: Runner> Runner for Traced<R> {
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
         Self::say(cmd);
         self.0.stream(cmd, on_line)
+    }
+
+    fn pipe(&self, cmd: &[OsString], on_bytes: &mut dyn FnMut(&[u8])) -> Result<()> {
+        Self::say(cmd);
+        self.0.pipe(cmd, on_bytes)
     }
 
     fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {

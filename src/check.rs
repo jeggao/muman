@@ -539,6 +539,7 @@ mod tests {
                 cover: None,
                 lyrics: None,
                 tags: Vec::new(),
+                loudness: None,
             }),
             stamp,
             digest: None,

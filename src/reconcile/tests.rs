@@ -122,7 +122,7 @@ fn infos(ids: &[&str]) -> Fake {
 fn renders(fake: &Fake) -> usize {
     fake.calls()
         .iter()
-        .filter(|c| c.iter().any(|a| a == "opus"))
+        .filter(|c| c.iter().any(|a| a == "opus") && !c.iter().any(|a| a == crate::ffmpeg::PIPE))
         .count()
 }
 
@@ -1797,4 +1797,186 @@ fn a_full_disk_is_told_from_a_source_that_does_not_read() {
     assert!(!out_of_space(&anyhow::anyhow!(
         "ffprobe failed (exit 1): Invalid data"
     )));
+}
+
+/// Two seconds of a tone at 8 kHz, `amplitude` of full scale, as a fake
+/// analysis decodes it.
+fn tone(amplitude: f32) -> Vec<u8> {
+    crate::testing::wav(
+        8000,
+        2,
+        Some(0x3),
+        &crate::testing::sine(8000, 2, 1000.0, amplitude, 2.0),
+    )
+}
+
+fn tag<'a>(plan: &'a Plan, key: &str) -> Option<&'a str> {
+    plan.tags
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| v.first())
+        .map(String::as_str)
+}
+
+const ALBUM: &str = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { album = \"Harbor Lights\", albumartist = \"Paper Comets\" }\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { album = \"Harbor Lights\", albumartist = \"Paper Comets\" }\n";
+
+fn levelled() -> Fake {
+    let mut fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    fake.wavs = vec![
+        ("aaaaaaaaaaa".into(), tone(0.1)),
+        ("bbbbbbbbbbb".into(), tone(0.4)),
+    ];
+    fake
+}
+
+fn plans(h: &Home) -> Vec<Plan> {
+    State::load(&h.dirs.home)
+        .unwrap()
+        .outputs
+        .into_values()
+        .filter_map(|w| w.plan)
+        .collect()
+}
+
+#[test]
+fn songs_are_levelled_by_what_they_measured_and_an_album_by_all_its_songs() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    let fake = levelled();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let plans = plans(&h);
+    let tracks: BTreeSet<&str> = plans
+        .iter()
+        .filter_map(|p| tag(p, "REPLAYGAIN_TRACK_GAIN"))
+        .collect();
+    let albums: BTreeSet<&str> = plans
+        .iter()
+        .filter_map(|p| tag(p, "REPLAYGAIN_ALBUM_GAIN"))
+        .collect();
+    assert_eq!(tracks.len(), 2, "{plans:?}");
+    assert_eq!(albums.len(), 1, "{plans:?}");
+    assert!(plans.iter().all(|p| {
+        p.loudness
+            .is_some_and(|g| g.apply == crate::loudness::Apply::Tags)
+    }));
+    let status = h.status(&fake, &[], true);
+    assert!(
+        status.contains("measured over its album's 2 song(s)"),
+        "{status}"
+    );
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(again.contains("Up to date: 2"), "{again}");
+}
+
+#[test]
+fn a_gain_put_in_the_opus_header_is_a_retag_and_a_gain_in_the_samples_an_encode() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    let fake = levelled();
+    h.run(&fake, Options::default());
+    let written = renders(&fake);
+    h.songs(&format!("[loudness]\nmode = \"header\"\n{ALBUM}"));
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), written, "{text}");
+    assert!(text.contains("(loudness)"), "{text}");
+    let gains: Vec<i16> = files(&h.dirs.library)
+        .iter()
+        .filter_map(|f| crate::ogg::output_gain(&std::fs::read(f).unwrap()))
+        .collect();
+    assert_eq!(gains.len(), 2);
+    assert!(
+        gains.iter().all(|&g| g != 0 && g == gains[0]),
+        "one album, one gain: {gains:?}"
+    );
+    h.songs(&format!("[loudness]\nmode = \"audio\"\n{ALBUM}"));
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), written + 2, "{text}");
+    assert!(
+        fake.calls()
+            .iter()
+            .any(|c| c.iter().any(|a| a.contains("volume=")))
+    );
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| p.format.is_encoded() && p.chain().gain != 0)
+    );
+}
+
+#[test]
+fn loudness_off_measures_nothing_and_keeps_what_sources_carry() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(!fake.ran(crate::ffmpeg::PIPE));
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| p.loudness.is_none() && tag(p, "REPLAYGAIN_TRACK_GAIN").is_none())
+    );
+}
+
+#[test]
+fn facts_measured_before_loudness_are_analyzed_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.run(&fake, Options::default());
+    let before = fake.calls().len();
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("Analyzing 1 source(s)"), "{text}");
+    let calls = fake.calls();
+    let new = &calls[before..];
+    assert_eq!(
+        new.iter()
+            .filter(|c| c.iter().any(|a| a == crate::ffmpeg::PIPE))
+            .count(),
+        1
+    );
+    assert!(
+        !new.iter().any(|c| c.iter().any(|a| a == "s16le")),
+        "no print again"
+    );
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| tag(p, "REPLAYGAIN_TRACK_GAIN").is_some())
+    );
+}
+
+#[test]
+fn a_song_mixed_is_levelled_by_its_mix() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[audio]\nlayouts = [\"stereo\"]\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let surround = crate::testing::ORIGINAL.replace(
+        r#""channels": 2, "sample_rate": "48000""#,
+        r#""channels": 6, "channel_layout": "5.1", "sample_rate": "48000""#,
+    );
+    let mut fake = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", &surround);
+    fake.wavs = vec![("aaaaaaaaaaa".into(), tone(0.4))];
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(fake.calls().iter().any(|c| {
+        c.iter().any(|a| a == crate::ffmpeg::PIPE)
+            && c.iter().any(|a| a.starts_with("aresample=ochl=stereo"))
+    }));
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.mixes.len(), 1);
+    let plans = plans(&h);
+    assert!(plans[0].format.mix().is_some());
+    assert!(
+        tag(&plans[0], "REPLAYGAIN_TRACK_GAIN").is_some(),
+        "{plans:?}"
+    );
 }

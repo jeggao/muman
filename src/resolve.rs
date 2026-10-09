@@ -74,8 +74,9 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Codec, Layout};
+use crate::codec::{Adapt, Chain, Codec, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
+use crate::loudness::Gains;
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
@@ -173,6 +174,23 @@ impl Format {
                 Self::Copy { codec }
             }
             _ => encoded,
+        }
+    }
+
+    /// `audio` encoded to `codec` itself, where it holds the audio as it
+    /// is, as a gain applied to audio otherwise copied asks; else as
+    /// [`Self::encoded`] would.
+    #[must_use]
+    pub fn encoded_as(codec: Codec, audio: &AudioFacts, settings: &Audio) -> Self {
+        let shape = audio.shape();
+        match codec.adapt(&shape) {
+            Some(adapt) => Self::Encode {
+                codec,
+                kbps: settings.kbps(codec, shape.channels),
+                adapt,
+                mix: None,
+            },
+            None => Self::encoded(audio, settings),
         }
     }
 
@@ -305,17 +323,72 @@ pub struct Plan {
     pub lyrics: Option<LyricsRef>,
     /// Vorbis comments, in the order written.
     pub tags: Vec<(String, Vec<String>)>,
+    /// The gains that level the song, before any is applied; the
+    /// ReplayGain tags are derived from them and the format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Gains>,
 }
 
 impl Plan {
-    /// This plan written in `format`, by the renderer's version for it.
+    /// This plan written in `format`, by the renderer's version for it,
+    /// its loudness tags as that format holds its gains.
     #[must_use]
     pub fn with_format(&self, format: Format) -> Self {
-        Self {
+        let plan = Self {
             version: render_version(format.codec()),
             format,
             ..self.clone()
+        };
+        match plan.loudness {
+            Some(gains) => plan.with_loudness(gains),
+            None => plan,
         }
+    }
+
+    /// This plan levelled by `gains`: its ReplayGain tags what is left of
+    /// each gain once its format holds what it applies.
+    #[must_use]
+    pub fn with_loudness(&self, gains: Gains) -> Self {
+        let mut plan = self.clone();
+        plan.loudness = Some(gains);
+        plan.tags
+            .retain(|(k, _)| !Field::named(k).is_some_and(Field::is_loudness));
+        for (field, value) in gains.tags(plan.applied()) {
+            insert_comment(&mut plan.tags, field, vec![value]);
+        }
+        plan
+    }
+
+    /// The hundredths of a dB of its gain the file holds, by its header or
+    /// in its samples.
+    #[must_use]
+    pub fn applied(&self) -> i32 {
+        self.loudness.map_or(0, |g| {
+            g.applied(self.format.codec() == Codec::Opus, self.format.is_encoded())
+        })
+    }
+
+    /// What is done to the samples on their way to the encoder.
+    #[must_use]
+    pub fn chain(&self) -> Chain {
+        match (self.format, self.loudness) {
+            (Format::Encode { .. }, Some(g)) => Chain {
+                gain: g.applied(false, true),
+                bits: g.bits,
+            },
+            _ => Chain::default(),
+        }
+    }
+
+    /// The gain the Opus header is set to once muxed, where it is.
+    #[must_use]
+    pub fn opus_header(&self) -> Option<i16> {
+        self.loudness.and_then(|g| {
+            g.header(
+                self.format.codec() == Codec::Opus,
+                !self.format.is_encoded(),
+            )
+        })
     }
 
     /// This plan with each part of `key` it takes named as `to` names it,
@@ -507,6 +580,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             cover: cover.as_ref().map(|(c, _)| c.clone()),
             lyrics: lyrics.as_ref().map(|(l, _)| l.clone()),
             tags,
+            loudness: None,
         },
         stem,
         why: Why {
@@ -944,6 +1018,17 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
         };
         insert_in_order(written, Field::Album, slot);
     }
+}
+
+/// `values` of `field` put in `tags` before the first known field after
+/// it.
+fn insert_comment(tags: &mut Comments, field: Field, values: Vec<String>) {
+    let rank = |f: Field| Field::ALL.iter().position(|g| *g == f);
+    let at = tags
+        .iter()
+        .position(|(k, _)| Field::named(k).and_then(rank) > rank(field))
+        .unwrap_or(tags.len());
+    tags.insert(at, (field.vorbis().to_string(), values));
 }
 
 /// `slot` put in `written` before the first known field after `field`.

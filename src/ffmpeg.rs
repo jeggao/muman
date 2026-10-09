@@ -1,6 +1,8 @@
 //! ffmpeg command lines that write several files from one run: each
 //! start costs about 100 ms of library loading against a few
-//! milliseconds of work, so the outputs of a step share one.
+//! milliseconds of work, so the outputs of a step share one. One output
+//! of a run may go to its stdout, [`PIPE`], to be read as it is written
+//! rather than from a file: [`run_piped`].
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -135,6 +137,47 @@ pub fn run<R: Runner>(runner: &R, inputs: &[Input], outputs: &[Output]) -> Vec<R
             .map(|o| runner.run(&command(inputs, std::slice::from_ref(o))))
             .collect(),
     }
+}
+
+/// The path of an output written to ffmpeg's stdout.
+pub const PIPE: &str = "pipe:1";
+
+/// What a piped output's reader is handed.
+#[derive(Debug)]
+pub enum Piped<'a> {
+    /// The next bytes the output wrote.
+    Bytes(&'a [u8]),
+    /// The output begins again, its run tried alone.
+    Again,
+}
+
+/// [`run`], with `piped`, written to [`PIPE`], handed to `sink` as it
+/// arrives: every output in one run, and when that fails, each in its
+/// own. One result per output, then the piped one's.
+pub fn run_piped<R: Runner>(
+    runner: &R,
+    inputs: &[Input],
+    outputs: &[Output],
+    piped: &Output,
+    sink: &mut dyn FnMut(Piped<'_>),
+) -> (Vec<Result<()>>, Result<()>) {
+    let mut all = outputs.to_vec();
+    all.push(piped.clone());
+    let Err(e) = runner.pipe(&command(inputs, &all), &mut |b| sink(Piped::Bytes(b))) else {
+        return (outputs.iter().map(|_| Ok(())).collect(), Ok(()));
+    };
+    sink(Piped::Again);
+    let alone = runner.pipe(&command(inputs, std::slice::from_ref(piped)), &mut |b| {
+        sink(Piped::Bytes(b));
+    });
+    if outputs.is_empty() {
+        return (Vec::new(), alone.map_err(|_| e));
+    }
+    let results = outputs
+        .iter()
+        .map(|o| runner.run(&command(inputs, std::slice::from_ref(o))))
+        .collect();
+    (results, alone)
 }
 
 /// A binary graymap, as `-c:v pgm` writes it: its width, height and

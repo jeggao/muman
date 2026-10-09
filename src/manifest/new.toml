@@ -68,6 +68,25 @@ mp3_bitrate = "320 kb/s"
 layouts = ["any"]
 downmix = ["stereo"]
 
+[loudness]
+# How each song is levelled to `target`, measured as EBU R128 measures:
+# "tags" writes ReplayGain 2.0 gains and peaks that players apply, as
+# R128 gains in Opus; "header" also writes the gain into each Opus file's
+# header, which every Opus player applies; "audio" scales the samples,
+# encoding audio that would be copied; "off" measures nothing and keeps
+# the gains a source's tags carry.
+mode = "tags"
+target = "-18 LUFS"
+# Peaks between samples, as a DAC rebuilds them, rather than the
+# samples' own.
+true_peak = true
+# The gain "header" and "audio" apply: "album", its album's for a song on
+# one, else its own; or "track", always its own.
+scope = "album"
+# A raising gain "header" or "audio" applies is lowered so the peak stays
+# at or under this; a lowering one never is.
+ceiling = "-1 dB"
+
 # How the best of a song's sources is picked. Each measure scores a
 # source in whole steps; the steps times the weight are summed, and the
 # lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.

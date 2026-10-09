@@ -1203,3 +1203,91 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
     let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
 }
+
+#[test]
+fn a_plan_stored_before_loudness_reads_as_one_with_none() {
+    let plan = Plan {
+        version: 3,
+        format: Format::Copy { codec: Codec::Flac },
+        audio: AudioRef {
+            key: SourceKey::youtube("vid00000001"),
+            rev: "r".into(),
+            index: 0,
+        },
+        cover: None,
+        lyrics: None,
+        tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
+        loudness: None,
+    };
+    let json = serde_json::to_string(&plan).unwrap();
+    assert!(!json.contains("loudness"));
+    assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+}
+
+#[test]
+fn a_plan_s_loudness_tags_follow_its_format() {
+    use crate::loudness::{Apply, Gains, Level};
+    let plan = Plan {
+        version: 3,
+        format: Format::Copy { codec: Codec::Flac },
+        audio: AudioRef {
+            key: SourceKey::youtube("vid00000001"),
+            rev: "r".into(),
+            index: 0,
+        },
+        cover: None,
+        lyrics: None,
+        tags: vec![
+            ("TITLE".into(), vec!["Lantern Weather".into()]),
+            ("REPLAYGAIN_TRACK_GAIN".into(), vec!["+1.00 dB".into()]),
+            ("GENRE".into(), vec!["Ambient".into()]),
+        ],
+        loudness: None,
+    };
+    let gains = Gains {
+        track: Level {
+            gain: -612,
+            peak: Some(900_000),
+        },
+        album: None,
+        apply: Apply::Volume(-612),
+        opus_gain: 0,
+        bits: 16,
+    };
+    let copied = plan.with_loudness(gains);
+    let gain = |p: &Plan| {
+        p.tags
+            .iter()
+            .find(|(k, _)| k == "REPLAYGAIN_TRACK_GAIN")
+            .map(|(_, v)| v[0].clone())
+    };
+    assert_eq!(
+        gain(&copied).as_deref(),
+        Some("-6.12 dB"),
+        "a copy holds none of it"
+    );
+    assert_eq!(
+        copied.tags.last().map(|(k, _)| k.as_str()),
+        Some("REPLAYGAIN_TRACK_PEAK")
+    );
+    assert_eq!(copied.chain(), crate::codec::Chain::default());
+    let encoded = copied.with_format(Format::Encode {
+        codec: Codec::Flac,
+        kbps: None,
+        adapt: None,
+        mix: None,
+    });
+    assert_eq!(gain(&encoded).as_deref(), Some("0.00 dB"));
+    assert_eq!(
+        encoded.chain(),
+        crate::codec::Chain {
+            gain: -612,
+            bits: 16
+        }
+    );
+    assert_eq!(
+        encoded.with_format(copied.format),
+        copied,
+        "every route derives alike"
+    );
+}

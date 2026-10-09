@@ -23,8 +23,8 @@
 //! block_size` blocks, and two standard deviations of the estimates
 //! still in the sum are kept free.
 //!
-//! Real sizes are kept in `state.json` by [`plan_key`], the plan and the
-//! ffmpeg version together, and taken from there instead of rendering
+//! Real sizes are kept in `state.json` by [`plan_key`], the plan's media
+//! and the ffmpeg version together, and taken from there instead of rendering
 //! again, but only when the passes above ask for that rung: sizes known
 //! from before never steer the passes, so a home measured over many runs
 //! fits exactly as a new one would, only with less rendering. A song
@@ -101,10 +101,42 @@ pub fn blocks(bytes: u64, block: u64) -> u64 {
 }
 
 /// The key a plan's real size is kept under: a 64-bit FNV-1a hash of
-/// the ffmpeg version and the plan, as hex.
+/// the ffmpeg version and the plan's media, as hex. Tags move a size by
+/// a few hundred bytes, which whole blocks mostly hide, so a song whose
+/// loudness or tags change keeps its size.
 #[must_use]
 pub fn plan_key(tools: &str, plan: &Plan) -> String {
-    let json = serde_json::to_string(plan).unwrap_or_default();
+    let media = Plan {
+        tags: Vec::new(),
+        loudness: None,
+        ..plan.clone()
+    };
+    let chain = plan.chain();
+    fnv(
+        tools,
+        &format!("{}{}:{}", key_json(&media), chain.gain, chain.bits),
+    )
+}
+
+/// The key a plan's size was kept under before keys named its media
+/// alone: its JSON whole. Taken for one it now has, as a sync measuring
+/// loudness the first time retags every song.
+fn legacy_key(tools: &str, plan: &Plan) -> String {
+    let mut old = Plan {
+        loudness: None,
+        ..plan.clone()
+    };
+    old.tags.retain(|(k, _)| {
+        !crate::tags::Field::named(k).is_some_and(crate::tags::Field::is_loudness)
+    });
+    fnv(tools, &key_json(&old))
+}
+
+fn key_json(plan: &Plan) -> String {
+    serde_json::to_string(plan).unwrap_or_default()
+}
+
+fn fnv(tools: &str, json: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in tools.bytes().chain([0]).chain(json.bytes()) {
         hash ^= u64::from(byte);
@@ -165,6 +197,8 @@ struct Choice {
     /// The key its plan had before this run named its sources anew, by
     /// [`State::rebase`], where that differs.
     was_key: Option<String>,
+    /// The key its plan had before keys named media alone.
+    legacy_key: String,
     estimate: u64,
     sigma: f64,
     loss: f64,
@@ -278,6 +312,7 @@ fn ladder(
         Choice {
             format,
             was_key: was.filter(|w| *w != plan_key),
+            legacy_key: legacy_key(tools, &plan),
             plan_key,
             estimate: blocks(audio as u64 + extras, block) + blocks(lyrics, block),
             sigma,
@@ -489,9 +524,11 @@ pub fn fit_library<R: Runner, W: Write>(
         .collect();
     drop(written);
     for rung in ladders.iter().flat_map(|l| &l.rungs) {
-        if let Some(was) = rung.was_key.as_ref().and_then(|k| state.sizes.get(k))
-            && !state.sizes.contains_key(&rung.plan_key)
-        {
+        if state.sizes.contains_key(&rung.plan_key) {
+            continue;
+        }
+        let was = rung.was_key.as_ref().and_then(|k| state.sizes.get(k));
+        if let Some(was) = was.or_else(|| state.sizes.get(&rung.legacy_key)) {
             state.sizes.insert(rung.plan_key.clone(), was.clone());
         }
     }
@@ -655,10 +692,40 @@ mod tests {
             cover: None,
             lyrics: None,
             tags: Vec::new(),
+            loudness: None,
         };
         let key = plan_key("ffmpeg version 7", &plan(96));
         assert_eq!(key, plan_key("ffmpeg version 7", &plan(96)));
         assert_ne!(key, plan_key("ffmpeg version 7", &plan(80)));
         assert_ne!(key, plan_key("ffmpeg version 8", &plan(96)));
+        let gains = crate::loudness::Gains {
+            track: crate::loudness::Level {
+                gain: -612,
+                peak: Some(900_000),
+            },
+            album: None,
+            apply: crate::loudness::Apply::Tags,
+            opus_gain: 0,
+            bits: 0,
+        };
+        let tagged = plan(96).with_loudness(gains);
+        assert_eq!(
+            plan_key("ffmpeg version 7", &tagged),
+            key,
+            "tags move no size"
+        );
+        assert_eq!(
+            legacy_key("ffmpeg version 7", &tagged),
+            legacy_key("ffmpeg version 7", &plan(96))
+        );
+        let louder = plan(96).with_loudness(crate::loudness::Gains {
+            apply: crate::loudness::Apply::Volume(-612),
+            ..gains
+        });
+        assert_ne!(
+            plan_key("ffmpeg version 7", &louder),
+            key,
+            "a gain changes the samples"
+        );
     }
 }

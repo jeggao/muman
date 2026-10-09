@@ -180,3 +180,72 @@ fn songs_are_added_matched_written_removed_and_put_back() {
             .is_file()
     );
 }
+
+/// The integrated loudness ffmpeg's own meter gives `path`, in LUFS.
+fn ffmpeg_lufs(path: &Path) -> f64 {
+    let out = Command::new("ffmpeg")
+        .args(["-hide_banner", "-nostats", "-i"])
+        .arg(path)
+        .args(["-af", "ebur128", "-f", "null", "-"])
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&out.stderr);
+    let summary = &log[log.rfind("Integrated loudness").expect("a summary")..];
+    summary
+        .split_whitespace()
+        .skip_while(|w| *w != "I:")
+        .nth(1)
+        .and_then(|n| n.parse().ok())
+        .expect("a loudness")
+}
+
+fn tag(path: &Path, key: &str) -> Option<String> {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-show_entries"])
+        .arg(format!("format_tags={key}:stream_tags={key}"))
+        .args(["-of", "default=nw=1:nk=1"])
+        .arg(path)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .map(str::to_string)
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn songs_are_levelled_as_ffmpeg_measures_them_and_opus_by_its_header() {
+    let h = Home::new();
+    let song = h.song("song.flac", 3, "Lantern Weather");
+    let added = h.muman(&["add", "-y", song.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+    let written = &h.library_files("flac")[0];
+    let gain: f64 = tag(written, "REPLAYGAIN_TRACK_GAIN")
+        .expect("a gain")
+        .trim_end_matches(" dB")
+        .parse()
+        .unwrap();
+    let measured = ffmpeg_lufs(written);
+    assert!(
+        (gain - (-18.0 - measured)).abs() <= 0.1,
+        "{gain} dB against {measured} LUFS"
+    );
+
+    // Opus copied with its own gain in its header plays at the target.
+    let opus = h.song("lone.opus", 4, "Low Orchard");
+    let songs = h.root.join("home").join("songs.toml");
+    let list = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        list.replacen("\nmode = \"tags\"\n", "\nmode = \"header\"\n", 1)
+            .replacen("\nscope = \"album\"\n", "\nscope = \"track\"\n", 1),
+    )
+    .unwrap();
+    let added = h.muman(&["add", "-y", opus.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+    let written = &h.library_files("opus")[0];
+    let lufs = ffmpeg_lufs(written);
+    assert!((lufs + 18.0).abs() <= 0.2, "{lufs} LUFS");
+    assert_eq!(tag(written, "R128_TRACK_GAIN").as_deref(), Some("-1280"));
+}

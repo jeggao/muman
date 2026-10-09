@@ -109,8 +109,9 @@ impl Inputs {
     }
 }
 
-fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output {
-    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{index}")];
+fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
+    let format = plan.format;
+    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
     args.extend(match format {
         Format::Copy { .. } => vec!["-c:a".into(), "copy".into()],
         Format::Encode {
@@ -118,7 +119,7 @@ fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output
             kbps,
             adapt,
             mix,
-        } => codec.encoder_args(kbps, adapt, mix),
+        } => codec.encoder_args(kbps, adapt, mix, plan.chain()),
     });
     // Tags are written from the plan alone; ffmpeg would carry the
     // container's, chapters as comments among them.
@@ -179,7 +180,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut inputs = Inputs::default();
     let source = locate(&plan.audio.key)?;
     let n = inputs.index(&source.path);
-    let mut outputs = vec![audio_output(plan.format, n, plan.audio.index, &audio_part)];
+    let mut outputs = vec![audio_output(plan, n, &audio_part)];
     let mut problems = Vec::new();
 
     let cover = match &plan.cover {
@@ -279,6 +280,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             problems.push(format!("no cover: {e:#}"));
             write_tags(&audio_part, plan.format, &tags, None)?;
         }
+        set_opus_header(&audio_part, plan)?;
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
                 fs::write(&lyrics_part, text)
@@ -399,7 +401,8 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         {
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
-        write_tags(&staged, plan.format, &tags, picture)
+        write_tags(&staged, plan.format, &tags, picture)?;
+        set_opus_header(&staged, plan)
     })();
     if let Err(e) = result {
         let _ = fs::remove_file(&staged);
@@ -413,6 +416,21 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         lyrics: lyrics.map(Path::to_path_buf),
         problems: Vec::new(),
     })
+}
+
+/// The gain `plan` gives its Opus header, set in `path` once its tags
+/// are written, as [`crate::ogg`] sets it.
+fn set_opus_header(path: &Path, plan: &Plan) -> Result<()> {
+    let Some(gain) = plan.opus_header() else {
+        return Ok(());
+    };
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    crate::ogg::set_output_gain(&mut file, gain)
+        .with_context(|| format!("setting the gain of {}", path.display()))
 }
 
 fn size_of(path: &Path) -> u64 {

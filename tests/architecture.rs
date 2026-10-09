@@ -274,6 +274,31 @@ fn audio_is_mixed_only_to_fit_a_codec_or_to_print_it() {
 }
 
 #[test]
+fn samples_are_changed_only_as_a_plan_s_chain_says() {
+    let filters = [
+        "volume=",
+        "loudnorm",
+        "dynaudnorm",
+        "acompressor",
+        "alimiter",
+    ];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file != "codec.rs" {
+            for line in lines_with(&text, &filters) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "render a gain or dynamics filter in `codec::Codec::encoder_args`, from the plan's \
+         chain, so a song's samples change only as its plan says:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
 fn a_plan_changes_format_with_its_renderer_version() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {

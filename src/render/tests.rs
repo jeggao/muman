@@ -72,6 +72,7 @@ fn plan(format: Format) -> Plan {
             ("ARTIST".into(), vec!["A, B".into()]),
             ("ALBUM".into(), vec!["Record".into()]),
         ],
+        loudness: None,
     }
 }
 

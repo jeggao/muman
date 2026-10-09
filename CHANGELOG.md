@@ -7,6 +7,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Loudness normalization.** Every song is measured whole, as EBU R128
+  measures loudness, and levelled to `[loudness] target`, -18 LUFS
+  unless set otherwise: ReplayGain 2.0 track and album gains and true
+  peaks are written into its tags, R128 gains in Opus, the album's
+  measured over all its songs together. `[loudness] mode = "header"`
+  also writes the gain into each Opus file's header, which every Opus
+  player applies, without encoding anything again; `mode = "audio"`
+  scales the samples for players that read no gain. `scope` picks the
+  album's or the song's own gain, and `ceiling` the highest peak a
+  raising gain may lift a song to. A gain set by hand wins. A mixed
+  song is measured as mixed.
+
+### Changed
+
+- **The first sync measures every song's loudness and retags it.** It
+  decodes each source once, in full, then writes the tags of every
+  song again, encoding none: a `written` hook runs for each song, and
+  `undo` keeps the files replaced as far as `[history] max_size` allows.
+  `[loudness] mode = "off"` keeps the gains a source's own tags carry,
+  as before.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added

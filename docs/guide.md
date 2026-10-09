@@ -333,12 +333,15 @@ is titled. The release's, album, album artist, track, disc, date, totals, countr
 the release's MusicBrainz IDs, come together from the one source whose
 album ranks best, so an album never splits across folders and one
 release's IDs never mix with another's; a song on no album is a single
-named for its title. ReplayGain's track gain and peak come only from the
-source whose audio the song is, and its album gain and peak only when
-the release's fields come from it too: another source's loudness is not
-this audio's. An Opus file holds the gains as `R128_TRACK_GAIN` and
-`R128_ALBUM_GAIN` and no peaks, as Opus players read them, and an Opus
-source's R128 gains are read as ReplayGain's. A file's own tags offer every field by its Vorbis
+named for its title. ReplayGain's track gain and peak are measured from
+the audio the song is, and its album gain and peak over every song of
+its album, as [Loudness](configuration.md#loudness) says; with
+`[loudness] mode = "off"`, they come only from the tags of the source
+whose audio the song is, the album's only when the release's fields come
+from it too, since another source's loudness is not this audio's. An
+Opus file holds the gains as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` and
+no peaks, as Opus players read them, and an Opus source's R128 gains are
+read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
 `3/12` offers its total too. Fields with no tag of their own in MP3 or
 MP4 are written as Picard writes them there. A value over 4 KiB is

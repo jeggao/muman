@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
-//! | `library`, `alignments`, `facts` | Yes: measured or set again |
+//! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //!
@@ -45,7 +45,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::align;
+use crate::analysis::Analysis;
 use crate::atomic;
+use crate::codec::Layout;
 use crate::dirs::STATE;
 use crate::facts::Facts;
 use crate::provider::Provider;
@@ -76,6 +78,14 @@ pub struct State {
     pub alignments: Vec<Aligned>,
     #[serde(default, deserialize_with = "lenient_map")]
     pub facts: BTreeMap<SourceKey, Facts>,
+    /// What a source's audio holds once mixed into another layout, as a
+    /// song is written mixed.
+    #[serde(
+        default,
+        deserialize_with = "lenient_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub mixes: Vec<Mix>,
     /// What could not be done for a source, so it is not tried again at
     /// once.
     #[serde(default, deserialize_with = "lenient_map")]
@@ -285,6 +295,16 @@ pub fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// What `source`'s audio, by its revision `audio`, holds mixed into
+/// `layout`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Mix {
+    pub source: SourceKey,
+    pub audio: String,
+    pub layout: Layout,
+    pub analysis: Analysis,
+}
+
 /// One comparison of two sources' audio, `a` against `b`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Aligned {
@@ -434,6 +454,21 @@ impl State {
             .find(|x| &x.a == a && &x.b == b && x.method == align::METHOD && &x.revs == revs)
     }
 
+    /// What the audio `audio` of `source` holds mixed into `layout`.
+    #[must_use]
+    pub fn mix(&self, source: &SourceKey, audio: &str, layout: Layout) -> Option<&Analysis> {
+        self.mixes
+            .iter()
+            .find(|m| &m.source == source && m.audio == audio && m.layout == layout)
+            .map(|m| &m.analysis)
+    }
+
+    pub fn record_mix(&mut self, mix: Mix) {
+        self.mixes
+            .retain(|m| !(m.source == mix.source && m.layout == mix.layout));
+        self.mixes.push(mix);
+    }
+
     /// Record that `step` failed for `key` now.
     pub fn record_failure(
         &mut self,
@@ -578,6 +613,9 @@ impl State {
         for aligned in &measured.alignments {
             state.record_alignment(aligned.clone());
         }
+        for mix in &measured.mixes {
+            state.record_mix(mix.clone());
+        }
         state
             .sizes
             .extend(measured.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -678,6 +716,7 @@ mod tests {
             cover: None,
             lyrics: None,
             tags: Vec::new(),
+            loudness: None,
         };
         let mut disk = State::default();
         disk.facts.insert(key.clone(), old.clone());
@@ -729,6 +768,7 @@ mod tests {
             cover: None,
             lyrics: None,
             tags: Vec::new(),
+            loudness: None,
         };
         let old = SourceKey::Remote {
             site: "youtube".into(),

@@ -1,12 +1,12 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
 //! and named, which codecs are kept and what the rest is encoded to, how
-//! sources are ranked, how yt-dlp fetches, and how much history `undo`
+//! loud songs are made, how sources are ranked, how yt-dlp fetches, and how much history `undo`
 //! keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[quality]`, `[ytdlp]`, `[history]` and
-//! `[sites]` ([`crate::sites`]).
+//! are `[library]`, `[audio]`, `[loudness]` ([`crate::loudness`]),
+//! `[quality]`, `[ytdlp]`, `[history]` and `[sites]` ([`crate::sites`]).
 //! A key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored. Which machine runs what is no
 //! setting: tools and folders come from flags and `MUMAN_*` variables.
@@ -48,13 +48,16 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 6] = ["library", "audio", "quality", "ytdlp", "history", "sites"];
+pub const TABLES: [&str; 7] = [
+    "library", "audio", "loudness", "quality", "ytdlp", "history", "sites",
+];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub library: Library,
     pub audio: Audio,
+    pub loudness: Loudness,
     pub quality: Quality,
     pub ytdlp: Ytdlp,
     pub history: History,
@@ -329,6 +332,83 @@ impl Audio {
         }
         Ok(())
     }
+}
+
+/// How loud each song is made, from its loudness measured as EBU R128
+/// measures it; [`crate::loudness`] holds the design.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Loudness {
+    pub mode: LoudnessMode,
+    /// The loudness every song is levelled to, in hundredths of a LUFS.
+    #[serde(deserialize_with = "serde_as::lufs")]
+    pub target: i32,
+    /// Peaks between samples, as a DAC rebuilds them, rather than the
+    /// samples' own.
+    pub true_peak: bool,
+    /// The gain `header` and `audio` apply.
+    pub scope: GainScope,
+    /// The highest peak a raising gain applied may lift a song to, in
+    /// hundredths of a dB against full scale.
+    #[serde(deserialize_with = "serde_as::db")]
+    pub ceiling: i32,
+}
+
+impl Default for Loudness {
+    fn default() -> Self {
+        Self {
+            mode: LoudnessMode::Tags,
+            target: -1800,
+            true_peak: true,
+            scope: GainScope::Album,
+            ceiling: -100,
+        }
+    }
+}
+
+impl Loudness {
+    /// Whether songs are measured at all.
+    #[must_use]
+    pub fn measured(&self) -> bool {
+        self.mode != LoudnessMode::Off
+    }
+
+    fn check(&self) -> Result<()> {
+        if !(-7000..=0).contains(&self.target) {
+            bail!("[loudness] target must lie between -70 LUFS and 0 LUFS");
+        }
+        if self.ceiling > 0 {
+            bail!("[loudness] ceiling must be 0 dB or less, at most full scale");
+        }
+        Ok(())
+    }
+}
+
+/// Where a song's gain is put.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoudnessMode {
+    /// Nothing measured: the gains a source's own tags carry are kept.
+    Off,
+    /// ReplayGain tags players apply, R128 gains in Opus.
+    #[default]
+    Tags,
+    /// Tags, and in Opus the gain in the header every decoder applies.
+    Header,
+    /// The samples scaled, encoding audio that would be copied.
+    Audio,
+}
+
+/// Which of a song's gains is applied to it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GainScope {
+    /// Its album's, so the album keeps its songs' levels; a song on no
+    /// album takes its own.
+    #[default]
+    Album,
+    /// Its own.
+    Track,
 }
 
 /// How the best of a song's sources is picked. Each measure scores a
@@ -757,6 +837,7 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
         );
     }
     settings.audio.check()?;
+    settings.loudness.check()?;
     settings.quality.check()?;
     Ok(settings)
 }
@@ -816,6 +897,19 @@ mod tests {
         assert_eq!(s.library.untitled, "Untitled");
         assert_eq!(s.audio.opus_kbps, 192);
         assert_eq!(s.audio.opus_surround_kbps, 256);
+    }
+
+    #[test]
+    fn loudness_takes_its_units_and_refuses_what_cannot_be() {
+        let s = settings("[loudness]\nmode = \"header\"\ntarget = \"-23 LKFS\"\nceiling = \"-2 dBTP\"\nscope = \"track\"\n").unwrap();
+        assert_eq!(s.loudness.mode, LoudnessMode::Header);
+        assert_eq!(s.loudness.target, -2300);
+        assert_eq!(s.loudness.ceiling, -200);
+        assert_eq!(s.loudness.scope, GainScope::Track);
+        assert!(settings("[loudness]\ntarget = -18\n").is_err());
+        assert!(settings("[loudness]\ntarget = \"-80 LUFS\"\n").is_err());
+        assert!(settings("[loudness]\nceiling = \"1 dB\"\n").is_err());
+        assert!(settings("[loudness]\nmode = \"loud\"\n").is_err());
     }
 
     #[test]

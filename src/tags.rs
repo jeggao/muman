@@ -167,6 +167,12 @@ impl Field {
         }
     }
 
+    /// Whether it is one of ReplayGain's gains and peaks.
+    #[must_use]
+    pub fn is_loudness(self) -> bool {
+        matches!(self.scope(), Scope::Loudness | Scope::AlbumLoudness)
+    }
+
     #[must_use]
     pub fn scope(self) -> Scope {
         match self {

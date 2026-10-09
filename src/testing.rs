@@ -54,6 +54,9 @@ pub struct Fake {
     pub segments: Vec<(String, Vec<u8>)>,
     /// The 8 kHz samples a comparison decodes, by path fragment.
     pub pcm: Vec<(String, Vec<u8>)>,
+    /// The WAV an analysis decodes to its pipe, by path fragment; a short
+    /// quiet tone otherwise.
+    pub wavs: Vec<(String, Vec<u8>)>,
     /// The size of every picture decoded to gray, by path fragment.
     pub pictures: Vec<(String, (u32, u32))>,
     pub lrc: Option<String>,
@@ -82,6 +85,47 @@ fn find<'a, T>(table: &'a [(String, T)], path: &str) -> Option<&'a T> {
 
 /// Deterministic words, unique to their seed.
 #[must_use]
+/// `seconds` of a sine at `hz` and `amplitude` of full scale, the same in
+/// each of `channels`, interleaved.
+pub fn sine(rate: u32, channels: u16, hz: f64, amplitude: f32, seconds: f64) -> Vec<f32> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let frames = (f64::from(rate) * seconds).round() as usize;
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    (0..frames)
+        .flat_map(|n| {
+            let x =
+                amplitude * (std::f64::consts::TAU * hz * n as f64 / f64::from(rate)).sin() as f32;
+            std::iter::repeat_n(x, usize::from(channels))
+        })
+        .collect()
+}
+
+/// `samples` as ffmpeg writes 32-bit float WAV on a pipe: sizes unknown,
+/// and the speakers' mask where `mask` gives one.
+pub fn wav(rate: u32, channels: u16, mask: Option<u32>, samples: &[f32]) -> Vec<u8> {
+    let mut fmt = Vec::new();
+    let tag: u16 = if mask.is_some() { 0xFFFE } else { 3 };
+    fmt.extend(tag.to_le_bytes());
+    fmt.extend(channels.to_le_bytes());
+    fmt.extend(rate.to_le_bytes());
+    fmt.extend((rate * u32::from(channels) * 4).to_le_bytes());
+    fmt.extend((channels * 4).to_le_bytes());
+    fmt.extend(32u16.to_le_bytes());
+    if let Some(mask) = mask {
+        fmt.extend(22u16.to_le_bytes());
+        fmt.extend(32u16.to_le_bytes());
+        fmt.extend(mask.to_le_bytes());
+        fmt.extend(3u16.to_le_bytes());
+        fmt.extend([0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71]);
+    }
+    let mut out = b"RIFF\xff\xff\xff\xffWAVEfmt ".to_vec();
+    out.extend(u32::try_from(fmt.len()).unwrap().to_le_bytes());
+    out.extend(fmt);
+    out.extend(b"data\xff\xff\xff\xff");
+    out.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    out
+}
+
 pub fn words(n: usize, seed: u64) -> Vec<u32> {
     let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
     (0..n)
@@ -183,7 +227,9 @@ impl Fake {
             .cloned()
             .unwrap_or_default();
         if self.failing.iter().any(|f| f == format) {
-            fs::write(&path, b"partial")?;
+            if path != Path::new(crate::ffmpeg::PIPE) {
+                fs::write(&path, b"partial")?;
+            }
             return Err(anyhow!("ffmpeg: {format} failed"));
         }
         let bytes = match format {
@@ -242,7 +288,50 @@ impl Fake {
     }
 }
 
+/// What a fake analysis decodes where no table names it: two seconds of
+/// a tone at 8 kHz, cheap to measure.
+#[must_use]
+pub fn quiet_wav() -> Vec<u8> {
+    wav(8000, 1, None, &sine(8000, 1, 1000.0, 0.1, 2.0))
+}
+
 impl Runner for Fake {
+    fn pipe(&self, cmd: &[OsString], on_bytes: &mut dyn FnMut(&[u8])) -> Result<()> {
+        let ran = self.run(cmd);
+        let args: Vec<String> = cmd
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let inputs: Vec<String> = args
+            .iter()
+            .zip(args.iter().skip(1))
+            .filter(|(f, _)| *f == "-i")
+            .map(|(_, p)| p.clone())
+            .collect();
+        let Some(at) = args.iter().position(|a| a == crate::ffmpeg::PIPE) else {
+            return ran;
+        };
+        let input = args[..at]
+            .iter()
+            .rposition(|a| a == "-map")
+            .and_then(|i| args[i + 1].split(':').next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .and_then(|n| inputs.get(n))
+            .cloned()
+            .unwrap_or_default();
+        let bytes = find(&self.wavs, &input).cloned().unwrap_or_else(quiet_wav);
+        let mut rest = bytes.as_slice();
+        for size in [5, 40, 999].into_iter().cycle() {
+            if rest.is_empty() {
+                break;
+            }
+            let (piece, after) = rest.split_at(size.min(rest.len()));
+            on_bytes(piece);
+            rest = after;
+        }
+        ran
+    }
+
     fn fingerprint(&self, pcm: &Path) -> Result<Vec<u32>> {
         Ok(crate::fingerprint::Print::from_raw(&fs::read(pcm)?)
             .map(|p| p.words().to_vec())

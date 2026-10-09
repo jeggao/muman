@@ -42,7 +42,7 @@ These bind every change, by a person or an agent.
 src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [audio], [quality], [ytdlp], [history]
+  settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [history]
   migrate.rs        older song lists brought up to this edition
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
@@ -61,6 +61,8 @@ src/
                     musicbrainz.rs, acoustid.rs, coverart.rs
   reconcile.rs      the offline phase: measure, compare, plan, render, prune
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
+  analysis.rs       the whole of a source's audio, one decode, every analyzer
+  loudness.rs       EBU R128 loudness, album pooling and the gains of a song
   held.rs           what each source held when its song was built
   quality.rs        audio and picture measures
   fingerprint.rs    Chromaprint prints and their comparison
@@ -70,6 +72,7 @@ src/
   lyrics.rs         subtitle languages, LRC cleaning and timing
   naming.rs         safe names; template.rs, the path template
   codec.rs          output codecs: names, containers, ffmpeg arguments
+  ogg.rs            the output gain an Opus file's header holds
   render.rs         one plan to library files
   library.rs        the ledger: every move and removal in the library
   fit.rs            songs fitted into a size, least audible loss first

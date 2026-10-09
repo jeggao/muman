@@ -57,12 +57,14 @@ the space optional:
 | Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[quality.purity] step`, `[ytdlp] keep_partial`, `[providers.*] recheck`, a song's `lyrics_offset` |
 | Frequency | `"500 Hz"`, `"1.5 kHz"` | `[quality.bandwidth] step` |
 | Share | `"1 %"`, or `0.01` | `[quality.stereo] incoherence`, `[quality.clipping] cutoffs`, `[quality.resolution] step` |
+| Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
+| Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
 Every unit is also known by its name, singular or plural, as
 `"2 gibibytes"` or `"3 hours"`. `K`, `M`, `G` and `T` alone are binary
 sizes, as `KiB`; `KB`, `MB` and `GB` are decimal. A size counts bytes
-without a unit, a frequency hertz and a share a fraction; a bitrate or
-a time has no bare number.
+without a unit, a frequency hertz and a share a fraction; a bitrate, a
+time, a loudness or a level has no bare number.
 
 `edition`, beside `version`, names the settings' names, units and
 defaults the file was written to. A song list of an earlier edition
@@ -82,6 +84,7 @@ know.
 |---|---|
 | `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, the most the library may take |
 | `[audio]` | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
+| `[loudness]` | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, extra arguments, muman's postprocessors, how long partial downloads are kept |
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
@@ -159,9 +162,9 @@ the first of `[audio] downmix` with no more channels than it has, or else
 the one with the fewest: audio is mixed up only when `downmix` holds no
 layout as small, as mono into stereo. Each layout `downmix` names must
 be one `layouts` takes. A mix is scaled so no sum of channels passes
-full scale, so it plays quieter than its source, and a source's
-ReplayGain does not hold for it and is not written. A mixed song is
-always encoded, never copied.
+full scale, so it plays quieter than its source: its loudness is
+measured on the mix itself, and a source's own ReplayGain is not
+written for it. A mixed song is always encoded, never copied.
 
 ```toml
 [audio]
@@ -183,6 +186,58 @@ lossless = "alac"
 Copying never loses anything, while every lossy encode costs a
 generation, so list every codec your players read. Setting `lossless`
 to a lossy codec makes a library with no lossless files.
+
+## Loudness
+
+Every song is measured whole, as EBU R128 and ITU-R BS.1770 measure
+loudness, and levelled to `[loudness] target`. An album's loudness is
+measured over every song of it the list holds together, so the album
+keeps its songs' levels against each other; a song is on an album when
+its album and album artist are another song's, and a single, named for
+its title, is an album of its own. `[loudness] mode` says where the
+gain goes:
+
+| Mode | The gain is | Files |
+|---|---|---|
+| `tags` | In ReplayGain 2.0 tags, track and album gain and peak, which players apply; in Opus, as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` | Retagged, never encoded again |
+| `header` | As `tags`, and in each Opus file's header too, which every Opus decoder applies, so the song plays levelled in any player | Retagged: the header is two bytes of the file, and no audio changes |
+| `audio` | In the samples, for players that read no gain at all | Encoded again, in the codec they were copied in |
+| `off` | Not measured: a source's own ReplayGain tags are written as they are | As before |
+
+The tags always describe the file as written: where the header or the
+samples hold a gain, the tags hold what is left of it, and the peaks as
+they now are. `[loudness] scope` picks the gain `header` and `audio`
+apply, the album's or the song's own. A gain that raises a song is
+lowered so its peak stays under `[loudness] ceiling`, measured as
+`[loudness] true_peak` says; a gain that lowers it never is, and nor
+are the tags, since players keep the peaks under full scale from the
+peak tags themselves. R128 gains in Opus lie 5 dB under ReplayGain's,
+against the −23 LUFS of EBU R128, so a target other than −18 LUFS makes
+the tags differ from what other taggers write.
+
+A gain you set by hand, as `tags = { replaygain_track_gain = "-3 dB" }`
+on a song or its album, is written instead of the measured one, and is
+the one `header` and `audio` apply.
+
+```toml
+[loudness]
+# Every Opus song plays levelled, in any player, without encoding again.
+mode = "header"
+```
+
+```toml
+[loudness]
+# For a car stereo that reads no tags: each song as loud as the next.
+mode = "audio"
+scope = "track"
+```
+
+`audio` encodes again every song it would have copied, so a lossy
+source loses a generation; for an Opus library, `header` levels as
+well without it. MP3 and AAC fold more channels than they hold into
+fewer without a mix muman makes, and such a song keeps its source's
+measure. The first sync after loudness is measured decodes every source
+once, in full; later syncs measure only new sources.
 
 ## How sources are ranked
 
