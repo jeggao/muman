@@ -116,6 +116,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   to keep the file has the song written again where it moves back,
   where the file kept the run's tags and the next undo refused it as
   changed since muman wrote it.
+- **An excerpt joined to its song** leaves the whole song's audio
+  chosen, where the rest of the song counted against it as sound beyond
+  the song and the excerpt replaced it. A source cut off mid-sound
+  counts the song it lacks against itself. Every pair of sources is
+  compared again on the next sync.
 
 ## [0.3.0] - 2026-10-07
 

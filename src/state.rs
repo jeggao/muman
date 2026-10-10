@@ -325,8 +325,15 @@ pub struct Aligned {
     /// How long each side's audio is.
     pub a_ms: i64,
     pub b_ms: i64,
-    /// How long `a` plays sound outside the stretch it shares with `b`.
+    /// How long `a` plays sound outside the stretch it shares with `b`,
+    /// past an edge where `b` ends of its own.
     pub a_extra_ms: i64,
+    /// How long `b` plays the song on past an edge where `a` is cut off.
+    #[serde(default)]
+    pub a_lacks_ms: i64,
+    /// How long `a` plays the song on past an edge where `b` is cut off.
+    #[serde(default)]
+    pub b_lacks_ms: i64,
 }
 
 impl Aligned {
@@ -348,7 +355,8 @@ impl Aligned {
     /// How much of `a` is sound that is not the recording it shares
     /// with `b`, as a video's intro or outro is. Silence padding counts
     /// for nothing, and so do the few windows inside that disagree in
-    /// any pair's quiet passages.
+    /// any pair's quiet passages, and so does what `a` plays past where
+    /// `b` is cut off, which is the song going on.
     #[must_use]
     pub fn unmatched_ms(&self) -> i64 {
         self.a_extra_ms
@@ -849,6 +857,8 @@ mod tests {
             a_ms,
             b_ms,
             a_extra_ms: a_ms - (end - start).max(0),
+            a_lacks_ms: 0,
+            b_lacks_ms: 0,
         }
     }
 

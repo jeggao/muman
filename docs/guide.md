@@ -360,17 +360,20 @@ measures after it can make up for it. See
 
 | Aspect | Criteria, by default in order |
 |---|---|
-| Audio | Least sound beyond the song; widest real bandwidth; real stereo; least clipping |
+| Audio | Least sound beyond the song or missing from it; widest real bandwidth; real stereo; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Timed; in a preferred language; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |
 
 **Audio.** Sound beyond the song is how long a source plays outside the
 stretch it shares with another source of the song: a music video's
-intro counts, silence does not. Bandwidth is where a lowpass cuts the
-sound off, so a FLAC transcoded from a lossy file measures as narrow as
-that file, while a recording whose treble fades on its own measures
-full. Real stereo tells stereo from mono copied into two channels, even
+intro counts, silence does not. A source cut off mid-sound, as an
+excerpt is, lacks the song another plays on past its cut, which counts
+as sound beyond the song does, so an excerpt never beats the whole song
+it was cut from; one that fades out reads as a song ending. Bandwidth
+is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
+file measures as narrow as that file, while a recording whose treble
+fades on its own measures full. Real stereo tells stereo from mono copied into two channels, even
 at different levels or a few samples apart, by the front two of more;
 clipping is the share of samples stuck at full scale or at the audio's
 own peak, or piled up just under full scale where a lossy encoder

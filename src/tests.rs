@@ -1312,6 +1312,47 @@ fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
     );
 }
 
+/// 8 kHz samples, a square wave at each of `levels` for 10 ms.
+fn pcm(levels: &[u32]) -> Vec<u8> {
+    levels
+        .iter()
+        .flat_map(|level| {
+            let level = i16::try_from(level % 10_000 + 2000).unwrap();
+            [level, -level].repeat(40)
+        })
+        .flat_map(i16::to_le_bytes)
+        .collect()
+}
+
+#[test]
+fn an_excerpt_added_to_its_song_leaves_the_whole_song_chosen() {
+    let s = Setup::new();
+    let whole = s.file("rips/Ember Road.flac");
+    let edit = s.file("rips/Ember Road (Edit).flac");
+    let print = words(320, 1);
+    let levels = words(4000, 2);
+    let fake = || {
+        let mut fake = flacs()
+            .print("Road.flac", print.clone())
+            .print("Edit).flac", print[..160].to_vec());
+        fake.pcm = vec![
+            ("Road.flac".into(), pcm(&levels)),
+            ("Edit).flac".into(), pcm(&levels[..2000])),
+        ];
+        fake
+    };
+    let (ok, text) = s.run(&fake(), &["add", &whole]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&fake(), &["add", "-y", &edit]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 1, "{text}");
+    let (_, report) = s.report(&fake(), &["status", "--all"]);
+    assert!(
+        report.contains("audio   manual:Ember Road.flac: 0.0 s of sound beyond the song"),
+        "{report}"
+    );
+}
+
 #[test]
 fn an_album_with_a_soft_cover_finds_one_on_the_cover_art_archive_once() {
     const GROUP: &str = "00000000-0000-4000-8000-0000000000aa";

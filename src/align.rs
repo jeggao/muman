@@ -29,13 +29,26 @@
 //! same recording does not. That is what ranks a release over its music
 //! video. Measured, music videos carried 1.2 to 17.9 s of it; an upload
 //! 3.8 s longer than its release carried 60 ms.
+//!
+//! An excerpt is shaped as a release is against its video, the other
+//! playing on past it, so what tells them apart is the shorter one's
+//! edge: a whole song rises from quiet and falls back to it, while a file
+//! cut off mid-sound still plays within 20 dB of its median over its first
+//! or last 50 ms, and the longer one plays on as loud over the 50 ms past
+//! it. Past a cut the longer one plays the song on, which the cut one
+//! lacks; past any other edge, sound beyond the song. The shorter one must
+//! sound at its edge, not only the longer one across it, since a video's
+//! intro may run on under a release's first moments. So a release that
+//! starts at full sound on its first sample, its video's intro running
+//! straight into it, reads as cut there, and the intro as song it lacks;
+//! an excerpt that fades out reads as whole, as a song that fades does.
 
 use std::ffi::OsString;
 use std::path::Path;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/3";
+pub const METHOD: &str = "envelope-xcorr/4";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
@@ -177,28 +190,108 @@ pub fn envelope(pcm: &[u8]) -> Vec<f64> {
 /// Loudness within this much of a recording's median, in the envelope's
 /// natural-log units, is sound; 4.6 is 40 dB.
 const AUDIBLE_BELOW_MEDIAN: f64 = 4.6;
+/// Loudness within this much of a recording's median, 2.3 or 20 dB, is
+/// the song at full sound, as it is across a cut.
+const FULL_BELOW_MEDIAN: f64 = 2.3;
+/// The frames either side of an edge that say whether it is a cut: 50 ms.
+const EDGE: i64 = 5;
 
-/// How long `upload` plays sound outside the stretch it shares with
-/// `track` when `at` places them: a video's intro, skit or outro, where
-/// silence padding the same recording counts for nothing.
+/// What two recordings play outside the stretch they share, each in
+/// milliseconds of sound.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Outside {
+    /// The upload's sound past an edge where the track ends of its own: a
+    /// video's intro, skit or outro.
+    pub extra_ms: i64,
+    /// The track's sound past an edge where the upload is cut off: the
+    /// song the upload lacks.
+    pub lacks_ms: i64,
+    /// The upload's sound past an edge where the track is cut off: the
+    /// song the track lacks.
+    pub track_lacks_ms: i64,
+}
+
+/// One recording's envelope and its median loudness.
+struct Levels<'a> {
+    frames: &'a [f64],
+    median: f64,
+}
+
+impl<'a> Levels<'a> {
+    fn new(frames: &'a [f64]) -> Self {
+        let mut sorted = frames.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        let median = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
+        Self { frames, median }
+    }
+
+    fn len(&self) -> i64 {
+        i64::try_from(self.frames.len()).unwrap_or(i64::MAX)
+    }
+
+    /// How long it sounds over the frames `outside` picks out.
+    fn audible(&self, outside: impl Fn(i64) -> bool) -> i64 {
+        let floor = self.median - AUDIBLE_BELOW_MEDIAN;
+        let frames = self
+            .frames
+            .iter()
+            .zip(0_i64..)
+            .filter(|(level, at)| outside(*at) && **level > floor)
+            .count();
+        i64::try_from(frames).unwrap_or(i64::MAX) * FRAME_MS
+    }
+
+    /// Whether it plays at full sound over each of its frames from `from`
+    /// up to `to`, and has any there.
+    fn full(&self, from: i64, to: i64) -> bool {
+        let clamp = |at: i64| usize::try_from(at.clamp(0, self.len())).unwrap_or(0);
+        let frames = &self.frames[clamp(from)..clamp(to).max(clamp(from))];
+        !frames.is_empty() && frames.iter().all(|l| *l > self.median - FULL_BELOW_MEDIAN)
+    }
+}
+
+/// What `upload` and `track` play outside the stretch they share when `at`
+/// places them. Silence padding the same recording counts for nothing.
+///
+/// An edge is a cut when the one ending there still plays at full sound
+/// over its last frames and the other plays on at full sound past it, as
+/// a song cut off mid-sound does; the other's sound past a cut is the
+/// song, which the cut one lacks, and past any other edge it is beyond the
+/// song.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
-pub fn audible_outside(upload: &[f64], track_len: usize, at: &Alignment) -> i64 {
-    let mut sorted = upload.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let Some(median) = sorted.get(sorted.len() / 2) else {
-        return 0;
-    };
-    let floor = median - AUDIBLE_BELOW_MEDIAN;
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
+    let (upload, track) = (Levels::new(upload), Levels::new(track));
     let lag = at.offset_ms / FRAME_MS;
-    let start = lag.max(0);
-    let end = ((real(track_len) * at.stretch()).round() as i64).saturating_add(lag);
-    let outside = upload
-        .iter()
-        .zip(0_i64..)
-        .filter(|(level, at)| (*at < start || *at >= end) && **level > floor)
-        .count();
-    i64::try_from(outside).unwrap_or(i64::MAX) * FRAME_MS
+    let stretch = at.stretch();
+    let end = ((track.len() as f64 * stretch).round() as i64).saturating_add(lag);
+    let upload_at = |t: i64| lag as f64 + stretch * t as f64;
+    let track_at = |u: i64| ((u - lag) as f64 / stretch).floor() as i64;
+    let (u_len, t_len) = (upload.len(), track.len());
+    let mut found = Outside::default();
+    for (past, cut) in [
+        (
+            upload.audible(|u| u < lag),
+            track.full(0, EDGE) && upload.full(lag - EDGE, lag),
+        ),
+        (
+            upload.audible(|u| u >= end),
+            track.full(t_len - EDGE, t_len) && upload.full(end, end + EDGE),
+        ),
+    ] {
+        if cut {
+            found.track_lacks_ms += past;
+        } else {
+            found.extra_ms += past;
+        }
+    }
+    if upload.full(0, EDGE) && track.full(track_at(-EDGE), track_at(0)) {
+        found.lacks_ms += track.audible(|t| upload_at(t) < 0.0);
+    }
+    if upload.full(u_len - EDGE, u_len) && track.full(track_at(u_len), track_at(u_len + EDGE)) {
+        found.lacks_ms += track.audible(|t| upload_at(t) >= u_len as f64);
+    }
+    found
 }
 
 /// Pearson correlation of two runs over their common length; 0 when
@@ -484,24 +577,59 @@ mod tests {
         assert!(a.coverage < 0.8, "{a:?}");
     }
 
-    #[test]
-    fn only_sound_outside_the_shared_stretch_counts() {
-        // As loud as music is in the envelope; silence is zero.
-        let loud = |e: Vec<f64>| e.into_iter().map(|v| v + 7.0).collect::<Vec<_>>();
-        let track = loud(song(4000, 7));
-        let mut intro = loud(song(500, 99));
-        intro.extend(&track);
-        let at = |offset_ms| Alignment {
+    /// As loud as music is in the envelope; silence is zero.
+    fn loud(e: Vec<f64>) -> Vec<f64> {
+        e.into_iter().map(|v| v + 7.0).collect()
+    }
+
+    fn at(offset_ms: i64) -> Alignment {
+        Alignment {
             offset_ms,
             stretch_ppm: 0,
             score: 1.0,
             coverage: 1.0,
-        };
-        assert_eq!(audible_outside(&intro, track.len(), &at(5000)), 5000);
+        }
+    }
+
+    /// A whole song, `frames` of sound between 100 ms of quiet at each end.
+    fn whole(frames: usize, seed: u64) -> Vec<f64> {
+        let mut track = vec![0.0; 10];
+        track.extend(loud(song(frames, seed)));
+        track.extend([0.0; 10]);
+        track
+    }
+
+    #[test]
+    fn only_sound_outside_the_shared_stretch_counts() {
+        let track = whole(4000, 7);
+        let mut intro = loud(song(500, 99));
+        intro.extend(&track);
+        let found = outside(&intro, &track, &at(5000));
+        assert_eq!((found.extra_ms, found.track_lacks_ms), (5000, 0));
         let mut padded = vec![0.0; 500];
         padded.extend(&track);
-        assert_eq!(audible_outside(&padded, track.len(), &at(5000)), 0);
-        assert_eq!(audible_outside(&track, intro.len(), &at(-5000)), 0);
+        assert_eq!(outside(&padded, &track, &at(5000)), Outside::default());
+        assert_eq!(outside(&track, &intro, &at(-5000)), Outside::default());
+        let sudden = loud(song(4000, 7));
+        let mut paused = loud(song(500, 99));
+        paused.extend([0.0; 20]);
+        paused.extend(&sudden);
+        assert_eq!(outside(&paused, &sudden, &at(5200)).extra_ms, 5000);
+    }
+
+    #[test]
+    fn past_an_excerpt_s_cut_the_song_plays_on() {
+        let full = whole(4000, 7);
+        let excerpt = full[..2000].to_vec();
+        let found = outside(&full, &excerpt, &at(0));
+        assert_eq!(found.extra_ms, 0);
+        assert_eq!(found.track_lacks_ms, 20_100);
+        let back = outside(&excerpt, &full, &at(0));
+        assert_eq!((back.extra_ms, back.lacks_ms), (0, found.track_lacks_ms));
+        let middle = full[1000..3000].to_vec();
+        let found = outside(&full, &middle, &at(10_000));
+        assert_eq!(found.extra_ms, 0);
+        assert_eq!(found.track_lacks_ms, 20_000);
     }
 
     #[test]

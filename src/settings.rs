@@ -463,7 +463,8 @@ impl Quality {
     }
 }
 
-/// Sound in a source beyond the song: a video's intro, outro or skit.
+/// Sound in a source beyond the song, a video's intro, outro or skit, and
+/// the song a source cut off lacks.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Purity {

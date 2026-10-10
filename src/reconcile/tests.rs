@@ -366,7 +366,11 @@ fn the_release_wins_over_its_video_by_measure_and_lends_it_lyrics() {
     h.fetched("rrrrrrrrrrr");
     h.fetched("vvvvvvvvvvv");
     h.songs("[[song]]\nsources = [\"youtube.com:vvvvvvvvvvv\", \"youtube.com:rrrrrrrrrrr\"]\n");
-    let song = levels(6000, 7);
+    // A release rises from quiet and falls back to it; one at full sound on
+    // its first frame, the intro running into it, would read as cut off.
+    let mut song = vec![0.0; 10];
+    song.extend(levels(6000, 7));
+    song.extend([0.0; 10]);
     let mut video = levels(1000, 99);
     video.extend(&song);
     let mut fake = Fake::default()

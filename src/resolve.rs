@@ -7,7 +7,8 @@
 //! with a measure that could not be taken ranks after every source with
 //! fewer such.
 //!
-//! - Audio: least that is not the song (a video's intro or skit), then
+//! - Audio: least that is not the song (a video's intro or skit) or
+//!   is missing from it (past an excerpt's cut), then
 //!   the widest bandwidth, real stereo, least clipping; scored alike,
 //!   lossless, then the most bits used, then the lowest rate.
 //! - Cover: square content, then effective resolution, then fewest
@@ -27,6 +28,13 @@
 //! purity outweighs any bandwidth up to 500 kHz, a step of bandwidth all
 //! of stereo and clipping. Lowering a weight lets the measures after it
 //! trade against it.
+//!
+//! Purity is a source's sound beyond the song plus the song it lacks, as
+//! [`crate::align`] measures them against each other source of the same
+//! recording. Sound beyond is the least any other leaves unshared, since
+//! another source holding it makes it the song; a source cut off where this
+//! one plays on vouches for nothing, so it counts only when none other is
+//! whole there. The song lacked is the most any other plays on past a cut.
 //!
 //! The output format follows the winning audio's codec, not its measures:
 //! a codec `[audio] codecs` lists is copied, and so is one already in the
@@ -624,12 +632,19 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
         bail!("the pinned audio, {pin}, has no audio on disk");
     }
     let ranked = audible.iter().map(|(n, key, facts)| {
-        let unmatched = audible
+        let compared: Vec<&Aligned> = audible
             .iter()
             .filter(|(_, other, _)| other != key)
             .filter_map(|(_, other, _)| input.aligned(key, other).filter(|a| a.fits()))
-            .map(Aligned::unmatched_ms)
-            .min();
+            .collect();
+        let beyond = compared
+            .iter()
+            .filter(|a| a.b_lacks_ms == 0)
+            .map(|a| a.unmatched_ms())
+            .min()
+            .or_else(|| compared.iter().map(|a| a.unmatched_ms()).min());
+        let lacks = compared.iter().map(|a| a.a_lacks_ms).max().unwrap_or(0);
+        let unmatched = beyond.map(|ms| ms + lacks);
         let q = facts.audio.as_ref().and_then(|a| a.quality);
         let w = input.quality;
         let [unknown, sum] = score(&[
@@ -657,19 +672,21 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
             i64::try_from(*n).unwrap_or(UNKNOWN),
         ];
-        let why = match (unmatched, q) {
+        // A song's milliseconds are far below 2^52, held exactly.
+        #[allow(clippy::cast_precision_loss)]
+        let tenths = |ms: i64| (units::seconds_of_ms(ms as f64) * 10.0).floor() / 10.0;
+        let why = match (beyond, q) {
             (u, Some(q)) => format!(
                 "{}, {:.1} kHz, {}, {:.2}% clipped",
                 u.map_or_else(
                     || "no other recording to compare".to_string(),
-                    |ms| {
-                        // A song's milliseconds are far below 2^52, held exactly.
-                        #[allow(clippy::cast_precision_loss)]
-                        let seconds = units::seconds_of_ms(ms as f64);
-                        format!(
-                            "{:.1} s of sound beyond the song",
-                            (seconds * 10.0).floor() / 10.0
-                        )
+                    |ms| match lacks {
+                        0 => format!("{:.1} s of sound beyond the song", tenths(ms)),
+                        _ => format!(
+                            "{:.1} s of sound beyond the song, {:.1} s of the song missing",
+                            tenths(ms),
+                            tenths(lacks)
+                        ),
                     }
                 ),
                 units::khz_of_hz(q.bandwidth_hz),

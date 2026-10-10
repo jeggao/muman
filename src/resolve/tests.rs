@@ -120,6 +120,8 @@ fn aligned(
         a_ms: ms(facts[a].duration),
         b_ms: ms(facts[b].duration),
         a_extra_ms: (ms(facts[a].duration) - ms(facts[b].duration)).max(0),
+        a_lacks_ms: 0,
+        b_lacks_ms: 0,
     }
 }
 
@@ -285,6 +287,74 @@ fn wider_bandwidth_wins_between_clean_recordings_and_a_transcode_cannot_fake_it(
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
     let r = run(&song(&[fake, opus.clone()]), &facts, &alignments);
     assert_eq!(r.plan.audio.key, opus, "a 16 kHz FLAC is a lossy transcode");
+}
+
+/// Both directions of a comparison of `whole` against `excerpt`, cut off
+/// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
+fn cut(
+    facts: &BTreeMap<SourceKey, Facts>,
+    whole: &SourceKey,
+    excerpt: &SourceKey,
+    offset_ms: i64,
+    lacks_ms: i64,
+) -> [Aligned; 2] {
+    let [mut on, mut back] = both(facts, whole, excerpt, offset_ms, 0.99);
+    (on.a_extra_ms, on.b_lacks_ms) = (0, lacks_ms);
+    back.a_lacks_ms = lacks_ms;
+    [on, back]
+}
+
+#[test]
+fn an_excerpt_never_beats_the_whole_song_however_it_measures() {
+    let (whole, excerpt) = (yt("ooooooooooo"), manual("edit.flac"));
+    let mut e = audio("flac", 22.0);
+    e.duration = Some(100.0);
+    let facts = BTreeMap::from([(whole.clone(), audio("opus", 16.0)), (excerpt.clone(), e)]);
+    let alignments = cut(&facts, &whole, &excerpt, 0, 100_000).to_vec();
+    let r = run(&song(&[excerpt, whole.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, whole, "{}", r.why.audio);
+    assert!(
+        r.why
+            .audio
+            .starts_with("0.0 s of sound beyond the song, 16.0 kHz"),
+        "{}",
+        r.why.audio
+    );
+}
+
+#[test]
+fn of_two_excerpts_the_one_missing_less_wins_and_says_so() {
+    let (head, tail) = (manual("head.flac"), manual("tail.flac"));
+    let facts = BTreeMap::from([
+        (head.clone(), audio("flac", 22.0)),
+        (tail.clone(), audio("opus", 16.0)),
+    ]);
+    let [mut on, mut back] = both(&facts, &head, &tail, -30_000, 0.99);
+    (on.a_extra_ms, on.a_lacks_ms, on.b_lacks_ms) = (0, 30_000, 10_000);
+    (back.a_extra_ms, back.a_lacks_ms, back.b_lacks_ms) = (0, 10_000, 30_000);
+    let r = run(&song(&[head, tail.clone()]), &facts, &[on, back]);
+    assert_eq!(r.plan.audio.key, tail);
+    assert!(
+        r.why
+            .audio
+            .starts_with("0.0 s of sound beyond the song, 10.0 s of the song missing"),
+        "{}",
+        r.why.audio
+    );
+}
+
+#[test]
+fn an_excerpt_cut_where_a_video_s_intro_plays_vouches_for_none_of_it() {
+    let (mut song, mut facts, mut alignments) = release_and_video();
+    let (release, video, middle) = (yt("rrrrrrrrrrr"), yt("vvvvvvvvvvv"), manual("middle.flac"));
+    let mut m = audio("flac", 22.0);
+    m.duration = Some(60.0);
+    facts.insert(middle.clone(), m);
+    alignments.extend(cut(&facts, &release, &middle, 60_000, 140_000));
+    alignments.extend(cut(&facts, &video, &middle, 80_000, 160_000));
+    song.sources.push(middle);
+    let r = run(&song, &facts, &alignments);
+    assert_eq!(r.plan.audio.key, release, "{}", r.why.audio);
 }
 
 #[test]

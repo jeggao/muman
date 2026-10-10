@@ -539,6 +539,7 @@ fn compare<R: Runner, W: Write>(
             coverage: 0.0,
         });
         let ms = |e: &[f64]| i64::try_from(e.len()).unwrap_or(i64::MAX) * 10;
+        let outside = align::outside(ea, eb, &found);
         Some(Aligned {
             a: a.clone(),
             b: b.clone(),
@@ -550,7 +551,9 @@ fn compare<R: Runner, W: Write>(
             coverage: found.coverage,
             a_ms: ms(ea),
             b_ms: ms(eb),
-            a_extra_ms: align::audible_outside(ea, eb.len(), &found),
+            a_extra_ms: outside.extra_ms,
+            a_lacks_ms: outside.lacks_ms,
+            b_lacks_ms: outside.track_lacks_ms,
         })
     });
     for aligned in compared.into_iter().flatten() {

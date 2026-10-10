@@ -92,7 +92,8 @@ ceiling = "-1 dB"
 # lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
 # The weights below rank by each measure in turn, top first.
 [quality.purity]
-# Sound beyond the song, such as a video's intro, in steps of `step`.
+# Sound beyond the song, such as a video's intro, and the song an
+# excerpt lacks, in steps of `step`.
 enabled = true
 weight = 10000
 step = "2 s"
