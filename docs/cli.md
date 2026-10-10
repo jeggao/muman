@@ -6,7 +6,7 @@
 
 Keep a music library made from YouTube and files of your own, each song from the best of its sources.
 
-songs.toml in the state root lists every song and the sources it may be made from: what yt-dlp fetched, kept whole in sources/yt-dlp, and files dropped into sources/manual. Each source is measured — its audio's real bandwidth, stereo and clipping, how much of it is not the song, its pictures' content and real detail, its lyrics, its tags — and for each song the best audio, cover, lyrics and tags are picked from among them by those measures alone. The song is written to the library where the song list's [library] template puts it, <album artist>/<album>/<track title> by default, its audio copied or encoded, tagged and covered, with its lyrics. A song is written again only when what it is made from changes, and a file muman wrote that no listed song makes any more is deleted.
+songs.toml in the home folder lists every song and the sources it may be made from: what yt-dlp fetched, kept whole in sources/yt-dlp, and files dropped into sources/manual. Each source is measured — its audio's real bandwidth, stereo and clipping, how much of it is not the song, its pictures' content and real detail, its lyrics, its tags — and for each song the best audio, cover, lyrics and tags are picked from among them by those measures alone. The song is written to the library where the song list's [library] template puts it, <album artist>/<album>/<track title> by default, its audio copied or encoded, tagged and covered, with its lyrics. A song is written again only when what it is made from changes, and a file muman wrote that no listed song makes any more is deleted.
 
 A new source the same recording as a listed song, by its fingerprint, is added to that song; one that may be is asked about.
 
@@ -20,9 +20,9 @@ Exit codes:
      folder, or the command line does not parse
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query did not read or matched no song, a change needs a terminal,
-     -y or --all, a file added matched no song for sure and was left out,
-     or a change or undo was refused
+  5  A query for a change did not read or matched no song, a change
+     needs a terminal, -y or --all, a file added matched no song for sure
+     and was left out, or a change or undo was refused
 ```
 
 **Subcommands:**
@@ -33,7 +33,7 @@ Exit codes:
 * `remove` — Remove the songs a query matches: their library files go, and they are kept under `[[removed]]` so no playlist or dropped file lists them again
 * `restore` — List again the removed songs a query matches, fetching any source purged
 * `set` — Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
-* `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed
+* `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
@@ -44,8 +44,9 @@ Exit codes:
 
 **Options:**
 
-* `--home <DIR>` — The state root: the song list, the state file and the sources [default: the platform's local data folder, then `muman`]
+* `--home <DIR>` — The home folder: the song list, the state file and the sources [default: the platform's local data folder, then `muman`]
 * `--library <DIR>` — Folder the songs are written to [default: the song list's `[library] path`, else the platform's music folder, then `muman`]
+* `--offline` — Reach no network: make no lookup, fetch nothing missing, and refuse URLs; what is on disk is written as ever
 * `-v`, `--verbose` — Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how close each new source came to every song it was compared with
 * `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line; or `none`
 
@@ -72,22 +73,22 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 **Arguments:**
 
-* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into the store; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
+* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into sources/yt-dlp; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 
-* `--to <TERM>` — Give every lyrics, picture and tag file to the songs this query names, matching none: one song, or for a picture every one, or for a cue sheet those its tracks go among. The query is read as `muman list` reads one; quote it when it has several words, as --to "artist:venn lantern"
+* `--to <QUERY>` — Give every lyrics, picture and tag file to the songs this query names instead of matching them by what they hold: one song, or for a picture every one, or for a cue sheet those its tracks go among. The query is split into terms as a shell splits words, so quote it whole: --to "artist:venn lantern" is two terms, --to 'album:="The Glass Orchards"' one
 * `--no-match` — Keep each video as uploaded, never looking for its YouTube Music track; other lookups are still made
-* `-y`, `--yes` — Add a new source to the listed song it may be the same recording as without asking
+* `-y`, `--yes` — Decide without asking: a new source joins the listed song it may be the same recording as, and a lyrics, picture or tag file goes to the song it is clearly nearest
 * `--new` — Make every new source a song of its own, without comparing it
-* `--title <TEXT>`
+* `--title <TEXT>` — The song's title
 * `--artist <NAME>` — Given again, one more artist
-* `--album <TEXT>`
-* `--album-artist <NAME>`
+* `--album <TEXT>` — The album's title
+* `--album-artist <NAME>` — The album's artist, where the library's folders are named from
 * `--genre <TEXT>` — Given again, one more genre
 * `--date <DATE>` — The release date, as YYYY-MM-DD or a year
-* `--track <N>`
-* `--disc <N>`
+* `--track <N>` — The track number on its disc
+* `--disc <N>` — The disc number
 * `--tag <NAME=VALUE>` — Any Vorbis comment; given again with one name, one more value
 
 
@@ -105,7 +106,7 @@ Bring the library in line with the song list: fetch any missing source, add file
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to
 * `--accept` — Take what each fetched source holds now, its audio, cover, lyrics or tags, where it differs from what its song was built from, as after a fetch again, and record it in the song list
 * `--update-defaults` — Move each setting still at the default of the edition the song list names to this muman's default, and raise the edition; settings you changed stay
-* `-y`, `--yes` — Add a new source to the listed song it may be the same recording as without asking
+* `-y`, `--yes` — Decide without asking: a new source joins the listed song it may be the same recording as, and a lyrics, picture or tag file goes to the song it is clearly nearest
 * `--new` — Make every new source a song of its own, without comparing it
 
 
@@ -131,7 +132,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms every song listed matches; none lists every song
 
 **Options:**
 
@@ -162,12 +163,12 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms every song removed matches
 
 **Options:**
 
 * `--purge` — Also delete their sources: fetched files outright, files of your own to the trash
-* `-y`, `--yes` — Make the change without asking; required without a terminal
+* `-y`, `--yes` — Make the change without asking; needed without a terminal
 * `--all` — Act on every song the query matches, without picking among them
 * `-n`, `--dry-run` — Say what would change; change nothing
 
@@ -194,11 +195,11 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms every removed song listed again matches; its tags and its sources' are read as when it was listed
 
 **Options:**
 
-* `-y`, `--yes` — Make the change without asking; required without a terminal
+* `-y`, `--yes` — Make the change without asking; needed without a terminal
 * `--all` — Act on every song the query matches, without picking among them
 * `-n`, `--dry-run` — Say what would change; change nothing
 
@@ -223,11 +224,11 @@ Every other word is a query, as `muman list` reads it.
 
 **Arguments:**
 
-* `<QUERY|NAME=VALUE|NAME!>`
+* `<QUERY|NAME=VALUE|NAME!>` — Assignments, and terms every song changed matches
 
 **Options:**
 
-* `-y`, `--yes` — Make the change without asking; required without a terminal
+* `-y`, `--yes` — Make the change without asking; needed without a terminal
 * `--all` — Act on every song the query matches, without picking among them
 * `-n`, `--dry-run` — Say what would change; change nothing
 
@@ -235,7 +236,7 @@ Every other word is a query, as `muman list` reads it.
 
 ### `muman edit`
 
-Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed
+Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 
 **Usage:** `muman edit [OPTIONS] [QUERY]...`
 
@@ -254,7 +255,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms every song edited matches; none offers every song
 
 **Options:**
 
@@ -270,7 +271,7 @@ Put the song list and the library back as they were before the last run that cha
 
 **Options:**
 
-* `-y`, `--yes`
+* `-y`, `--yes` — Put back without asking; needed without a terminal
 * `-n`, `--dry-run` — Say what would be put back; change nothing
 
 
@@ -283,7 +284,7 @@ Delete fetched sources and lookup records no song uses: an upload a release took
 
 **Options:**
 
-* `-y`, `--yes`
+* `-y`, `--yes` — Delete without asking; needed without a terminal
 * `-n`, `--dry-run` — Say what would be deleted; change nothing
 
 
@@ -322,7 +323,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms every song shown matches; none shows every song changed
 
 **Options:**
 
@@ -366,7 +367,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 **Arguments:**
 
-* `<QUERY>`
+* `<QUERY>` — Terms a song in each group shown matches; none shows every group
 
 
 

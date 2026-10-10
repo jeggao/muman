@@ -127,7 +127,7 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         out,
         "Songs",
         &format!(
-            "{} ({} on {} albums, {singles} singles)",
+            "{} ({} on {} album(s), {singles} single(s))",
             c.manifest.songs.len(),
             c.planned.len() - singles,
             albums.len()

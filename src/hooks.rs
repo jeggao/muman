@@ -112,7 +112,7 @@ pub fn run<R: Runner, W: Write>(
             lines.push(l.to_string());
         });
         for line in lines {
-            crate::ui::trace(out, &format!("hook: {line}"))?;
+            crate::ui::relayed(out, &format!("hook: {line}"))?;
         }
         match ran {
             Ok(true) => {}

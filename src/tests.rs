@@ -392,6 +392,64 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
     assert!(ok, "{text}");
     assert_eq!(s.songs().len(), 2);
     assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 2, "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--all", "album:record"]);
+    assert!(ok, "{text}");
+    assert!(s.songs().is_empty(), "{text}");
+    assert_eq!(
+        s.listed(&["list", "--removed", "--keys", "album:record"]),
+        "manual:b.flac\nmanual:a.flac\n"
+    );
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "--all", "album:record"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
+}
+
+#[test]
+fn sync_on_a_new_home_writes_the_song_list_to_edit() {
+    let s = Setup::new();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        list.contains("[library]") && list.contains("[audio]"),
+        "{list}"
+    );
+}
+
+#[test]
+fn audio_that_does_not_read_is_not_copied_in_or_listed() {
+    let s = Setup::new();
+    let good = s.file("rips/One/a.flac");
+    s.file("rips/One/broken.flac");
+    let lone = s.file("rips/lone.flac");
+    let fake = Fake::default()
+        .probe("broken.flac", "not json")
+        .probe("lone.flac", "not json")
+        .probe(".flac", FLAC);
+    let e = run_with(
+        &s.job(&[
+            "add",
+            &s.dir.path().join("rips/One").to_string_lossy(),
+            &lone,
+        ]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    let said = format!("{e:#}");
+    assert!(said.starts_with("2 file(s) could not be added"), "{said}");
+    assert!(
+        said.contains("broken.flac, which reads as no audio"),
+        "{said}"
+    );
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("One/a.flac".into())]]);
+    let manual = s.dir.path().join("home/sources/manual");
+    assert!(!manual.join("One/broken.flac").exists() && !manual.join("lone.flac").exists());
+    assert!(Path::new(&good).exists());
 }
 
 #[test]
@@ -460,7 +518,7 @@ fn sync_fills_in_every_setting_and_updates_none_already_current() {
         "{text}"
     );
     assert!(
-        text.contains("Every setting is at this muman's defaults"),
+        text.contains("No setting is at an older edition's default"),
         "{text}"
     );
     let listed = std::fs::read_to_string(&songs).unwrap();
@@ -734,6 +792,31 @@ fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
 }
 
 #[test]
+fn offline_a_sync_asks_no_service_and_an_add_fetches_no_url() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync", "--offline"]);
+    assert!(ok, "{text}");
+    assert!(server.asked.lock().unwrap().is_empty(), "{text}");
+    assert_eq!(s.songs().len(), 1);
+    let e = run_with(
+        &s.job(&[
+            "add",
+            "--offline",
+            "https://youtube.com/watch?v=aaaaaaaaaaa",
+        ]),
+        &flacs(),
+        &server,
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e}").contains("--offline"), "{e:#}");
+}
+
+#[test]
 fn a_purge_spares_what_a_removed_song_lists_so_that_restore_gets_it_whole() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -755,6 +838,26 @@ fn a_purge_spares_what_a_removed_song_lists_so_that_restore_gets_it_whole() {
     assert!(ok, "{text}");
     let record = SourceKey::parse("lrclib:7").unwrap();
     assert!(s.songs().iter().any(|k| k.contains(&record)), "{text}");
+}
+
+#[test]
+fn undo_of_a_purge_waits_for_the_file_of_your_own_back_from_the_trash() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:a.flac"]);
+    assert!(ok && !Path::new(&a).exists(), "{text}");
+    let said = s.refused(&["undo", "-y"]);
+    assert!(
+        said.contains("moved") && said.contains("to the trash"),
+        "{said}"
+    );
+    assert_eq!(s.songs().len(), 0);
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 1, "{text}");
 }
 
 const MBID: &str = "00000000-0000-4000-8000-000000000001";
@@ -1059,6 +1162,18 @@ fn exported_home(seconds: &str) -> (Setup, Fake) {
 fn export_writes_the_song_list_and_the_library_into_a_zip() {
     let (s, fake) = exported_home("200.0");
     let zip = s.dir.path().join("out");
+    let typo = zip.join("nowhere").join("x.zip");
+    let e = run_with(
+        &s.job(&["export", "-o", &typo.to_string_lossy()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e}").contains("is no folder"), "{e:#}");
+    assert!(!zip.exists(), "no folder made for a typo");
     std::fs::create_dir_all(&zip).unwrap();
     let (ok, text) = s.run(&fake, &["export", "-o", &zip.to_string_lossy()]);
     assert!(ok, "{text}");
@@ -1192,7 +1307,7 @@ fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
     assert!(!report.contains("manual:c.flac"), "{report}");
     let (_, report) = s.report(&prints(), &["duplicates", "c.flac"]);
     assert!(
-        report.contains("No two songs are one recording"),
+        report.contains("No group of one recording holds a song the query matches"),
         "{report}"
     );
 }

@@ -164,16 +164,11 @@ pub fn export<R: Runner, W: Write>(
     let manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let output = if output.is_dir() {
-        output.join("muman.zip")
-    } else {
-        output.to_path_buf()
-    };
+    let output = zip_at(output)?;
     let folder = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
 
     let songs = songs(dirs, &state, &store, out)?;
     let mut files: Vec<Vec<Entry>> = songs
@@ -198,7 +193,7 @@ pub fn export<R: Runner, W: Write>(
             &state,
             &songs,
             &files,
-            budget,
+            (max, budget),
             scratch.path(),
             out,
         )?;
@@ -310,6 +305,28 @@ struct Fitted {
     ok: bool,
 }
 
+/// The zip `output` names: itself, or `muman.zip` in it when it is a
+/// folder. A folder that is not there is refused rather than made, as a
+/// typo would make one.
+fn zip_at(output: &Path) -> Result<PathBuf> {
+    let zip = if output.is_dir() {
+        output.join("muman.zip")
+    } else {
+        output.to_path_buf()
+    };
+    let folder = zip
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if !folder.is_dir() {
+        bail!(
+            "{} is no folder; make it first, or write the zip into one that is",
+            folder.display()
+        );
+    }
+    Ok(zip)
+}
+
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
 /// estimate, and corrects the estimates not measured yet.
@@ -320,7 +337,7 @@ fn fit_into<R: Runner, W: Write>(
     state: &State,
     songs: &[Song],
     files: &[Vec<Entry>],
-    budget: u64,
+    (max, budget): (u64, u64),
     scratch: &Path,
     out: &mut W,
 ) -> Result<Fitted> {
@@ -399,8 +416,8 @@ fn fit_into<R: Runner, W: Write>(
         fit::Settled::Fit(fit) => fit,
         fit::Settled::Over(floor) => bail!(
             "{} cannot hold the export: at the lowest bitrates it takes {}",
-            crate::ui::bytes(budget),
-            crate::ui::bytes(floor)
+            crate::ui::bytes(max),
+            crate::ui::bytes(floor + (max - budget))
         ),
     };
     let entries = fit

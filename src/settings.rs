@@ -32,8 +32,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
@@ -846,7 +848,8 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
 /// its line in `whole`, the song list as written: under the same table
 /// header, the first line that reads the same.
 fn at_line(error: &toml::de::Error, text: &str, whole: &str) -> anyhow::Error {
-    let message = error.message();
+    let message = plainly(error.message());
+    let message = message.as_str();
     let Some(at) = error.span().map(|s| s.start.min(text.len())) else {
         return anyhow::anyhow!("{message}");
     };
@@ -868,6 +871,25 @@ fn at_line(error: &toml::de::Error, text: &str, whole: &str) -> anyhow::Error {
     }
 }
 
+/// A deserializer's `message` in the song list's words: `expected u32`
+/// says nothing to whoever edits it, `expected a whole number` does.
+fn plainly(message: &str) -> String {
+    static RUST: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?:u8|u16|u32|u64|usize|i8|i16|i32|i64|isize)\b|\bf(?:32|64)\b")
+            .expect("valid")
+    });
+    let message = message.replace("unknown variant", "unknown value");
+    let message = message.replace("invalid type: ", "");
+    RUST.replace_all(&message, |c: &regex::Captures| {
+        if c[0].starts_with('f') {
+            "a number"
+        } else {
+            "a whole number"
+        }
+    })
+    .into_owned()
+}
+
 /// The bytes a file or folder name may take on ext4, NTFS, APFS and
 /// FAT alike.
 const MOST_NAME_BYTES: usize = 255;
@@ -875,6 +897,19 @@ const MOST_NAME_BYTES: usize = 255;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type_error_names_no_rust_type() {
+        assert_eq!(
+            plainly("invalid type: string \"two hundred\", expected usize"),
+            "string \"two hundred\", expected a whole number"
+        );
+        assert_eq!(plainly("expected f64"), "expected a number");
+        assert_eq!(
+            plainly("unknown variant `wma`, expected one of `opus`, `flac`"),
+            "unknown value `wma`, expected one of `opus`, `flac`"
+        );
+    }
 
     fn settings(text: &str) -> Result<Settings> {
         read(&text.parse().unwrap())

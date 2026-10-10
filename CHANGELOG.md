@@ -31,6 +31,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   sources of the song; tags from `NAME=value`, ffmetadata, beets or
   MusicBrainz JSON and cue sheets are set on it by hand.
 
+- **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
+  no lookup, no fetch, and URLs refused.
+- **`sync` on a new home writes the song list,** every setting in it, so
+  lookups can be turned off before the first `add`.
+
 ### Changed
 
 - **The first sync measures every song's loudness and retags it.** It
@@ -60,8 +65,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`remove --purge`** keeps a source a removed song still lists, so
   that `restore` gets the song back whole, where it deleted it.
 - **A song list's format version** goes back down once its songs no
-  longer need it, on the next command that writes the list, so that an
-  older muman reads it again; it changed only with another edit.
+  longer need it, on the next `sync`, so that an older muman reads it
+  again; it changed only with another edit.
+- **`undo` after `remove --purge`** refuses until you put the files of
+  your own it trashed back, naming each, where it listed their songs
+  again with nothing to make them from, and every sync after failed.
+- **`restore album:…`** finds removed songs by their tags and their
+  sources', as `list` and `remove` find songs, where it read only the
+  name noted when they were removed.
+- **A field's value in quotes,** as `'album:="The Glass Orchards"'`,
+  matches without them, where the quotes were part of the text.
+- **An emptied library file** is written again by `sync`, as `check`
+  says, where it was left as changed since written.
+- **`check`** names every file in the library muman did not write, as
+  `info` counts them, where it named only audio and `.lrc` files.
+- **A song file ffprobe finds no audio in** is not copied in or listed
+  by `add`, which names it and exits with 4, where it was listed and
+  failed every run after.
+- **A negative `lyrics_offset`** starts the line still sung as the song
+  begins at 0:00, where it dropped it with the lines over by then.
+- **A closed pipe,** as `muman sync | head` leaves, drops what the run
+  says after rather than stopping it halfway through writing the
+  library.
+- **`export -o`** into a folder that is not there is refused, where it
+  made every folder the path named.
+- **`set`** exits with 5 when it refuses a change, as other changes do,
+  where it exited with 4.
+- **A misspelled settings table,** as `[audoi]`, is warned of by `sync`
+  and `check`, where its settings did nothing unnoticed.
 
 ## [0.3.0] - 2026-10-07
 

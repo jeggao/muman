@@ -1,5 +1,5 @@
-//! Command line: what to add, sync or show, and where the state root
-//! and the library are.
+//! Command line: what to add, sync or show, and where the home and the
+//! library are.
 //!
 //! Help is wrapped to the terminal's width, up to clap's 100 columns, and
 //! colored in muman's palette ([`STYLES`]): headings green, what is typed
@@ -41,16 +41,16 @@ Exit codes:
      folder, or the command line does not parse
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
-  5  A query did not read or matched no song, a change needs a terminal,
-     -y or --all, a file added matched no song for sure and was left out,
-     or a change or undo was refused";
+  5  A query for a change did not read or matched no song, a change
+     needs a terminal, -y or --all, a file added matched no song for sure
+     and was left out, or a change or undo was refused";
 
 #[derive(Debug, Parser)]
 #[command(
     name = env!("CARGO_PKG_NAME"),
     about = "Keep a music library made from YouTube and files of your own, each song from the best of its sources.",
     long_about = "Keep a music library made from YouTube and files of your own, each song from the best of its sources.\n\n\
-        songs.toml in the state root lists every song and the sources it may be made from: \
+        songs.toml in the home folder lists every song and the sources it may be made from: \
         what yt-dlp fetched, kept whole in sources/yt-dlp, and files dropped into sources/manual. \
         Each source is measured — its audio's real bandwidth, stereo and clipping, how much of it \
         is not the song, its pictures' content and real detail, its lyrics, its tags — and for \
@@ -70,15 +70,37 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// The state root: the song list, the state file and the sources
+    /// The home folder: the song list, the state file and the sources
     /// [default: the platform's local data folder, then `muman`].
-    #[arg(long, global = true, env = "MUMAN_HOME", value_name = "DIR")]
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_HOME",
+        hide_env_values = true,
+        value_name = "DIR"
+    )]
     pub home: Option<PathBuf>,
 
     /// Folder the songs are written to [default: the song list's
     /// `[library] path`, else the platform's music folder, then `muman`].
-    #[arg(long, global = true, env = "MUMAN_LIBRARY", value_name = "DIR")]
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_LIBRARY",
+        hide_env_values = true,
+        value_name = "DIR"
+    )]
     pub library: Option<PathBuf>,
+
+    /// Reach no network: make no lookup, fetch nothing missing, and
+    /// refuse URLs; what is on disk is written as ever.
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_OFFLINE",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    pub offline: bool,
 
     /// Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how
     /// close each new source came to every song it was compared with.
@@ -102,8 +124,9 @@ pub struct Cli {
 /// How new sources that may be a listed song are decided.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct Matching {
-    /// Add a new source to the listed song it may be the same recording
-    /// as without asking.
+    /// Decide without asking: a new source joins the listed song it may
+    /// be the same recording as, and a lyrics, picture or tag file goes
+    /// to the song it is clearly nearest.
     #[arg(short = 'y', long, conflicts_with = "new")]
     pub yes: bool,
 
@@ -115,7 +138,7 @@ pub struct Matching {
 /// How a change to songs a query selects is confirmed.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct Confirm {
-    /// Make the change without asking; required without a terminal.
+    /// Make the change without asking; needed without a terminal.
     #[arg(short = 'y', long)]
     pub yes: bool,
 
@@ -133,17 +156,21 @@ pub struct Confirm {
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Tags")]
 pub struct TagArgs {
-    #[arg(long, value_name = "TEXT")]
+    #[arg(long, value_name = "TEXT", help = "The song's title")]
     pub title: Option<String>,
 
     /// Given again, one more artist.
     #[arg(long, value_name = "NAME")]
     pub artist: Vec<String>,
 
-    #[arg(long, value_name = "TEXT")]
+    #[arg(long, value_name = "TEXT", help = "The album's title")]
     pub album: Option<String>,
 
-    #[arg(long, value_name = "NAME")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The album's artist, where the library's folders are named from"
+    )]
     pub album_artist: Option<String>,
 
     /// Given again, one more genre.
@@ -154,10 +181,10 @@ pub struct TagArgs {
     #[arg(long, value_name = "DATE", value_parser = date)]
     pub date: Option<String>,
 
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help = "The track number on its disc")]
     pub track: Option<u32>,
 
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", help = "The disc number")]
     pub disc: Option<u32>,
 
     /// Any Vorbis comment; given again with one name, one more value.
@@ -246,18 +273,19 @@ pub enum Command {
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
         /// or audio files and folders of them, copied into the manual
-        /// folder, or originals yt-dlp fetched, into the store; or
+        /// folder, or originals yt-dlp fetched, into sources/yt-dlp; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
         #[arg(required = true, value_name = "URL|FILE")]
         inputs: Vec<String>,
 
         /// Give every lyrics, picture and tag file to the songs this
-        /// query names, matching none: one song, or for a picture every
-        /// one, or for a cue sheet those its tracks go among. The query is
-        /// read as `muman list` reads one; quote it when it has several
-        /// words, as --to "artist:venn lantern".
-        #[arg(long = "to", value_name = "TERM")]
+        /// query names instead of matching them by what they hold: one
+        /// song, or for a picture every one, or for a cue sheet those its
+        /// tracks go among. The query is split into terms as a shell
+        /// splits words, so quote it whole: --to "artist:venn lantern" is
+        /// two terms, --to 'album:="The Glass Orchards"' one.
+        #[arg(long = "to", value_name = "QUERY")]
         to: Vec<String>,
 
         /// Keep each video as uploaded, never looking for its YouTube
@@ -313,6 +341,7 @@ pub enum Command {
     /// its artist, title and album, separated by tabs.
     #[command(after_help = QUERY_HELP)]
     List {
+        /// Terms every song listed matches; none lists every song.
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
 
@@ -333,6 +362,7 @@ pub enum Command {
     /// them again.
     #[command(after_help = QUERY_HELP)]
     Remove {
+        /// Terms every song removed matches.
         #[arg(required = true, value_name = "QUERY")]
         query: Vec<String>,
 
@@ -348,6 +378,8 @@ pub enum Command {
     /// purged.
     #[command(after_help = QUERY_HELP)]
     Restore {
+        /// Terms every removed song listed again matches; its tags and
+        /// its sources' are read as when it was listed.
         #[arg(required = true, value_name = "QUERY")]
         query: Vec<String>,
 
@@ -358,6 +390,7 @@ pub enum Command {
     /// each `NAME=VALUE` sets, `NAME!` clears, the other words query.
     #[command(after_help = SET_HELP)]
     Set {
+        /// Assignments, and terms every song changed matches.
         #[arg(required = true, value_name = "QUERY|NAME=VALUE|NAME!")]
         terms: Vec<String>,
 
@@ -365,9 +398,10 @@ pub enum Command {
         confirm: Confirm,
     },
     /// Edit the songs a query matches in $VISUAL or $EDITOR, as their
-    /// song-list entries, then apply what changed.
+    /// song-list entries, then apply what changed. Needs a terminal.
     #[command(after_help = QUERY_HELP)]
     Edit {
+        /// Terms every song edited matches; none offers every song.
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
 
@@ -379,6 +413,7 @@ pub enum Command {
     /// last run that changed them; how many runs are kept is the song
     /// list's `[history] runs`.
     Undo {
+        /// Put back without asking; needed without a terminal.
         #[arg(short = 'y', long)]
         yes: bool,
 
@@ -391,6 +426,7 @@ pub enum Command {
     /// removed song's sources stay for `restore`, and a file of your own
     /// is never touched. A source listed again is fetched again.
     Purge {
+        /// Delete without asking; needed without a terminal.
         #[arg(short = 'y', long)]
         yes: bool,
 
@@ -419,6 +455,7 @@ pub enum Command {
     /// matches it.
     #[command(after_help = QUERY_HELP)]
     Status {
+        /// Terms every song shown matches; none shows every song changed.
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
 
@@ -447,6 +484,8 @@ pub enum Command {
     /// nothing.
     #[command(after_help = QUERY_HELP)]
     Duplicates {
+        /// Terms a song in each group shown matches; none shows every
+        /// group.
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
     },

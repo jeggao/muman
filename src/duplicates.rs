@@ -102,6 +102,8 @@ pub fn report<W: Write, D: Write>(
             linked
         },
     );
+    // Done before the report, so a plain progress line does not follow it.
+    drop(step);
     let groups = groups(manifest.songs.len(), pairs.into_iter().flatten());
     let shown: Vec<&Vec<usize>> = groups
         .iter()
@@ -123,16 +125,26 @@ pub fn report<W: Write, D: Write>(
             writeln!(report, "  {key}\t{}\t{}", view.name(), album(*n))?;
         }
     }
-    if alone.is_empty() && across.is_empty() {
+    summary(report, (alone.len(), across.len()), groups.len())
+}
+
+/// The line after the groups shown, `alone` on one album and `across`
+/// albums, of `found` in all.
+fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usize) -> Result<()> {
+    if found == 0 {
         crate::ui::success(report, "No two songs are one recording")?;
+    } else if alone + across == 0 {
+        crate::ui::info(
+            report,
+            "No group of one recording holds a song the query matches",
+        )?;
     } else {
         crate::ui::info(
             report,
             &format!(
-                "{} group(s) on one album, {} across albums. To keep one song of a group, \
-                 move the others' sources into its [[song]] with `muman edit`, or remove them",
-                alone.len(),
-                across.len()
+                "{alone} group(s) on one album, {across} across albums. To keep one song of a \
+                 group, move the others' sources into its [[song]] with `muman edit`, or \
+                 remove them"
             ),
         )?;
     }

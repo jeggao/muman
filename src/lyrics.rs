@@ -364,25 +364,41 @@ pub fn timing(text: &str) -> Option<Timing> {
 
 /// LRC timed for another cut of the recording: every `[mm:ss.xx]` tag
 /// moved `offset_ms` earlier, then shortened by `stretch_ppm` parts per
-/// million for a cut that plays the recording that much longer. A line
-/// that would start before the track does is dropped; untimed lines are
-/// kept.
+/// million for a cut that plays the recording that much longer. Of the
+/// lines that would start before the track does, the one still sung as
+/// it begins starts at 0:00 and those over by then are dropped; untimed
+/// lines are kept.
 #[must_use]
 pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
-    let mut out = String::new();
-    for line in text.lines() {
+    let timed = |line: &str| {
         let mut rest = line;
         let mut times = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
             times.push(unstretch(ms.saturating_sub(offset_ms), stretch_ppm));
             rest = after;
         }
-        if !times.is_empty() {
-            times.retain(|ms| *ms >= 0);
-            if times.is_empty() {
+        (times, rest.to_string())
+    };
+    let all: Vec<i64> = text.lines().flat_map(|l| timed(l).0).collect();
+    let begun = all
+        .iter()
+        .copied()
+        .filter(|ms| *ms < 0)
+        .max()
+        .filter(|_| !all.contains(&0));
+    let mut out = String::new();
+    for line in text.lines() {
+        let (mut starts, rest) = timed(line);
+        let rest = rest.as_str();
+        if !starts.is_empty() {
+            starts.retain(|ms| *ms >= 0 || Some(*ms) == begun);
+            for ms in &mut starts {
+                *ms = (*ms).max(0);
+            }
+            if starts.is_empty() {
                 continue;
             }
-            for ms in times {
+            for ms in starts {
                 let _ = write!(
                     out,
                     "[{:02}:{:02}.{:02}]",
@@ -694,10 +710,14 @@ mod tests {
     }
 
     #[test]
-    fn a_line_before_the_track_starts_is_dropped() {
+    fn a_line_over_before_the_track_starts_is_dropped_and_one_still_sung_starts_it() {
         assert_eq!(
-            shift_lrc("[00:00.50]gone\n[00:02.00]kept\n", 1000, 0),
-            "[00:01.00]kept\n"
+            shift_lrc("[00:00.20]gone\n[00:00.50]sung\n[00:02.00]kept\n", 1000, 0),
+            "[00:00.00]sung\n[00:01.00]kept\n"
+        );
+        assert_eq!(
+            shift_lrc("[00:00.50]gone\n[00:01.00]kept\n", 1000, 0),
+            "[00:00.00]kept\n"
         );
     }
 

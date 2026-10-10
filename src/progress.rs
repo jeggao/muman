@@ -672,6 +672,10 @@ pub fn drawing() -> bool {
 pub struct Console<W: Write> {
     inner: W,
     line: Vec<u8>,
+    /// Whether the reader closed the pipe, as `| head` does once it has
+    /// read enough: what the run says after is dropped, and the run goes
+    /// on rather than stop halfway through writing the library.
+    closed: bool,
 }
 
 impl<W: Write> Console<W> {
@@ -679,6 +683,23 @@ impl<W: Write> Console<W> {
         Self {
             inner,
             line: Vec::new(),
+            closed: false,
+        }
+    }
+
+    fn put(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+        match suspend(|| {
+            self.inner.write_all(bytes)?;
+            self.inner.flush()
+        }) {
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                self.closed = true;
+                Ok(())
+            }
+            done => done,
         }
     }
 }
@@ -688,20 +709,14 @@ impl<W: Write> Write for Console<W> {
         self.line.extend_from_slice(buf);
         if let Some(end) = self.line.iter().rposition(|b| *b == b'\n') {
             let whole: Vec<u8> = self.line.drain(..=end).collect();
-            suspend(|| {
-                self.inner.write_all(&whole)?;
-                self.inner.flush()
-            })?;
+            self.put(&whole)?;
         }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if !self.line.is_empty() {
-            let part: Vec<u8> = std::mem::take(&mut self.line);
-            suspend(|| self.inner.write_all(&part))?;
-        }
-        self.inner.flush()
+        let part: Vec<u8> = std::mem::take(&mut self.line);
+        self.put(&part)
     }
 }
 
@@ -714,6 +729,28 @@ impl<W: Write> Drop for Console<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Closed(usize);
+
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            self.0 += 1;
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_closed_pipe_drops_what_follows_rather_than_stop_the_run() {
+        let mut console = Console::new(Closed(0));
+        writeln!(console, "Updated: one").unwrap();
+        writeln!(console, "Updated: two").unwrap();
+        console.flush().unwrap();
+        assert_eq!(console.inner.0, 1, "written to once, then let be");
+    }
 
     /// A sink whose bytes a test reads back.
     #[derive(Clone, Default)]

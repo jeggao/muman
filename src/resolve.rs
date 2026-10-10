@@ -685,7 +685,7 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
     ranked
         .min_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, key, why)| (key, why))
-        .ok_or_else(|| anyhow::anyhow!("no source of this song has audio on disk"))
+        .ok_or_else(|| anyhow::anyhow!("no source of this song has audio that reads"))
 }
 
 /// What breaks a tie between sources the measures score alike, most
@@ -846,20 +846,18 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
-            let why = format!(
-                "{}, {} line(s), {} the chosen audio",
-                if l.timing.is_some() {
-                    "timed"
-                } else {
-                    "untimed"
-                },
-                l.timing.map_or(0, |t| t.lines),
-                if key == audio {
-                    "from".to_string()
-                } else {
-                    format!("{offset} ms from")
-                }
-            );
+            let why = match l.timing {
+                None => "untimed".to_string(),
+                Some(t) => format!(
+                    "timed, {} line(s), {} the chosen audio",
+                    t.lines,
+                    if key == audio {
+                        "from".to_string()
+                    } else {
+                        format!("{offset} ms from")
+                    }
+                ),
+            };
             best = Some((
                 rank,
                 LyricsRef {

@@ -106,8 +106,9 @@ const HEADER: &str = "\
 #
 #   sources:  every file the song may be made from: `<site>:<id>` for
 #             what yt-dlp fetched, as `youtube.com:<id>`, or `lrclib:<id>`,
-#             `musicbrainz:<id>` or `manual:<path>` under sources/manual. muman picks the best audio, cover, lyrics and
-#             tags by measuring each.
+#             `musicbrainz:<id>` or `manual:<path>` under sources/manual.
+#             muman picks the best audio, cover, lyrics and tags by
+#             measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset = \"120 ms\" moves
 #             them later, a negative time earlier.
@@ -126,17 +127,19 @@ const HEADER: &str = "\
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
 #             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck = \"30 days\", per_run, and the url
-#             of lrclib and musicbrainz.
+#             enabled, concurrency, recheck = \"30 days\", per_run, and
+#             the url of lrclib, musicbrainz, acoustid and coverart.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
-#   Settings: [library], [audio], [quality.*], [ytdlp] and [history] lay
-#             out and name the library, set encoding, ranking and fetching,
-#             and size `undo`; sizes, bitrates, times and shares take a
-#             unit, as \"2 GiB\" or \"1 %\". `edition` names the settings'
-#             names and defaults the file was written to: muman renames
-#             old names itself, and `muman sync --update-defaults` moves
-#             settings still at an older default to the current.
+#   Settings: [library], [audio], [loudness], [quality.*], [ytdlp],
+#             [history] and [sites.*] lay out and name the library, set
+#             encoding, loudness, ranking and fetching, size `undo` and
+#             describe the sites fetched from; sizes, bitrates, times
+#             and shares take a unit, as \"2 GiB\" or \"1 %\". `edition`
+#             names the settings' names and defaults the file was written
+#             to: muman renames old names itself, and `muman sync
+#             --update-defaults` moves settings still at an older default
+#             to the current.
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
@@ -216,6 +219,8 @@ pub struct Removed {
     pub sources: Vec<SourceKey>,
     /// How the song was named when it was removed.
     pub note: String,
+    /// The tags it was given by hand.
+    pub tags: Tags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -347,6 +352,21 @@ pub fn present(home: &Path) -> Result<()> {
     .into())
 }
 
+/// The top-level keys the song list reads besides the settings'
+/// [`crate::settings::TABLES`].
+const KEYS: [&str; 10] = [
+    "version",
+    "edition",
+    "song",
+    "album",
+    "removed",
+    "providers",
+    "trigger",
+    "hook",
+    "clean",
+    "defaults",
+];
+
 /// The oldest format version that reads the songs of `parsed`: what
 /// they share decides it.
 fn needed_version(parsed: &Parsed) -> i64 {
@@ -367,7 +387,50 @@ fn needed_version(parsed: &Parsed) -> i64 {
     }
 }
 
+/// Write the song list a new home starts with, every setting written
+/// out to edit, when `home` has none and none is missing: `sync` on a
+/// new home makes it, so lookups can be turned off before the first
+/// `add`.
+pub fn start(home: &Path) -> Result<()> {
+    present(home)?;
+    if home.join(MANIFEST).exists() {
+        return Ok(());
+    }
+    let mut m = Manifest::load(home)?;
+    m.stale = true;
+    m.save()
+}
+
 impl Manifest {
+    /// A warning for each top-level key muman does not read that is a
+    /// letter or two from one it does. Unknown keys are kept for a newer
+    /// muman, but a misspelled `[audio]` would leave its settings doing
+    /// nothing, unnoticed.
+    #[must_use]
+    pub fn misspelled(&self) -> Vec<String> {
+        let Some(doc) = self
+            .text
+            .as_deref()
+            .and_then(|t| t.parse::<DocumentMut>().ok())
+        else {
+            return Vec::new();
+        };
+        let known = || KEYS.iter().chain(&crate::settings::TABLES);
+        doc.iter()
+            .filter(|(key, _)| !known().any(|k| k == key))
+            .filter_map(|(key, _)| {
+                let near = known().min_by_key(|k| strsim::osa_distance(k, key))?;
+                let most = if key.chars().count() > 4 { 2 } else { 1 };
+                (strsim::osa_distance(near, key) <= most).then(|| {
+                    format!(
+                        "`{key}` in the song list is nothing muman reads, so what it sets does \
+                         nothing; did you mean `{near}`?"
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// The list in `home`; an empty one when there is none yet. A list
     /// stating a newer version than its songs need is stale, so the next
     /// save writes it down and an older muman reads it again.
@@ -616,7 +679,15 @@ fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
              update muman before it changes the list",
             file.display()
         ),
-        _ => bail!("{} has no format version muman knows", file.display()),
+        None => bail!(
+            "{} has no `version`: start it with `version = 1`, or delete it and \
+             `muman sync` writes a new one",
+            file.display()
+        ),
+        Some(v) => bail!(
+            "{} is format version {v}, which no muman wrote",
+            file.display()
+        ),
     }
     for key in ["song", "album", "removed"] {
         if doc
@@ -829,6 +900,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
                 .and_then(Item::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            tags: tags_of(t.get("tags")),
         });
     }
     let settings = crate::settings::read(doc)?;

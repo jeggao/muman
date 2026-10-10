@@ -512,7 +512,7 @@ fn compare<R: Runner, W: Write>(
     crate::ui::info(
         out,
         &format!(
-            "Comparing {} pair(s) of {} recording(s)",
+            "Comparing {} pair(s), decoding {} recording(s)",
             due.len().div_ceil(2),
             keys.len()
         ),
@@ -1425,11 +1425,21 @@ fn out_of_space(e: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `file` is empty, as a disk that filled up leaves one: it holds
+/// no one's work, so it counts as unchanged since written and a sync
+/// writes it again, as `check` says.
+fn emptied(file: &Path) -> bool {
+    std::fs::metadata(file).is_ok_and(|m| m.len() == 0)
+}
+
 pub(crate) fn changed_since_written(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
 ) -> bool {
+    if emptied(&library.join(path)) {
+        return false;
+    }
     old.get(path)
         .and_then(|w| w.stamp.as_ref())
         .zip(store::stamp_text(&library.join(path)))
@@ -1801,7 +1811,10 @@ pub(crate) fn plan<W: Write>(
     for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
         crate::ui::info(out, &line)?;
     }
-    for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
+    for line in crate::settings::stale_warnings(&manifest.stale_defaults)
+        .into_iter()
+        .chain(manifest.misspelled())
+    {
         crate::ui::warning(out, &line)?;
     }
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));

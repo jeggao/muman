@@ -998,6 +998,21 @@ impl<W: Write> Asking<'_, '_, W> {
         line
     }
 
+    /// How `j`'s song is named among `among`: by its label, and where
+    /// another has the same, its album or else its key too.
+    fn told_apart(&self, j: &Judged, among: &[&Judged]) -> String {
+        let c = &self.cands[j.song];
+        let twin = |o: &&&Judged| o.song != j.song && self.cands[o.song].label == c.label;
+        let Some(other) = among.iter().find(twin) else {
+            return c.label.clone();
+        };
+        if !c.album.is_empty() && self.cands[other.song].album != c.album {
+            format!("{} · {}", c.label, c.album)
+        } else {
+            format!("{} ({})", c.label, c.id)
+        }
+    }
+
     /// The song `item` goes to: the one sure, or one picked; none when
     /// the user declines, `Err` of a refusal when none can be asked.
     fn one(
@@ -1051,12 +1066,30 @@ impl<W: Write> Asking<'_, '_, W> {
             return Ok(Some(j.song));
         }
         if self.prompter.is_none() {
-            let maybe: Vec<String> = offered
+            let unsure: Vec<&Judged> = offered
                 .iter()
+                .copied()
                 .filter(|j| j.verdict == Verdict::Unsure)
-                .map(|j| self.cands[j.song].label.clone())
                 .collect();
-            let said = if maybe.is_empty() {
+            let maybe: Vec<String> = unsure.iter().map(|j| self.told_apart(j, &unsure)).collect();
+            let refused: Vec<String> = offered
+                .iter()
+                .filter(|j| j.verdict == Verdict::Different && !j.reasons.is_empty())
+                .take(2)
+                .map(|j| {
+                    format!(
+                        "not {}, as {}",
+                        self.cands[j.song].label,
+                        j.reasons.join(", ")
+                    )
+                })
+                .collect();
+            let said = if maybe.is_empty() && !refused.is_empty() {
+                format!(
+                    "{item_label} matches no song: {}; not added. Name its song with --to",
+                    refused.join("; ")
+                )
+            } else if maybe.is_empty() {
                 format!("{item_label} matches no song; not added. Name its song with --to")
             } else {
                 format!(

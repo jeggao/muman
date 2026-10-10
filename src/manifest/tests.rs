@@ -804,3 +804,19 @@ fn lyrics_moved_more_than_an_hour_are_refused() {
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("more than an hour"), "{e:#}");
 }
+
+#[test]
+fn a_misspelled_table_is_warned_of_and_an_unknown_one_kept_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[audoi]\nlossy = \"vorbis\"\n[histroy]\n[plugins_of_tomorrow]\n",
+    );
+    let said = Manifest::load(dir.path()).unwrap().misspelled();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].contains("`audoi`") && said[0].contains("`audio`"),
+        "{said:?}"
+    );
+    assert!(said[1].contains("`history`"), "{said:?}");
+}

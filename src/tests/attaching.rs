@@ -242,6 +242,22 @@ fn lyrics_that_may_be_two_songs_are_asked_about_and_searched_for() {
 }
 
 #[test]
+fn lyrics_refused_by_their_length_say_so() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let lrc = s.written(
+        "dl/Copper Moth.lrc",
+        "[ti:Copper Moth]\n[length:09:10]\n[00:02.00]wings\n",
+    );
+    let said = s.not_added(&fake, &["add", &lrc]);
+    assert!(
+        said.contains("not Copper Moth — Marlo Venn, as it says it is 9:10 long, the song 3:20"),
+        "{said}"
+    );
+}
+
+#[test]
 fn yes_takes_a_song_that_leads_and_to_names_one() {
     let s = Setup::new();
     let fake = library();
@@ -281,7 +297,7 @@ fn yes_takes_a_song_that_leads_and_to_names_one() {
     )
     .unwrap_err();
     assert!(
-        format!("{e}").starts_with("moth is no file or URL"),
+        format!("{e}").starts_with("`moth` is no file or URL"),
         "{e:#}"
     );
 }
@@ -444,7 +460,7 @@ fn a_mistyped_loose_file_is_no_file() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(format!("{e:#}").contains("is no file"), "{e:#}");
+    assert!(format!("{e:#}").contains("no such file"), "{e:#}");
 }
 
 #[test]

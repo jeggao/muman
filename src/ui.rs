@@ -83,6 +83,11 @@ pub fn error<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
     writeln!(w, "{}", Style::Danger.paint(msg))
 }
 
+/// A line another program wrote, as a hook's, muted.
+pub fn relayed<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
+    writeln!(w, "{}", Style::Muted.paint(msg))
+}
+
 pub fn trace<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
     writeln!(w, "{}", Style::Muted.paint(&format!("trace: {msg}")))
 }

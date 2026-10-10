@@ -62,6 +62,9 @@ pub fn pick(
     let found: Vec<usize> = (0..views.len())
         .filter(|n| !views[*n].keys.is_empty() && query.matches(&views[*n]))
         .collect();
+    if found.is_empty() && verb == "restore" {
+        return refuse("No removed song matches the query; `muman list --removed` lists them");
+    }
     if found.is_empty() {
         return refuse("No song matches the query");
     }
@@ -98,6 +101,7 @@ pub fn confirmed<W: Write>(
     out: &mut W,
 ) -> Result<bool> {
     if confirm.dry_run {
+        crate::ui::info(out, "Dry run: nothing changed")?;
         return Ok(false);
     }
     if confirm.yes {
@@ -198,6 +202,7 @@ pub fn remove<W: Write>(
     purge: bool,
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    run: &mut crate::history::Run,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -286,6 +291,7 @@ pub fn remove<W: Write>(
     read.save(&picked)?;
     for (file, own) in doomed {
         if own {
+            run.trashed(&dirs.home, &file);
             to_trash(&file).with_context(|| format!("moving {} to the trash", file.display()))?;
         } else {
             match std::fs::remove_file(&file) {
@@ -324,7 +330,12 @@ pub fn restore<W: Write>(
 ) -> Result<bool> {
     let mut manifest = Manifest::load(&dirs.home)?;
     let query = Query::parse(terms, &query::extractors(&manifest))?;
-    let views: Vec<View> = manifest.removed.iter().map(query::removed_view).collect();
+    let state = State::load(&dirs.home)?;
+    let views: Vec<View> = manifest
+        .removed
+        .iter()
+        .map(|r| query::removed_view(r, &state))
+        .collect();
     query.check_fields(&views)?;
     let picked = pick(
         &views,
@@ -457,8 +468,10 @@ impl Assign {
                     format!("{name}: {now} → {}", values.join("; "))
                 }
             }
+            Self::Pin(pin, Some(v)) if v == "false" => format!("{pin}: none taken"),
             Self::Pin(pin, Some(key)) => format!("{pin}: pinned to {key}"),
             Self::Pin(pin, None) => format!("{pin}: picked by measure"),
+            Self::Offset(Some(ms)) if *ms < 0 => format!("lyrics earlier by {} ms", -ms),
             Self::Offset(Some(ms)) => format!("lyrics later by {ms} ms"),
             Self::Offset(None) => "lyrics offset: none".to_string(),
         }
@@ -473,10 +486,11 @@ impl Assign {
             Self::Pin(pin, Some(v)) => {
                 let key = SourceKey::parse(v)?;
                 if !song.has(&key) {
-                    bail!(
+                    return Err(Refused(format!(
                         "{key} is not a source of the song listing {}",
                         song.id().map(ToString::to_string).unwrap_or_default()
-                    );
+                    ))
+                    .into());
                 }
                 table.insert(pin, value(v.as_str()));
             }
@@ -505,7 +519,7 @@ pub fn set<W: Write>(
     mut prompter: Option<&mut dyn Prompter>,
     out: &mut W,
 ) -> Result<bool> {
-    let (query_terms, assigns) = split_terms(terms)?;
+    let (query_terms, assigns) = split_terms(terms).map_err(|e| Refused(format!("{e:#}")))?;
     if assigns.is_empty() {
         return refuse("Nothing to set: give NAME=VALUE or NAME!");
     }

@@ -39,7 +39,10 @@
 //! `undoing` before it changes anything and skips each step already
 //! done, so an undo stopped partway finishes when run again. A purge
 //! cannot be undone in full: a fetched source is fetched again by the
-//! next sync, and a file of the user's own is in the desktop's trash.
+//! next sync, and a file of the user's own is in the desktop's trash,
+//! which muman cannot take it back from on every platform. The run
+//! records each it trashed, and `undo` refuses until the user puts them
+//! back, rather than list their songs again with nothing to make them.
 //!
 //! `run.json` carries a `version`; a record without one is of version 1.
 
@@ -104,6 +107,10 @@ struct Record {
     /// Library files the run moved, in the order it moved them.
     #[serde(default)]
     moves: Vec<Moved>,
+    /// Files of the user's own the run moved to the desktop's trash,
+    /// under the home.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    trashed: BTreeSet<PathBuf>,
 }
 
 /// One run, recording as it goes; written ahead by [`Run::checkpoint`]
@@ -366,6 +373,14 @@ impl Run {
         });
     }
 
+    /// Record that the run moved `file`, under `home`, to the desktop's
+    /// trash, which muman cannot take it back from on every platform.
+    pub fn trashed(&mut self, home: &Path, file: &Path) {
+        if let Ok(rel) = file.strip_prefix(home) {
+            self.record.trashed.insert(rel.to_path_buf());
+        }
+    }
+
     /// Forget a move the run could not make.
     pub fn not_moved(&mut self, from: &Path, to: &Path) {
         self.record
@@ -598,6 +613,14 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             ))
             .into());
         }
+    }
+    // Its song would be listed again with no file to make it from.
+    if let Some(rel) = record.trashed.iter().find(|rel| !home.join(rel).exists()) {
+        return Err(crate::change::Refused(format!(
+            "The last run moved {} to the trash; put it back there, then undo again",
+            home.join(rel).display()
+        ))
+        .into());
     }
     let mut lines = Vec::new();
     if !record.complete {

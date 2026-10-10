@@ -87,7 +87,13 @@ muman sync
 ```
 
 `add` fetches what a URL names, or copies your files into muman's
-sources, lists each as a song, and syncs. `status` says what a sync
+sources, lists each as a song, and syncs. It also looks songs up on
+YouTube, YouTube Music, LRCLIB, MusicBrainz, AcoustID and the Cover Art
+Archive, sending AcoustID your files' fingerprints; `--offline` makes no request, and
+`enabled = false` under a `[providers.<name>]` turns one off for good
+(the [guide](docs/guide.md#lookups-and-providers) has the names).
+`muman sync` on a new home writes the song list, every setting in it,
+to edit before the first `add`. `status` says what a sync
 would write and why each song's audio, cover and lyrics come from where
 they do; `sync` writes it. `muman info` shows where the song list and
 the library are on this machine.
@@ -126,9 +132,9 @@ Every flag is in the [command reference](docs/cli.md).
 | Exit code | Means |
 |---|---|
 | 0 | Done, or nothing needed doing, or a change was declined |
-| 2 | ffmpeg, ffprobe or yt-dlp is missing, or the system names no home folder |
+| 2 | ffmpeg, ffprobe or yt-dlp is missing, the system names no home folder, or the command line does not parse |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, or a problem `check` found |
-| 5 | A query matched no song, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, or `undo` refused |
+| 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, or a change or `undo` was refused |
 
 ## Documentation
 

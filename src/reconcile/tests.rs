@@ -581,6 +581,11 @@ fn an_empty_or_unfinished_file_is_written_again() {
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     let rel = PathBuf::from("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    std::fs::write(h.lib(&rel.to_string_lossy()), "").unwrap();
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), 1, "emptied since written: {text}");
+
     let mut state = State::load(&h.dirs.home).unwrap();
     state.outputs.get_mut(&rel).unwrap().stamp = None;
     state.save(&h.dirs.home).unwrap();

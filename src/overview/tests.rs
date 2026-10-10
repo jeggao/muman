@@ -58,7 +58,7 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
     let mut out = Vec::new();
     assert!(reconcile(&fake(), &dirs, Options::default(), None, &mut out).unwrap());
     let text = info_text(&dirs, false);
-    assert_eq!(value(&text, "Songs"), "2 (0 on 0 albums, 2 singles)");
+    assert_eq!(value(&text, "Songs"), "2 (0 on 0 album(s), 2 single(s))");
     assert_eq!(value(&text, "Up to date"), "2");
     assert_eq!(value(&text, "To write"), "0");
     assert_eq!(value(&text, "Formats"), "2 Opus (0 encoded)");

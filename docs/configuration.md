@@ -15,7 +15,8 @@ muman is configured in two places, split by what a setting is about:
 | Flag | Variable | Names |
 |---|---|---|
 | `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
-| `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path` |
+| `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path`. Named anew, the library is written there in full, and the files in the folder before are left alone, no longer muman's, even if you go back to it |
+| `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookups, no fetching, URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
 | | `MUMAN_FFMPEG` | The ffmpeg to run |
 | | `MUMAN_FFPROBE` | The ffprobe to run |
@@ -39,13 +40,16 @@ use.
 ## Settings in the song list
 
 A new home's `songs.toml` starts with every setting written out at its
-default: [`src/manifest/new.toml`](../src/manifest/new.toml) is that
-file and the reference for every key. Change the values you want. A
+default, written by the first `add` or `sync`:
+[`src/manifest/new.toml`](../src/manifest/new.toml) is that file and
+the reference for every key. Change the values you want. A
 song list made by an earlier muman gains each setting it lacks, at its
 default, the next time muman writes it. A setting with no default, such
 as the library folder, stays a comment until you set it. A key a
 settings table does not know is an error that names it, so a
-misspelling never goes unnoticed.
+misspelling never goes unnoticed. A table muman does not know is kept,
+for a newer muman, but one a letter or two from a known name, as
+`[audoi]`, is warned of by `sync` and `check`.
 
 A setting that is a quantity takes its unit, written after the number,
 the space optional:
@@ -309,7 +313,7 @@ the extension. `/` in the template separates folders.
 | Variable | Holds |
 |---|---|
 | `album`, `album_artist` | The album and its artist, or the fallback names when missing |
-| `artist`, `artists` | The first artist, and every artist as a list |
+| `artist`, `artists` | The first artist, and every artist as a list; empty when missing, with no fallback name, so `{{ artist or album_artist }}` gives one |
 | `date`, `year` | The date as tagged, and its first four digits |
 | `disc`, `track` | The disc and track numbers, or none |
 | `disc_track` | `03 ` on a first disc, `2-03 ` on a later one, nothing without a track number |

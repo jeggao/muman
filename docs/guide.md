@@ -310,8 +310,9 @@ the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
 out, and `add` exits with 5 once the rest is done; a file that does not
-read, as an empty `.lrc`, a picture that does not decode or a cue sheet
-splitting one song's file into tracks, is not added and `add` exits
+read, as an empty `.lrc`, a picture that does not decode, a song file
+in which ffprobe finds no audio or a cue sheet splitting one song's
+file into tracks, is not added and `add` exits
 with 4, the songs given with it written all the same. `--to` names the song
 with a query instead, quoted as one word when it has several, and
 matches nothing; for a picture it names every
@@ -486,7 +487,9 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
-Any `[[trigger]]` in the song list replaces all of them. A
+`--offline`, or `MUMAN_OFFLINE=1`, makes a run look nothing up and
+fetch nothing, and refuses URLs. Any `[[trigger]]` in the song list
+replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck` (how long a lookup that found nothing waits, as
 `"30 days"`),
@@ -609,7 +612,9 @@ nothing, or, negated, every song.
   or removed come back, files it moved move back, and an edit you made by
   hand before that run is undone with it. A run stopped partway, by a
   crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
-  It refuses when the song list changed since. `[history]` sets how many
+  It refuses when the song list changed since, and after `remove
+  --purge` until you put the files of your own it trashed back from the
+  trash, where it names them. `[history]` sets how many
   runs are kept and how much space they take together; a file past that
   is written again from its sources.
 
@@ -626,8 +631,9 @@ Every change says what it does first, each tag as `old → new`:
 | It matches several songs | Picked from a list | Refused unless `--all`, exit 5 |
 | The change itself | Asked, unless `-y` | Made only with `-y`, else exit 5 |
 
-A query of keys alone takes every song it names. `-n` says what would
-change and stops. A song changed meanwhile, by hand or by another run,
+`edit` takes no `-y`: it needs a terminal for its editor, `$VISUAL`,
+else `$EDITOR`, else `vi`, or Notepad on Windows. A query of keys alone
+takes every song it names. `-n` says what would change and stops. A song changed meanwhile, by hand or by another run,
 refuses the save.
 
 ## Status, info and check

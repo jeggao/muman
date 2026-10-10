@@ -63,11 +63,22 @@ pub struct MissingTool {
 
 impl std::fmt::Display for MissingTool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} not found: install it, or name it in {}",
-            self.name, self.variable
-        )
+        match std::env::var_os(self.variable).filter(|v| !v.is_empty()) {
+            Some(named) => write!(
+                f,
+                "{} names {}, which is no program found: give its path, or unset {} to find \
+                 {} on the PATH",
+                self.variable,
+                named.to_string_lossy(),
+                self.variable,
+                self.name
+            ),
+            None => write!(
+                f,
+                "{} not found: install it, or name it in {}",
+                self.name, self.variable
+            ),
+        }
     }
 }
 
@@ -285,12 +296,20 @@ impl Runner for System {
 fn failed(cmd: &[OsString], status: std::process::ExitStatus, stderr: &[u8]) -> anyhow::Error {
     let stderr = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = stderr.lines().collect();
-    let tail = lines[lines.len().saturating_sub(10)..].join("\n");
+    let tail = without_addresses(&lines[lines.len().saturating_sub(10)..].join("\n"));
     anyhow!(
         "{} failed (exit {}): {tail}",
         name(cmd),
         status.code().unwrap_or(-1)
     )
+}
+
+/// `text` without the memory addresses ffmpeg names its parts by, as
+/// `[mp3 @ 0x55d0c1a2]`, which say nothing to a reader: `[mp3]`.
+fn without_addresses(text: &str) -> String {
+    static ADDRESS: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r" @ 0x[0-9a-fA-F]+\]").expect("valid"));
+    ADDRESS.replace_all(text, "]").into_owned()
 }
 
 /// A runner that says each command, as a shell would read it, before
@@ -393,6 +412,14 @@ fn name(cmd: &[OsString]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_names_no_memory_address() {
+        assert_eq!(
+            without_addresses("[mp3 @ 0x558127e226c0] Invalid frame size (176)"),
+            "[mp3] Invalid frame size (176)"
+        );
+    }
 
     #[test]
     fn a_variable_names_a_whole_command() {

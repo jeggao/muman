@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::codec::Codec;
 use crate::dirs::Dirs;
 use crate::held::{Held, Upstream};
 use crate::manifest::Manifest;
@@ -21,11 +20,6 @@ use crate::runner::{Line, Runner};
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{self, Kind, Store};
-
-/// Whether a library file muman writes could end in `extension`.
-fn is_written(extension: &str) -> bool {
-    extension == "lrc" || Codec::ALL.iter().any(|c| c.extension() == extension)
-}
 
 fn decode_command(path: &Path) -> Vec<OsString> {
     let mut cmd: Vec<OsString> = [
@@ -75,7 +69,10 @@ pub fn check<R: Runner, W: Write, D: Write>(
     for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
         crate::ui::info(report, &line)?;
     }
-    for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
+    for line in crate::settings::stale_warnings(&manifest.stale_defaults)
+        .into_iter()
+        .chain(manifest.misspelled())
+    {
         crate::ui::warning(report, &line)?;
     }
     let mut state = State::load(&dirs.home)?;
@@ -171,11 +168,10 @@ pub fn check<R: Runner, W: Write, D: Write>(
             }
             continue;
         }
-        let ours = rel
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(is_written);
-        if ours && !owned.contains(rel) {
+        let hidden = rel
+            .components()
+            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+        if !hidden && !owned.contains(rel) {
             crate::ui::info(
                 report,
                 &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
@@ -193,12 +189,17 @@ pub fn check<R: Runner, W: Write, D: Write>(
             let fetchable = manifest.settings.sites.fetch_url(key).is_some()
                 || page
                 || crate::provider::is_kept(key);
+            let others = manifest
+                .song_with(key)
+                .is_some_and(|s| s.sources.iter().any(|k| k != key && store.has(k)));
             let how = if fetchable {
                 "`sync` fetches it again"
+            } else if others {
+                "its song is made from its other sources"
             } else {
                 "its song cannot be written"
             };
-            problem(report, format!("Missing from the store, {how}: {key}"))?;
+            problem(report, format!("Missing from sources, {how}: {key}"))?;
         }
     }
     for (key, failure) in &state.failures {
@@ -256,9 +257,9 @@ fn served<R: Runner, W: Write>(
 ) -> Result<Vec<(bool, String)>> {
     let keep = |key: &SourceKey| {
         if store.has(key) {
-            "keep the copy in the store, the only one of what was fetched"
+            "keep the copy in sources/yt-dlp, the only one of what was fetched"
         } else {
-            "the store holds no copy of what was fetched either"
+            "sources/yt-dlp holds no copy of what was fetched either"
         }
     };
     let asked: Vec<(&SourceKey, &Held, String)> = manifest
@@ -523,14 +524,18 @@ mod tests {
         std::fs::write(dirs.library.join("A/kept.opus"), "x").unwrap();
         std::fs::write(dirs.library.join("A/changed.opus"), "x").unwrap();
         std::fs::write(dirs.library.join("A/stray.opus"), "x").unwrap();
+        std::fs::write(dirs.library.join("A/notes.txt"), "x").unwrap();
+        std::fs::write(dirs.library.join("A/.hidden"), "x").unwrap();
         std::fs::write(dirs.library.join("A/half.opus.part"), "x").unwrap();
         let mut state = State::default();
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
             lyrics: None,
             plan: Some(crate::resolve::Plan {
-                version: crate::resolve::render_version(Codec::Opus),
-                format: crate::resolve::Format::Copy { codec: Codec::Opus },
+                version: crate::resolve::render_version(crate::codec::Codec::Opus),
+                format: crate::resolve::Format::Copy {
+                    codec: crate::codec::Codec::Opus,
+                },
                 audio: crate::resolve::AudioRef {
                     key: crate::source::SourceKey::youtube("aaaaaaaaaaa"),
                     rev: "1".into(),
@@ -580,6 +585,11 @@ mod tests {
             text.contains("Not muman's, left alone: A/stray.opus"),
             "{text}"
         );
+        assert!(
+            text.contains("Not muman's, left alone: A/notes.txt"),
+            "{text}"
+        );
+        assert!(!text.contains(".hidden"), "{text}");
         assert!(text.contains("Left by an interrupted run"), "{text}");
         assert!(
             text.contains("Lyrics missing, `sync` writes them again: A/sung.opus"),

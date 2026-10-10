@@ -68,6 +68,12 @@ impl View {
             "format" => self.format.iter().cloned().collect(),
             "cover" => yes_no(self.cover),
             "lyrics" => yes_no(self.lyrics),
+            // As the path template's `year`: a date's first four digits.
+            "year" => self
+                .values("date")
+                .into_iter()
+                .map(|d| d.chars().take(4).collect())
+                .collect(),
             _ => {
                 let name = tags::vorbis_key(field);
                 self.tags
@@ -156,10 +162,28 @@ pub fn resolved_views(
 /// A removed song as a query reads it: its keys, and its note as its
 /// title.
 #[must_use]
-pub fn removed_view(removed: &Removed) -> View {
+/// A removed song as a query reads it: titled by its note, with the
+/// tags it was given and those its sources offer, so `album:` finds it
+/// as it found the song listed.
+pub fn removed_view(removed: &Removed, state: &State) -> View {
+    let mut tags = vec![("TITLE".to_string(), vec![removed.note.clone()])];
+    let given = removed
+        .tags
+        .iter()
+        .map(|(k, v)| (tags::vorbis_key(k), v.clone()));
+    let offers = removed.sources.iter().find_map(|k| state.facts.get(k));
+    let offered = Field::ALL.iter().filter_map(|field| {
+        let offer = offers.and_then(|f| f.tags.get(field))?;
+        Some((field.vorbis().to_string(), offer.values.clone()))
+    });
+    for (key, values) in given.chain(offered) {
+        if !tags.iter().any(|(k, _)| *k == key) {
+            tags.push((key, values));
+        }
+    }
     View {
         keys: removed.sources.clone(),
-        tags: vec![("TITLE".to_string(), vec![removed.note.clone()])],
+        tags,
         ..View::default()
     }
 }
@@ -182,6 +206,15 @@ struct Term {
 /// A parsed query; with no terms it matches every song.
 #[derive(Debug, Clone, Default)]
 pub struct Query(Vec<Term>);
+
+/// `text` without one pair of double quotes around it, so that
+/// `album:="The Glass Orchards"` reads alike whether a shell took its
+/// quotes or they reached muman.
+fn unquoted(text: &str) -> &str {
+    text.strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .unwrap_or(text)
+}
 
 impl Query {
     /// Parse the terms of a query. `extractors` are the key schemes in
@@ -223,8 +256,8 @@ impl Query {
                         Test::Matches(field, re)
                     } else {
                         let (exact, text) = match rest.strip_prefix('=') {
-                            Some(text) => (true, text.to_lowercase()),
-                            None => (false, rest.to_lowercase()),
+                            Some(text) => (true, unquoted(text).to_lowercase()),
+                            None => (false, unquoted(rest).to_lowercase()),
                         };
                         let yes_no =
                             ["cover", "lyrics"].contains(&field.to_ascii_lowercase().as_str());
@@ -321,7 +354,8 @@ pub fn check_format(template: &str, views: &[View]) -> Result<()> {
         if !is_field(field) && !had {
             return Err(crate::change::Refused(format!(
                 "The format names `{{{field}}}`, which no song has: a tag such as title, \
-                 artist or album, or one of {}",
+                 artist or album, or one of {}. The path template's own variables, as \
+                 disc_track, are not fields",
                 DERIVED.join(", ")
             ))
             .into());
@@ -533,6 +567,17 @@ mod tests {
         assert!(query(&["genre:=french"]).matches(&v), "any value matches");
         assert!(query(&["lyrics:none", "cover:yes", "format:opus"]).matches(&v));
         assert!(query(&["path:lanternfall"]).matches(&v));
+        assert!(
+            query(&["artist:=\"Lumo Fenn\""]).matches(&v),
+            "quotes that reach muman"
+        );
+        assert!(query(&["title:\"lantern hour\""]).matches(&v));
+        let dated = View {
+            tags: vec![("DATE".into(), vec!["2015-03-04".into()])],
+            ..v.clone()
+        };
+        assert_eq!(dated.values("year"), ["2015"]);
+        assert!(query(&["year:=2015"]).matches(&dated));
     }
 
     #[test]
