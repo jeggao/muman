@@ -104,7 +104,7 @@ const SOFT: f64 = 0.05;
 
 /// Words saying a name is another recording than one without them,
 /// with the conflict they name: written folded, each matched as whole
-/// words by [`holds`].
+/// words, as the module's documentation says.
 pub const VERSIONS: [(&str, &[&str]); 7] = [
     (
         "live version",
