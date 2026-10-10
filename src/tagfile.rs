@@ -63,6 +63,18 @@ fn skipped(key: &str) -> bool {
         || Field::named(key).is_some_and(Field::is_loudness)
 }
 
+/// The names a song has one value of: a file giving several means the
+/// last.
+const ONE_VALUE: [&str; 7] = [
+    "TITLE",
+    "ALBUM",
+    "DATE",
+    "TRACKNUMBER",
+    "DISCNUMBER",
+    "TRACKTOTAL",
+    "DISCTOTAL",
+];
+
 /// The longest value taken, as the tags of a source are capped.
 const MOST_BYTES: usize = 4096;
 
@@ -101,6 +113,16 @@ impl Sheet {
 
     pub(crate) fn add(&mut self, tags: &mut Tags, name: &str, value: &str) {
         let key = tags::vorbis_key(name.trim());
+        let one = ONE_VALUE.contains(&key.as_str());
+        self.put(tags, &key, value, one);
+    }
+
+    /// Gives `tags` the one value `value` of `name`, over any before.
+    pub(crate) fn set(&mut self, tags: &mut Tags, name: &str, value: &str) {
+        self.put(tags, &tags::vorbis_key(name.trim()), value, true);
+    }
+
+    fn put(&mut self, tags: &mut Tags, key: &str, value: &str, one: bool) {
         let cleaned: String = value
             .chars()
             .filter(|c| !c.is_control() || *c == '\n')
@@ -116,16 +138,17 @@ impl Sheet {
         if key.is_empty() || value.is_empty() {
             return;
         }
-        if skipped(&key) {
+        if skipped(key) {
             self.skip(format!("{key}, which describes another file"));
             return;
         }
         let mut put = |key: &str, value: String| match tags.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) if one => *v = vec![value],
             Some((_, v)) if !v.contains(&value) => v.push(value),
             Some(_) => {}
             None => tags.push((key.to_string(), vec![value])),
         };
-        match key.as_str() {
+        match key {
             "TRACKNUMBER" | "DISCNUMBER" => {
                 let (n, total) = value.split_once('/').unwrap_or((value, ""));
                 let total_key = if key == "TRACKNUMBER" {
@@ -134,21 +157,21 @@ impl Sheet {
                     "DISCTOTAL"
                 };
                 if let Some(n) = number(n) {
-                    put(&key, n.to_string());
+                    put(key, n.to_string());
                 }
                 if let Some(t) = number(total) {
                     put(total_key, t.to_string());
                 }
             }
             "DATE" => match date(value) {
-                Some(d) => put(&key, d),
+                Some(d) => put(key, d),
                 None => self.skip(format!("DATE {value:?}, which reads as no date")),
             },
             "TRACKTOTAL" | "DISCTOTAL" => match number(value) {
-                Some(n) => put(&key, n.to_string()),
+                Some(n) => put(key, n.to_string()),
                 None => self.skip(format!("{key} {value:?}, which is no count")),
             },
-            _ => put(&key, value.to_string()),
+            _ => put(key, value.to_string()),
         }
     }
 
@@ -237,10 +260,12 @@ fn is_vorbis(text: &str) -> bool {
         && (named.len() * 5 >= lines.len() * 4 || known >= 2)
 }
 
-/// The name a `NAME=value` line sets: printable ASCII but `=`.
+/// The name a `NAME=value` line sets: printable ASCII but `=`, with no
+/// space at either end, so a line sung as `title = x` sets none.
 fn vorbis_name(line: &str) -> Option<&str> {
     let (name, _) = line.split_once('=')?;
     (!name.is_empty()
+        && name.trim() == name
         && name
             .bytes()
             .all(|b| (0x20..=0x7d).contains(&b) && b != b'='))
@@ -313,8 +338,12 @@ fn ffmetadata(text: &str) -> Sheet {
             entry.push_str(lines.next().unwrap_or_default());
         }
         let (name, value) = split_escaped(&entry);
-        if let Some(value) = value {
-            sheet.add(&mut tags, &name, &value);
+        match value {
+            Some(_) if name.contains('=') => {
+                sheet.skip(format!("{name:?}, which is no tag name"));
+            }
+            Some(value) => sheet.add(&mut tags, &name, &value),
+            None => {}
         }
     }
     sheet.tracks.push(Track {
@@ -352,15 +381,33 @@ fn json(text: &str) -> Result<Sheet> {
         Ok(Value::Array(items)) => items,
         Ok(v @ Value::Object(_)) => vec![v],
         Ok(_) => bail!("holds no object of tags"),
-        Err(_) => text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()
-            .context("reading its JSON")?,
+        Err(whole) => {
+            let mut read = Vec::new();
+            let mut broken = Vec::new();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match serde_json::from_str(line) {
+                    Ok(v) => read.push(v),
+                    Err(_) => broken.push(n + 1),
+                }
+            }
+            if read.is_empty() {
+                return Err(whole).context("reading its JSON");
+            }
+            let mut sheet = Sheet::default();
+            for n in broken {
+                sheet.skip(format!("line {n}, which is no JSON"));
+            }
+            return tracks_of(sheet, &read);
+        }
     };
-    let mut sheet = Sheet::default();
-    for o in &objects {
+    tracks_of(Sheet::default(), &objects)
+}
+
+fn tracks_of(mut sheet: Sheet, objects: &[Value]) -> Result<Sheet> {
+    for o in objects {
         let track = object(&mut sheet, o)?;
         sheet.tracks.push(track);
     }
@@ -410,7 +457,9 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     let mut tags = Tags::new();
     let text = |v: &Value| match v {
         Value::String(s) => vec![s.clone()],
-        Value::Number(n) if n.as_f64() != Some(0.0) => vec![n.to_string()],
+        Value::Number(n) if n.as_f64() != Some(0.0) => {
+            vec![whole(v).map_or_else(|| n.to_string(), |w| w.to_string())]
+        }
         Value::Array(a) => a
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
@@ -425,7 +474,7 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     for value in map.get("composer").map(text).unwrap_or_default() {
         sheet.add(&mut tags, "COMPOSER", &value);
     }
-    let part = |k: &str| map.get(k).and_then(Value::as_u64).filter(|&n| n > 0);
+    let part = |k: &str| map.get(k).and_then(whole);
     if let Some(year) = part("year") {
         let date = match (part("month"), part("day")) {
             (Some(month), Some(day)) => format!("{year:04}-{month:02}-{day:02}"),
@@ -437,12 +486,15 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     #[allow(clippy::cast_possible_truncation)]
     let length_ms = map
         .get("length")
-        .and_then(Value::as_f64)
+        .and_then(|v| match v {
+            Value::String(s) => s.trim().parse().ok(),
+            v => v.as_f64(),
+        })
         .filter(|s| s.is_finite() && *s > 0.0)
         .map(|s| (s * 1000.0).round() as i64);
     let number = map
         .get("track")
-        .and_then(Value::as_u64)
+        .and_then(whole)
         .and_then(|n| u32::try_from(n).ok());
     Ok(Track {
         tags,
@@ -450,6 +502,20 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
         length_ms,
         file: None,
     })
+}
+
+/// A positive whole number however beets writes it: `3`, `3.0` or `"3"`.
+fn whole(v: &Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return (n > 0).then_some(n);
+    }
+    let f = match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (f.is_finite() && f >= 1.0 && f.fract() == 0.0 && f < 1e15).then_some(f as u64)
 }
 
 fn recorded(sheet: &mut Sheet, record: &crate::musicbrainz::Record) -> Track {
@@ -541,6 +607,36 @@ mod tests {
         assert_eq!(read(Path::new("all.json"), &lines).unwrap().tracks.len(), 2);
         let array = format!("[{one}, {one}]");
         assert_eq!(read(Path::new("all.json"), &array).unwrap().tracks.len(), 2);
+    }
+
+    #[test]
+    fn beets_numbers_read_as_strings_or_whole_floats_and_a_broken_line_is_skipped() {
+        let one = r#"{"title": "Copper Moth", "track": "4", "disc": 1.0, "year": "2011", "length": "200"}"#;
+        let lines = format!("{one}\n{{\"title\": \"Rooms\n\n{one}\n");
+        let sheet = read(Path::new("all.jsonl"), &lines).unwrap();
+        assert_eq!(sheet.tracks.len(), 2);
+        assert_eq!(sheet.skipped, ["line 2, which is no JSON"]);
+        let track = &sheet.tracks[0];
+        assert_eq!(track.number, Some(4));
+        assert_eq!(values(&track.tags, "TRACKNUMBER"), ["4"]);
+        assert_eq!(values(&track.tags, "DISCNUMBER"), ["1"]);
+        assert_eq!(values(&track.tags, "DATE"), ["2011"]);
+        assert_eq!(track.length_ms, Some(200_000));
+        assert!(read(Path::new("x.json"), "{\"title\": \n").is_err());
+    }
+
+    #[test]
+    fn names_with_spaces_at_their_ends_or_escaped_equals_set_nothing() {
+        assert_eq!(vorbis_name("title = Lantern"), None);
+        assert_eq!(vorbis_name(" TITLE=Lantern"), None);
+        assert_eq!(vorbis_name("ALBUM ARTIST=Marlo"), Some("ALBUM ARTIST"));
+        let sheet = read(
+            Path::new("x.ffmeta"),
+            ";FFMETADATA1\ntitle=Lantern\na\\=b=c\ntitle=Lantern Weather\n",
+        )
+        .unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["Lantern Weather"]);
+        assert_eq!(sheet.skipped, ["\"a=b\", which is no tag name"]);
     }
 
     #[test]

@@ -386,6 +386,12 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
                     bail!("{missing} is no file");
                 }
+                if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
+                    bail!(
+                        "{word} is no file or URL; to name songs with it, put it inside \
+                         --to's quotes, as --to \"artist:venn {word}\""
+                    );
+                }
                 let (loose, files) = split_loose(&files)?;
                 let mut ok = true;
                 let sites = Manifest::load(&dirs.home)?.settings.sites;
@@ -1119,6 +1125,17 @@ fn names_a_path(input: &str) -> bool {
         .is_some_and(|e| attach::LOOSE.contains(&e.to_ascii_lowercase().as_str()));
     let a_file = !input.contains("://") && (store::kind_of(Path::new(input)).is_some() || loose);
     !input.contains("://") && from_folder || a_file
+}
+
+/// Whether `input`, which names nothing on disk, is a plain word: no
+/// address, path or video ID yt-dlp could read, as a query's word given
+/// apart from `--to` is.
+fn is_a_word(input: &str) -> bool {
+    let video_id = input.len() == 11
+        && input
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    !video_id && !input.contains(['.', '/', ':', '\\'])
 }
 
 /// The song files at or under `path` in the manual folder.

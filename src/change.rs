@@ -248,8 +248,20 @@ pub fn remove<W: Write>(
                         .enumerate()
                         .any(|(m, s)| !picked.contains(&m) && s.has(k))
             };
+            // A removed song's sources stay, so that restore gets it whole.
+            let held = |k: &SourceKey| read.manifest.removed.iter().any(|r| r.sources.contains(k));
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
+                if held(key) {
+                    for file in store_files(&store, dirs, key)? {
+                        writeln!(
+                            out,
+                            "    keeps {}, which a removed song lists",
+                            file.display()
+                        )?;
+                    }
+                    continue;
+                }
                 for file in store_files(&store, dirs, key)? {
                     let how = if own { "trashes" } else { "deletes" };
                     writeln!(out, "    {how} {}", file.display())?;

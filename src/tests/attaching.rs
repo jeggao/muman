@@ -263,6 +263,27 @@ fn yes_takes_a_song_that_leads_and_to_names_one() {
     assert!(said.contains("2 songs match --to"), "{said}");
     let said = s.not_added(&fake, &["add", &plain, "--to", "nothing-like-it"]);
     assert!(said.contains("No song matches"), "{said}");
+
+    let wings = s.written("dl/wings.txt", "wings in the lamplight\n");
+    let (ok, text) = s.run(&fake, &["add", &wings, "--to", "artist:venn moth"]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Copper Moth").has(&manual("added/wings.lrc")),
+        "{text}"
+    );
+    let e = run_with(
+        &s.job(&["add", &wings, "--to", "artist:venn", "moth"]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{e}").starts_with("moth is no file or URL"),
+        "{e:#}"
+    );
 }
 
 #[test]

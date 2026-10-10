@@ -14,7 +14,7 @@ use crate::tagfile::{Sheet, Tags, Track};
 
 const FRAMES_PER_SECOND: i64 = 75;
 
-/// A line's words, a quoted one whole.
+/// A line's words, a quoted one whole, `\"` in it a quote.
 fn words(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut chars = line.trim().chars().peekable();
@@ -23,7 +23,15 @@ fn words(line: &str) -> Vec<String> {
             chars.next();
         } else if c == '"' {
             chars.next();
-            out.push(chars.by_ref().take_while(|&c| c != '"').collect());
+            let mut word = String::new();
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => break,
+                    '\\' if chars.peek() == Some(&'"') => word.extend(chars.next()),
+                    c => word.push(c),
+                }
+            }
+            out.push(word);
         } else {
             let mut word = String::new();
             while let Some(&c) = chars.peek().filter(|c| !c.is_whitespace()) {
@@ -89,17 +97,17 @@ pub fn read(text: &str) -> Result<Sheet> {
                 tracks.push(t);
                 starts.push(None);
             }
-            "INDEX" if into_track && arg == "01" => {
+            "INDEX" if into_track && arg.parse::<u32>() == Ok(1) => {
                 let at = w.get(2).and_then(|a| frames(a));
                 if let (Some(at), Some(start)) = (at, starts.last_mut()) {
                     *start = Some((files, at));
                 }
             }
-            "TITLE" => sheet.add(tags, if into_track { "TITLE" } else { "ALBUM" }, arg),
-            "PERFORMER" => sheet.add(tags, if into_track { "ARTIST" } else { "ALBUMARTIST" }, arg),
-            "SONGWRITER" => sheet.add(tags, "COMPOSER", arg),
-            "ISRC" if into_track => sheet.add(tags, "ISRC", arg),
-            "CATALOG" => sheet.add(tags, "BARCODE", arg),
+            "TITLE" => sheet.set(tags, if into_track { "TITLE" } else { "ALBUM" }, arg),
+            "PERFORMER" => sheet.set(tags, if into_track { "ARTIST" } else { "ALBUMARTIST" }, arg),
+            "SONGWRITER" => sheet.set(tags, "COMPOSER", arg),
+            "ISRC" if into_track => sheet.set(tags, "ISRC", arg),
+            "CATALOG" => sheet.set(tags, "BARCODE", arg),
             "REM" => {
                 let value = w.get(2..).map(|v| v.join(" ")).unwrap_or_default();
                 let upper = arg.to_ascii_uppercase();
@@ -135,13 +143,15 @@ pub fn read(text: &str) -> Result<Sheet> {
         .find(|(k, _)| k == "ALBUMARTIST")
         .map(|(_, v)| v.clone())
         .unwrap_or_default();
-    let total = tracks.len().to_string();
+    let numbered = tracks.iter().filter(|t| t.number.is_some()).count();
     for t in &mut tracks {
         if !performer.is_empty() && !t.tags.iter().any(|(k, _)| k == "ARTIST") {
             t.tags.push(("ARTIST".to_string(), performer.clone()));
         }
     }
-    sheet.add(&mut album, "TRACKTOTAL", &total);
+    if numbered > 0 {
+        sheet.add(&mut album, "TRACKTOTAL", &numbered.to_string());
+    }
     sheet.album = album;
     sheet.tracks = tracks;
     Ok(sheet)
@@ -204,5 +214,22 @@ mod tests {
             TRACK 02 AUDIO\nINDEX 01 1000000000000000:00:00\n";
         assert_eq!(read(far).unwrap().tracks[0].length_ms, None);
         assert!(read("REM nothing\n").is_err());
+    }
+
+    #[test]
+    fn escaped_quotes_short_indexes_and_repeated_commands_read_as_meant() {
+        let sheet = read(
+            "PERFORMER \"Marlo\"\nPERFORMER \"Marlo Venn\"\nFILE \"d.flac\" WAVE\n\
+             TRACK 01 AUDIO\nTITLE \"The \\\"Lantern\\\" Weather\"\nINDEX 1 00:00:00\n\
+             TRACK 02 AUDIO\nINDEX 01 01:00:00\nTRACK x AUDIO\n",
+        )
+        .unwrap();
+        assert_eq!(values(&sheet.album, "ALBUMARTIST"), ["Marlo Venn"]);
+        assert_eq!(
+            values(&sheet.tracks[0].tags, "TITLE"),
+            ["The \"Lantern\" Weather"]
+        );
+        assert_eq!(sheet.tracks[0].length_ms, Some(60_000));
+        assert_eq!(values(&sheet.album, "TRACKTOTAL"), ["2"]);
     }
 }

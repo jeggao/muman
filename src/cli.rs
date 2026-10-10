@@ -254,8 +254,9 @@ pub enum Command {
 
         /// Give every lyrics, picture and tag file to the songs this
         /// query names, matching none: one song, or for a picture every
-        /// one, or for a cue sheet those its tracks go among. Each value
-        /// is a word of the query, as `muman list` reads them.
+        /// one, or for a cue sheet those its tracks go among. The query is
+        /// read as `muman list` reads one; quote it when it has several
+        /// words, as --to "artist:venn lantern".
         #[arg(long = "to", value_name = "TERM")]
         to: Vec<String>,
 

@@ -57,6 +57,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   followed by its song, as a moved song file is, where the song lost it.
 - **Two songs listing one lookup record** each keep their record of what
   it holds, where the second's was written again on every sync.
+- **`remove --purge`** keeps a source a removed song still lists, so
+  that `restore` gets the song back whole, where it deleted it.
+- **A song list's format version** goes back down once its songs no
+  longer need it, on the next command that writes the list, so that an
+  older muman reads it again; it changed only with another edit.
 
 ## [0.3.0] - 2026-10-07
 

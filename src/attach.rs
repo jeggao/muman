@@ -298,11 +298,14 @@ struct Judged {
 }
 
 impl Judged {
-    fn percent(&self) -> i64 {
-        if self.distance >= NO_MATCH {
-            0
-        } else {
-            100 - (self.distance + 5) / 10
+    /// How its names compare, in words: a percentage would read as more
+    /// sure than a name ever makes a song.
+    fn names(&self) -> Option<&'static str> {
+        match self.distance {
+            d if d <= STRONG => Some("same name"),
+            d if d <= ASK => Some("close name"),
+            d if d < NO_MATCH => Some("other name"),
+            _ => None,
         }
     }
 }
@@ -514,17 +517,18 @@ fn judge(cands: &[Candidate], clues: &Clues, what: What) -> Vec<Judged> {
         .enumerate()
         .map(|(n, c)| judge_one(n, c, clues, what))
         .collect();
-    let stem_shared = judged
-        .iter()
-        .filter(|j| j.reasons.iter().any(|r| r == "named as its file"))
-        .count()
-        > 1;
+    let named = |j: &Judged| j.reasons.iter().any(|r| r == "named as its file");
+    let stem_shared = judged.iter().filter(|j| named(j)).count();
     for j in &mut judged {
-        if stem_shared
-            && j.reasons.iter().any(|r| r == "named as its file")
-            && j.verdict == Verdict::Same
-        {
-            j.verdict = Verdict::Unsure;
+        if stem_shared > 1 && named(j) {
+            for r in &mut j.reasons {
+                if r == "named as its file" {
+                    *r = format!("named as its file, as {stem_shared} songs are");
+                }
+            }
+            if j.verdict == Verdict::Same {
+                j.verdict = Verdict::Unsure;
+            }
         }
     }
     // A match by fields alone must lead every other song: two equally
@@ -542,7 +546,8 @@ fn judge(cands: &[Candidate], clues: &Clues, what: What) -> Vec<Judged> {
             && d - j.distance < LEAD
         {
             j.verdict = Verdict::Unsure;
-            j.reasons.push(format!("as near as {}", cands[song].label));
+            j.reasons
+                .push(format!("as near as {}, so asked", cands[song].label));
         }
     }
     order(&mut judged);
@@ -985,10 +990,7 @@ impl<W: Write> Asking<'_, '_, W> {
         if let Some(ms) = c.length_ms {
             let _ = write!(line, " · {}", minutes(ms));
         }
-        let mut why = Vec::new();
-        if j.distance < NO_MATCH {
-            why.push(format!("{}%", j.percent()));
-        }
+        let mut why: Vec<String> = j.names().map(String::from).into_iter().collect();
         why.extend(j.reasons.iter().cloned());
         if !why.is_empty() {
             let _ = write!(line, "   {}", why.join(", "));
@@ -1236,7 +1238,14 @@ pub fn attach<R: Runner, W: Write>(
     let pool: Option<Vec<usize>> = if how.to.is_empty() {
         None
     } else {
-        let q = Query::parse(&how.to, &extractors)?;
+        let mut terms = Vec::new();
+        for value in &how.to {
+            terms.extend(
+                shell_words::split(value)
+                    .map_err(|e| crate::change::Refused(format!("--to {value}: {e}")))?,
+            );
+        }
+        let q = Query::parse(&terms, &extractors)?;
         let found: Vec<usize> = (0..cands.len())
             .filter(|&n| q.matches(&cands[n].view))
             .collect();
@@ -1720,9 +1729,9 @@ fn decide_sheet<W: Write>(
             || "(no song)".to_string(),
             |j| {
                 format!(
-                    "{} {}%{}",
+                    "{} ({}{})",
                     cands[j.song].label,
-                    j.percent(),
+                    j.names().unwrap_or("named as its file"),
                     if j.verdict == Verdict::Same {
                         ""
                     } else {

@@ -159,15 +159,26 @@ pub fn is_lyric(text: &str) -> bool {
     })
 }
 
-/// The length an `.lrc` states with its `[length:]` tag, in ms.
+/// The value of the first ID tag `name` in the LRC `text`, read in any
+/// case and with spaces around the colon, as `[TI:]` or `[length : ]`.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    text.lines().find_map(|l| {
+        let inner = l.trim().strip_prefix('[')?.strip_suffix(']')?;
+        let (k, v) = inner.split_once(':')?;
+        (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty()).then(|| v.trim())
+    })
+}
+
+/// The length an `.lrc` states with its `[length:]` tag, in ms; none
+/// when it states no positive length.
 #[must_use]
 pub fn stated_length(text: &str) -> Option<i64> {
-    let line = text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("[length:")?.strip_suffix(']'))?;
     let mut seconds = 0.0;
-    for part in line.trim().split(':') {
+    for part in tag(text, "length")?.split(':') {
         seconds = seconds * 60.0 + part.trim().parse::<f64>().ok()?;
+    }
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return None;
     }
     #[allow(clippy::cast_possible_truncation)]
     Some(units::ms_of_seconds(seconds).round() as i64)
@@ -189,14 +200,7 @@ pub struct Headers {
 /// and `[offset:]`.
 #[must_use]
 pub fn headers(text: &str) -> Headers {
-    let tag = |name: &str| {
-        text.lines().find_map(|l| {
-            let inner = l.trim().strip_prefix('[')?.strip_suffix(']')?;
-            let (k, v) = inner.split_once(':')?;
-            (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty())
-                .then(|| v.trim().to_string())
-        })
-    };
+    let tag = |name| tag(text, name).map(str::to_string);
     Headers {
         title: tag("ti"),
         artist: tag("ar"),
@@ -710,5 +714,10 @@ mod tests {
         assert_eq!(stated_length("[length:1:02:03]\n"), Some(3_723_000));
         assert_eq!(stated_length("[00:01.00]line\n"), None);
         assert_eq!(stated_length("[length:soon]\n"), None);
+        assert_eq!(stated_length("[LENGTH : 2:00]\n"), Some(120_000));
+        assert_eq!(stated_length("[length:-3:00]\n"), None);
+        assert_eq!(stated_length("[length:0]\n"), None);
+        assert_eq!(stated_length("[length:inf]\n"), None);
+        assert_eq!(stated_length("[length:1e400]\n"), None);
     }
 }

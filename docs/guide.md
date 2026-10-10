@@ -302,7 +302,10 @@ apart by their letters and decide nothing.
 | A title alone, two songs as near, another version (live, instrumental, remix…), or a near match | Asked |
 | Lyrics ending after the song does, or stating another length | Not the song's |
 
-Asked means on a terminal: you pick among the likeliest songs, search
+Asked means on a terminal: you pick among the likeliest songs, each
+shown with why, as `Lantern Weather — Marlo Venn · The Glass Orchards ·
+3:20   close name, length agrees`, where `same name`, `close name` or `other name` says how the
+names compare and the rest what else agrees or not. You may also search
 the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
@@ -310,12 +313,14 @@ out, and `add` exits with 5 once the rest is done; a file that does not
 read, as an empty `.lrc`, a picture that does not decode or a cue sheet
 splitting one song's file into tracks, is not added and `add` exits
 with 4, the songs given with it written all the same. `--to` names the song
-with a query instead and matches nothing; for a picture it names every
+with a query instead, quoted as one word when it has several, and
+matches nothing; for a picture it names every
 song to give it to, for a cue sheet the songs its tracks go among:
 
 ```bash
 muman add "Lantern Weather.lrc"
 muman add front.jpg --to 'album:="The Glass Orchards"'
+muman add words.txt --to "artist:venn lantern"
 muman add album.cue rips/*.flac --new
 ```
 

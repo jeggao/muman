@@ -347,14 +347,37 @@ pub fn present(home: &Path) -> Result<()> {
     .into())
 }
 
+/// The oldest format version that reads the songs of `parsed`: what
+/// they share decides it.
+fn needed_version(parsed: &Parsed) -> i64 {
+    let mut seen = BTreeSet::new();
+    // Each song's keys once: a song naming one twice shares it with no one.
+    let shared: Vec<&SourceKey> = parsed
+        .songs
+        .iter()
+        .flat_map(|s| s.sources.iter().collect::<BTreeSet<_>>())
+        .filter(|k| shareable(k) && !seen.insert(*k))
+        .collect();
+    if shared.iter().any(|k| is_picture(k)) {
+        VERSION
+    } else if shared.is_empty() {
+        PLAIN
+    } else {
+        SHARED
+    }
+}
+
 impl Manifest {
-    /// The list in `home`; an empty one when there is none yet.
+    /// The list in `home`; an empty one when there is none yet. A list
+    /// stating a newer version than its songs need is stale, so the next
+    /// save writes it down and an older muman reads it again.
     pub fn load(home: &Path) -> Result<Self> {
         let (doc, text) = read_text(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
         let stale = file.exists()
             && (with_header(&doc.to_string()).is_some()
+                || doc.get("version").and_then(Item::as_integer) > Some(needed_version(&parsed))
                 || normalize(&mut doc.clone())
                 || !parsed.respelled.is_empty());
         Ok(Self {
@@ -495,21 +518,7 @@ impl Manifest {
         }
         normalize(&mut doc);
         let parsed = parse(&doc)?;
-        let mut seen = BTreeSet::new();
-        // Each song's keys once: a song naming one twice shares it with no one.
-        let shared: Vec<&SourceKey> = parsed
-            .songs
-            .iter()
-            .flat_map(|s| s.sources.iter().collect::<BTreeSet<_>>())
-            .filter(|k| shareable(k) && !seen.insert(*k))
-            .collect();
-        let version = if shared.iter().any(|k| is_picture(k)) {
-            VERSION
-        } else if shared.is_empty() {
-            PLAIN
-        } else {
-            SHARED
-        };
+        let version = needed_version(&parsed);
         if doc.get("version").and_then(Item::as_integer) != Some(version) {
             doc["version"] = value(version);
         }

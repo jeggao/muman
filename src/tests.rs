@@ -733,6 +733,30 @@ fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
     );
 }
 
+#[test]
+fn a_purge_spares_what_a_removed_song_lists_so_that_restore_gets_it_whole() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run_against(&Server::default(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run_against(
+        &Server::default(),
+        &["remove", "-y", "--purge", "manual:a.flac"],
+    );
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("home/sources/lrclib/7.lrc");
+    assert!(lrc.exists(), "{text}");
+    assert!(text.contains("which a removed song lists"), "{text}");
+    let (ok, text) = s.run_against(&Server::default(), &["restore", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    let record = SourceKey::parse("lrclib:7").unwrap();
+    assert!(s.songs().iter().any(|k| k.contains(&record)), "{text}");
+}
+
 const MBID: &str = "00000000-0000-4000-8000-000000000001";
 
 /// A recording of `Song` by `Artist` on the album `Glass Orchards`, as a

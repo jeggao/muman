@@ -76,7 +76,7 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 **Options:**
 
-* `--to <TERM>` — Give every lyrics, picture and tag file to the songs this query names, matching none: one song, or for a picture every one, or for a cue sheet those its tracks go among. Each value is a word of the query, as `muman list` reads them
+* `--to <TERM>` — Give every lyrics, picture and tag file to the songs this query names, matching none: one song, or for a picture every one, or for a cue sheet those its tracks go among. The query is read as `muman list` reads one; quote it when it has several words, as --to "artist:venn lantern"
 * `--no-match` — Keep each video as uploaded, never looking for its YouTube Music track; other lookups are still made
 * `-y`, `--yes` — Add a new source to the listed song it may be the same recording as without asking
 * `--new` — Make every new source a song of its own, without comparing it

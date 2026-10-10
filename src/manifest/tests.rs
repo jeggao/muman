@@ -317,6 +317,25 @@ fn a_song_with_no_source_of_its_own_is_refused_and_never_made() {
 }
 
 #[test]
+fn a_list_needing_an_older_version_than_it_states_is_written_down_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        "version = 3\n[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\"]\n",
+    )
+    .unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.save().unwrap();
+    assert!(
+        text(dir.path()).contains("version = 1"),
+        "{}",
+        text(dir.path())
+    );
+    assert!(!Manifest::load(dir.path()).unwrap().stale);
+}
+
+#[test]
 fn a_picture_one_song_lists_twice_is_shared_with_no_one() {
     let dir = tempfile::tempdir().unwrap();
     write(
