@@ -37,7 +37,11 @@
 //! file goes as a removed song's does.
 //!
 //! Songs changed since muman wrote them, and the files a failed song
-//! keeps, are counted as they are and never moved: they are yours.
+//! keeps, are counted as they are and never moved: they are yours. A run
+//! that writes changed files again, as `sync --force` does, fits their
+//! songs as any other: counted as they are, a file about to be replaced
+//! would leave room the song's new file then takes, and the next run,
+//! counting that file as muman's, would fit the library anew.
 
 use crate::units;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -289,7 +293,7 @@ fn ladder(
     written: &ByAudio<'_>,
     song: usize,
     plan: &Plan,
-    library: &Path,
+    at: &Workshop<'_>,
     tools: &str,
 ) -> Ladder {
     let block = manifest.settings.library.block_size.0;
@@ -323,8 +327,9 @@ fn ladder(
         .get(&plan.audio)
         .into_iter()
         .flatten()
-        .find(|(path, _)| changed_since_written(library, &state.outputs, path))
-        .map(|(path, w)| on_disk(library, path, w, block));
+        .filter(|_| !at.force)
+        .find(|(path, _)| changed_since_written(at.library, &state.outputs, path))
+        .map(|(path, w)| on_disk(at.library, path, w, block));
     let mut ladder = Ladder {
         key,
         rungs: vec![choice(plan.format, 0.0)],
@@ -497,6 +502,9 @@ pub struct Workshop<'a> {
     pub library: &'a Path,
     /// What files no plan makes take and keep: a failed song's.
     pub kept: u64,
+    /// Whether the run writes again the files changed since muman wrote
+    /// them, as `sync --force` does.
+    pub force: bool,
 }
 
 /// Fit the planned songs into `[library] max_size`, setting each one's
@@ -520,7 +528,7 @@ pub fn fit_library<R: Runner, W: Write>(
     let written = by_audio(state);
     let mut ladders: Vec<Ladder> = planned
         .iter()
-        .map(|(n, r)| ladder(manifest, state, &written, *n, &r.plan, at.library, &tools))
+        .map(|(n, r)| ladder(manifest, state, &written, *n, &r.plan, at, &tools))
         .collect();
     drop(written);
     for rung in ladders.iter().flat_map(|l| &l.rungs) {

@@ -846,6 +846,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             scratch: workshop.path(),
             library: &dirs.library,
             kept: limit::kept(&state, &dirs.library, &failed, block),
+            force: opts.force,
         };
         let fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
         if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {

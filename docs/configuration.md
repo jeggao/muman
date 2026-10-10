@@ -307,8 +307,8 @@ rest fit; their files are removed and the run exits with 4. `status`
 shows each lowered song's format and why, and what the library is
 projected to take; `info` shows what it takes against `max_size`. A song
 you changed since muman wrote it counts as it is and is never encoded
-again, and files in the library that muman did not write are not
-counted.
+again, unless `sync --force` writes it again, which fits it as any other
+song; files in the library that muman did not write are not counted.
 
 ## The path template
 

@@ -1065,6 +1065,37 @@ fn a_library_fitted_song_by_song_ends_as_one_fitted_at_once() {
 }
 
 #[test]
+fn a_changed_file_forced_fits_as_the_next_sync_does() {
+    let fresh = home();
+    listing(&fresh, &limit(20_000), &["a", "b", "c"]);
+    fresh.run(&three_flacs(), Options::default());
+    let fitted = formats(&fresh);
+
+    let h = home();
+    listing(&h, &limit(20_000), &["a", "b", "c"]);
+    h.run(&three_flacs(), Options::default());
+    let (lowered, _) = formats(&h)
+        .into_iter()
+        .find(|(_, f)| f.is_encoded())
+        .expect("the limit binds");
+    std::fs::write(h.lib(&lowered.to_string_lossy()), "").unwrap();
+    let (_, text) = h.run(&three_flacs(), Options::default());
+    assert!(text.contains("Left alone, changed since"), "{text}");
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&three_flacs(), forced);
+    assert!(ok, "{text}");
+    assert_eq!(formats(&h), fitted, "{text}");
+    let again = three_flacs();
+    let (ok, text) = h.run(&again, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&again), 0, "nothing encoded again: {text}");
+    assert_eq!(formats(&h), fitted, "{text}");
+}
+
+#[test]
 fn sizes_measured_under_another_limit_change_no_choice() {
     let fresh = home();
     listing(&fresh, &limit(20_000), &["a", "b", "c"]);

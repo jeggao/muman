@@ -102,6 +102,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`[library] max_size` and `export --max-size`** raise each song
   lowered back as far as the room left allows, where songs that fit at
   their best stayed lowered and room went unused.
+- **`sync --force` under `[library] max_size`** fits a song whose file
+  changed since muman wrote it as any other, as the next `sync` does,
+  where it counted the file it was about to replace, wrote the song at
+  its best, and left the next sync to encode it again.
 
 ## [0.3.0] - 2026-10-07
 
