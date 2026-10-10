@@ -12,28 +12,43 @@
 //! - **dHash**: the picture averaged down to 9×8, each bit whether a
 //!   pixel is darker than the one to its right.
 //!
+//! Each bit is set only past a dead zone: a coefficient a millionth of
+//! the largest above the median, a pixel a gray level darker. Without
+//! it, a plain field, as behind a centred logo, and a design symmetric
+//! about its middle, whose coefficients are all but zero, set their bits
+//! by rounding: the 9×8 cells of a solid picture differ in their
+//! thirteenth decimal, and one such cover set 16 to 32 bits otherwise at
+//! another size.
+//!
 //! Each is taken over the picture's content, inside the bars
-//! `quality::image` trims, and over the centred square of that content,
-//! which is the cover a thumbnail frames on a blurred background. Two
-//! pictures are as far apart as the nearest of those pairs, in bits that
-//! differ:
+//! `quality::image` trims; over the centred square of that content,
+//! which is the cover a thumbnail frames on a blurred background; and,
+//! for a frame of another shape, over the centred square of the whole
+//! frame, since a dark cover in black bars is trimmed into its own art.
+//! Two pictures are one design when any pair of those is:
 //!
 //! | pHash bits apart | dHash bits apart | Verdict |
 //! |---|---|---|
-//! | 6 or fewer | 10 or fewer | One design |
+//! | 6 or fewer | Any | One design |
+//! | 10 or fewer | 10 or fewer | One design |
 //! | 12 or fewer | Any | Unsure |
 //! | More | Any | Different |
 //!
-//! These are the bands Hackerfactor gives for 64-bit hashes (a variant
-//! within about 5 to 10 bits, unrelated pictures beyond 10); two
-//! unrelated pictures differ in 32 bits on average. A picture with little
-//! contrast (a spread under 6 gray levels at 32×32) hashes like every
-//! other such picture, so it is never more than Unsure. Hashes are of
-//! gray pixels, so two colourings of one design are one design.
+//! The bands were measured over 50 generated covers, each under 29
+//! changes. JPEG at quality 20, WebP, scaling from 120 to 2,000 px, bars
+//! and blurred frames, gamma, brightness and noise kept 94 of 100 one
+//! design, and of the 1,225 pairs of distinct covers, and 17,150 changed
+//! covers against distinct originals, none was nearer than 16 bits of
+//! pHash; distinct covers are 32 apart on average. Crops of a tenth and
+//! a badge over a corner move pHash past the bands, as is its nature.
+//! A picture with little contrast (a spread under 6 gray levels at
+//! 32×32) hashes like every other such picture, so it is never more than
+//! Unsure. Hashes are of gray pixels, so two colourings of one design are
+//! one design, and a transparent field hashes as the colour it hides.
 //!
 //! The DCT's cosines come from `f64::cos`, whose last bit may differ
-//! between platforms; that can flip a coefficient lying on the median,
-//! a bit at most, far inside the bands.
+//! between platforms; the dead zone keeps such a difference from flipping
+//! a bit.
 
 use std::sync::LazyLock;
 
@@ -42,14 +57,20 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::quality::{self, Rect};
 
 /// Names how pictures are hashed. A look taken by another is taken again.
-pub const METHOD: &str = "picture/1";
+pub const METHOD: &str = "picture/2";
 
 const SIDE: usize = 32;
 const LOW: usize = 8;
 const SAME_P: u32 = 6;
-const SAME_D: u32 = 10;
+const NEAR_P: u32 = 10;
+const NEAR_D: u32 = 10;
 const UNSURE_P: u32 = 12;
 const FLAT: f64 = 6.0;
+/// How far past the median a coefficient lies to set its bit, of the
+/// largest coefficient.
+const TIE: f64 = 1e-6;
+/// How much darker, in gray levels, a pixel is to set its bit.
+const STEP: f64 = 1.0;
 
 /// A picture's two hashes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,10 +88,11 @@ impl Serialize for Hashes {
 impl<'de> Deserialize<'de> for Hashes {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let text = String::deserialize(d)?;
+        if text.len() != 32 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(serde::de::Error::custom("not 32 hex digits"));
+        }
         let half = |r: std::ops::Range<usize>| {
-            text.get(r)
-                .and_then(|h| u64::from_str_radix(h, 16).ok())
-                .ok_or_else(|| serde::de::Error::custom("not 32 hex digits"))
+            u64::from_str_radix(&text[r], 16).map_err(serde::de::Error::custom)
         };
         Ok(Hashes {
             p: half(0..16)?,
@@ -86,6 +108,9 @@ pub struct Look {
     /// The centred square, when the content is no square.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub square: Option<Hashes>,
+    /// The centred square of the whole frame, when the frame is no square.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<Hashes>,
     /// Too little contrast to be told apart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub flat: bool,
@@ -99,33 +124,52 @@ pub enum Alike {
     Same,
 }
 
-/// How the gray picture `pixels`, `width` × `height`, looks, its
-/// content inside `content`; `None` for a picture too small to hash.
-#[must_use]
-pub fn look(pixels: &[u8], width: u32, height: u32, content: Rect) -> Option<Look> {
-    if content.width < 9 || content.height < 8 || pixels.len() < (width * height) as usize {
-        return None;
-    }
-    let side = content.width.min(content.height);
-    let square = (content.width != content.height).then(|| Rect {
-        x: content.x + (content.width - side) / 2,
-        y: content.y + (content.height - side) / 2,
+fn centred_square(r: Rect) -> Option<Rect> {
+    let side = r.width.min(r.height);
+    (r.width != r.height).then(|| Rect {
+        x: r.x + (r.width - side) / 2,
+        y: r.y + (r.height - side) / 2,
         width: side,
         height: side,
-    });
-    let small = quality::downscale(pixels, width, content, SIDE, SIDE);
+    })
+}
+
+/// How the gray picture `pixels`, `width` × `height`, looks, its
+/// content inside `content`; `None` for a picture too small to hash, or
+/// a content that is not inside it.
+#[must_use]
+pub fn look(pixels: &[u8], width: u32, height: u32, content: Rect) -> Option<Look> {
+    let inside = u64::from(content.x) + u64::from(content.width) <= u64::from(width)
+        && u64::from(content.y) + u64::from(content.height) <= u64::from(height);
+    let size = usize::try_from(u64::from(width) * u64::from(height)).ok()?;
+    if content.width < 9 || content.height < 8 || !inside || pixels.len() < size {
+        return None;
+    }
+    let whole = Rect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let frame = centred_square(whole)
+        .filter(|r| r.width >= 9 && Some(*r) != centred_square(content) && *r != content);
+    let (hashed, small) = hashes(pixels, width, content);
     Some(Look {
-        content: hashes(pixels, width, content),
-        square: square.map(|r| hashes(pixels, width, r)),
+        content: hashed,
+        square: centred_square(content).map(|r| hashes(pixels, width, r).0),
+        frame: frame.map(|r| hashes(pixels, width, r).0),
         flat: spread(&small) < FLAT,
     })
 }
 
-fn hashes(pixels: &[u8], width: u32, area: Rect) -> Hashes {
-    Hashes {
-        p: phash(&quality::downscale(pixels, width, area, SIDE, SIDE)),
+/// The hashes of `area`, and the 32×32 it was averaged to.
+fn hashes(pixels: &[u8], width: u32, area: Rect) -> (Hashes, Vec<f64>) {
+    let small = quality::downscale(pixels, width, area, SIDE, SIDE);
+    let hashed = Hashes {
+        p: phash(&small),
         d: dhash(&quality::downscale(pixels, width, area, 9, 8)),
-    }
+    };
+    (hashed, small)
 }
 
 /// `COSINES[u][x]`: the DCT-II basis at frequency `u` and sample `x`.
@@ -159,9 +203,11 @@ fn phash(img: &[f64]) -> u64 {
     let mut sorted = ac.to_vec();
     sorted.sort_by(f64::total_cmp);
     let median = sorted[sorted.len() / 2];
+    let largest = ac.iter().map(|c| c.abs()).fold(0.0, f64::max);
+    let tie = largest * TIE;
     ac.iter()
         .enumerate()
-        .filter(|(_, c)| **c > median)
+        .filter(|(_, c)| **c > median + tie)
         .fold(0, |bits, (i, _)| bits | 1 << i)
 }
 
@@ -169,7 +215,7 @@ fn dhash(img: &[f64]) -> u64 {
     let mut bits = 0;
     for y in 0..8 {
         for x in 0..8 {
-            if img[y * 9 + x] < img[y * 9 + x + 1] {
+            if img[y * 9 + x] + STEP < img[y * 9 + x + 1] {
                 bits |= 1 << (y * 8 + x);
             }
         }
@@ -188,15 +234,27 @@ fn real(n: usize) -> f64 {
     n as f64
 }
 
-/// How many bits apart the nearest of two looks' hashes are: pHash,
-/// then dHash.
+fn sides(l: &Look) -> Vec<Hashes> {
+    std::iter::once(l.content)
+        .chain(l.square)
+        .chain(l.frame)
+        .collect()
+}
+
+fn verdict(p: u32, d: u32) -> Alike {
+    if p <= SAME_P || (p <= NEAR_P && d <= NEAR_D) {
+        Alike::Same
+    } else if p <= UNSURE_P {
+        Alike::Unsure
+    } else {
+        Alike::Different
+    }
+}
+
+/// How many bits apart the nearest of two looks' hashes are, pHash
+/// then dHash: the pair of their sides that is most alike.
 #[must_use]
 pub fn distance(a: &Look, b: &Look) -> (u32, u32) {
-    let sides = |l: &Look| {
-        std::iter::once(l.content)
-            .chain(l.square)
-            .collect::<Vec<_>>()
-    };
     let (ours, theirs) = (sides(a), sides(b));
     ours.iter()
         .flat_map(|x| {
@@ -204,21 +262,16 @@ pub fn distance(a: &Look, b: &Look) -> (u32, u32) {
                 .iter()
                 .map(move |y| ((x.p ^ y.p).count_ones(), (x.d ^ y.d).count_ones()))
         })
-        .min()
+        .min_by_key(|&(p, d)| (std::cmp::Reverse(verdict(p, d)), p, d))
         .unwrap_or((64, 64))
 }
 
-/// Whether `a` and `b` are one design, by the bands above.
+/// Whether `a` and `b` are one design, by the bands above, judged on
+/// the pair of their sides most alike.
 #[must_use]
 pub fn alike(a: &Look, b: &Look) -> Alike {
     let (p, d) = distance(a, b);
-    let verdict = if p <= SAME_P && d <= SAME_D {
-        Alike::Same
-    } else if p <= UNSURE_P {
-        Alike::Unsure
-    } else {
-        Alike::Different
-    };
+    let verdict = verdict(p, d);
     if a.flat || b.flat {
         verdict.min(Alike::Unsure)
     } else {
@@ -352,5 +405,116 @@ mod tests {
         assert!(json.contains(&format!("{:016x}", a.content.p)));
         assert_eq!(serde_json::from_str::<Look>(&json).unwrap(), a);
         assert!(serde_json::from_str::<Look>(r#"{"content":"zz"}"#).is_err());
+    }
+
+    /// A gray field with a centred white block, rendered at `side`.
+    fn plain_logo(side: u32) -> Vec<u8> {
+        render(side, side, |x, y| {
+            let (u, v) = (
+                f64::from(x) / f64::from(side),
+                f64::from(y) / f64::from(side),
+            );
+            if (0.2..0.8).contains(&u) && (0.4..0.6).contains(&v) {
+                255.0
+            } else {
+                64.0
+            }
+        })
+    }
+
+    #[test]
+    fn a_plain_field_sets_no_bit_by_rounding_at_any_size() {
+        let at = |side| look_of(&plain_logo(side), side, side);
+        let original = at(600);
+        for side in [300, 500, 900, 1000, 1200] {
+            assert_eq!(
+                alike(&original, &at(side)),
+                Alike::Same,
+                "{side}: {:?}",
+                distance(&original, &at(side))
+            );
+        }
+        let solid = look_of(&render(64, 64, |_, _| 128.0), 64, 64);
+        assert_eq!(solid.content.d, 0);
+    }
+
+    #[test]
+    fn a_dark_cover_in_black_bars_is_still_its_cover() {
+        let disk = |u: f64, v: f64| {
+            if (u - 0.5).hypot(v - 0.5) < 0.25 {
+                235.0
+            } else {
+                0.0
+            }
+        };
+        let cover = render(600, 600, |x, y| {
+            disk(f64::from(x) / 600.0, f64::from(y) / 600.0)
+        });
+        let original = look_of(&cover, 600, 600);
+        let framed = render(640, 360, |x, y| {
+            if (140..500).contains(&x) {
+                disk(f64::from(x - 140) / 360.0, f64::from(y) / 360.0)
+            } else {
+                0.0
+            }
+        });
+        let framed = look_of(&framed, 640, 360);
+        assert!(framed.frame.is_some());
+        assert_eq!(
+            alike(&original, &framed),
+            Alike::Same,
+            "{:?}",
+            distance(&original, &framed)
+        );
+    }
+
+    #[test]
+    fn the_most_alike_pair_of_sides_decides() {
+        let h = |p, d| Hashes { p, d };
+        let a = Look {
+            content: h(0, 0),
+            square: Some(h(u64::MAX, u64::MAX)),
+            frame: None,
+            flat: false,
+        };
+        let b = Look {
+            content: h(0xFF, (1 << 14) - 1),
+            square: Some(h(u64::MAX >> 10, u64::MAX >> 3)),
+            frame: None,
+            flat: false,
+        };
+        assert_eq!(alike(&a, &b), Alike::Same, "{:?}", distance(&a, &b));
+    }
+
+    #[test]
+    fn hashes_read_only_as_32_hex_digits_and_a_look_only_inside_its_picture() {
+        let bad = [
+            r#"{"content":"0123456789abcdef0123456789abcdefzz"}"#,
+            r#"{"content":"+123456789abcdef0123456789abcdef"}"#,
+        ];
+        for json in bad {
+            assert!(serde_json::from_str::<Look>(json).is_err(), "{json}");
+        }
+        let outside = Rect {
+            x: 1,
+            y: 0,
+            width: 64,
+            height: 64,
+        };
+        assert_eq!(look(&[0; 64 * 64], 64, 64, outside), None);
+        assert_eq!(
+            look(
+                &[0; 16],
+                65536,
+                65536,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 16,
+                    height: 16
+                }
+            ),
+            None
+        );
     }
 }

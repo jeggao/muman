@@ -177,6 +177,7 @@ fn a_picture_alike_to_many_songs_of_many_albums_is_asked_about() {
             d: 0xfedc_ba98_7654_3210,
         },
         square: None,
+        frame: None,
         flat: false,
     };
     let mut cands: Vec<Candidate> = (0..4)
