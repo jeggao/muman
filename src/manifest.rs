@@ -496,10 +496,11 @@ impl Manifest {
         normalize(&mut doc);
         let parsed = parse(&doc)?;
         let mut seen = BTreeSet::new();
+        // Each song's keys once: a song naming one twice shares it with no one.
         let shared: Vec<&SourceKey> = parsed
             .songs
             .iter()
-            .flat_map(|s| &s.sources)
+            .flat_map(|s| s.sources.iter().collect::<BTreeSet<_>>())
             .filter(|k| shareable(k) && !seen.insert(*k))
             .collect();
         let version = if shared.iter().any(|k| is_picture(k)) {
@@ -689,6 +690,33 @@ fn owned_keys(
     Ok(keys)
 }
 
+/// Refuse a song whose every key another song lists too: a song is named
+/// by a key only it lists, and such a song would be taken for that other
+/// song by every edit.
+fn refuse_unowned(songs: &[Song]) -> Result<()> {
+    for (n, song) in songs.iter().enumerate() {
+        if song.sources.iter().all(shareable)
+            && let Some(other) = songs
+                .iter()
+                .enumerate()
+                .find(|(m, o)| *m != n && song.sources.iter().any(|k| o.has(k)))
+        {
+            bail!(
+                "song {} lists no source of its own: song {} lists its {} too; \
+                 give it a file of its own, or delete it",
+                n + 1,
+                other.0 + 1,
+                song.sources
+                    .iter()
+                    .find(|k| other.1.has(k))
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// A song's `lyrics_offset`, in milliseconds.
 fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
     let Some(item) = t.get("lyrics_offset") else {
@@ -767,6 +795,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         }
         songs.push(song);
     }
+    refuse_unowned(&songs)?;
     let mut albums = Vec::new();
     for (n, t) in tables(doc, "album").enumerate() {
         let what = format!("album {}", n + 1);
@@ -1069,7 +1098,10 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 .filter(|k| !taken(k))
                 .filter_map(|k| SourceKey::parse(k).ok())
                 .collect();
-            if keys.is_empty() {
+            let shared = |k: &SourceKey| {
+                tables(doc, "song").any(|t| listed_keys(t).contains(&k.to_string()))
+            };
+            if keys.is_empty() || keys.iter().all(|k| shareable(k) && shared(k)) {
                 // Every source of it is another song's now: nothing to list.
                 tables_mut(doc, "removed")?.push(removed);
                 return Ok(());
@@ -1220,7 +1252,12 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
             gone.insert("sources", key_array(&left));
         }
     }
-    list.retain(|t| !listed_keys(t).is_empty());
+    // A song left with no file of its own is gone, whatever records it lists.
+    list.retain(|t| {
+        listed_keys(t)
+            .iter()
+            .any(|k| SourceKey::parse(k).is_ok_and(|k| !shareable(&k)))
+    });
     if list.is_empty() {
         doc.remove("removed");
     }

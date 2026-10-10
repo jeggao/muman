@@ -267,15 +267,8 @@ fn listed_by(h: &Home, query: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-#[test]
-#[ignore = "needs ffmpeg and ffprobe"]
-fn lyrics_pictures_and_cue_sheets_are_given_to_their_songs() {
-    let h = Home::new();
-    let dir = h.root.join("in");
-    let first = h.song("First Light.flac", 1, "First Light");
-    let second = h.song("Second Light.flac", 2, "Second Light");
-    let third = h.song("Third Light.flac", 3, "Third Light");
-    let art = dir.join("art.png");
+/// A generated cover at `art`, embedded in each of `songs`.
+fn embed_cover(art: &Path, songs: &[&PathBuf]) {
     ffmpeg(
         &[
             "-f",
@@ -285,30 +278,32 @@ fn lyrics_pictures_and_cue_sheets_are_given_to_their_songs() {
             "-frames:v",
             "1",
         ],
-        &art,
+        art,
     );
-    for song in [&first, &second] {
+    for song in songs {
         let covered = song.with_extension("covered.flac");
         let (song, art) = (song.to_str().unwrap(), art.to_str().unwrap());
+        let args = [
+            "-i", song, "-i", art, "-map", "0", "-map", "1", "-c", "copy",
+        ];
         ffmpeg(
-            &[
-                "-i",
-                song,
-                "-i",
-                art,
-                "-map",
-                "0",
-                "-map",
-                "1",
-                "-c",
-                "copy",
-                "-disposition:v",
-                "attached_pic",
-            ],
+            &[&args[..], &["-disposition:v", "attached_pic"]].concat(),
             &covered,
         );
         std::fs::rename(&covered, song).unwrap();
     }
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn lyrics_pictures_and_cue_sheets_are_given_to_their_songs() {
+    let h = Home::new();
+    let dir = h.root.join("in");
+    let first = h.song("First Light.flac", 1, "First Light");
+    let second = h.song("Second Light.flac", 2, "Second Light");
+    let third = h.song("Third Light.flac", 3, "Third Light");
+    let art = dir.join("art.png");
+    embed_cover(&art, &[&first, &second]);
     let added = h.muman(&[
         "add",
         "--new",

@@ -206,6 +206,26 @@ pub fn headers(text: &str) -> Headers {
     }
 }
 
+/// `line` without the word timings an enhanced LRC line holds, as
+/// `<00:12.30>`; any other `<` or `>` is sung.
+fn without_word_times(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if lrc_time(&after.replacen('>', "]", 1)).is_some() {
+            let close = after.find('>').map_or(after.len(), |c| c + 1);
+            rest = &after[close..];
+        } else {
+            out.push('<');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The words LRC or plain lyrics sing: each timed line's text, and each
 /// untimed line but the ID tags, without the lines that are no lyric.
 #[must_use]
@@ -218,11 +238,7 @@ pub fn sung(text: &str) -> String {
             timed = true;
             rest = after;
         }
-        // Word timings, `<00:12.30>`, inside an enhanced LRC line.
-        let words: String = rest
-            .split('<')
-            .map(|part| part.split_once('>').map_or(part, |(_, w)| w))
-            .collect();
+        let words = without_word_times(rest);
         let header = !timed && words.starts_with('[') && words.ends_with(']');
         if !header && !words.trim().is_empty() && is_lyric(&words) {
             out.push_str(words.trim());
@@ -235,8 +251,8 @@ pub fn sung(text: &str) -> String {
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
-/// guessed as a browser guesses a page that names none. CRLF line
-/// endings become LF.
+/// guessed as a browser guesses a page that names none. CRLF and CR
+/// line endings become LF.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
     let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
@@ -249,7 +265,7 @@ pub fn decode(bytes: &[u8]) -> String {
         detector.guess(None, chardetng::Utf8Detection::Deny)
     };
     let (text, _, _) = encoding.decode(bytes);
-    text.replace("\r\n", "\n")
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// UTF-16 with no byte-order mark, told by its zero bytes: text mostly in
@@ -354,7 +370,7 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
         let mut rest = line;
         let mut times = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(unstretch(ms - offset_ms, stretch_ppm));
+            times.push(unstretch(ms.saturating_sub(offset_ms), stretch_ppm));
             rest = after;
         }
         if !times.is_empty() {
@@ -403,13 +419,41 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
         2 => frac.parse::<i64>().ok()? * 10,
         _ => frac[..3].parse::<i64>().ok()?,
     };
-    let ms = min.parse::<i64>().ok()? * 60_000 + whole.parse::<i64>().ok()? * 1000 + frac_ms;
+    let ms = min
+        .parse::<i64>()
+        .ok()?
+        .checked_mul(60_000)?
+        .checked_add(whole.parse::<i64>().ok()?.checked_mul(1000)?)?
+        .checked_add(frac_ms)?;
     Some((ms, after))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signs_are_sung_word_times_are_not_and_huge_times_are_no_times() {
+        assert_eq!(sung("[00:01.00]we go -> home"), "we go -> home\n");
+        assert_eq!(
+            sung("plain words > here\nI <3 the tide\n"),
+            "plain words > here\nI <3 the tide\n"
+        );
+        assert_eq!(
+            sung("[00:01.00]<00:01.00>rain <00:01.50>falls"),
+            "rain falls\n"
+        );
+        assert_eq!(
+            sung("[9999999999999999:00.00]x"),
+            "[9999999999999999:00.00]x\n"
+        );
+        assert_eq!(timing("[9999999999999999:00.00]x"), None);
+        let _ = shift_lrc("[153722867280912:55.807]x", -1, 0);
+        assert_eq!(
+            decode(b"[00:01.00]a\r[00:02.00]b\r"),
+            "[00:01.00]a\n[00:02.00]b\n"
+        );
+    }
 
     #[test]
     fn lyrics_files_decode_from_any_common_encoding() {

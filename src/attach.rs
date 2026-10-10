@@ -181,7 +181,7 @@ pub fn sort(path: &Path) -> Result<Option<What>> {
         if tagfile::format_of(path, &text).is_some() {
             return Ok(Some(What::Tags));
         }
-        if ext == "txt" && lyrics::is_text(&text) {
+        if ext == "txt" && !text.trim().is_empty() && lyrics::is_text(&text) {
             return Ok(Some(What::Lyrics));
         }
     }
@@ -823,8 +823,8 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
             } else {
                 read_text(path)?
             };
-            if !lyrics::is_text(&text) {
-                bail!("{} holds no text", path.display());
+            if text.trim().is_empty() || !lyrics::is_text(&text) {
+                bail!("{} holds no lyrics", path.display());
             }
             let h = lyrics::headers(&text);
             if h.title.is_some() {
@@ -837,8 +837,8 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
             }
             clues.stated_ms = h.length_ms;
             clues.length_ms = h.length_ms;
-            clues.last_ms =
-                lyrics::timing(&lyrics::clean_lrc(&text)).map(|t| t.last_ms - h.offset_ms);
+            clues.last_ms = lyrics::timing(&lyrics::clean_lrc(&text))
+                .map(|t| t.last_ms.saturating_sub(h.offset_ms));
             let sung = lyrics::sung(&text);
             clues.words = Some((
                 similar::shingles(&similar::tokens(&sung), 3),

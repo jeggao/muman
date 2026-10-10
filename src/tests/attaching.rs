@@ -450,3 +450,26 @@ fn subtitles_are_given_as_the_lrc_they_convert_to() {
     .unwrap();
     assert!(copied.starts_with("[00:01.00]"), "{copied}");
 }
+
+#[test]
+fn a_shared_picture_moved_in_the_manual_folder_is_followed_by_each_song() {
+    let s = Setup::new();
+    let mut fake = library();
+    fake.looks = vec![
+        ("Lantern Weather.flac".into(), 7),
+        ("Copper Moth.flac".into(), 7),
+        ("orchards.jpg".into(), 7),
+        ("moved.jpg".into(), 7),
+    ];
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let jpg = s.file("art/orchards.jpg");
+    assert!(s.run(&fake, &["add", &jpg]).0);
+    let added = s.dir.path().join("home/sources/manual/added");
+    moved(&added.join("orchards.jpg"), &added.join("moved.jpg"));
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("is now manual:added/moved.jpg"), "{text}");
+    let moved = manual("added/moved.jpg");
+    assert!(s.song_with("Lantern Weather").has(&moved));
+    assert!(s.song_with("Copper Moth").has(&moved));
+}

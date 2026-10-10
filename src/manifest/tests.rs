@@ -283,6 +283,60 @@ fn songs_share_a_picture_of_the_users_but_not_its_lyrics_in_version_3() {
 }
 
 #[test]
+fn a_song_with_no_source_of_its_own_is_refused_and_never_made() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        "version = 3\n[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n\
+         [[song]]\nsources = [\"manual:added/c.jpg\"]\n",
+    )
+    .unwrap();
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("song 2 lists no source of its own"),
+        "{e:#}"
+    );
+
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:b.flac\", \"manual:added/c.jpg\"]\n\
+         [[removed]]\nnote = \"gone\"\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![SourceKey::Manual("a.flac".into())],
+        album: None,
+    });
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert!(
+        m.removed.is_empty(),
+        "a tombstone left with the picture alone goes"
+    );
+    assert_eq!(m.songs.len(), 2);
+}
+
+#[test]
+fn a_picture_one_song_lists_twice_is_shared_with_no_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\", \"manual:added/c.jpg\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: SourceKey::Manual("a.flac".into()),
+        tags: vec![("genre".into(), vec!["Folk".into()])],
+    });
+    m.save().unwrap();
+    assert!(
+        text(dir.path()).contains("version = 1"),
+        "{}",
+        text(dir.path())
+    );
+}
+
+#[test]
 fn a_rename_and_a_drop_follow_the_key_into_its_pins() {
     let dir = tempfile::tempdir().unwrap();
     write(

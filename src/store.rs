@@ -513,7 +513,9 @@ impl Store {
 
 /// Each listed manual file gone from its path that is one of `ready`,
 /// the manual files no song lists, by its size and modification time,
-/// which a move keeps: the file moved there, taken out of `ready`.
+/// which a move keeps: the file moved there, taken out of `ready`. A
+/// listed `.lrc` or picture, which `ready` never holds, is followed to
+/// one no song lists either.
 pub fn moved_manual(
     listed: &BTreeSet<SourceKey>,
     state: &crate::state::State,
@@ -521,6 +523,13 @@ pub fn moved_manual(
     ready: &mut Vec<SourceKey>,
 ) -> BTreeMap<SourceKey, SourceKey> {
     let mut moved = BTreeMap::new();
+    let mut loose: Vec<SourceKey> = store
+        .manual
+        .iter()
+        .filter(|(_, kind)| **kind != Kind::Media)
+        .map(|(rel, _)| SourceKey::Manual(rel.into()))
+        .filter(|k| !listed.contains(k))
+        .collect();
     let gone = listed
         .iter()
         .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
@@ -528,11 +537,13 @@ pub fn moved_manual(
         let Some(was) = state.facts.get(gone).and_then(|f| stamp_of_rev(&f.rev)) else {
             continue;
         };
-        let at = ready
+        let media = matches!(gone, SourceKey::Manual(m) if kind_of(m.path()) == Some(Kind::Media));
+        let candidates = if media { &mut *ready } else { &mut loose };
+        let at = candidates
             .iter()
             .position(|k| store.locate(k).and_then(|l| stamp(&l.path)) == Some(was));
         if let Some(at) = at {
-            moved.insert(gone.clone(), ready.remove(at));
+            moved.insert(gone.clone(), candidates.remove(at));
         }
     }
     moved

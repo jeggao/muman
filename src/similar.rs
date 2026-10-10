@@ -57,19 +57,25 @@
 //!   syllable's marks count once, with a Hangul syllable taken as its
 //!   jamo; a decoration's edits count a fifth, as beets weighs brackets;
 //! - one less the Monge–Elkan similarity of the two sides' words, both
-//!   ways round, for reordered names.
+//!   ways round, for reordered names; each word stands for one word of
+//!   the other side at most, so a word said three times is not said once.
 //!
 //! Two names whose main scripts differ are compared only when one is
 //! Latin and the other an alphabet [`deunicode`] romanizes letter by
 //! letter (Cyrillic, Greek, Armenian, Georgian), at a small cost. Any
 //! other pair, kanji and romaji, Hangul and Latin, is uncompared:
-//! MusicBrainz bridges such names only with aliases entered by hand.
+//! MusicBrainz bridges such names only with aliases entered by hand. So
+//! is a name in kanji alone against one in kana alone, which may be the
+//! name and its reading.
 //!
 //! A version word ([`VERSIONS`]) in one name's decorations but not the
 //! other's says the two may be other recordings: live, instrumental,
 //! karaoke, acoustic, remix, cover and demo are conflicts; remastered,
-//! edit, mix, mono and version only cost a little. Words are written
-//! folded; kana in hiragana, since katakana folds to it.
+//! edit, mix, mono and version only cost a little. Each is matched as
+//! whole words, in Chinese, Japanese and Thai as words the dictionary
+//! finds, run together; a kana entry, written in hiragana, matches only
+//! katakana, as the loanword is written, so デモ is a demo and でも
+//! ("but") is not, nor is the ライブ inside ドライブ ("drive").
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
@@ -98,7 +104,7 @@ const SOFT: f64 = 0.05;
 
 /// Words saying a name is another recording than one without them,
 /// with the conflict they name: written folded, each matched as whole
-/// words or, in a script written without spaces, anywhere.
+/// words by [`holds`].
 pub const VERSIONS: [(&str, &[&str]); 7] = [
     (
         "live version",
@@ -236,7 +242,6 @@ fn by_hand(c: char) -> Option<&'static str> {
         'æ' => "ae",
         'œ' => "oe",
         'þ' => "th",
-        'ё' => "е",
         _ => return None,
     })
 }
@@ -271,17 +276,13 @@ fn prepare(s: &str) -> String {
         .filter(|&c| !CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c))
         .collect::<String>()
         .replace('&', " and ");
-    let cased = CaseMapper::new().fold_string(&wide);
-    let mut plain = String::with_capacity(cased.len());
-    for c in cased.chars() {
-        match by_hand(c) {
-            Some(s) => plain.push_str(s),
-            None => plain.push(c),
-        }
-    }
-    let mut out = String::with_capacity(plain.len());
+    // ё is е with a mark Cyrillic keeps, so it is mapped before marks part.
+    let cased = CaseMapper::new().fold_string(&wide).replace('ё', "е");
+    let mut out = String::with_capacity(cased.len());
+    // The script the last letter written is in, which owns the marks after
+    // it; a digit or a space owns none.
     let mut base = Script::Common;
-    for c in plain.nfd() {
+    for c in cased.nfd() {
         if is_mark(c) {
             if !strips_marks(base) {
                 out.push(c);
@@ -291,13 +292,18 @@ fn prepare(s: &str) -> String {
         if c == '\u{0640}' {
             continue;
         }
-        if !matches!(script(c), Script::Common | Script::Inherited) {
-            base = script(c);
-        }
-        if counts(c) {
-            out.push(alike(c).unwrap_or(c));
-        } else if !out.ends_with(' ') {
-            out.push(' ');
+        if let Some(letters) = by_hand(c) {
+            out.push_str(letters);
+            base = Script::Latin;
+        } else if counts(c) {
+            let folded = alike(c).unwrap_or(c);
+            out.push(folded);
+            base = script(folded);
+        } else {
+            if !out.ends_with(' ') {
+                out.push(' ');
+            }
+            base = Script::Common;
         }
     }
     out.nfc().collect::<String>().trim().to_string()
@@ -310,14 +316,25 @@ pub fn fold(s: &str) -> String {
     without_article(&folded).to_string()
 }
 
-fn without_article(s: &str) -> &str {
-    let s = s.strip_prefix("the ").unwrap_or(s);
-    s.strip_suffix(" the").unwrap_or(s)
+fn without_article(mut s: &str) -> &str {
+    while let Some(rest) = s.strip_prefix("the ").or_else(|| s.strip_suffix(" the")) {
+        s = rest;
+    }
+    s
 }
 
 /// The words of `s`, folded.
 #[must_use]
 pub fn tokens(s: &str) -> Vec<String> {
+    words_of(s)
+        .into_iter()
+        .map(|w| w.chars().map(kana).collect())
+        .collect()
+}
+
+/// The words of `s`, folded but for kana, which tell a loanword in
+/// katakana from a word of the language in hiragana.
+fn words_of(s: &str) -> Vec<String> {
     let prepared = prepare(s);
     let mut words = Vec::new();
     let mut last = 0;
@@ -326,7 +343,7 @@ pub fn tokens(s: &str) -> Vec<String> {
     for at in SEGMENTER.segment_str(&prepared) {
         let word = &prepared[last..at];
         if word.chars().any(counts) {
-            words.push(word.chars().map(kana).collect());
+            words.push(word.to_string());
         }
         last = at;
     }
@@ -382,19 +399,28 @@ fn ratio(part: usize, whole: usize) -> f64 {
 }
 
 /// How alike the words of `a` are to the closest of `b`'s, averaged.
+///
+/// Each word of `b` is the closest of one word of `a` at most, and the
+/// sum is over the longer list, so a word said twice is not said once.
 fn monge_elkan(a: &[String], b: &[String]) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
-    let total: f64 = a
-        .iter()
-        .map(|w| {
-            b.iter()
-                .map(|v| 1.0 - edit_distance(w, v))
-                .fold(0.0, f64::max)
-        })
-        .sum();
-    total / ratio(a.len(), 1)
+    let mut free = vec![true; b.len()];
+    let mut total = 0.0;
+    for w in a {
+        let best = b
+            .iter()
+            .enumerate()
+            .filter(|(n, _)| free[*n])
+            .map(|(n, v)| (n, 1.0 - edit_distance(w, v)))
+            .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.cmp(&x.0)));
+        if let Some((n, sim)) = best {
+            free[n] = false;
+            total += sim;
+        }
+    }
+    total / ratio(a.len().max(b.len()), 1)
 }
 
 /// The families of scripts a name can be written in: Chinese and
@@ -443,7 +469,12 @@ pub struct Name {
     pub core: String,
     pub decorations: Vec<String>,
     words: Vec<String>,
+    /// Each decoration's words, kana as written.
+    decoration_words: Vec<Vec<String>>,
     script: Option<Script>,
+    /// Whether its core holds Han, and kana.
+    han: bool,
+    kana: bool,
 }
 
 impl Name {
@@ -455,9 +486,13 @@ impl Name {
             .chain(&decorations)
             .flat_map(|s| tokens(s))
             .collect();
+        let in_script = |sc: Script| core.chars().any(|c| script(c) == sc);
         Name {
             script: main_script(&core),
+            han: in_script(Script::Han),
+            kana: in_script(Script::Hiragana) || in_script(Script::Katakana),
             core: fold(&core),
+            decoration_words: decorations.iter().map(|d| words_of(d)).collect(),
             decorations: decorations.iter().map(|d| fold(d)).collect(),
             words,
         }
@@ -475,14 +510,13 @@ impl Name {
     pub fn versions(&self) -> (BTreeSet<&'static str>, bool) {
         let mut hard = BTreeSet::new();
         let mut soft = false;
-        for d in &self.decorations {
-            let words: Vec<&str> = d.split(' ').collect();
+        for words in &self.decoration_words {
             for (kind, entries) in VERSIONS {
-                if entries.iter().any(|e| holds(d, &words, e)) {
+                if entries.iter().any(|e| holds(words, e)) {
                     hard.insert(kind);
                 }
             }
-            soft |= SOFT_VERSIONS.iter().any(|e| holds(d, &words, e));
+            soft |= SOFT_VERSIONS.iter().any(|e| holds(words, e));
         }
         (hard, soft)
     }
@@ -497,13 +531,12 @@ impl Name {
                 .collect()
         };
         let mut out: BTreeSet<String> = numbered(&self.core).into_iter().collect();
-        for d in &self.decorations {
-            let words: Vec<&str> = d.split(' ').collect();
+        for (d, words) in self.decorations.iter().zip(&self.decoration_words) {
             let versioned = VERSIONS
                 .iter()
                 .flat_map(|(_, e)| e.iter())
                 .chain(&SOFT_VERSIONS);
-            if !versioned.into_iter().any(|e| holds(d, &words, e)) {
+            if !versioned.into_iter().any(|e| holds(words, e)) {
                 out.extend(numbered(d));
             }
         }
@@ -511,17 +544,35 @@ impl Name {
     }
 }
 
-/// Whether the folded text `d`, of words `words`, holds `entry`: as
-/// whole words, or anywhere for a script written without spaces.
-fn holds(d: &str, words: &[&str], entry: &str) -> bool {
+/// Whether `words`, as [`words_of`] gives them, hold `entry` as whole
+/// words. An entry in a script written without spaces is matched by
+/// words the dictionary found, run together, and in kana by katakana,
+/// as a loanword is written: so デモ is a demo and でも ("but") is not,
+/// nor is the ライブ in ドライブ ("drive").
+fn holds(words: &[String], entry: &str) -> bool {
     let spaced = entry
         .chars()
         .all(|c| !matches!(family(script(c)), Script::Han | Script::Thai));
-    if !spaced {
-        return d.contains(entry);
+    if spaced {
+        let wanted: Vec<&str> = entry.split(' ').collect();
+        return words
+            .windows(wanted.len())
+            .any(|w| w.iter().map(String::as_str).eq(wanted.iter().copied()));
     }
-    let wanted: Vec<&str> = entry.split(' ').collect();
-    words.windows(wanted.len()).any(|w| w == wanted.as_slice())
+    let written: String = entry
+        .chars()
+        .map(|c| match u32::from(c) {
+            0x3041..=0x3096 => char::from_u32(u32::from(c) + 0x60).unwrap_or(c),
+            _ => c,
+        })
+        .collect();
+    (0..words.len()).any(|start| {
+        let mut run = String::new();
+        words[start..].iter().take(4).any(|w| {
+            run.push_str(w);
+            run == written
+        })
+    })
 }
 
 /// `s` split into its core and its decorations.
@@ -534,7 +585,7 @@ fn split(s: &str) -> (String, Vec<String>) {
         .find_map(|(i, c)| opener(c).map(|close| (i, c, close)))
     {
         let inner_at = at + open.len_utf8();
-        let Some(len) = rest[inner_at..].find(close) else {
+        let Some(len) = closing(&rest[inner_at..], open, close) else {
             break;
         };
         core.push_str(&rest[..at]);
@@ -564,6 +615,26 @@ fn split(s: &str) -> (String, Vec<String>) {
     (core.trim().to_string(), decorations)
 }
 
+/// Where the bracket `close` that matches an `open` before `inner`
+/// stands in it, past any pair nested inside.
+fn closing(inner: &str, open: char, close: char) -> Option<usize> {
+    if open == close {
+        return inner.find(close);
+    }
+    let mut depth = 0usize;
+    for (at, c) in inner.char_indices() {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            if depth == 0 {
+                return Some(at);
+            }
+            depth -= 1;
+        }
+    }
+    None
+}
+
 fn opener(c: char) -> Option<char> {
     OPENS
         .iter()
@@ -586,6 +657,11 @@ pub struct Compared {
 #[must_use]
 pub fn compare(a: &Name, b: &Name) -> Option<Compared> {
     if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    // A name in kanji and one in kana alone may be one name and its
+    // reading, which no rule tells.
+    if (a.han && !a.kana && b.kana && !b.han) || (b.han && !b.kana && a.kana && !a.han) {
         return None;
     }
     let mut cost = 0.0;
@@ -710,6 +786,7 @@ pub fn guesses(stem: &str) -> Vec<Guess> {
 /// The runs of `k` words of `words`, or all of them as one when fewer.
 #[must_use]
 pub fn shingles(words: &[String], k: usize) -> BTreeSet<String> {
+    let k = k.max(1);
     if words.len() < k {
         return std::iter::once(words.join("\u{1f}"))
             .filter(|s| !s.is_empty())

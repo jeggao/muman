@@ -107,6 +107,11 @@ impl Setup {
     }
 }
 
+/// `from` moved to `to`, as the user moves a file.
+fn moved(from: &Path, to: &Path) {
+    std::fs::rename(from, to).unwrap();
+}
+
 fn flacs() -> Fake {
     Fake::default().probe(".flac", FLAC)
 }

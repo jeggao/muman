@@ -38,14 +38,17 @@ fn words(line: &str) -> Vec<String> {
 
 /// `mm:ss:ff` in frames.
 fn frames(at: &str) -> Option<i64> {
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
     let parts: Vec<i64> = at
         .split(':')
-        .map(|p| p.parse().ok())
+        .map(|p| digits(p).then(|| p.parse().ok()).flatten())
         .collect::<Option<_>>()?;
     match parts[..] {
-        [m, s, f] if (0..60).contains(&s) && (0..FRAMES_PER_SECOND).contains(&f) => {
-            Some((m * 60 + s) * FRAMES_PER_SECOND + f)
-        }
+        [m, s, f] if (0..60).contains(&s) && (0..FRAMES_PER_SECOND).contains(&f) => m
+            .checked_mul(60)?
+            .checked_add(s)?
+            .checked_mul(FRAMES_PER_SECOND)?
+            .checked_add(f),
         _ => None,
     }
 }
@@ -122,7 +125,9 @@ pub fn read(text: &str) -> Result<Sheet> {
             && f == *g
             && *next > at
         {
-            tracks[n].length_ms = Some((next - at) * 1000 / FRAMES_PER_SECOND);
+            tracks[n].length_ms = (next - at)
+                .checked_mul(1000)
+                .map(|ms| ms / FRAMES_PER_SECOND);
         }
     }
     let performer: Vec<String> = album
@@ -192,6 +197,12 @@ mod tests {
         assert_eq!(lengths, [Some(221_493), None, None, None]);
         assert_eq!(frames("01:02:74"), Some(4724));
         assert_eq!(frames("01:02:75"), None);
+        assert_eq!(frames("999999999999999999:00:00"), None);
+        assert_eq!(frames("-1:00:00"), None);
+        assert_eq!(frames("+1:00:00"), None);
+        let far = "FILE \"d.flac\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:00\n\
+            TRACK 02 AUDIO\nINDEX 01 1000000000000000:00:00\n";
+        assert_eq!(read(far).unwrap().tracks[0].length_ms, None);
         assert!(read("REM nothing\n").is_err());
     }
 }

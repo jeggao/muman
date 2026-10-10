@@ -224,3 +224,45 @@ fn assign_finds_the_least_sum_and_breaks_ties_alike() {
     assert_eq!(assign(&[vec![0, 0], vec![0, 0]]), [0, 1]);
     assert!(assign(&[]).is_empty());
 }
+
+#[test]
+fn version_words_are_whole_loanwords_in_japanese() {
+    assert!(conflicts("夜行 (なんでもない)", "夜行").is_empty());
+    assert!(conflicts("夜行 (ドライブ)", "夜行").is_empty());
+    assert!(conflicts("夜行 〜雨でも〜", "夜行").is_empty());
+    assert_eq!(conflicts("夜行 (デモ)", "夜行"), ["demo"]);
+    assert_eq!(conflicts("夜行 (ライブ)", "夜行"), ["live version"]);
+}
+
+#[test]
+fn nested_brackets_close_where_they_match() {
+    let n = Name::new("Lantern ((Live) Demo)");
+    assert_eq!(n.core, "lantern");
+    assert_eq!(n.versions().0, ["demo", "live version"].into());
+}
+
+#[test]
+fn fold_is_the_same_folded_again_and_letters_without_a_base_fold_with_marks() {
+    assert!(same("Ǿlstad", "Ølstad"));
+    assert!(same("ǽble", "æble"));
+    for s in [
+        "a३\u{94d}",
+        "Marlo the the",
+        "The The Glass",
+        "ǽ\u{301}x",
+        "Ёлка й",
+    ] {
+        let f = fold(s);
+        assert_eq!(fold(&f), f, "{s}");
+    }
+}
+
+#[test]
+fn a_word_said_again_is_not_said_once_and_kanji_and_kana_are_not_compared() {
+    assert!(distance("Moth", "Moth Moth Moth").unwrap() > 0.25);
+    assert!(distance("Lantern Weather", "Lantern Lantern Weather Weather").unwrap() > 0.1);
+    assert_eq!(distance("Weather Lantern", "Lantern Weather"), Some(0.0));
+    assert_eq!(distance("东京", "とうきょう"), None);
+    assert!(distance("東京の雨", "東京のあめ").is_some());
+    assert_eq!(shingles(&tokens("rain"), 0).len(), 1);
+}

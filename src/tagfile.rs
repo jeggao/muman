@@ -28,18 +28,12 @@ use crate::tags::{self, Field};
 /// Tag names and their values, in the order a file gave them.
 pub type Tags = Vec<(String, Vec<String>)>;
 
-/// The names a tag file may hold but a song is never given by hand.
+/// The names a tag file may hold but a song is never given by hand: of
+/// the file's loudness, pictures, lyrics, encoding or container.
 pub const SKIPPED: [&str; 17] = [
-    "R128_TRACK_GAIN",
-    "R128_ALBUM_GAIN",
-    "ITUNNORM",
-    "ITUNSMPB",
     "METADATA_BLOCK_PICTURE",
     "COVERART",
     "COVERARTMIME",
-    "LYRICS",
-    "UNSYNCEDLYRICS",
-    "SYNCEDLYRICS",
     "ENCODER",
     "ENCODED_BY",
     "ENCODEDBY",
@@ -47,7 +41,30 @@ pub const SKIPPED: [&str; 17] = [
     "ENCODING",
     "VENDOR",
     "WAVEFORMATEXTENSIBLE_CHANNEL_MASK",
+    "MAJOR_BRAND",
+    "MINOR_VERSION",
+    "COMPATIBLE_BRANDS",
+    "CREATION_TIME",
+    "HANDLER_NAME",
+    "ITUNES_CDDB_1",
+    "ACOUSTID_FINGERPRINT",
 ];
+
+/// The beginnings of names skipped as [`SKIPPED`] is: gains, and the
+/// tags iTunes and `MP3Gain` keep of their own.
+const SKIPPED_PREFIXES: [&str; 4] = ["REPLAYGAIN_", "R128_", "MP3GAIN_", "ITUN"];
+
+/// Whether a song is never given the tag `key` by hand.
+fn skipped(key: &str) -> bool {
+    SKIPPED.contains(&key)
+        || SKIPPED_PREFIXES.iter().any(|p| key.starts_with(p))
+        // LYRICS, UNSYNCEDLYRICS, `LYRICS-ENG` as ffmpeg names ID3's.
+        || key.contains("LYRICS")
+        || Field::named(key).is_some_and(Field::is_loudness)
+}
+
+/// The longest value taken, as the tags of a source are capped.
+const MOST_BYTES: usize = 4096;
 
 /// One song's part of a tag file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -84,11 +101,22 @@ impl Sheet {
 
     pub(crate) fn add(&mut self, tags: &mut Tags, name: &str, value: &str) {
         let key = tags::vorbis_key(name.trim());
-        let value = value.trim();
+        let cleaned: String = value
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n')
+            .collect();
+        let mut value = cleaned.trim();
+        if value.len() > MOST_BYTES {
+            let mut end = MOST_BYTES;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            value = &value[..end];
+        }
         if key.is_empty() || value.is_empty() {
             return;
         }
-        if SKIPPED.contains(&key.as_str()) || Field::named(&key).is_some_and(Field::is_loudness) {
+        if skipped(&key) {
             self.skip(format!("{key}, which describes another file"));
             return;
         }
@@ -116,6 +144,10 @@ impl Sheet {
                 Some(d) => put(&key, d),
                 None => self.skip(format!("DATE {value:?}, which reads as no date")),
             },
+            "TRACKTOTAL" | "DISCTOTAL" => match number(value) {
+                Some(n) => put(&key, n.to_string()),
+                None => self.skip(format!("{key} {value:?}, which is no count")),
+            },
             _ => put(&key, value.to_string()),
         }
     }
@@ -131,15 +163,29 @@ fn number(s: &str) -> Option<u32> {
     s.trim().parse().ok().filter(|&n| n > 0)
 }
 
-/// A date as Vorbis comments write it: a year, a month or a day.
+/// A date as Vorbis comments write it: a year, a month or a day, of a
+/// real calendar; a time after it, as iTunes writes one, is cut.
 fn date(s: &str) -> Option<String> {
     let s = s.trim();
-    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
-    match s.split('-').collect::<Vec<_>>()[..] {
-        [y] if y.len() == 4 && digits(y) => Some(y.to_string()),
-        [y, m] if y.len() == 4 && m.len() == 2 && digits(y) && digits(m) => Some(s.to_string()),
-        _ => tags::iso_date(s),
-    }
+    let s = match s.split_once('T') {
+        Some((day, _)) if day.len() == 10 => day,
+        _ => s,
+    };
+    let iso = if s.len() == 8 {
+        tags::iso_date(s)?
+    } else {
+        s.to_string()
+    };
+    let parts: Vec<&str> = iso.split('-').collect();
+    let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
+    let within = |p: &str, most: u32| p.parse::<u32>().is_ok_and(|v| (1..=most).contains(&v));
+    let fine = match parts[..] {
+        [y] => digits(y, 4),
+        [y, m] => digits(y, 4) && digits(m, 2) && within(m, 12),
+        [y, m, d] => digits(y, 4) && digits(m, 2) && digits(d, 2) && within(m, 12) && within(d, 31),
+        _ => false,
+    };
+    (fine && parts[0] != "0000").then_some(iso)
 }
 
 /// What kind of tag file `path`, holding `text`, is, if any.
@@ -174,14 +220,21 @@ pub fn format_of(path: &Path, text: &str) -> Option<Format> {
     }
 }
 
-/// Whether `text` is Vorbis comments: four in five lines `NAME=value`,
-/// one of them a field muman knows.
+/// Whether `text` is Vorbis comments: it opens with `NAME=value`, and
+/// either four in five of its lines are so, or two name fields muman
+/// knows. A value may run over lines of its own, as metaflac writes a
+/// comment's newlines, so the second test lets a long one through.
 fn is_vorbis(text: &str) -> bool {
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let lines: Vec<&str> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     let named: Vec<&str> = lines.iter().filter_map(|l| vorbis_name(l)).collect();
-    !lines.is_empty()
-        && named.len() * 5 >= lines.len() * 4
-        && named.iter().any(|n| Field::named(n).is_some())
+    let known = named.iter().filter(|n| Field::named(n).is_some()).count();
+    lines.first().is_some_and(|l| vorbis_name(l).is_some())
+        && known > 0
+        && (named.len() * 5 >= lines.len() * 4 || known >= 2)
 }
 
 /// The name a `NAME=value` line sets: printable ASCII but `=`.
@@ -203,7 +256,13 @@ pub fn read(path: &Path, text: &str) -> Result<Sheet> {
         Some(Format::Cue) => crate::cue::read(text),
         None => bail!("holds no tags muman reads"),
     };
-    read.with_context(|| format!("reading {}", path.display()))
+    let sheet = read.with_context(|| format!("reading {}", path.display()))?;
+    if sheet.tracks.is_empty()
+        || (sheet.album.is_empty() && sheet.tracks.iter().all(|t| t.tags.is_empty()))
+    {
+        bail!("{} holds no tag a song is given by hand", path.display());
+    }
+    Ok(sheet)
 }
 
 fn vorbis(text: &str) -> Sheet {
@@ -234,7 +293,11 @@ fn vorbis(text: &str) -> Sheet {
 fn ffmetadata(text: &str) -> Sheet {
     let mut sheet = Sheet::default();
     let mut tags = Tags::new();
-    let mut lines = text.trim_start_matches('\u{feff}').lines().skip(1);
+    let text = text.trim_start_matches('\u{feff}');
+    let mut lines = text.lines().peekable();
+    if lines.peek().is_some_and(|l| l.starts_with(FFMETADATA)) {
+        lines.next();
+    }
     while let Some(line) = lines.next() {
         if line.starts_with('[') {
             break;
@@ -243,7 +306,8 @@ fn ffmetadata(text: &str) -> Sheet {
             continue;
         }
         let mut entry = line.to_string();
-        while entry.ends_with('\\') && !entry.ends_with("\\\\") {
+        // An odd run of backslashes ends in one escaping the newline.
+        while entry.chars().rev().take_while(|c| *c == '\\').count() % 2 == 1 {
             entry.pop();
             entry.push('\n');
             entry.push_str(lines.next().unwrap_or_default());
@@ -329,6 +393,9 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     let Some(map) = o.as_object() else {
         bail!("holds a value that is no object of tags");
     };
+    if map.contains_key("media") || map.contains_key("release-group") {
+        bail!("holds a MusicBrainz release, which names no one recording");
+    }
     if map.contains_key("artist-credit") {
         let record = crate::musicbrainz::parse_recording(&o.to_string(), None)?;
         return Ok(recorded(sheet, &record));
@@ -485,6 +552,73 @@ mod tests {
         assert_eq!(values(&track.tags, "TITLE"), ["Copper Moth"]);
         assert_eq!(values(&track.tags, "ISRC"), ["XX0000000001"]);
         assert_eq!(track.length_ms, Some(200_000));
+    }
+
+    #[test]
+    fn a_file_that_sets_nothing_is_refused() {
+        for empty in ["[]", "", "  \n"] {
+            assert!(read(Path::new("tags.json"), empty).is_err(), "{empty:?}");
+        }
+        let gains = "TITLE=x\nREPLAYGAIN_TRACK_GAIN=-1 dB\n";
+        assert!(read(Path::new("a.txt"), gains).is_ok());
+        assert!(
+            read(
+                Path::new("a.txt"),
+                "REPLAYGAIN_TRACK_GAIN=-1 dB\nREPLAYGAIN_TRACK_PEAK=1\n"
+            )
+            .is_err()
+        );
+        let release = r#"{"id": "00000000-0000-4000-8000-000000000004", "title": "The Glass Orchards",
+            "artist-credit": [{"name": "Marlo Venn"}], "media": []}"#;
+        assert!(read(Path::new("release.json"), release).is_err());
+    }
+
+    #[test]
+    fn whatever_describes_another_file_is_skipped_in_any_spelling() {
+        let text = "TITLE=x\nREPLAYGAIN_REFERENCE_LOUDNESS=89.0 dB\nlyrics-eng=sung words\n\
+            UNSYNCED LYRICS=more\nMP3GAIN_MINMAX=1,2\nmajor_brand=M4A\ncreation_time=2011\n\
+            iTunes_CDDB_1=x\nacoustid_fingerprint=AQAA\nr128_track_gain=0\n";
+        let sheet = read(Path::new("a.txt"), text).unwrap();
+        assert_eq!(sheet.tracks[0].tags.len(), 1, "{:?}", sheet.tracks[0].tags);
+    }
+
+    #[test]
+    fn a_long_comment_runs_over_lines_and_values_are_clean() {
+        let text = "TITLE=x\nARTIST=y\nCOMMENT=a\nb\nc\nd\ne\n";
+        assert_eq!(format_of(Path::new("a.txt"), text), Some(Format::Vorbis));
+        let sheet = read(Path::new("a.txt"), text).unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "COMMENT"), ["a\nb\nc\nd\ne"]);
+        assert_eq!(
+            format_of(Path::new("a.txt"), "a quiet line\nTITLE=x\nARTIST=y\n"),
+            None
+        );
+        let long = format!("TITLE=x\u{7}{}\n", "é".repeat(5000));
+        let sheet = read(Path::new("a.txt"), &long).unwrap();
+        let title = &values(&sheet.tracks[0].tags, "TITLE")[0];
+        assert!(title.len() <= MOST_BYTES && !title.contains('\u{7}'));
+    }
+
+    #[test]
+    fn ffmetadata_continues_on_an_odd_run_of_backslashes_and_reads_without_its_header() {
+        let sheet = read(Path::new("x.ffmeta"), ";FFMETADATA1\ntitle=a\\\\\\\nb\n").unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["a\\\nb"]);
+        let bare = read(
+            Path::new("x.ffmeta"),
+            "title=Copper Moth\nartist=Marlo Venn\n",
+        )
+        .unwrap();
+        assert_eq!(values(&bare.tracks[0].tags, "TITLE"), ["Copper Moth"]);
+    }
+
+    #[test]
+    fn dates_and_counts_are_real_ones() {
+        assert_eq!(date("2011-03-04T10:00:00Z"), Some("2011-03-04".into()));
+        for bad in ["2011-13", "2011-00", "2011-13-45", "20111399", "0000", "11"] {
+            assert_eq!(date(bad), None, "{bad}");
+        }
+        let sheet = read(Path::new("a.txt"), "TITLE=x\nTRACKTOTAL=abc\nDISCTOTAL=2\n").unwrap();
+        assert!(values(&sheet.tracks[0].tags, "TRACKTOTAL").is_empty());
+        assert_eq!(values(&sheet.tracks[0].tags, "DISCTOTAL"), ["2"]);
     }
 
     #[test]
