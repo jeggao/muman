@@ -112,6 +112,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   their sources, where old runs kept their files past the limit. The
   run that follows a hand edit of `[history]` keeps to the edit, where
   it kept to the limits before it.
+- **`undo` of a run that moved a song and retagged it** without room
+  to keep the file has the song written again where it moves back,
+  where the file kept the run's tags and the next undo refused it as
+  changed since muman wrote it.
 
 ## [0.3.0] - 2026-10-07
 

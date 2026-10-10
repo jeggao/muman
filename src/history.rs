@@ -804,11 +804,19 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     {
         outputs.remove(rel);
     }
+    // A file moved back holds what the run wrote over it where it went,
+    // unless what it held there was kept and put back.
+    let written_over: BTreeSet<&PathBuf> = record
+        .moves
+        .iter()
+        .filter(|m| record.touched.contains(&m.to) && !record.kept.contains(&m.to))
+        .map(|m| &m.from)
+        .collect();
     for (rel, before) in &record.outputs {
         let mut written = before.clone();
         if record.kept.contains(rel) {
             written.stamp = store::stamp_text(&dirs.library.join(rel));
-        } else if record.touched.contains(rel) {
+        } else if record.touched.contains(rel) || written_over.contains(rel) {
             written.plan = None;
             written.stamp = None;
         }
@@ -1058,6 +1066,45 @@ mod tests {
         assert_eq!(
             back.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/x.opus")]
+        );
+    }
+
+    #[test]
+    fn a_move_then_a_retag_not_kept_is_written_again_where_it_moves_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(
+            d.home.join(MANIFEST),
+            "version = 1\n[history]\nmax_size = \"2 B\"\n",
+        )
+        .unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        run.keep(&d.library, Path::new("B/x.opus")).unwrap();
+        std::fs::remove_file(d.library.join("B/x.opus")).unwrap();
+        std::fs::write(d.library.join("B/x.opus"), "retagged").unwrap();
+        let w = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        let stamp = store::stamp_text(&d.library.join("B/x.opus"));
+        state
+            .outputs
+            .insert("B/x.opus".into(), Written { stamp, ..w });
+        state.save(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.finish(&d.home).unwrap();
+
+        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "retagged"
+        );
+        let back = State::load(&d.home).unwrap();
+        let written = &back.outputs[Path::new("A/x.opus")];
+        assert!(
+            written.plan.is_none() && written.stamp.is_none(),
+            "the next sync writes it again: {written:?}"
         );
     }
 
