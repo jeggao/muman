@@ -29,10 +29,17 @@
 //!
 //! | pHash bits apart | dHash bits apart | Verdict |
 //! |---|---|---|
-//! | 6 or fewer | Any | One design |
+//! | 6 or fewer, both dense | Any | One design |
 //! | 10 or fewer | 10 or fewer | One design |
-//! | 12 or fewer | Any | Unsure |
+//! | 12 or fewer, both dense | Any | Unsure |
+//! | 12 or fewer | 20 or fewer | Unsure |
 //! | More | Any | Different |
+//!
+//! A pHash is dense when it sets 24 of its 63 bits or more, as a median
+//! split sets 31. One of a design symmetric about its middle, as bands
+//! or a checkerboard, has nearly every coefficient on the median, so the
+//! dead zone leaves it a few bits or none; two such hashes are near
+//! whatever their designs, and only dHash tells them apart.
 //!
 //! The bands were measured over 50 generated covers, each under 29
 //! changes. JPEG at quality 20, WebP, scaling from 120 to 2,000 px, bars
@@ -65,6 +72,11 @@ const SAME_P: u32 = 6;
 const NEAR_P: u32 = 10;
 const NEAR_D: u32 = 10;
 const UNSURE_P: u32 = 12;
+/// The dHash bits a sparse pair may differ by and still be Unsure.
+const UNSURE_D: u32 = 20;
+/// The pHash bits set, of 63, that make a hash dense enough to decide by
+/// itself; a median split sets 31.
+const DENSE: u32 = 24;
 const FLAT: f64 = 6.0;
 /// How far past the median a coefficient lies to set its bit, of the
 /// largest coefficient.
@@ -241,37 +253,43 @@ fn sides(l: &Look) -> Vec<Hashes> {
         .collect()
 }
 
-fn verdict(p: u32, d: u32) -> Alike {
-    if p <= SAME_P || (p <= NEAR_P && d <= NEAR_D) {
+/// The verdict on two sides `p` and `d` bits apart, `dense` when both
+/// pHashes set enough bits to decide alone.
+fn verdict(p: u32, d: u32, dense: bool) -> Alike {
+    if (dense && p <= SAME_P) || (p <= NEAR_P && d <= NEAR_D) {
         Alike::Same
-    } else if p <= UNSURE_P {
+    } else if p <= UNSURE_P && (dense || d <= UNSURE_D) {
         Alike::Unsure
     } else {
         Alike::Different
     }
 }
 
+fn judged(x: &Hashes, y: &Hashes) -> (Alike, u32, u32) {
+    let (p, d) = ((x.p ^ y.p).count_ones(), (x.d ^ y.d).count_ones());
+    let dense = x.p.count_ones() >= DENSE && y.p.count_ones() >= DENSE;
+    (verdict(p, d, dense), p, d)
+}
+
 /// How many bits apart the nearest of two looks' hashes are, pHash
 /// then dHash: the pair of their sides that is most alike.
 #[must_use]
 pub fn distance(a: &Look, b: &Look) -> (u32, u32) {
+    most_alike(a, b).map_or((64, 64), |(_, p, d)| (p, d))
+}
+
+fn most_alike(a: &Look, b: &Look) -> Option<(Alike, u32, u32)> {
     let (ours, theirs) = (sides(a), sides(b));
     ours.iter()
-        .flat_map(|x| {
-            theirs
-                .iter()
-                .map(move |y| ((x.p ^ y.p).count_ones(), (x.d ^ y.d).count_ones()))
-        })
-        .min_by_key(|&(p, d)| (std::cmp::Reverse(verdict(p, d)), p, d))
-        .unwrap_or((64, 64))
+        .flat_map(|x| theirs.iter().map(move |y| judged(x, y)))
+        .min_by_key(|&(v, p, d)| (std::cmp::Reverse(v), p, d))
 }
 
 /// Whether `a` and `b` are one design, by the bands above, judged on
 /// the pair of their sides most alike.
 #[must_use]
 pub fn alike(a: &Look, b: &Look) -> Alike {
-    let (p, d) = distance(a, b);
-    let verdict = verdict(p, d);
+    let verdict = most_alike(a, b).map_or(Alike::Different, |(v, _, _)| v);
     if a.flat || b.flat {
         verdict.min(Alike::Unsure)
     } else {
@@ -515,6 +533,53 @@ mod tests {
                 }
             ),
             None
+        );
+    }
+
+    #[test]
+    fn designs_symmetric_about_their_middle_are_told_apart_by_dhash() {
+        let ramp = render(300, 300, |x, _| 100.0 + f64::from(x) / 12.0);
+        let ramp = look_of(&ramp, 300, 300);
+        let rotated = look_of(
+            &render(300, 300, |_, y| 100.0 + f64::from(y) / 12.0),
+            300,
+            300,
+        );
+        let mirrored = look_of(
+            &render(300, 300, |x, _| 125.0 - f64::from(x) / 12.0),
+            300,
+            300,
+        );
+        assert_ne!(
+            alike(&ramp, &rotated),
+            Alike::Same,
+            "{:?}",
+            distance(&ramp, &rotated)
+        );
+        assert_ne!(
+            alike(&ramp, &mirrored),
+            Alike::Same,
+            "{:?}",
+            distance(&ramp, &mirrored)
+        );
+        let checks = render(300, 300, |x, y| {
+            if (x / 50 + y / 50) % 2 == 0 {
+                30.0
+            } else {
+                220.0
+            }
+        });
+        let bands = render(
+            300,
+            300,
+            |_, y| if (y / 50) % 2 == 0 { 30.0 } else { 220.0 },
+        );
+        let (checks, bands) = (look_of(&checks, 300, 300), look_of(&bands, 300, 300));
+        assert_eq!(
+            alike(&checks, &bands),
+            Alike::Different,
+            "{:?}",
+            distance(&checks, &bands)
         );
     }
 }
