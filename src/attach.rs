@@ -55,7 +55,10 @@
 //! likeliest songs, a search of the song list, or leaving the file out.
 //! With `-y` the likeliest is taken when it leads the next by 0.10.
 //! Without a terminal it is left out, and the command refuses at its
-//! end, so a script hears that a file it named was not added. Distances
+//! end, so a script hears that a file it named was not added. A file
+//! that cannot be used, as one that does not read or a cue sheet that
+//! splits one song's file into tracks, is not added either, and the
+//! command fails at its end; the songs given with it are written first. Distances
 //! are rounded to thousandths before any comparison, and ties go to the
 //! song listed first, so the same files go to the same songs every run.
 //!
@@ -63,7 +66,8 @@
 //! `added/`, where no song file is, so it becomes no song's sidecar or
 //! folder cover, and listed among the song's sources, where `resolve`
 //! ranks it as any other; one already there with the same bytes is
-//! listed again rather than copied. A tag file is written into the song's
+//! listed again rather than copied, but for lyrics another song lists,
+//! which are copied anew, a song's lyrics being its own. A tag file is written into the song's
 //! `tags` and not kept.
 
 use std::collections::BTreeSet;
@@ -219,6 +223,8 @@ pub struct How {
 pub struct Attached {
     pub songs: Vec<SourceKey>,
     pub left_out: usize,
+    /// The files that could not be read or used, each with why.
+    pub unread: Vec<String>,
 }
 
 /// One song as a loose file is matched against it.
@@ -850,6 +856,9 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
         }
         What::Picture => {
             clues.look = look_of(runner, path, scratch);
+            if clues.look.is_none() {
+                bail!("{} reads as no picture", path.display());
+            }
             clues.readings.extend(name_readings(path, what));
         }
         What::Tags => {
@@ -936,8 +945,12 @@ fn read_streams<R: Runner>(runner: &R, cands: &mut [Candidate], items: &[Item], 
 enum Decision {
     /// Copied and listed by these songs.
     Listed(Vec<usize>),
-    /// Its tags set on these songs, each with its own.
-    Tagged(Vec<(usize, Tags)>),
+    /// Its tags set on these songs, each with its own; `left_out` when
+    /// some of its tracks were left for want of an answer.
+    Tagged {
+        songs: Vec<(usize, Tags)>,
+        left_out: bool,
+    },
     Already,
     Declined,
     LeftOut,
@@ -1017,11 +1030,13 @@ impl<W: Write> Asking<'_, '_, W> {
             )
             .take(OFFERED)
             .collect();
+        // The likeliest leads when no other song may be it, or when it is
+        // clearly the nearest by name.
         let leads = |j: &&Judged| {
             j.verdict == Verdict::Unsure
-                && judged
-                    .get(1)
-                    .is_none_or(|next| next.distance - j.distance >= LEAD)
+                && judged.get(1).is_none_or(|next| {
+                    next.verdict == Verdict::Different || next.distance - j.distance >= LEAD
+                })
         };
         if self.yes
             && let Some(j) = top.filter(leads)
@@ -1043,10 +1058,14 @@ impl<W: Write> Asking<'_, '_, W> {
                 format!("{item_label} matches no song; not added. Name its song with --to")
             } else {
                 format!(
-                    "{item_label} may be {} {}; not added. Name its song with --to, \
-                     add it again with -y, or run on a terminal",
+                    "{item_label} may be {} {}; not added. Name its song with --to{}",
                     what.of(),
-                    maybe.join(" or ")
+                    maybe.join(" or "),
+                    if self.yes {
+                        ", or run on a terminal"
+                    } else {
+                        ", add it again with -y, or run on a terminal"
+                    }
                 )
             };
             self.warn(&said)?;
@@ -1228,11 +1247,18 @@ pub fn attach<R: Runner, W: Write>(
         }
         Some(found)
     };
+    let mut attached = Attached::default();
     let mut items = Vec::new();
     for (n, (path, what)) in paths.iter().enumerate() {
         let scratch = temp.path().join(format!("loose-{n}"));
         std::fs::create_dir_all(&scratch)?;
-        items.push(read_item(runner, path, *what, &scratch)?);
+        match read_item(runner, path, *what, &scratch) {
+            Ok(item) => items.push(item),
+            Err(e) => {
+                ui::warning(out, &format!("{e:#}; not added"))?;
+                attached.unread.push(path.display().to_string());
+            }
+        }
     }
     read_streams(runner, &mut cands, &items, temp.path());
     let mut ask = Asking {
@@ -1246,9 +1272,10 @@ pub fn attach<R: Runner, W: Write>(
     for item in &mut items {
         // A folder's cover given with that folder's songs is theirs.
         if item.what == What::Picture {
-            let folder = item.path.parent().map(Path::to_path_buf);
+            let folder = folder_of(&item.path);
             for (origin, key) in beside {
-                if origin.parent().map(Path::to_path_buf) == folder
+                if folder.is_some()
+                    && folder_of(origin) == folder
                     && let SourceKey::Manual(m) = key
                 {
                     item.clues.with.insert(folded_stem(m.path()));
@@ -1258,16 +1285,27 @@ pub fn attach<R: Runner, W: Write>(
         let decision = match decide(&mut ask, item, pool.as_deref()) {
             Ok(d) => d,
             Err(e) if e.is::<LeftOut>() => Decision::LeftOut,
-            Err(e) => return Err(e),
+            Err(e) => {
+                ui::warning(ask.out, &format!("{e:#}"))?;
+                attached.unread.push(item.path.display().to_string());
+                Decision::Declined
+            }
         };
         decisions.push(decision);
     }
-    let mut attached = Attached::default();
     let manual = dirs.manual();
+    // The files of one song's own, which another song may not be given.
+    let mut taken: BTreeSet<SourceKey> = manifest.keys();
     for (item, decision) in items.iter().zip(decisions) {
         match decision {
             Decision::Listed(songs) => {
-                let key = copy_in(&manual, item)?;
+                // A picture is one file the songs share; lyrics are one
+                // song's own, so another song's copy is not reused.
+                let key = if item.what == What::Picture {
+                    copy_in(&manual, item, &mut BTreeSet::new())?
+                } else {
+                    copy_in(&manual, item, &mut taken)?
+                };
                 for n in songs {
                     let id = cands[n].id.clone();
                     manifest.edit(Edit::Add {
@@ -1277,7 +1315,8 @@ pub fn attach<R: Runner, W: Write>(
                     attached.songs.push(id);
                 }
             }
-            Decision::Tagged(songs) => {
+            Decision::Tagged { songs, left_out } => {
+                attached.left_out += usize::from(left_out);
                 for (n, tags) in songs {
                     let id = cands[n].id.clone();
                     let named: Vec<String> = tags
@@ -1329,12 +1368,23 @@ pub fn attach<R: Runner, W: Write>(
                 }
             }
             Decision::Already => {}
+            Decision::Declined if attached.unread.contains(&item.path.display().to_string()) => {}
             Decision::Declined => ui::info(ask.out, &format!("{}: not added", item.label))?,
             Decision::LeftOut => attached.left_out += 1,
         }
     }
     manifest.save()?;
     Ok(attached)
+}
+
+/// The folder `path` is in, as the file system names it, so two
+/// spellings of one folder are one.
+fn folder_of(path: &Path) -> Option<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    dunce::canonicalize(parent).ok()
 }
 
 /// Whether `n` may be given a file: a song with a source only it lists.
@@ -1359,12 +1409,20 @@ fn decide<W: Write>(
         .filter(|j| ownable(&cands[j.song]))
         .filter(|j| pool.is_none_or(|p| p.contains(&j.song)))
         .collect();
-    if let Some(j) = judged.first()
-        && j.already
+    // A song that holds it already is told so; a picture still goes to
+    // the other songs it is meant for.
+    let holders: Vec<usize> = judged
+        .iter()
+        .filter(|j| j.already)
+        .map(|j| j.song)
+        .collect();
+    let held = |n: usize| holders.contains(&n);
+    if let Some(&n) = holders.first()
+        && (item.what != What::Picture && pool.is_none_or(|p| p.iter().all(|m| held(*m))))
     {
         ask.info(&format!(
             "{}: {} already holds it",
-            item.label, cands[j.song].label
+            item.label, cands[n].label
         ))?;
         return Ok(Decision::Already);
     }
@@ -1374,24 +1432,33 @@ fn decide<W: Write>(
             .as_ref()
             .map(|s| s.tags_of(0))
             .unwrap_or_default();
-        Decision::Tagged(vec![(n, tags)])
+        Decision::Tagged {
+            songs: vec![(n, tags)],
+            left_out: false,
+        }
     };
     if let Some(pool) = pool {
         if item.what == What::Picture {
-            return Ok(Decision::Listed(pool.to_vec()));
+            let wanted: Vec<usize> = pool.iter().copied().filter(|n| !held(*n)).collect();
+            return Ok(if wanted.is_empty() {
+                Decision::Already
+            } else {
+                Decision::Listed(wanted)
+            });
         }
-        let chosen = match pool {
+        let pool: Vec<usize> = pool.iter().copied().filter(|n| !held(*n)).collect();
+        let chosen = match pool.as_slice() {
             [one] => Some(*one),
             many => {
                 let lines: Vec<String> = many.iter().map(|&n| cands[n].label.clone()).collect();
                 if ask.prompter.is_none() {
-                    return Err(crate::change::Refused(format!(
-                        "{} songs match --to; name one for {}:\n  {}",
+                    ask.warn(&format!(
+                        "{} songs match --to; {} not added. Name one of them:\n  {}",
                         many.len(),
                         item.label,
                         lines.join("\n  ")
-                    ))
-                    .into());
+                    ))?;
+                    return Ok(Decision::LeftOut);
                 }
                 ask.pick(
                     &format!("{}: {}", item.label, item.what.whose()),
@@ -1440,6 +1507,15 @@ fn decide<W: Write>(
                     .filter(|j| j.looks != Alike::Same && j.verdict == Verdict::Same)
                     .map(|j| j.song),
             );
+            sure.retain(|n| !held(*n));
+            asked.retain(|n| !held(*n));
+            if sure.is_empty() && asked.is_empty() && !holders.is_empty() {
+                ask.info(&format!(
+                    "{}: {} already holds it",
+                    item.label, cands[holders[0]].label
+                ))?;
+                return Ok(Decision::Already);
+            }
             if !sure.is_empty() {
                 let album = &cands[sure[0]].album;
                 let whose = if sure.len() > 1
@@ -1519,6 +1595,30 @@ fn decide_sheet<W: Write>(
     pool: Option<&[usize]>,
 ) -> Result<Decision> {
     let cands = ask.cands;
+    let named = |file: &str| {
+        sheet
+            .tracks
+            .iter()
+            .filter(|t| t.file.as_deref() == Some(file))
+            .count()
+    };
+    // A file several tracks are in is a whole album's rip, which muman
+    // keeps as one song; a song named as it is no track of it.
+    if let Some(file) = sheet
+        .tracks
+        .iter()
+        .filter_map(|t| t.file.as_deref())
+        .find(|f| named(f) > 1)
+        && cands
+            .iter()
+            .any(|c| c.stems.contains(&folded_stem(Path::new(file))))
+    {
+        bail!(
+            "{} splits {file} into tracks, which muman keeps as one song; \
+             its tags are not set",
+            item.label
+        );
+    }
     let mut per_track: Vec<Vec<Judged>> = Vec::new();
     for (n, track) in sheet.tracks.iter().enumerate() {
         let tags = sheet.tags_of(n);
@@ -1527,7 +1627,11 @@ fn decide_sheet<W: Write>(
             length_ms: track.length_ms,
             grace: (CUE_GRACE_MS, CUE_SPAN_MS),
             ids: ids_of(&tags),
-            file: track.file.as_deref().map(|f| folded_stem(Path::new(f))),
+            file: track
+                .file
+                .as_deref()
+                .filter(|f| named(f) == 1)
+                .map(|f| folded_stem(Path::new(f))),
             ..Clues::default()
         };
         let judged: Vec<Judged> = judge(cands, &clues, What::Tags)
@@ -1591,8 +1695,14 @@ fn decide_sheet<W: Write>(
     let all_sure = fits
         .iter()
         .all(|(_, j)| j.as_ref().is_some_and(|j| j.verdict == Verdict::Same));
-    let tagged = |chosen: &[(usize, usize)]| {
-        Decision::Tagged(chosen.iter().map(|&(r, n)| (n, sheet.tags_of(r))).collect())
+    let tagged = |chosen: &[(usize, usize)], left_out: bool| {
+        if chosen.is_empty() && left_out {
+            return Decision::LeftOut;
+        }
+        Decision::Tagged {
+            songs: chosen.iter().map(|&(r, n)| (n, sheet.tags_of(r))).collect(),
+            left_out,
+        }
     };
     let sure: Vec<(usize, usize)> = fits
         .iter()
@@ -1603,7 +1713,7 @@ fn decide_sheet<W: Write>(
         })
         .collect();
     if all_sure {
-        return Ok(tagged(&sure));
+        return Ok(tagged(&sure, false));
     }
     for (r, j) in &fits {
         let to = j.as_ref().map_or_else(
@@ -1642,66 +1752,94 @@ fn decide_sheet<W: Write>(
                 (j.verdict == Verdict::Same || leads).then_some((*r, j.song))
             })
             .collect();
-        return Ok(tagged(&led));
-    }
-    let Some(p) = ask.prompter.as_deref_mut() else {
-        if sure.len() < rows {
+        let unsure = fitting.len() - led.len();
+        if unsure > 0 {
             ask.warn(&format!(
-                "{}: {} of {rows} tracks are not surely a song's; their tags are not set. \
-                 Run on a terminal, or give -y",
-                item.label,
-                rows - sure.len()
+                "{}: {unsure} track(s) may be either of two songs; their tags are not set. \
+                 Run on a terminal to choose",
+                item.label
             ))?;
         }
-        return Ok(tagged(&sure));
+        return Ok(tagged(&led, unsure > 0));
+    }
+    if fitting.is_empty() && ask.prompter.is_none() {
+        ask.warn(&format!(
+            "{}: no track fits a song; not added. Name the songs it is of with --to",
+            item.label
+        ))?;
+        return Ok(Decision::LeftOut);
+    }
+    let Some(p) = ask.prompter.as_deref_mut() else {
+        let unsure = fitting.len() - sure.len();
+        if unsure > 0 {
+            ask.warn(&format!(
+                "{}: {unsure} track(s) are not surely a song's; their tags are not set. \
+                 Run on a terminal, or give -y",
+                item.label
+            ))?;
+        }
+        return Ok(tagged(&sure, unsure > 0));
     };
     let album = values(&sheet.album, "ALBUM")
         .next()
         .cloned()
         .unwrap_or_default();
-    let picked = p.select(
-        &format!(
-            "{}: {} of {rows} tracks fit songs{}; set their tags?",
-            item.label,
-            fitting.len(),
-            if album.is_empty() {
-                String::new()
-            } else {
-                format!(" of {album}")
-            }
-        ),
-        &[
-            format!("Set all {}", fitting.len()),
-            "Choose song by song".to_string(),
-            "Don't add it".to_string(),
-        ],
-    )?;
+    let picked = if fitting.is_empty() {
+        Some(1)
+    } else {
+        p.select(
+            &format!(
+                "{}: {} of {rows} tracks fit songs{}; set their tags?",
+                item.label,
+                fitting.len(),
+                if album.is_empty() {
+                    String::new()
+                } else {
+                    format!(" of {album}")
+                }
+            ),
+            &[
+                format!("Set all {}", fitting.len()),
+                "Choose song by song".to_string(),
+                "Don't add it".to_string(),
+            ],
+        )?
+    };
     match picked {
-        Some(0) => Ok(tagged(&fitting)),
+        Some(0) => Ok(tagged(&fitting, false)),
         Some(1) => {
-            let mut chosen = Vec::new();
+            let mut chosen: Vec<(usize, usize)> = Vec::new();
             for (r, judged) in per_track.iter().enumerate() {
                 let question = format!("track {} “{}”: which song is it?", r + 1, title_of(r));
-                let lines: Vec<String> = judged.iter().take(OFFERED).map(|j| ask.line(j)).collect();
-                let songs: Vec<usize> = judged.iter().take(OFFERED).map(|j| j.song).collect();
+                // A song is one track's at most, and only one that may be it.
+                let offered: Vec<&Judged> = judged
+                    .iter()
+                    .filter(|j| j.verdict != Verdict::Different)
+                    .filter(|j| !chosen.iter().any(|(_, n)| *n == j.song))
+                    .take(OFFERED)
+                    .collect();
+                let lines: Vec<String> = offered.iter().map(|j| ask.line(j)).collect();
+                let songs: Vec<usize> = offered.iter().map(|j| j.song).collect();
                 if let Some(n) = ask.pick(
                     &format!("{}, {question}", item.label),
                     &lines,
                     &songs,
                     &question,
-                )? {
+                )? && !chosen.iter().any(|(_, m)| *m == n)
+                {
                     chosen.push((r, n));
                 }
             }
-            Ok(tagged(&chosen))
+            Ok(tagged(&chosen, false))
         }
         _ => Ok(Decision::Declined),
     }
 }
 
 /// Copy `item` into the manual folder's `added/`, or find it there: its
-/// key.
-fn copy_in(manual: &Path, item: &Item) -> Result<SourceKey> {
+/// key. A copy already there with its bytes is listed again, but for one
+/// in `taken`, the keys of other songs' own files, which is copied anew.
+fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Result<SourceKey> {
     let bytes = match &item.bytes {
         Some(b) => b.clone(),
         None => {
@@ -1730,12 +1868,15 @@ fn copy_in(manual: &Path, item: &Item) -> Result<SourceKey> {
         let to = added.join(&name);
         let key = SourceKey::Manual(PathBuf::from(ADDED).join(&name).into());
         if to.exists() {
-            if facts::digest_file(&to).as_deref() == Some(digest.as_str()) {
+            if !taken.contains(&key) && facts::digest_file(&to).as_deref() == Some(digest.as_str())
+            {
+                taken.insert(key.clone());
                 return Ok(key);
             }
             continue;
         }
         crate::atomic::write(&added, &crate::atomic::Name::new(&name)?, &bytes)?;
+        taken.insert(key.clone());
         return Ok(key);
     }
     unreachable!("some name is free")

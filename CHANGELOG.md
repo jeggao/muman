@@ -41,7 +41,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   as before.
 - **A picture of your own may be listed by several songs,** as the songs
   of an album share its cover. A song list where one is is format
-  version 3, which an older muman refuses.
+  version 3, which an older muman refuses. A song whose every source
+  another song lists too is refused, since edits would take it for that
+  song.
 - **`add` exits with 5 when a file it was given was left out,** having
   matched no song for sure with no terminal to ask on.
 
@@ -49,6 +51,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 - **`add Song.flac Song.lrc`** copies the lyrics once, beside their
   song, where it failed saying they existed already.
+- **`undo` of a run that gave a song lyrics** removes the `.lrc` it
+  wrote beside the song, where it stayed, recorded by nothing.
+- **A song's own `.lrc` or picture moved within `sources/manual`** is
+  followed by its song, as a moved song file is, where the song lost it.
 - **Two songs listing one lookup record** each keep their record of what
   it holds, where the second's was written again on every sync.
 

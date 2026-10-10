@@ -694,6 +694,21 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     }
     let left: Vec<PathBuf> = record.moves.iter().map(|m| m.to.clone()).collect();
     crate::library::remove_empty_folders(&dirs.library, &left);
+    // Lyrics the run wrote beside a song it had before are recorded by
+    // nothing once its record is put back, so they go now.
+    for (rel, now) in &state.outputs {
+        let Some(lyrics) = &now.lyrics else { continue };
+        let before = record.outputs.get(rel).and_then(|b| b.lyrics.as_ref());
+        let path = dirs.library.join(lyrics);
+        if record.outputs.contains_key(rel)
+            && before != Some(lyrics)
+            && !record.kept.contains(lyrics)
+            && path.exists()
+        {
+            atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(lyrics)))?;
+        }
+    }
     let mut outputs = state.outputs.clone();
     for m in &record.moves {
         outputs.remove(&m.to);

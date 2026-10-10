@@ -378,6 +378,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
             let mut left_out = 0;
+            let mut unread = Vec::new();
+            let mut refused = None;
             let done = (|| {
                 let (files, urls): (Vec<&String>, Vec<&String>) =
                     inputs.iter().partition(|i| Path::new(i).exists());
@@ -421,15 +423,36 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     to: to.clone(),
                     verbose: job.verbose,
                 };
-                let attached =
-                    attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out)?;
+                // A loose file's refusal waits for the songs added with it
+                // to be written.
+                let attached = match attach::attach(
+                    runner, dirs, &loose, &beside, &attaching, prompter, out,
+                ) {
+                    Ok(a) => a,
+                    Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
+                        refused = Some(e);
+                        attach::Attached::default()
+                    }
+                    Err(e) => return Err(e),
+                };
                 left_out = attached.left_out;
+                unread = attached.unread;
                 give_tags(dirs, &attached.songs, &how, out)?;
                 ok &= look_up(job, runner, http, false, &declined, out)?;
                 ok &= sync(Options::default(), Some(&mut run), out)?;
                 Ok(ok)
             })();
             let ok = recorded(run, &dirs.home, done)?;
+            if let Some(e) = refused {
+                return Err(e);
+            }
+            if !unread.is_empty() {
+                bail!(
+                    "{} file(s) could not be added: {}",
+                    unread.len(),
+                    unread.join(", ")
+                );
+            }
             if left_out > 0 {
                 return Err(change::Refused(format!(
                     "{left_out} file(s) were not added: name their songs with --to, give -y, \
@@ -889,12 +912,18 @@ fn split_loose<'a>(files: &[&'a String]) -> Result<(attach::Loose, Vec<&'a Strin
             None => rest.push(*file),
         }
     }
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let audio: Vec<PathBuf> = rest
         .iter()
         .map(|f| PathBuf::from(f.as_str()))
         .filter(|p| p.is_file())
         .collect();
-    loose.retain(|(path, _)| !audio.iter().any(|a| sidecars(a).contains(path)));
+    let beside: Vec<PathBuf> = audio
+        .iter()
+        .flat_map(|a| sidecars(a))
+        .map(|p| canonical(&p))
+        .collect();
+    loose.retain(|(path, _)| !beside.contains(&canonical(path)));
     Ok((loose, rest))
 }
 

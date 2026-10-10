@@ -306,7 +306,10 @@ Asked means on a terminal: you pick among the likeliest songs, search
 the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
-out, and `add` exits with 5 once the rest is done. `--to` names the song
+out, and `add` exits with 5 once the rest is done; a file that does not
+read, as an empty `.lrc`, a picture that does not decode or a cue sheet
+splitting one song's file into tracks, is not added and `add` exits
+with 4, the songs given with it written all the same. `--to` names the song
 with a query instead and matches nothing; for a picture it names every
 song to give it to, for a cue sheet the songs its tracks go among:
 
@@ -320,7 +323,11 @@ A picture alike to the covers of more than three songs of more than one
 album is asked about rather than given to all, and a cover given with
 songs from its folder goes to those songs. Several songs may list one
 picture of your own; a song list where they do is format version 3,
-which an older muman refuses.
+which an older muman refuses. Each song still lists a file of its own:
+one whose every source another song lists too is refused. Lyrics are
+one song's: the same lyrics given to a second song are copied for it.
+A picture or `.lrc` moved within `sources/manual` is followed, as a
+song file is.
 
 ## How the best of each is picked
 

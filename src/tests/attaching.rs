@@ -473,3 +473,235 @@ fn a_shared_picture_moved_in_the_manual_folder_is_followed_by_each_song() {
     assert!(s.song_with("Lantern Weather").has(&moved));
     assert!(s.song_with("Copper Moth").has(&moved));
 }
+
+fn library_has(s: &Setup, name: &str) -> bool {
+    crate::store::files_below(&s.dir.path().join("lib"), usize::MAX, |_| true)
+        .unwrap()
+        .iter()
+        .any(|f| f.to_string_lossy().contains(name))
+}
+
+#[test]
+fn the_same_lyrics_given_to_a_second_song_are_its_own_copy() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth", "Night Ferry"]);
+    let lrc = s.written("dl/shared.lrc", "[00:02.00]a line sung by both\n");
+    assert!(s.run(&fake, &["add", &lrc, "--to", "copper"]).0);
+    let (ok, text) = s.run(&fake, &["add", &lrc, "--to", "ferry"]);
+    assert!(ok, "{text}");
+    assert!(s.song_with("Copper Moth").has(&manual("added/shared.lrc")));
+    assert!(
+        s.song_with("Night Ferry")
+            .has(&manual("added/shared (2).lrc"))
+    );
+    assert_eq!(s.songs().len(), 3);
+}
+
+#[test]
+fn a_loose_file_left_out_still_lets_the_songs_added_with_it_be_written() {
+    let s = Setup::new();
+    let fake = library().probe(
+        "Paper Kite.flac",
+        &flac("Paper Kite", "Ada Fenn", "Harbour Lights", 4, 190, ""),
+    );
+    let song = s.file("rips/new/Paper Kite.flac");
+    let lrc = s.written("dl/x.lrc", "[00:01.00]x\n");
+    let said = s.not_added(&fake, &["add", &song, &lrc, "--to", "nothing-like-it"]);
+    assert!(said.contains("No song matches"), "{said}");
+    assert!(library_has(&s, "Paper Kite.flac"), "{said}");
+    let binary = s.written("dl/broken.lrc", "\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}");
+    let e = run_with(
+        &s.job(&["add", &binary]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("1 file(s) could not be added"),
+        "{e:#}"
+    );
+}
+
+#[test]
+fn a_sheet_of_tracks_not_surely_songs_is_left_out_without_a_terminal() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(
+        &fake,
+        &["Lantern Weather", "Lantern Weather (Live)", "Night Ferry"],
+    );
+    let cue = s.written(
+        "dl/amb.cue",
+        "TITLE \"Sheet\"\nFILE \"t0.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         FILE \"t1.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Night Ferry\"\n    INDEX 01 00:00:00\n",
+    );
+    let said = s.not_added(&fake, &["add", &cue]);
+    assert!(said.contains("no track fits a song"), "{said}");
+    let maybe = s.written(
+        "dl/maybe.cue",
+        "PERFORMER \"Marlo Venn\"\nFILE \"t0.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n",
+    );
+    let said = s.not_added(&fake, &["add", &maybe]);
+    assert!(
+        said.contains("not surely a song's") || said.contains("may be"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_cue_of_one_file_holding_a_whole_album_sets_nothing() {
+    let s = Setup::new();
+    let fake = library().probe(
+        "The Glass Orchards.flac",
+        &flac(
+            "The Glass Orchards",
+            "Marlo Venn",
+            "The Glass Orchards",
+            1,
+            600,
+            "",
+        ),
+    );
+    s.songs_named(&fake, &["The Glass Orchards"]);
+    let cue = s.written(
+        "dl/image.cue",
+        "FILE \"The Glass Orchards.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         \x20 TRACK 02 AUDIO\n    TITLE \"Salt Road\"\n    INDEX 01 03:00:00\n",
+    );
+    let e = run_with(
+        &s.job(&["add", &cue]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
+    assert!(
+        !s.song_with("The Glass Orchards")
+            .tags
+            .iter()
+            .any(|(k, v)| k == "title" && v == &["Salt Road"])
+    );
+}
+
+#[test]
+fn choosing_song_by_song_never_gives_one_song_two_tracks() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Lantern Weather (Live)"]);
+    let cue = s.written(
+        "dl/amb.cue",
+        "PERFORMER \"Marlo Venn\"\nFILE \"t0.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         FILE \"t1.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n",
+    );
+    let mut p = MockPrompter::new();
+    p.push_select(Some(1))
+        .push_select(Some(0))
+        .push_select(None);
+    let (ok, _) = s.asking(&fake, &["add", &cue], &mut p).unwrap();
+    assert!(ok);
+    let first = p.asked[1].lines().nth(1).unwrap().to_string();
+    assert!(
+        first.trim().starts_with("Lantern Weather — Marlo Venn"),
+        "{:?}",
+        p.asked
+    );
+    assert!(!p.asked[2].lines().any(|l| l == first), "{:?}", p.asked);
+}
+
+#[test]
+fn a_cover_one_song_holds_still_goes_to_the_others_it_is_given_to() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth", "Night Ferry"]);
+    let jpg = s.written("art/front.jpg", "front bytes");
+    assert!(s.run(&fake, &["add", &jpg, "--to", "lantern"]).0);
+    let (ok, text) = s.run(&fake, &["add", &jpg, "--to", "artist:venn"]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Copper Moth").has(&manual("added/front.jpg")),
+        "{text}"
+    );
+    assert!(
+        s.song_with("Lantern Weather")
+            .has(&manual("added/front.jpg"))
+    );
+}
+
+#[test]
+fn a_folder_s_cover_is_its_songs_however_its_path_is_spelled() {
+    let s = Setup::new();
+    let fake = library();
+    let a = s.file("rips/A/Lantern Weather.flac");
+    let b = s.file("rips/A/Copper Moth.flac");
+    s.file("rips/A/cover.jpg");
+    let cover = s.dir.path().join("rips/A/../A/cover.jpg");
+    let (ok, text) = s.run(&fake, &["add", "--new", &a, &b, cover.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Copper Moth").has(&manual("added/cover.jpg")),
+        "{text}"
+    );
+}
+
+#[test]
+fn yes_takes_lyrics_only_their_words_tell() {
+    let s = Setup::new();
+    let fake = library();
+    let song = s.file("rips/Night Ferry.flac");
+    let verse = "[00:01.00]harbour bells at early tide\n[00:05.00]nets are mended on the pier\n\
+                 [00:09.00]salt and cedar on the wind\n[00:13.00]ferries leaving ferries near\n";
+    s.written("rips/Night Ferry.lrc", verse);
+    s.songs_named(&fake, &["Lantern Weather"]);
+    assert!(s.run(&fake, &["add", "--new", &song]).0);
+    let words = s.written("dl/untitled.txt", &verse.replace("[00:", "\n[00:"));
+    let (ok, text) = s.run(&fake, &["add", "-y", &words]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Night Ferry")
+            .has(&manual("added/untitled.lrc")),
+        "{text}"
+    );
+}
+
+#[test]
+fn undoing_an_add_that_gave_a_song_lyrics_takes_its_lyrics_file_away() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    assert!(!library_has(&s, ".lrc"));
+    let lrc = s.written("dl/Lantern Weather.lrc", "[00:01.00]first light\n");
+    assert!(s.run(&fake, &["add", &lrc]).0);
+    assert!(library_has(&s, ".lrc"));
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!library_has(&s, ".lrc"), "{text}");
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok && library_has(&s, ".lrc"), "{text}");
+}
+
+#[test]
+fn a_picture_that_does_not_decode_is_not_added() {
+    let s = Setup::new();
+    let mut fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    fake.failing = vec!["image2".into()];
+    let jpg = s.written("art/Lantern Weather.jpg", "");
+    let e = run_with(
+        &s.job(&["add", &jpg]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
+    assert!(s.added().is_empty());
+}

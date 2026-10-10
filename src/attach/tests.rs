@@ -246,13 +246,23 @@ fn a_file_copied_in_twice_is_one_file_and_a_name_taken_gets_another() {
         clues: Clues::default(),
         sheet: None,
     };
-    let key = copy_in(&manual, &item(&from)).unwrap();
+    let mut none = BTreeSet::new();
+    let key = copy_in(&manual, &item(&from), &mut none).unwrap();
     assert_eq!(key, SourceKey::Manual("added/words.lrc".into()));
-    assert_eq!(copy_in(&manual, &item(&from)).unwrap(), key);
+    assert_eq!(
+        copy_in(&manual, &item(&from), &mut BTreeSet::new()).unwrap(),
+        key
+    );
+    let mut taken = BTreeSet::from([key.clone()]);
+    assert_eq!(
+        copy_in(&manual, &item(&from), &mut taken).unwrap(),
+        SourceKey::Manual("added/words (2).lrc".into()),
+        "another song's own copy is not given to a second song"
+    );
     std::fs::write(&from, "second light\n").unwrap();
     assert_eq!(
-        copy_in(&manual, &item(&from)).unwrap(),
-        SourceKey::Manual("added/words (2).lrc".into())
+        copy_in(&manual, &item(&from), &mut BTreeSet::new()).unwrap(),
+        SourceKey::Manual("added/words (3).lrc".into())
     );
     assert_eq!(song_list_name("ALBUMARTIST"), "album_artist");
     assert_eq!(song_list_name("MOOD"), "mood");
