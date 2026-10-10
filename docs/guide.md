@@ -282,6 +282,10 @@ A lyrics file or picture is ranked like any other source, so a song may
 keep lyrics that are timed where the new ones are not; pin it with
 `muman set` to choose it. Gains, peaks, embedded pictures and lyrics,
 and encoder names in a tag file describe another file and are skipped.
+A beets field sets the Vorbis comment Picard writes it as, `label` as
+`LABEL`; one Picard has no name for is skipped, and what beets records
+of its own file, as its path and bitrate, is no tag. `--verbose` names
+each tag skipped.
 
 Each file is matched by the strongest of what it shows: an ID it shares
 with the song (a video ID in its name, an ISRC, a MusicBrainz recording

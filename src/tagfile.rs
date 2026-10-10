@@ -17,6 +17,12 @@
 //! measured one, but these were measured on someone else's file), the
 //! encoder, embedded pictures and lyrics. Those are skipped ([`SKIPPED`]).
 //! Any other name is kept, as hand tags keep any Vorbis name.
+//!
+//! beets names its fields in its own way, so each is read into the
+//! Vorbis name Picard writes it as. What beets keeps of its own, as the
+//! file's path, bitrate and length, is no tag of the song and sets none;
+//! any other field, which no Vorbis name stands for, is reported as
+//! skipped rather than dropped unsaid.
 
 use std::path::Path;
 
@@ -414,33 +420,100 @@ fn tracks_of(mut sheet: Sheet, objects: &[Value]) -> Result<Sheet> {
     Ok(sheet)
 }
 
-/// beets' field names and the Vorbis names they set.
-const BEETS: [(&str, Field); 18] = [
-    ("title", Field::Title),
-    ("artist", Field::Artist),
-    ("artists", Field::Artist),
-    ("album", Field::Album),
-    ("albumartist", Field::AlbumArtist),
-    ("albumartists", Field::AlbumArtist),
-    ("track", Field::Track),
-    ("tracktotal", Field::TrackTotal),
-    ("disc", Field::Disc),
-    ("disctotal", Field::DiscTotal),
-    ("genre", Field::Genre),
-    ("isrc", Field::Isrc),
-    ("country", Field::ReleaseCountry),
-    ("mb_trackid", Field::MusicBrainzTrackId),
-    ("mb_releasetrackid", Field::MusicBrainzReleaseTrackId),
-    ("mb_albumid", Field::MusicBrainzAlbumId),
-    ("mb_releasegroupid", Field::MusicBrainzReleaseGroupId),
-    ("mb_artistid", Field::MusicBrainzArtistId),
+/// beets' field names and the Vorbis names they set, as Picard names
+/// them. Gains, lyrics, the encoder and the fingerprint are read too, so
+/// that skipping them is reported as a Vorbis comment's would be.
+const BEETS: [(&str, &str); 55] = [
+    ("title", "TITLE"),
+    ("artist", "ARTIST"),
+    ("artists", "ARTIST"),
+    ("artist_sort", "ARTISTSORT"),
+    ("album", "ALBUM"),
+    ("albumartist", "ALBUMARTIST"),
+    ("albumartists", "ALBUMARTIST"),
+    ("albumartist_sort", "ALBUMARTISTSORT"),
+    ("track", "TRACKNUMBER"),
+    ("tracktotal", "TRACKTOTAL"),
+    ("disc", "DISCNUMBER"),
+    ("disctotal", "DISCTOTAL"),
+    ("disctitle", "DISCSUBTITLE"),
+    ("genre", "GENRE"),
+    ("composer", "COMPOSER"),
+    ("composer_sort", "COMPOSERSORT"),
+    ("lyricist", "LYRICIST"),
+    ("arranger", "ARRANGER"),
+    ("work", "WORK"),
+    ("grouping", "GROUPING"),
+    ("comments", "COMMENT"),
+    ("bpm", "BPM"),
+    ("initial_key", "KEY"),
+    ("comp", "COMPILATION"),
+    ("label", "LABEL"),
+    ("catalognum", "CATALOGNUMBER"),
+    ("barcode", "BARCODE"),
+    ("asin", "ASIN"),
+    ("albumtype", "RELEASETYPE"),
+    ("albumtypes", "RELEASETYPE"),
+    ("albumstatus", "RELEASESTATUS"),
+    ("media", "MEDIA"),
+    ("script", "SCRIPT"),
+    ("language", "LANGUAGE"),
+    ("country", "RELEASECOUNTRY"),
+    ("isrc", "ISRC"),
+    ("mb_trackid", "MUSICBRAINZ_TRACKID"),
+    ("mb_releasetrackid", "MUSICBRAINZ_RELEASETRACKID"),
+    ("mb_albumid", "MUSICBRAINZ_ALBUMID"),
+    ("mb_releasegroupid", "MUSICBRAINZ_RELEASEGROUPID"),
+    ("mb_artistid", "MUSICBRAINZ_ARTISTID"),
+    ("mb_artistids", "MUSICBRAINZ_ARTISTID"),
+    ("mb_albumartistid", "MUSICBRAINZ_ALBUMARTISTID"),
+    ("mb_albumartistids", "MUSICBRAINZ_ALBUMARTISTID"),
+    ("mb_workid", "MUSICBRAINZ_WORKID"),
+    ("acoustid_id", "ACOUSTID_ID"),
+    ("acoustid_fingerprint", "ACOUSTID_FINGERPRINT"),
+    ("lyrics", "LYRICS"),
+    ("encoder", "ENCODER"),
+    ("rg_track_gain", "REPLAYGAIN_TRACK_GAIN"),
+    ("rg_track_peak", "REPLAYGAIN_TRACK_PEAK"),
+    ("rg_album_gain", "REPLAYGAIN_ALBUM_GAIN"),
+    ("rg_album_peak", "REPLAYGAIN_ALBUM_PEAK"),
+    ("r128_track_gain", "R128_TRACK_GAIN"),
+    ("r128_album_gain", "R128_ALBUM_GAIN"),
+];
+
+/// The parts of the dates beets keeps as numbers, and the Vorbis names
+/// of the dates they make.
+const BEETS_DATES: [(&str, &str); 2] = [("", "DATE"), ("original_", "ORIGINALDATE")];
+
+/// beets' fields of its own: what it measured of the file, where it
+/// keeps it and its own IDs, none a tag of the song. Any other field
+/// [`BEETS`] does not name is reported as skipped.
+const BEETS_OWN: [&str; 17] = [
+    "path",
+    "mtime",
+    "added",
+    "id",
+    "album_id",
+    "artpath",
+    "data_source",
+    "format",
+    "bitrate",
+    "bitrate_mode",
+    "samplerate",
+    "bitdepth",
+    "channels",
+    "length",
+    "filesize",
+    "encoder_info",
+    "encoder_settings",
 ];
 
 fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     let Some(map) = o.as_object() else {
         bail!("holds a value that is no object of tags");
     };
-    if map.contains_key("media") || map.contains_key("release-group") {
+    // beets names the medium in `media` too, as a word.
+    if map.get("media").is_some_and(Value::is_array) || map.contains_key("release-group") {
         bail!("holds a MusicBrainz release, which names no one recording");
     }
     if map.contains_key("artist-credit") {
@@ -460,28 +533,41 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
         Value::Number(n) if n.as_f64() != Some(0.0) => {
             vec![whole(v).map_or_else(|| n.to_string(), |w| w.to_string())]
         }
+        Value::Bool(true) => vec!["1".to_string()],
         Value::Array(a) => a
             .iter()
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
         _ => Vec::new(),
     };
-    for (name, field) in BEETS {
+    for (name, key) in BEETS {
         for value in map.get(name).map(text).unwrap_or_default() {
-            sheet.add(&mut tags, field.vorbis(), &value);
+            sheet.add(&mut tags, key, &value);
         }
     }
-    for value in map.get("composer").map(text).unwrap_or_default() {
-        sheet.add(&mut tags, "COMPOSER", &value);
-    }
     let part = |k: &str| map.get(k).and_then(whole);
-    if let Some(year) = part("year") {
-        let date = match (part("month"), part("day")) {
-            (Some(month), Some(day)) => format!("{year:04}-{month:02}-{day:02}"),
-            (Some(month), None) => format!("{year:04}-{month:02}"),
-            _ => format!("{year:04}"),
-        };
-        sheet.add(&mut tags, "DATE", &date);
+    for (prefix, key) in BEETS_DATES {
+        let part = |p: &str| part(&format!("{prefix}{p}"));
+        if let Some(year) = part("year") {
+            let date = match (part("month"), part("day")) {
+                (Some(month), Some(day)) => format!("{year:04}-{month:02}-{day:02}"),
+                (Some(month), None) => format!("{year:04}-{month:02}"),
+                _ => format!("{year:04}"),
+            };
+            sheet.add(&mut tags, key, &date);
+        }
+    }
+    let dated = |name: &str| {
+        BEETS_DATES.iter().any(|(prefix, _)| {
+            name.strip_prefix(prefix)
+                .is_some_and(|p| ["year", "month", "day"].contains(&p))
+        })
+    };
+    for (name, value) in map {
+        let read = BEETS.iter().any(|(n, _)| n == name) || BEETS_OWN.contains(&name.as_str());
+        if !read && !dated(name) && text(value).iter().any(|v| !v.trim().is_empty()) {
+            sheet.skip(format!("{name:?}, which has no Vorbis name muman knows"));
+        }
     }
     #[allow(clippy::cast_possible_truncation)]
     let length_ms = map
@@ -607,6 +693,54 @@ mod tests {
         assert_eq!(read(Path::new("all.json"), &lines).unwrap().tracks.len(), 2);
         let array = format!("[{one}, {one}]");
         assert_eq!(read(Path::new("all.json"), &array).unwrap().tracks.len(), 2);
+    }
+
+    #[test]
+    fn every_beets_field_with_a_vorbis_name_is_read_and_any_other_reported() {
+        let one = r#"{"title": "Harbor Lights at Noon", "artist": "Ada Quill", "album": "The Glass Orchards",
+            "track": 2, "label": "Saltmarsh Records", "bpm": 120, "composer": "Tamsin Orr",
+            "lyricist": "Ferris Gale", "catalognum": "SM-001", "media": "CD", "comp": true,
+            "albumtypes": ["album", "compilation"], "comments": "a quiet one", "original_year": 1999,
+            "original_month": 4, "rg_track_gain": -6.5, "style": "Coastal", "artist_credit": "A. Quill",
+            "tracktotal": 0, "disc": 0, "isrc": "", "mb_trackid": "", "year": 0, "arranger": null,
+            "path": "/x/y.flac", "mtime": 1700000000.5, "id": 7, "album_id": 3, "bitrate": 900000,
+            "format": "FLAC", "length": 50.0, "data_source": "MusicBrainz"}"#;
+        let sheet = read(Path::new("beets.json"), one).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        let names: Vec<&str> = tags.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "TITLE",
+                "ARTIST",
+                "ALBUM",
+                "TRACKNUMBER",
+                "COMPOSER",
+                "LYRICIST",
+                "COMMENT",
+                "BPM",
+                "COMPILATION",
+                "LABEL",
+                "CATALOGNUMBER",
+                "RELEASETYPE",
+                "MEDIA",
+                "ORIGINALDATE",
+            ]
+        );
+        assert_eq!(values(tags, "LABEL"), ["Saltmarsh Records"]);
+        assert_eq!(values(tags, "BPM"), ["120"]);
+        assert_eq!(values(tags, "LYRICIST"), ["Ferris Gale"]);
+        assert_eq!(values(tags, "COMPILATION"), ["1"]);
+        assert_eq!(values(tags, "RELEASETYPE"), ["album", "compilation"]);
+        assert_eq!(values(tags, "ORIGINALDATE"), ["1999-04"]);
+        assert_eq!(
+            sheet.skipped,
+            [
+                "REPLAYGAIN_TRACK_GAIN, which describes another file",
+                "\"artist_credit\", which has no Vorbis name muman knows",
+                "\"style\", which has no Vorbis name muman knows",
+            ]
+        );
     }
 
     #[test]

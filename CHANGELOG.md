@@ -29,7 +29,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   surely one song's is asked about on a terminal, with a search of the
   song list; `--to` names the songs instead. Lyrics and pictures become
   sources of the song; tags from `NAME=value`, ffmetadata, beets or
-  MusicBrainz JSON and cue sheets are set on it by hand.
+  MusicBrainz JSON and cue sheets are set on it by hand, each beets
+  field under the name Picard writes it as, and `--verbose` names what
+  was skipped.
 
 - **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
   no lookup, no fetch, and URLs refused.
