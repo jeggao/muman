@@ -42,12 +42,16 @@
 //! whatever their designs, and only dHash tells them apart.
 //!
 //! The bands were measured over 50 generated covers, each under 29
-//! changes. JPEG at quality 20, WebP, scaling from 120 to 2,000 px, bars
-//! and blurred frames, gamma, brightness and noise kept 94 of 100 one
-//! design, and of the 1,225 pairs of distinct covers, and 17,150 changed
-//! covers against distinct originals, none was nearer than 16 bits of
-//! pHash; distinct covers are 32 apart on average. Crops of a tenth and
-//! a badge over a corner move pHash past the bands, as is its nature.
+//! changes. JPEG down to quality 20, WebP, scaling from 120 to 2,000 px,
+//! bars, blurred frames, gamma, brightness and noise kept 960 of 1,000
+//! changed covers one design. No pair of distinct covers was judged one
+//! design or unsure: none of the 1,225 pairs of originals, nor of the
+//! 17,150 changed covers against other originals. Distinct dense
+//! hashes were never nearer than 16 bits of pHash, and are 32 apart on
+//! average. A crop of a tenth, a badge over a corner, and a dark cover
+//! boxed on all four sides, as a 4:3 thumbnail boxes a square one, move
+//! the hashes past the bands, as is pHash's nature.
+//!
 //! A picture with little contrast (a spread under 6 gray levels at
 //! 32×32) hashes like every other such picture, so it is never more than
 //! Unsure. Hashes are of gray pixels, so two colourings of one design are
