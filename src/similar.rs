@@ -172,7 +172,7 @@ const OPENS: [(char, char); 10] = [
 ];
 
 /// What opens a name's suffix, as `Lantern Weather - Live at the Pier`.
-const SUFFIXES: [&str; 3] = [" - ", " – ", " — "];
+const SUFFIXES: [&str; 7] = [" - ", " – ", " — ", " ‐ ", " ‒ ", " ― ", " − "];
 
 /// Wave dashes, which set off a subtitle in Japanese: `Title 〜Night〜`.
 const WAVES: [char; 2] = ['~', '〜'];
@@ -722,11 +722,12 @@ pub struct Guess {
     pub title: String,
 }
 
-static GUESSES: LazyLock<[Regex; 4]> = LazyLock::new(|| {
+static GUESSES: LazyLock<[Regex; 5]> = LazyLock::new(|| {
     [
-        r"^(?P<track>\d+)\.?\s*[-–—]\s*(?P<a>.+?)\s+[-–—]\s+(?P<b>.+)$",
-        r"^(?P<a>.+?)\s+[-–—]\s+(?P<b>.+)$",
+        r"^(?P<track>\d+)\.?\s*[-‐‒–—―−]\s*(?P<a>.+?)\s+[-‐‒–—―−]\s+(?P<b>.+)$",
+        r"^(?P<a>.+?)\s+[-‐‒–—―−]\s+(?P<b>.+)$",
         r"^(?P<track>\d+)\.?[\s_-]+(?P<b>.+)$",
+        r"^(?P<track>\d+)\.(?P<b>\D.*)$",
         r"^(?P<b>.+?)\s+by\s+(?P<a>.+)$",
     ]
     .map(|p| Regex::new(p).expect("a valid pattern"))

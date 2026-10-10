@@ -410,7 +410,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     loose: !loose.is_empty(),
                 };
                 let mut prompter = prompter;
-                list(
+                let listed = list(
                     runner,
                     dirs,
                     proposals,
@@ -437,7 +437,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 };
                 left_out = attached.left_out;
                 unread = attached.unread;
-                give_tags(dirs, &attached.songs, &how, out)?;
+                give_tags(dirs, &attached.songs, &how, listed, out)?;
                 ok &= look_up(job, runner, http, false, &declined, out)?;
                 ok &= sync(Options::default(), Some(&mut run), out)?;
                 Ok(ok)
@@ -839,7 +839,8 @@ struct Listing {
 }
 
 /// List each proposal as a song, or as a source of the song it is the
-/// same recording as, and set the tags given on each.
+/// same recording as, and set the tags given on each: whether any song
+/// was given them.
 fn list<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
@@ -847,7 +848,7 @@ fn list<R: Runner, W: Write>(
     how: &Listing,
     prompter: Option<&mut dyn Prompter>,
     out: &mut W,
-) -> Result<()> {
+) -> Result<bool> {
     let edits = identify::identify(
         runner,
         dirs,
@@ -861,6 +862,7 @@ fn list<R: Runner, W: Write>(
         ui::warning(out, "No song was added, so no tag was set")?;
     }
     let mut manifest = Manifest::load(&dirs.home)?;
+    let mut any = false;
     for edit in edits {
         let tagged = match &edit {
             Edit::Add { sources, .. } if !how.tags.is_empty() => manifest::id_of(sources).cloned(),
@@ -868,22 +870,30 @@ fn list<R: Runner, W: Write>(
         };
         manifest.edit(edit);
         if let Some(key) = tagged {
+            any = true;
             manifest.edit(Edit::Tag {
                 key,
                 tags: how.tags.clone(),
             });
         }
     }
-    manifest.save()
+    manifest.save()?;
+    Ok(any)
 }
 
 /// Set the tags given on the command line on every song a loose file was
 /// given to, after the file's own, so the command line wins.
-fn give_tags<W: Write>(dirs: &Dirs, songs: &[SourceKey], how: &Listing, out: &mut W) -> Result<()> {
+fn give_tags<W: Write>(
+    dirs: &Dirs,
+    songs: &[SourceKey],
+    how: &Listing,
+    listed: bool,
+    out: &mut W,
+) -> Result<()> {
     if how.tags.is_empty() || !how.loose {
         return Ok(());
     }
-    if songs.is_empty() {
+    if songs.is_empty() && !listed {
         return Ok(ui::warning(
             out,
             "No song was given a file, so no tag was set",
