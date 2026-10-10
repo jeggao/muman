@@ -1362,3 +1362,51 @@ fn a_plan_s_loudness_tags_follow_its_format() {
         "every route derives alike"
     );
 }
+
+#[test]
+fn a_gain_a_format_applies_none_of_compares_as_tags() {
+    use crate::loudness::{Apply, Gains, Level};
+    let plan = |codec| Plan {
+        version: render_version(codec),
+        format: Format::Copy { codec },
+        audio: AudioRef {
+            key: SourceKey::youtube("vid00000001"),
+            rev: "r".into(),
+            index: 0,
+        },
+        cover: None,
+        lyrics: None,
+        tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
+        loudness: None,
+    };
+    let gains = |apply| Gains {
+        track: Level {
+            gain: -612,
+            peak: Some(900_000),
+        },
+        album: None,
+        apply,
+        opus_gain: 0,
+        bits: 16,
+    };
+    let header = Apply::Header(crate::loudness::hundredths_to_q78(-612));
+    let tagged = plan(Codec::Flac).with_loudness(gains(Apply::Tags));
+    assert_eq!(plan(Codec::Flac).with_loudness(gains(header)), tagged);
+    assert_eq!(
+        plan(Codec::Flac).with_loudness(gains(Apply::Volume(0))),
+        tagged
+    );
+    assert_ne!(
+        plan(Codec::Opus).with_loudness(gains(header)),
+        plan(Codec::Opus).with_loudness(gains(Apply::Tags))
+    );
+    let lowered = plan(Codec::Flac)
+        .with_loudness(gains(header))
+        .with_format(Format::Encode {
+            codec: Codec::Opus,
+            kbps: Some(96),
+            adapt: None,
+            mix: None,
+        });
+    assert!(lowered.opus_header().is_some(), "{lowered:?}");
+}

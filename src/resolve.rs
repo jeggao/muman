@@ -72,7 +72,10 @@
 //! again exactly when its sources' revisions, the picks, the tags or the
 //! renderer change; [`render_version`] rises for a codec when the bytes a
 //! plan in it renders to change, so only songs in that codec are written
-//! again.
+//! again. Its gains are kept as `[loudness] mode` asks, so a plan that
+//! [`crate::limit`] encodes into Opus holds them in its header, but are
+//! compared as its format holds them: a header gain in FLAC is as tags
+//! alone, so a mode that changes only Opus files writes only those again.
 
 use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
@@ -322,8 +325,9 @@ pub struct LyricsRef {
 }
 
 /// Everything a library file is made from. Stored beside each output and
-/// compared whole, so a song is rendered again exactly when this changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// compared whole, so a song is rendered again exactly when this changes;
+/// its gains are compared as its format holds them ([`Gains::as_held`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub version: u32,
     pub format: Format,
@@ -338,7 +342,37 @@ pub struct Plan {
     pub loudness: Option<Gains>,
 }
 
+impl PartialEq for Plan {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            version,
+            format,
+            audio,
+            cover,
+            lyrics,
+            tags,
+            loudness: _,
+        } = self;
+        *version == other.version
+            && *format == other.format
+            && *audio == other.audio
+            && *cover == other.cover
+            && *lyrics == other.lyrics
+            && *tags == other.tags
+            && self.held_loudness() == other.held_loudness()
+    }
+}
+
+impl Eq for Plan {}
+
 impl Plan {
+    /// Its gains as its file holds them.
+    #[must_use]
+    pub fn held_loudness(&self) -> Option<Gains> {
+        self.loudness
+            .map(|g| g.as_held(self.format.codec() == Codec::Opus, self.format.is_encoded()))
+    }
+
     /// This plan written in `format`, by the renderer's version for it,
     /// its loudness tags as that format holds its gains.
     #[must_use]

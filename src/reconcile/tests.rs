@@ -1949,6 +1949,29 @@ fn a_gain_put_in_the_opus_header_is_a_retag_and_a_gain_in_the_samples_an_encode(
 }
 
 #[test]
+fn a_gain_put_in_opus_headers_leaves_a_flac_song_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let path = h.dirs.manual().join("Song.flac");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "flac").unwrap();
+    let songs = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"manual:Song.flac\"]\n";
+    h.songs(songs);
+    let mut fake = levelled().probe(".flac", crate::testing::FLAC);
+    fake.wavs.push(("Song.flac".into(), tone(0.2)));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(h.lib("Artist/Record/02 Song.flac").exists(), "{text}");
+    h.songs(&format!("[loudness]\nmode = \"header\"\n{songs}"));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (loudness)"), "{text}");
+    assert!(!text.contains("Song.flac"), "{text}");
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(again.contains("Up to date: 2"), "{again}");
+}
+
+#[test]
 fn loudness_off_measures_nothing_and_keeps_what_sources_carry() {
     let h = home();
     h.fetched("aaaaaaaaaaa");

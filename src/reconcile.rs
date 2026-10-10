@@ -623,7 +623,7 @@ fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     if other_tags(old) != other_tags(new) {
         what.push("tags");
     }
-    if old.loudness != new.loudness
+    if old.held_loudness() != new.held_loudness()
         || old.tags.len() - other_tags(old).len() != new.tags.len() - other_tags(new).len()
     {
         what.push("loudness");

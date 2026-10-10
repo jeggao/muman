@@ -125,6 +125,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   measures its full bandwidth, where a partial standing over the noise
   read as a lowpass at 2 to 3 kHz and the song's own lossy copy won.
   Every source is measured again on the next sync.
+- **`[loudness] mode` changed between `tags` and `header`** writes
+  again only the Opus songs, whose headers it changes, where it
+  reported every other song's loudness updated and kept each in
+  history, its bytes the same.
 
 ## [0.3.0] - 2026-10-07
 
