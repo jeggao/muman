@@ -278,7 +278,11 @@ that does not fit at its best is written at a lower bitrate of
 `[audio] lossy`, never below `[audio] min_bitrate`. The songs lowered are
 those that lose the least audible quality for each byte saved: lossless
 songs first, which an encoder at a high bitrate loses nothing of, and
-lossy songs last, since encoding them again costs a generation.
+lossy songs last, since encoding them again costs a generation. Once
+they fit, each song lowered is raised back to the best format that still
+fits, the songs whose last step down lost the most for each byte saved
+first, then by their first source's key, so no song is left lower than
+the room needs.
 
 Which songs are lowered, and how far, follows from the song list, the
 sources, the settings and the ffmpeg in use, never from what the library

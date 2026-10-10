@@ -99,6 +99,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   one atom holding each, as Picard writes it and taggers read it, where
   each value was an atom of its own. The first sync writes every `.m4a`
   song again.
+- **`[library] max_size` and `export --max-size`** raise each song
+  lowered back as far as the room left allows, where songs that fit at
+  their best stayed lowered and room went unused.
 
 ## [0.3.0] - 2026-10-07
 

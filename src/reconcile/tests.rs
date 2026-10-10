@@ -949,7 +949,7 @@ fn a_song_over_the_limit_is_written_lower_and_stays_so() {
     assert!(
         status
             .1
-            .contains("Opus 192 kbit/s to fit max_size; at best FLAC, copied"),
+            .contains("Opus 256 kbit/s to fit max_size; at best FLAC, copied"),
         "{}",
         status.1
     );
@@ -957,7 +957,7 @@ fn a_song_over_the_limit_is_written_lower_and_stays_so() {
     let fake = big_flac();
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
-    assert!(fake.ran("libopus") && fake.ran("192k"), "{text}");
+    assert!(fake.ran("libopus") && fake.ran("256k"), "{text}");
     assert!(h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
     assert!(!h.lib("Artist/Record/02 Song.flac").exists());
 

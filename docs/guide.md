@@ -691,9 +691,10 @@ folder, which gets `muman.zip`.
 Songs that do not fit are encoded again from their sources at lower
 bitrates of `[audio] lossy`, the least audible loss for each byte saved
 first: lossless songs before lossy ones, which would lose a generation,
-and a few songs lowered far before many a little. Each song is measured
-once encoded and the rest fitted again on what it really took, so the
-zip lands under the cap. When even the lowest bitrates cannot fit,
+and a few songs lowered far before many a little; once they fit, each
+song lowered is raised back as far as the room left allows, as the
+library is. Each song is measured once encoded and the rest fitted
+again on what it really took, so the zip lands under the cap. When even the lowest bitrates cannot fit,
 nothing is written and the size needed is said. The library itself is
 never changed.
 
