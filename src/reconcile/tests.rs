@@ -1078,7 +1078,7 @@ fn a_changed_file_forced_fits_as_the_next_sync_does() {
         .into_iter()
         .find(|(_, f)| f.is_encoded())
         .expect("the limit binds");
-    std::fs::write(h.lib(&lowered.to_string_lossy()), "").unwrap();
+    std::fs::write(h.lib(&lowered.to_string_lossy()), "edited by hand").unwrap();
     let (_, text) = h.run(&three_flacs(), Options::default());
     assert!(text.contains("Left alone, changed since"), "{text}");
     let forced = Options {
