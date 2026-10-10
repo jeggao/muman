@@ -91,8 +91,9 @@ use crate::tags::{self, Field, Offer, Scope};
 #[must_use]
 pub fn render_version(codec: Codec) -> u32 {
     match codec {
-        // Opus ended 312 samples late, its timestamps shifted by its delay.
-        Codec::Opus => 4,
+        // Opus ended 312 samples late, its timestamps shifted by its delay;
+        // MP4 wrote a tag of several values as an atom each.
+        Codec::Opus | Codec::Aac | Codec::Alac => 4,
         _ => 3,
     }
 }

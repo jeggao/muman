@@ -891,6 +891,44 @@ mod tests {
     }
 
     #[test]
+    fn an_m4a_reads_several_values_from_one_atom_or_from_repeated_ones() {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::file::AudioFile;
+        use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst, Mp4File};
+        use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+        const ARTIST: AtomIdent<'static> = AtomIdent::Fourcc(*b"\xa9ART");
+        let artists = ["Odile Marsh", "Bram Feld"];
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one.m4a");
+        std::fs::write(&one, crate::testing::SILENCE_M4A).unwrap();
+        let mut ilst = Ilst::new();
+        let data = artists.map(|a| AtomData::UTF8(a.into())).to_vec();
+        ilst.insert(Atom::from_collection(ARTIST, data).unwrap());
+        ilst.save_to_path(&one, WriteOptions::default()).unwrap();
+        let repeated = dir.path().join("repeated.m4a");
+        std::fs::write(&repeated, crate::testing::SILENCE_M4A).unwrap();
+        let mut generic = Tag::new(TagType::Mp4Ilst);
+        for artist in artists {
+            generic.push(TagItem::new(
+                ItemKey::TrackArtist,
+                ItemValue::Text(artist.into()),
+            ));
+        }
+        Ilst::from(generic)
+            .save_to_path(&repeated, WriteOptions::default())
+            .unwrap();
+        for (path, atoms) in [(&one, 1), (&repeated, 2)] {
+            let mut file = std::fs::File::open(path).unwrap();
+            let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+            let held = m4a.ilst().unwrap().into_iter();
+            assert_eq!(held.filter(|a| *a.ident() == ARTIST).count(), atoms);
+            let o = from_container(&read_file(path).unwrap());
+            assert_eq!(o[&Field::Artist].values, artists, "{}", path.display());
+        }
+    }
+
+    #[test]
     fn loudness_is_read_from_replaygain_and_r128_alike() {
         let tags = each(BTreeMap::from([
             ("replaygain_track_gain".to_string(), "-6.1 dB".to_string()),

@@ -13,9 +13,13 @@
 //! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
 //! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
 //! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
-//! name; in WavPack each is an APEv2 item, by the name `lofty` gives it or
-//! its own. Opus holds ReplayGain's gains as R128's and no peaks, as
-//! RFC 7845 tells its players to read them. The cover is a front-cover
+//! name. An MP4 comment of several values is one atom holding a `data`
+//! atom for each, as iTunes, Picard and mutagen write one: `lofty` makes
+//! a generic tag's values an atom each, and a reader that takes one atom
+//! a name, as ffmpeg's does, then sees only the last. In WavPack each
+//! comment is an APEv2 item, by the name `lofty` gives it or its own.
+//! Opus holds ReplayGain's gains as R128's and no peaks, as RFC 7845
+//! tells its players to read them. The cover is a front-cover
 //! picture written through `lofty`: a
 //! JPEG or PNG without borders as its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
@@ -615,7 +619,12 @@ fn write_tags(
         }
         Container::Mp4 => {
             let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
-            let mut ilst = Ilst::from(generic);
+            // A generic tag converts to an atom a value; inserted again,
+            // the values of one name merge into one atom.
+            let mut ilst = Ilst::new();
+            for atom in Ilst::from(generic) {
+                ilst.insert(atom);
+            }
             for (key, values) in own {
                 let ident = AtomIdent::Freeform {
                     mean: "com.apple.iTunes".into(),

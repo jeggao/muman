@@ -137,7 +137,9 @@ file:
 
 In MP3 and MP4, a tag those formats name, such as the title, the track
 or the lyrics, becomes their own frame or atom; any other is kept under
-its name, as a `TXXX` frame or an iTunes freeform atom.
+its name, as a `TXXX` frame or an iTunes freeform atom. A tag of
+several values, as two artists, is one MP4 atom holding each, as Picard
+writes it.
 
 Each codec holds some audio and not others, and muman never lets the
 encoder mix speakers anew to make it fit:

@@ -95,6 +95,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   where it exited with 4.
 - **A misspelled settings table,** as `[audoi]`, is warned of by `sync`
   and `check`, where its settings did nothing unnoticed.
+- **An MP4 tag of several values,** as two artists or two genres, is
+  one atom holding each, as Picard writes it and taggers read it, where
+  each value was an atom of its own. The first sync writes every `.m4a`
+  song again.
 
 ## [0.3.0] - 2026-10-07
 

@@ -265,6 +265,46 @@ fn an_m4a_song_is_tagged_with_atoms() {
 }
 
 #[test]
+fn an_m4a_song_holds_the_values_of_one_tag_in_one_atom_and_reads_back_whole() {
+    let f = fixture();
+    let fake = Fake::default();
+    let mut p = tagged(Format::Copy { codec: Codec::Aac });
+    p.tags[1].1 = vec!["Odile Marsh".into(), "Bram Feld".into()];
+    p.tags
+        .push(("MOOD".into(), vec!["sleepy".into(), "drowsy".into()]));
+    p.tags
+        .push(("SHADE".into(), vec!["amber".into(), "slate".into()]));
+    let r = go(&fake, &f, &p).unwrap();
+    let path = f.dir.path().join("lib").join(&r.audio);
+    let mut file = fs::File::open(&path).unwrap();
+    let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+    let mut atoms: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+    for atom in m4a.ilst().unwrap() {
+        let name = match atom.ident() {
+            lofty::mp4::AtomIdent::Fourcc(f) => f.iter().map(|&b| char::from(b)).collect(),
+            lofty::mp4::AtomIdent::Freeform { name, .. } => name.to_string(),
+        };
+        let values = atom
+            .data()
+            .filter_map(|d| match d {
+                lofty::mp4::AtomData::UTF8(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        atoms.entry(name).or_default().push(values);
+    }
+    let one = |name: &str| atoms[name].clone();
+    assert_eq!(one("©ART"), [["Odile Marsh", "Bram Feld"]]);
+    assert_eq!(one("©gen"), [["House", "Disco"]]);
+    assert_eq!(one("MOOD"), [["sleepy", "drowsy"]]);
+    assert_eq!(one("SHADE"), [["amber", "slate"]]);
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read["artist"], ["Odile Marsh", "Bram Feld"]);
+    assert_eq!(read["genre"], ["House", "Disco"]);
+    assert_eq!(read["mood"], ["sleepy", "drowsy"]);
+}
+
+#[test]
 fn a_vorbis_song_keeps_vorbis_comments_in_ogg() {
     let f = fixture();
     let fake = Fake::default();
