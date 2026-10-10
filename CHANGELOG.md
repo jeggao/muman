@@ -121,6 +121,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   the song and the excerpt replaced it. A source cut off mid-sound
   counts the song it lacks against itself. Every pair of sources is
   compared again on the next sync.
+- **Lossless audio whose notes end low over a flat noise floor**
+  measures its full bandwidth, where a partial standing over the noise
+  read as a lowpass at 2 to 3 kHz and the song's own lossy copy won.
+  Every source is measured again on the next sync.
 
 ## [0.3.0] - 2026-10-07
 

@@ -373,9 +373,10 @@ as sound beyond the song does, so an excerpt never beats the whole song
 it was cut from; one that fades out reads as a song ending. Bandwidth
 is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
 file measures as narrow as that file, while a recording whose treble
-fades on its own measures full. Real stereo tells stereo from mono copied into two channels, even
-at different levels or a few samples apart, by the front two of more;
-clipping is the share of samples stuck at full scale or at the audio's
+fades on its own measures full, as does one whose notes end low over a
+noise floor that runs on to the top. Real stereo tells stereo from mono
+copied into two channels, even at different levels or a few samples
+apart, by the front two of more; clipping is the share of samples stuck at full scale or at the audio's
 own peak, or piled up just under full scale where a lossy encoder
 smeared them. Float lossless audio can hold samples past full scale, so
 in it only those at its own peak count. Every channel is measured as it

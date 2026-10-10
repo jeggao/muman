@@ -8,11 +8,13 @@
 //! them holds, and cancel channels in opposite phase.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
-//!   highest band standing 20 dB above all bands past a short guard,
-//!   in each excerpt's mean spectrum, its channels' powers summed, taken
-//!   low across the excerpts. A FLAC transcoded from a 16 kHz source
-//!   measures 16 kHz; a recording whose treble fades into its noise floor
-//!   shows no wall and measures full.
+//!   highest band standing 20 dB above all bands past a short guard, the
+//!   band under it as high even at its quietest bin, in each excerpt's
+//!   mean spectrum, its channels' powers summed, taken low across the
+//!   excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz; a
+//!   recording whose treble fades into its noise floor shows no wall and
+//!   measures full, and so does one whose notes' partials end low over a
+//!   noise floor that runs on to the top.
 //! - **Real stereo.** One minus the first two channels' squared
 //!   correlation at the lag within 1 ms that best aligns them: mono copied
 //!   into two channels, at two levels or a few samples apart, has next to
@@ -54,7 +56,7 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/6";
+pub const METHOD: &str = "quality/7";
 
 /// Seconds of audio measured at each of [`SEGMENTS`].
 pub const SEGMENT_SECONDS: f64 = 8.0;
@@ -568,13 +570,34 @@ fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
 }
 
 /// The top of the highest band above [`WALL_MIN_HZ`] that stands
-/// [`WALL_DB`] above every band past [`WALL_GUARD`]; half the sample rate
-/// when none does.
+/// [`WALL_DB`] above every band past [`WALL_GUARD`], the band under it
+/// standing as high at its floor; half the sample rate when none does.
+///
+/// A lowpass leaves next to nothing past it, while a tone's partial stands
+/// as high over a noise floor that runs on past it. A band's floor is its
+/// quietest bin's power over the band: in the band under a lowpass, sound
+/// fills it; between partials, the floor is the noise that is also past
+/// them. The band under the wall's, not the wall's, is judged so, since the
+/// lowpass may begin to fall inside the wall's own band.
+///
+/// Measured on synthesized notes of three partials, up to 2.5 kHz, over
+/// white noise 26 dB down: by the peak alone, 21 of 40 renderings stood a
+/// wall at 2.1 to 2.6 kHz, where with the floor none did. Their copies as
+/// MP3 at 96 and 128 kbit/s, AAC at 128 kbit/s and Opus at 48 to 128
+/// kbit/s, a 16 kHz FIR lowpass, and soxr resamplings through 32 and
+/// 22.05 kHz measured as by the peak alone, but for one AAC copy of
+/// noiseless notes that the peak had put at 2.6 kHz, and the floor at
+/// 17.2 kHz.
 fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
     let hz = |bands: usize| real(bands * BAND_BINS) * f64::from(sample_rate) / real(FFT);
+    let db = |power: f64| 10.0 * (power + f64::MIN_POSITIVE).log10();
     let levels: Vec<f64> = spectrum
         .chunks(BAND_BINS)
-        .map(|c| 10.0 * (c.iter().sum::<f64>() + f64::MIN_POSITIVE).log10())
+        .map(|c| db(c.iter().sum()))
+        .collect();
+    let floors: Vec<f64> = spectrum
+        .chunks(BAND_BINS)
+        .map(|c| db(real(c.len()) * c.iter().copied().fold(f64::INFINITY, f64::min)))
         .collect();
     let mut above = vec![f64::NEG_INFINITY; levels.len() + 1];
     for b in (0..levels.len()).rev() {
@@ -583,7 +606,10 @@ fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
     (0..levels.len().saturating_sub(WALL_GUARD + 1))
         .rev()
         .take_while(|b| hz(b + 1) >= WALL_MIN_HZ)
-        .find(|b| levels[*b] - above[b + WALL_GUARD + 1] >= WALL_DB)
+        .find(|b| {
+            let past = above[b + WALL_GUARD + 1];
+            levels[*b] - past >= WALL_DB && floors[b.saturating_sub(1)] - past >= WALL_DB
+        })
         .map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
 }
 
@@ -990,6 +1016,35 @@ mod tests {
         let q = audio(&[stereo(&natural, &natural)], 48_000, false).unwrap();
         assert!(q.bandwidth_hz >= 24_000.0, "{q:?}");
         let encoded = shaped(FFT * 40, rate, |f| if f > 16_000.0 { 0.0 } else { fade(f) });
+        let q = audio(&[stereo(&encoded, &encoded)], 48_000, false).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+    }
+
+    #[test]
+    fn tones_over_a_flat_noise_floor_are_no_lowpass() {
+        let rate = 48_000.0;
+        let n = FFT * 40;
+        // Three notes' first three partials, the highest at 2.2 kHz, each
+        // standing 33 dB or more over the band's share of white noise.
+        let tones: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = real(i) / rate;
+                [523.25, 659.26, 739.99]
+                    .into_iter()
+                    .flat_map(|f| [1.0, 2.0, 3.0].map(|h| (f * h, 0.1 / h)))
+                    .map(|(f, a)| a * (std::f64::consts::TAU * f * t).sin())
+                    .sum()
+            })
+            .collect();
+        let floor = noise(n, 5);
+        let mix: Vec<f64> = tones
+            .iter()
+            .zip(&floor)
+            .map(|(t, f)| t + 0.01 * f)
+            .collect();
+        let q = audio(&[stereo(&mix, &mix)], 48_000, false).unwrap();
+        assert!(q.bandwidth_hz >= 24_000.0, "{q:?}");
+        let encoded = filtered(&mix, rate, |f| if f > 16_000.0 { 0.0 } else { 1.0 });
         let q = audio(&[stereo(&encoded, &encoded)], 48_000, false).unwrap();
         assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
     }
