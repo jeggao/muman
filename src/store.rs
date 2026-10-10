@@ -7,6 +7,10 @@
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
 //! providers and `info` all read it there, so a provider added is one
 //! entry. A key of any other scheme is a file yt-dlp fetched.
+//!
+//! Lyrics and pictures `add` gives to songs are copied into the manual
+//! folder's `added/`, which holds no song file, so none of them becomes
+//! a song's sidecar or a folder's cover by its name.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -26,9 +30,9 @@ const MEDIA: [&str; 32] = [
     "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd", "mlp", "mka", "mkv",
     "mp4", "webm", "mov", "alac", "dsf", "dff",
 ];
-const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+pub(crate) const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.
-const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
+pub(crate) const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

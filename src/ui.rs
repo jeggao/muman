@@ -93,9 +93,21 @@ pub trait Prompter {
     /// A yes-or-no question; anything but yes, cancel included, is no.
     fn ask(&mut self, question: &str) -> io::Result<bool>;
 
-    /// Pick any of `items`, every one picked to begin with. Returns the
-    /// indices picked, in order.
-    fn choose(&mut self, question: &str, items: &[String]) -> io::Result<Vec<usize>>;
+    /// Pick any of `items`, those in `picked` picked to begin with.
+    /// Returns the indices picked, in order.
+    fn choose(
+        &mut self,
+        question: &str,
+        items: &[String],
+        picked: &[usize],
+    ) -> io::Result<Vec<usize>>;
+
+    /// Pick one of `items`; `None` when the user cancels.
+    fn select(&mut self, question: &str, items: &[String]) -> io::Result<Option<usize>>;
+
+    /// A line of text, `help` beneath it; `None` when the user cancels
+    /// or types nothing.
+    fn text(&mut self, question: &str, help: &str) -> io::Result<Option<String>>;
 }
 
 #[derive(Debug, Default)]
@@ -112,10 +124,15 @@ impl Prompter for InquirePrompter {
         Ok(answer == Some(true))
     }
 
-    fn choose(&mut self, question: &str, items: &[String]) -> io::Result<Vec<usize>> {
+    fn choose(
+        &mut self,
+        question: &str,
+        items: &[String],
+        picked: &[usize],
+    ) -> io::Result<Vec<usize>> {
         let picked = crate::progress::suspend(|| {
             inquire::MultiSelect::new(question, items.to_vec())
-                .with_all_selected_by_default()
+                .with_default(picked)
                 .with_help_message("space toggles, → all, ← none, type to filter, enter accepts")
                 .raw_prompt_skippable()
         })
@@ -126,6 +143,26 @@ impl Prompter for InquirePrompter {
             .map(|o| o.index)
             .collect())
     }
+
+    fn select(&mut self, question: &str, items: &[String]) -> io::Result<Option<usize>> {
+        let picked = crate::progress::suspend(|| {
+            inquire::Select::new(question, items.to_vec())
+                .with_help_message("↑↓ moves, type to filter, enter picks, esc for none")
+                .raw_prompt_skippable()
+        })
+        .map_err(io::Error::other)?;
+        Ok(picked.map(|o| o.index))
+    }
+
+    fn text(&mut self, question: &str, help: &str) -> io::Result<Option<String>> {
+        let typed = crate::progress::suspend(|| {
+            inquire::Text::new(question)
+                .with_help_message(help)
+                .prompt_skippable()
+        })
+        .map_err(io::Error::other)?;
+        Ok(typed.filter(|t| !t.trim().is_empty()))
+    }
 }
 
 /// Answers from queues, in order; running out panics, surfacing the
@@ -135,6 +172,10 @@ impl Prompter for InquirePrompter {
 pub struct MockPrompter {
     answers: std::collections::VecDeque<bool>,
     choices: std::collections::VecDeque<Vec<usize>>,
+    selections: std::collections::VecDeque<Option<usize>>,
+    texts: std::collections::VecDeque<Option<String>>,
+    /// Every question asked, in order, each with the items it offered.
+    pub asked: Vec<String>,
 }
 
 #[cfg(test)]
@@ -156,22 +197,59 @@ impl MockPrompter {
         self.choices.push_back(picked.into_iter().collect());
         self
     }
+
+    pub fn push_select(&mut self, picked: Option<usize>) -> &mut Self {
+        self.selections.push_back(picked);
+        self
+    }
+
+    pub fn push_text(&mut self, typed: Option<&str>) -> &mut Self {
+        self.texts.push_back(typed.map(String::from));
+        self
+    }
+
+    fn heard(&mut self, question: &str, items: &[String]) {
+        let mut asked = question.to_string();
+        for item in items {
+            asked.push_str("\n  ");
+            asked.push_str(item);
+        }
+        self.asked.push(asked);
+    }
 }
 
 #[cfg(test)]
 impl Prompter for MockPrompter {
-    fn ask(&mut self, _: &str) -> io::Result<bool> {
+    fn ask(&mut self, question: &str) -> io::Result<bool> {
+        self.heard(question, &[]);
         Ok(self
             .answers
             .pop_front()
-            .expect("MockPrompter ran out of answers"))
+            .unwrap_or_else(|| panic!("MockPrompter ran out of answers at {question:?}")))
     }
 
-    fn choose(&mut self, _: &str, _: &[String]) -> io::Result<Vec<usize>> {
+    fn choose(&mut self, question: &str, items: &[String], _: &[usize]) -> io::Result<Vec<usize>> {
+        self.heard(question, items);
         Ok(self
             .choices
             .pop_front()
-            .expect("MockPrompter ran out of choices"))
+            .unwrap_or_else(|| panic!("MockPrompter ran out of choices at {question:?}")))
+    }
+
+    fn select(&mut self, question: &str, items: &[String]) -> io::Result<Option<usize>> {
+        self.heard(question, items);
+        Ok(self
+            .selections
+            .pop_front()
+            .unwrap_or_else(|| panic!("MockPrompter ran out of selections at {question:?}")))
+    }
+
+    fn text(&mut self, question: &str, _: &str) -> io::Result<Option<String>> {
+        self.heard(question, &[]);
+        Ok(self
+            .texts
+            .pop_front()
+            .unwrap_or_else(|| panic!("MockPrompter ran out of texts at {question:?}")))
     }
 }
 
@@ -201,6 +279,16 @@ mod tests {
         assert!(p.ask("?").unwrap());
         assert!(!p.ask("?").unwrap());
         p.push_choice([0, 2]);
-        assert_eq!(p.choose("?", &[]).unwrap(), [0, 2]);
+        assert_eq!(p.choose("?", &[], &[]).unwrap(), [0, 2]);
+        p.push_select(Some(1)).push_text(Some("artist:venn"));
+        assert_eq!(
+            p.select("Which?", &["a".into(), "b".into()]).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            p.text("Search:", "").unwrap().as_deref(),
+            Some("artist:venn")
+        );
+        assert_eq!(p.asked[3], "Which?\n  a\n  b");
     }
 }

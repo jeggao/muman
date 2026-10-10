@@ -477,15 +477,9 @@ impl Client<'_> {
         let Some(body) = self.get(&path)? else {
             return Ok(None);
         };
-        let found: Recording =
-            serde_json::from_str(&body).context("reading MusicBrainz's answer")?;
-        match found.record(album) {
-            Some(record) => Ok(Some(record)),
-            None => anyhow::bail!(
-                "MusicBrainz answered with {:?}, which is no recording ID",
-                found.id
-            ),
-        }
+        parse_recording(&body, album)
+            .context("reading MusicBrainz's answer")
+            .map(Some)
     }
 
     /// The song's recording and the release it is best known from, or
@@ -614,6 +608,16 @@ pub fn keep(folder: &Path, record: &Record) -> Result<PathBuf> {
     let name = crate::atomic::Name::new(format!("{}.json", record.id))?;
     crate::atomic::write(folder, &name, &json)?;
     Ok(path_of(folder, &record.id))
+}
+
+/// The recording a `/ws/2/recording/<id>?fmt=json` answer holds, with
+/// the release it is best known from, or the one named `album`.
+pub(crate) fn parse_recording(json: &str, album: Option<&str>) -> Result<Record> {
+    let found: Recording = serde_json::from_str(json)?;
+    match found.record(album) {
+        Some(record) => Ok(record),
+        None => anyhow::bail!("{:?} is no recording ID", found.id),
+    }
 }
 
 /// Read a kept record.

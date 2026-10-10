@@ -315,6 +315,58 @@ fn hash<R: Runner, W: Write>(
     Ok(true)
 }
 
+/// Take the looks of the pictures of every source in `keys` whose
+/// measures hold but whose looks were taken another way, decoding only
+/// its pictures. Returns whether any were.
+pub fn look<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<Located> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| {
+            state
+                .facts
+                .get(&l.key)
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.pictured())
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!("Hashing the covers of {} source(s)", due.len()),
+    )?;
+    let step = progress::step("Hashing covers", Some(due.len() as u64));
+    let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
+    let read = parallel::map(&numbered, parallel::builds(), |(n, l)| {
+        let _working = step.working(&progress::label(&l.path));
+        facts::look(runner, l, &scratch.join(format!("look-{n}")))
+    });
+    for (located, result) in due.iter().zip(read) {
+        let Some(f) = state.facts.get_mut(&located.key) else {
+            continue;
+        };
+        match result {
+            Ok(looks) => f.take_looks(&looks),
+            Err(e) => {
+                crate::ui::warning(
+                    out,
+                    &format!("Could not read the covers of {}: {e:#}", located.key),
+                )?;
+                f.take_looks(&[]);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Analyze, for each of `wanted`, every source whose measures hold but
 /// lack it, by one decode of its own rather than measuring it all again.
 /// Returns whether any was.
@@ -1398,7 +1450,7 @@ pub(crate) fn files_of(
 ) -> BTreeMap<usize, PathBuf> {
     let own = |keys: &[SourceKey]| -> BTreeSet<SourceKey> {
         keys.iter()
-            .filter(|k| !crate::provider::is_kept(k))
+            .filter(|k| !crate::manifest::shareable(k))
             .cloned()
             .collect()
     };
@@ -2406,7 +2458,7 @@ pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
         for key in written
             .sources
             .iter()
-            .filter(|k| !crate::provider::is_kept(k))
+            .filter(|k| !crate::manifest::shareable(k))
         {
             if let Some(other) = owners.insert(key, path) {
                 return Err(format!("{key} made both {other:?} and {path:?}"));

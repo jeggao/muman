@@ -187,7 +187,7 @@ fn a_site_the_song_list_adds_names_its_keys() {
 #[test]
 fn another_version_is_refused_and_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(MANIFEST), "version = 3\n").unwrap();
+    std::fs::write(dir.path().join(MANIFEST), "version = 4\n").unwrap();
     assert!(format!("{:#}", Manifest::load(dir.path()).unwrap_err()).contains("newer"));
     std::fs::write(dir.path().join(MANIFEST), "version = 1\n[[song]\n").unwrap();
     assert!(Manifest::load(dir.path()).is_err());
@@ -237,6 +237,46 @@ fn songs_share_a_kept_record_but_never_a_file() {
     write(
         dir.path(),
         "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
+}
+
+#[test]
+fn songs_share_a_picture_of_the_users_but_not_its_lyrics_in_version_3() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:added/cover.jpg\", \"manual:a.flac\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].id(), Some(&SourceKey::Manual("a.flac".into())));
+    m.edit(Edit::Add {
+        sources: vec![
+            SourceKey::Manual("b.flac".into()),
+            SourceKey::Manual("added/cover.jpg".into()),
+        ],
+        album: None,
+    });
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs.len(), 2);
+    assert!(
+        m.songs
+            .iter()
+            .all(|s| s.has(&SourceKey::Manual("added/cover.jpg".into())))
+    );
+    assert!(
+        text(dir.path()).contains("version = 3"),
+        "{}",
+        text(dir.path())
+    );
+
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\", \"manual:added/a.lrc\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\", \"manual:added/a.lrc\"]\n",
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("listed by both"), "{e:#}");

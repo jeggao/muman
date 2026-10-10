@@ -9,17 +9,20 @@
 //!
 //! There is no song ID: a song is the sources it lists, and is named by
 //! the first of them that belongs to it alone ([`Song::id`]). A file
-//! fetched or dropped in belongs to one song only; a record a lookup
+//! fetched or dropped in belongs to one song only. A record a lookup
 //! keeps, an LRCLIB record or a MusicBrainz recording, is data any song
 //! of that recording may list, as two releases of one recording share
-//! its lyrics. A key that does not parse, a file two songs list, and a
-//! pin outside the song's sources stop the run before anything is
-//! written, rather than a song being silently dropped and its file
-//! deleted.
+//! its lyrics; and a picture of the user's is any song's it looks like,
+//! as an album's songs share its cover. A key that does not parse, a
+//! file two songs list, and a pin outside the song's sources stop the
+//! run before anything is written, rather than a song being silently
+//! dropped and its file deleted.
 //!
-//! A list in which songs share a record is format version 2, which an
-//! older muman refuses rather than misreads; any other is written as
-//! version 1, which this one reads as well.
+//! A list in which songs share a picture of the user's is format version
+//! 3, and one in which they share only records a lookup keeps version 2:
+//! an older muman refuses either rather than misreads it, saying it is
+//! too old where it would otherwise call the list broken. Any other is
+//! written as version 1, which this one reads as well.
 //!
 //! muman changes the file only by recording edits and applying them to
 //! the file as it is when saved, under the folder's lock and through a
@@ -60,19 +63,29 @@ use crate::source::SourceKey;
 use crate::tags;
 
 /// The newest format this version reads, written only when songs share
-/// a record. Adding a key is not a new version; changing what an
-/// existing key means is.
-pub const VERSION: i64 = 2;
+/// a picture of the user's. Adding a key is not a new version; changing
+/// what an existing key means is.
+pub const VERSION: i64 = 3;
 
-/// The format written when no record is shared, which every version
+/// The format written when songs share a record a lookup keeps, and no
+/// picture of the user's.
+const SHARED: i64 = 2;
+
+/// The format written when no source is shared, which every version
 /// since 0.1 reads.
 const PLAIN: i64 = 1;
 
-/// Whether songs may share `key`: a record a lookup keeps, not a file of
-/// one song's.
+/// Whether songs may share `key`: a record a lookup keeps, or a picture
+/// of the user's, as one album's songs share its cover; not a song's own
+/// file.
 #[must_use]
 pub fn shareable(key: &SourceKey) -> bool {
-    provider::is_kept(key)
+    provider::is_kept(key) || is_picture(key)
+}
+
+fn is_picture(key: &SourceKey) -> bool {
+    matches!(key, SourceKey::Manual(m)
+        if crate::store::kind_of(m.path()) == Some(crate::store::Kind::Image))
 }
 
 /// The key that names a song listing `keys`: the first only it lists,
@@ -254,8 +267,9 @@ pub enum Edit {
     /// `from`, an extractor's name for a source, named `to` wherever it
     /// is written, its record kept: one key, renamed.
     Respell { from: SourceKey, to: SourceKey },
-    /// What `key` holds recorded in the song listing it.
+    /// What `key` holds recorded in the song named `song` that lists it.
     Hold {
+        song: SourceKey,
         key: SourceKey,
         held: crate::held::Held,
     },
@@ -481,16 +495,19 @@ impl Manifest {
         }
         normalize(&mut doc);
         let parsed = parse(&doc)?;
-        let shared = parsed
+        let mut seen = BTreeSet::new();
+        let shared: Vec<&SourceKey> = parsed
             .songs
             .iter()
             .flat_map(|s| &s.sources)
-            .filter(|k| shareable(k));
-        let mut seen = BTreeSet::new();
-        let version = if shared.into_iter().all(|k| seen.insert(k)) {
+            .filter(|k| shareable(k) && !seen.insert(*k))
+            .collect();
+        let version = if shared.iter().any(|k| is_picture(k)) {
+            VERSION
+        } else if shared.is_empty() {
             PLAIN
         } else {
-            VERSION
+            SHARED
         };
         if doc.get("version").and_then(Item::as_integer) != Some(version) {
             doc["version"] = value(version);
@@ -1120,12 +1137,19 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             let (from, to) = (from.to_string(), to.to_string());
             respell(doc, &|k| (k == from).then(|| to.clone()));
         }
-        Edit::Hold { key, held } => {
-            let text = key.to_string();
+        Edit::Hold { song, key, held } => {
+            let (named, text) = (song.to_string(), key.to_string());
+            // A key songs share is held by each apart: the song is found
+            // by its id, which only it lists.
             if let Some(song) = doc
                 .get_mut("song")
                 .and_then(Item::as_array_of_tables_mut)
-                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&text)))
+                .and_then(|l| {
+                    l.iter_mut().find(|t| {
+                        let listed = listed_keys(t);
+                        listed.contains(&named) && listed.contains(&text)
+                    })
+                })
             {
                 crate::held::set(song, key, held);
             }

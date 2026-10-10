@@ -173,6 +173,65 @@ pub fn stated_length(text: &str) -> Option<i64> {
     Some(units::ms_of_seconds(seconds).round() as i64)
 }
 
+/// What an `.lrc`'s ID tags say of its song.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// `[length:]`, in ms.
+    pub length_ms: Option<i64>,
+    /// `[offset:]`: how much earlier every line is meant, in ms.
+    pub offset_ms: i64,
+}
+
+/// The ID tags of the LRC `text`: `[ti:]`, `[ar:]`, `[al:]`, `[length:]`
+/// and `[offset:]`.
+#[must_use]
+pub fn headers(text: &str) -> Headers {
+    let tag = |name: &str| {
+        text.lines().find_map(|l| {
+            let inner = l.trim().strip_prefix('[')?.strip_suffix(']')?;
+            let (k, v) = inner.split_once(':')?;
+            (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty())
+                .then(|| v.trim().to_string())
+        })
+    };
+    Headers {
+        title: tag("ti"),
+        artist: tag("ar"),
+        album: tag("al"),
+        length_ms: stated_length(text),
+        offset_ms: tag("offset").and_then(|o| o.parse().ok()).unwrap_or(0),
+    }
+}
+
+/// The words LRC or plain lyrics sing: each timed line's text, and each
+/// untimed line but the ID tags, without the lines that are no lyric.
+#[must_use]
+pub fn sung(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut rest = line.trim();
+        let mut timed = false;
+        while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+            timed = true;
+            rest = after;
+        }
+        // Word timings, `<00:12.30>`, inside an enhanced LRC line.
+        let words: String = rest
+            .split('<')
+            .map(|part| part.split_once('>').map_or(part, |(_, w)| w))
+            .collect();
+        let header = !timed && words.starts_with('[') && words.ends_with(']');
+        if !header && !words.trim().is_empty() && is_lyric(&words) {
+            out.push_str(words.trim());
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,

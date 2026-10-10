@@ -208,7 +208,9 @@ the folder is followed rather than listed again. A song file brings the
 `.lrc` and the JPEG, PNG or WebP pictures named as it is, as
 `Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
 `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
-listed as a source of its own. A `.lrc` reads in UTF-8 or UTF-16, or in
+listed as a source of its own, and one given to `add` alone goes to the
+songs it belongs to ([lyrics, pictures and tags of their
+own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
 an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
 tells by its bytes. A folder linked into the manual folder is read as
 the folder it links to, except a link back to a folder it is inside,
@@ -263,6 +265,62 @@ notes that any two songs share:
 Asked means on a terminal; without one, the source becomes a song of its
 own, with a warning. `-y` joins every unsure match, `--new` compares
 nothing, and `--verbose` shows how close the nearest songs came.
+
+### Lyrics, pictures and tags of their own
+
+`muman add` also takes a file that is no song and gives it to the songs
+it belongs to:
+
+| File | Is |
+|---|---|
+| `.lrc`, a `.txt` of plain lyrics, `.srt`, `.vtt` | Lyrics, copied in as `.lrc`, listed among the song's sources |
+| JPEG, PNG or WebP | A cover, listed by every song whose cover looks like it |
+| `NAME=value` lines (`.txt`, `.tags`, `.vc`), `;FFMETADATA1` (`.ffmeta`), `.json` from beets or MusicBrainz | Tags, set on the song by hand and not kept |
+| `.cue` | Tags of the album and each track, each track's set on its song |
+
+A lyrics file or picture is ranked like any other source, so a song may
+keep lyrics that are timed where the new ones are not; pin it with
+`muman set` to choose it. Gains, peaks, embedded pictures and lyrics,
+and encoder names in a tag file describe another file and are skipped.
+
+Each file is matched by the strongest of what it shows: an ID it shares
+with the song (a video ID in its name, an ISRC, a MusicBrainz recording
+ID); its name, as the song's file is named; its fields, from an `.lrc`'s
+`[ti:]`, `[ar:]`, `[al:]` and `[length:]`, a tag file, or its own name
+read as `03 - Artist - Title`, `Artist - Title` or `Title`; and what it
+holds, lyrics against the words the song's lyrics sing, a picture
+against the song's covers by how they look, unchanged by scale,
+recompression or a frame of bars. Names are compared in their own
+script: accents, case, width and Traditional or Simplified forms count
+for little, but kanji and romaji, or Hangul and Latin, cannot be told
+apart by their letters and decide nothing.
+
+| Evidence | Verdict |
+|---|---|
+| An ID, its file's name, words or a cover alike | The song's: given to it |
+| Title, artist, album, track and length all but equal, and nearer than any other song | The song's |
+| A title alone, two songs as near, another version (live, instrumental, remix…), or a near match | Asked |
+| Lyrics ending after the song does, or stating another length | Not the song's |
+
+Asked means on a terminal: you pick among the likeliest songs, search
+the song list with a query as `muman list` reads one, or leave the file
+out, which copies nothing. `-y` takes the likeliest when it is clearly
+the nearest. Without a terminal, a file not surely a song's is left
+out, and `add` exits with 5 once the rest is done. `--to` names the song
+with a query instead and matches nothing; for a picture it names every
+song to give it to, for a cue sheet the songs its tracks go among:
+
+```bash
+muman add "Lantern Weather.lrc"
+muman add front.jpg --to 'album:="The Glass Orchards"'
+muman add album.cue rips/*.flac --new
+```
+
+A picture alike to the covers of more than three songs of more than one
+album is asked about rather than given to all, and a cover given with
+songs from its folder goes to those songs. Several songs may list one
+picture of your own; a song list where they do is format version 3,
+which an older muman refuses.
 
 ## How the best of each is picked
 

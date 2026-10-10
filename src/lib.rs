@@ -7,12 +7,14 @@ pub mod acquire;
 pub mod align;
 pub mod analysis;
 pub mod atomic;
+pub mod attach;
 pub mod change;
 pub mod check;
 pub mod clean;
 pub mod cli;
 pub mod codec;
 pub mod coverart;
+pub mod cue;
 pub mod dirs;
 pub mod download;
 pub mod duplicates;
@@ -42,6 +44,7 @@ pub mod naming;
 pub mod ogg;
 pub mod overview;
 pub mod parallel;
+pub mod picture;
 pub mod platform;
 pub mod plugins;
 pub mod probe;
@@ -56,10 +59,12 @@ pub mod render;
 pub mod resolve;
 pub mod runner;
 pub mod settings;
+pub mod similar;
 pub mod sites;
 pub mod source;
 pub mod state;
 pub mod store;
+pub mod tagfile;
 pub mod tags;
 pub mod template;
 #[cfg(test)]
@@ -365,21 +370,25 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Add {
             inputs,
+            to,
             no_match,
             matching,
             tags,
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
+            let mut left_out = 0;
             let done = (|| {
                 let (files, urls): (Vec<&String>, Vec<&String>) =
                     inputs.iter().partition(|i| Path::new(i).exists());
                 if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
                     bail!("{missing} is no file");
                 }
+                let (loose, files) = split_loose(&files)?;
                 let mut ok = true;
                 let sites = Manifest::load(&dirs.home)?.settings.sites;
-                let mut proposals = import(runner, dirs, &sites, &files, out)?;
+                let mut beside = Vec::new();
+                let mut proposals = import(runner, dirs, &sites, &files, &mut beside, out)?;
                 if !urls.is_empty() {
                     let urls: Vec<String> = urls.into_iter().cloned().collect();
                     let (fine, additions) =
@@ -396,13 +405,39 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     mode: mode(*matching),
                     verbose: job.verbose,
                     tags: tags.tags(),
+                    loose: !loose.is_empty(),
                 };
-                list(runner, dirs, proposals, &how, prompter, out)?;
+                let mut prompter = prompter;
+                list(
+                    runner,
+                    dirs,
+                    proposals,
+                    &how,
+                    change::reborrow(&mut prompter),
+                    out,
+                )?;
+                let attaching = attach::How {
+                    yes: matching.yes,
+                    to: to.clone(),
+                    verbose: job.verbose,
+                };
+                let attached =
+                    attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out)?;
+                left_out = attached.left_out;
+                give_tags(dirs, &attached.songs, &how, out)?;
                 ok &= look_up(job, runner, http, false, &declined, out)?;
                 ok &= sync(Options::default(), Some(&mut run), out)?;
                 Ok(ok)
             })();
-            recorded(run, &dirs.home, done)
+            let ok = recorded(run, &dirs.home, done)?;
+            if left_out > 0 {
+                return Err(change::Refused(format!(
+                    "{left_out} file(s) were not added: name their songs with --to, give -y, \
+                     or run on a terminal"
+                ))
+                .into());
+            }
+            Ok(ok)
         }
         Command::Sync {
             rematch,
@@ -425,6 +460,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     mode: mode(*matching),
                     verbose: job.verbose,
                     tags: Vec::new(),
+                    loose: false,
                 };
                 list(runner, dirs, proposals, &how, prompter, out)?;
                 ok &= look_up(job, runner, http, *rematch, &BTreeSet::new(), out)?;
@@ -775,6 +811,8 @@ struct Listing {
     verbose: bool,
     /// Set on every song a proposal is listed as or added to.
     tags: Tags,
+    /// Whether loose files may yet be given to songs, and so the tags.
+    loose: bool,
 }
 
 /// List each proposal as a song, or as a source of the song it is the
@@ -796,7 +834,7 @@ fn list<R: Runner, W: Write>(
         prompter,
         out,
     )?;
-    if edits.is_empty() && !how.tags.is_empty() {
+    if edits.is_empty() && !how.tags.is_empty() && !how.loose {
         ui::warning(out, "No song was added, so no tag was set")?;
     }
     let mut manifest = Manifest::load(&dirs.home)?;
@@ -814,6 +852,50 @@ fn list<R: Runner, W: Write>(
         }
     }
     manifest.save()
+}
+
+/// Set the tags given on the command line on every song a loose file was
+/// given to, after the file's own, so the command line wins.
+fn give_tags<W: Write>(dirs: &Dirs, songs: &[SourceKey], how: &Listing, out: &mut W) -> Result<()> {
+    if how.tags.is_empty() || !how.loose {
+        return Ok(());
+    }
+    if songs.is_empty() {
+        return Ok(ui::warning(
+            out,
+            "No song was given a file, so no tag was set",
+        )?);
+    }
+    let mut manifest = Manifest::load(&dirs.home)?;
+    let mut seen = BTreeSet::new();
+    for key in songs.iter().filter(|k| seen.insert(*k)) {
+        manifest.edit(Edit::Tag {
+            key: key.clone(),
+            tags: how.tags.clone(),
+        });
+    }
+    manifest.save()
+}
+
+/// The files of `files` `add` gives to songs rather than lists, each with
+/// what it holds, and the rest. A loose file named as an audio file given
+/// with it, in its folder, is that file's sidecar and copied with it.
+fn split_loose<'a>(files: &[&'a String]) -> Result<(attach::Loose, Vec<&'a String>)> {
+    let mut loose = Vec::new();
+    let mut rest = Vec::new();
+    for file in files {
+        match attach::sort(Path::new(file))? {
+            Some(what) => loose.push((PathBuf::from(file), what)),
+            None => rest.push(*file),
+        }
+    }
+    let audio: Vec<PathBuf> = rest
+        .iter()
+        .map(|f| PathBuf::from(f.as_str()))
+        .filter(|p| p.is_file())
+        .collect();
+    loose.retain(|(path, _)| !audio.iter().any(|a| sidecars(a).contains(path)));
+    Ok((loose, rest))
 }
 
 /// Song files dropped into the manual folder that no song lists, each a
@@ -904,12 +986,15 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
 /// Copy files and folders the user named into the sources: an original
 /// yt-dlp fetched into the store under its key, anything else into the
 /// manual folder with the lyrics and pictures named as it is. Never
-/// moves or overwrites; a name already taken is an error.
+/// moves or overwrites; a name already taken is an error. Each song file
+/// copied is noted in `beside` with where it came from, for the loose
+/// files given with it.
 fn import<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     sites: &crate::sites::Sites,
     paths: &[&String],
+    beside: &mut Vec<(PathBuf, SourceKey)>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let mut proposals = Vec::new();
@@ -937,7 +1022,7 @@ fn import<R: Runner, W: Write>(
         let to = dirs.manual().join(name);
         if path.is_file() && store::kind_of(path).is_none() {
             bail!(
-                "{} is no song, lyrics or picture muman reads",
+                "{} is no song, lyrics, picture or tags muman reads",
                 path.display()
             );
         }
@@ -957,6 +1042,17 @@ fn import<R: Runner, W: Write>(
         )?;
         let store = Store::scan(dirs)?;
         for key in media_at(&store, dirs, &to)? {
+            if let SourceKey::Manual(m) = &key
+                && let Some(folder) = path.parent()
+            {
+                let rel = m.path().strip_prefix(name).unwrap_or(m.path());
+                let origin = if path.is_dir() {
+                    path.join(rel)
+                } else {
+                    folder.join(m.path())
+                };
+                beside.push((origin, key.clone()));
+            }
             proposals.push(Proposal {
                 label: key.short(),
                 sources: vec![key],
@@ -978,7 +1074,11 @@ fn names_a_path(input: &str) -> bool {
                 .as_bytes()
                 .get(2)
                 .is_some_and(|b| *b == b'/' || *b == b'\\');
-    let a_file = !input.contains("://") && store::kind_of(Path::new(input)).is_some();
+    let loose = Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| attach::LOOSE.contains(&e.to_ascii_lowercase().as_str()));
+    let a_file = !input.contains("://") && (store::kind_of(Path::new(input)).is_some() || loose);
     !input.contains("://") && from_folder || a_file
 }
 

@@ -69,6 +69,13 @@ impl Setup {
         path.to_string_lossy().into_owned()
     }
 
+    /// A file holding `text`, written as [`Setup::file`] writes one.
+    fn written(&self, rel: &str, text: &str) -> String {
+        let path = self.file(rel);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
     fn run(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
         let mut out = Vec::new();
         let ok = run_with(
@@ -1415,7 +1422,7 @@ fn a_path_that_is_not_there_is_told_from_an_address() {
 #[test]
 fn a_file_muman_does_not_read_is_not_added() {
     let s = Setup::new();
-    let notes = s.file("rips/notes.txt");
+    let notes = s.file("rips/notes.docx");
     let e = run_with(
         &s.job(&["add", &notes]),
         &flacs(),
@@ -1426,10 +1433,10 @@ fn a_file_muman_does_not_read_is_not_added() {
     )
     .unwrap_err();
     assert!(
-        format!("{e:#}").contains("is no song, lyrics or picture"),
+        format!("{e:#}").contains("is no song, lyrics, picture or tags"),
         "{e:#}"
     );
-    assert!(!s.dir.path().join("home/sources/manual/notes.txt").exists());
+    assert!(!s.dir.path().join("home/sources/manual/notes.docx").exists());
 }
 
 #[test]
@@ -1725,3 +1732,5 @@ fn songs_moving_with_their_lyrics_survive_a_kill_anywhere() {
     };
     survives_a_kill_at_every_step(&retemplated, &["sync"], &sync_again, Ends::Whole);
 }
+
+mod attaching;

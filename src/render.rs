@@ -544,20 +544,15 @@ fn lyrics_plan(
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
 ) -> Result<Option<String>> {
-    let file = match &lyrics.at {
-        LyricsAt::Stream { index } => {
-            let n = inputs.index(&source.path);
-            let mut args: Vec<OsString> = vec!["-map".into(), format!("{n}:{index}").into()];
-            args.extend(LRC_ARGS.iter().map(OsString::from));
-            outputs.push(Output::new(args, raw));
-            return Ok(None);
-        }
-        LyricsAt::Sidecar => source
-            .lyrics
-            .clone()
-            .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?,
-        LyricsAt::File => source.path.clone(),
-    };
+    if let LyricsAt::Stream { index } = &lyrics.at {
+        let n = inputs.index(&source.path);
+        let mut args: Vec<OsString> = vec!["-map".into(), format!("{n}:{index}").into()];
+        args.extend(LRC_ARGS.iter().map(OsString::from));
+        outputs.push(Output::new(args, raw));
+        return Ok(None);
+    }
+    let file = lyrics_file(&lyrics.at, source)
+        .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
     let text =
         lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
     Ok(Some(lyrics::shift_lrc(
@@ -565,6 +560,16 @@ fn lyrics_plan(
         lyrics.shift_ms,
         lyrics.stretch_ppm,
     )))
+}
+
+/// The file lyrics at `at` of `source` are read from; none for a stream,
+/// or lyrics beside it that are gone.
+pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
+    match at {
+        LyricsAt::Stream { .. } => None,
+        LyricsAt::Sidecar => source.lyrics.clone(),
+        LyricsAt::File => Some(source.path.clone()),
+    }
 }
 
 fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {

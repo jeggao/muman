@@ -21,12 +21,13 @@ Exit codes:
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
   5  A query did not read or matched no song, a change needs a terminal,
-     -y or --all, or a change or undo was refused
+     -y or --all, a file added matched no song for sure and was left out,
+     or a change or undo was refused
 ```
 
 **Subcommands:**
 
-* `add` — Add songs: fetch what URLs name, or copy files into the manual folder, list each as a song or as a source of the song it is the same recording as, set any tags given on each, then sync
+* `add` — Add songs: fetch what URLs name, or copy files into the manual folder, list each as a song or as a source of the song it is the same recording as, set any tags given on each, then sync. Lyrics, pictures and tag files are matched to the songs they belong to, and asked about when that is not sure
 * `sync` — Bring the library in line with the song list: fetch any missing source, add files dropped into the manual folder, make every lookup due, write every song whose sources or tags changed, and delete what no song makes
 * `list` — List the songs a query matches, one per line: its first key, then its artist, title and album, separated by tabs
 * `remove` — Remove the songs a query matches: their library files go, and they are kept under `[[removed]]` so no playlist or dropped file lists them again
@@ -65,16 +66,17 @@ Exit codes:
 
 ### `muman add`
 
-Add songs: fetch what URLs name, or copy files into the manual folder, list each as a song or as a source of the song it is the same recording as, set any tags given on each, then sync
+Add songs: fetch what URLs name, or copy files into the manual folder, list each as a song or as a source of the song it is the same recording as, set any tags given on each, then sync. Lyrics, pictures and tag files are matched to the songs they belong to, and asked about when that is not sure
 
 **Usage:** `muman add [OPTIONS] <URL|FILE>...`
 
 **Arguments:**
 
-* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into the store
+* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into the store; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 
+* `--to <TERM>` — Give every lyrics, picture and tag file to the songs this query names, matching none: one song, or for a picture every one, or for a cue sheet those its tracks go among. Each value is a word of the query, as `muman list` reads them
 * `--no-match` — Keep each video as uploaded, never looking for its YouTube Music track; other lookups are still made
 * `-y`, `--yes` — Add a new source to the listed song it may be the same recording as without asking
 * `--new` — Make every new source a song of its own, without comparing it

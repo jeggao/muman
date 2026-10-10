@@ -100,6 +100,19 @@ impl View {
 
 /// Every song as a query reads it, in song-list order.
 pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<View>> {
+    Ok(resolved_views(manifest, state, library)?
+        .into_iter()
+        .map(|(view, _)| view)
+        .collect())
+}
+
+/// Every song as a query reads it, in song-list order, with its plan
+/// where it resolves.
+pub fn resolved_views(
+    manifest: &Manifest,
+    state: &State,
+    library: &Path,
+) -> Result<Vec<(View, Option<crate::resolve::Resolved>)>> {
     let (mut planned, _) = reconcile::plan(manifest, state, library, None, &mut std::io::sink())?;
     crate::limit::as_written(manifest, state, &mut planned);
     let mut views: Vec<View> = manifest
@@ -127,6 +140,7 @@ pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<V
             }
         })
         .collect();
+    let mut plans: Vec<Option<crate::resolve::Resolved>> = vec![None; views.len()];
     for (n, r) in planned {
         let view = &mut views[n];
         view.tags.clone_from(&r.plan.tags);
@@ -134,8 +148,9 @@ pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<V
         view.format = Some(r.plan.format.extension().to_string());
         view.cover = r.plan.cover.is_some();
         view.lyrics = r.plan.lyrics.is_some();
+        plans[n] = Some(r);
     }
-    Ok(views)
+    Ok(views.into_iter().zip(plans).collect())
 }
 
 /// A removed song as a query reads it: its keys, and its note as its

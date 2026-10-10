@@ -107,7 +107,7 @@ muman undo
 
 | Command | Does |
 |---|---|
-| `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, then sync |
+| `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, give lyrics, pictures and tag files to their songs, then sync |
 | `check` | Compare the library and the sources with what muman recorded |
 | `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
@@ -128,7 +128,7 @@ Every flag is in the [command reference](docs/cli.md).
 | 0 | Done, or nothing needed doing, or a change was declined |
 | 2 | ffmpeg, ffprobe or yt-dlp is missing, or the system names no home folder |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, or a problem `check` found |
-| 5 | A query matched no song, a change needs a terminal, `-y` or `--all`, or `undo` refused |
+| 5 | A query matched no song, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, or `undo` refused |
 
 ## Documentation
 

@@ -59,6 +59,9 @@ pub struct Fake {
     pub wavs: Vec<(String, Vec<u8>)>,
     /// The size of every picture decoded to gray, by path fragment.
     pub pictures: Vec<(String, (u32, u32))>,
+    /// The design a picture decodes to, by path fragment: two paths given
+    /// one look alike; others look as their own.
+    pub looks: Vec<(String, u64)>,
     pub lrc: Option<String>,
     /// The bytes an audio stream's packets add up to, by path fragment.
     pub packets: Vec<(String, u64)>,
@@ -251,7 +254,10 @@ impl Fake {
                 .into_bytes(),
             "image2" if args[..at].iter().any(|a| a == "pgm") => {
                 let (w, h) = find(&self.pictures, &input).copied().unwrap_or((64, 64));
-                pgm(w, h, seed_of_path(&input))
+                let seed = find(&self.looks, &input)
+                    .copied()
+                    .unwrap_or_else(|| seed_of_path(&input));
+                pgm(w, h, seed)
             }
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),

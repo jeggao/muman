@@ -730,6 +730,18 @@ fn crop(gray: &Gray<'_>, r: Rect) -> Vec<f64> {
     out
 }
 
+/// The part `area` of the gray picture `pixels`, `width` wide, averaged
+/// down to exactly `nw` × `nh`.
+pub(crate) fn downscale(pixels: &[u8], width: u32, area: Rect, nw: usize, nh: usize) -> Vec<f64> {
+    let gray = Gray {
+        pixels,
+        width: width as usize,
+    };
+    let (w, h) = (area.width as usize, area.height as usize);
+    let img = crop(&gray, area);
+    columns(&rows(&img, w, &box_weights(w, nw)), nw, &box_weights(h, nh))
+}
+
 /// For each of `n` outputs over `len` inputs, the inputs it averages and
 /// how much of each it covers.
 fn box_weights(len: usize, n: usize) -> Vec<Vec<(usize, f64)>> {

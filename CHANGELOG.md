@@ -20,6 +20,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   album's or the song's own gain, and `ceiling` the highest peak a
   raising gain may lift a song to. A gain set by hand wins. A mixed
   song is measured as mixed.
+- **`add` gives lyrics, pictures, tag files and cue sheets to their
+  songs.** Each is matched by an ID it shares with a song, its file
+  name, its fields (an `.lrc`'s ID tags, a tag file's, or its own name)
+  and what it holds: lyrics by the words the song sings, a picture by
+  how the song's cover looks. Names are compared in every script,
+  folding accents, width, kana and Traditional Chinese. What is not
+  surely one song's is asked about on a terminal, with a search of the
+  song list; `--to` names the songs instead. Lyrics and pictures become
+  sources of the song; tags from `NAME=value`, ffmetadata, beets or
+  MusicBrainz JSON and cue sheets are set on it by hand.
 
 ### Changed
 
@@ -29,6 +39,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `undo` keeps the files replaced as far as `[history] max_size` allows.
   `[loudness] mode = "off"` keeps the gains a source's own tags carry,
   as before.
+- **A picture of your own may be listed by several songs,** as the songs
+  of an album share its cover. A song list where one is is format
+  version 3, which an older muman refuses.
+- **`add` exits with 5 when a file it was given was left out,** having
+  matched no song for sure with no terminal to ask on.
+
+### Fixed
+
+- **`add Song.flac Song.lrc`** copies the lyrics once, beside their
+  song, where it failed saying they existed already.
+- **Two songs listing one lookup record** each keep their record of what
+  it holds, where the second's was written again on every sync.
 
 ## [0.3.0] - 2026-10-07
 

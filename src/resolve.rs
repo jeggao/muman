@@ -774,7 +774,7 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
 
 /// How far a stated length may be from the audio's before lyrics timed
 /// to it are no use.
-const STATED_SPAN_MS: f64 = 4000.0;
+pub(crate) const STATED_SPAN_MS: f64 = 4000.0;
 /// A stated length that agrees proves less than an audio comparison, so
 /// it never ranks over a subtitle of the same recording.
 const STATED_MAX: f64 = 0.9;

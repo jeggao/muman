@@ -71,9 +71,11 @@ pub fn pick(
     let labels: Vec<String> = found.iter().map(|n| label(&views[*n])).collect();
     match prompter {
         Some(p) => {
+            let every: Vec<usize> = (0..labels.len()).collect();
             let picked = p.choose(
                 &format!("{} songs match; which to {verb}?", found.len()),
                 &labels,
+                &every,
             )?;
             Ok(picked
                 .into_iter()

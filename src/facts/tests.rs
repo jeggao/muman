@@ -250,3 +250,28 @@ fn an_analysis_caught_up_takes_one_run_and_reads_the_opus_header() {
     assert_eq!(fake.calls().len(), before + 1);
     assert_eq!(a.loudness().map(|m| m.opus_gain), Some(0));
 }
+
+#[test]
+fn a_picture_is_looked_at_when_measured_and_an_old_one_caught_up_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let fake = Fake::default();
+    let mut facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
+    assert!(facts.covers[0].look.is_some());
+    assert!(facts.pictured());
+    let look = facts.covers[0].look;
+    facts.covers[0].look = None;
+    facts.picture_method.clear();
+    assert!(!facts.pictured());
+    let fake = Fake::default();
+    let looks = super::look(&fake, &source, &dir.path().join("scratch")).unwrap();
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 3, "{calls:#?}");
+    assert!(
+        !fake.ran("s16le") && !fake.ran("wav"),
+        "nothing but the pictures decoded"
+    );
+    facts.take_looks(&looks);
+    assert!(facts.pictured());
+    assert_eq!(facts.covers[0].look, look);
+}

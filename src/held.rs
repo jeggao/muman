@@ -486,6 +486,9 @@ pub fn records(
 ) -> Vec<Edit> {
     let mut edits = Vec::new();
     for song in &manifest.songs {
+        let Some(id) = song.id() else {
+            continue;
+        };
         for key in &song.sources {
             let Some(now) = facts
                 .get(key)
@@ -505,6 +508,7 @@ pub fn records(
             };
             if let Some(held) = held {
                 edits.push(Edit::Hold {
+                    song: id.clone(),
                     key: key.clone(),
                     held,
                 });

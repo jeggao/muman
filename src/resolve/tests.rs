@@ -67,6 +67,7 @@ fn cover(f: &mut Facts, at: CoverAt, q: ImageQuality) {
         mimetype: "image/jpeg".into(),
         quality: Some(q),
         digest: None,
+        look: None,
     });
 }
 

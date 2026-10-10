@@ -42,7 +42,8 @@ Exit codes:
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
   5  A query did not read or matched no song, a change needs a terminal,
-     -y or --all, or a change or undo was refused";
+     -y or --all, a file added matched no song for sure and was left out,
+     or a change or undo was refused";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -239,13 +240,24 @@ Every other word is a query, as `muman list` reads it.";
 pub enum Command {
     /// Add songs: fetch what URLs name, or copy files into the manual
     /// folder, list each as a song or as a source of the song it is the
-    /// same recording as, set any tags given on each, then sync.
+    /// same recording as, set any tags given on each, then sync. Lyrics,
+    /// pictures and tag files are matched to the songs they belong to,
+    /// and asked about when that is not sure.
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
         /// or audio files and folders of them, copied into the manual
-        /// folder, or originals yt-dlp fetched, into the store.
+        /// folder, or originals yt-dlp fetched, into the store; or
+        /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
+        /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
         #[arg(required = true, value_name = "URL|FILE")]
         inputs: Vec<String>,
+
+        /// Give every lyrics, picture and tag file to the songs this
+        /// query names, matching none: one song, or for a picture every
+        /// one, or for a cue sheet those its tracks go among. Each value
+        /// is a word of the query, as `muman list` reads them.
+        #[arg(long = "to", value_name = "TERM")]
+        to: Vec<String>,
 
         /// Keep each video as uploaded, never looking for its YouTube
         /// Music track; other lookups are still made.
@@ -704,6 +716,7 @@ Shelves hold `songs` alone."
         assert!(parse(&["add"]).is_err());
         let Command::Add {
             inputs,
+            to,
             no_match,
             matching,
             tags,
@@ -712,8 +725,22 @@ Shelves hold `songs` alone."
             panic!("not add");
         };
         assert_eq!(inputs, ["a", "b.flac"]);
-        assert!(!no_match && !matching.yes && !matching.new);
+        assert!(!no_match && !matching.yes && !matching.new && to.is_empty());
         assert_eq!(tags.tags(), []);
+        let Command::Add { to, .. } = parse(&[
+            "add",
+            "a.lrc",
+            "--to",
+            "artist:venn",
+            "--to",
+            "album:=The Glass Orchards",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("not add");
+        };
+        assert_eq!(to, ["artist:venn", "album:=The Glass Orchards"]);
     }
 
     #[test]
