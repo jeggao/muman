@@ -106,6 +106,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   changed since muman wrote it as any other, as the next `sync` does,
   where it counted the file it was about to replace, wrote the song at
   its best, and left the next sync to encode it again.
+- **A lowered `[history] max_size`** binds the runs already kept: each
+  run that records lets go of the oldest runs' files until the history
+  fits, keeping their records so `undo` writes those files again from
+  their sources, where old runs kept their files past the limit. The
+  run that follows a hand edit of `[history]` keeps to the edit, where
+  it kept to the limits before it.
 
 ## [0.3.0] - 2026-10-07
 

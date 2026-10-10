@@ -618,9 +618,10 @@ nothing, or, negated, every song.
   crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
   It refuses when the song list changed since, and after `remove
   --purge` until you put the files of your own it trashed back from the
-  trash, where it names them. `[history]` sets how many
-  runs are kept and how much space they take together; a file past that
-  is written again from its sources.
+  trash, where it names them. `[history]` sets how many runs are kept
+  and how much space they take together; each run that records holds
+  the history to it, letting go of the oldest runs' files first, and a
+  file not kept is written again from its sources.
 
 ```bash
 muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y
