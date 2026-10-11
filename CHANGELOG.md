@@ -208,6 +208,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   after an undo that only put files back, where it ran only once a file
   was written or removed; `{moved}` counts the files moved, and an
   undo's files put back count as written.
+- **`undo` of `sync --force`** puts back a file you had changed since
+  muman wrote it as still changed, where it took it for muman's own,
+  `check` found nothing and the next change to its song wrote over it.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.

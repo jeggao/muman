@@ -30,7 +30,10 @@
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
-//! reversed, as a song retagged where it moved to needs.
+//! reversed, as a song retagged where it moved to needs. A file the user
+//! had changed since muman wrote it, which only a forced run writes over,
+//! is noted so as it is kept and put back with the stamp it no longer
+//! matches, still the user's to the sync after.
 //!
 //! A run's song list before is the one the last kept run left, so a hand
 //! edit is undone with the run that applied it. A command that changes
@@ -117,6 +120,11 @@ struct Record {
     /// Those kept under the run's `files`.
     #[serde(with = "crate::relpath::portable_keys")]
     kept: BTreeSet<PathBuf>,
+    /// Those of them that were muman's files changed since it wrote
+    /// them, as a forced run writes over a file retagged by hand: put
+    /// back, they are still changed since written.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    changed: BTreeSet<PathBuf>,
     /// The bytes those take.
     #[serde(default)]
     bytes: u64,
@@ -414,6 +422,15 @@ impl Run {
         if kept {
             self.record.bytes += meta.len();
             self.record.kept.insert(rel.to_path_buf());
+            // A copy with new times, its bytes muman's, is no change.
+            let outputs = &self.record.outputs;
+            let changed = crate::reconcile::changed_since_written(library, outputs, rel)
+                && outputs.get(rel).is_some_and(|w| {
+                    w.digest.is_none() || crate::facts::digest_file(&from) != w.digest
+                });
+            if changed {
+                self.record.changed.insert(rel.to_path_buf());
+            }
         }
         Ok(())
     }
@@ -897,7 +914,32 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
             crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(lyrics)))?;
         }
     }
-    let mut outputs = state.outputs.clone();
+    state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library);
+    // A home that had no song list before gets one that lists nothing, so
+    // the sync after removes what the run added.
+    let before = record
+        .songs_before
+        .as_deref()
+        .unwrap_or(crate::manifest::NEW);
+    atomic::write(home, &atomic::Name::new(MANIFEST)?, before.as_bytes())?;
+    state.save(home)?;
+    if !record.undone {
+        record.undone = true;
+        let text = serde_json::to_vec(&record).context("writing the run record")?;
+        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
+    }
+    Ok(Undone { dir, changed })
+}
+
+/// The outputs once `record`'s run is undone, from `now`'s: as the run
+/// found them, each file put back stamped as it lies, and each the run
+/// wrote over and did not keep left for the sync after to write again.
+fn outputs_put_back(
+    record: &Record,
+    now: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+) -> BTreeMap<PathBuf, Written> {
+    let mut outputs = now.clone();
     for m in &record.moves {
         outputs.remove(&m.to);
     }
@@ -920,28 +962,17 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     for (rel, before) in &record.outputs {
         let mut written = before.clone();
         if record.kept.contains(rel) {
-            written.stamp = store::stamp_text(&dirs.library.join(rel));
+            // One changed since written keeps the stamp it no longer matches.
+            if !record.changed.contains(rel) {
+                written.stamp = store::stamp_text(&library.join(rel));
+            }
         } else if record.touched.contains(rel) || written_over.contains(rel) {
             written.plan = None;
             written.stamp = None;
         }
         outputs.insert(rel.clone(), written);
     }
-    state.outputs = outputs;
-    // A home that had no song list before gets one that lists nothing, so
-    // the sync after removes what the run added.
-    let before = record
-        .songs_before
-        .as_deref()
-        .unwrap_or(crate::manifest::NEW);
-    atomic::write(home, &atomic::Name::new(MANIFEST)?, before.as_bytes())?;
-    state.save(home)?;
-    if !record.undone {
-        record.undone = true;
-        let text = serde_json::to_vec(&record).context("writing the run record")?;
-        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
-    }
-    Ok(Undone { dir, changed })
+    outputs
 }
 
 #[cfg(test)]

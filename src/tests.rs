@@ -699,6 +699,42 @@ fn a_file_of_your_own_at_a_songs_path_is_written_over_only_when_forced() {
 }
 
 #[test]
+fn undo_of_a_forced_sync_leaves_a_file_retagged_by_hand_changed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let mut retagged = std::fs::read(&file).unwrap();
+    retagged.extend_from_slice(b"a comment of my own");
+    std::fs::write(&file, &retagged).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert_ne!(std::fs::read(&file).unwrap(), retagged);
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read(&file).unwrap(), retagged, "{text}");
+    let mut report = Vec::new();
+    run_with(
+        &s.job(&["check"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut report,
+    )
+    .unwrap();
+    let report = String::from_utf8(report).unwrap();
+    assert!(report.contains("Changed since muman wrote it"), "{report}");
+    let (_, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(
+        text.contains("Left alone, changed since muman wrote it"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), retagged, "{text}");
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
