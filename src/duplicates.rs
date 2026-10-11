@@ -11,8 +11,9 @@
 //! real library of 1,546 songs took 8 s, and found 12 groups on one album
 //! and 144 across albums.
 //!
-//! A group on one album is most likely a file there twice; a group on
-//! several albums is a song and its copies elsewhere, which a library of
+//! A group with an album holding it twice is most likely a file there
+//! twice, whatever other albums hold it too; a group on several albums,
+//! once on each, is a song and its copies elsewhere, which a library of
 //! whole albums keeps. Nothing is changed: merging is for the user, by
 //! moving the sources into one `[[song]]` or removing the others.
 
@@ -110,13 +111,16 @@ pub fn report<W: Write, D: Write>(
         .filter(|g| g.iter().any(|n| query.matches(&views[*n])))
         .collect();
     let album = |n: usize| views[n].first("album");
-    let albums = |g: &[usize]| g.iter().map(|n| album(*n)).collect::<BTreeSet<_>>().len();
+    let names = |g: &[usize]| g.iter().map(|n| album(*n)).collect::<Vec<_>>();
     let (alone, across): (Vec<&Vec<usize>>, Vec<&Vec<usize>>) =
-        shown.into_iter().partition(|g| albums(g) == 1);
+        shown.into_iter().partition(|g| twice(&names(g)).is_some());
     for group in alone.iter().chain(&across) {
-        let on = match albums(group) {
-            1 => format!("on one album, {}", album(group[0])),
-            n => format!("on {n} albums"),
+        let names = names(group);
+        let albums = names.iter().collect::<BTreeSet<_>>().len();
+        let on = match (albums, twice(&names)) {
+            (1, _) => format!("on one album, {}", names[0]),
+            (n, Some(held)) => format!("on {n} albums, twice on {held}"),
+            (n, None) => format!("on {n} albums"),
         };
         writeln!(report, "{} songs, one recording, {on}:", group.len())?;
         for n in *group {
@@ -128,8 +132,18 @@ pub fn report<W: Write, D: Write>(
     summary(report, (alone.len(), across.len()), groups.len())
 }
 
-/// The line after the groups shown, `alone` on one album and `across`
-/// albums, of `found` in all.
+/// The album of `albums`, one per song of a group, that holds it more
+/// than once.
+fn twice(albums: &[String]) -> Option<&str> {
+    albums
+        .iter()
+        .enumerate()
+        .find(|(n, a)| albums[..*n].contains(a))
+        .map(|(_, a)| a.as_str())
+}
+
+/// The line after the groups shown, `alone` with an album holding it
+/// twice and `across` albums, of `found` in all.
 fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usize) -> Result<()> {
     if found == 0 {
         crate::ui::success(report, "No two songs are one recording")?;
@@ -142,7 +156,7 @@ fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usi
         crate::ui::info(
             report,
             &format!(
-                "{alone} group(s) on one album, {across} across albums. To keep one song of a \
+                "{alone} group(s) an album holds twice, {across} across albums. To keep one song of a \
                  group, move the others' sources into its [[song]] with `muman edit`, or \
                  remove them"
             ),
@@ -185,6 +199,14 @@ fn root_of(root: &mut [usize], mut n: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_album_holding_a_recording_twice_is_found_among_others() {
+        let names = |a: &[&str]| a.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let both = names(&["Lantern Weather", "Best Of", "Lantern Weather"]);
+        assert_eq!(twice(&both), Some("Lantern Weather"));
+        assert_eq!(twice(&names(&["Lantern Weather", "Best Of"])), None);
+    }
 
     #[test]
     fn linked_songs_make_one_group() {

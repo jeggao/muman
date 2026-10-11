@@ -510,7 +510,12 @@ mod tests {
     fn accents_and_unicode_forms_are_ignored() {
         let composed = view("Caf\u{e9} Noir", "Lumo Fenn", "manual:a.flac");
         let decomposed = view("Cafe\u{301} Noir", "Lumo Fenn", "manual:b.flac");
-        for term in ["caf\u{e9}", "cafe\u{301}", "cafe", "title:=\"CAF\u{c9} NOIR\""] {
+        for term in [
+            "caf\u{e9}",
+            "cafe\u{301}",
+            "cafe",
+            "title:=\"CAF\u{c9} NOIR\"",
+        ] {
             let q = query(&[term]);
             assert!(q.matches(&composed) && q.matches(&decomposed), "{term}");
         }

@@ -482,9 +482,9 @@ pub enum Command {
     },
     /// List the songs listed apart that are one recording, by their audio
     /// fingerprints: a file of an album there twice, or a track and its
-    /// copies on other albums. Groups on one album come first; songs any
-    /// group holds that the query matches name the groups shown. Changes
-    /// nothing.
+    /// copies on other albums. Groups an album holds twice come first;
+    /// songs any group holds that the query matches name the groups
+    /// shown. Changes nothing.
     #[command(after_help = QUERY_HELP)]
     Duplicates {
         /// Terms a song in each group shown matches; none shows every

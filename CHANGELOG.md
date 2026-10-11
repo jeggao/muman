@@ -106,6 +106,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A query ignores accents and how a name was composed,** so `cafe`
   and `café` match "Café" however it was written, where a name a Mac
   wrote decomposed matched only a decomposed query, and `cafe` none.
+- **`duplicates`** puts first and names a group an album holds twice
+  when other albums hold it too, where only a group on one album came
+  first.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

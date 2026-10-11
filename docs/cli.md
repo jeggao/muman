@@ -39,7 +39,7 @@ Exit codes:
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
-* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
+* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Options:**
@@ -348,7 +348,7 @@ Write the song list and the library, as the last run left them, into one zip: so
 
 ### `muman duplicates`
 
-List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups on one album come first; songs any group holds that the query matches name the groups shown. Changes nothing
+List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
 
 **Usage:** `muman duplicates [QUERY]...`
 
