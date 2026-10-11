@@ -105,7 +105,10 @@ fn credits_packaging_and_order_cost_nothing_and_decorations_little() {
     assert!(distance("Copper Moth", "Lantern Weather").unwrap() > 0.5);
     let remaster = distance("Lantern Weather (Remastered 2011)", "Lantern Weather").unwrap();
     assert!(remaster > 0.04 && remaster < 0.25, "{remaster}");
-    assert!(conflicts("Lantern Weather (Remastered 2011)", "Lantern Weather").is_empty());
+    assert_eq!(
+        conflicts("Lantern Weather (Remastered 2011)", "Lantern Weather"),
+        [] as [&str; 0]
+    );
 }
 
 #[test]
@@ -132,7 +135,7 @@ fn version_words_name_conflicts_in_any_language() {
     );
     assert_eq!(conflicts("바람 (Inst.)", "바람"), ["instrumental"]);
     assert_eq!(conflicts("夜行 (現場)", "夜行"), ["live version"]);
-    assert!(conflicts("でもね", "でもね").is_empty());
+    assert_eq!(conflicts("でもね", "でもね"), [] as [&str; 0]);
     assert_eq!(conflicts("夜行 (デモ)", "夜行"), ["demo"]);
     assert_eq!(
         conflicts("Lantern Weather (Live)", "Lantern Weather (Live)"),
@@ -222,14 +225,14 @@ fn assign_finds_the_least_sum_and_breaks_ties_alike() {
     );
     assert_eq!(assign(&[vec![9, 1, 9, 9], vec![1, 9, 9, 9]]), [1, 0]);
     assert_eq!(assign(&[vec![0, 0], vec![0, 0]]), [0, 1]);
-    assert!(assign(&[]).is_empty());
+    assert_eq!(assign(&[]), [] as [usize; 0]);
 }
 
 #[test]
 fn version_words_are_whole_loanwords_in_japanese() {
-    assert!(conflicts("夜行 (なんでもない)", "夜行").is_empty());
-    assert!(conflicts("夜行 (ドライブ)", "夜行").is_empty());
-    assert!(conflicts("夜行 〜雨でも〜", "夜行").is_empty());
+    assert_eq!(conflicts("夜行 (なんでもない)", "夜行"), [] as [&str; 0]);
+    assert_eq!(conflicts("夜行 (ドライブ)", "夜行"), [] as [&str; 0]);
+    assert_eq!(conflicts("夜行 〜雨でも〜", "夜行"), [] as [&str; 0]);
     assert_eq!(conflicts("夜行 (デモ)", "夜行"), ["demo"]);
     assert_eq!(conflicts("夜行 (ライブ)", "夜行"), ["live version"]);
 }

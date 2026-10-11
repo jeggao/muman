@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(values(&sheet.album, "DATE"), ["2011"]);
         assert_eq!(values(&sheet.album, "BARCODE"), ["0000000000017"]);
         assert_eq!(values(&sheet.album, "TRACKTOTAL"), ["2"]);
-        assert!(values(&sheet.album, "COMMENT").is_empty());
+        assert_eq!(values(&sheet.album, "COMMENT"), [] as [&str; 0]);
         assert_eq!(sheet.skipped.len(), 1);
         let [one, two] = &sheet.tracks[..] else {
             panic!()

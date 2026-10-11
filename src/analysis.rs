@@ -385,7 +385,7 @@ mod tests {
             Some(loudness::METHOD)
         );
         assert!(a.loudness().is_none());
-        assert!(a.stale(&[Kind::Loudness]).is_empty());
+        assert_eq!(a.stale(&[Kind::Loudness]), [] as [Kind; 0]);
         assert_eq!(
             Analysis::default().stale(&[Kind::Loudness]),
             [Kind::Loudness]

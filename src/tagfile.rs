@@ -657,8 +657,8 @@ mod tests {
         assert_eq!(values(tags, "COMMENT"), ["one\ntwo"]);
         assert_eq!(values(tags, "DATE"), ["2011-03-04"]);
         assert_eq!(values(tags, "MOOD"), ["calm"]);
-        assert!(values(tags, "REPLAYGAIN_TRACK_GAIN").is_empty());
-        assert!(values(tags, "ENCODER").is_empty());
+        assert_eq!(values(tags, "REPLAYGAIN_TRACK_GAIN"), [] as [&str; 0]);
+        assert_eq!(values(tags, "ENCODER"), [] as [&str; 0]);
         assert_eq!(sheet.skipped.len(), 2, "{:?}", sheet.skipped);
     }
 
@@ -694,7 +694,7 @@ mod tests {
         let track = &sheet.tracks[0];
         assert_eq!(values(&track.tags, "DATE"), ["2011-03"]);
         assert_eq!(values(&track.tags, "TRACKNUMBER"), ["3"]);
-        assert!(values(&track.tags, "TRACKTOTAL").is_empty());
+        assert_eq!(values(&track.tags, "TRACKTOTAL"), [] as [&str; 0]);
         assert_eq!(
             values(&track.tags, "MUSICBRAINZ_TRACKID"),
             ["00000000-0000-4000-8000-000000000001"]
@@ -859,7 +859,7 @@ mod tests {
             assert_eq!(date(bad), None, "{bad}");
         }
         let sheet = read(Path::new("a.txt"), "TITLE=x\nTRACKTOTAL=abc\nDISCTOTAL=2\n").unwrap();
-        assert!(values(&sheet.tracks[0].tags, "TRACKTOTAL").is_empty());
+        assert_eq!(values(&sheet.tracks[0].tags, "TRACKTOTAL"), [] as [&str; 0]);
         assert_eq!(values(&sheet.tracks[0].tags, "DISCTOTAL"), ["2"]);
     }
 

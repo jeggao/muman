@@ -439,7 +439,7 @@ fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     let lrc = s.written("rips/Lantern Weather.lrc", "[00:01.00]first light\n");
     let (ok, text) = s.run(&fake, &["add", &song, &lrc]);
     assert!(ok, "{text}");
-    assert!(s.added().is_empty());
+    assert_eq!(s.added(), [] as [String; 0]);
     assert!(
         s.dir
             .path()
@@ -740,5 +740,5 @@ fn a_picture_that_does_not_decode_is_not_added() {
     )
     .unwrap_err();
     assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
-    assert!(s.added().is_empty());
+    assert_eq!(s.added(), [] as [String; 0]);
 }
