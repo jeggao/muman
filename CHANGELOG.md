@@ -113,6 +113,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   nothing; a removed song is named once by its artist, where `restore`
   named it twice; a source that lost its cover and lyrics has "no
   cover or lyrics".
+- **`export`** dates each entry of its zip by its file, where every one
+  read 1980-01-01.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

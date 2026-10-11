@@ -550,6 +550,32 @@ fn encode<R: Runner>(
         .collect())
 }
 
+/// `time` as a zip stamps an entry, in UTC to the even second; none
+/// before 1980, which a zip cannot say.
+fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
+    let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let (days, of_day) = (secs / 86_400, secs % 86_400);
+    // Days since 1970 as a civil date, after Howard Hinnant's algorithm.
+    let z = i64::try_from(days).ok()? + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    zip::DateTime::from_date_and_time(
+        u16::try_from(year).ok()?,
+        u8::try_from(month).ok()?,
+        u8::try_from(day).ok()?,
+        u8::try_from(of_day / 3_600).ok()?,
+        u8::try_from(of_day % 3_600 / 60).ok()?,
+        u8::try_from(of_day % 60).ok()?,
+    )
+    .ok()
+}
+
 /// Write `entries` into a new zip at `path`, each stored as it is.
 fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Result<()> {
     let entries: Vec<&Entry> = entries.collect();
@@ -560,12 +586,16 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
         let _working = step.working(&entry.name);
         let mut from =
             File::open(&entry.from).with_context(|| format!("reading {}", entry.from.display()))?;
-        let large = from
-            .metadata()
+        let meta = from.metadata().ok();
+        let large = meta
+            .as_ref()
             .map_or(true, |m| m.len() >= u64::from(u32::MAX));
-        let options = SimpleFileOptions::default()
+        let mut options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
             .large_file(large);
+        if let Some(time) = meta.and_then(|m| m.modified().ok()).and_then(zip_time) {
+            options = options.last_modified_time(time);
+        }
         zip.start_file(entry.name.as_str(), options)
             .with_context(|| format!("adding {} to {}", entry.name, path.display()))?;
         io::copy(&mut from, &mut zip)
@@ -581,6 +611,15 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
 mod tests {
     use super::*;
     use crate::codec::Codec;
+
+    #[test]
+    fn an_entry_is_stamped_with_its_file_s_time() {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_717_243_506);
+        let stamp = zip_time(at).unwrap();
+        assert_eq!((stamp.year(), stamp.month(), stamp.day()), (2024, 6, 1));
+        assert_eq!((stamp.hour(), stamp.minute(), stamp.second()), (12, 5, 6));
+        assert!(zip_time(std::time::UNIX_EPOCH).is_none());
+    }
 
     fn rung(bytes: u64, known: bool) -> fit::Rung {
         fit::Rung {
