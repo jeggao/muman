@@ -2291,9 +2291,12 @@ fn tally<W: Write>(
         parts.push(format!("{failed} failed"));
     }
     if parts.is_empty() {
-        if showing.matched.is_some() {
-            crate::ui::info(out, "No song matches the query")?;
-        }
+        let said = if showing.matched.is_some() {
+            "No song matches the query"
+        } else {
+            "No song listed yet; `muman add` adds one"
+        };
+        crate::ui::info(out, said)?;
         return Ok(());
     }
     let hidden = showing.matched.is_none() && !showing.all && fates.contains_key(&Fate::Kept);

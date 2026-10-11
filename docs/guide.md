@@ -204,8 +204,9 @@ One that fails waits an hour before the next try, doubling each time;
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you
 drop it there yourself and the next `sync` lists it. A file that
 yt-dlp fetched elsewhere goes into `sources/yt-dlp` under its key
-instead. A dropped file waits until it is ten seconds old, so one still
-being copied is not read half written, and a listed file moved within
+instead. A dropped file waits until ten seconds after it arrived,
+whatever modification time a copy kept for it, so one still being
+copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
 `.lrc` and the JPEG, PNG or WebP pictures named as it is, as
 `Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,

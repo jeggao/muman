@@ -109,6 +109,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`duplicates`** puts first and names a group an album holds twice
   when other albums hold it too, where only a group on one album came
   first.
+- **Messages:** `status` on a home with no song says so, where it said
+  nothing; a removed song is named once by its artist, where `restore`
+  named it twice; a source that lost its cover and lyrics has "no
+  cover or lyrics".
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

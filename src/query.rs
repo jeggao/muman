@@ -168,7 +168,7 @@ pub fn resolved_views(
 /// tags it was given and those its sources offer, so `album:` finds it
 /// as it found the song listed.
 pub fn removed_view(removed: &Removed, state: &State) -> View {
-    let mut tags = vec![("TITLE".to_string(), vec![removed.note.clone()])];
+    let mut tags: Vec<(String, Vec<String>)> = Vec::new();
     let given = removed
         .tags
         .iter()
@@ -182,6 +182,11 @@ pub fn removed_view(removed: &Removed, state: &State) -> View {
         if !tags.iter().any(|(k, _)| *k == key) {
             tags.push((key, values));
         }
+    }
+    // The name noted names it when nothing measured does; beside a title,
+    // it would name the artist twice.
+    if !tags.iter().any(|(k, _)| k == "TITLE") {
+        tags.insert(0, ("TITLE".to_string(), vec![removed.note.clone()]));
     }
     View {
         keys: removed.sources.clone(),
