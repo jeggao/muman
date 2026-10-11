@@ -261,6 +261,8 @@ notes that any two songs share:
 | Agreement | Covering the longer recording | Verdict |
 |---|---|---|
 | 30% or more, over at least 6 s | 80% or more | The same recording: joins that song |
+| 50% or more, over 1 to 6 s | 80% or more | The same recording: a track too short for 6 s, as an interlude |
+| 30% to 50%, over 1 to 6 s | 80% or more | Unsure of a short track: asked |
 | 30% or more, over at least 6 s | Less | An excerpt, or a video with a skit: asked |
 | 10% to 30% | 80% or more | Another master or mix: asked |
 | Less | Any | A different song |

@@ -1468,6 +1468,33 @@ fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
     );
 }
 
+#[test]
+fn a_copy_of_a_track_too_short_to_agree_on_six_seconds_is_one_recording() {
+    let s = Setup::new();
+    let track = s.file("rips/Interlude.flac");
+    let copy = s.file("rips/Interlude (copy).flac");
+    // An interlude of 8 s: 40 words.
+    let print = words(40, 3);
+    let fake = || flacs().print("Interlude", print.clone());
+    let (ok, text) = s.run(&fake(), &["add", &track]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&fake(), &["add", &copy]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 1, "{text}");
+    for name in ["a", "b"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    let prints = || {
+        fake()
+            .print("a.flac", print.clone())
+            .print("b.flac", print.clone())
+    };
+    let (ok, text) = s.run(&prints(), &["sync", "--new"]);
+    assert!(ok, "{text}");
+    let (_, report) = s.report(&prints(), &["duplicates"]);
+    assert!(report.contains("3 songs, one recording"), "{report}");
+}
+
 /// 8 kHz samples, a square wave at each of `levels` for 10 ms.
 fn pcm(levels: &[u32]) -> Vec<u8> {
     levels

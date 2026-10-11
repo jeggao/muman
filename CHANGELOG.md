@@ -180,6 +180,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   where no shift past a minute was tried, the two were never found one
   recording, and the excerpt could win on bandwidth. Every pair of
   sources is compared again on the next sync.
+- **A copy of a track under about 9 s,** as an album's interlude,
+  joins its song, and `duplicates` finds two songs listing it, where
+  the two never agreed on the 6 s a match needed and the copy became a
+  second song, even byte for byte the same.
 - **Lossless audio whose notes end low over a flat noise floor**
   measures its full bandwidth, where a partial standing over the noise
   read as a lowpass at 2 to 3 kHz and the song's own lossy copy won.
