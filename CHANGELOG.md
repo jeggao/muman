@@ -171,6 +171,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   can be, counts as no sound beyond the song, where it counted as
   sound and the rip lost to another copy of its song. Every pair of
   sources is compared again on the next sync.
+- **An excerpt starting past its song's first minute, or a video whose
+  intro runs past a minute,** is compared with the rest of its song,
+  where no shift past a minute was tried, the two were never found one
+  recording, and the excerpt could win on bandwidth. Every pair of
+  sources is compared again on the next sync.
 - **Lossless audio whose notes end low over a flat noise floor**
   measures its full bandwidth, where a partial standing over the noise
   read as a lowpass at 2 to 3 kHz and the song's own lossy copy won.

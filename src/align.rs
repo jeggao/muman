@@ -5,14 +5,20 @@
 //! Each side is decoded to 8 kHz mono and reduced to a log-energy
 //! envelope at 100 frames a second, its samples centred on their mean
 //! first: an old rip's converter may hold its silence off centre, which
-//! would measure as steady sound 50 dB down. A cross-correlation over the whole
-//! of both, coarse at a quarter of the rate and then refined, finds the
-//! shift. Ten-second windows of the upload, each searched again within
-//! 1 s of it, find their own, and a line through them, the median of their
-//! pairwise slopes, says how the shift drifts: a copy played 0.1% fast
-//! drifts 240 ms in four minutes. The two are one recording when the
-//! whole, the drift undone, correlates at 0.8 or more and at least 80% of
-//! the windows lie on the line, each within 50 ms and correlating at 0.5.
+//! would measure as steady sound 50 dB down. A cross-correlation over the
+//! whole of both finds the shift: coarse, at a quarter of the rate, over
+//! every shift that places the shorter within the longer and up to a
+//! minute past either end, then refined. An excerpt may start anywhere in
+//! its song, and a video's intro run past a minute; so that hour-long
+//! files cost no more than a fraction of a second, the coarse rate halves
+//! until the search correlates at most 10^8 frames, and the shift found
+//! is refined at twice the rate in turn. Ten-second windows of the
+//! upload, each searched again within 1 s of it, find their own, and a
+//! line through them, the median of their pairwise slopes, says how the
+//! shift drifts: a copy played 0.1% fast drifts 240 ms in four minutes.
+//! The two are one recording when the whole, the drift undone, correlates
+//! at 0.8 or more and at least 80% of the windows lie on the line, each
+//! within 50 ms and correlating at 0.5.
 //!
 //! Measured on uploads paired with their releases, one recording scored
 //! 0.991 to 0.997 with 97% to 100% of its windows agreeing, a music video
@@ -50,15 +56,20 @@ use std::path::Path;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/5";
+pub const METHOD: &str = "envelope-xcorr/6";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
 const HOP: usize = 80;
-/// The longest intro or outro a music video may add, in frames.
-const MAX_SHIFT: usize = 6000;
-/// The coarse search averages this many frames into one.
+/// How far past either end of the other one recording may play, in
+/// frames: the longest intro or outro a music video adds beyond a release
+/// that plays out past the video's other end.
+const MAX_PAST: usize = 6000;
+/// The coarse search averages this many frames into one, or more where
+/// that would cost over [`COARSE_BUDGET`].
 const COARSE: usize = 4;
+/// The most frames the coarse search correlates, over every shift.
+const COARSE_BUDGET: usize = 100_000_000;
 /// The least overlap a shift is scored on, in frames.
 const MIN_OVERLAP: usize = 1000;
 const WINDOW: usize = 1000;
@@ -343,12 +354,55 @@ fn best(scored: impl Iterator<Item = (isize, f64)>) -> Option<(isize, f64)> {
     })
 }
 
-fn decimate(x: &[f64]) -> Vec<f64> {
-    x.as_chunks::<COARSE>()
-        .0
-        .iter()
-        .map(|c| c.iter().sum::<f64>() / real(COARSE))
+fn decimate(x: &[f64], factor: usize) -> Vec<f64> {
+    x.chunks_exact(factor)
+        .map(|c| c.iter().sum::<f64>() / real(factor))
         .collect()
+}
+
+/// The shift among `lags`, in frames of `factor` averaged, at which
+/// `upload` correlates best with `track`.
+fn search(
+    upload: &[f64],
+    track: &[f64],
+    factor: usize,
+    lags: std::ops::RangeInclusive<isize>,
+) -> Option<(isize, f64)> {
+    let (u, t) = (decimate(upload, factor), decimate(track, factor));
+    best(lags.filter_map(|lag| Some((lag, score_at(&u, &t, lag, MIN_OVERLAP / factor)?))))
+}
+
+/// The shift `upload` plays `track` at: searched coarse over every shift
+/// that places the shorter within the longer and up to [`MAX_PAST`] past
+/// either end, as coarse as keeps that under `budget` frames correlated,
+/// then refined at twice the rate in turn to the full one.
+fn shift(upload: &[f64], track: &[f64], budget: usize) -> Option<(isize, f64)> {
+    let longer = upload.len().cast_signed() - track.len().cast_signed();
+    let (lo, hi) = (
+        longer.min(0) - MAX_PAST.cast_signed(),
+        longer.max(0) + MAX_PAST.cast_signed(),
+    );
+    let span = (hi - lo).unsigned_abs();
+    let shorter = upload.len().min(track.len());
+    let mut factor = COARSE;
+    while (span / factor) * (shorter / factor) > budget {
+        factor *= 2;
+    }
+    let step = factor.cast_signed();
+    let mut found = search(upload, track, factor, lo.div_euclid(step)..=hi / step)?;
+    while factor > 1 {
+        let finer = if factor > COARSE { factor / 2 } else { 1 };
+        let scale = (factor / finer).cast_signed();
+        let (lag, _) = found;
+        found = search(
+            upload,
+            track,
+            finer,
+            lag * scale - 2 * scale..=lag * scale + 2 * scale,
+        )?;
+        factor = finer;
+    }
+    Some(found)
 }
 
 /// One window of the upload and the shift it finds for itself.
@@ -450,16 +504,7 @@ fn stretched_score(upload: &[f64], track: &[f64], start: f64, stretch: f64) -> O
 /// drifts; `None` when they overlap too little to say.
 #[must_use]
 pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
-    let around = |at: isize, reach: usize| (at - reach.cast_signed())..=(at + reach.cast_signed());
-    let (cu, ct) = (decimate(upload), decimate(track));
-    let (coarse, _) = best(
-        around(0, MAX_SHIFT / COARSE)
-            .filter_map(|lag| Some((lag, score_at(&cu, &ct, lag, MIN_OVERLAP / COARSE)?))),
-    )?;
-    let (lag, score) = best(
-        around(coarse * COARSE.cast_signed(), COARSE * 2)
-            .filter_map(|lag| Some((lag, score_at(upload, track, lag, MIN_OVERLAP)?))),
-    )?;
+    let (lag, score) = shift(upload, track, COARSE_BUDGET)?;
     #[allow(clippy::cast_precision_loss)]
     let one_shift = |_: f64| lag as f64;
     let flat = windows(upload, track, |_| lag);
@@ -549,6 +594,22 @@ mod tests {
                 envelope[k] + (envelope[k + 1] - envelope[k]) * (at - real(k))
             })
             .collect()
+    }
+
+    #[test]
+    fn a_shift_past_the_first_minute_is_found_however_long_the_two() {
+        let track = song(3000, 7);
+        let mut upload = song(7000, 99);
+        upload.extend(&track);
+        upload.extend(song(500, 98));
+        let a = align(&upload, &track).unwrap();
+        assert_eq!(a.offset_ms, 70_000);
+        assert!(a.fits(), "{a:?}");
+        let excerpt = upload[8000..9500].to_vec();
+        assert_eq!(align(&upload, &excerpt).unwrap().offset_ms, 80_000);
+        let (lag, score) = shift(&upload, &track, 100_000).unwrap();
+        assert_eq!(lag, 7000);
+        assert!(score > 0.99, "{score}");
     }
 
     #[test]
