@@ -58,6 +58,11 @@
 //! which muman cannot take it back from on every platform. The run
 //! records each it trashed, and `undo` refuses until the user puts them
 //! back, rather than list their songs again with nothing to make them.
+//! What `add` copied into the sources is recorded with a digest of it,
+//! and `undo` takes each copy out with its song, else the next sync
+//! would list it again as a file dropped in: a copy as made is deleted,
+//! the file it came from untouched, and one changed since goes to the
+//! trash.
 //!
 //! `run.json` carries a `version`; a record without one is of version 1.
 
@@ -135,6 +140,10 @@ struct Record {
     /// under the home.
     #[serde(default, with = "crate::relpath::portable_keys")]
     trashed: BTreeSet<PathBuf>,
+    /// Files `add` copied into the sources, under the home, with a digest
+    /// of each as copied.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    copied: BTreeMap<PathBuf, String>,
 }
 
 /// One run, recording as it goes; written ahead by [`Run::checkpoint`]
@@ -451,6 +460,15 @@ impl Run {
         }
     }
 
+    /// Record that the run copied `file`, under `home`, into the
+    /// sources, so `undo` takes the copy out with the song.
+    pub fn copied(&mut self, home: &Path, file: &Path) {
+        if let (Ok(rel), Some(digest)) = (file.strip_prefix(home), crate::facts::digest_file(file))
+        {
+            self.record.copied.insert(rel.to_path_buf(), digest);
+        }
+    }
+
     /// Forget a move the run could not make.
     pub fn not_moved(&mut self, from: &Path, to: &Path) {
         self.record
@@ -492,6 +510,7 @@ impl Run {
         }
         if self.record.touched.is_empty()
             && self.record.moves.is_empty()
+            && self.record.copied.is_empty()
             && self.record.songs_after == self.record.songs_before
             && self.record.outputs_equal_current(home)
         {
@@ -789,6 +808,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             crate::relpath::show(&m.to)
         ));
     }
+    lines.extend(copies_said(home, &record));
     let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
     let added = state
         .outputs
@@ -915,6 +935,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         }
     }
     state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library);
+    take_out_copies(dirs, &record, out)?;
     // A home that had no song list before gets one that lists nothing, so
     // the sync after removes what the run added.
     let before = record
@@ -929,6 +950,75 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     Ok(Undone { dir, changed })
+}
+
+/// What undoing does with each copy `add` made that is still there, a
+/// line each.
+fn copies_said(home: &Path, record: &Record) -> Vec<String> {
+    record
+        .copied
+        .iter()
+        .filter(|(rel, _)| home.join(rel).exists())
+        .map(|(rel, digest)| {
+            let how = if as_copied(&home.join(rel), digest) {
+                "deleted"
+            } else {
+                "changed since, moved to the trash"
+            };
+            format!(
+                "{}: the copy the run made, {how}",
+                crate::relpath::show(rel)
+            )
+        })
+        .collect()
+}
+
+/// Take out each copy `add` made that is still there, and the folders
+/// that leaves empty in the sources.
+fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Result<()> {
+    let home = &dirs.home;
+    for (rel, digest) in &record.copied {
+        let copy = home.join(rel);
+        if !copy.exists() {
+            continue;
+        }
+        if as_copied(&copy, digest) {
+            std::fs::remove_file(&copy).with_context(|| format!("deleting {}", copy.display()))?;
+            crate::ui::info(
+                out,
+                &format!("Deleted the copy the run made: {}", copy.display()),
+            )?;
+        } else {
+            crate::change::to_trash(&copy)
+                .with_context(|| format!("moving {} to the trash", copy.display()))?;
+            crate::ui::info(
+                out,
+                &format!(
+                    "Moved the copy the run made, changed since, to the trash: {}",
+                    copy.display()
+                ),
+            )?;
+        }
+        let sources = home.join("sources");
+        for folder in copy
+            .ancestors()
+            .skip(1)
+            .take_while(|f| f.starts_with(&sources))
+        {
+            if *folder == dirs.manual()
+                || *folder == dirs.ytdlp()
+                || std::fs::remove_dir(folder).is_err()
+            {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `file` holds the bytes it was copied with.
+fn as_copied(file: &Path, digest: &str) -> bool {
+    crate::facts::digest_file(file).as_deref() == Some(digest)
 }
 
 /// The outputs once `record`'s run is undone, from `now`'s: as the run

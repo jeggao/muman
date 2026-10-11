@@ -308,7 +308,7 @@ pub fn remove<W: Write>(
 /// Move a file of the user's own to the desktop's trash. On macOS this
 /// asks the file manager API directly rather than scripting Finder,
 /// which prompts for permission and fails over SSH.
-fn to_trash(file: &Path) -> Result<(), trash::Error> {
+pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
     #[allow(unused_mut)]
     let mut trash = trash::TrashContext::default();
     #[cfg(target_os = "macos")]

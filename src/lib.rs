@@ -416,8 +416,20 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 }
                 let sites = Manifest::load(&dirs.home)?.settings.sites;
                 let mut beside = Vec::new();
-                let mut proposals =
-                    import(runner, dirs, &sites, &files, &mut beside, &mut unread, out)?;
+                let mut copied = Vec::new();
+                let imported = import(
+                    runner,
+                    dirs,
+                    &sites,
+                    &files,
+                    (&mut beside, &mut copied),
+                    &mut unread,
+                    out,
+                );
+                for file in &copied {
+                    run.copied(&dirs.home, file);
+                }
+                let mut proposals = imported?;
                 if !urls.is_empty() {
                     let urls: Vec<String> = urls.into_iter().cloned().collect();
                     let (fine, additions) =
@@ -1072,13 +1084,14 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
 /// manual folder with the lyrics and pictures named as it is. Never
 /// moves or overwrites; a name already taken is an error. Each song file
 /// copied is noted in `beside` with where it came from, for the loose
-/// files given with it.
+/// files given with it, and every file copied in `copied`, for `undo`,
+/// those copied before an error too.
 fn import<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     sites: &crate::sites::Sites,
     paths: &[&String],
-    beside: &mut Vec<(PathBuf, SourceKey)>,
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
     unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
@@ -1101,7 +1114,7 @@ fn import<R: Runner, W: Write>(
                 .parent()
                 .and_then(Path::file_name)
                 .map_or_else(|| "unknown".into(), std::ffi::OsStr::to_os_string);
-            copy_new(path, &dirs.ytdlp().join(folder).join(name))?;
+            copy_new(path, &dirs.ytdlp().join(folder).join(name), copied)?;
             ui::info(
                 out,
                 &format!("Copied {} into sources/yt-dlp as {key}", path.display()),
@@ -1128,14 +1141,14 @@ fn import<R: Runner, W: Write>(
             );
         }
         if path.is_dir() {
-            copy_tree(path, &to, &mut audio)?;
+            copy_tree(path, &to, &mut audio, copied)?;
         } else if !audio(path) {
             continue;
         } else {
-            copy_new(path, &to)?;
+            copy_new(path, &to, copied)?;
             for sidecar in sidecars(path) {
                 if let Some(n) = sidecar.file_name() {
-                    copy_new(&sidecar, &dirs.manual().join(n))?;
+                    copy_new(&sidecar, &dirs.manual().join(n), copied)?;
                 }
             }
         }
@@ -1253,7 +1266,7 @@ fn sidecars(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn copy_new(from: &Path, to: &Path) -> Result<()> {
+fn copy_new(from: &Path, to: &Path, copied: &mut Vec<PathBuf>) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
@@ -1262,18 +1275,24 @@ fn copy_new(from: &Path, to: &Path) -> Result<()> {
     }
     std::fs::copy(from, to)
         .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+    copied.push(to.to_path_buf());
     Ok(())
 }
 
 /// Copy the files below `from` that `keep` lets through to `to`.
-fn copy_tree(from: &Path, to: &Path, keep: &mut impl FnMut(&Path) -> bool) -> Result<()> {
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    keep: &mut impl FnMut(&Path) -> bool,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
     for file in crate::store::walk(from, usize::MAX)? {
         if keep(&file) {
             let rel = file.strip_prefix(from).unwrap_or(&file);
-            copy_new(&file, &to.join(rel))?;
+            copy_new(&file, &to.join(rel), copied)?;
         }
     }
     Ok(())

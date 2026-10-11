@@ -634,8 +634,9 @@ nothing, or, negated, every song.
 - **`undo`** puts the song list and library back as before the last run
   that changed them, one run further back each time: files it wrote over
   or removed come back, a file you had changed still yours, files it
-  moved move back, and an edit you made by hand before that run is
-  undone with it. A run stopped partway, by a
+  moved move back, a file `add` copied into `sources/` goes, deleted
+  while it holds what was copied and moved to the trash once changed,
+  and an edit you made by hand before that run is undone with it. A run stopped partway, by a
   crash or Ctrl-C, can be undone too, and so can an undo stopped partway:
   until the sync it ends with is done, it stays the latest run, which
   the next `undo` finishes, going no further back, and `check` names.

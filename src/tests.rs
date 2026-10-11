@@ -2005,9 +2005,41 @@ fn undo_of_a_home_s_first_add_leaves_a_home_that_syncs() {
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
     assert!(ok, "{text}");
     assert!(s.dir.path().join("home/songs.toml").exists(), "{text}");
-    // The file it copied in stays, and is listed again as any dropped in is.
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
+    assert!(s.songs().is_empty(), "{text}");
+}
+
+#[test]
+fn undo_of_an_add_takes_out_the_copy_it_made() {
+    let s = Setup::new();
+    let a = s.file("rips/a.flac");
+    let b = s.file("rips/b.flac");
+    let (ok, text) = s.run(&flacs(), &["add", &a]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["add", &b]);
+    assert!(ok, "{text}");
+    let copy = s.dir.path().join("home/sources/manual/b.flac");
+    assert!(copy.exists());
+    let (ok, text) = s.run(&flacs(), &["undo", "-n"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("sources/manual/b.flac: the copy the run made, deleted"),
+        "{text}"
+    );
+    assert!(copy.exists(), "-n changes nothing");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!copy.exists(), "{text}");
+    assert!(Path::new(&b).exists(), "the file it was copied from stays");
+    assert!(s.dir.path().join("home/sources/manual/a.flac").exists());
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("a.flac".into())]],
+        "{text}"
+    );
 }
 
 /// The library's files, by their paths in it, with their bytes.

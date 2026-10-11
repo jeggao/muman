@@ -215,6 +215,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song list can be undone, the edit with it, where `undo` refused,
   saying the song list had changed, as the run had written no record
   before its first new file.
+- **`undo` of an `add`** takes out the copy it made in `sources/`, as
+  `undo -n` says, where the copy stayed and the next sync listed the
+  song again as a file dropped in. A copy changed since goes to the
+  trash.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.

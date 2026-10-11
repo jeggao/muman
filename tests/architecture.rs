@@ -82,8 +82,8 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "history.rs",
-        13,
-        "run records, the files kept for undo, undo putting them back or removing lyrics it added, and an undone run's record let go of once its sync ends",
+        15,
+        "run records, the files kept for undo, undo putting them back or removing lyrics it added and the copies `add` made, and an undone run's record let go of once its sync ends",
     ),
     (
         "store.rs",
