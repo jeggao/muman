@@ -354,6 +354,26 @@ pub fn present(home: &Path) -> Result<()> {
 
 /// The top-level keys the song list reads besides the settings'
 /// [`crate::settings::TABLES`].
+/// The tables that list songs: one misspelled would take what it lists
+/// out of the library, so it is refused rather than warned of.
+const LISTED: [&str; 3] = ["song", "album", "removed"];
+
+/// The key muman reads that `key`, which it does not, is a letter or
+/// two from, as a misspelling.
+fn near_miss(key: &str) -> Option<&'static str> {
+    let mut known = KEYS.iter().chain(&crate::settings::TABLES).copied();
+    if known.any(|k| k == key) {
+        return None;
+    }
+    let near = KEYS
+        .iter()
+        .chain(&crate::settings::TABLES)
+        .copied()
+        .min_by_key(|k| strsim::osa_distance(k, key))?;
+    let most = if key.chars().count() > 4 { 2 } else { 1 };
+    (strsim::osa_distance(near, key) <= most).then_some(near)
+}
+
 const KEYS: [&str; 10] = [
     "version",
     "edition",
@@ -415,18 +435,13 @@ impl Manifest {
         else {
             return Vec::new();
         };
-        let known = || KEYS.iter().chain(&crate::settings::TABLES);
         doc.iter()
-            .filter(|(key, _)| !known().any(|k| k == key))
-            .filter_map(|(key, _)| {
-                let near = known().min_by_key(|k| strsim::osa_distance(k, key))?;
-                let most = if key.chars().count() > 4 { 2 } else { 1 };
-                (strsim::osa_distance(near, key) <= most).then(|| {
-                    format!(
-                        "`{key}` in the song list is nothing muman reads, so what it sets does \
-                         nothing; did you mean `{near}`?"
-                    )
-                })
+            .filter_map(|(key, _)| Some((key, near_miss(key)?)))
+            .map(|(key, near)| {
+                format!(
+                    "`{key}` in the song list is nothing muman reads, so what it sets does \
+                     nothing; did you mean `{near}`?"
+                )
             })
             .collect()
     }
@@ -822,6 +837,16 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
     let respelled = respell(&mut current, &spelled_now);
     let doc = &current;
+    if let Some((key, near)) = doc
+        .iter()
+        .find_map(|(key, _)| Some((key, near_miss(key).filter(|n| LISTED.contains(n))?)))
+    {
+        bail!(
+            "`{key}` in the song list is nothing muman reads; did you mean `{near}`? Read \
+             as it is, what it lists would leave the library, so nothing is done until it \
+             is spelled `{near}`"
+        );
+    }
     let lyrics = doc
         .get("defaults")
         .and_then(|d| d.get("lyrics"))

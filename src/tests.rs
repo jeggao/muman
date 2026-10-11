@@ -364,7 +364,16 @@ fn a_misspelled_song_table_takes_no_song_out_of_the_library() {
     let list = s.dir.path().join("home/songs.toml");
     let text = std::fs::read_to_string(&list).unwrap();
     std::fs::write(&list, text.replace("[[song]]", "[[songs]]")).unwrap();
-    let (_, text) = s.run(&flacs(), &["sync"]);
+    let e = run_with(
+        &s.job(&["sync"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    let text = format!("{e:#}");
     assert!(text.contains("did you mean `song`?"), "{text}");
     assert_eq!(
         std::fs::read_dir(&lib).map_or(0, Iterator::count),

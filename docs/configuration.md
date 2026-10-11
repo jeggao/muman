@@ -49,7 +49,9 @@ as the library folder, stays a comment until you set it. A key a
 settings table does not know is an error that names it, so a
 misspelling never goes unnoticed. A table muman does not know is kept,
 for a newer muman, but one a letter or two from a known name, as
-`[audoi]`, is warned of by `sync` and `check`.
+`[audoi]`, is warned of by `sync` and `check`. One a letter or two from
+`[[song]]`, `[[album]]` or `[[removed]]` is an error instead, since what
+it lists would leave the library.
 
 A setting that is a quantity takes its unit, written after the number,
 the space optional:

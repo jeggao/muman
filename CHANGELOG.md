@@ -94,7 +94,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`set`** exits with 5 when it refuses a change, as other changes do,
   where it exited with 4.
 - **A misspelled settings table,** as `[audoi]`, is warned of by `sync`
-  and `check`, where its settings did nothing unnoticed.
+  and `check`, where its settings did nothing unnoticed. A misspelled
+  `[[song]]`, `[[album]]` or `[[removed]]` is an error, where `sync`
+  warned of it and took every song it listed out of the library.
 - **An MP4 tag of several values,** as two artists or two genres, is
   one atom holding each, as Picard writes it and taggers read it, where
   each value was an atom of its own. The first sync writes every `.m4a`
