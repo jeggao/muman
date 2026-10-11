@@ -632,6 +632,37 @@ mod tests {
         assert_eq!(found.track_lacks_ms, 20_000);
     }
 
+    /// 8 kHz samples of `levels`, a square wave a frame, each around
+    /// `offset`.
+    fn samples(levels: &[f64], offset: i16) -> Vec<u8> {
+        levels
+            .iter()
+            .flat_map(|l| {
+                #[allow(clippy::cast_possible_truncation)]
+                let a = (l * 6000.0) as i16;
+                [offset + a, offset - a].repeat(HOP / 2)
+            })
+            .flat_map(i16::to_le_bytes)
+            .collect()
+    }
+
+    #[test]
+    fn silence_held_off_centre_by_a_dc_offset_counts_for_nothing() {
+        let mut song = vec![0.0; 10];
+        song.extend(song_levels());
+        song.extend([0.0; 10]);
+        // An old rip's 3 s lead-in, its converter 50 dB off centre.
+        let mut padded = vec![0.0; 300];
+        padded.extend(&song);
+        let track = envelope(&samples(&song, 0));
+        let upload = envelope(&samples(&padded, 100));
+        assert_eq!(outside(&upload, &track, &at(3000)), Outside::default());
+    }
+
+    fn song_levels() -> Vec<f64> {
+        song(4000, 7).into_iter().map(|l| 0.5 + l).collect()
+    }
+
     #[test]
     fn too_little_overlap_is_no_answer() {
         assert!(align(&song(100, 1), &song(100, 1)).is_none());

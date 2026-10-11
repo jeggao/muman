@@ -1410,3 +1410,47 @@ fn a_gain_a_format_applies_none_of_compares_as_tags() {
         });
     assert!(lowered.opus_header().is_some(), "{lowered:?}");
 }
+
+#[test]
+fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
+    use crate::loudness::{Apply, Gains, Level};
+    let plan = |format| Plan {
+        version: render_version(Codec::Opus),
+        format,
+        audio: AudioRef {
+            key: SourceKey::youtube("vid00000001"),
+            rev: "r".into(),
+            index: 0,
+        },
+        cover: None,
+        lyrics: None,
+        tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
+        loudness: None,
+    };
+    // A quiet song the ceiling lets be raised by nothing.
+    let gains = |apply| Gains {
+        track: Level {
+            gain: 900,
+            peak: Some(891_251),
+        },
+        album: None,
+        apply,
+        opus_gain: 0,
+        bits: 16,
+    };
+    let copied = plan(Format::Copy { codec: Codec::Opus });
+    assert_eq!(
+        copied.with_loudness(gains(Apply::Header(0))),
+        copied.with_loudness(gains(Apply::Tags))
+    );
+    let encoded = plan(Format::Encode {
+        codec: Codec::Flac,
+        kbps: None,
+        adapt: None,
+        mix: None,
+    });
+    assert_eq!(
+        encoded.with_loudness(gains(Apply::Volume(0))),
+        encoded.with_loudness(gains(Apply::Tags))
+    );
+}
