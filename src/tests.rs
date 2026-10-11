@@ -1575,6 +1575,25 @@ fn an_export_of_a_song_list_edited_since_the_last_run_is_refused() {
 }
 
 #[test]
+fn a_home_in_the_library_is_refused_before_add_copies_anything() {
+    let s = Setup::new();
+    let file = s.file("in/a.flac");
+    let mut job = s.job(&["add", &file]);
+    job.dirs.home = s.dir.path().join("lib/.muman");
+    let e = run_with(
+        &job,
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("is in the library"), "{e:#}");
+    assert!(!job.dirs.home.exists());
+}
+
+#[test]
 fn a_library_in_the_home_s_sources_is_refused() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -30,6 +30,10 @@ Without them, each folder is the platform's own:
 | macOS | `~/Library/Application Support/muman` | `~/Music/muman` |
 | Windows | `%LOCALAPPDATA%\muman\data` | `%USERPROFILE%\Music\muman` |
 
+Neither folder may hold the other, but for a library beside `sources/`
+in the home: a command that writes refuses a library in `sources/` or a
+home in the library.
+
 A program not named in its variable is looked for beside the muman
 executable, then on `PATH` (with `PATHEXT` on Windows, so a `.cmd`
 wrapper is found). ffmpeg and ffprobe are needed by every command that

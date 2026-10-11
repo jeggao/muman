@@ -285,6 +285,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             | Command::Edit { .. }
     );
     if writes {
+        dirs.apart()?;
         crate::manifest::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }

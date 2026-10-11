@@ -721,15 +721,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
     crate::manifest::present(home)?;
-    if crate::platform::within(&dirs.library, &home.join("sources"))
-        || crate::platform::same_path(&dirs.library, home)
-    {
-        anyhow::bail!(
-            "the library {} is in the home's sources, where muman would read the songs it \
-             writes back as new ones; choose a folder outside them",
-            dirs.library.display()
-        );
-    }
+    dirs.apart()?;
     let _library = if opts.dry_run {
         None
     } else {

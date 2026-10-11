@@ -81,6 +81,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   claimed to list it again, changing nothing. A removed song whose
   sources a song lists again is dropped from `[[removed]]` on the next
   write.
+- **A home inside the library** is refused by every command that
+  writes, where `add` copied the file in and listed nothing, taking it
+  for one of the library's.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.
