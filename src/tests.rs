@@ -353,6 +353,27 @@ impl Setup {
 }
 
 #[test]
+fn a_misspelled_song_table_takes_no_song_out_of_the_library() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    assert_eq!(std::fs::read_dir(&lib).unwrap().count(), 2, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let text = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(&list, text.replace("[[song]]", "[[songs]]")).unwrap();
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("did you mean `song`?"), "{text}");
+    assert_eq!(
+        std::fs::read_dir(&lib).map_or(0, Iterator::count),
+        2,
+        "{text}"
+    );
+}
+
+#[test]
 fn a_removed_song_goes_and_stays_gone_until_restored() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
