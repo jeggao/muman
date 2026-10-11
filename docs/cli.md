@@ -48,7 +48,7 @@ Exit codes:
 * `--library <DIR>` — Folder the songs are written to [default: the song list's `[library] path`, else the platform's music folder, then `muman`]
 * `--offline` — Reach no network: make no lookup, fetch nothing missing, and refuse URLs; what is on disk is written as ever
 * `-v`, `--verbose` — Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how close each new source came to every song it was compared with
-* `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line; or `none`
+* `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line, each message one too; or `none`
 
   Default value: `auto`
 

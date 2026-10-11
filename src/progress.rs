@@ -676,6 +676,9 @@ pub struct Console<W: Write> {
     /// read enough: what the run says after is dropped, and the run goes
     /// on rather than stop halfway through writing the library.
     closed: bool,
+    /// Beside `json` events, each message is one too, so that every line
+    /// on stderr reads as JSON.
+    events: bool,
 }
 
 impl<W: Write> Console<W> {
@@ -684,6 +687,18 @@ impl<W: Write> Console<W> {
             inner,
             line: Vec::new(),
             closed: false,
+            events: false,
+        }
+    }
+
+    /// The console, each line a `message` event under `--progress json`.
+    #[must_use]
+    pub fn for_kind(inner: W, kind: Kind) -> Self {
+        Self {
+            inner,
+            line: Vec::new(),
+            closed: false,
+            events: kind == Kind::Json,
         }
     }
 
@@ -691,6 +706,13 @@ impl<W: Write> Console<W> {
         if self.closed {
             return Ok(());
         }
+        let events;
+        let bytes = if self.events {
+            events = message_events(bytes);
+            events.as_bytes()
+        } else {
+            bytes
+        };
         match suspend(|| {
             self.inner.write_all(bytes)?;
             self.inner.flush()
@@ -702,6 +724,17 @@ impl<W: Write> Console<W> {
             done => done,
         }
     }
+}
+
+/// Each line of `bytes`, its colours taken out, as a `message` event.
+fn message_events(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    anstream::adapter::strip_str(&text)
+        .to_string()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| format!("{}\n", serde_json::json!({"event": "message", "text": l})))
+        .collect()
 }
 
 impl<W: Write> Write for Console<W> {
@@ -891,5 +924,23 @@ mod tests {
             write!(console, "tail").unwrap();
         }
         assert_eq!(String::from_utf8(out).unwrap(), "Written again\ntail");
+    }
+
+    #[test]
+    fn under_json_each_message_is_an_event() {
+        let mut out = Vec::new();
+        {
+            let mut console = Console::for_kind(&mut out, Kind::Json);
+            writeln!(console, "Added: \u{1b}[32mSong\u{1b}[0m \"one\"").unwrap();
+            write!(console, "\nlast").unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2, "{text}");
+        assert_eq!(events[0]["text"], "Added: Song \"one\"");
+        assert_eq!(events[1]["event"], "message");
     }
 }

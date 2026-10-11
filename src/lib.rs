@@ -153,7 +153,7 @@ pub fn run() -> ExitCode {
     let live = std::io::stderr().is_terminal();
     let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
     let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
-    let mut err = progress::Console::new(anstream::stderr());
+    let mut err = progress::Console::for_kind(anstream::stderr(), kind);
     let Some(defaults) = platform::defaults() else {
         let _ = ui::error(&mut err, "the system names no home folder for this user");
         return ExitCode::from(2);

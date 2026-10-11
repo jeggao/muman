@@ -109,7 +109,7 @@ pub struct Cli {
 
     /// How a long step says how far it has got, on stderr: `auto`, a
     /// status line on a terminal and plain lines elsewhere; `plain`
-    /// lines; `json` events, one a line; or `none`.
+    /// lines; `json` events, one a line, each message one too; or `none`.
     #[arg(
         long,
         global = true,

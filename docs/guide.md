@@ -66,8 +66,10 @@ left, and stays one line. A step inside another, as a fetch of what a
 lookup found, takes the line until it ends. Elsewhere, as in a
 log, `auto` and `plain` write a line every tenth of the way or ten
 seconds; `json` writes one JSON object a line, `start`, `progress` and
-`finish` events, for a program to read; `none` writes nothing. What a
-command reports, as `status` does, stays on stdout.
+`finish` events, and each message, as `Added: …`, as a `message` event
+with its `text`, so that a program reads every line; `none` writes
+nothing. What a command does goes to stderr with its progress; what
+`status`, `list`, `info`, `check` and `duplicates` report goes to stdout.
 
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone. A file whose size or time changed

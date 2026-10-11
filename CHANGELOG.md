@@ -100,6 +100,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   exited with 4 having copied them.
 - **`export`** exits with 4 when it leaves out a song missing from the
   library, where it exited with 0.
+- **`--progress json`** writes each message as a `message` event, so
+  that every line on stderr reads as JSON, where messages were plain
+  lines among the events.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.
