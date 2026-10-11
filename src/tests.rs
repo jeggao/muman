@@ -483,6 +483,50 @@ fn audio_that_does_not_read_is_not_copied_in_or_listed() {
 }
 
 #[test]
+fn a_hidden_file_is_refused_and_one_in_a_folder_left_behind() {
+    let s = Setup::new();
+    let hidden = s.file("in/.Song.flac");
+    let fake = Fake::default().probe(".flac", FLAC);
+    let add = |args: &[&str]| {
+        run_with(
+            &s.job(args),
+            &fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    };
+    let e = add(&["add", &hidden]).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("rename it without the dot"),
+        "{e:#}"
+    );
+    let manual = s.dir.path().join("home/sources/manual");
+    assert!(!manual.join(".Song.flac").exists());
+
+    s.file("rips/One/a.flac");
+    s.file("rips/One/._a.flac");
+    std::fs::create_dir_all(s.dir.path().join("rips/Empty")).unwrap();
+    let folder = |n: &str| {
+        s.dir
+            .path()
+            .join("rips")
+            .join(n)
+            .to_string_lossy()
+            .into_owned()
+    };
+    add(&["add", &folder("One")]).unwrap();
+    assert!(!manual.join("One/._a.flac").exists());
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("One/a.flac".into())]]);
+    let e = add(&["add", &folder("Empty")]).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("holds no song muman reads"),
+        "{e:#}"
+    );
+}
+
+#[test]
 fn a_song_taken_out_of_the_list_by_hand_stays_out_until_restored() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

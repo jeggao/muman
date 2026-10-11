@@ -1082,6 +1082,7 @@ fn import<R: Runner, W: Write>(
         reads
     };
     let mut proposals = Vec::new();
+    let mut empty = Vec::new();
     for path in paths.iter().map(Path::new) {
         let name = path
             .file_name()
@@ -1110,6 +1111,13 @@ fn import<R: Runner, W: Write>(
                 path.display()
             );
         }
+        if path.is_file() && name.to_string_lossy().starts_with('.') {
+            bail!(
+                "{} is hidden, its name starting with a dot, and muman reads no hidden file; \
+                 rename it without the dot",
+                path.display()
+            );
+        }
         if path.is_dir() {
             copy_tree(path, &to, &mut audio)?;
         } else if !audio(path) {
@@ -1122,12 +1130,20 @@ fn import<R: Runner, W: Write>(
                 }
             }
         }
+        let store = Store::scan(dirs)?;
+        let found = media_at(&store, dirs, &to)?;
+        if found.is_empty() && path.is_dir() {
+            empty.push(format!(
+                "{}, which holds no song muman reads",
+                path.display()
+            ));
+            continue;
+        }
         ui::info(
             out,
             &format!("Copied {} into {}", path.display(), dirs.manual().display()),
         )?;
-        let store = Store::scan(dirs)?;
-        for key in media_at(&store, dirs, &to)? {
+        for key in found {
             if let SourceKey::Manual(m) = &key
                 && let Some(folder) = path.parent()
             {
@@ -1146,6 +1162,7 @@ fn import<R: Runner, W: Write>(
             });
         }
     }
+    unread.extend(empty);
     Ok(proposals)
 }
 
@@ -1244,7 +1261,7 @@ fn copy_tree(from: &Path, to: &Path, keep: &mut impl FnMut(&Path) -> bool) -> Re
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
-    for file in crate::store::files_below(from, usize::MAX, |_| true)? {
+    for file in crate::store::walk(from, usize::MAX)? {
         if keep(&file) {
             let rel = file.strip_prefix(from).unwrap_or(&file);
             copy_new(&file, &to.join(rel))?;

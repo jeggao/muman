@@ -84,6 +84,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A home inside the library** is refused by every command that
   writes, where `add` copied the file in and listed nothing, taking it
   for one of the library's.
+- **`add` of a file named with a leading dot** is refused, as muman
+  reads no hidden file, where it was copied in and never listed. A
+  folder's hidden files, as `._Song.flac`, are not copied, and a folder
+  holding no song is named and exits with 4, where `add` said it was
+  copied.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.
