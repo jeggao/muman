@@ -71,6 +71,23 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
 }
 
 #[test]
+fn an_emptied_file_is_to_write_as_status_says() {
+    let (_dir, dirs) = home();
+    songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let mut out = Vec::new();
+    assert!(reconcile(&fake(), &dirs, Options::default(), None, &mut out).unwrap());
+    let file = crate::store::walk(&dirs.library, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.extension().is_some_and(|e| e == "opus"))
+        .unwrap();
+    std::fs::write(file, "").unwrap();
+    let text = info_text(&dirs, false);
+    assert_eq!(value(&text, "Up to date"), "1", "{text}");
+    assert_eq!(value(&text, "To write"), "1", "{text}");
+}
+
+#[test]
 fn sources_are_counted_by_where_they_come_from_and_kept_ones_can_lie_unused() {
     let (_dir, dirs) = home();
     std::fs::create_dir_all(dirs.lrclib()).unwrap();

@@ -89,6 +89,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   folder's hidden files, as `._Song.flac`, are not copied, and a folder
   holding no song is named and exits with 4, where `add` said it was
   copied.
+- **`info`** counts an emptied library file as to write, and a song
+  with no file on disk as one that cannot be made, as `status` and
+  `check` say, where it counted both up to date.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.
