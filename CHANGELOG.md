@@ -92,6 +92,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`info`** counts an emptied library file as to write, and a song
   with no file on disk as one that cannot be made, as `status` and
   `check` say, where it counted both up to date.
+- **`set` and `add --tag`** refuse `track=abc`, `date=yesterday` and a
+  ReplayGain or R128 gain, which muman measures, where they wrote the
+  first two and showed the gain set, writing the measured one.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

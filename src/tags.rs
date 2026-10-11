@@ -233,6 +233,38 @@ pub fn vorbis_key(name: &str) -> String {
     Field::named(name).map_or_else(|| name.to_ascii_uppercase(), |f| f.vorbis().to_string())
 }
 
+/// What is wrong with `value` as `name`'s, set by hand: a number that is
+/// none, a date that is none, or a gain muman measures and writes over.
+#[must_use]
+pub fn bad_value(name: &str, value: &str) -> Option<String> {
+    let key = vorbis_key(name);
+    let v = value.trim();
+    match key.as_str() {
+        "TRACKNUMBER" | "DISCNUMBER" | "TRACKTOTAL" | "DISCTOTAL" => {
+            let whole = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+            let fine = match v.split_once('/') {
+                Some((n, of)) => whole(n) && whole(of),
+                None => whole(v),
+            };
+            (!fine).then(|| format!("`{value}` is no number for {name}: give one as 3, or 3/12"))
+        }
+        "DATE" | "ORIGINALDATE" => {
+            let digits = |n: &str, len| n.len() == len && n.bytes().all(|b| b.is_ascii_digit());
+            let month = v
+                .split_once('-')
+                .is_some_and(|(y, m)| digits(y, 4) && digits(m, 2));
+            (!(digits(v, 4) || month || iso_date(v).is_some())).then(|| {
+                format!("`{value}` is no date for {name}: give YYYY-MM-DD, YYYY-MM or a year")
+            })
+        }
+        k if k.starts_with("REPLAYGAIN_") || k.starts_with("R128_") => Some(format!(
+            "{name} is measured by muman and written over on every sync; set [loudness] in \
+             the song list instead"
+        )),
+        _ => None,
+    }
+}
+
 /// One source's value for a field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offer {

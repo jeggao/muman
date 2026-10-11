@@ -226,6 +226,9 @@ impl TagArgs {
 fn name_value(text: &str) -> Result<(String, String), String> {
     match text.split_once('=') {
         Some((name, value)) if !name.trim().is_empty() => {
+            if let Some(why) = crate::tags::bad_value(name.trim(), value) {
+                return Err(why);
+            }
             Ok((name.trim().to_string(), value.to_string()))
         }
         _ => Err(format!("`{text}` is not NAME=VALUE")),

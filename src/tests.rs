@@ -719,6 +719,28 @@ fn undo_puts_a_removed_song_back() {
 }
 
 #[test]
+fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    for (term, said) in [
+        ("track=abc", "no number"),
+        ("disc=2/x", "no number"),
+        ("date=yesterday", "no date"),
+        ("replaygain_track_gain=loud", "[loudness]"),
+    ] {
+        let e = s.refused(&["set", "-y", "manual:a.flac", term]);
+        assert!(e.contains(said), "{term}: {e}");
+    }
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "track=3/12", "date=2024-05"],
+    );
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn set_tags_a_song_and_writes_it_again() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

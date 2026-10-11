@@ -458,6 +458,9 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                 tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
                 v,
             ) {
+                (_, Some(v)) if let Some(why) = crate::tags::bad_value(name, v) => {
+                    return refuse(why);
+                }
                 (Some((_, values)), Some(v)) => values.push(v.to_string()),
                 (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
                 (None, v) => tags.push((

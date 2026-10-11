@@ -607,7 +607,9 @@ nothing, or, negated, every song.
   tombstones.
 - **`set`** sets tags, pins and `lyrics_offset`: `genre=Folk` sets,
   `genre!` clears so the sources' value shows, `audio=<key>` pins,
-  `audio!` unpins, `lyrics=false` takes none.
+  `audio!` unpins, `lyrics=false` takes none. A track or disc number
+  that is no number, a date that is none, and the gains muman measures
+  are refused, as by `add --tag`.
 - **`edit`** opens the songs' entries in `$VISUAL` or `$EDITOR`. Delete
   a table to remove its song, move a key to another table to join the
   two, or into a new table without an `id` to split it off. A file with
