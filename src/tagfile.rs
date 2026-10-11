@@ -483,6 +483,11 @@ const BEETS: [(&str, &str); 55] = [
 
 /// The parts of the dates beets keeps as numbers, and the Vorbis names
 /// of the dates they make.
+/// beets' credit as written, as "A feat. B", and the field naming each
+/// artist of it. Where both are given, the artists are the tag's values,
+/// so the credit is no artist of its own.
+const CREDITS: [(&str, &str); 2] = [("artist", "artists"), ("albumartist", "albumartists")];
+
 const BEETS_DATES: [(&str, &str); 2] = [("", "DATE"), ("original_", "ORIGINALDATE")];
 
 /// beets' fields of its own: what it measured of the file, where it
@@ -540,7 +545,14 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
             .collect(),
         _ => Vec::new(),
     };
+    let listed = |name: &str| map.get(name).map(text).is_some_and(|v| !v.is_empty());
     for (name, key) in BEETS {
+        if CREDITS
+            .iter()
+            .any(|(credit, each)| name == *credit && listed(each))
+        {
+            continue;
+        }
         for value in map.get(name).map(text).unwrap_or_default() {
             sheet.add(&mut tags, key, &value);
         }

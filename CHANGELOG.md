@@ -30,8 +30,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song list; `--to` names the songs instead. Lyrics and pictures become
   sources of the song; tags from `NAME=value`, ffmetadata, beets or
   MusicBrainz JSON and cue sheets are set on it by hand, each beets
-  field under the name Picard writes it as, and `--verbose` names what
-  was skipped.
+  field under the name Picard writes it as, a credit as "A feat. B"
+  giving way to the artists it names, and `--verbose` names what was
+  skipped.
 
 - **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
   no lookup, no fetch, and URLs refused.
