@@ -112,7 +112,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Messages:** `status` on a home with no song says so, where it said
   nothing; a removed song is named once by its artist, where `restore`
   named it twice; a source that lost its cover and lyrics has "no
-  cover or lyrics".
+  cover or lyrics"; `info --verbose` names each song with its key, so
+  that two of one title are told apart.
 - **`export`** dates each entry of its zip by its file, where every one
   read 1980-01-01.
 - **`restore album:…`** finds removed songs by their tags and their

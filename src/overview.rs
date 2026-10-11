@@ -60,8 +60,12 @@ struct Context<'a> {
 }
 
 impl Context<'_> {
+    /// The song by name and key, so that two of one name are told apart.
     fn name(&self, n: usize, r: &Resolved) -> String {
-        reconcile::name_of(&self.manifest.songs[n], Some(r), &self.state.facts)
+        let song = &self.manifest.songs[n];
+        let name = reconcile::name_of(song, Some(r), &self.state.facts);
+        song.id()
+            .map_or_else(|| name.clone(), |id| format!("{id} — {name}"))
     }
 }
 
