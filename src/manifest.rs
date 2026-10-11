@@ -1439,7 +1439,45 @@ fn normalize(doc: &mut DocumentMut) -> bool {
             }
         }
     }
-    changed
+    changed | drop_listed_removed(doc)
+}
+
+/// A removed song's sources a song lists again taken out of its
+/// `[[removed]]` table, and the table with them when none of its own is
+/// left: a song joined to another in `edit` is listed, not removed, and
+/// `restore` could list none of it again. Whether any was.
+fn drop_listed_removed(doc: &mut DocumentMut) -> bool {
+    let own = |k: &str| SourceKey::parse(k).ok().filter(|k| !shareable(k));
+    let listed: BTreeSet<SourceKey> = doc
+        .get("song")
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+        .flat_map(listed_keys)
+        .filter_map(|k| own(&k))
+        .collect();
+    let Some(removed) = doc
+        .get_mut("removed")
+        .and_then(Item::as_array_of_tables_mut)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for table in removed.iter_mut() {
+        let Some(sources) = table.get_mut("sources").and_then(Item::as_array_mut) else {
+            continue;
+        };
+        let before = sources.len();
+        sources.retain(|v| {
+            !v.as_str()
+                .and_then(own)
+                .is_some_and(|k| listed.contains(&k))
+        });
+        changed |= sources.len() != before;
+    }
+    let before = removed.len();
+    removed.retain(|t| listed_keys(t).iter().any(|k| own(k).is_some()));
+    changed | (removed.len() != before)
 }
 
 /// `held` records of sources the song no longer lists taken out, as a

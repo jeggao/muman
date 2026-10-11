@@ -76,6 +76,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`restore` after `remove --purge`** refuses until you put the files
   of your own it trashed back, naming each, where it listed their songs
   with nothing to make them from, and every sync after failed.
+- **A song joined to another in `edit`** is said to be joined and left
+  out of `[[removed]]`, where it was noted as removed and `restore`
+  claimed to list it again, changing nothing. A removed song whose
+  sources a song lists again is dropped from `[[removed]]` on the next
+  write.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

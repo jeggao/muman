@@ -613,7 +613,7 @@ fn a_rewrite_finds_every_song_before_changing_any() {
             vec![yt("bbbbbbbbbbb")]
         ]
     );
-    assert_eq!(m.removed[0].note, "gone");
+    assert_eq!(m.removed, [], "a song joined to another is not removed");
     let again = Manifest::load(dir.path()).unwrap();
     assert_eq!(again.songs.len(), 2, "{}", text(dir.path()));
     assert_eq!(
@@ -777,7 +777,7 @@ fn restoring_a_song_whose_sources_are_listed_again_lists_nothing() {
     m.save().unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs.len(), 1);
-    assert_eq!(m.removed.len(), 1);
+    assert_eq!(m.removed, []);
 }
 
 #[test]

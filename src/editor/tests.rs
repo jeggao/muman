@@ -186,6 +186,28 @@ fn a_deleted_song_is_removed_and_a_moved_key_split_off() {
 }
 
 #[test]
+fn a_song_joined_to_another_is_listed_there_not_removed() {
+    let h = home(TWO);
+    let (changed, text, _) = edit_with(
+        &h,
+        &[Box::new(|t| {
+            let c = t.rfind("[[song]]").unwrap();
+            let head = t[..c].rfind("\n# ").unwrap_or(c);
+            t[..head].replace(
+                "\"manual:b.flac\"]",
+                "\"manual:b.flac\", \"manual:c.flac\"]",
+            )
+        })],
+    );
+    assert!(changed, "{text}");
+    let m = songs(&h);
+    assert_eq!(m.songs.len(), 1, "{text}");
+    assert_eq!(m.songs[0].sources.len(), 3, "{text}");
+    assert_eq!(m.removed, [], "{text}");
+    assert!(text.contains("Joined to another song"), "{text}");
+}
+
+#[test]
 fn a_song_changed_meanwhile_is_said_and_saving_again_applies() {
     let h = home(TWO);
     let manifest = h.dirs.manifest();
