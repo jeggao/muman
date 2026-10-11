@@ -3,7 +3,9 @@
 //! time.
 //!
 //! Each side is decoded to 8 kHz mono and reduced to a log-energy
-//! envelope at 100 frames a second. A cross-correlation over the whole
+//! envelope at 100 frames a second, its samples centred on their mean
+//! first: an old rip's converter may hold its silence off centre, which
+//! would measure as steady sound 50 dB down. A cross-correlation over the whole
 //! of both, coarse at a quarter of the rate and then refined, finds the
 //! shift. Ten-second windows of the upload, each searched again within
 //! 1 s of it, find their own, and a line through them, the median of their
@@ -48,7 +50,7 @@ use std::path::Path;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/4";
+pub const METHOD: &str = "envelope-xcorr/5";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
@@ -168,20 +170,19 @@ fn real(count: usize) -> f64 {
     count as f64
 }
 
-/// The log-energy envelope of 16-bit little-endian samples.
+/// The log-energy envelope of 16-bit little-endian samples, centred on
+/// their mean first, which takes out a DC offset.
 #[must_use]
 pub fn envelope(pcm: &[u8]) -> Vec<f64> {
-    pcm.as_chunks::<{ HOP * 2 }>()
+    let (samples, _) = pcm.as_chunks::<2>();
+    let value = |s: &[u8; 2]| f64::from(i16::from_le_bytes(*s));
+    let mean = samples.iter().map(value).sum::<f64>() / real(samples.len().max(1));
+    samples
+        .as_chunks::<HOP>()
         .0
         .iter()
         .map(|frame| {
-            let energy = frame
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|s| f64::from(i16::from_le_bytes([s[0], s[1]])).powi(2))
-                .sum::<f64>()
-                / real(HOP);
+            let energy = frame.iter().map(|s| (value(s) - mean).powi(2)).sum::<f64>() / real(HOP);
             energy.sqrt().ln_1p()
         })
         .collect()
