@@ -14,6 +14,16 @@
 //! scanner cannot be replaced or deleted for a moment: the call fails
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
 //! few seconds before giving up; elsewhere they fail at once.
+//!
+//! The library's lock lives in the system's temporary folder, shared by
+//! every user and every library, so it goes as its holder lets go: the
+//! file is removed while still locked, and a run that locks it checks the
+//! path still names the file it locked, else opens and locks it again. A
+//! run that was waiting on the removed file finds its path gone or
+//! another file there, never two runs holding the lock at once. Windows
+//! deletes a file still open only once the last handle closes, refusing
+//! to open it meanwhile, which a run that locks it waits out as
+//! [`rename`] waits out a held file.
 
 use std::fs::{File, TryLockError};
 use std::io::{self, Write};
@@ -143,7 +153,21 @@ pub fn remove(path: &Path) -> io::Result<()> {
 
 /// An exclusive lock on a folder, held until dropped.
 #[derive(Debug)]
-pub struct Lock(#[allow(dead_code)] File);
+pub struct Lock {
+    file: File,
+    /// The lock file, removed as the lock is let go; a lock in a folder
+    /// of its own keeps its file.
+    removed: Option<PathBuf>,
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // Before the file closes, which lets the lock go.
+        if let Some(path) = &self.removed {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
 
 /// The folder library locks are kept in: the system's temporary folder,
 /// but beside the library in tests, so each test's lock goes with its
@@ -182,7 +206,8 @@ impl Lock {
 
     /// A lock on the library folder, so two homes never write one
     /// library at once. It is kept in the system's temporary folder, named
-    /// by the library's resolved path, to leave no file in the library.
+    /// by the library's resolved path, to leave no file in the library,
+    /// and removed as it is let go.
     pub fn library(library: &Path) -> Result<Self> {
         // Made first, so its path resolves alike on the first run and later.
         if !library.exists() {
@@ -192,19 +217,40 @@ impl Lock {
         let resolved = dunce::canonicalize(library).unwrap_or_else(|_| library.to_path_buf());
         let name = crate::facts::digest(resolved.to_string_lossy().as_bytes());
         let path = library_locks(&resolved).join(format!(".muman-library-{name}.lock"));
-        Self::at(&path, library)
+        loop {
+            let mut lock = Self::at(&path, library)?;
+            let held = lock.file.try_clone().and_then(same_file::Handle::from_file);
+            let named = same_file::Handle::from_path(&path);
+            if let (Ok(held), Ok(named)) = (held, named)
+                && held == named
+            {
+                lock.removed = Some(path);
+                return Ok(lock);
+            }
+        }
     }
 
     /// Lock `path`, guarding `dir`.
     fn at(path: &Path, dir: &Path) -> Result<Self> {
-        let file = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)
-            .with_context(|| format!("locking {}", dir.display()))?;
+        let mut opened = None;
+        retry(|| {
+            opened = Some(
+                File::options()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(path)?,
+            );
+            Ok(())
+        })
+        .with_context(|| format!("locking {}", dir.display()))?;
+        let file = opened.context("opening the lock")?;
+        let locked = |file| Self {
+            file,
+            removed: None,
+        };
         match file.try_lock() {
-            Ok(()) => return Ok(Self(file)),
+            Ok(()) => return Ok(locked(file)),
             Err(TryLockError::WouldBlock) => {
                 let _ = crate::ui::info(
                     &mut anstream::stderr(),
@@ -216,7 +262,7 @@ impl Lock {
             }
         }
         file.lock()
-            .map(|()| Self(file))
+            .map(|()| locked(file))
             .with_context(|| format!("locking {}", dir.display()))
     }
 }
@@ -377,6 +423,38 @@ mod tests {
         assert!(matches!(other.try_lock(), Err(TryLockError::WouldBlock)));
         drop(lock);
         assert!(other.try_lock().is_ok());
+    }
+
+    #[test]
+    fn a_library_lock_leaves_no_file_behind_and_still_excludes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("lib");
+        let locks = || {
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|n| n.starts_with(".muman-library-"))
+                .count()
+        };
+        let lock = Lock::library(&library).unwrap();
+        assert_eq!(locks(), 1);
+        drop(lock);
+        assert_eq!(locks(), 0, "let go of, its file goes");
+        let inside = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..10 {
+                        let _lock = Lock::library(&library).unwrap();
+                        assert_eq!(inside.fetch_add(1, Ordering::SeqCst), 0, "two hold it");
+                        std::thread::sleep(Duration::from_millis(1));
+                        inside.fetch_sub(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(locks(), 0);
     }
 
     #[cfg(windows)]

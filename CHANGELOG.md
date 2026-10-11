@@ -199,6 +199,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   is left alone as changed since muman wrote it, its bytes compared
   with those written as it is about to be written over, moved with new
   tags or removed, where the next change to its song wrote over it.
+- **The library's lock file** in the system's temporary folder is
+  removed as each run lets go of it, where one stayed for every library
+  folder muman ever wrote.
 
 ## [0.3.0] - 2026-10-07
 
