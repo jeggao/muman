@@ -170,7 +170,7 @@ pub fn export<R: Runner, W: Write>(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
 
-    let songs = songs(dirs, &state, &store, out)?;
+    let (songs, missing) = songs(dirs, &state, &store, out)?;
     let mut files: Vec<Vec<Entry>> = songs
         .iter()
         .map(|s| library_entries(&dirs.library, s))
@@ -179,7 +179,8 @@ pub fn export<R: Runner, W: Write>(
         from: list,
         name: dirs::MANIFEST.to_string(),
     };
-    let mut ok = true;
+    // A song left out leaves the export short of the library.
+    let mut ok = missing == 0;
     let mut encoded = 0_usize;
     let scratch = crate::atomic::Scratch::within(folder)?;
     if let Some(max) = max_size {
@@ -250,7 +251,12 @@ pub fn export<R: Runner, W: Write>(
 
 /// The songs the library holds as the state records them, in path order,
 /// each with its sources when it may be encoded again.
-fn songs<W: Write>(dirs: &Dirs, state: &State, store: &Store, out: &mut W) -> Result<Vec<Song>> {
+fn songs<W: Write>(
+    dirs: &Dirs,
+    state: &State,
+    store: &Store,
+    out: &mut W,
+) -> Result<(Vec<Song>, usize)> {
     let mut songs = Vec::new();
     let mut missing = 0_usize;
     for (path, written) in &state.outputs {
@@ -285,7 +291,7 @@ fn songs<W: Write>(dirs: &Dirs, state: &State, store: &Store, out: &mut W) -> Re
             ),
         )?;
     }
-    Ok(songs)
+    Ok((songs, missing))
 }
 
 fn library_entries(library: &Path, song: &Song) -> Vec<Entry> {

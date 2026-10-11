@@ -1276,6 +1276,45 @@ fn exported_home(seconds: &str) -> (Setup, Fake) {
 }
 
 #[test]
+fn an_export_short_of_a_song_fails() {
+    let (s, fake) = exported_home("200.0");
+    std::fs::remove_file(s.dir.path().join("lib/Artist/Record/02 Song.flac")).unwrap();
+    let zip = s.dir.path().join("out.zip");
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["export", "-o", &zip.to_string_lossy()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok && text.contains("left out"), "{text}");
+    assert!(zip.exists(), "{text}");
+}
+
+#[test]
+fn offline_a_url_is_refused_before_any_file_is_copied() {
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    let mut job = s.job(&["add", &song, "https://www.youtube.com/watch?v=aaaaaaaaaaa"]);
+    job.offline = true;
+    let e = run_with(
+        &job,
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(!s.dir.path().join("home/sources/manual/Song.flac").exists());
+}
+
+#[test]
 fn export_writes_the_song_list_and_the_library_into_a_zip() {
     let (s, fake) = exported_home("200.0");
     let zip = s.dir.path().join("out");

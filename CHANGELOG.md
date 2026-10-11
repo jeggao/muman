@@ -95,6 +95,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`set` and `add --tag`** refuse `track=abc`, `date=yesterday` and a
   ReplayGain or R128 gain, which muman measures, where they wrote the
   first two and showed the gain set, writing the measured one.
+- **`add <URL>` under `--offline`** is refused with exit 5, as `check
+  --upstream` is, before copying any file given with it, where it
+  exited with 4 having copied them.
+- **`export`** exits with 4 when it leaves out a song missing from the
+  library, where it exited with 0.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

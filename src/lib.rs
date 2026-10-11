@@ -402,13 +402,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 }
                 let (loose, files) = split_loose(&files)?;
                 let mut ok = true;
+                if let Some(url) = urls.first().filter(|_| job.offline) {
+                    return Err(change::Refused(format!(
+                        "{url} is fetched from the network, and --offline reaches none"
+                    ))
+                    .into());
+                }
                 let sites = Manifest::load(&dirs.home)?.settings.sites;
                 let mut beside = Vec::new();
                 let mut proposals =
                     import(runner, dirs, &sites, &files, &mut beside, &mut unread, out)?;
-                if let Some(url) = urls.first().filter(|_| job.offline) {
-                    bail!("{url} is fetched from the network, and --offline reaches none");
-                }
                 if !urls.is_empty() {
                     let urls: Vec<String> = urls.into_iter().cloned().collect();
                     let (fine, additions) =
