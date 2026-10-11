@@ -729,12 +729,16 @@ impl<W: Write> Console<W> {
 /// Each line of `bytes`, its colours taken out, as a `message` event.
 fn message_events(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
-    anstream::adapter::strip_str(&text)
+    let mut events = String::new();
+    for line in anstream::adapter::strip_str(&text)
         .to_string()
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .map(|l| format!("{}\n", serde_json::json!({"event": "message", "text": l})))
-        .collect()
+    {
+        events.push_str(&serde_json::json!({"event": "message", "text": line}).to_string());
+        events.push('\n');
+    }
+    events
 }
 
 impl<W: Write> Write for Console<W> {

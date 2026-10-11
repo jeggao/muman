@@ -587,9 +587,7 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
         let mut from =
             File::open(&entry.from).with_context(|| format!("reading {}", entry.from.display()))?;
         let meta = from.metadata().ok();
-        let large = meta
-            .as_ref()
-            .map_or(true, |m| m.len() >= u64::from(u32::MAX));
+        let large = meta.as_ref().is_none_or(|m| m.len() >= u64::from(u32::MAX));
         let mut options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
             .large_file(large);

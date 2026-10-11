@@ -358,6 +358,22 @@ pub fn present(home: &Path) -> Result<()> {
 /// out of the library, so it is refused rather than warned of.
 const LISTED: [&str; 3] = ["song", "album", "removed"];
 
+/// `doc`, refused when a table in it is a letter or two from one of
+/// [`LISTED`].
+fn no_misspelled_list(doc: &DocumentMut) -> Result<&DocumentMut> {
+    if let Some((key, near)) = doc
+        .iter()
+        .find_map(|(key, _)| Some((key, near_miss(key).filter(|n| LISTED.contains(n))?)))
+    {
+        bail!(
+            "`{key}` in the song list is nothing muman reads; did you mean `{near}`? Read \
+             as it is, what it lists would leave the library, so nothing is done until it \
+             is spelled `{near}`"
+        );
+    }
+    Ok(doc)
+}
+
 /// The key muman reads that `key`, which it does not, is a letter or
 /// two from, as a misspelling.
 fn near_miss(key: &str) -> Option<&'static str> {
@@ -836,17 +852,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut current = doc.clone();
     let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
     let respelled = respell(&mut current, &spelled_now);
-    let doc = &current;
-    if let Some((key, near)) = doc
-        .iter()
-        .find_map(|(key, _)| Some((key, near_miss(key).filter(|n| LISTED.contains(n))?)))
-    {
-        bail!(
-            "`{key}` in the song list is nothing muman reads; did you mean `{near}`? Read \
-             as it is, what it lists would leave the library, so nothing is done until it \
-             is spelled `{near}`"
-        );
-    }
+    let doc = no_misspelled_list(&current)?;
     let lyrics = doc
         .get("defaults")
         .and_then(|d| d.get("lyrics"))
