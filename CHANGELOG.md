@@ -219,6 +219,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `undo -n` says, where the copy stayed and the next sync listed the
   song again as a file dropped in. A copy changed since goes to the
   trash.
+- **A source cut off since its song was built,** as a copy stopped
+  short leaves a file of your own, leaves the song's file as built and
+  fails the song, exit 4, until the whole file is back or `sync --force`
+  writes it, where the song followed it, its library file replaced by
+  the stub. `check` names every source cut off.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.

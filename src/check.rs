@@ -210,6 +210,20 @@ pub fn check<R: Runner, W: Write, D: Write>(
             problem(report, format!("Missing from sources, {how}: {key}"))?;
         }
     }
+    for (key, f) in listed.iter().filter_map(|k| {
+        let rev = store.locate(k)?.rev();
+        Some((k, state.facts.get(k).filter(|f| f.holds_for(&rev))?))
+    }) {
+        if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
+            problem(
+                report,
+                format!(
+                    "Cut off, as a copy or a download stopped: {key} holds {held:.0} s of audio \
+                     where its header says {said:.0} s"
+                ),
+            )?;
+        }
+    }
     for (key, failure) in &state.failures {
         problem(
             report,

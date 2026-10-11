@@ -251,7 +251,11 @@ home made from the song list alone, is built from what its sources hold
 now, and the warning stays until accepted. A file of your own in
 `sources/manual`, or a picture or `.lrc` beside it, is yours to change:
 its song follows it, said in a line, and its record is written anew.
-`check --upstream` asks each site whether a fetch again would bring
+A source whose audio changed and is now cut off, holding less than its
+header says, as a copy or a download stopped short leaves it, is not
+followed: its song keeps the file it was built from and fails, exit 4,
+until you put the whole file back or `sync --force` writes the song
+from what it holds. `check --upstream` asks each site whether a fetch again would bring
 other audio or tags before any is lost
 ([status, info and check](#status-info-and-check)).
 
@@ -683,7 +687,8 @@ refuses the save.
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded; `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by an
-  interrupted run or not muman's, and sources missing or unreadable;
+  interrupted run or not muman's, and sources missing, unreadable or cut
+  off;
   `--decode` decodes every source in full to find a truncated download.
   `--upstream` asks each site, downloading nothing, whether it still
   serves each fetched source in the format and at the size its song

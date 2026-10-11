@@ -735,6 +735,60 @@ fn undo_of_a_forced_sync_leaves_a_file_retagged_by_hand_changed() {
 }
 
 #[test]
+fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
+    let s = Setup::new();
+    let source = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let built = std::fs::read(&file).unwrap();
+    std::fs::write(&source, "a copy stopped short").unwrap();
+    let cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..flacs()
+    };
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &cut,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok, "a failure: {text}");
+    assert!(text.contains("cut off since its song was built"), "{text}");
+    assert!(!text.contains("Updated"), "{text}");
+    assert_eq!(std::fs::read(&file).unwrap(), built, "{text}");
+    let mut report = Vec::new();
+    let clean = run_with(
+        &s.job(&["check"]),
+        &cut,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut report,
+    )
+    .unwrap();
+    let report = String::from_utf8(report).unwrap();
+    assert!(!clean && report.contains("Cut off"), "{report}");
+    let mut out = Vec::new();
+    run_with(
+        &s.job(&["sync", "--force"]),
+        &cut,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("Updated (audio"), "{text}");
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
