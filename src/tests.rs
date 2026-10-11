@@ -2251,6 +2251,67 @@ fn check_names_an_undo_stopped_before_its_sync_ended() {
 }
 
 #[test]
+fn a_sync_killed_after_a_hand_edit_is_undone_with_the_edit() {
+    let synced = Setup::new();
+    two_songs(&synced);
+    let songs = |s: &Setup| s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(songs(&synced)).unwrap();
+    let edited = listed
+        .replace("codecs = [\"opus\", \"flac\"]", "codecs = [\"opus\"]")
+        .replace("lossless = \"flac\"", "lossless = \"opus\"");
+    assert_ne!(edited, listed);
+    let prepare = |s: &Setup| {
+        two_songs(s);
+        std::fs::write(songs(s), &edited).unwrap();
+    };
+    let whole = Setup::new();
+    prepare(&whole);
+    let before = library_of(&whole);
+    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["sync"]);
+    let steps = counted.seen();
+    drop(counted);
+    assert_ne!(
+        library_of(&whole),
+        before,
+        "the edit writes every song again"
+    );
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["sync"]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        if library_of(&s) == before {
+            continue;
+        }
+        let mut out = Vec::new();
+        let undone = run_with(
+            &s.job(&["undo", "-y"]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        );
+        let text = String::from_utf8_lossy(&out);
+        assert!(undone.is_ok(), "step {at} of {steps}: {undone:?}: {text}");
+        assert_eq!(library_of(&s), before, "step {at} of {steps}: {text}");
+        assert_eq!(std::fs::read_to_string(songs(&s)).unwrap(), listed);
+    }
+}
+
+#[test]
 fn songs_moving_with_their_lyrics_survive_a_kill_anywhere() {
     let retemplated = |s: &Setup| {
         for name in ["a", "b"] {

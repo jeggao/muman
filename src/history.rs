@@ -22,8 +22,8 @@
 //!
 //! The record is written ahead of what it records: before the run moves,
 //! writes over or removes a library file, which a sync does only through
-//! [`crate::library::Ledger`], and again as it goes, so a run
-//! stopped partway, by a crash or Ctrl-C, is still listed, as
+//! [`crate::library::Ledger`], or writes a new one, and again as it goes,
+//! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
 //! interrupted, and can be undone. A folder with no record, left by a run
 //! stopped before it wrote one, holds nothing `undo` could use and is
 //! let go of with the runs past the count. A file such a run moved before

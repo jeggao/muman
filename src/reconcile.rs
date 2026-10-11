@@ -1003,6 +1003,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 },
             );
         }
+        // Recorded ahead of a new file as of one written over, so a run
+        // stopped among them is undone, the hand edit it applied with it.
+        ledger.checkpoint()?;
         pending.save(home)?;
     }
     let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));

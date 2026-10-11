@@ -211,6 +211,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`undo` of `sync --force`** puts back a file you had changed since
   muman wrote it as still changed, where it took it for muman's own,
   `check` found nothing and the next change to its song wrote over it.
+- **A sync stopped while writing new files** after a hand edit of the
+  song list can be undone, the edit with it, where `undo` refused,
+  saying the song list had changed, as the run had written no record
+  before its first new file.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.
