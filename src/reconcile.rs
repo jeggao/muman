@@ -963,7 +963,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 }
             }
             Doing::Move { .. }
-                if changed_since_written(&dirs.library, &state.outputs, &path_of(r)) =>
+                if edited_since_written(&dirs.library, &state.outputs, &path_of(r)) =>
             {
                 Doing::Guard { file: path_of(r) }
             }
@@ -1373,8 +1373,6 @@ fn fit_summary<W: Write>(fitted: &limit::Fitted, out: &mut W) -> Result<()> {
     Ok(())
 }
 
-/// Whether a file muman wrote has changed since, by its size and
-/// time: a tagger or player that rewrote it.
 /// What `old` records of the song's file, when that file is the song as
 /// it would be written now: its plan, its file there and not empty, its
 /// lyrics there.
@@ -1433,6 +1431,8 @@ fn emptied(file: &Path) -> bool {
     std::fs::metadata(file).is_ok_and(|m| m.len() == 0)
 }
 
+/// Whether a file muman wrote has changed since, by its size and
+/// time: a tagger or player that rewrote it.
 pub(crate) fn changed_since_written(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
@@ -1445,6 +1445,28 @@ pub(crate) fn changed_since_written(
         .and_then(|w| w.stamp.as_ref())
         .zip(store::stamp_text(&library.join(path)))
         .is_some_and(|(was, now)| *was != now)
+}
+
+/// [`changed_since_written`], or, its size and time as written, its
+/// bytes not the ones written: a tagger set to keep files' times, its
+/// edit fitting the tag's padding. The bytes are read only here, for a
+/// file about to be written over, moved with new tags or removed, so a
+/// sync reads no file it leaves as it is.
+pub(crate) fn edited_since_written(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+) -> bool {
+    if changed_since_written(library, old, path) {
+        return true;
+    }
+    let file = library.join(path);
+    let Some(written) = old.get(path).filter(|w| w.stamp.is_some()) else {
+        return false;
+    };
+    written.digest.as_ref().is_some_and(|was| {
+        !emptied(&file) && crate::facts::digest_file(&file).is_some_and(|now| now != *was)
+    })
 }
 
 /// Which file the state records is each song's, one file to one song:
@@ -1646,8 +1668,7 @@ fn decide(
             && was.lyrics.as_ref().is_none_or(|l| library.join(l).exists());
         let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
         let retag = was.plan.as_ref() != Some(&r.plan);
-        let changed = changed_since_written(library, old, from);
-        if same_media && !(changed && retag) {
+        if same_media && !(retag && edited_since_written(library, old, from)) {
             moving.push((i, from.clone(), path, retag));
         }
     }
@@ -1709,11 +1730,11 @@ fn decide(
                 && was
                     .and_then(|w| w.plan.as_ref())
                     .is_some_and(|p| media_equal(p, &r.plan));
-            if let Some(file) = file.filter(|f| changed_since_written(library, old, f)) {
+            if let Some(file) = file.filter(|f| edited_since_written(library, old, f)) {
                 return Doing::Guard { file: file.clone() };
             }
             // Whosever it is, a changed file at the path is not written over.
-            if changed_since_written(library, old, &path) {
+            if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
             if !foreign(library, old, &path).is_empty() {
@@ -1980,7 +2001,7 @@ fn prune_plan(
         }
         let fate = if written.sources.iter().any(|k| failed.contains(k)) {
             Pruned::KeptForFailed
-        } else if changed_since_written(library, old, path)
+        } else if edited_since_written(library, old, path)
             && !(forced
                 && outputs
                     .values()

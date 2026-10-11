@@ -662,7 +662,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             }
             let why = if !owned.contains(rel) {
                 "is not muman's"
-            } else if crate::reconcile::changed_since_written(&dirs.library, &state.outputs, rel) {
+            } else if crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel) {
                 "changed since muman wrote it"
             } else {
                 continue;

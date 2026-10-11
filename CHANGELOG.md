@@ -195,6 +195,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A gain `[loudness] ceiling` leaves nothing of,** in an Opus header
   or the samples, leaves a song alone as tags alone do, where its file
   was written again the same.
+- **A library file retagged by a tagger that keeps its size and time**
+  is left alone as changed since muman wrote it, its bytes compared
+  with those written as it is about to be written over, moved with new
+  tags or removed, where the next change to its song wrote over it.
 
 ## [0.3.0] - 2026-10-07
 

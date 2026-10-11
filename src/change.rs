@@ -232,7 +232,7 @@ pub fn remove<W: Write>(
             // As the sync after does: a song's files stay whole when its
             // audio changed since written.
             let changed =
-                crate::reconcile::changed_since_written(&dirs.library, &read.state.outputs, path);
+                crate::reconcile::edited_since_written(&dirs.library, &read.state.outputs, path);
             let how = if changed {
                 "leaves in place, changed since muman wrote it,"
             } else {

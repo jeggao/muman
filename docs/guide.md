@@ -79,9 +79,12 @@ with it, but a change to the song itself leaves it where it is, and
 `sync --force` writes the song again and deletes it, `undo` putting it
 back. A file whose time changed but whose bytes are still the ones
 written, as a backup put back or a copy made without its times, is
-muman's still. Each file is written under a temporary name and
-renamed into place, so a player never sees half a track. Library paths
-in messages use `/` on every system.
+muman's still; one whose size and time are as written but whose bytes
+are not, as a tagger set to keep files' times leaves it, is changed
+too, found as the file is about to be written over or removed. Each
+file is written under a temporary name and renamed into place, so a
+player never sees half a track. Library paths in messages use `/` on
+every system.
 
 ## The song list
 
