@@ -164,9 +164,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   changed since muman wrote it.
 - **An excerpt joined to its song** leaves the whole song's audio
   chosen, where the rest of the song counted against it as sound beyond
-  the song and the excerpt replaced it. A source cut off mid-sound
-  counts the song it lacks against itself. Every pair of sources is
-  compared again on the next sync.
+  the song and the excerpt replaced it. A source that ends where
+  another plays the song on, cut off mid-sound, in a short rest or
+  faded out, counts the song it lacks against itself. A release that
+  starts on a full chord at its first sample still beats its video's
+  intro, so an excerpt that starts mid-song and runs to the song's end
+  reads as whole. Every pair of sources is compared again on the next
+  sync.
 - **Silence held off centre by a DC offset,** as an old rip's lead-in
   can be, counts as no sound beyond the song, where it counted as
   sound and the rip lost to another copy of its song. Every pair of

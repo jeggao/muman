@@ -370,10 +370,14 @@ measures after it can make up for it. See
 
 **Audio.** Sound beyond the song is how long a source plays outside the
 stretch it shares with another source of the song: a music video's
-intro counts, silence does not. A source cut off mid-sound, as an
-excerpt is, lacks the song another plays on past its cut, which counts
-as sound beyond the song does, so an excerpt never beats the whole song
-it was cut from; one that fades out reads as a song ending. Bandwidth
+intro counts, silence does not. A source that ends where another plays
+the song on, as an excerpt cut off mid-sound, in a short rest or faded
+out does, lacks the rest of the song, which counts as sound beyond the
+song does, so an excerpt never beats the whole song it was cut from. A
+song's own end is in every source of it, so a video's outro past it is
+sound beyond the song; a release may start on a full chord at its first
+sample, so a source's start counts as cut only when its end is too.
+Bandwidth
 is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
 file measures as narrow as that file, while a recording whose treble
 fades on its own measures full, as does one whose notes end low over a
