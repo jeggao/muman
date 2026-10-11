@@ -874,4 +874,25 @@ mod tests {
         assert_eq!(date("2011-3"), None);
         assert_eq!(date("2011"), Some("2011".into()));
     }
+
+    #[test]
+    fn a_beets_credit_joined_in_one_field_is_not_one_more_artist() {
+        // beets keeps the credit as written in `artist` and each artist in
+        // `artists`; a song's ARTIST is each artist, a value apiece.
+        let one = r#"{"title": "Copper Moth", "artist": "Ada Quill feat. Marlo Venn",
+            "artists": ["Ada Quill", "Marlo Venn"], "albumartist": "Ada Quill & Tamsin Orr",
+            "albumartists": ["Ada Quill", "Tamsin Orr"]}"#;
+        let sheet = read(Path::new("beets.json"), one).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        assert_eq!(
+            values(tags, "ARTIST"),
+            ["Ada Quill", "Marlo Venn"],
+            "{tags:?}"
+        );
+        assert_eq!(
+            values(tags, "ALBUMARTIST"),
+            ["Ada Quill", "Tamsin Orr"],
+            "{tags:?}"
+        );
+    }
 }
