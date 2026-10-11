@@ -103,6 +103,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`--progress json`** writes each message as a `message` event, so
   that every line on stderr reads as JSON, where messages were plain
   lines among the events.
+- **A query ignores accents and how a name was composed,** so `cafe`
+  and `café` match "Café" however it was written, where a name a Mac
+  wrote decomposed matched only a decomposed query, and `cafe` none.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

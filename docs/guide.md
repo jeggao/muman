@@ -587,7 +587,7 @@ Each request names muman and its repository in its user agent.
 
 `list`, `remove`, `restore`, `set` and `edit` take a query, read from
 what earlier runs resolved, without fetching or measuring. Its terms
-are all required, case ignored:
+are all required, case and accents ignored, so `cafe` matches "Café":
 
 | Term | Matches |
 |---|---|

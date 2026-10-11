@@ -10,8 +10,9 @@
 //! field that is no tag muman knows and that no song has is refused, so
 //! a misspelled one neither matches nothing nor, negated, every song.
 //! A source key, as `youtube.com:<id>`, names its song exactly, and several
-//! name each of theirs. Every other term is required, and case is
-//! ignored throughout.
+//! name each of theirs. Every other term is required, and case and
+//! accents are ignored throughout, as is how a name was composed: `cafe`
+//! matches "Café", written in either Unicode form.
 //!
 //! A term is a key when what comes before its colon is no field's name
 //! and a site or scheme some key in the song list uses, or one
@@ -28,6 +29,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexBuilder};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::manifest::{Manifest, Removed};
 use crate::reconcile;
@@ -236,7 +238,7 @@ impl Query {
                 bail!("`{raw}` is an empty term");
             }
             let test = match body.split_once(':') {
-                None => Test::Word(body.to_lowercase()),
+                None => Test::Word(fold(body)),
                 Some(("", _)) => bail!("`{raw}` names no field"),
                 Some((scheme, rest))
                     if extractors.contains(&scheme.to_ascii_lowercase()) && !is_field(scheme) =>
@@ -256,8 +258,8 @@ impl Query {
                         Test::Matches(field, re)
                     } else {
                         let (exact, text) = match rest.strip_prefix('=') {
-                            Some(text) => (true, unquoted(text).to_lowercase()),
-                            None => (false, unquoted(rest).to_lowercase()),
+                            Some(text) => (true, fold(unquoted(text))),
+                            None => (false, fold(unquoted(rest))),
                         };
                         let yes_no =
                             ["cover", "lyrics"].contains(&field.to_ascii_lowercase().as_str());
@@ -373,8 +375,19 @@ fn names_key(key: &SourceKey, word: &str) -> bool {
         SourceKey::Manual(key) => [key.path().file_name(), key.path().file_stem()]
             .into_iter()
             .flatten()
-            .any(|n| n.to_string_lossy().to_lowercase() == word),
+            .any(|n| fold(&n.to_string_lossy()) == word),
     }
+}
+
+/// `text` as a query compares it: lower case, in one Unicode form, its
+/// accents taken off.
+fn fold(text: &str) -> String {
+    text.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+        .nfc()
+        .collect()
 }
 
 fn is_field(name: &str) -> bool {
@@ -383,9 +396,8 @@ fn is_field(name: &str) -> bool {
 
 impl Test {
     fn holds(&self, view: &View) -> bool {
-        let any = |field: &str, f: &dyn Fn(&str) -> bool| {
-            view.values(field).iter().any(|v| f(&v.to_lowercase()))
-        };
+        let any =
+            |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
         match self {
             Self::Word(w) => {
                 ["title", "artist", "album", "album_artist"]
@@ -396,7 +408,10 @@ impl Test {
             Self::Key(k) => view.keys.contains(k),
             Self::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
             Self::Equals(f, text) => any(f, &|v| v == text),
-            Self::Matches(f, re) => view.values(f).iter().any(|v| re.is_match(v)),
+            Self::Matches(f, re) => view
+                .values(f)
+                .iter()
+                .any(|v| re.is_match(&v.nfc().collect::<String>())),
         }
     }
 }
@@ -489,6 +504,16 @@ mod tests {
         assert!(query(&["lumo", "hour"]).matches(&v));
         assert!(!query(&["lumo", "around"]).matches(&v));
         assert!(query(&[]).matches(&v));
+    }
+
+    #[test]
+    fn accents_and_unicode_forms_are_ignored() {
+        let composed = view("Caf\u{e9} Noir", "Lumo Fenn", "manual:a.flac");
+        let decomposed = view("Cafe\u{301} Noir", "Lumo Fenn", "manual:b.flac");
+        for term in ["caf\u{e9}", "cafe\u{301}", "cafe", "title:=\"CAF\u{c9} NOIR\""] {
+            let q = query(&[term]);
+            assert!(q.matches(&composed) && q.matches(&decomposed), "{term}");
+        }
     }
 
     #[test]
