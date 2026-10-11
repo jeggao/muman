@@ -771,10 +771,17 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         }
     }
     // Its song would be listed again with no file to make it from.
-    if let Some(rel) = record.trashed.iter().find(|rel| !home.join(rel).exists()) {
+    let gone: Vec<String> = record
+        .trashed
+        .iter()
+        .filter(|rel| !home.join(rel).exists())
+        .map(|rel| format!("  {}", home.join(rel).display()))
+        .collect();
+    if !gone.is_empty() {
         return Err(crate::change::Refused(format!(
-            "The last run moved {} to the trash; put it back there, then undo again",
-            home.join(rel).display()
+            "The last run moved these to the trash; put them back there, then undo \
+             again:\n{}",
+            gone.join("\n")
         ))
         .into());
     }
