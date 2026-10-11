@@ -363,7 +363,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             }
             // As a run holds it, so no run begins between the undo and its sync.
             let _runs = Lock::runs(&dirs.home)?;
-            {
+            let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
@@ -372,9 +372,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     )
                     .into());
                 }
-                history::undo(dirs, again, out)?;
-            }
-            sync(Options::default(), None, out)
+                history::undo(dirs, again, out)?
+            };
+            let ok = sync(Options::default(), None, out)?;
+            undone.finish()?;
+            Ok(ok)
         }
         Command::Add {
             inputs,

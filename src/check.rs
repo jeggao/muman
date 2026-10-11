@@ -92,6 +92,14 @@ pub fn check<R: Runner, W: Write, D: Write>(
         problems += 1;
         crate::ui::warning(out, &text)
     };
+    if !busy && crate::history::undo_stopped(&dirs.home) {
+        problem(
+            report,
+            "Left by an interrupted run: an undo stopped partway, the library not yet as it \
+             puts it back; `undo` finishes it"
+                .to_string(),
+        )?;
+    }
 
     let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
     for (path, written) in &state.outputs {

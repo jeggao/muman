@@ -635,7 +635,9 @@ nothing, or, negated, every song.
   that changed them, one run further back each time: files it wrote over
   or removed come back, files it moved move back, and an edit you made by
   hand before that run is undone with it. A run stopped partway, by a
-  crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
+  crash or Ctrl-C, can be undone too, and so can an undo stopped partway:
+  until the sync it ends with is done, it stays the latest run, which
+  the next `undo` finishes, going no further back, and `check` names.
   It refuses when the song list changed since, and after `remove
   --purge` until you put the files of your own it trashed back from the
   trash, where it names them. `[history]` sets how many runs are kept

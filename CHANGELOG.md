@@ -199,6 +199,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   is left alone as changed since muman wrote it, its bytes compared
   with those written as it is about to be written over, moved with new
   tags or removed, where the next change to its song wrote over it.
+- **An `undo` stopped partway** stays the latest run until the sync it
+  ends with is done, so the next `undo` finishes it, where one stopped
+  in that sync had dropped the run's record: the next `undo` undid the
+  run before it as well, and `check` found no problem. `check` names
+  it, and a run begun meanwhile finishes it.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.

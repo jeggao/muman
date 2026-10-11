@@ -2095,6 +2095,81 @@ fn an_undo_survives_a_kill_anywhere_and_finishes_when_run_again() {
 }
 
 #[test]
+fn an_undo_killed_anywhere_is_finished_by_the_next_and_goes_no_further() {
+    let set = |s: &Setup| {
+        two_songs(s);
+        s.run(
+            &flacs(),
+            &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+        );
+    };
+    let whole = Setup::new();
+    two_songs(&whole);
+    let listed = std::fs::read_to_string(whole.dir.path().join("home/songs.toml")).unwrap();
+    let synced = library_of(&whole);
+    let whole = Setup::new();
+    set(&whole);
+    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["undo", "-y"]);
+    let steps = counted.seen();
+    drop(counted);
+    assert_eq!(library_of(&whole), synced);
+    for at in 1..=steps {
+        let s = Setup::new();
+        set(&s);
+        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["undo", "-y"]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (_, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert_eq!(library_of(&s), synced, "step {at} of {steps}: {text}");
+        assert_eq!(
+            std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap(),
+            listed,
+            "step {at}: {text}"
+        );
+    }
+}
+
+#[test]
+fn check_names_an_undo_stopped_before_its_sync_ended() {
+    let s = Setup::new();
+    two_songs(&s);
+    s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+    );
+    let dirs = s.job(&["undo"]).dirs;
+    let planned = crate::history::plan(&dirs).unwrap();
+    drop(crate::history::undo(&dirs, planned, &mut Vec::new()).unwrap());
+    let mut report = Vec::new();
+    let clean = run_with(
+        &s.job(&["check"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut report,
+    )
+    .unwrap();
+    let report = String::from_utf8(report).unwrap();
+    assert!(!clean, "{report}");
+    assert!(report.contains("an undo stopped partway"), "{report}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-n"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Finish the undo stopped partway"), "{text}");
+}
+
+#[test]
 fn songs_moving_with_their_lyrics_survive_a_kill_anywhere() {
     let retemplated = |s: &Setup| {
         for name in ["a", "b"] {

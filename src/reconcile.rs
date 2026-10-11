@@ -1249,6 +1249,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     manifest.save_locked(&lock)?;
     if let Some(run) = run {
         run.saw(&manifest);
+        run.synced();
     }
     if changed || !removed.is_empty() {
         if manifest.settings.library.touch_root {
