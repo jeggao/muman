@@ -454,20 +454,22 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                     "`{term}`: {lower} is no tag; set a tag, audio, cover, lyrics or lyrics_offset"
                 ));
             }
-            _ => match (
-                tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
-                v,
-            ) {
-                (_, Some(v)) if let Some(why) = crate::tags::bad_value(name, v) => {
+            _ => {
+                if let Some(why) = v.and_then(|v| crate::tags::bad_value(name, v)) {
                     return refuse(why);
                 }
-                (Some((_, values)), Some(v)) => values.push(v.to_string()),
-                (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
-                (None, v) => tags.push((
-                    name.to_string(),
-                    v.map(str::to_string).into_iter().collect(),
-                )),
-            },
+                match (
+                    tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
+                    v,
+                ) {
+                    (Some((_, values)), Some(v)) => values.push(v.to_string()),
+                    (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
+                    (None, v) => tags.push((
+                        name.to_string(),
+                        v.map(str::to_string).into_iter().collect(),
+                    )),
+                }
+            }
         }
     }
     let mut assigns: Vec<Assign> = tags.into_iter().map(|(n, v)| Assign::Tag(n, v)).collect();

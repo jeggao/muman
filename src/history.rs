@@ -711,6 +711,26 @@ impl UndoPlan {
     }
 }
 
+/// Refuse until every file of the user's the run trashed is back: its
+/// song would be listed again with no file to make it from.
+fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
+    let gone: Vec<String> = record
+        .trashed
+        .iter()
+        .filter(|rel| !home.join(rel).exists())
+        .map(|rel| format!("  {}", home.join(rel).display()))
+        .collect();
+    if !gone.is_empty() {
+        return Err(crate::change::Refused(format!(
+            "The last run moved these to the trash; put them back there, then undo \
+             again:\n{}",
+            gone.join("\n")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 /// What undoing the latest run would do, refused as `undo` itself would
 /// be: when the song list changed since, or the run wrote another
 /// library folder.
@@ -770,21 +790,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             .into());
         }
     }
-    // Its song would be listed again with no file to make it from.
-    let gone: Vec<String> = record
-        .trashed
-        .iter()
-        .filter(|rel| !home.join(rel).exists())
-        .map(|rel| format!("  {}", home.join(rel).display()))
-        .collect();
-    if !gone.is_empty() {
-        return Err(crate::change::Refused(format!(
-            "The last run moved these to the trash; put them back there, then undo \
-             again:\n{}",
-            gone.join("\n")
-        ))
-        .into());
-    }
+    all_trashed_back(home, &record)?;
     let mut lines = Vec::new();
     if record.undoing {
         lines.push("Finish the undo stopped partway".to_string());
