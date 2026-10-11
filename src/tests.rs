@@ -1218,6 +1218,51 @@ fn hooks_run_for_each_file_written_and_once_a_run_changed_anything() {
 }
 
 #[test]
+fn the_changed_hook_runs_after_a_run_that_only_put_back_or_moved_files() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let songs = s.dir.path().join("home/songs.toml");
+    let hook = "[[hook]]\non = \"changed\"\n\
+                run = [\"mpc\", \"update\", \"{written}\", \"{moved}\", \"{removed}\"]\n";
+    std::fs::write(&songs, format!("version = 1\n{hook}")).unwrap();
+    let hooked = |args: &[&str]| {
+        let fake = flacs();
+        let mut out = Vec::new();
+        run_with(
+            &s.job(args),
+            &fake,
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let ran: Vec<Vec<String>> = fake
+            .calls()
+            .into_iter()
+            .filter(|c| c.first().is_some_and(|p| p == "mpc"))
+            .collect();
+        (ran, String::from_utf8(out).unwrap())
+    };
+    hooked(&["sync"]);
+    hooked(&["set", "-y", "manual:a.flac", "genre=Folk"]);
+    let (ran, text) = hooked(&["undo", "-y"]);
+    assert!(text.contains("Put back:"), "{text}");
+    assert_eq!(ran, [["mpc", "update", "1", "0", "0"]], "{text}");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    assert!(listed.contains(&default), "{listed}");
+    std::fs::write(
+        &songs,
+        listed.replace(&default, "template = \"{{ title }}\""),
+    )
+    .unwrap();
+    let (ran, text) = hooked(&["sync"]);
+    assert!(text.contains("Moved:"), "{text}");
+    assert_eq!(ran, [["mpc", "update", "0", "1", "0"]], "{text}");
+}
+
+#[test]
 fn a_backlog_of_lookups_drains_over_runs() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

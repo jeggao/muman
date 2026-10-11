@@ -795,15 +795,31 @@ fn latest(home: &Path) -> Result<(PathBuf, Record)> {
     Ok((dir, record))
 }
 
+/// Library files a step changed before the sync after it, which that
+/// sync's `changed` hook counts with its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Changed {
+    pub written: usize,
+    pub moved: usize,
+    pub removed: usize,
+}
+
 /// An undo whose song list and state are back, its record kept until
 /// the sync after it ends: [`Undone::finish`] lets go of it.
 #[derive(Debug)]
 #[must_use]
 pub struct Undone {
     dir: PathBuf,
+    changed: Changed,
 }
 
 impl Undone {
+    /// The library files the undo put back, moved back and removed.
+    #[must_use]
+    pub fn changed(&self) -> Changed {
+        self.changed
+    }
+
     /// Let go of the run's record, the sync after the undo ended.
     pub fn finish(self) -> Result<()> {
         std::fs::remove_dir_all(&self.dir)
@@ -823,6 +839,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         dir, mut record, ..
     } = plan;
     let mut state = State::load(home)?;
+    let mut changed = Changed::default();
     if !record.undoing {
         record.undoing = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
@@ -843,6 +860,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         atomic::rename(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
             .with_context(|| format!("putting back {}", to.display()))?;
+        changed.written += 1;
         crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
     }
     for m in record.moves.iter().rev() {
@@ -855,6 +873,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
         atomic::rename(&to, &from).with_context(|| format!("moving back {}", to.display()))?;
+        changed.moved += 1;
         crate::ui::info(
             out,
             &format!("Moved back: {}", crate::relpath::show(&m.from)),
@@ -874,6 +893,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
             && path.exists()
         {
             atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+            changed.removed += 1;
             crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(lyrics)))?;
         }
     }
@@ -921,7 +941,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         let text = serde_json::to_vec(&record).context("writing the run record")?;
         atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
-    Ok(Undone { dir })
+    Ok(Undone { dir, changed })
 }
 
 #[cfg(test)]

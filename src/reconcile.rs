@@ -52,6 +52,9 @@ pub struct Options {
     /// Take what each fetched source holds now where it differs from
     /// what its song was built from.
     pub accept: bool,
+    /// Library files changed before the sync, as an undo puts files back,
+    /// which its `changed` hook counts with its own.
+    pub before: crate::history::Changed,
 }
 
 /// Songs left alone for a file not muman's that a run names one by one;
@@ -1086,7 +1089,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
             ),
         )?;
     }
-    let mut changed = false;
     let mut written = 0_usize;
     let mut learned = Vec::new();
     let every = opts.checkpoint.unwrap_or(CHECKPOINT);
@@ -1120,7 +1122,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
             let name = name_of(song, Some(r), &state.facts);
             match result {
                 Ok(done) => {
-                    changed = true;
                     // A new format writes the song beside its old file, under
                     // another extension.
                     let stem = done.audio.with_extension("");
@@ -1251,17 +1252,20 @@ pub fn reconcile_into<R: Runner, W: Write>(
         run.saw(&manifest);
         run.synced();
     }
-    if changed || !removed.is_empty() {
+    let counts = [
+        ("written", written + opts.before.written),
+        ("moved", arrived.len() + opts.before.moved),
+        ("removed", removed.len() + opts.before.removed),
+    ];
+    if counts.iter().any(|(_, n)| *n > 0) {
         if manifest.settings.library.touch_root {
             touch(&dirs.library, out)?;
         }
-        let (written, removed) = (written.to_string(), removed.len().to_string());
+        let counts = counts.map(|(name, n)| (name, n.to_string()));
         let library = dirs.library.to_string_lossy();
-        let values = [
-            ("library", library.as_ref()),
-            ("written", written.as_str()),
-            ("removed", removed.as_str()),
-        ];
+        let values: Vec<(&str, &str)> = std::iter::once(("library", library.as_ref()))
+            .chain(counts.iter().map(|(name, n)| (*name, n.as_str())))
+            .collect();
         hooks::run(runner, &manifest.hooks, hooks::Event::Changed, &values, out)?;
     }
     Ok(ok)

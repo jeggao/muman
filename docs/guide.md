@@ -738,7 +738,7 @@ run = ["mpc", "update"]
 | Event | Runs | Values |
 |---|---|---|
 | `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`), `library` |
-| `changed` | Once, after a run that wrote or removed any file | `library`, `written`, `removed` (counts) |
+| `changed` | Once, after a run that wrote, moved or removed any file, an undo's files put back counting as written | `library`, `written`, `moved`, `removed` (counts) |
 
 Each value reaches the command as a `{name}` placeholder in its words
 and as a `MUMAN_<NAME>` environment variable, such as `MUMAN_PATH`.

@@ -204,6 +204,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   in that sync had dropped the run's record: the next `undo` undid the
   run before it as well, and `check` found no problem. `check` names
   it, and a run begun meanwhile finishes it.
+- **The `changed` hook** runs after a sync that only moved files and
+  after an undo that only put files back, where it ran only once a file
+  was written or removed; `{moved}` counts the files moved, and an
+  undo's files put back count as written.
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.

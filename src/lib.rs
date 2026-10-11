@@ -374,7 +374,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 }
                 history::undo(dirs, again, out)?
             };
-            let ok = sync(Options::default(), None, out)?;
+            let opts = Options {
+                before: undone.changed(),
+                ..Options::default()
+            };
+            let ok = sync(opts, None, out)?;
             undone.finish()?;
             Ok(ok)
         }
