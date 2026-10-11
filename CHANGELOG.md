@@ -175,6 +175,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   again only the Opus songs, whose headers it changes, where it
   reported every other song's loudness updated and kept each in
   history, its bytes the same.
+- **A gain `[loudness] ceiling` leaves nothing of,** in an Opus header
+  or the samples, leaves a song alone as tags alone do, where its file
+  was written again the same.
 
 ## [0.3.0] - 2026-10-07
 

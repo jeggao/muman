@@ -462,13 +462,15 @@ impl Gains {
 
     /// These gains as a file in `opus` (whether it is Opus), written
     /// `encoded`, holds them: a header gain outside Opus, or a gain to the
-    /// samples of audio copied, applies nothing, as tags alone do.
+    /// samples of audio copied, applies nothing, as tags alone do, and so
+    /// does a gain of nothing, which leaves a copy's header as it was and
+    /// the samples as decoded.
     #[must_use]
     pub fn as_held(self, opus: bool, encoded: bool) -> Self {
         let applies = match self.apply {
             Apply::Tags => true,
-            Apply::Header(_) => opus,
-            Apply::Volume(_) => encoded,
+            Apply::Header(q) => opus && q != 0,
+            Apply::Volume(g) => encoded && g != 0,
         };
         if applies {
             self

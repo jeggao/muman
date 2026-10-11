@@ -1053,12 +1053,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
             }
             _ => None,
         };
-        if let Some(written) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
+        if let Some((mut written, path)) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
+            // Equal to the plan written as its file holds it, the plan now
+            // also keeps the gain the mode asks, as a song written does.
+            if *d == Doing::Keep {
+                written.plan = Some(r.plan.clone());
+            }
             outputs.insert(
-                written.1,
+                path,
                 Written {
                     sources: manifest.songs[*n].sources.clone(),
-                    ..written.0
+                    ..written
                 },
             );
         }
