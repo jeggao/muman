@@ -60,7 +60,6 @@ struct Context<'a> {
 }
 
 impl Context<'_> {
-    /// The song by name and key, so that two of one name are told apart.
     fn name(&self, n: usize, r: &Resolved) -> String {
         let song = &self.manifest.songs[n];
         let name = reconcile::name_of(song, Some(r), &self.state.facts);
