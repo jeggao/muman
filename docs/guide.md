@@ -615,6 +615,8 @@ nothing, or, negated, every song.
 - **`remove`** moves songs to `[[removed]]` and deletes their library
   files; `--purge` also deletes fetched sources and trashes your own.
 - **`restore`** lists removed songs again, fetching any purged source.
+  It refuses until you put back from the trash the files of your own
+  `--purge` moved there, naming each.
 - **`undo`** puts the song list and library back as before the last run
   that changed them, one run further back each time: files it wrote over
   or removed come back, files it moved move back, and an edit you made by

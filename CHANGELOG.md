@@ -73,6 +73,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`undo` after `remove --purge`** refuses until you put the files of
   your own it trashed back, naming each, where it listed their songs
   again with nothing to make them from, and every sync after failed.
+- **`restore` after `remove --purge`** refuses until you put the files
+  of your own it trashed back, naming each, where it listed their songs
+  with nothing to make them from, and every sync after failed.
 - **`restore album:…`** finds removed songs by their tags and their
   sources', as `list` and `remove` find songs, where it read only the
   name noted when they were removed.

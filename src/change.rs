@@ -348,6 +348,27 @@ pub fn restore<W: Write>(
         crate::ui::info(out, "Nothing restored")?;
         return Ok(false);
     }
+    // A file of your own `remove --purge` trashed would leave its song
+    // listed with nothing to make it from, and every sync failing.
+    let store = Store::scan(dirs)?;
+    let gone: Vec<String> = picked
+        .iter()
+        .flat_map(|n| &manifest.removed[*n].sources)
+        .filter_map(|k| match k {
+            SourceKey::Manual(m) if store.locate(k).is_none() => {
+                Some(format!("  {}", dirs.manual().join(m.path()).display()))
+            }
+            _ => None,
+        })
+        .collect();
+    if !gone.is_empty() {
+        return Err(Refused(format!(
+            "These files of your own are gone, as `remove --purge` moves them to the \
+             trash; put them back, then restore again:\n{}",
+            gone.join("\n")
+        ))
+        .into());
+    }
     crate::ui::info(out, &format!("Listing {} song(s) again:", picked.len()))?;
     for n in &picked {
         writeln!(out, "  {}", label(&views[*n]))?;

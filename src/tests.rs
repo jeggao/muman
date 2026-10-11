@@ -890,6 +890,27 @@ fn undo_of_a_purge_waits_for_the_file_of_your_own_back_from_the_trash() {
     assert_eq!(s.songs().len(), 1, "{text}");
 }
 
+#[test]
+fn restore_of_a_purged_song_waits_for_its_files_back_from_the_trash() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    let said = s.refused(&["restore", "-y", "manual:a.flac"]);
+    assert!(
+        said.contains("a.flac") && said.contains("put them back"),
+        "{said}"
+    );
+    assert_eq!(s.songs().len(), 1);
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
+}
+
 const MBID: &str = "00000000-0000-4000-8000-000000000001";
 
 /// A recording of `Song` by `Artist` on the album `Glass Orchards`, as a
