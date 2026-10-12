@@ -164,18 +164,13 @@ pub fn export<R: Runner, W: Write>(
     let manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let output = if output.is_dir() {
-        output.join("muman.zip")
-    } else {
-        output.to_path_buf()
-    };
+    let output = zip_at(output)?;
     let folder = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
 
-    let songs = songs(dirs, &state, &store, out)?;
+    let (songs, missing) = songs(dirs, &state, &store, out)?;
     let mut files: Vec<Vec<Entry>> = songs
         .iter()
         .map(|s| library_entries(&dirs.library, s))
@@ -184,7 +179,8 @@ pub fn export<R: Runner, W: Write>(
         from: list,
         name: dirs::MANIFEST.to_string(),
     };
-    let mut ok = true;
+    // A song left out leaves the export short of the library.
+    let mut ok = missing == 0;
     let mut encoded = 0_usize;
     let scratch = crate::atomic::Scratch::within(folder)?;
     if let Some(max) = max_size {
@@ -198,7 +194,7 @@ pub fn export<R: Runner, W: Write>(
             &state,
             &songs,
             &files,
-            budget,
+            (max, budget),
             scratch.path(),
             out,
         )?;
@@ -255,7 +251,12 @@ pub fn export<R: Runner, W: Write>(
 
 /// The songs the library holds as the state records them, in path order,
 /// each with its sources when it may be encoded again.
-fn songs<W: Write>(dirs: &Dirs, state: &State, store: &Store, out: &mut W) -> Result<Vec<Song>> {
+fn songs<W: Write>(
+    dirs: &Dirs,
+    state: &State,
+    store: &Store,
+    out: &mut W,
+) -> Result<(Vec<Song>, usize)> {
     let mut songs = Vec::new();
     let mut missing = 0_usize;
     for (path, written) in &state.outputs {
@@ -290,7 +291,7 @@ fn songs<W: Write>(dirs: &Dirs, state: &State, store: &Store, out: &mut W) -> Re
             ),
         )?;
     }
-    Ok(songs)
+    Ok((songs, missing))
 }
 
 fn library_entries(library: &Path, song: &Song) -> Vec<Entry> {
@@ -310,6 +311,28 @@ struct Fitted {
     ok: bool,
 }
 
+/// The zip `output` names: itself, or `muman.zip` in it when it is a
+/// folder. A folder that is not there is refused rather than made, as a
+/// typo would make one.
+fn zip_at(output: &Path) -> Result<PathBuf> {
+    let zip = if output.is_dir() {
+        output.join("muman.zip")
+    } else {
+        output.to_path_buf()
+    };
+    let folder = zip
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if !folder.is_dir() {
+        bail!(
+            "{} is no folder; make it first, or write the zip into one that is",
+            folder.display()
+        );
+    }
+    Ok(zip)
+}
+
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
 /// estimate, and corrects the estimates not measured yet.
@@ -320,7 +343,7 @@ fn fit_into<R: Runner, W: Write>(
     state: &State,
     songs: &[Song],
     files: &[Vec<Entry>],
-    budget: u64,
+    (max, budget): (u64, u64),
     scratch: &Path,
     out: &mut W,
 ) -> Result<Fitted> {
@@ -399,8 +422,8 @@ fn fit_into<R: Runner, W: Write>(
         fit::Settled::Fit(fit) => fit,
         fit::Settled::Over(floor) => bail!(
             "{} cannot hold the export: at the lowest bitrates it takes {}",
-            crate::ui::bytes(budget),
-            crate::ui::bytes(floor)
+            crate::ui::bytes(max),
+            crate::ui::bytes(floor + (max - budget))
         ),
     };
     let entries = fit
@@ -527,6 +550,32 @@ fn encode<R: Runner>(
         .collect())
 }
 
+/// `time` as a zip stamps an entry, in UTC to the even second; none
+/// before 1980, which a zip cannot say.
+fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
+    let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let (days, of_day) = (secs / 86_400, secs % 86_400);
+    // Days since 1970 as a civil date, after Howard Hinnant's algorithm.
+    let z = i64::try_from(days).ok()? + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    zip::DateTime::from_date_and_time(
+        u16::try_from(year).ok()?,
+        u8::try_from(month).ok()?,
+        u8::try_from(day).ok()?,
+        u8::try_from(of_day / 3_600).ok()?,
+        u8::try_from(of_day % 3_600 / 60).ok()?,
+        u8::try_from(of_day % 60).ok()?,
+    )
+    .ok()
+}
+
 /// Write `entries` into a new zip at `path`, each stored as it is.
 fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Result<()> {
     let entries: Vec<&Entry> = entries.collect();
@@ -537,12 +586,14 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
         let _working = step.working(&entry.name);
         let mut from =
             File::open(&entry.from).with_context(|| format!("reading {}", entry.from.display()))?;
-        let large = from
-            .metadata()
-            .map_or(true, |m| m.len() >= u64::from(u32::MAX));
-        let options = SimpleFileOptions::default()
+        let meta = from.metadata().ok();
+        let large = meta.as_ref().is_none_or(|m| m.len() >= u64::from(u32::MAX));
+        let mut options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Stored)
             .large_file(large);
+        if let Some(time) = meta.and_then(|m| m.modified().ok()).and_then(zip_time) {
+            options = options.last_modified_time(time);
+        }
         zip.start_file(entry.name.as_str(), options)
             .with_context(|| format!("adding {} to {}", entry.name, path.display()))?;
         io::copy(&mut from, &mut zip)
@@ -558,6 +609,15 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
 mod tests {
     use super::*;
     use crate::codec::Codec;
+
+    #[test]
+    fn an_entry_is_stamped_with_its_file_s_time() {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_717_243_506);
+        let stamp = zip_time(at).unwrap();
+        assert_eq!((stamp.year(), stamp.month(), stamp.day()), (2024, 6, 1));
+        assert_eq!((stamp.hour(), stamp.minute(), stamp.second()), (12, 5, 6));
+        assert!(zip_time(std::time::UNIX_EPOCH).is_none());
+    }
 
     fn rung(bytes: u64, known: bool) -> fit::Rung {
         fit::Rung {

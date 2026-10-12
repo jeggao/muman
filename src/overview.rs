@@ -61,7 +61,10 @@ struct Context<'a> {
 
 impl Context<'_> {
     fn name(&self, n: usize, r: &Resolved) -> String {
-        reconcile::name_of(&self.manifest.songs[n], Some(r), &self.state.facts)
+        let song = &self.manifest.songs[n];
+        let name = reconcile::name_of(song, Some(r), &self.state.facts);
+        song.id()
+            .map_or_else(|| name.clone(), |id| format!("{id} — {name}"))
     }
 }
 
@@ -127,7 +130,7 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         out,
         "Songs",
         &format!(
-            "{} ({} on {} albums, {singles} singles)",
+            "{} ({} on {} album(s), {singles} single(s))",
             c.manifest.songs.len(),
             c.planned.len() - singles,
             albums.len()
@@ -252,19 +255,41 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
             ),
         )?;
     }
+    // A song none of whose files is on disk, and none to fetch, fails to
+    // be made, as `status` says, however its file stands.
+    let stranded: BTreeSet<usize> = c
+        .manifest
+        .songs
+        .iter()
+        .enumerate()
+        .filter(|(_, song)| {
+            song.sources.iter().all(|k| {
+                c.store.locate(k).is_none() && matches!(k, SourceKey::Manual(_))
+                    || crate::provider::is_kept(k)
+            })
+        })
+        .map(|(n, _)| n)
+        .collect();
     let mut made: BTreeSet<PathBuf> = BTreeSet::new();
     let (mut current, mut due) = (0, Group::default());
+    let mut unplanned = Group::default();
     for (n, r) in &c.planned {
         let path = reconcile::path_of(r);
+        made.insert(path.clone());
+        if stranded.contains(n) {
+            unplanned.add(&format!("{}: no file of it is on disk", c.name(*n, r)));
+            continue;
+        }
+        // An emptied file is written again, as `check` and `status` say.
         let fresh = c.state.outputs.get(&path).is_some_and(|w| {
-            w.plan.as_ref() == Some(&r.plan) && c.dirs.library.join(&path).exists()
+            w.plan.as_ref() == Some(&r.plan)
+                && std::fs::metadata(c.dirs.library.join(&path)).is_ok_and(|m| m.len() > 0)
         });
         if fresh {
             current += 1;
         } else {
             due.add(&c.name(*n, r));
         }
-        made.insert(path);
     }
     let mut gone = Group::default();
     for path in c.state.outputs.keys().filter(|p| !made.contains(*p)) {
@@ -273,7 +298,6 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     row(out, "Up to date", &current.to_string())?;
     group(out, c.verbose, "To write", &due)?;
     group(out, c.verbose, "To remove", &gone)?;
-    let mut unplanned = Group::default();
     for line in String::from_utf8_lossy(&c.failures).lines() {
         unplanned.add(line.trim_start_matches("Failed: "));
     }

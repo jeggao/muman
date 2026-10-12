@@ -220,6 +220,23 @@ fn summarize<W: Write>(
     let Edit::Rewrite { songs, new } = edit else {
         return Ok(());
     };
+    let keys = |t: &Table| -> Vec<String> {
+        t.get("sources")
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    };
+    let listed: Vec<String> = songs
+        .iter()
+        .filter_map(|(_, to)| match to {
+            Rewritten::Table(t) => Some(&t.0),
+            Rewritten::Removed(_) => None,
+        })
+        .chain(new.iter().map(|t| &t.0))
+        .flat_map(keys)
+        .collect();
     for (id, to) in songs {
         let name = opened
             .iter()
@@ -230,6 +247,14 @@ fn summarize<W: Write>(
                 crate::ui::warning(out, &format!("Not changed: {name}, no longer listed"))?;
             }
             Rewritten::Table(_) => crate::ui::info(out, &format!("Changed: {name}"))?,
+            Rewritten::Removed(_)
+                if opened
+                    .iter()
+                    .find(|o| &o.id == id)
+                    .is_some_and(|o| keys(&o.table).iter().all(|k| listed.contains(k))) =>
+            {
+                crate::ui::info(out, &format!("Joined to another song: {name}"))?;
+            }
             Rewritten::Removed(_) => crate::ui::warning(out, &format!("Removed: {name}"))?,
         }
     }

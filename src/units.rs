@@ -1,5 +1,6 @@
 //! Quantities written with a unit, in `songs.toml` and on the command
-//! line: sizes, bitrates, lengths of time, frequencies and shares. Each
+//! line: sizes, bitrates, lengths of time, frequencies, shares and
+//! levels in decibels. Each
 //! kind is read by one type here, so every setting of a kind takes the
 //! same spellings, and is converted by `uom`, which names every unit of
 //! its kind by abbreviation, singular and plural: `"2 gibibytes"`,
@@ -12,6 +13,12 @@
 //! | [`Time`] | `"14 days"`, `"2 s"`, `"500 ms"`, `"-120 ms"` | Refused |
 //! | [`Frequency`] | `"500 Hz"`, `"1.5 kHz"` | Hertz |
 //! | [`Share`] | `"1 %"`, `"0.1 %"` | A fraction: 0.01 is 1 % |
+//! | [`Loudness`] | `"-18 LUFS"`, `"-23 LKFS"` | Refused |
+//! | [`Level`] | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | Refused |
+//!
+//! Decibels are logarithmic, which `uom` does not model, so a loudness
+//! and a level are read here alone and kept in hundredths: whole numbers
+//! a plan can compare exactly.
 //!
 //! `uom` reads a number, one space and a unit exactly as it spells it.
 //! What muman read before it came stays readable on top: no space, any
@@ -57,6 +64,16 @@ pub struct Frequency(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
 #[serde(try_from = "Written")]
 pub struct Share(pub f64);
+
+/// A loudness against digital full scale, in hundredths of a LUFS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(try_from = "Written")]
+pub struct Loudness(pub i32);
+
+/// A level against digital full scale, or a gain, in hundredths of a dB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(try_from = "Written")]
+pub struct Level(pub i32);
 
 /// A value as TOML gives it: a number, or text with a unit.
 #[derive(Deserialize)]
@@ -216,6 +233,36 @@ impl std::str::FromStr for Share {
     }
 }
 
+/// `text` in hundredths of decibels, if its unit is one of `units`.
+fn hundredths(text: &str, units: &[&str]) -> Option<i32> {
+    let (number, unit) = split(text);
+    let lower = unit.to_lowercase();
+    if !units.contains(&lower.as_str()) {
+        return None;
+    }
+    whole(number.parse::<f64>().ok()? * 100.0)
+}
+
+impl std::str::FromStr for Loudness {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        hundredths(text, &["lufs", "lkfs"])
+            .map(Self)
+            .ok_or_else(|| format!("`{text}` is not a loudness, such as \"-18 LUFS\""))
+    }
+}
+
+impl std::str::FromStr for Level {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        hundredths(text, &["db", "dbfs", "dbtp"])
+            .map(Self)
+            .ok_or_else(|| format!("`{text}` is not a level, such as \"-1 dB\""))
+    }
+}
+
 /// A bare number is refused for `what`, which needs a unit like `example`.
 fn needs_unit(n: impl fmt::Display, example: &str) -> String {
     format!("{n} needs a unit, as in \"{n} {example}\"")
@@ -286,6 +333,30 @@ impl TryFrom<Written> for Share {
     }
 }
 
+impl TryFrom<Written> for Loudness {
+    type Error = String;
+
+    fn try_from(w: Written) -> Result<Self, String> {
+        match w {
+            Written::Whole(n) => Err(needs_unit(n, "LUFS")),
+            Written::Real(n) => Err(needs_unit(n, "LUFS")),
+            Written::Text(t) => t.parse(),
+        }
+    }
+}
+
+impl TryFrom<Written> for Level {
+    type Error = String;
+
+    fn try_from(w: Written) -> Result<Self, String> {
+        match w {
+            Written::Whole(n) => Err(needs_unit(n, "dB")),
+            Written::Real(n) => Err(needs_unit(n, "dB")),
+            Written::Text(t) => t.parse(),
+        }
+    }
+}
+
 /// Seconds in milliseconds.
 #[must_use]
 pub fn ms_of_seconds(seconds: f64) -> f64 {
@@ -335,7 +406,7 @@ pub fn ppm_of_ratio(fraction: f64) -> f64 {
 pub mod serde_as {
     use serde::{Deserialize, Deserializer};
 
-    use super::{Bitrate, Frequency, Share, Time};
+    use super::{Bitrate, Frequency, Level, Loudness, Share, Time};
 
     pub fn kbps<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
         Bitrate::deserialize(d).map(|b| b.0)
@@ -374,6 +445,16 @@ pub mod serde_as {
 
     pub fn share<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
         Share::deserialize(d).map(|s| s.0)
+    }
+
+    /// A loudness, in hundredths of a LUFS.
+    pub fn lufs<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+        Loudness::deserialize(d).map(|l| l.0)
+    }
+
+    /// A level or gain, in hundredths of a dB.
+    pub fn db<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+        Level::deserialize(d).map(|l| l.0)
     }
 
     pub fn shares<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<f64>, D::Error> {
@@ -463,6 +544,37 @@ impl Frequency {
     #[must_use]
     pub fn exact(self) -> String {
         format!("{} Hz", self.0)
+    }
+}
+
+/// Hundredths as a setting writes them: `-18`, `-0.5`, `-1.25`.
+fn decimal(n: i32) -> String {
+    let sign = if n < 0 { "-" } else { "" };
+    let (whole, part) = (n.unsigned_abs() / 100, n.unsigned_abs() % 100);
+    match part {
+        0 => format!("{sign}{whole}"),
+        p if p % 10 == 0 => format!("{sign}{whole}.{}", p / 10),
+        p => format!("{sign}{whole}.{p:02}"),
+    }
+}
+
+impl Loudness {
+    #[must_use]
+    pub fn exact(self) -> String {
+        format!("{} LUFS", decimal(self.0))
+    }
+}
+
+impl Level {
+    #[must_use]
+    pub fn exact(self) -> String {
+        format!("{} dB", decimal(self.0))
+    }
+
+    /// The number alone, as ffmpeg's filters take it: `-6.12`, `0.5`.
+    #[must_use]
+    pub fn decimal(self) -> String {
+        decimal(self.0)
     }
 }
 
@@ -556,5 +668,27 @@ mod tests {
         assert_eq!("10%".parse(), Ok(Share(0.1)));
         assert_eq!(Share::try_from(Written::Real(0.03)), Ok(Share(0.03)));
         assert!("loud".parse::<Frequency>().is_err());
+    }
+
+    #[test]
+    fn a_loudness_and_a_level_need_their_unit_and_keep_hundredths() {
+        assert_eq!("-18 LUFS".parse(), Ok(Loudness(-1800)));
+        assert_eq!("-23lkfs".parse(), Ok(Loudness(-2300)));
+        assert_eq!("-14.5 LUFS".parse(), Ok(Loudness(-1450)));
+        assert_eq!("-1 dB".parse(), Ok(Level(-100)));
+        assert_eq!("-1 dBTP".parse(), Ok(Level(-100)));
+        assert_eq!("-0.25dBFS".parse(), Ok(Level(-25)));
+        assert_eq!("+2 dB".parse(), Ok(Level(200)));
+        assert!("-18 dB".parse::<Loudness>().is_err());
+        assert!("-1 LUFS".parse::<Level>().is_err());
+        assert!(
+            Loudness::try_from(Written::Whole(-18))
+                .unwrap_err()
+                .contains("-18 LUFS")
+        );
+        assert!(Level::try_from(Written::Real(-1.0)).is_err());
+        assert_eq!(Loudness(-1800).exact(), "-18 LUFS");
+        assert_eq!(Level(-125).exact(), "-1.25 dB");
+        assert_eq!(Level(-50).exact(), "-0.5 dB");
     }
 }

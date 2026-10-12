@@ -122,7 +122,7 @@ fn infos(ids: &[&str]) -> Fake {
 fn renders(fake: &Fake) -> usize {
     fake.calls()
         .iter()
-        .filter(|c| c.iter().any(|a| a == "opus"))
+        .filter(|c| c.iter().any(|a| a == "opus") && !c.iter().any(|a| a == crate::ffmpeg::PIPE))
         .count()
 }
 
@@ -366,7 +366,11 @@ fn the_release_wins_over_its_video_by_measure_and_lends_it_lyrics() {
     h.fetched("rrrrrrrrrrr");
     h.fetched("vvvvvvvvvvv");
     h.songs("[[song]]\nsources = [\"youtube.com:vvvvvvvvvvv\", \"youtube.com:rrrrrrrrrrr\"]\n");
-    let song = levels(6000, 7);
+    // A release rises from quiet and falls back to it; one at full sound on
+    // its first frame, the intro running into it, would read as cut off.
+    let mut song = vec![0.0; 10];
+    song.extend(levels(6000, 7));
+    song.extend([0.0; 10]);
     let mut video = levels(1000, 99);
     video.extend(&song);
     let mut fake = Fake::default()
@@ -525,6 +529,30 @@ fn a_file_changed_since_it_was_written_is_left_alone() {
 }
 
 #[test]
+fn a_file_retagged_by_hand_keeping_its_size_and_time_is_left_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let a = h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    // A tagger set to keep files' times, its edit inside the tag's padding.
+    let mut edited = std::fs::read(&a).unwrap();
+    let at = edited.len() - 1;
+    edited[at] ^= 0xff;
+    let time = std::fs::metadata(&a).unwrap().modified().unwrap();
+    std::fs::write(&a, &edited).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&a)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
+    let (_, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert_eq!(std::fs::read(&a).unwrap(), edited, "{text}");
+}
+
+#[test]
 fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
@@ -581,6 +609,11 @@ fn an_empty_or_unfinished_file_is_written_again() {
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
     let rel = PathBuf::from("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
+    std::fs::write(h.lib(&rel.to_string_lossy()), "").unwrap();
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), 1, "emptied since written: {text}");
+
     let mut state = State::load(&h.dirs.home).unwrap();
     state.outputs.get_mut(&rel).unwrap().stamp = None;
     state.save(&h.dirs.home).unwrap();
@@ -944,7 +977,7 @@ fn a_song_over_the_limit_is_written_lower_and_stays_so() {
     assert!(
         status
             .1
-            .contains("Opus 192 kbit/s to fit max_size; at best FLAC, copied"),
+            .contains("Opus 256 kbit/s to fit max_size; at best FLAC, copied"),
         "{}",
         status.1
     );
@@ -952,7 +985,7 @@ fn a_song_over_the_limit_is_written_lower_and_stays_so() {
     let fake = big_flac();
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
-    assert!(fake.ran("libopus") && fake.ran("192k"), "{text}");
+    assert!(fake.ran("libopus") && fake.ran("256k"), "{text}");
     assert!(h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
     assert!(!h.lib("Artist/Record/02 Song.flac").exists());
 
@@ -1057,6 +1090,37 @@ fn a_library_fitted_song_by_song_ends_as_one_fitted_at_once() {
         assert!(ok, "{text}");
     }
     assert_eq!(formats(&by_song), formats(&at_once));
+}
+
+#[test]
+fn a_changed_file_forced_fits_as_the_next_sync_does() {
+    let fresh = home();
+    listing(&fresh, &limit(20_000), &["a", "b", "c"]);
+    fresh.run(&three_flacs(), Options::default());
+    let fitted = formats(&fresh);
+
+    let h = home();
+    listing(&h, &limit(20_000), &["a", "b", "c"]);
+    h.run(&three_flacs(), Options::default());
+    let (lowered, _) = formats(&h)
+        .into_iter()
+        .find(|(_, f)| f.is_encoded())
+        .expect("the limit binds");
+    std::fs::write(h.lib(&lowered.to_string_lossy()), "edited by hand").unwrap();
+    let (_, text) = h.run(&three_flacs(), Options::default());
+    assert!(text.contains("Left alone, changed since"), "{text}");
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&three_flacs(), forced);
+    assert!(ok, "{text}");
+    assert_eq!(formats(&h), fitted, "{text}");
+    let again = three_flacs();
+    let (ok, text) = h.run(&again, Options::default());
+    assert!(ok, "{text}");
+    assert_eq!(renders(&again), 0, "nothing encoded again: {text}");
+    assert_eq!(formats(&h), fitted, "{text}");
 }
 
 #[test]
@@ -1797,4 +1861,313 @@ fn a_full_disk_is_told_from_a_source_that_does_not_read() {
     assert!(!out_of_space(&anyhow::anyhow!(
         "ffprobe failed (exit 1): Invalid data"
     )));
+}
+
+/// Two seconds of a tone at 8 kHz, `amplitude` of full scale, as a fake
+/// analysis decodes it.
+fn tone(amplitude: f32) -> Vec<u8> {
+    crate::testing::wav(
+        8000,
+        2,
+        Some(0x3),
+        &crate::testing::sine(8000, 2, 1000.0, amplitude, 2.0),
+    )
+}
+
+fn tag<'a>(plan: &'a Plan, key: &str) -> Option<&'a str> {
+    plan.tags
+        .iter()
+        .find(|(k, _)| k == key)
+        .and_then(|(_, v)| v.first())
+        .map(String::as_str)
+}
+
+const ALBUM: &str = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { album = \"Harbor Lights\", albumartist = \"Paper Comets\" }\n[[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\ntags = { album = \"Harbor Lights\", albumartist = \"Paper Comets\" }\n";
+
+fn levelled() -> Fake {
+    let mut fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    fake.wavs = vec![
+        ("aaaaaaaaaaa".into(), tone(0.1)),
+        ("bbbbbbbbbbb".into(), tone(0.4)),
+    ];
+    fake
+}
+
+fn plans(h: &Home) -> Vec<Plan> {
+    State::load(&h.dirs.home)
+        .unwrap()
+        .outputs
+        .into_values()
+        .filter_map(|w| w.plan)
+        .collect()
+}
+
+#[test]
+fn songs_are_levelled_by_what_they_measured_and_an_album_by_all_its_songs() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    let fake = levelled();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let plans = plans(&h);
+    let tracks: BTreeSet<&str> = plans
+        .iter()
+        .filter_map(|p| tag(p, "REPLAYGAIN_TRACK_GAIN"))
+        .collect();
+    let albums: BTreeSet<&str> = plans
+        .iter()
+        .filter_map(|p| tag(p, "REPLAYGAIN_ALBUM_GAIN"))
+        .collect();
+    assert_eq!(tracks.len(), 2, "{plans:?}");
+    assert_eq!(albums.len(), 1, "{plans:?}");
+    assert!(plans.iter().all(|p| {
+        p.loudness
+            .is_some_and(|g| g.apply == crate::loudness::Apply::Tags)
+    }));
+    let status = h.status(&fake, &[], true);
+    assert!(
+        status.contains("measured over its album's 2 song(s)"),
+        "{status}"
+    );
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(again.contains("Up to date: 2"), "{again}");
+}
+
+#[test]
+fn a_gain_put_in_the_opus_header_is_a_retag_and_a_gain_in_the_samples_an_encode() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    let fake = levelled();
+    h.run(&fake, Options::default());
+    let written = renders(&fake);
+    h.songs(&format!("[loudness]\nmode = \"header\"\n{ALBUM}"));
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), written, "{text}");
+    assert!(text.contains("(loudness)"), "{text}");
+    let gains: Vec<i16> = files(&h.dirs.library)
+        .iter()
+        .filter_map(|f| crate::ogg::output_gain(&std::fs::read(f).unwrap()))
+        .collect();
+    assert_eq!(gains.len(), 2);
+    assert!(
+        gains.iter().all(|&g| g != 0 && g == gains[0]),
+        "one album, one gain: {gains:?}"
+    );
+    h.songs(&format!("[loudness]\nmode = \"audio\"\n{ALBUM}"));
+    let (_, text) = h.run(&fake, Options::default());
+    assert_eq!(renders(&fake), written + 2, "{text}");
+    assert!(
+        fake.calls()
+            .iter()
+            .any(|c| c.iter().any(|a| a.contains("volume=")))
+    );
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| p.format.is_encoded() && p.chain().gain != 0)
+    );
+}
+
+#[test]
+fn a_gain_put_in_opus_headers_leaves_a_flac_song_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let path = h.dirs.manual().join("Song.flac");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "flac").unwrap();
+    let songs = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n[[song]]\nsources = [\"manual:Song.flac\"]\n";
+    h.songs(songs);
+    let mut fake = levelled().probe(".flac", crate::testing::FLAC);
+    fake.wavs.push(("Song.flac".into(), tone(0.2)));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(h.lib("Artist/Record/02 Song.flac").exists(), "{text}");
+    h.songs(&format!("[loudness]\nmode = \"header\"\n{songs}"));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (loudness)"), "{text}");
+    assert!(!text.contains("Song.flac"), "{text}");
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(again.contains("Up to date: 2"), "{again}");
+}
+
+#[test]
+fn loudness_off_measures_nothing_and_keeps_what_sources_carry() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(!fake.ran(crate::ffmpeg::PIPE));
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| p.loudness.is_none() && tag(p, "REPLAYGAIN_TRACK_GAIN").is_none())
+    );
+}
+
+#[test]
+fn facts_measured_before_loudness_are_analyzed_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.run(&fake, Options::default());
+    let before = fake.calls().len();
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("Analyzing 1 source(s)"), "{text}");
+    let calls = fake.calls();
+    let new = &calls[before..];
+    assert_eq!(
+        new.iter()
+            .filter(|c| c.iter().any(|a| a == crate::ffmpeg::PIPE))
+            .count(),
+        1
+    );
+    assert!(
+        !new.iter().any(|c| c.iter().any(|a| a == "s16le")),
+        "no print again"
+    );
+    assert!(
+        plans(&h)
+            .iter()
+            .all(|p| tag(p, "REPLAYGAIN_TRACK_GAIN").is_some())
+    );
+}
+
+#[test]
+fn a_song_mixed_is_levelled_by_its_mix() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[audio]\nlayouts = [\"stereo\"]\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let surround = crate::testing::ORIGINAL.replace(
+        r#""channels": 2, "sample_rate": "48000""#,
+        r#""channels": 6, "channel_layout": "5.1", "sample_rate": "48000""#,
+    );
+    let mut fake = infos(&["aaaaaaaaaaa"]).probe("aaaaaaaaaaa", &surround);
+    fake.wavs = vec![("aaaaaaaaaaa".into(), tone(0.4))];
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(fake.calls().iter().any(|c| {
+        c.iter().any(|a| a == crate::ffmpeg::PIPE)
+            && c.iter().any(|a| a.starts_with("aresample=ochl=stereo"))
+    }));
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.mixes.len(), 1);
+    let plans = plans(&h);
+    assert!(plans[0].format.mix().is_some());
+    assert!(
+        tag(&plans[0], "REPLAYGAIN_TRACK_GAIN").is_some(),
+        "{plans:?}"
+    );
+}
+
+/// The source the one song of `curves`' uploads is written from, each
+/// given its loudness curve, and why, as `status --all` says it.
+fn chosen(curves: &[(&str, Vec<f64>)]) -> (SourceKey, String) {
+    let h = home();
+    let mut list = Vec::new();
+    let mut fake = Fake::default();
+    for (id, curve) in curves {
+        h.fetched(id);
+        list.push(format!("\"youtube.com:{id}\""));
+        fake = fake.info(
+            id,
+            &format!(r#"{{"id": "{id}", "track": "Song", "artists": ["A"], "album": "Record"}}"#),
+        );
+        fake.pcm.push(((*id).into(), pcm(curve)));
+    }
+    h.songs(&format!("[[song]]\nsources = [{}]\n", list.join(", ")));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let written = state.outputs.values().next().unwrap();
+    let why = h.status(&fake, &[], true);
+    (written.plan.as_ref().unwrap().audio.key.clone(), why)
+}
+
+/// A whole song: `frames` of sound between 100 ms of quiet at each end.
+fn whole_song(frames: usize, seed: u64) -> Vec<f64> {
+    let mut song = vec![0.0; 10];
+    song.extend(levels(frames, seed));
+    song.extend([0.0; 10]);
+    song
+}
+
+#[test]
+fn a_release_that_starts_at_full_sound_beats_its_video_with_an_intro() {
+    // A rock release whose first chord lands on its first sample, and its
+    // video, a 10 s skit running into it.
+    let mut release = levels(6000, 7);
+    release.extend([0.0; 10]);
+    let mut video = levels(1000, 99);
+    video.extend(&release);
+    let (key, why) = chosen(&[("vvvvvvvvvvv", video), ("rrrrrrrrrrr", release)]);
+    assert_eq!(key, SourceKey::youtube("rrrrrrrrrrr"), "{why}");
+}
+
+#[test]
+fn an_excerpt_that_fades_out_never_beats_the_whole_song() {
+    let whole = whole_song(6000, 7);
+    // The first half, faded out over its last second as a preview is.
+    let mut excerpt = whole[..3000].to_vec();
+    for (i, level) in excerpt[2900..].iter_mut().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let fade = 1.0 - (i as f64 + 1.0) / 100.0;
+        *level *= fade;
+    }
+    let (key, why) = chosen(&[("eeeeeeeeeee", excerpt), ("wwwwwwwwwww", whole)]);
+    assert_eq!(key, SourceKey::youtube("wwwwwwwwwww"), "{why}");
+}
+
+#[test]
+fn an_excerpt_cut_in_a_rest_never_beats_the_whole_song() {
+    let mut whole = whole_song(6000, 7);
+    // A 20 ms rest between two phrases, and the excerpt cut inside it.
+    whole[3008..3010].copy_from_slice(&[0.0, 0.0]);
+    let excerpt = whole[..3010].to_vec();
+    let (key, why) = chosen(&[("eeeeeeeeeee", excerpt), ("wwwwwwwwwww", whole)]);
+    assert_eq!(key, SourceKey::youtube("wwwwwwwwwww"), "{why}");
+}
+
+#[test]
+fn a_header_gain_the_ceiling_holds_at_nothing_leaves_an_opus_song_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let songs = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
+    h.songs(songs);
+    // Quiet, so it asks to be raised, but for one peak at full scale,
+    // which leaves the raise no room under the ceiling.
+    let mut samples = crate::testing::sine(8000, 2, 1000.0, 0.01, 2.0);
+    samples[8000] = 0.99;
+    let mut fake = infos(&["aaaaaaaaaaa"]);
+    fake.wavs = vec![(
+        "aaaaaaaaaaa".into(),
+        crate::testing::wav(8000, 2, Some(0x3), &samples),
+    )];
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    h.songs(&format!("[loudness]\nmode = \"header\"\n{songs}"));
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let gains = plans(&h)[0].loudness.unwrap();
+    assert!(gains.track.gain > 0, "{gains:?}");
+    assert_eq!(gains.header(true, true), Some(0), "{gains:?}");
+    assert!(text.contains("Up to date: 1"), "{text}");
+}
+
+#[test]
+fn an_excerpt_from_past_a_long_song_s_first_minute_never_beats_the_whole_song() {
+    // A seven-minute album version, and the edit cut from it starting at
+    // its vocals, 90 s in.
+    let whole = whole_song(42_000, 7);
+    let excerpt = whole[9000..27_000].to_vec();
+    let (key, why) = chosen(&[("eeeeeeeeeee", excerpt), ("wwwwwwwwwww", whole)]);
+    assert_eq!(key, SourceKey::youtube("wwwwwwwwwww"), "{why}");
 }

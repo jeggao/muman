@@ -9,17 +9,20 @@
 //!
 //! There is no song ID: a song is the sources it lists, and is named by
 //! the first of them that belongs to it alone ([`Song::id`]). A file
-//! fetched or dropped in belongs to one song only; a record a lookup
+//! fetched or dropped in belongs to one song only. A record a lookup
 //! keeps, an LRCLIB record or a MusicBrainz recording, is data any song
 //! of that recording may list, as two releases of one recording share
-//! its lyrics. A key that does not parse, a file two songs list, and a
-//! pin outside the song's sources stop the run before anything is
-//! written, rather than a song being silently dropped and its file
-//! deleted.
+//! its lyrics; and a picture of the user's is any song's it looks like,
+//! as an album's songs share its cover. A key that does not parse, a
+//! file two songs list, and a pin outside the song's sources stop the
+//! run before anything is written, rather than a song being silently
+//! dropped and its file deleted.
 //!
-//! A list in which songs share a record is format version 2, which an
-//! older muman refuses rather than misreads; any other is written as
-//! version 1, which this one reads as well.
+//! A list in which songs share a picture of the user's is format version
+//! 3, and one in which they share only records a lookup keeps version 2:
+//! an older muman refuses either rather than misreads it, saying it is
+//! too old where it would otherwise call the list broken. Any other is
+//! written as version 1, which this one reads as well.
 //!
 //! muman changes the file only by recording edits and applying them to
 //! the file as it is when saved, under the folder's lock and through a
@@ -60,19 +63,29 @@ use crate::source::SourceKey;
 use crate::tags;
 
 /// The newest format this version reads, written only when songs share
-/// a record. Adding a key is not a new version; changing what an
-/// existing key means is.
-pub const VERSION: i64 = 2;
+/// a picture of the user's. Adding a key is not a new version; changing
+/// what an existing key means is.
+pub const VERSION: i64 = 3;
 
-/// The format written when no record is shared, which every version
+/// The format written when songs share a record a lookup keeps, and no
+/// picture of the user's.
+const SHARED: i64 = 2;
+
+/// The format written when no source is shared, which every version
 /// since 0.1 reads.
 const PLAIN: i64 = 1;
 
-/// Whether songs may share `key`: a record a lookup keeps, not a file of
-/// one song's.
+/// Whether songs may share `key`: a record a lookup keeps, or a picture
+/// of the user's, as one album's songs share its cover; not a song's own
+/// file.
 #[must_use]
 pub fn shareable(key: &SourceKey) -> bool {
-    provider::is_kept(key)
+    provider::is_kept(key) || is_picture(key)
+}
+
+fn is_picture(key: &SourceKey) -> bool {
+    matches!(key, SourceKey::Manual(m)
+        if crate::store::kind_of(m.path()) == Some(crate::store::Kind::Image))
 }
 
 /// The key that names a song listing `keys`: the first only it lists,
@@ -93,8 +106,9 @@ const HEADER: &str = "\
 #
 #   sources:  every file the song may be made from: `<site>:<id>` for
 #             what yt-dlp fetched, as `youtube.com:<id>`, or `lrclib:<id>`,
-#             `musicbrainz:<id>` or `manual:<path>` under sources/manual. muman picks the best audio, cover, lyrics and
-#             tags by measuring each.
+#             `musicbrainz:<id>` or `manual:<path>` under sources/manual.
+#             muman picks the best audio, cover, lyrics and tags by
+#             measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset = \"120 ms\" moves
 #             them later, a negative time earlier.
@@ -113,17 +127,19 @@ const HEADER: &str = "\
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
 #             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck = \"30 days\", per_run, and the url
-#             of lrclib and musicbrainz.
+#             enabled, concurrency, recheck = \"30 days\", per_run, and
+#             the url of lrclib, musicbrainz, acoustid and coverart.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
-#   Settings: [library], [audio], [quality.*], [ytdlp] and [history] lay
-#             out and name the library, set encoding, ranking and fetching,
-#             and size `undo`; sizes, bitrates, times and shares take a
-#             unit, as \"2 GiB\" or \"1 %\". `edition` names the settings'
-#             names and defaults the file was written to: muman renames
-#             old names itself, and `muman sync --update-defaults` moves
-#             settings still at an older default to the current.
+#   Settings: [library], [audio], [loudness], [quality.*], [ytdlp],
+#             [history] and [sites.*] lay out and name the library, set
+#             encoding, loudness, ranking and fetching, size `undo` and
+#             describe the sites fetched from; sizes, bitrates, times
+#             and shares take a unit, as \"2 GiB\" or \"1 %\". `edition`
+#             names the settings' names and defaults the file was written
+#             to: muman renames old names itself, and `muman sync
+#             --update-defaults` moves settings still at an older default
+#             to the current.
 #
 # Other keys muman does not know are kept. Leave `version` as it is.
 ";
@@ -203,6 +219,8 @@ pub struct Removed {
     pub sources: Vec<SourceKey>,
     /// How the song was named when it was removed.
     pub note: String,
+    /// The tags it was given by hand.
+    pub tags: Tags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,8 +272,9 @@ pub enum Edit {
     /// `from`, an extractor's name for a source, named `to` wherever it
     /// is written, its record kept: one key, renamed.
     Respell { from: SourceKey, to: SourceKey },
-    /// What `key` holds recorded in the song listing it.
+    /// What `key` holds recorded in the song named `song` that lists it.
     Hold {
+        song: SourceKey,
         key: SourceKey,
         held: crate::held::Held,
     },
@@ -333,14 +352,126 @@ pub fn present(home: &Path) -> Result<()> {
     .into())
 }
 
+/// The top-level keys the song list reads besides the settings'
+/// [`crate::settings::TABLES`].
+/// The tables that list songs: one misspelled would take what it lists
+/// out of the library, so it is refused rather than warned of.
+const LISTED: [&str; 3] = ["song", "album", "removed"];
+
+/// `doc`, refused when a table in it is a letter or two from one of
+/// [`LISTED`].
+fn no_misspelled_list(doc: &DocumentMut) -> Result<&DocumentMut> {
+    if let Some((key, near)) = doc
+        .iter()
+        .find_map(|(key, _)| Some((key, near_miss(key).filter(|n| LISTED.contains(n))?)))
+    {
+        bail!(
+            "`{key}` in the song list is nothing muman reads; did you mean `{near}`? Read \
+             as it is, what it lists would leave the library, so nothing is done until it \
+             is spelled `{near}`"
+        );
+    }
+    Ok(doc)
+}
+
+/// The key muman reads that `key`, which it does not, is a letter or
+/// two from, as a misspelling.
+fn near_miss(key: &str) -> Option<&'static str> {
+    let mut known = KEYS.iter().chain(&crate::settings::TABLES).copied();
+    if known.any(|k| k == key) {
+        return None;
+    }
+    let near = KEYS
+        .iter()
+        .chain(&crate::settings::TABLES)
+        .copied()
+        .min_by_key(|k| strsim::osa_distance(k, key))?;
+    let most = if key.chars().count() > 4 { 2 } else { 1 };
+    (strsim::osa_distance(near, key) <= most).then_some(near)
+}
+
+const KEYS: [&str; 10] = [
+    "version",
+    "edition",
+    "song",
+    "album",
+    "removed",
+    "providers",
+    "trigger",
+    "hook",
+    "clean",
+    "defaults",
+];
+
+/// The oldest format version that reads the songs of `parsed`: what
+/// they share decides it.
+fn needed_version(parsed: &Parsed) -> i64 {
+    let mut seen = BTreeSet::new();
+    // Each song's keys once: a song naming one twice shares it with no one.
+    let shared: Vec<&SourceKey> = parsed
+        .songs
+        .iter()
+        .flat_map(|s| s.sources.iter().collect::<BTreeSet<_>>())
+        .filter(|k| shareable(k) && !seen.insert(*k))
+        .collect();
+    if shared.iter().any(|k| is_picture(k)) {
+        VERSION
+    } else if shared.is_empty() {
+        PLAIN
+    } else {
+        SHARED
+    }
+}
+
+/// Write the song list a new home starts with, every setting written
+/// out to edit, when `home` has none and none is missing: `sync` on a
+/// new home makes it, so lookups can be turned off before the first
+/// `add`.
+pub fn start(home: &Path) -> Result<()> {
+    present(home)?;
+    if home.join(MANIFEST).exists() {
+        return Ok(());
+    }
+    let mut m = Manifest::load(home)?;
+    m.stale = true;
+    m.save()
+}
+
 impl Manifest {
-    /// The list in `home`; an empty one when there is none yet.
+    /// A warning for each top-level key muman does not read that is a
+    /// letter or two from one it does. Unknown keys are kept for a newer
+    /// muman, but a misspelled `[audio]` would leave its settings doing
+    /// nothing, unnoticed.
+    #[must_use]
+    pub fn misspelled(&self) -> Vec<String> {
+        let Some(doc) = self
+            .text
+            .as_deref()
+            .and_then(|t| t.parse::<DocumentMut>().ok())
+        else {
+            return Vec::new();
+        };
+        doc.iter()
+            .filter_map(|(key, _)| Some((key, near_miss(key)?)))
+            .map(|(key, near)| {
+                format!(
+                    "`{key}` in the song list is nothing muman reads, so what it sets does \
+                     nothing; did you mean `{near}`?"
+                )
+            })
+            .collect()
+    }
+
+    /// The list in `home`; an empty one when there is none yet. A list
+    /// stating a newer version than its songs need is stale, so the next
+    /// save writes it down and an older muman reads it again.
     pub fn load(home: &Path) -> Result<Self> {
         let (doc, text) = read_text(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
         let stale = file.exists()
             && (with_header(&doc.to_string()).is_some()
+                || doc.get("version").and_then(Item::as_integer) > Some(needed_version(&parsed))
                 || normalize(&mut doc.clone())
                 || !parsed.respelled.is_empty());
         Ok(Self {
@@ -481,17 +612,7 @@ impl Manifest {
         }
         normalize(&mut doc);
         let parsed = parse(&doc)?;
-        let shared = parsed
-            .songs
-            .iter()
-            .flat_map(|s| &s.sources)
-            .filter(|k| shareable(k));
-        let mut seen = BTreeSet::new();
-        let version = if shared.into_iter().all(|k| seen.insert(k)) {
-            PLAIN
-        } else {
-            VERSION
-        };
+        let version = needed_version(&parsed);
         if doc.get("version").and_then(Item::as_integer) != Some(version) {
             doc["version"] = value(version);
         }
@@ -589,7 +710,15 @@ fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
              update muman before it changes the list",
             file.display()
         ),
-        _ => bail!("{} has no format version muman knows", file.display()),
+        None => bail!(
+            "{} has no `version`: start it with `version = 1`, or delete it and \
+             `muman sync` writes a new one",
+            file.display()
+        ),
+        Some(v) => bail!(
+            "{} is format version {v}, which no muman wrote",
+            file.display()
+        ),
     }
     for key in ["song", "album", "removed"] {
         if doc
@@ -672,6 +801,33 @@ fn owned_keys(
     Ok(keys)
 }
 
+/// Refuse a song whose every key another song lists too: a song is named
+/// by a key only it lists, and such a song would be taken for that other
+/// song by every edit.
+fn refuse_unowned(songs: &[Song]) -> Result<()> {
+    for (n, song) in songs.iter().enumerate() {
+        if song.sources.iter().all(shareable)
+            && let Some(other) = songs
+                .iter()
+                .enumerate()
+                .find(|(m, o)| *m != n && song.sources.iter().any(|k| o.has(k)))
+        {
+            bail!(
+                "song {} lists no source of its own: song {} lists its {} too; \
+                 give it a file of its own, or delete it",
+                n + 1,
+                other.0 + 1,
+                song.sources
+                    .iter()
+                    .find(|k| other.1.has(k))
+                    .map(ToString::to_string)
+                    .unwrap_or_default()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// A song's `lyrics_offset`, in milliseconds.
 fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
     let Some(item) = t.get("lyrics_offset") else {
@@ -696,7 +852,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut current = doc.clone();
     let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
     let respelled = respell(&mut current, &spelled_now);
-    let doc = &current;
+    let doc = no_misspelled_list(&current)?;
     let lyrics = doc
         .get("defaults")
         .and_then(|d| d.get("lyrics"))
@@ -750,6 +906,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         }
         songs.push(song);
     }
+    refuse_unowned(&songs)?;
     let mut albums = Vec::new();
     for (n, t) in tables(doc, "album").enumerate() {
         let what = format!("album {}", n + 1);
@@ -774,6 +931,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
                 .and_then(Item::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            tags: tags_of(t.get("tags")),
         });
     }
     let settings = crate::settings::read(doc)?;
@@ -1052,7 +1210,10 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 .filter(|k| !taken(k))
                 .filter_map(|k| SourceKey::parse(k).ok())
                 .collect();
-            if keys.is_empty() {
+            let shared = |k: &SourceKey| {
+                tables(doc, "song").any(|t| listed_keys(t).contains(&k.to_string()))
+            };
+            if keys.is_empty() || keys.iter().all(|k| shareable(k) && shared(k)) {
                 // Every source of it is another song's now: nothing to list.
                 tables_mut(doc, "removed")?.push(removed);
                 return Ok(());
@@ -1120,12 +1281,19 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             let (from, to) = (from.to_string(), to.to_string());
             respell(doc, &|k| (k == from).then(|| to.clone()));
         }
-        Edit::Hold { key, held } => {
-            let text = key.to_string();
+        Edit::Hold { song, key, held } => {
+            let (named, text) = (song.to_string(), key.to_string());
+            // A key songs share is held by each apart: the song is found
+            // by its id, which only it lists.
             if let Some(song) = doc
                 .get_mut("song")
                 .and_then(Item::as_array_of_tables_mut)
-                .and_then(|l| l.iter_mut().find(|t| listed_keys(t).contains(&text)))
+                .and_then(|l| {
+                    l.iter_mut().find(|t| {
+                        let listed = listed_keys(t);
+                        listed.contains(&named) && listed.contains(&text)
+                    })
+                })
             {
                 crate::held::set(song, key, held);
             }
@@ -1196,7 +1364,12 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
             gone.insert("sources", key_array(&left));
         }
     }
-    list.retain(|t| !listed_keys(t).is_empty());
+    // A song left with no file of its own is gone, whatever records it lists.
+    list.retain(|t| {
+        listed_keys(t)
+            .iter()
+            .any(|k| SourceKey::parse(k).is_ok_and(|k| !shareable(&k)))
+    });
     if list.is_empty() {
         doc.remove("removed");
     }
@@ -1272,7 +1445,45 @@ fn normalize(doc: &mut DocumentMut) -> bool {
             }
         }
     }
-    changed
+    changed | drop_listed_removed(doc)
+}
+
+/// A removed song's sources a song lists again taken out of its
+/// `[[removed]]` table, and the table with them when none of its own is
+/// left: a song joined to another in `edit` is listed, not removed, and
+/// `restore` could list none of it again. Whether any was.
+fn drop_listed_removed(doc: &mut DocumentMut) -> bool {
+    let own = |k: &str| SourceKey::parse(k).ok().filter(|k| !shareable(k));
+    let listed: BTreeSet<SourceKey> = doc
+        .get("song")
+        .and_then(Item::as_array_of_tables)
+        .into_iter()
+        .flatten()
+        .flat_map(listed_keys)
+        .filter_map(|k| own(&k))
+        .collect();
+    let Some(removed) = doc
+        .get_mut("removed")
+        .and_then(Item::as_array_of_tables_mut)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for table in removed.iter_mut() {
+        let Some(sources) = table.get_mut("sources").and_then(Item::as_array_mut) else {
+            continue;
+        };
+        let before = sources.len();
+        sources.retain(|v| {
+            !v.as_str()
+                .and_then(own)
+                .is_some_and(|k| listed.contains(&k))
+        });
+        changed |= sources.len() != before;
+    }
+    let before = removed.len();
+    removed.retain(|t| listed_keys(t).iter().any(|k| own(k).is_some()));
+    changed | (removed.len() != before)
 }
 
 /// `held` records of sources the song no longer lists taken out, as a

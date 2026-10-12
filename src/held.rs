@@ -421,20 +421,20 @@ impl Drift {
             .changed
             .iter()
             .partition(|a| self.now.digest(**a).is_none());
-        let list = |aspects: &[Aspect]| {
+        let list = |aspects: &[Aspect], and: &str| {
             let names: Vec<&str> = aspects.iter().map(|a| a.name()).collect();
             match names.split_last() {
                 Some((last, [])) => (*last).to_string(),
-                Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+                Some((last, rest)) => format!("{} {and} {last}", rest.join(", ")),
                 None => String::new(),
             }
         };
         let mut what = Vec::new();
         if !other.is_empty() {
-            what.push(format!("other {}", list(&other)));
+            what.push(format!("other {}", list(&other, "and")));
         }
         if !gone.is_empty() {
-            what.push(format!("no {}", list(&gone)));
+            what.push(format!("no {}", list(&gone, "or")));
         }
         let format = match (&self.was.format, &self.now.format) {
             (Some(a), Some(b)) if a != b => format!(" (format {a} → {b})"),
@@ -486,6 +486,9 @@ pub fn records(
 ) -> Vec<Edit> {
     let mut edits = Vec::new();
     for song in &manifest.songs {
+        let Some(id) = song.id() else {
+            continue;
+        };
         for key in &song.sources {
             let Some(now) = facts
                 .get(key)
@@ -505,6 +508,7 @@ pub fn records(
             };
             if let Some(held) = held {
                 edits.push(Edit::Hold {
+                    song: id.clone(),
                     key: key.clone(),
                     held,
                 });

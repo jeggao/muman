@@ -7,7 +7,8 @@
 //! with a measure that could not be taken ranks after every source with
 //! fewer such.
 //!
-//! - Audio: least that is not the song (a video's intro or skit), then
+//! - Audio: least that is not the song (a video's intro or skit) or
+//!   is missing from it (past an excerpt's cut), then
 //!   the widest bandwidth, real stereo, least clipping; scored alike,
 //!   lossless, then the most bits used, then the lowest rate.
 //! - Cover: square content, then effective resolution, then fewest
@@ -27,6 +28,13 @@
 //! purity outweighs any bandwidth up to 500 kHz, a step of bandwidth all
 //! of stereo and clipping. Lowering a weight lets the measures after it
 //! trade against it.
+//!
+//! Purity is a source's sound beyond the song plus the song it lacks, as
+//! [`crate::align`] measures them against each other source of the same
+//! recording. Sound beyond is the least any other leaves unshared, since
+//! another source holding it makes it the song; a source cut off where this
+//! one plays on vouches for nothing, so it counts only when none other is
+//! whole there. The song lacked is the most any other plays on past a cut.
 //!
 //! The output format follows the winning audio's codec, not its measures:
 //! a codec `[audio] codecs` lists is copied, and so is one already in the
@@ -64,7 +72,10 @@
 //! again exactly when its sources' revisions, the picks, the tags or the
 //! renderer change; [`render_version`] rises for a codec when the bytes a
 //! plan in it renders to change, so only songs in that codec are written
-//! again.
+//! again. Its gains are kept as `[loudness] mode` asks, so a plan that
+//! [`crate::limit`] encodes into Opus holds them in its header, but are
+//! compared as its format holds them: a header gain in FLAC is as tags
+//! alone, so a mode that changes only Opus files writes only those again.
 
 use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
@@ -74,8 +85,9 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Codec, Layout};
+use crate::codec::{Adapt, Chain, Codec, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
+use crate::loudness::Gains;
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
@@ -90,8 +102,9 @@ use crate::tags::{self, Field, Offer, Scope};
 #[must_use]
 pub fn render_version(codec: Codec) -> u32 {
     match codec {
-        // Opus ended 312 samples late, its timestamps shifted by its delay.
-        Codec::Opus => 4,
+        // Opus ended 312 samples late, its timestamps shifted by its delay;
+        // MP4 wrote a tag of several values as an atom each.
+        Codec::Opus | Codec::Aac | Codec::Alac => 4,
         _ => 3,
     }
 }
@@ -173,6 +186,23 @@ impl Format {
                 Self::Copy { codec }
             }
             _ => encoded,
+        }
+    }
+
+    /// `audio` encoded to `codec` itself, where it holds the audio as it
+    /// is, as a gain applied to audio otherwise copied asks; else as
+    /// [`Self::encoded`] would.
+    #[must_use]
+    pub fn encoded_as(codec: Codec, audio: &AudioFacts, settings: &Audio) -> Self {
+        let shape = audio.shape();
+        match codec.adapt(&shape) {
+            Some(adapt) => Self::Encode {
+                codec,
+                kbps: settings.kbps(codec, shape.channels),
+                adapt,
+                mix: None,
+            },
+            None => Self::encoded(audio, settings),
         }
     }
 
@@ -295,8 +325,9 @@ pub struct LyricsRef {
 }
 
 /// Everything a library file is made from. Stored beside each output and
-/// compared whole, so a song is rendered again exactly when this changes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// compared whole, so a song is rendered again exactly when this changes;
+/// its gains are compared as its format holds them ([`Gains::as_held`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub version: u32,
     pub format: Format,
@@ -305,17 +336,102 @@ pub struct Plan {
     pub lyrics: Option<LyricsRef>,
     /// Vorbis comments, in the order written.
     pub tags: Vec<(String, Vec<String>)>,
+    /// The gains that level the song, before any is applied; the
+    /// ReplayGain tags are derived from them and the format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<Gains>,
 }
 
+impl PartialEq for Plan {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            version,
+            format,
+            audio,
+            cover,
+            lyrics,
+            tags,
+            loudness: _,
+        } = self;
+        *version == other.version
+            && *format == other.format
+            && *audio == other.audio
+            && *cover == other.cover
+            && *lyrics == other.lyrics
+            && *tags == other.tags
+            && self.held_loudness() == other.held_loudness()
+    }
+}
+
+impl Eq for Plan {}
+
 impl Plan {
-    /// This plan written in `format`, by the renderer's version for it.
+    /// Its gains as its file holds them.
+    #[must_use]
+    pub fn held_loudness(&self) -> Option<Gains> {
+        self.loudness
+            .map(|g| g.as_held(self.format.codec() == Codec::Opus, self.format.is_encoded()))
+    }
+
+    /// This plan written in `format`, by the renderer's version for it,
+    /// its loudness tags as that format holds its gains.
     #[must_use]
     pub fn with_format(&self, format: Format) -> Self {
-        Self {
+        let plan = Self {
             version: render_version(format.codec()),
             format,
             ..self.clone()
+        };
+        match plan.loudness {
+            Some(gains) => plan.with_loudness(gains),
+            None => plan,
         }
+    }
+
+    /// This plan levelled by `gains`: its ReplayGain tags what is left of
+    /// each gain once its format holds what it applies.
+    #[must_use]
+    pub fn with_loudness(&self, gains: Gains) -> Self {
+        let mut plan = self.clone();
+        plan.loudness = Some(gains);
+        plan.tags
+            .retain(|(k, _)| !Field::named(k).is_some_and(Field::is_loudness));
+        for (field, value) in gains.tags(plan.applied()) {
+            insert_comment(&mut plan.tags, field, vec![value]);
+        }
+        plan
+    }
+
+    /// The hundredths of a dB of its gain the file holds, by its header or
+    /// in its samples.
+    #[must_use]
+    pub fn applied(&self) -> i32 {
+        self.loudness.map_or(0, |g| {
+            g.applied(self.format.codec() == Codec::Opus, self.format.is_encoded())
+        })
+    }
+
+    /// What is done to the samples on their way to the encoder.
+    #[must_use]
+    pub fn chain(&self) -> Chain {
+        match (self.format, self.loudness) {
+            (Format::Encode { .. }, Some(g)) => Chain {
+                gain: g.applied(false, true),
+                bits: g.bits,
+            },
+            _ => Chain::default(),
+        }
+    }
+
+    /// The gain the Opus header is set to once muxed, where it is.
+    #[must_use]
+    pub fn opus_header(&self) -> Option<i16> {
+        self.loudness.and_then(|g| {
+            g.header(
+                self.format.codec() == Codec::Opus,
+                !self.format.is_encoded(),
+            )
+        })
     }
 
     /// This plan with each part of `key` it takes named as `to` names it,
@@ -507,6 +623,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             cover: cover.as_ref().map(|(c, _)| c.clone()),
             lyrics: lyrics.as_ref().map(|(l, _)| l.clone()),
             tags,
+            loudness: None,
         },
         stem,
         why: Why {
@@ -549,12 +666,19 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
         bail!("the pinned audio, {pin}, has no audio on disk");
     }
     let ranked = audible.iter().map(|(n, key, facts)| {
-        let unmatched = audible
+        let compared: Vec<&Aligned> = audible
             .iter()
             .filter(|(_, other, _)| other != key)
             .filter_map(|(_, other, _)| input.aligned(key, other).filter(|a| a.fits()))
-            .map(Aligned::unmatched_ms)
-            .min();
+            .collect();
+        let beyond = compared
+            .iter()
+            .filter(|a| a.b_lacks_ms == 0)
+            .map(|a| a.unmatched_ms())
+            .min()
+            .or_else(|| compared.iter().map(|a| a.unmatched_ms()).min());
+        let lacks = compared.iter().map(|a| a.a_lacks_ms).max().unwrap_or(0);
+        let unmatched = beyond.map(|ms| ms + lacks);
         let q = facts.audio.as_ref().and_then(|a| a.quality);
         let w = input.quality;
         let [unknown, sum] = score(&[
@@ -582,19 +706,21 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
             i64::try_from(*n).unwrap_or(UNKNOWN),
         ];
-        let why = match (unmatched, q) {
+        // A song's milliseconds are far below 2^52, held exactly.
+        #[allow(clippy::cast_precision_loss)]
+        let tenths = |ms: i64| (units::seconds_of_ms(ms as f64) * 10.0).floor() / 10.0;
+        let why = match (beyond, q) {
             (u, Some(q)) => format!(
                 "{}, {:.1} kHz, {}, {:.2}% clipped",
                 u.map_or_else(
                     || "no other recording to compare".to_string(),
-                    |ms| {
-                        // A song's milliseconds are far below 2^52, held exactly.
-                        #[allow(clippy::cast_precision_loss)]
-                        let seconds = units::seconds_of_ms(ms as f64);
-                        format!(
-                            "{:.1} s of sound beyond the song",
-                            (seconds * 10.0).floor() / 10.0
-                        )
+                    |ms| match lacks {
+                        0 => format!("{:.1} s of sound beyond the song", tenths(ms)),
+                        _ => format!(
+                            "{:.1} s of sound beyond the song, {:.1} s of the song missing",
+                            tenths(ms),
+                            tenths(lacks)
+                        ),
                     }
                 ),
                 units::khz_of_hz(q.bandwidth_hz),
@@ -611,7 +737,7 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
     ranked
         .min_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, key, why)| (key, why))
-        .ok_or_else(|| anyhow::anyhow!("no source of this song has audio on disk"))
+        .ok_or_else(|| anyhow::anyhow!("no source of this song has audio that reads"))
 }
 
 /// What breaks a tie between sources the measures score alike, most
@@ -700,7 +826,7 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
 
 /// How far a stated length may be from the audio's before lyrics timed
 /// to it are no use.
-const STATED_SPAN_MS: f64 = 4000.0;
+pub(crate) const STATED_SPAN_MS: f64 = 4000.0;
 /// A stated length that agrees proves less than an audio comparison, so
 /// it never ranks over a subtitle of the same recording.
 const STATED_MAX: f64 = 0.9;
@@ -772,20 +898,18 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
-            let why = format!(
-                "{}, {} line(s), {} the chosen audio",
-                if l.timing.is_some() {
-                    "timed"
-                } else {
-                    "untimed"
-                },
-                l.timing.map_or(0, |t| t.lines),
-                if key == audio {
-                    "from".to_string()
-                } else {
-                    format!("{offset} ms from")
-                }
-            );
+            let why = match l.timing {
+                None => "untimed".to_string(),
+                Some(t) => format!(
+                    "timed, {} line(s), {} the chosen audio",
+                    t.lines,
+                    if key == audio {
+                        "from".to_string()
+                    } else {
+                        format!("{offset} ms from")
+                    }
+                ),
+            };
             best = Some((
                 rank,
                 LyricsRef {
@@ -944,6 +1068,17 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
         };
         insert_in_order(written, Field::Album, slot);
     }
+}
+
+/// `values` of `field` put in `tags` before the first known field after
+/// it.
+fn insert_comment(tags: &mut Comments, field: Field, values: Vec<String>) {
+    let rank = |f: Field| Field::ALL.iter().position(|g| *g == f);
+    let at = tags
+        .iter()
+        .position(|(k, _)| Field::named(k).and_then(rank) > rank(field))
+        .unwrap_or(tags.len());
+    tags.insert(at, (field.vorbis().to_string(), values));
 }
 
 /// `slot` put in `written` before the first known field after `field`.

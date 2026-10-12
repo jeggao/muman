@@ -7,6 +7,227 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Loudness normalization.** Every song is measured whole, as EBU R128
+  measures loudness, and levelled to `[loudness] target`, -18 LUFS
+  unless set otherwise: ReplayGain 2.0 track and album gains and true
+  peaks are written into its tags, R128 gains in Opus, the album's
+  measured over all its songs together. `[loudness] mode = "header"`
+  also writes the gain into each Opus file's header, which every Opus
+  player applies, without encoding anything again; `mode = "audio"`
+  scales the samples for players that read no gain. `scope` picks the
+  album's or the song's own gain, and `ceiling` the highest peak a
+  raising gain may lift a song to. A gain set by hand wins. A mixed
+  song is measured as mixed.
+- **`add` gives lyrics, pictures, tag files and cue sheets to their
+  songs.** Each is matched by an ID it shares with a song, its file
+  name, its fields (an `.lrc`'s ID tags, a tag file's, or its own name)
+  and what it holds: lyrics by the words the song sings, a picture by
+  how the song's cover looks. Names are compared in every script,
+  folding accents, width, kana and Traditional Chinese. What is not
+  surely one song's is asked about on a terminal, with a search of the
+  song list; `--to` names the songs instead. Lyrics and pictures become
+  sources of the song; tags from `NAME=value`, ffmetadata, beets or
+  MusicBrainz JSON and cue sheets are set on it by hand, each beets
+  field under the name Picard writes it as, a credit as "A feat. B"
+  giving way to the artists it names, and `--verbose` names what was
+  skipped.
+
+- **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
+  no lookup, no fetch, and URLs refused.
+- **`sync` on a new home writes the song list,** every setting in it, so
+  lookups can be turned off before the first `add`.
+
+### Changed
+
+- **The first sync measures every song's loudness and retags it.** It
+  decodes each source once, in full, then writes the tags of every
+  song again, encoding none: a `written` hook runs for each song, and
+  `undo` keeps the files replaced as far as `[history] max_size` allows.
+  `[loudness] mode = "off"` keeps the gains a source's own tags carry,
+  as before.
+- **A picture of your own may be listed by several songs,** as the songs
+  of an album share its cover. A song list where one is is format
+  version 3, which an older muman refuses. A song whose every source
+  another song lists too is refused, since edits would take it for that
+  song.
+- **`add` exits with 5 when a file it was given was left out,** having
+  matched no song for sure with no terminal to ask on.
+
+### Fixed
+
+- **`add Song.flac Song.lrc`** copies the lyrics once, beside their
+  song, where it failed saying they existed already.
+- **`undo` of a run that gave a song lyrics** removes the `.lrc` it
+  wrote beside the song, where it stayed, recorded by nothing.
+- **A song's own `.lrc` or picture moved within `sources/manual`** is
+  followed by its song, as a moved song file is, where the song lost it.
+- **Two songs listing one lookup record** each keep their record of what
+  it holds, where the second's was written again on every sync.
+- **`remove --purge`** keeps a source a removed song still lists, so
+  that `restore` gets the song back whole, where it deleted it.
+- **A song list's format version** goes back down once its songs no
+  longer need it, on the next `sync`, so that an older muman reads it
+  again; it changed only with another edit.
+- **`undo` after `remove --purge`** refuses until you put the files of
+  your own it trashed back, naming each, where it listed their songs
+  again with nothing to make them from, and every sync after failed.
+- **`restore` after `remove --purge`** refuses until you put the files
+  of your own it trashed back, naming each, where it listed their songs
+  with nothing to make them from, and every sync after failed.
+- **A song joined to another in `edit`** is said to be joined and left
+  out of `[[removed]]`, where it was noted as removed and `restore`
+  claimed to list it again, changing nothing. A removed song whose
+  sources a song lists again is dropped from `[[removed]]` on the next
+  write.
+- **A home inside the library** is refused by every command that
+  writes, where `add` copied the file in and listed nothing, taking it
+  for one of the library's.
+- **`add` of a file named with a leading dot** is refused, as muman
+  reads no hidden file, where it was copied in and never listed. A
+  folder's hidden files, as `._Song.flac`, are not copied, and a folder
+  holding no song is named and exits with 4, where `add` said it was
+  copied.
+- **`info`** counts an emptied library file as to write, and a song
+  with no file on disk as one that cannot be made, as `status` and
+  `check` say, where it counted both up to date.
+- **`set` and `add --tag`** refuse `track=abc`, `date=yesterday` and a
+  ReplayGain or R128 gain, which muman measures, where they wrote the
+  first two and showed the gain set, writing the measured one.
+- **`add <URL>` under `--offline`** is refused with exit 5, as `check
+  --upstream` is, before copying any file given with it, where it
+  exited with 4 having copied them.
+- **`export`** exits with 4 when it leaves out a song missing from the
+  library, where it exited with 0.
+- **`--progress json`** writes each message as a `message` event, so
+  that every line on stderr reads as JSON, where messages were plain
+  lines among the events.
+- **A query ignores accents and how a name was composed,** so `cafe`
+  and `café` match "Café" however it was written, where a name a Mac
+  wrote decomposed matched only a decomposed query, and `cafe` none.
+- **`duplicates`** puts first and names a group an album holds twice
+  when other albums hold it too, where only a group on one album came
+  first.
+- **Messages:** `status` on a home with no song says so, where it said
+  nothing; a removed song is named once by its artist, where `restore`
+  named it twice; a source that lost its cover and lyrics has "no
+  cover or lyrics"; `info --verbose` names each song with its key, so
+  that two of one title are told apart.
+- **`export`** dates each entry of its zip by its file, where every one
+  read 1980-01-01.
+- **`restore album:…`** finds removed songs by their tags and their
+  sources', as `list` and `remove` find songs, where it read only the
+  name noted when they were removed.
+- **A field's value in quotes,** as `'album:="The Glass Orchards"'`,
+  matches without them, where the quotes were part of the text.
+- **An emptied library file** is written again by `sync`, as `check`
+  says, where it was left as changed since written.
+- **`check`** names every file in the library muman did not write, as
+  `info` counts them, where it named only audio and `.lrc` files.
+- **A song file ffprobe finds no audio in** is not copied in or listed
+  by `add`, which names it and exits with 4, where it was listed and
+  failed every run after.
+- **A negative `lyrics_offset`** starts the line still sung as the song
+  begins at 0:00, where it dropped it with the lines over by then.
+- **A closed pipe,** as `muman sync | head` leaves, drops what the run
+  says after rather than stopping it halfway through writing the
+  library.
+- **`export -o`** into a folder that is not there is refused, where it
+  made every folder the path named.
+- **`set`** exits with 5 when it refuses a change, as other changes do,
+  where it exited with 4.
+- **A misspelled settings table,** as `[audoi]`, is warned of by `sync`
+  and `check`, where its settings did nothing unnoticed. A misspelled
+  `[[song]]`, `[[album]]` or `[[removed]]` is an error, where `sync`
+  warned of it and took every song it listed out of the library.
+- **An MP4 tag of several values,** as two artists or two genres, is
+  one atom holding each, as Picard writes it and taggers read it, where
+  each value was an atom of its own. The first sync writes every `.m4a`
+  song again.
+- **`[library] max_size` and `export --max-size`** raise each song
+  lowered back as far as the room left allows, where songs that fit at
+  their best stayed lowered and room went unused.
+- **`sync --force` under `[library] max_size`** fits a song whose file
+  changed since muman wrote it as any other, as the next `sync` does,
+  where it counted the file it was about to replace, wrote the song at
+  its best, and left the next sync to encode it again.
+- **A lowered `[history] max_size`** binds the runs already kept: each
+  run that records lets go of the oldest runs' files until the history
+  fits, keeping their records so `undo` writes those files again from
+  their sources, where old runs kept their files past the limit. The
+  run that follows a hand edit of `[history]` keeps to the edit, where
+  it kept to the limits before it.
+- **`undo` of a run that moved a song and retagged it** without room
+  to keep the file has the song written again where it moves back,
+  where the file kept the run's tags and the next undo refused it as
+  changed since muman wrote it.
+- **An excerpt joined to its song** leaves the whole song's audio
+  chosen, where the rest of the song counted against it as sound beyond
+  the song and the excerpt replaced it. A source that ends where
+  another plays the song on, cut off mid-sound, in a short rest or
+  faded out, counts the song it lacks against itself. A release that
+  starts on a full chord at its first sample still beats its video's
+  intro, so an excerpt that starts mid-song and runs to the song's end
+  reads as whole. Every pair of sources is compared again on the next
+  sync.
+- **Silence held off centre by a DC offset,** as an old rip's lead-in
+  can be, counts as no sound beyond the song, where it counted as
+  sound and the rip lost to another copy of its song. Every pair of
+  sources is compared again on the next sync.
+- **An excerpt starting past its song's first minute, or a video whose
+  intro runs past a minute,** is compared with the rest of its song,
+  where no shift past a minute was tried, the two were never found one
+  recording, and the excerpt could win on bandwidth. Every pair of
+  sources is compared again on the next sync.
+- **A copy of a track under about 9 s,** as an album's interlude,
+  joins its song, and `duplicates` finds two songs listing it, where
+  the two never agreed on the 6 s a match needed and the copy became a
+  second song, even byte for byte the same.
+- **Lossless audio whose notes end low over a flat noise floor**
+  measures its full bandwidth, where a partial standing over the noise
+  read as a lowpass at 2 to 3 kHz and the song's own lossy copy won.
+  Every source is measured again on the next sync.
+- **`[loudness] mode` changed between `tags` and `header`** writes
+  again only the Opus songs, whose headers it changes, where it
+  reported every other song's loudness updated and kept each in
+  history, its bytes the same.
+- **A gain `[loudness] ceiling` leaves nothing of,** in an Opus header
+  or the samples, leaves a song alone as tags alone do, where its file
+  was written again the same.
+- **A library file retagged by a tagger that keeps its size and time**
+  is left alone as changed since muman wrote it, its bytes compared
+  with those written as it is about to be written over, moved with new
+  tags or removed, where the next change to its song wrote over it.
+- **An `undo` stopped partway** stays the latest run until the sync it
+  ends with is done, so the next `undo` finishes it, where one stopped
+  in that sync had dropped the run's record: the next `undo` undid the
+  run before it as well, and `check` found no problem. `check` names
+  it, and a run begun meanwhile finishes it.
+- **The `changed` hook** runs after a sync that only moved files and
+  after an undo that only put files back, where it ran only once a file
+  was written or removed; `{moved}` counts the files moved, and an
+  undo's files put back count as written.
+- **`undo` of `sync --force`** puts back a file you had changed since
+  muman wrote it as still changed, where it took it for muman's own,
+  `check` found nothing and the next change to its song wrote over it.
+- **A sync stopped while writing new files** after a hand edit of the
+  song list can be undone, the edit with it, where `undo` refused,
+  saying the song list had changed, as the run had written no record
+  before its first new file.
+- **`undo` of an `add`** takes out the copy it made in `sources/`, as
+  `undo -n` says, where the copy stayed and the next sync listed the
+  song again as a file dropped in. A copy changed since goes to the
+  trash.
+- **A source cut off since its song was built,** as a copy stopped
+  short leaves a file of your own, leaves the song's file as built and
+  fails the song, exit 4, until the whole file is back or `sync --force`
+  writes it, where the song followed it, its library file replaced by
+  the stub. `check` names every source cut off.
+- **The library's lock file** in the system's temporary folder is
+  removed as each run lets go of it, where one stayed for every library
+  folder muman ever wrote.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added

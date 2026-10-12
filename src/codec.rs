@@ -130,6 +130,31 @@ const LAYOUTS: [(&str, u32); 35] = [
     ("downmix", 2),
 ];
 
+/// The filter that mixes audio into `layout`, scaled so no sum of
+/// channels passes full scale.
+#[must_use]
+pub fn mix_filter(layout: Layout) -> String {
+    format!("aresample=ochl={layout}:rematrix_maxval=1")
+}
+
+/// What is done to the samples on their way to the encoder, beyond what
+/// fits them to the codec: kept in whole numbers, so a plan compares
+/// exactly, and rendered here alone, in one order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Chain {
+    /// A gain, in hundredths of a dB.
+    pub gain: i32,
+    /// The bits an integer source's samples hold; 0 for float or unknown.
+    pub bits: u32,
+}
+
+impl Chain {
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.gain == 0
+    }
+}
+
 /// One of ffmpeg's standard speaker layouts, by its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Layout(&'static str);
@@ -407,15 +432,23 @@ impl Codec {
     }
 
     /// ffmpeg's options that encode to this codec, at `kbps` when lossy,
-    /// mixed into `mix`, and adapted as `adapt` says. A mix is scaled so
-    /// no sum of channels passes full scale: ffmpeg scales one written as
-    /// integers so and not one written as float, which would clip.
+    /// mixed into `mix`, processed by `chain`, and adapted as `adapt`
+    /// says. A mix is scaled so no sum of channels passes full scale:
+    /// ffmpeg scales one written as integers so and not one written as
+    /// float, which would clip.
+    ///
+    /// A gain turns integer samples to float, which a lossless encoder
+    /// would keep at 24 bits or as float, so a lossless codec has them
+    /// back at the source's bits, dithered when that is 16: ffmpeg's
+    /// triangular dither is seeded alike on every run, so a song encodes
+    /// to the same bytes each time.
     #[must_use]
     pub fn encoder_args(
         self,
         kbps: Option<u32>,
         adapt: Option<Adapt>,
         mix: Option<Layout>,
+        chain: Chain,
     ) -> Vec<String> {
         let encoder = match self {
             Self::Opus => "libopus",
@@ -429,7 +462,20 @@ impl Codec {
         let mut args = vec!["-c:a".to_string(), encoder.to_string()];
         let mut filters = Vec::new();
         if let Some(mix) = mix {
-            filters.push(format!("aresample=ochl={mix}:rematrix_maxval=1"));
+            filters.push(mix_filter(mix));
+        }
+        if chain.gain != 0 {
+            filters.push(format!(
+                "volume={}dB",
+                crate::units::Level(chain.gain).decimal()
+            ));
+            if self.is_lossless() {
+                match chain.bits {
+                    1..=16 => filters.push("aresample=osf=s16:dither_method=triangular".into()),
+                    17..=32 => filters.push("aresample=osf=s32".into()),
+                    _ => {}
+                }
+            }
         }
         match adapt {
             Some(Adapt::Relabel(channels)) => {
@@ -491,11 +537,11 @@ mod tests {
     #[test]
     fn a_lossless_codec_takes_no_bitrate() {
         assert_eq!(
-            Codec::Flac.encoder_args(Some(160), None, None),
+            Codec::Flac.encoder_args(Some(160), None, None, Chain::default()),
             ["-c:a", "flac"]
         );
         assert_eq!(
-            Codec::Mp3.encoder_args(Some(320), None, None),
+            Codec::Mp3.encoder_args(Some(320), None, None, Chain::default()),
             ["-c:a", "libmp3lame", "-b:a", "320k"]
         );
     }
@@ -541,7 +587,8 @@ mod tests {
         assert_eq!(opus(4, Some("4.0")), Some(Some(Adapt::Discrete)));
         assert_eq!(opus(12, Some("7.1.4")), Some(Some(Adapt::Discrete)));
         assert_eq!(
-            Codec::Opus.encoder_args(Some(256), Some(Adapt::Relabel(6)), None)[2..4],
+            Codec::Opus.encoder_args(Some(256), Some(Adapt::Relabel(6)), None, Chain::default())
+                [2..4],
             ["-af", "channelmap=channel_layout=5.1"]
         );
     }
@@ -601,6 +648,7 @@ mod tests {
             Some(256),
             Some(Adapt::Relabel(6)),
             Layout::named("5.1(side)"),
+            Chain::default(),
         );
         assert_eq!(
             args[2..4],
@@ -608,6 +656,40 @@ mod tests {
                 "-af",
                 "aresample=ochl=5.1(side):rematrix_maxval=1,channelmap=channel_layout=5.1"
             ]
+        );
+    }
+
+    #[test]
+    fn a_gain_follows_the_mix_and_keeps_a_lossless_codec_s_bits() {
+        let chain = Chain {
+            gain: -612,
+            bits: 16,
+        };
+        let args = Codec::Opus.encoder_args(
+            Some(256),
+            Some(Adapt::Relabel(6)),
+            Layout::named("5.1(side)"),
+            chain,
+        );
+        assert_eq!(
+            args[2..4],
+            [
+                "-af",
+                "aresample=ochl=5.1(side):rematrix_maxval=1,volume=-6.12dB,\
+                 channelmap=channel_layout=5.1"
+            ]
+        );
+        let flac = Codec::Flac.encoder_args(None, None, None, chain);
+        assert!(
+            flac.iter()
+                .any(|a| a == "volume=-6.12dB,aresample=osf=s16:dither_method=triangular")
+        );
+        let deep = Codec::Flac.encoder_args(None, None, None, Chain { gain: 50, bits: 24 });
+        assert!(deep.iter().any(|a| a == "volume=0.5dB,aresample=osf=s32"));
+        assert!(
+            !Codec::Flac
+                .encoder_args(None, None, None, Chain::default())
+                .contains(&"-af".into())
         );
     }
 }

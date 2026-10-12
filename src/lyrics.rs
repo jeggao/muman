@@ -159,25 +159,104 @@ pub fn is_lyric(text: &str) -> bool {
     })
 }
 
-/// The length an `.lrc` states with its `[length:]` tag, in ms.
+/// The value of the first ID tag `name` in the LRC `text`, read in any
+/// case and with spaces around the colon, as `[TI:]` or `[length : ]`.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    text.lines().find_map(|l| {
+        let inner = l.trim().strip_prefix('[')?.strip_suffix(']')?;
+        let (k, v) = inner.split_once(':')?;
+        (k.trim().eq_ignore_ascii_case(name) && !v.trim().is_empty()).then(|| v.trim())
+    })
+}
+
+/// The length an `.lrc` states with its `[length:]` tag, in ms; none
+/// when it states no positive length.
 #[must_use]
 pub fn stated_length(text: &str) -> Option<i64> {
-    let line = text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("[length:")?.strip_suffix(']'))?;
     let mut seconds = 0.0;
-    for part in line.trim().split(':') {
+    for part in tag(text, "length")?.split(':') {
         seconds = seconds * 60.0 + part.trim().parse::<f64>().ok()?;
+    }
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return None;
     }
     #[allow(clippy::cast_possible_truncation)]
     Some(units::ms_of_seconds(seconds).round() as i64)
 }
 
+/// What an `.lrc`'s ID tags say of its song.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// `[length:]`, in ms.
+    pub length_ms: Option<i64>,
+    /// `[offset:]`: how much earlier every line is meant, in ms.
+    pub offset_ms: i64,
+}
+
+/// The ID tags of the LRC `text`: `[ti:]`, `[ar:]`, `[al:]`, `[length:]`
+/// and `[offset:]`.
+#[must_use]
+pub fn headers(text: &str) -> Headers {
+    let tag = |name| tag(text, name).map(str::to_string);
+    Headers {
+        title: tag("ti"),
+        artist: tag("ar"),
+        album: tag("al"),
+        length_ms: stated_length(text),
+        offset_ms: tag("offset").and_then(|o| o.parse().ok()).unwrap_or(0),
+    }
+}
+
+/// `line` without the word timings an enhanced LRC line holds, as
+/// `<00:12.30>`; any other `<` or `>` is sung.
+fn without_word_times(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if lrc_time(&after.replacen('>', "]", 1)).is_some() {
+            let close = after.find('>').map_or(after.len(), |c| c + 1);
+            rest = &after[close..];
+        } else {
+            out.push('<');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The words LRC or plain lyrics sing: each timed line's text, and each
+/// untimed line but the ID tags, without the lines that are no lyric.
+#[must_use]
+pub fn sung(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut rest = line.trim();
+        let mut timed = false;
+        while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+            timed = true;
+            rest = after;
+        }
+        let words = without_word_times(rest);
+        let header = !timed && words.starts_with('[') && words.ends_with(']');
+        if !header && !words.trim().is_empty() && is_lyric(&words) {
+            out.push_str(words.trim());
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
-/// guessed as a browser guesses a page that names none. CRLF line
-/// endings become LF.
+/// guessed as a browser guesses a page that names none. CRLF and CR
+/// line endings become LF.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
     let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
@@ -190,7 +269,7 @@ pub fn decode(bytes: &[u8]) -> String {
         detector.guess(None, chardetng::Utf8Detection::Deny)
     };
     let (text, _, _) = encoding.decode(bytes);
-    text.replace("\r\n", "\n")
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// UTF-16 with no byte-order mark, told by its zero bytes: text mostly in
@@ -285,25 +364,41 @@ pub fn timing(text: &str) -> Option<Timing> {
 
 /// LRC timed for another cut of the recording: every `[mm:ss.xx]` tag
 /// moved `offset_ms` earlier, then shortened by `stretch_ppm` parts per
-/// million for a cut that plays the recording that much longer. A line
-/// that would start before the track does is dropped; untimed lines are
-/// kept.
+/// million for a cut that plays the recording that much longer. Of the
+/// lines that would start before the track does, the one still sung as
+/// it begins starts at 0:00 and those over by then are dropped; untimed
+/// lines are kept.
 #[must_use]
 pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
-    let mut out = String::new();
-    for line in text.lines() {
+    let timed = |line: &str| {
         let mut rest = line;
         let mut times = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(unstretch(ms - offset_ms, stretch_ppm));
+            times.push(unstretch(ms.saturating_sub(offset_ms), stretch_ppm));
             rest = after;
         }
-        if !times.is_empty() {
-            times.retain(|ms| *ms >= 0);
-            if times.is_empty() {
+        (times, rest.to_string())
+    };
+    let all: Vec<i64> = text.lines().flat_map(|l| timed(l).0).collect();
+    let begun = all
+        .iter()
+        .copied()
+        .filter(|ms| *ms < 0)
+        .max()
+        .filter(|_| !all.contains(&0));
+    let mut out = String::new();
+    for line in text.lines() {
+        let (mut starts, rest) = timed(line);
+        let rest = rest.as_str();
+        if !starts.is_empty() {
+            starts.retain(|ms| *ms >= 0 || Some(*ms) == begun);
+            for ms in &mut starts {
+                *ms = (*ms).max(0);
+            }
+            if starts.is_empty() {
                 continue;
             }
-            for ms in times {
+            for ms in starts {
                 let _ = write!(
                     out,
                     "[{:02}:{:02}.{:02}]",
@@ -344,13 +439,41 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
         2 => frac.parse::<i64>().ok()? * 10,
         _ => frac[..3].parse::<i64>().ok()?,
     };
-    let ms = min.parse::<i64>().ok()? * 60_000 + whole.parse::<i64>().ok()? * 1000 + frac_ms;
+    let ms = min
+        .parse::<i64>()
+        .ok()?
+        .checked_mul(60_000)?
+        .checked_add(whole.parse::<i64>().ok()?.checked_mul(1000)?)?
+        .checked_add(frac_ms)?;
     Some((ms, after))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signs_are_sung_word_times_are_not_and_huge_times_are_no_times() {
+        assert_eq!(sung("[00:01.00]we go -> home"), "we go -> home\n");
+        assert_eq!(
+            sung("plain words > here\nI <3 the tide\n"),
+            "plain words > here\nI <3 the tide\n"
+        );
+        assert_eq!(
+            sung("[00:01.00]<00:01.00>rain <00:01.50>falls"),
+            "rain falls\n"
+        );
+        assert_eq!(
+            sung("[9999999999999999:00.00]x"),
+            "[9999999999999999:00.00]x\n"
+        );
+        assert_eq!(timing("[9999999999999999:00.00]x"), None);
+        let _ = shift_lrc("[153722867280912:55.807]x", -1, 0);
+        assert_eq!(
+            decode(b"[00:01.00]a\r[00:02.00]b\r"),
+            "[00:01.00]a\n[00:02.00]b\n"
+        );
+    }
 
     #[test]
     fn lyrics_files_decode_from_any_common_encoding() {
@@ -587,10 +710,14 @@ mod tests {
     }
 
     #[test]
-    fn a_line_before_the_track_starts_is_dropped() {
+    fn a_line_over_before_the_track_starts_is_dropped_and_one_still_sung_starts_it() {
         assert_eq!(
-            shift_lrc("[00:00.50]gone\n[00:02.00]kept\n", 1000, 0),
-            "[00:01.00]kept\n"
+            shift_lrc("[00:00.20]gone\n[00:00.50]sung\n[00:02.00]kept\n", 1000, 0),
+            "[00:00.00]sung\n[00:01.00]kept\n"
+        );
+        assert_eq!(
+            shift_lrc("[00:00.50]gone\n[00:01.00]kept\n", 1000, 0),
+            "[00:00.00]kept\n"
         );
     }
 
@@ -607,5 +734,10 @@ mod tests {
         assert_eq!(stated_length("[length:1:02:03]\n"), Some(3_723_000));
         assert_eq!(stated_length("[00:01.00]line\n"), None);
         assert_eq!(stated_length("[length:soon]\n"), None);
+        assert_eq!(stated_length("[LENGTH : 2:00]\n"), Some(120_000));
+        assert_eq!(stated_length("[length:-3:00]\n"), None);
+        assert_eq!(stated_length("[length:0]\n"), None);
+        assert_eq!(stated_length("[length:inf]\n"), None);
+        assert_eq!(stated_length("[length:1e400]\n"), None);
     }
 }

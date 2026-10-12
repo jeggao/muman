@@ -92,6 +92,7 @@ pub fn identify<R: Runner, W: Write>(
             retry: false,
             say_unread: false,
             checkpoint: &mut |s: &State| State::keep_measures(home, s),
+            analyses: crate::analysis::wanted(&manifest.settings.loudness),
         };
         reconcile::measure(
             runner,

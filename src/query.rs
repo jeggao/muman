@@ -10,8 +10,9 @@
 //! field that is no tag muman knows and that no song has is refused, so
 //! a misspelled one neither matches nothing nor, negated, every song.
 //! A source key, as `youtube.com:<id>`, names its song exactly, and several
-//! name each of theirs. Every other term is required, and case is
-//! ignored throughout.
+//! name each of theirs. Every other term is required, and case and
+//! accents are ignored throughout, as is how a name was composed: `cafe`
+//! matches "Café", written in either Unicode form.
 //!
 //! A term is a key when what comes before its colon is no field's name
 //! and a site or scheme some key in the song list uses, or one
@@ -28,6 +29,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexBuilder};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::manifest::{Manifest, Removed};
 use crate::reconcile;
@@ -68,6 +70,12 @@ impl View {
             "format" => self.format.iter().cloned().collect(),
             "cover" => yes_no(self.cover),
             "lyrics" => yes_no(self.lyrics),
+            // As the path template's `year`: a date's first four digits.
+            "year" => self
+                .values("date")
+                .into_iter()
+                .map(|d| d.chars().take(4).collect())
+                .collect(),
             _ => {
                 let name = tags::vorbis_key(field);
                 self.tags
@@ -100,6 +108,19 @@ impl View {
 
 /// Every song as a query reads it, in song-list order.
 pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<View>> {
+    Ok(resolved_views(manifest, state, library)?
+        .into_iter()
+        .map(|(view, _)| view)
+        .collect())
+}
+
+/// Every song as a query reads it, in song-list order, with its plan
+/// where it resolves.
+pub fn resolved_views(
+    manifest: &Manifest,
+    state: &State,
+    library: &Path,
+) -> Result<Vec<(View, Option<crate::resolve::Resolved>)>> {
     let (mut planned, _) = reconcile::plan(manifest, state, library, None, &mut std::io::sink())?;
     crate::limit::as_written(manifest, state, &mut planned);
     let mut views: Vec<View> = manifest
@@ -127,6 +148,7 @@ pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<V
             }
         })
         .collect();
+    let mut plans: Vec<Option<crate::resolve::Resolved>> = vec![None; views.len()];
     for (n, r) in planned {
         let view = &mut views[n];
         view.tags.clone_from(&r.plan.tags);
@@ -134,17 +156,41 @@ pub fn views(manifest: &Manifest, state: &State, library: &Path) -> Result<Vec<V
         view.format = Some(r.plan.format.extension().to_string());
         view.cover = r.plan.cover.is_some();
         view.lyrics = r.plan.lyrics.is_some();
+        plans[n] = Some(r);
     }
-    Ok(views)
+    Ok(views.into_iter().zip(plans).collect())
 }
 
 /// A removed song as a query reads it: its keys, and its note as its
 /// title.
 #[must_use]
-pub fn removed_view(removed: &Removed) -> View {
+/// A removed song as a query reads it: titled by its note, with the
+/// tags it was given and those its sources offer, so `album:` finds it
+/// as it found the song listed.
+pub fn removed_view(removed: &Removed, state: &State) -> View {
+    let mut tags: Vec<(String, Vec<String>)> = Vec::new();
+    let given = removed
+        .tags
+        .iter()
+        .map(|(k, v)| (tags::vorbis_key(k), v.clone()));
+    let offers = removed.sources.iter().find_map(|k| state.facts.get(k));
+    let offered = Field::ALL.iter().filter_map(|field| {
+        let offer = offers.and_then(|f| f.tags.get(field))?;
+        Some((field.vorbis().to_string(), offer.values.clone()))
+    });
+    for (key, values) in given.chain(offered) {
+        if !tags.iter().any(|(k, _)| *k == key) {
+            tags.push((key, values));
+        }
+    }
+    // The name noted names it when nothing measured does; beside a title,
+    // it would name the artist twice.
+    if !tags.iter().any(|(k, _)| k == "TITLE") {
+        tags.insert(0, ("TITLE".to_string(), vec![removed.note.clone()]));
+    }
     View {
         keys: removed.sources.clone(),
-        tags: vec![("TITLE".to_string(), vec![removed.note.clone()])],
+        tags,
         ..View::default()
     }
 }
@@ -168,6 +214,15 @@ struct Term {
 #[derive(Debug, Clone, Default)]
 pub struct Query(Vec<Term>);
 
+/// `text` without one pair of double quotes around it, so that
+/// `album:="The Glass Orchards"` reads alike whether a shell took its
+/// quotes or they reached muman.
+fn unquoted(text: &str) -> &str {
+    text.strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .unwrap_or(text)
+}
+
 impl Query {
     /// Parse the terms of a query. `extractors` are the key schemes in
     /// use, so `youtube.com:<id>` names a key where `composer:quill` names
@@ -188,7 +243,7 @@ impl Query {
                 bail!("`{raw}` is an empty term");
             }
             let test = match body.split_once(':') {
-                None => Test::Word(body.to_lowercase()),
+                None => Test::Word(fold(body)),
                 Some(("", _)) => bail!("`{raw}` names no field"),
                 Some((scheme, rest))
                     if extractors.contains(&scheme.to_ascii_lowercase()) && !is_field(scheme) =>
@@ -208,8 +263,8 @@ impl Query {
                         Test::Matches(field, re)
                     } else {
                         let (exact, text) = match rest.strip_prefix('=') {
-                            Some(text) => (true, text.to_lowercase()),
-                            None => (false, rest.to_lowercase()),
+                            Some(text) => (true, fold(unquoted(text))),
+                            None => (false, fold(unquoted(rest))),
                         };
                         let yes_no =
                             ["cover", "lyrics"].contains(&field.to_ascii_lowercase().as_str());
@@ -306,7 +361,8 @@ pub fn check_format(template: &str, views: &[View]) -> Result<()> {
         if !is_field(field) && !had {
             return Err(crate::change::Refused(format!(
                 "The format names `{{{field}}}`, which no song has: a tag such as title, \
-                 artist or album, or one of {}",
+                 artist or album, or one of {}. The path template's own variables, as \
+                 disc_track, are not fields",
                 DERIVED.join(", ")
             ))
             .into());
@@ -324,8 +380,19 @@ fn names_key(key: &SourceKey, word: &str) -> bool {
         SourceKey::Manual(key) => [key.path().file_name(), key.path().file_stem()]
             .into_iter()
             .flatten()
-            .any(|n| n.to_string_lossy().to_lowercase() == word),
+            .any(|n| fold(&n.to_string_lossy()) == word),
     }
+}
+
+/// `text` as a query compares it: lower case, in one Unicode form, its
+/// accents taken off.
+fn fold(text: &str) -> String {
+    text.nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+        .nfc()
+        .collect()
 }
 
 fn is_field(name: &str) -> bool {
@@ -334,9 +401,8 @@ fn is_field(name: &str) -> bool {
 
 impl Test {
     fn holds(&self, view: &View) -> bool {
-        let any = |field: &str, f: &dyn Fn(&str) -> bool| {
-            view.values(field).iter().any(|v| f(&v.to_lowercase()))
-        };
+        let any =
+            |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
         match self {
             Self::Word(w) => {
                 ["title", "artist", "album", "album_artist"]
@@ -347,7 +413,10 @@ impl Test {
             Self::Key(k) => view.keys.contains(k),
             Self::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
             Self::Equals(f, text) => any(f, &|v| v == text),
-            Self::Matches(f, re) => view.values(f).iter().any(|v| re.is_match(v)),
+            Self::Matches(f, re) => view
+                .values(f)
+                .iter()
+                .any(|v| re.is_match(&v.nfc().collect::<String>())),
         }
     }
 }
@@ -443,6 +512,21 @@ mod tests {
     }
 
     #[test]
+    fn accents_and_unicode_forms_are_ignored() {
+        let composed = view("Caf\u{e9} Noir", "Lumo Fenn", "manual:a.flac");
+        let decomposed = view("Cafe\u{301} Noir", "Lumo Fenn", "manual:b.flac");
+        for term in [
+            "caf\u{e9}",
+            "cafe\u{301}",
+            "cafe",
+            "title:=\"CAF\u{c9} NOIR\"",
+        ] {
+            let q = query(&[term]);
+            assert!(q.matches(&composed) && q.matches(&decomposed), "{term}");
+        }
+    }
+
+    #[test]
     fn a_bare_word_names_a_key_only_whole() {
         let video = view("One Lantern Hour", "Lumo Fenn", "youtube.com:aaaaaaaaaaa");
         let file = view("Tide", "Ada Quill", "manual:Ada Quill/02 Tide.flac");
@@ -518,6 +602,17 @@ mod tests {
         assert!(query(&["genre:=french"]).matches(&v), "any value matches");
         assert!(query(&["lyrics:none", "cover:yes", "format:opus"]).matches(&v));
         assert!(query(&["path:lanternfall"]).matches(&v));
+        assert!(
+            query(&["artist:=\"Lumo Fenn\""]).matches(&v),
+            "quotes that reach muman"
+        );
+        assert!(query(&["title:\"lantern hour\""]).matches(&v));
+        let dated = View {
+            tags: vec![("DATE".into(), vec!["2015-03-04".into()])],
+            ..v.clone()
+        };
+        assert_eq!(dated.values("year"), ["2015"]);
+        assert!(query(&["year:=2015"]).matches(&dated));
     }
 
     #[test]

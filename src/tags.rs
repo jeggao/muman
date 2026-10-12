@@ -167,6 +167,12 @@ impl Field {
         }
     }
 
+    /// Whether it is one of ReplayGain's gains and peaks.
+    #[must_use]
+    pub fn is_loudness(self) -> bool {
+        matches!(self.scope(), Scope::Loudness | Scope::AlbumLoudness)
+    }
+
     #[must_use]
     pub fn scope(self) -> Scope {
         match self {
@@ -225,6 +231,38 @@ impl Field {
 #[must_use]
 pub fn vorbis_key(name: &str) -> String {
     Field::named(name).map_or_else(|| name.to_ascii_uppercase(), |f| f.vorbis().to_string())
+}
+
+/// What is wrong with `value` as `name`'s, set by hand: a number that is
+/// none, a date that is none, or a gain muman measures and writes over.
+#[must_use]
+pub fn bad_value(name: &str, value: &str) -> Option<String> {
+    let key = vorbis_key(name);
+    let v = value.trim();
+    match key.as_str() {
+        "TRACKNUMBER" | "DISCNUMBER" | "TRACKTOTAL" | "DISCTOTAL" => {
+            let whole = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+            let fine = match v.split_once('/') {
+                Some((n, of)) => whole(n) && whole(of),
+                None => whole(v),
+            };
+            (!fine).then(|| format!("`{value}` is no number for {name}: give one as 3, or 3/12"))
+        }
+        "DATE" | "ORIGINALDATE" => {
+            let digits = |n: &str, len| n.len() == len && n.bytes().all(|b| b.is_ascii_digit());
+            let month = v
+                .split_once('-')
+                .is_some_and(|(y, m)| digits(y, 4) && digits(m, 2));
+            (!(digits(v, 4) || month || iso_date(v).is_some())).then(|| {
+                format!("`{value}` is no date for {name}: give YYYY-MM-DD, YYYY-MM or a year")
+            })
+        }
+        k if k.starts_with("REPLAYGAIN_") || k.starts_with("R128_") => Some(format!(
+            "{name} is measured by muman and written over on every sync; set [loudness] in \
+             the song list instead"
+        )),
+        _ => None,
+    }
 }
 
 /// One source's value for a field.
@@ -882,6 +920,44 @@ mod tests {
         assert_eq!(o[&Field::Track].values, ["7"]);
         assert_eq!(o[&Field::TrackTotal].values, ["12"]);
         assert!(read_file(&dir.path().join("none.flac")).is_none());
+    }
+
+    #[test]
+    fn an_m4a_reads_several_values_from_one_atom_or_from_repeated_ones() {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::file::AudioFile;
+        use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst, Mp4File};
+        use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+        const ARTIST: AtomIdent<'static> = AtomIdent::Fourcc(*b"\xa9ART");
+        let artists = ["Odile Marsh", "Bram Feld"];
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one.m4a");
+        std::fs::write(&one, crate::testing::SILENCE_M4A).unwrap();
+        let mut ilst = Ilst::new();
+        let data = artists.map(|a| AtomData::UTF8(a.into())).to_vec();
+        ilst.insert(Atom::from_collection(ARTIST, data).unwrap());
+        ilst.save_to_path(&one, WriteOptions::default()).unwrap();
+        let repeated = dir.path().join("repeated.m4a");
+        std::fs::write(&repeated, crate::testing::SILENCE_M4A).unwrap();
+        let mut generic = Tag::new(TagType::Mp4Ilst);
+        for artist in artists {
+            generic.push(TagItem::new(
+                ItemKey::TrackArtist,
+                ItemValue::Text(artist.into()),
+            ));
+        }
+        Ilst::from(generic)
+            .save_to_path(&repeated, WriteOptions::default())
+            .unwrap();
+        for (path, atoms) in [(&one, 1), (&repeated, 2)] {
+            let mut file = std::fs::File::open(path).unwrap();
+            let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+            let held = m4a.ilst().unwrap().into_iter();
+            assert_eq!(held.filter(|a| *a.ident() == ARTIST).count(), atoms);
+            let o = from_container(&read_file(path).unwrap());
+            assert_eq!(o[&Field::Artist].values, artists, "{}", path.display());
+        }
     }
 
     #[test]

@@ -5,13 +5,16 @@
 pub mod acoustid;
 pub mod acquire;
 pub mod align;
+pub mod analysis;
 pub mod atomic;
+pub mod attach;
 pub mod change;
 pub mod check;
 pub mod clean;
 pub mod cli;
 pub mod codec;
 pub mod coverart;
+pub mod cue;
 pub mod dirs;
 pub mod download;
 pub mod duplicates;
@@ -30,6 +33,7 @@ pub mod info;
 pub mod library;
 pub mod limit;
 pub mod lookup;
+pub mod loudness;
 pub mod lrclib;
 pub mod lyrics;
 pub mod manifest;
@@ -37,8 +41,10 @@ pub mod migrate;
 pub mod music;
 pub mod musicbrainz;
 pub mod naming;
+pub mod ogg;
 pub mod overview;
 pub mod parallel;
+pub mod picture;
 pub mod platform;
 pub mod plugins;
 pub mod probe;
@@ -53,10 +59,12 @@ pub mod render;
 pub mod resolve;
 pub mod runner;
 pub mod settings;
+pub mod similar;
 pub mod sites;
 pub mod source;
 pub mod state;
 pub mod store;
+pub mod tagfile;
 pub mod tags;
 pub mod template;
 #[cfg(test)]
@@ -111,6 +119,8 @@ pub struct Job {
     pub throttles: lookup::Throttles,
     /// How long steps say how far they have got.
     pub progress: progress::Mode,
+    /// Whether the run reaches no network.
+    pub offline: bool,
 }
 
 impl Job {
@@ -128,6 +138,7 @@ impl Job {
             cache: defaults.cache,
             live: false,
             progress: cli.progress,
+            offline: cli.offline,
         }
     }
 }
@@ -142,7 +153,7 @@ pub fn run() -> ExitCode {
     let live = std::io::stderr().is_terminal();
     let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
     let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
-    let mut err = progress::Console::new(anstream::stderr());
+    let mut err = progress::Console::for_kind(anstream::stderr(), kind);
     let Some(defaults) = platform::defaults() else {
         let _ = ui::error(&mut err, "the system names no home folder for this user");
         return ExitCode::from(2);
@@ -274,6 +285,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             | Command::Edit { .. }
     );
     if writes {
+        dirs.apart()?;
         crate::manifest::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
@@ -325,6 +337,10 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             list_songs(dirs, query, format.as_deref(), *keys, *removed, data)?;
             Ok(true)
         }
+        Command::Check { upstream: true, .. } if job.offline => Err(change::Refused(
+            "--upstream asks each site, and --offline reaches none".into(),
+        )
+        .into()),
         Command::Check { decode, upstream } => {
             check::check(runner, dirs, (*decode, *upstream), out, data)
         }
@@ -347,7 +363,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             }
             // As a run holds it, so no run begins between the undo and its sync.
             let _runs = Lock::runs(&dirs.home)?;
-            {
+            let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
@@ -356,27 +372,64 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     )
                     .into());
                 }
-                history::undo(dirs, again, out)?;
-            }
-            sync(Options::default(), None, out)
+                history::undo(dirs, again, out)?
+            };
+            let opts = Options {
+                before: undone.changed(),
+                ..Options::default()
+            };
+            let ok = sync(opts, None, out)?;
+            undone.finish()?;
+            Ok(ok)
         }
         Command::Add {
             inputs,
+            to,
             no_match,
             matching,
             tags,
         } => {
             create(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
+            let mut left_out = 0;
+            let mut unread = Vec::new();
+            let mut refused = None;
             let done = (|| {
                 let (files, urls): (Vec<&String>, Vec<&String>) =
                     inputs.iter().partition(|i| Path::new(i).exists());
                 if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
-                    bail!("{missing} is no file");
+                    bail!("`{missing}`: no such file");
                 }
+                if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
+                    bail!(
+                        "`{word}` is no file or URL; to name songs with it, put it inside \
+                         --to's quotes, as --to \"artist:venn {word}\""
+                    );
+                }
+                let (loose, files) = split_loose(&files)?;
                 let mut ok = true;
+                if let Some(url) = urls.first().filter(|_| job.offline) {
+                    return Err(change::Refused(format!(
+                        "{url} is fetched from the network, and --offline reaches none"
+                    ))
+                    .into());
+                }
                 let sites = Manifest::load(&dirs.home)?.settings.sites;
-                let mut proposals = import(runner, dirs, &sites, &files, out)?;
+                let mut beside = Vec::new();
+                let mut copied = Vec::new();
+                let imported = import(
+                    runner,
+                    dirs,
+                    &sites,
+                    &files,
+                    (&mut beside, &mut copied),
+                    &mut unread,
+                    out,
+                );
+                for file in &copied {
+                    run.copied(&dirs.home, file);
+                }
+                let mut proposals = imported?;
                 if !urls.is_empty() {
                     let urls: Vec<String> = urls.into_iter().cloned().collect();
                     let (fine, additions) =
@@ -393,13 +446,63 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     mode: mode(*matching),
                     verbose: job.verbose,
                     tags: tags.tags(),
+                    loose: !loose.is_empty(),
                 };
-                list(runner, dirs, proposals, &how, prompter, out)?;
+                let mut prompter = prompter;
+                let listed = list(
+                    runner,
+                    dirs,
+                    proposals,
+                    &how,
+                    change::reborrow(&mut prompter),
+                    out,
+                )?;
+                let attaching = attach::How {
+                    yes: matching.yes,
+                    to: to.clone(),
+                    verbose: job.verbose,
+                };
+                // A loose file's refusal waits for the songs added with it
+                // to be written.
+                let attached = match attach::attach(
+                    runner, dirs, &loose, &beside, &attaching, prompter, out,
+                ) {
+                    Ok(a) => a,
+                    Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
+                        refused = Some(e);
+                        attach::Attached::default()
+                    }
+                    Err(e) => return Err(e),
+                };
+                left_out = attached.left_out;
+                unread.extend(attached.unread);
+                give_tags(dirs, &attached.songs, &how, listed, out)?;
                 ok &= look_up(job, runner, http, false, &declined, out)?;
                 ok &= sync(Options::default(), Some(&mut run), out)?;
                 Ok(ok)
             })();
-            recorded(run, &dirs.home, done)
+            let ok = recorded(run, &dirs.home, done)?;
+            if let Some(e) = refused {
+                return Err(e);
+            }
+            if !unread.is_empty() {
+                bail!(
+                    "{} file(s) could not be added: {}",
+                    unread.len(),
+                    unread.join(", ")
+                );
+            }
+            if left_out > 0 {
+                let how = if matching.yes {
+                    "name their songs with --to, or run on a terminal to pick them"
+                } else {
+                    "name their songs with --to, give -y, or run on a terminal to pick them"
+                };
+                return Err(
+                    change::Refused(format!("{left_out} file(s) were not added: {how}")).into(),
+                );
+            }
+            Ok(ok)
         }
         Command::Sync {
             rematch,
@@ -410,6 +513,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             matching,
         } => {
             create(&dirs.home)?;
+            manifest::start(&dirs.home)?;
             let mut run = Run::begin(&dirs.home)?;
             let done = (|| {
                 if *update_defaults {
@@ -422,6 +526,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     mode: mode(*matching),
                     verbose: job.verbose,
                     tags: Vec::new(),
+                    loose: false,
                 };
                 list(runner, dirs, proposals, &how, prompter, out)?;
                 ok &= look_up(job, runner, http, *rematch, &BTreeSet::new(), out)?;
@@ -443,7 +548,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         } => {
             let mut run = Run::begin(&dirs.home)?;
             let done = (|| {
-                if !change::remove(dirs, query, *purge, confirm, prompter, out)? {
+                if !change::remove(dirs, query, *purge, confirm, prompter, &mut run, out)? {
                     return Ok(true);
                 }
                 sync(Options::default(), Some(&mut run), out)
@@ -551,10 +656,15 @@ fn list_songs<D: Write>(
 ) -> Result<()> {
     let manifest = Manifest::load(&dirs.home)?;
     let parsed = query::Query::parse(terms, &query::extractors(&manifest))?;
+    let state = State::load(&dirs.home)?;
     let views = if removed {
-        manifest.removed.iter().map(query::removed_view).collect()
+        manifest
+            .removed
+            .iter()
+            .map(|r| query::removed_view(r, &state))
+            .collect()
     } else {
-        query::views(&manifest, &State::load(&dirs.home)?, &dirs.library)?
+        query::views(&manifest, &state, &dirs.library)?
     };
     parsed.check_fields(&views)?;
     let template = match (format, keys, removed) {
@@ -586,6 +696,9 @@ fn look_up<R: Runner, W: Write>(
     declined: &BTreeSet<SourceKey>,
     out: &mut W,
 ) -> Result<bool> {
+    if job.offline {
+        return Ok(true);
+    }
     let (ok, ()) = network(job, runner, out, |acquire| {
         Ok((
             lookup::run(acquire, &job.dirs, http, &job.throttles, force, declined)?,
@@ -606,6 +719,9 @@ fn fetch_missing<R: Runner, W: Write>(
     retry: bool,
     out: &mut W,
 ) -> Result<bool> {
+    if job.offline {
+        return Ok(true);
+    }
     let mut state = State::load(&job.dirs.home)?;
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
@@ -664,7 +780,10 @@ fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
     manifest.edit(Edit::UpdateDefaults);
     manifest.save()?;
     if moved.is_empty() {
-        ui::info(out, "Every setting is at this muman's defaults")?;
+        ui::info(
+            out,
+            "No setting is at an older edition's default: each is at this muman's, or set by you",
+        )?;
     }
     for s in &moved {
         ui::info(out, &format!("Updated: `{s}` to {}", s.now))?;
@@ -772,10 +891,13 @@ struct Listing {
     verbose: bool,
     /// Set on every song a proposal is listed as or added to.
     tags: Tags,
+    /// Whether loose files may yet be given to songs, and so the tags.
+    loose: bool,
 }
 
 /// List each proposal as a song, or as a source of the song it is the
-/// same recording as, and set the tags given on each.
+/// same recording as, and set the tags given on each: whether any song
+/// was given them.
 fn list<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
@@ -783,7 +905,7 @@ fn list<R: Runner, W: Write>(
     how: &Listing,
     prompter: Option<&mut dyn Prompter>,
     out: &mut W,
-) -> Result<()> {
+) -> Result<bool> {
     let edits = identify::identify(
         runner,
         dirs,
@@ -793,10 +915,11 @@ fn list<R: Runner, W: Write>(
         prompter,
         out,
     )?;
-    if edits.is_empty() && !how.tags.is_empty() {
+    if edits.is_empty() && !how.tags.is_empty() && !how.loose {
         ui::warning(out, "No song was added, so no tag was set")?;
     }
     let mut manifest = Manifest::load(&dirs.home)?;
+    let mut any = false;
     for edit in edits {
         let tagged = match &edit {
             Edit::Add { sources, .. } if !how.tags.is_empty() => manifest::id_of(sources).cloned(),
@@ -804,13 +927,71 @@ fn list<R: Runner, W: Write>(
         };
         manifest.edit(edit);
         if let Some(key) = tagged {
+            any = true;
             manifest.edit(Edit::Tag {
                 key,
                 tags: how.tags.clone(),
             });
         }
     }
+    manifest.save()?;
+    Ok(any)
+}
+
+/// Set the tags given on the command line on every song a loose file was
+/// given to, after the file's own, so the command line wins.
+fn give_tags<W: Write>(
+    dirs: &Dirs,
+    songs: &[SourceKey],
+    how: &Listing,
+    listed: bool,
+    out: &mut W,
+) -> Result<()> {
+    if how.tags.is_empty() || !how.loose {
+        return Ok(());
+    }
+    if songs.is_empty() && !listed {
+        return Ok(ui::warning(
+            out,
+            "No song was given a file, so no tag was set",
+        )?);
+    }
+    let mut manifest = Manifest::load(&dirs.home)?;
+    let mut seen = BTreeSet::new();
+    for key in songs.iter().filter(|k| seen.insert(*k)) {
+        manifest.edit(Edit::Tag {
+            key: key.clone(),
+            tags: how.tags.clone(),
+        });
+    }
     manifest.save()
+}
+
+/// The files of `files` `add` gives to songs rather than lists, each with
+/// what it holds, and the rest. A loose file named as an audio file given
+/// with it, in its folder, is that file's sidecar and copied with it.
+fn split_loose<'a>(files: &[&'a String]) -> Result<(attach::Loose, Vec<&'a String>)> {
+    let mut loose = Vec::new();
+    let mut rest = Vec::new();
+    for file in files {
+        match attach::sort(Path::new(file))? {
+            Some(what) => loose.push((PathBuf::from(file), what)),
+            None => rest.push(*file),
+        }
+    }
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let audio: Vec<PathBuf> = rest
+        .iter()
+        .map(|f| PathBuf::from(f.as_str()))
+        .filter(|p| p.is_file())
+        .collect();
+    let beside: Vec<PathBuf> = audio
+        .iter()
+        .flat_map(|a| sidecars(a))
+        .map(|p| canonical(&p))
+        .collect();
+    loose.retain(|(path, _)| !beside.contains(&canonical(path)));
+    Ok((loose, rest))
 }
 
 /// Song files dropped into the manual folder that no song lists, each a
@@ -901,15 +1082,29 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
 /// Copy files and folders the user named into the sources: an original
 /// yt-dlp fetched into the store under its key, anything else into the
 /// manual folder with the lyrics and pictures named as it is. Never
-/// moves or overwrites; a name already taken is an error.
+/// moves or overwrites; a name already taken is an error. Each song file
+/// copied is noted in `beside` with where it came from, for the loose
+/// files given with it, and every file copied in `copied`, for `undo`,
+/// those copied before an error too.
 fn import<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     sites: &crate::sites::Sites,
     paths: &[&String],
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
+    unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
+    let mut audio = |file: &Path| {
+        let reads =
+            store::kind_of(file) != Some(store::Kind::Media) || reads_as_audio(runner, file);
+        if !reads {
+            unread.push(format!("{}, which reads as no audio", file.display()));
+        }
+        reads
+    };
     let mut proposals = Vec::new();
+    let mut empty = Vec::new();
     for path in paths.iter().map(Path::new) {
         let name = path
             .file_name()
@@ -919,10 +1114,10 @@ fn import<R: Runner, W: Write>(
                 .parent()
                 .and_then(Path::file_name)
                 .map_or_else(|| "unknown".into(), std::ffi::OsStr::to_os_string);
-            copy_new(path, &dirs.ytdlp().join(folder).join(name))?;
+            copy_new(path, &dirs.ytdlp().join(folder).join(name), copied)?;
             ui::info(
                 out,
-                &format!("Copied {} into the store as {key}", path.display()),
+                &format!("Copied {} into sources/yt-dlp as {key}", path.display()),
             )?;
             proposals.push(Proposal {
                 label: key.short(),
@@ -934,26 +1129,54 @@ fn import<R: Runner, W: Write>(
         let to = dirs.manual().join(name);
         if path.is_file() && store::kind_of(path).is_none() {
             bail!(
-                "{} is no song, lyrics or picture muman reads",
+                "{} is no song, lyrics, picture or tags muman reads",
+                path.display()
+            );
+        }
+        if path.is_file() && name.to_string_lossy().starts_with('.') {
+            bail!(
+                "{} is hidden, its name starting with a dot, and muman reads no hidden file; \
+                 rename it without the dot",
                 path.display()
             );
         }
         if path.is_dir() {
-            copy_tree(path, &to)?;
+            copy_tree(path, &to, &mut audio, copied)?;
+        } else if !audio(path) {
+            continue;
         } else {
-            copy_new(path, &to)?;
+            copy_new(path, &to, copied)?;
             for sidecar in sidecars(path) {
                 if let Some(n) = sidecar.file_name() {
-                    copy_new(&sidecar, &dirs.manual().join(n))?;
+                    copy_new(&sidecar, &dirs.manual().join(n), copied)?;
                 }
             }
+        }
+        let store = Store::scan(dirs)?;
+        let found = media_at(&store, dirs, &to)?;
+        if found.is_empty() && path.is_dir() {
+            empty.push(format!(
+                "{}, which holds no song muman reads",
+                path.display()
+            ));
+            continue;
         }
         ui::info(
             out,
             &format!("Copied {} into {}", path.display(), dirs.manual().display()),
         )?;
-        let store = Store::scan(dirs)?;
-        for key in media_at(&store, dirs, &to)? {
+        for key in found {
+            if let SourceKey::Manual(m) = &key
+                && let Some(folder) = path.parent()
+            {
+                let rel = m.path().strip_prefix(name).unwrap_or(m.path());
+                let origin = if path.is_dir() {
+                    path.join(rel)
+                } else {
+                    folder.join(m.path())
+                };
+                beside.push((origin, key.clone()));
+            }
             proposals.push(Proposal {
                 label: key.short(),
                 sources: vec![key],
@@ -961,6 +1184,7 @@ fn import<R: Runner, W: Write>(
             });
         }
     }
+    unread.extend(empty);
     Ok(proposals)
 }
 
@@ -975,8 +1199,23 @@ fn names_a_path(input: &str) -> bool {
                 .as_bytes()
                 .get(2)
                 .is_some_and(|b| *b == b'/' || *b == b'\\');
-    let a_file = !input.contains("://") && store::kind_of(Path::new(input)).is_some();
+    let loose = Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| attach::LOOSE.contains(&e.to_ascii_lowercase().as_str()));
+    let a_file = !input.contains("://") && (store::kind_of(Path::new(input)).is_some() || loose);
     !input.contains("://") && from_folder || a_file
+}
+
+/// Whether `input`, which names nothing on disk, is a plain word: no
+/// address, path or video ID yt-dlp could read, as a query's word given
+/// apart from `--to` is.
+fn is_a_word(input: &str) -> bool {
+    let video_id = input.len() == 11
+        && input
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    !video_id && !input.contains(['.', '/', ':', '\\'])
 }
 
 /// The song files at or under `path` in the manual folder.
@@ -1027,7 +1266,7 @@ fn sidecars(path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn copy_new(from: &Path, to: &Path) -> Result<()> {
+fn copy_new(from: &Path, to: &Path, copied: &mut Vec<PathBuf>) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
@@ -1036,18 +1275,37 @@ fn copy_new(from: &Path, to: &Path) -> Result<()> {
     }
     std::fs::copy(from, to)
         .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+    copied.push(to.to_path_buf());
     Ok(())
 }
 
-fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+/// Copy the files below `from` that `keep` lets through to `to`.
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    keep: &mut impl FnMut(&Path) -> bool,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
-    for file in crate::store::files_below(from, usize::MAX, |_| true)? {
-        let rel = file.strip_prefix(from).unwrap_or(&file);
-        copy_new(&file, &to.join(rel))?;
+    for file in crate::store::walk(from, usize::MAX)? {
+        if keep(&file) {
+            let rel = file.strip_prefix(from).unwrap_or(&file);
+            copy_new(&file, &to.join(rel), copied)?;
+        }
     }
     Ok(())
+}
+
+/// Whether ffprobe reads an audio stream in `file`, so a file that holds
+/// none, as an empty or cut-off download, is never listed as a song.
+fn reads_as_audio<R: Runner>(runner: &R, file: &Path) -> bool {
+    runner
+        .output(&probe::ffprobe_command(file))
+        .ok()
+        .and_then(|o| probe::parse(&o).ok())
+        .is_some_and(|p| p.audio.is_some())
 }
 
 #[cfg(test)]

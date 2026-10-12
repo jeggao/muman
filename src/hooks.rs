@@ -1,7 +1,8 @@
 //! Commands the song list's `[[hook]]`s run as the library changes:
 //! one after each song file is written, before muman records its
 //! size and time, so a hook may tag it further; one after a run that
-//! wrote or removed anything. Each is an argument list, run without a
+//! wrote, moved or removed any file, an undo's files put back counting
+//! as written. Each is an argument list, run without a
 //! shell; its output is relayed and a failure is warned of, never fatal.
 //!
 //! The values a hook is given come both as `{name}` placeholders in its
@@ -22,8 +23,8 @@ use crate::runner::{Line, Runner};
 pub enum Event {
     /// A song's audio file was written: `{path}` is it.
     Written,
-    /// A run wrote or removed anything: `{written}` and `{removed}` are
-    /// how many files.
+    /// A run wrote, moved or removed any file: `{written}`, `{moved}`
+    /// and `{removed}` are how many.
     Changed,
 }
 
@@ -112,7 +113,7 @@ pub fn run<R: Runner, W: Write>(
             lines.push(l.to_string());
         });
         for line in lines {
-            crate::ui::trace(out, &format!("hook: {line}"))?;
+            crate::ui::relayed(out, &format!("hook: {line}"))?;
         }
         match ran {
             Ok(true) => {}

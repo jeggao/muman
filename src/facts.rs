@@ -8,7 +8,12 @@
 //!
 //! A media file costs at most three runs: ffprobe, one ffmpeg dumping
 //! its attachments, and one ffmpeg writing every measured excerpt as a
-//! separate output.
+//! separate output. That run decodes the whole audio once for its
+//! fingerprint, and the same decode goes, as WAV on its stdout, to the
+//! analyses [`crate::analysis`] runs over the whole of it. An analysis a
+//! source's facts lack, or hold by another method, is caught up by one
+//! run of its own, [`analyze`], measuring nothing else again; the Opus
+//! header's gain, which ffprobe does not show, is read beside it.
 //!
 //! Each audio stream, picture and lyrics a source offers is also known
 //! by a digest of its content, which plans name it by, so a source
@@ -28,6 +33,13 @@
 //! fetch, or by a file's own tags, before any cleaning. Facts hashed by
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
+//!
+//! Each picture is also known by how it looks, [`crate::picture`]'s
+//! hashes of the graymap its quality is measured from, so a picture
+//! given to `add` finds the songs whose covers it is. Facts taken before,
+//! or by another `picture::METHOD`, have their pictures looked at again
+//! by [`look`], which decodes the pictures alone, and only when a picture
+//! is added.
 
 use std::path::{Path, PathBuf};
 
@@ -35,10 +47,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::ffmpeg::{self, Input, Output};
+use crate::analysis::{self, Analysis, Pass};
+use crate::ffmpeg::{self, Input, Output, Piped};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
 use crate::lyrics::{self, Language, Timing};
+use crate::picture::{self, Look};
 use crate::probe::{self, Probed};
 use crate::quality::{self, AudioQuality, ImageQuality};
 use crate::runner::Runner;
@@ -93,6 +107,10 @@ pub struct Facts {
     /// facts made before muman hashed sources.
     #[serde(default)]
     pub hash_method: String,
+    /// The `picture::METHOD` its pictures' looks were taken by, or tried;
+    /// empty for facts made before muman took them.
+    #[serde(default)]
+    pub picture_method: String,
 }
 
 /// What a source's digests are of; facts hashed otherwise are hashed
@@ -176,6 +194,31 @@ impl Facts {
         self.hash_method == HASH_METHOD
     }
 
+    /// The analyses of `wanted` the audio lacks; none for no audio.
+    #[must_use]
+    pub fn unanalyzed(&self, wanted: &[analysis::Kind]) -> Vec<analysis::Kind> {
+        self.audio
+            .as_ref()
+            .map(|a| a.analysis.stale(wanted))
+            .unwrap_or_default()
+    }
+
+    /// Whether its pictures' looks were taken the way they are now.
+    #[must_use]
+    pub fn pictured(&self) -> bool {
+        self.covers.is_empty() || self.picture_method == picture::METHOD
+    }
+
+    /// Take the looks [`look`] found, by where each picture sits.
+    pub fn take_looks(&mut self, looks: &[(CoverAt, Option<Look>)]) {
+        for c in &mut self.covers {
+            if let Some((_, look)) = looks.iter().find(|(at, _)| *at == c.at) {
+                c.look = *look;
+            }
+        }
+        self.picture_method = picture::METHOD.to_string();
+    }
+
     /// Whether the tags were read the way they are now.
     #[must_use]
     pub fn tags_hold(&self) -> bool {
@@ -201,6 +244,7 @@ impl Facts {
             served: None,
             tags_digest: None,
             hash_method: HASH_METHOD.to_string(),
+            picture_method: picture::METHOD.to_string(),
         }
     }
 }
@@ -229,6 +273,13 @@ pub struct AudioFacts {
     pub bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// What the whole of the audio holds.
+    #[serde(default, skip_serializing_if = "is_unanalyzed")]
+    pub analysis: Analysis,
+}
+
+fn is_unanalyzed(a: &Analysis) -> bool {
+    *a == Analysis::default()
 }
 
 impl AudioFacts {
@@ -283,6 +334,9 @@ pub struct CoverFacts {
     pub quality: Option<ImageQuality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// How it looks, to tell it from other pictures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<Look>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,8 +428,14 @@ fn hash_output(input: usize, index: u32) -> Vec<std::ffi::OsString> {
         .collect()
 }
 
-/// Measure one located source, writing intermediates to `scratch`.
-pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<Facts> {
+/// Measure one located source, writing intermediates to `scratch`, and
+/// analyze its audio for each of `wanted`.
+pub fn gather<R: Runner>(
+    runner: &R,
+    located: &Located,
+    scratch: &Path,
+    wanted: &[analysis::Kind],
+) -> Result<Facts> {
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let mut facts = Facts::unreadable(located.rev());
     match located.kind {
@@ -387,25 +447,20 @@ pub fn gather<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Resul
             });
         }
         Kind::Image => {
-            let out = scratch.join("file.pgm");
-            let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
-            let ok = ffmpeg::run_outputs(runner, &[located.path.as_path()], &outputs);
+            let (quality, look) = image_file(runner, located, scratch);
             facts.covers.push(CoverFacts {
                 at: CoverAt::File,
                 mimetype: mimetype_of(&located.path),
-                quality: ok
-                    .into_iter()
-                    .next()
-                    .and_then(Result::ok)
-                    .and_then(|()| measure_image(&out)),
+                quality,
                 digest: digest_file(&located.path),
+                look,
             });
         }
         Kind::Tags => {
             facts.tags = tags::from_record(&crate::musicbrainz::read(&located.path)?);
             facts.tags_digest = digest_file(&located.path);
         }
-        Kind::Media => media(runner, located, scratch, &mut facts)?,
+        Kind::Media => media(runner, located, scratch, wanted, &mut facts)?,
     }
     Ok(facts)
 }
@@ -495,10 +550,129 @@ fn mimetype_of(path: &Path) -> String {
     .to_string()
 }
 
-fn measure_image(pgm: &Path) -> Option<ImageQuality> {
-    let bytes = std::fs::read(pgm).ok()?;
-    let (w, h, pixels) = ffmpeg::read_pgm(&bytes)?;
-    quality::image(pixels, w, h)
+fn measure_image(pgm: &Path) -> (Option<ImageQuality>, Option<Look>) {
+    let Some(bytes) = std::fs::read(pgm).ok() else {
+        return (None, None);
+    };
+    let Some((w, h, pixels)) = ffmpeg::read_pgm(&bytes) else {
+        return (None, None);
+    };
+    let quality = quality::image(pixels, w, h);
+    let look = quality.and_then(|q| picture::look(pixels, w, h, q.content));
+    (quality, look)
+}
+
+/// The measures of the picture `located` is.
+fn image_file<R: Runner>(
+    runner: &R,
+    located: &Located,
+    scratch: &Path,
+) -> (Option<ImageQuality>, Option<Look>) {
+    let out = scratch.join("file.pgm");
+    let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
+    let ok = ffmpeg::run_outputs(runner, &[located.path.as_path()], &outputs);
+    match ok.into_iter().next() {
+        Some(Ok(())) => measure_image(&out),
+        _ => (None, None),
+    }
+}
+
+/// The outputs writing each picture `probed` holds, and those dumped
+/// from its attachments into `scratch`, as graymaps, each input it
+/// needs added to `inputs`.
+fn cover_outputs(
+    probed: &Probed,
+    scratch: &Path,
+    inputs: &mut Vec<Input>,
+) -> Vec<(Output, CoverAt, String)> {
+    let mut outputs = Vec::new();
+    for p in &probed.pictures {
+        outputs.push((
+            Output::new(
+                quality::gray_output(0, &p.index.to_string()),
+                &scratch.join(format!("pic{}.pgm", p.index)),
+            ),
+            CoverAt::Picture { index: p.index },
+            p.mimetype.clone(),
+        ));
+    }
+    for a in probed.image_attachments() {
+        let dumped = scratch.join(format!("att{}", a.ordinal));
+        if !dumped.exists() {
+            continue;
+        }
+        inputs.push(Input::from(dumped.as_path()));
+        outputs.push((
+            Output::new(
+                quality::gray_output(inputs.len() - 1, "v:0"),
+                &scratch.join(format!("att{}.pgm", a.ordinal)),
+            ),
+            CoverAt::Attachment { ordinal: a.ordinal },
+            a.mimetype.clone(),
+        ));
+    }
+    outputs
+}
+
+/// The run writing the `n`th picture beside a manual file as a graymap;
+/// each has one of its own, since an ffmpeg that cannot open one input
+/// fails every output.
+fn sidecar_cover<R: Runner>(
+    runner: &R,
+    cover: &Path,
+    n: usize,
+    scratch: &Path,
+) -> (Output, Result<()>) {
+    let output = Output::new(
+        quality::gray_output(0, "v:0"),
+        &scratch.join(format!("side{n}.pgm")),
+    );
+    let result = ffmpeg::run_outputs(runner, &[cover], std::slice::from_ref(&output))
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Err(anyhow::anyhow!("no run")));
+    (output, result)
+}
+
+/// How each picture of `located` looks, measuring nothing else: one
+/// ffmpeg run for a picture, and for a media file its probe, a dump of
+/// its attachments and one run for its pictures, besides one for each
+/// beside it.
+pub fn look<R: Runner>(
+    runner: &R,
+    located: &Located,
+    scratch: &Path,
+) -> Result<Vec<(CoverAt, Option<Look>)>> {
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    match located.kind {
+        Kind::Image => Ok(vec![(
+            CoverAt::File,
+            image_file(runner, located, scratch).1,
+        )]),
+        Kind::Media => {
+            let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
+            dump_attachments(runner, located, &probed, scratch, true);
+            let mut inputs = vec![Input::from(located.path.as_path())];
+            let covers = cover_outputs(&probed, scratch, &mut inputs);
+            let mut looks = Vec::new();
+            if !covers.is_empty() {
+                let plain: Vec<Output> = covers.iter().map(|(o, _, _)| o.clone()).collect();
+                let results = ffmpeg::run(runner, &inputs, &plain);
+                for ((output, at, _), result) in covers.into_iter().zip(results) {
+                    looks.push((at, result.ok().and_then(|()| measure_image(&output.path).1)));
+                }
+            }
+            for (n, cover) in located.covers.iter().enumerate() {
+                let (output, result) = sidecar_cover(runner, cover, n, scratch);
+                looks.push((
+                    CoverAt::Sidecar(n),
+                    result.ok().and_then(|()| measure_image(&output.path).1),
+                ));
+            }
+            Ok(looks)
+        }
+        Kind::Lyrics | Kind::Tags => Ok(Vec::new()),
+    }
 }
 
 /// Where each measured segment of a recording `duration` long starts.
@@ -517,6 +691,7 @@ fn segment_starts(duration: Option<f64>) -> Vec<f64> {
 
 /// What one ffmpeg output measures, to read back once it ran.
 enum Measured {
+    OpusHead,
     Print,
     Packets,
     Segment(PathBuf),
@@ -635,6 +810,7 @@ fn media<R: Runner>(
     runner: &R,
     located: &Located,
     scratch: &Path,
+    wanted: &[analysis::Kind],
     facts: &mut Facts,
 ) -> Result<()> {
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
@@ -660,6 +836,12 @@ fn media<R: Runner>(
             Output::new(packets_output(0, a.index), &scratch.join("packets.crc")),
             Measured::Packets,
         ));
+        if !wanted.is_empty() && a.codec == "opus" {
+            outputs.push((
+                Output::new(opus_head_output(0, a.index), &scratch.join("head.opus")),
+                Measured::OpusHead,
+            ));
+        }
         for (n, start) in segment_starts(probed.duration).into_iter().enumerate() {
             let path = scratch.join(format!("segment{n}"));
             inputs.push(Input::new(quality::segment_input(start), &located.path));
@@ -680,47 +862,26 @@ fn media<R: Runner>(
             ));
         }
     }
-    for p in &probed.pictures {
-        outputs.push((
-            Output::new(
-                quality::gray_output(0, &p.index.to_string()),
-                &scratch.join(format!("pic{}.pgm", p.index)),
-            ),
-            Measured::Cover(CoverAt::Picture { index: p.index }, p.mimetype.clone()),
-        ));
-    }
-    for a in probed.image_attachments() {
-        let dumped = scratch.join(format!("att{}", a.ordinal));
-        if !dumped.exists() {
-            continue;
-        }
-        inputs.push(Input::from(dumped.as_path()));
-        outputs.push((
-            Output::new(
-                quality::gray_output(inputs.len() - 1, "v:0"),
-                &scratch.join(format!("att{}.pgm", a.ordinal)),
-            ),
-            Measured::Cover(
-                CoverAt::Attachment { ordinal: a.ordinal },
-                a.mimetype.clone(),
-            ),
-        ));
+    for (output, at, mimetype) in cover_outputs(&probed, scratch, &mut inputs) {
+        outputs.push((output, Measured::Cover(at, mimetype)));
     }
 
     let mut plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
-    let mut results = ffmpeg::run(runner, &inputs, &plain);
-    // Each picture beside the file in a run of its own: one ffmpeg cannot
-    // open, as an empty file, fails every run it is an input of.
+    let mut pass = Pass::new(if probed.audio.is_some() {
+        wanted.to_vec()
+    } else {
+        Vec::new()
+    });
+    let mut results = match probed.audio.as_ref().filter(|_| pass.wants()) {
+        Some(a) => {
+            let piped = Output::new(analysis_output(0, a.index, None), Path::new(ffmpeg::PIPE));
+            ffmpeg::run_piped(runner, &inputs, &plain, &piped, &mut |p| pass.piped(&p)).0
+        }
+        None => ffmpeg::run(runner, &inputs, &plain),
+    };
     for (n, cover) in located.covers.iter().enumerate() {
-        let output = Output::new(
-            quality::gray_output(0, "v:0"),
-            &scratch.join(format!("side{n}.pgm")),
-        );
-        results.extend(ffmpeg::run_outputs(
-            runner,
-            &[cover.as_path()],
-            std::slice::from_ref(&output),
-        ));
+        let (output, result) = sidecar_cover(runner, cover, n, scratch);
+        results.push(result);
         plain.push(output.clone());
         outputs.push((
             output,
@@ -736,6 +897,7 @@ fn media<R: Runner>(
     let mut bytes = None;
     let mut packets_end = None;
     let mut digests = Digests::default();
+    let mut opus_gain = 0;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
             continue;
@@ -761,15 +923,21 @@ fn media<R: Runner>(
                     });
                 }
             }
-            Measured::Cover(at, mimetype) => facts.covers.push(CoverFacts {
-                at,
-                mimetype,
-                quality: measure_image(&output.path),
-                digest: None,
-            }),
+            Measured::Cover(at, mimetype) => {
+                let (quality, look) = measure_image(&output.path);
+                facts.covers.push(CoverFacts {
+                    at,
+                    mimetype,
+                    quality,
+                    digest: None,
+                    look,
+                });
+            }
             Measured::Hash(part) => note_hash(&mut digests, part, &output.path),
+            Measured::OpusHead => opus_gain = read_opus_gain(&output.path),
         }
     }
+    let analysis = with_opus_gain(pass.finish(), opus_gain);
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
     // Lyrics beside a song that do not read cost the song only them.
@@ -798,6 +966,7 @@ fn media<R: Runner>(
         float: a.float,
         bytes,
         digest: None,
+        analysis,
     });
     facts.take(&digests, served);
     Ok(())
@@ -921,6 +1090,102 @@ fn measure_segments<R: Runner>(
         .filter(|(result, _)| result.is_ok())
         .map(|(_, path)| quality::read_segment(&path, channels))
         .collect()
+}
+
+impl Pass {
+    fn piped(&mut self, piped: &Piped<'_>) {
+        match piped {
+            Piped::Bytes(b) => self.take(b),
+            Piped::Again => self.again(),
+        }
+    }
+}
+
+/// The ffmpeg output options that decode the audio stream `input:index`
+/// whole for [`crate::analysis`]: 32-bit float WAV at its own rate and
+/// channels, or mixed through `filter` as a song is mixed.
+fn analysis_output(input: usize, index: u32, filter: Option<String>) -> Vec<std::ffi::OsString> {
+    let mut args = vec!["-map".to_string(), format!("{input}:{index}")];
+    if let Some(f) = filter {
+        args.extend(["-af".to_string(), f]);
+    }
+    args.extend(["-c:a", "pcm_f32le", "-f", "wav"].map(String::from));
+    args.into_iter().map(Into::into).collect()
+}
+
+/// The ffmpeg output options that copy the first packet of the Opus stream
+/// `input:index` into Ogg, for the gain its header holds.
+fn opus_head_output(input: usize, index: u32) -> Vec<std::ffi::OsString> {
+    let map = format!("{input}:{index}");
+    ["-map", &map, "-c:a", "copy", "-frames:a", "1", "-f", "opus"]
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+fn read_opus_gain(path: &Path) -> i16 {
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| crate::ogg::output_gain(&b))
+        .unwrap_or(0)
+}
+
+fn with_opus_gain(mut analysis: Analysis, gain: i16) -> Analysis {
+    if let Some(m) = analysis.loudness.as_mut().and_then(|m| m.value.as_mut()) {
+        m.opus_gain = gain;
+    }
+    analysis
+}
+
+/// The analyses of `wanted` of `audio`, a stream of `located`, by one run
+/// of their own: for facts measured before they were asked for.
+pub fn analyze<R: Runner>(
+    runner: &R,
+    located: &Located,
+    audio: &AudioFacts,
+    wanted: &[analysis::Kind],
+    scratch: &Path,
+) -> Result<Analysis> {
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let head = scratch.join("head.opus");
+    let outputs = if audio.codec == "opus" {
+        vec![Output::new(opus_head_output(0, audio.index), &head)]
+    } else {
+        Vec::new()
+    };
+    let piped = Output::new(
+        analysis_output(0, audio.index, None),
+        Path::new(ffmpeg::PIPE),
+    );
+    let mut pass = Pass::new(wanted.to_vec());
+    let inputs = [Input::from(located.path.as_path())];
+    let (results, _) =
+        ffmpeg::run_piped(runner, &inputs, &outputs, &piped, &mut |p| pass.piped(&p));
+    let gain = if results.first().is_some_and(Result::is_ok) {
+        read_opus_gain(&head)
+    } else {
+        0
+    };
+    Ok(with_opus_gain(pass.finish(), gain))
+}
+
+/// The analyses of `wanted` of `audio` mixed through `filter`, as a song
+/// mixed into another layout is written.
+pub fn analyze_mix<R: Runner>(
+    runner: &R,
+    located: &Located,
+    audio: &AudioFacts,
+    filter: String,
+    wanted: &[analysis::Kind],
+) -> Analysis {
+    let piped = Output::new(
+        analysis_output(0, audio.index, Some(filter)),
+        Path::new(ffmpeg::PIPE),
+    );
+    let mut pass = Pass::new(wanted.to_vec());
+    let inputs = [Input::from(located.path.as_path())];
+    let _ = ffmpeg::run_piped(runner, &inputs, &[], &piped, &mut |p| pass.piped(&p));
+    pass.finish()
 }
 
 /// The ffmpeg output options that list every packet of the audio stream

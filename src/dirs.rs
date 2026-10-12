@@ -1,5 +1,6 @@
-//! The folders a run works in: the state root, with the song list, the
-//! state file and the sources, and the library it writes.
+//! The folders a run works in: the home, with the song list, the state
+//! file and the sources, and the library it writes. Neither may hold the
+//! other, but for a library beside the sources in the home.
 
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,36 @@ pub struct Dirs {
 }
 
 impl Dirs {
+    /// Refuse folders that hold each other where muman would read its
+    /// own songs back as new ones, or skip every file of the user's as
+    /// one of the library's.
+    pub fn apart(&self) -> anyhow::Result<()> {
+        use crate::platform::{same_path, within};
+        if same_path(&self.library, &self.home) {
+            anyhow::bail!(
+                "the library and the home are one folder, {}, where muman would read the \
+                 songs it writes back as new ones; choose a library outside the home",
+                self.home.display()
+            );
+        }
+        if within(&self.library, &self.home.join("sources")) {
+            anyhow::bail!(
+                "the library {} is in the home's sources, where muman would read the songs it \
+                 writes back as new ones; choose a folder outside them",
+                self.library.display()
+            );
+        }
+        if within(&self.home, &self.library) {
+            anyhow::bail!(
+                "the home {} is in the library {}, where muman would take your files for the \
+                 library's and read none of them; choose a home outside the library",
+                self.home.display(),
+                self.library.display()
+            );
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn manifest(&self) -> PathBuf {
         self.home.join(MANIFEST)

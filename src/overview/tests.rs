@@ -58,7 +58,7 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
     let mut out = Vec::new();
     assert!(reconcile(&fake(), &dirs, Options::default(), None, &mut out).unwrap());
     let text = info_text(&dirs, false);
-    assert_eq!(value(&text, "Songs"), "2 (0 on 0 albums, 2 singles)");
+    assert_eq!(value(&text, "Songs"), "2 (0 on 0 album(s), 2 single(s))");
     assert_eq!(value(&text, "Up to date"), "2");
     assert_eq!(value(&text, "To write"), "0");
     assert_eq!(value(&text, "Formats"), "2 Opus (0 encoded)");
@@ -68,6 +68,23 @@ fn a_synced_library_counts_its_songs_and_is_up_to_date() {
         !text.contains("Title aaaaaaaaaaa"),
         "names only when verbose"
     );
+}
+
+#[test]
+fn an_emptied_file_is_to_write_as_status_says() {
+    let (_dir, dirs) = home();
+    songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let mut out = Vec::new();
+    assert!(reconcile(&fake(), &dirs, Options::default(), None, &mut out).unwrap());
+    let file = crate::store::walk(&dirs.library, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.extension().is_some_and(|e| e == "opus"))
+        .unwrap();
+    std::fs::write(file, "").unwrap();
+    let text = info_text(&dirs, false);
+    assert_eq!(value(&text, "Up to date"), "1", "{text}");
+    assert_eq!(value(&text, "To write"), "1", "{text}");
 }
 
 #[test]

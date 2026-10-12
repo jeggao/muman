@@ -66,8 +66,10 @@ left, and stays one line. A step inside another, as a fetch of what a
 lookup found, takes the line until it ends. Elsewhere, as in a
 log, `auto` and `plain` write a line every tenth of the way or ten
 seconds; `json` writes one JSON object a line, `start`, `progress` and
-`finish` events, for a program to read; `none` writes nothing. What a
-command reports, as `status` does, stays on stdout.
+`finish` events, and each message, as `Added: …`, as a `message` event
+with its `text`, so that a program reads every line; `none` writes
+nothing. What a command does goes to stderr with its progress; what
+`status`, `list`, `info`, `check` and `duplicates` report goes to stdout.
 
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone. A file whose size or time changed
@@ -77,9 +79,12 @@ with it, but a change to the song itself leaves it where it is, and
 `sync --force` writes the song again and deletes it, `undo` putting it
 back. A file whose time changed but whose bytes are still the ones
 written, as a backup put back or a copy made without its times, is
-muman's still. Each file is written under a temporary name and
-renamed into place, so a player never sees half a track. Library paths
-in messages use `/` on every system.
+muman's still; one whose size and time are as written but whose bytes
+are not, as a tagger set to keep files' times leaves it, is changed
+too, found as the file is about to be written over or removed. Each
+file is written under a temporary name and renamed into place, so a
+player never sees half a track. Library paths in messages use `/` on
+every system.
 
 ## The song list
 
@@ -202,13 +207,16 @@ One that fails waits an hour before the next try, doubling each time;
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you
 drop it there yourself and the next `sync` lists it. A file that
 yt-dlp fetched elsewhere goes into `sources/yt-dlp` under its key
-instead. A dropped file waits until it is ten seconds old, so one still
-being copied is not read half written, and a listed file moved within
+instead. A dropped file waits until ten seconds after it arrived,
+whatever modification time a copy kept for it, so one still being
+copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
 `.lrc` and the JPEG, PNG or WebP pictures named as it is, as
 `Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
 `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
-listed as a source of its own. A `.lrc` reads in UTF-8 or UTF-16, or in
+listed as a source of its own, and one given to `add` alone goes to the
+songs it belongs to ([lyrics, pictures and tags of their
+own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
 an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
 tells by its bytes. A folder linked into the manual folder is read as
 the folder it links to, except a link back to a folder it is inside,
@@ -243,7 +251,11 @@ home made from the song list alone, is built from what its sources hold
 now, and the warning stays until accepted. A file of your own in
 `sources/manual`, or a picture or `.lrc` beside it, is yours to change:
 its song follows it, said in a line, and its record is written anew.
-`check --upstream` asks each site whether a fetch again would bring
+A source whose audio changed and is now cut off, holding less than its
+header says, as a copy or a download stopped short leaves it, is not
+followed: its song keeps the file it was built from and fails, exit 4,
+until you put the whole file back or `sync --force` writes the song
+from what it holds. `check --upstream` asks each site whether a fetch again would bring
 other audio or tags before any is lost
 ([status, info and check](#status-info-and-check)).
 
@@ -256,6 +268,8 @@ notes that any two songs share:
 | Agreement | Covering the longer recording | Verdict |
 |---|---|---|
 | 30% or more, over at least 6 s | 80% or more | The same recording: joins that song |
+| 50% or more, over 1 to 6 s | 80% or more | The same recording: a track too short for 6 s, as an interlude |
+| 30% to 50%, over 1 to 6 s | 80% or more | Unsure of a short track: asked |
 | 30% or more, over at least 6 s | Less | An excerpt, or a video with a skit: asked |
 | 10% to 30% | 80% or more | Another master or mix: asked |
 | Less | Any | A different song |
@@ -263,6 +277,79 @@ notes that any two songs share:
 Asked means on a terminal; without one, the source becomes a song of its
 own, with a warning. `-y` joins every unsure match, `--new` compares
 nothing, and `--verbose` shows how close the nearest songs came.
+
+### Lyrics, pictures and tags of their own
+
+`muman add` also takes a file that is no song and gives it to the songs
+it belongs to:
+
+| File | Is |
+|---|---|
+| `.lrc`, a `.txt` of plain lyrics, `.srt`, `.vtt` | Lyrics, copied in as `.lrc`, listed among the song's sources |
+| JPEG, PNG or WebP | A cover, listed by every song whose cover looks like it |
+| `NAME=value` lines (`.txt`, `.tags`, `.vc`), `;FFMETADATA1` (`.ffmeta`), `.json` from beets or MusicBrainz | Tags, set on the song by hand and not kept |
+| `.cue` | Tags of the album and each track, each track's set on its song |
+
+A lyrics file or picture is ranked like any other source, so a song may
+keep lyrics that are timed where the new ones are not; pin it with
+`muman set` to choose it. Gains, peaks, embedded pictures and lyrics,
+and encoder names in a tag file describe another file and are skipped.
+A beets field sets the Vorbis comment Picard writes it as, `label` as
+`LABEL`; one Picard has no name for is skipped, and what beets records
+of its own file, as its path and bitrate, is no tag. `--verbose` names
+each tag skipped.
+
+Each file is matched by the strongest of what it shows: an ID it shares
+with the song (a video ID in its name, an ISRC, a MusicBrainz recording
+ID); its name, as the song's file is named; its fields, from an `.lrc`'s
+`[ti:]`, `[ar:]`, `[al:]` and `[length:]`, a tag file, or its own name
+read as `03 - Artist - Title`, `Artist - Title` or `Title`; and what it
+holds, lyrics against the words the song's lyrics sing, a picture
+against the song's covers by how they look, unchanged by scale,
+recompression or a frame of bars. Names are compared in their own
+script: accents, case, width and Traditional or Simplified forms count
+for little, but kanji and romaji, or Hangul and Latin, cannot be told
+apart by their letters and decide nothing.
+
+| Evidence | Verdict |
+|---|---|
+| An ID, its file's name, words or a cover alike | The song's: given to it |
+| Title, artist, album, track and length all but equal, and nearer than any other song | The song's |
+| A title alone, two songs as near, another version (live, instrumental, remix…), or a near match | Asked |
+| Lyrics ending after the song does, or stating another length | Not the song's |
+
+Asked means on a terminal: you pick among the likeliest songs, each
+shown with why, as `Lantern Weather — Marlo Venn · The Glass Orchards ·
+3:20   close name, length agrees`, where `same name`, `close name` or `other name` says how the
+names compare and the rest what else agrees or not. You may also search
+the song list with a query as `muman list` reads one, or leave the file
+out, which copies nothing. `-y` takes the likeliest when it is clearly
+the nearest. Without a terminal, a file not surely a song's is left
+out, and `add` exits with 5 once the rest is done; a file that does not
+read, as an empty `.lrc`, a picture that does not decode, a song file
+in which ffprobe finds no audio or a cue sheet splitting one song's
+file into tracks, is not added and `add` exits
+with 4, the songs given with it written all the same. `--to` names the song
+with a query instead, quoted as one word when it has several, and
+matches nothing; for a picture it names every
+song to give it to, for a cue sheet the songs its tracks go among:
+
+```bash
+muman add "Lantern Weather.lrc"
+muman add front.jpg --to 'album:="The Glass Orchards"'
+muman add words.txt --to "artist:venn lantern"
+muman add album.cue rips/*.flac --new
+```
+
+A picture alike to the covers of more than three songs of more than one
+album is asked about rather than given to all, and a cover given with
+songs from its folder goes to those songs. Several songs may list one
+picture of your own; a song list where they do is format version 3,
+which an older muman refuses. Each song still lists a file of its own:
+one whose every source another song lists too is refused. Lyrics are
+one song's: the same lyrics given to a second song are copied for it.
+A picture or `.lrc` moved within `sources/manual` is followed, as a
+song file is.
 
 ## How the best of each is picked
 
@@ -285,19 +372,27 @@ measures after it can make up for it. See
 
 | Aspect | Criteria, by default in order |
 |---|---|
-| Audio | Least sound beyond the song; widest real bandwidth; real stereo; least clipping |
+| Audio | Least sound beyond the song or missing from it; widest real bandwidth; real stereo; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Timed; in a preferred language; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |
 
 **Audio.** Sound beyond the song is how long a source plays outside the
 stretch it shares with another source of the song: a music video's
-intro counts, silence does not. Bandwidth is where a lowpass cuts the
-sound off, so a FLAC transcoded from a lossy file measures as narrow as
-that file, while a recording whose treble fades on its own measures
-full. Real stereo tells stereo from mono copied into two channels, even
-at different levels or a few samples apart, by the front two of more;
-clipping is the share of samples stuck at full scale or at the audio's
+intro counts, silence does not. A source that ends where another plays
+the song on, as an excerpt cut off mid-sound, in a short rest or faded
+out does, lacks the rest of the song, which counts as sound beyond the
+song does, so an excerpt never beats the whole song it was cut from. A
+song's own end is in every source of it, so a video's outro past it is
+sound beyond the song; a release may start on a full chord at its first
+sample, so a source's start counts as cut only when its end is too.
+Bandwidth
+is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
+file measures as narrow as that file, while a recording whose treble
+fades on its own measures full, as does one whose notes end low over a
+noise floor that runs on to the top. Real stereo tells stereo from mono
+copied into two channels, even at different levels or a few samples
+apart, by the front two of more; clipping is the share of samples stuck at full scale or at the audio's
 own peak, or piled up just under full scale where a lossy encoder
 smeared them. Float lossless audio can hold samples past full scale, so
 in it only those at its own peak count. Every channel is measured as it
@@ -333,12 +428,15 @@ is titled. The release's, album, album artist, track, disc, date, totals, countr
 the release's MusicBrainz IDs, come together from the one source whose
 album ranks best, so an album never splits across folders and one
 release's IDs never mix with another's; a song on no album is a single
-named for its title. ReplayGain's track gain and peak come only from the
-source whose audio the song is, and its album gain and peak only when
-the release's fields come from it too: another source's loudness is not
-this audio's. An Opus file holds the gains as `R128_TRACK_GAIN` and
-`R128_ALBUM_GAIN` and no peaks, as Opus players read them, and an Opus
-source's R128 gains are read as ReplayGain's. A file's own tags offer every field by its Vorbis
+named for its title. ReplayGain's track gain and peak are measured from
+the audio the song is, and its album gain and peak over every song of
+its album, as [Loudness](configuration.md#loudness) says; with
+`[loudness] mode = "off"`, they come only from the tags of the source
+whose audio the song is, the album's only when the release's fields come
+from it too, since another source's loudness is not this audio's. An
+Opus file holds the gains as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` and
+no peaks, as Opus players read them, and an Opus source's R128 gains are
+read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
 `3/12` offers its total too. Fields with no tag of their own in MP3 or
 MP4 are written as Picard writes them there. A value over 4 KiB is
@@ -413,7 +511,9 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
-Any `[[trigger]]` in the song list replaces all of them. A
+`--offline`, or `MUMAN_OFFLINE=1`, makes a run look nothing up and
+fetch nothing, and refuses URLs. Any `[[trigger]]` in the song list
+replaces all of them. A
 `[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
 once), `recheck` (how long a lookup that found nothing waits, as
 `"30 days"`),
@@ -501,7 +601,7 @@ Each request names muman and its repository in its user agent.
 
 `list`, `remove`, `restore`, `set` and `edit` take a query, read from
 what earlier runs resolved, without fetching or measuring. Its terms
-are all required, case ignored:
+are all required, case and accents ignored, so `cafe` matches "Café":
 
 | Term | Matches |
 |---|---|
@@ -523,7 +623,9 @@ nothing, or, negated, every song.
   tombstones.
 - **`set`** sets tags, pins and `lyrics_offset`: `genre=Folk` sets,
   `genre!` clears so the sources' value shows, `audio=<key>` pins,
-  `audio!` unpins, `lyrics=false` takes none.
+  `audio!` unpins, `lyrics=false` takes none. A track or disc number
+  that is no number, a date that is none, and the gains muman measures
+  are refused, as by `add --tag`.
 - **`edit`** opens the songs' entries in `$VISUAL` or `$EDITOR`. Delete
   a table to remove its song, move a key to another table to join the
   two, or into a new table without an `id` to split it off. A file with
@@ -531,14 +633,23 @@ nothing, or, negated, every song.
 - **`remove`** moves songs to `[[removed]]` and deletes their library
   files; `--purge` also deletes fetched sources and trashes your own.
 - **`restore`** lists removed songs again, fetching any purged source.
+  It refuses until you put back from the trash the files of your own
+  `--purge` moved there, naming each.
 - **`undo`** puts the song list and library back as before the last run
   that changed them, one run further back each time: files it wrote over
-  or removed come back, files it moved move back, and an edit you made by
-  hand before that run is undone with it. A run stopped partway, by a
-  crash or Ctrl-C, can be undone too, and so can an undo stopped partway.
-  It refuses when the song list changed since. `[history]` sets how many
-  runs are kept and how much space they take together; a file past that
-  is written again from its sources.
+  or removed come back, a file you had changed still yours, files it
+  moved move back, a file `add` copied into `sources/` goes, deleted
+  while it holds what was copied and moved to the trash once changed,
+  and an edit you made by hand before that run is undone with it. A run stopped partway, by a
+  crash or Ctrl-C, can be undone too, and so can an undo stopped partway:
+  until the sync it ends with is done, it stays the latest run, which
+  the next `undo` finishes, going no further back, and `check` names.
+  It refuses when the song list changed since, and after `remove
+  --purge` until you put the files of your own it trashed back from the
+  trash, where it names them. `[history]` sets how many runs are kept
+  and how much space they take together; each run that records holds
+  the history to it, letting go of the oldest runs' files first, and a
+  file not kept is written again from its sources.
 
 ```bash
 muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -y
@@ -553,8 +664,9 @@ Every change says what it does first, each tag as `old → new`:
 | It matches several songs | Picked from a list | Refused unless `--all`, exit 5 |
 | The change itself | Asked, unless `-y` | Made only with `-y`, else exit 5 |
 
-A query of keys alone takes every song it names. `-n` says what would
-change and stops. A song changed meanwhile, by hand or by another run,
+`edit` takes no `-y`: it needs a terminal for its editor, `$VISUAL`,
+else `$EDITOR`, else `vi`, or Notepad on Windows. A query of keys alone
+takes every song it names. `-n` says what would change and stops. A song changed meanwhile, by hand or by another run,
 refuses the save.
 
 ## Status, info and check
@@ -575,7 +687,8 @@ refuses the save.
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded; `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by an
-  interrupted run or not muman's, and sources missing or unreadable;
+  interrupted run or not muman's, and sources missing, unreadable or cut
+  off;
   `--decode` decodes every source in full to find a truncated download.
   `--upstream` asks each site, downloading nothing, whether it still
   serves each fetched source in the format and at the size its song
@@ -608,9 +721,10 @@ folder, which gets `muman.zip`.
 Songs that do not fit are encoded again from their sources at lower
 bitrates of `[audio] lossy`, the least audible loss for each byte saved
 first: lossless songs before lossy ones, which would lose a generation,
-and a few songs lowered far before many a little. Each song is measured
-once encoded and the rest fitted again on what it really took, so the
-zip lands under the cap. When even the lowest bitrates cannot fit,
+and a few songs lowered far before many a little; once they fit, each
+song lowered is raised back as far as the room left allows, as the
+library is. Each song is measured once encoded and the rest fitted
+again on what it really took, so the zip lands under the cap. When even the lowest bitrates cannot fit,
 nothing is written and the size needed is said. The library itself is
 never changed.
 
@@ -631,7 +745,7 @@ run = ["mpc", "update"]
 | Event | Runs | Values |
 |---|---|---|
 | `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`), `library` |
-| `changed` | Once, after a run that wrote or removed any file | `library`, `written`, `removed` (counts) |
+| `changed` | Once, after a run that wrote, moved or removed any file, an undo's files put back counting as written | `library`, `written`, `moved`, `removed` (counts) |
 
 Each value reaches the command as a `{name}` placeholder in its words
 and as a `MUMAN_<NAME>` environment variable, such as `MUMAN_PATH`.

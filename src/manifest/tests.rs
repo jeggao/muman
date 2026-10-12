@@ -187,7 +187,7 @@ fn a_site_the_song_list_adds_names_its_keys() {
 #[test]
 fn another_version_is_refused_and_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(MANIFEST), "version = 3\n").unwrap();
+    std::fs::write(dir.path().join(MANIFEST), "version = 4\n").unwrap();
     assert!(format!("{:#}", Manifest::load(dir.path()).unwrap_err()).contains("newer"));
     std::fs::write(dir.path().join(MANIFEST), "version = 1\n[[song]\n").unwrap();
     assert!(Manifest::load(dir.path()).is_err());
@@ -240,6 +240,119 @@ fn songs_share_a_kept_record_but_never_a_file() {
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
+}
+
+#[test]
+fn songs_share_a_picture_of_the_users_but_not_its_lyrics_in_version_3() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:added/cover.jpg\", \"manual:a.flac\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].id(), Some(&SourceKey::Manual("a.flac".into())));
+    m.edit(Edit::Add {
+        sources: vec![
+            SourceKey::Manual("b.flac".into()),
+            SourceKey::Manual("added/cover.jpg".into()),
+        ],
+        album: None,
+    });
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs.len(), 2);
+    assert!(
+        m.songs
+            .iter()
+            .all(|s| s.has(&SourceKey::Manual("added/cover.jpg".into())))
+    );
+    assert!(
+        text(dir.path()).contains("version = 3"),
+        "{}",
+        text(dir.path())
+    );
+
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\", \"manual:added/a.lrc\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\", \"manual:added/a.lrc\"]\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
+}
+
+#[test]
+fn a_song_with_no_source_of_its_own_is_refused_and_never_made() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        "version = 3\n[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n\
+         [[song]]\nsources = [\"manual:added/c.jpg\"]\n",
+    )
+    .unwrap();
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("song 2 lists no source of its own"),
+        "{e:#}"
+    );
+
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:b.flac\", \"manual:added/c.jpg\"]\n\
+         [[removed]]\nnote = \"gone\"\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![SourceKey::Manual("a.flac".into())],
+        album: None,
+    });
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert!(
+        m.removed.is_empty(),
+        "a tombstone left with the picture alone goes"
+    );
+    assert_eq!(m.songs.len(), 2);
+}
+
+#[test]
+fn a_list_needing_an_older_version_than_it_states_is_written_down_to_it() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        "version = 3\n[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\"]\n\
+         [[song]]\nsources = [\"manual:b.flac\"]\n",
+    )
+    .unwrap();
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.save().unwrap();
+    assert!(
+        text(dir.path()).contains("version = 1"),
+        "{}",
+        text(dir.path())
+    );
+    assert!(!Manifest::load(dir.path()).unwrap().stale);
+}
+
+#[test]
+fn a_picture_one_song_lists_twice_is_shared_with_no_one() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\", \"manual:added/c.jpg\", \"manual:added/c.jpg\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.edit(Edit::Tag {
+        key: SourceKey::Manual("a.flac".into()),
+        tags: vec![("genre".into(), vec!["Folk".into()])],
+    });
+    m.save().unwrap();
+    assert!(
+        text(dir.path()).contains("version = 1"),
+        "{}",
+        text(dir.path())
+    );
 }
 
 #[test]
@@ -500,7 +613,7 @@ fn a_rewrite_finds_every_song_before_changing_any() {
             vec![yt("bbbbbbbbbbb")]
         ]
     );
-    assert_eq!(m.removed[0].note, "gone");
+    assert_eq!(m.removed, [], "a song joined to another is not removed");
     let again = Manifest::load(dir.path()).unwrap();
     assert_eq!(again.songs.len(), 2, "{}", text(dir.path()));
     assert_eq!(
@@ -664,7 +777,7 @@ fn restoring_a_song_whose_sources_are_listed_again_lists_nothing() {
     m.save().unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs.len(), 1);
-    assert_eq!(m.removed.len(), 1);
+    assert_eq!(m.removed, []);
 }
 
 #[test]
@@ -690,4 +803,20 @@ fn lyrics_moved_more_than_an_hour_are_refused() {
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("more than an hour"), "{e:#}");
+}
+
+#[test]
+fn a_misspelled_table_is_warned_of_and_an_unknown_one_kept_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[audoi]\nlossy = \"vorbis\"\n[histroy]\n[plugins_of_tomorrow]\n",
+    );
+    let said = Manifest::load(dir.path()).unwrap().misspelled();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].contains("`audoi`") && said[0].contains("`audio`"),
+        "{said:?}"
+    );
+    assert!(said[1].contains("`history`"), "{said:?}");
 }

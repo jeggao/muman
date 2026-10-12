@@ -27,9 +27,17 @@
 //! | Agreeing words, of the shorter print's sounding ones | Span of the longer | Verdict |
 //! |---|---|---|
 //! | 30% or more, and at least 48 (~6 s) | 80% or more | The same recording |
+//! | 50% or more, under 48 but at least 8 (~1 s) | 80% or more | The same recording |
+//! | 30% to 50%, under 48 but at least 8 | 80% or more | Unsure |
 //! | 30% or more, and at least 48 | Under 80% | Unsure: an excerpt, or a video with a skit |
 //! | 10% to 30%, and at least 48 | 80% or more | Unsure: another master or mix |
 //! | Less | Any | A different song |
+//!
+//! A match spanning 80% of the longer print spans as much of both, and the
+//! offsets that leave it so are few, so it does not find agreeing words by
+//! sliding one along the other: a track too short for 48 words, as an
+//! album's interlude under about 9 s is, matches a copy of itself on as few
+//! as 8, half its sounding words agreeing.
 //!
 //! The thresholds were calibrated over every pair of sources in a real
 //! library, printed by ffmpeg's muxer with the same algorithm. Pairs the
@@ -67,6 +75,12 @@ const NEAR_BITS: u32 = 4;
 const STATIC_RUN: usize = 8;
 /// The fewest agreeing words, ~6 s, a match rests on.
 const MIN_WORDS: usize = 48;
+/// The fewest, ~1 s, a match spanning [`COMPLETE`] of both prints rests
+/// on, where both are too short to agree on [`MIN_WORDS`].
+const MIN_WHOLE_WORDS: usize = 8;
+/// The share of the shorter print's sounding words that agree in a match
+/// on fewer than [`MIN_WORDS`].
+const WHOLE_SHARE: f64 = 0.5;
 /// The share of the shorter print's sounding words that agree in a
 /// match.
 const SHARE: f64 = 0.3;
@@ -231,7 +245,11 @@ impl Match {
     pub fn verdict(&self) -> Verdict {
         let whole = self.coverage >= COMPLETE;
         if self.words < MIN_WORDS {
-            Verdict::Different
+            match (whole && self.words >= MIN_WHOLE_WORDS, self.share) {
+                (true, s) if s >= WHOLE_SHARE => Verdict::Same,
+                (true, s) if s >= SHARE => Verdict::Unsure,
+                _ => Verdict::Different,
+            }
         } else if self.share >= SHARE && whole {
             Verdict::Same
         } else if self.share >= SHARE || (self.share >= AKIN && whole) {
@@ -468,6 +486,28 @@ mod tests {
         let m = compare(&Print(excerpt), &Print(song)).unwrap();
         assert!(m.share > 0.99, "{m:?}");
         assert_eq!(m.verdict(), Verdict::Unsure);
+    }
+
+    #[test]
+    fn a_short_track_is_the_same_as_its_copy_and_no_other() {
+        let track = words(40, 13);
+        let m = compare(&Print(noisy(&track, 2)), &Print(track.clone())).unwrap();
+        assert_eq!((m.words, m.verdict()), (40, Verdict::Same), "{m:?}");
+        let half: Vec<u32> = track
+            .iter()
+            .enumerate()
+            .map(|(i, w)| if i % 5 < 2 { *w } else { !w })
+            .collect();
+        let m = compare(&Print(half), &Print(track.clone())).unwrap();
+        assert_eq!(m.verdict(), Verdict::Unsure, "{m:?}");
+        let m = compare(&Print(words(38, 14)), &Print(track.clone())).unwrap();
+        assert_eq!(m.verdict(), Verdict::Different, "{m:?}");
+        let mut long = words(400, 15);
+        long.extend(&track);
+        let m = compare(&Print(track[..6].to_vec()), &Print(track[..6].to_vec())).unwrap();
+        assert_eq!(m.verdict(), Verdict::Different, "too few words: {m:?}");
+        let m = compare(&Print(track), &Print(long)).unwrap();
+        assert_eq!(m.verdict(), Verdict::Different, "found in a longer: {m:?}");
     }
 
     #[test]

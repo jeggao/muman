@@ -7,6 +7,10 @@
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
 //! providers and `info` all read it there, so a provider added is one
 //! entry. A key of any other scheme is a file yt-dlp fetched.
+//!
+//! Lyrics and pictures `add` gives to songs are copied into the manual
+//! folder's `added/`, which holds no song file, so none of them becomes
+//! a song's sidecar or a folder's cover by its name.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -26,9 +30,9 @@ const MEDIA: [&str; 32] = [
     "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd", "mlp", "mka", "mkv",
     "mp4", "webm", "mov", "alac", "dsf", "dff",
 ];
-const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+pub(crate) const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.
-const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
+pub(crate) const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -509,7 +513,9 @@ impl Store {
 
 /// Each listed manual file gone from its path that is one of `ready`,
 /// the manual files no song lists, by its size and modification time,
-/// which a move keeps: the file moved there, taken out of `ready`.
+/// which a move keeps: the file moved there, taken out of `ready`. A
+/// listed `.lrc` or picture, which `ready` never holds, is followed to
+/// one no song lists either.
 pub fn moved_manual(
     listed: &BTreeSet<SourceKey>,
     state: &crate::state::State,
@@ -517,6 +523,13 @@ pub fn moved_manual(
     ready: &mut Vec<SourceKey>,
 ) -> BTreeMap<SourceKey, SourceKey> {
     let mut moved = BTreeMap::new();
+    let mut loose: Vec<SourceKey> = store
+        .manual
+        .iter()
+        .filter(|(_, kind)| **kind != Kind::Media)
+        .map(|(rel, _)| SourceKey::Manual(rel.into()))
+        .filter(|k| !listed.contains(k))
+        .collect();
     let gone = listed
         .iter()
         .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
@@ -524,11 +537,13 @@ pub fn moved_manual(
         let Some(was) = state.facts.get(gone).and_then(|f| stamp_of_rev(&f.rev)) else {
             continue;
         };
-        let at = ready
+        let media = matches!(gone, SourceKey::Manual(m) if kind_of(m.path()) == Some(Kind::Media));
+        let candidates = if media { &mut *ready } else { &mut loose };
+        let at = candidates
             .iter()
             .position(|k| store.locate(k).and_then(|l| stamp(&l.path)) == Some(was));
         if let Some(at) = at {
-            moved.insert(gone.clone(), ready.remove(at));
+            moved.insert(gone.clone(), candidates.remove(at));
         }
     }
     moved

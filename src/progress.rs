@@ -672,6 +672,13 @@ pub fn drawing() -> bool {
 pub struct Console<W: Write> {
     inner: W,
     line: Vec<u8>,
+    /// Whether the reader closed the pipe, as `| head` does once it has
+    /// read enough: what the run says after is dropped, and the run goes
+    /// on rather than stop halfway through writing the library.
+    closed: bool,
+    /// Beside `json` events, each message is one too, so that every line
+    /// on stderr reads as JSON.
+    events: bool,
 }
 
 impl<W: Write> Console<W> {
@@ -679,8 +686,59 @@ impl<W: Write> Console<W> {
         Self {
             inner,
             line: Vec::new(),
+            closed: false,
+            events: false,
         }
     }
+
+    /// The console, each line a `message` event under `--progress json`.
+    #[must_use]
+    pub fn for_kind(inner: W, kind: Kind) -> Self {
+        Self {
+            inner,
+            line: Vec::new(),
+            closed: false,
+            events: kind == Kind::Json,
+        }
+    }
+
+    fn put(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+        let events;
+        let bytes = if self.events {
+            events = message_events(bytes);
+            events.as_bytes()
+        } else {
+            bytes
+        };
+        match suspend(|| {
+            self.inner.write_all(bytes)?;
+            self.inner.flush()
+        }) {
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                self.closed = true;
+                Ok(())
+            }
+            done => done,
+        }
+    }
+}
+
+/// Each line of `bytes`, its colours taken out, as a `message` event.
+fn message_events(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut events = String::new();
+    for line in anstream::adapter::strip_str(&text)
+        .to_string()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+    {
+        events.push_str(&serde_json::json!({"event": "message", "text": line}).to_string());
+        events.push('\n');
+    }
+    events
 }
 
 impl<W: Write> Write for Console<W> {
@@ -688,20 +746,14 @@ impl<W: Write> Write for Console<W> {
         self.line.extend_from_slice(buf);
         if let Some(end) = self.line.iter().rposition(|b| *b == b'\n') {
             let whole: Vec<u8> = self.line.drain(..=end).collect();
-            suspend(|| {
-                self.inner.write_all(&whole)?;
-                self.inner.flush()
-            })?;
+            self.put(&whole)?;
         }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if !self.line.is_empty() {
-            let part: Vec<u8> = std::mem::take(&mut self.line);
-            suspend(|| self.inner.write_all(&part))?;
-        }
-        self.inner.flush()
+        let part: Vec<u8> = std::mem::take(&mut self.line);
+        self.put(&part)
     }
 }
 
@@ -714,6 +766,28 @@ impl<W: Write> Drop for Console<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Closed(usize);
+
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            self.0 += 1;
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_closed_pipe_drops_what_follows_rather_than_stop_the_run() {
+        let mut console = Console::new(Closed(0));
+        writeln!(console, "Updated: one").unwrap();
+        writeln!(console, "Updated: two").unwrap();
+        console.flush().unwrap();
+        assert_eq!(console.inner.0, 1, "written to once, then let be");
+    }
 
     /// A sink whose bytes a test reads back.
     #[derive(Clone, Default)]
@@ -854,5 +928,23 @@ mod tests {
             write!(console, "tail").unwrap();
         }
         assert_eq!(String::from_utf8(out).unwrap(), "Written again\ntail");
+    }
+
+    #[test]
+    fn under_json_each_message_is_an_event() {
+        let mut out = Vec::new();
+        {
+            let mut console = Console::for_kind(&mut out, Kind::Json);
+            writeln!(console, "Added: \u{1b}[32mSong\u{1b}[0m \"one\"").unwrap();
+            write!(console, "\nlast").unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        let events: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2, "{text}");
+        assert_eq!(events[0]["text"], "Added: Song \"one\"");
+        assert_eq!(events[1]["event"], "message");
     }
 }

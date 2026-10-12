@@ -1,0 +1,910 @@
+//! Files of tags a user hands `add`, read into the tags songs are given
+//! by hand.
+//!
+//! A tag file says what a song is called and who made it; it is not
+//! kept as a source, but matched to its song once and written into the
+//! song's `tags`, which beat every source's. These are read:
+//!
+//! | Format | Recognized by |
+//! |---|---|
+//! | Vorbis comments, `NAME=value` a line, as `metaflac --export-tags-to` writes | `.txt`, `.tags` or `.vc` whose lines are mostly `NAME=value`, one a known field |
+//! | ffmpeg's metadata file: its global section | `.ffmeta`, `.ffmetadata`, or a first line `;FFMETADATA1` |
+//! | JSON: beets' `export`, a MusicBrainz recording, a record muman keeps | `.json`, an object, an array or one object a line |
+//! | A cue sheet | `.cue`, read by [`crate::cue`] |
+//!
+//! Some names describe another file rather than the song, and a hand
+//! value would outlive it: gains and peaks (a hand gain beats the
+//! measured one, but these were measured on someone else's file), the
+//! encoder, embedded pictures and lyrics. Those are skipped ([`SKIPPED`]).
+//! Any other name is kept, as hand tags keep any Vorbis name.
+//!
+//! beets names its fields in its own way, so each is read into the
+//! Vorbis name Picard writes it as. What beets keeps of its own, as the
+//! file's path, bitrate and length, is no tag of the song and sets none;
+//! any other field, which no Vorbis name stands for, is reported as
+//! skipped rather than dropped unsaid.
+
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use crate::tags::{self, Field};
+
+/// Tag names and their values, in the order a file gave them.
+pub type Tags = Vec<(String, Vec<String>)>;
+
+/// The names a tag file may hold but a song is never given by hand: of
+/// the file's loudness, pictures, lyrics, encoding or container.
+pub const SKIPPED: [&str; 17] = [
+    "METADATA_BLOCK_PICTURE",
+    "COVERART",
+    "COVERARTMIME",
+    "ENCODER",
+    "ENCODED_BY",
+    "ENCODEDBY",
+    "ENCODERSETTINGS",
+    "ENCODING",
+    "VENDOR",
+    "WAVEFORMATEXTENSIBLE_CHANNEL_MASK",
+    "MAJOR_BRAND",
+    "MINOR_VERSION",
+    "COMPATIBLE_BRANDS",
+    "CREATION_TIME",
+    "HANDLER_NAME",
+    "ITUNES_CDDB_1",
+    "ACOUSTID_FINGERPRINT",
+];
+
+/// The beginnings of names skipped as [`SKIPPED`] is: gains, and the
+/// tags iTunes and `MP3Gain` keep of their own.
+const SKIPPED_PREFIXES: [&str; 4] = ["REPLAYGAIN_", "R128_", "MP3GAIN_", "ITUN"];
+
+/// Whether a song is never given the tag `key` by hand.
+fn skipped(key: &str) -> bool {
+    SKIPPED.contains(&key)
+        || SKIPPED_PREFIXES.iter().any(|p| key.starts_with(p))
+        // LYRICS, UNSYNCEDLYRICS, `LYRICS-ENG` as ffmpeg names ID3's.
+        || key.contains("LYRICS")
+        || Field::named(key).is_some_and(Field::is_loudness)
+}
+
+/// The names a song has one value of: a file giving several means the
+/// last.
+const ONE_VALUE: [&str; 7] = [
+    "TITLE",
+    "ALBUM",
+    "DATE",
+    "TRACKNUMBER",
+    "DISCNUMBER",
+    "TRACKTOTAL",
+    "DISCTOTAL",
+];
+
+/// The longest value taken, as the tags of a source are capped.
+const MOST_BYTES: usize = 4096;
+
+/// One song's part of a tag file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Track {
+    pub tags: Tags,
+    pub number: Option<u32>,
+    pub length_ms: Option<i64>,
+    /// The audio file a cue sheet names for it.
+    pub file: Option<String>,
+}
+
+/// What a tag file holds: tags of the whole album, and of each song.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sheet {
+    pub album: Tags,
+    pub tracks: Vec<Track>,
+    /// Names left out, and why.
+    pub skipped: Vec<String>,
+}
+
+impl Sheet {
+    /// The tags track `n` is given: the album's, then its own over them.
+    #[must_use]
+    pub fn tags_of(&self, n: usize) -> Tags {
+        let mut out = self.album.clone();
+        for (name, values) in &self.tracks[n].tags {
+            match out.iter_mut().find(|(k, _)| k == name) {
+                Some((_, v)) => v.clone_from(values),
+                None => out.push((name.clone(), values.clone())),
+            }
+        }
+        out
+    }
+
+    pub(crate) fn add(&mut self, tags: &mut Tags, name: &str, value: &str) {
+        let key = tags::vorbis_key(name.trim());
+        let one = ONE_VALUE.contains(&key.as_str());
+        self.put(tags, &key, value, one);
+    }
+
+    /// Gives `tags` the one value `value` of `name`, over any before.
+    pub(crate) fn set(&mut self, tags: &mut Tags, name: &str, value: &str) {
+        self.put(tags, &tags::vorbis_key(name.trim()), value, true);
+    }
+
+    fn put(&mut self, tags: &mut Tags, key: &str, value: &str, one: bool) {
+        let cleaned: String = value
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n')
+            .collect();
+        let mut value = cleaned.trim();
+        if value.len() > MOST_BYTES {
+            let mut end = MOST_BYTES;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            value = &value[..end];
+        }
+        if key.is_empty() || value.is_empty() {
+            return;
+        }
+        if skipped(key) {
+            self.skip(format!("{key}, which describes another file"));
+            return;
+        }
+        let mut put = |key: &str, value: String| match tags.iter_mut().find(|(k, _)| k == key) {
+            Some((_, v)) if one => *v = vec![value],
+            Some((_, v)) if !v.contains(&value) => v.push(value),
+            Some(_) => {}
+            None => tags.push((key.to_string(), vec![value])),
+        };
+        match key {
+            "TRACKNUMBER" | "DISCNUMBER" => {
+                let (n, total) = value.split_once('/').unwrap_or((value, ""));
+                let total_key = if key == "TRACKNUMBER" {
+                    "TRACKTOTAL"
+                } else {
+                    "DISCTOTAL"
+                };
+                if let Some(n) = number(n) {
+                    put(key, n.to_string());
+                }
+                if let Some(t) = number(total) {
+                    put(total_key, t.to_string());
+                }
+            }
+            "DATE" => match date(value) {
+                Some(d) => put(key, d),
+                None => self.skip(format!("DATE {value:?}, which reads as no date")),
+            },
+            "TRACKTOTAL" | "DISCTOTAL" => match number(value) {
+                Some(n) => put(key, n.to_string()),
+                None => self.skip(format!("{key} {value:?}, which is no count")),
+            },
+            _ => put(key, value.to_string()),
+        }
+    }
+
+    fn skip(&mut self, why: String) {
+        if !self.skipped.contains(&why) {
+            self.skipped.push(why);
+        }
+    }
+}
+
+fn number(s: &str) -> Option<u32> {
+    s.trim().parse().ok().filter(|&n| n > 0)
+}
+
+/// A date as Vorbis comments write it: a year, a month or a day, of a
+/// real calendar; a time after it, as iTunes writes one, is cut.
+fn date(s: &str) -> Option<String> {
+    let s = s.trim();
+    let s = match s.split_once('T') {
+        Some((day, _)) if day.len() == 10 => day,
+        _ => s,
+    };
+    let iso = if s.len() == 8 {
+        tags::iso_date(s)?
+    } else {
+        s.to_string()
+    };
+    let parts: Vec<&str> = iso.split('-').collect();
+    let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
+    let within = |p: &str, most: u32| p.parse::<u32>().is_ok_and(|v| (1..=most).contains(&v));
+    let fine = match parts[..] {
+        [y] => digits(y, 4),
+        [y, m] => digits(y, 4) && digits(m, 2) && within(m, 12),
+        [y, m, d] => digits(y, 4) && digits(m, 2) && digits(d, 2) && within(m, 12) && within(d, 31),
+        _ => false,
+    };
+    (fine && parts[0] != "0000").then_some(iso)
+}
+
+/// What kind of tag file `path`, holding `text`, is, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Vorbis,
+    FfMetadata,
+    Json,
+    Cue,
+}
+
+const FFMETADATA: &str = ";FFMETADATA1";
+
+/// The tag format `path` is written in, by its extension and, for text,
+/// by what its lines hold.
+#[must_use]
+pub fn format_of(path: &Path, text: &str) -> Option<Format> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if text.trim_start_matches('\u{feff}').starts_with(FFMETADATA) {
+        return Some(Format::FfMetadata);
+    }
+    match ext.as_str() {
+        "cue" => Some(Format::Cue),
+        "json" | "jsonl" => Some(Format::Json),
+        "ffmeta" | "ffmetadata" => Some(Format::FfMetadata),
+        "txt" | "tags" | "vc" if is_vorbis(text) => Some(Format::Vorbis),
+        _ => None,
+    }
+}
+
+/// Whether `text` is Vorbis comments: it opens with `NAME=value`, and
+/// either four in five of its lines are so, or two name fields muman
+/// knows. A value may run over lines of its own, as metaflac writes a
+/// comment's newlines, so the second test lets a long one through.
+fn is_vorbis(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let named: Vec<&str> = lines.iter().filter_map(|l| vorbis_name(l)).collect();
+    let known = named.iter().filter(|n| Field::named(n).is_some()).count();
+    lines.first().is_some_and(|l| vorbis_name(l).is_some())
+        && known > 0
+        && (named.len() * 5 >= lines.len() * 4 || known >= 2)
+}
+
+/// The name a `NAME=value` line sets: printable ASCII but `=`, with no
+/// space at either end, so a line sung as `title = x` sets none.
+fn vorbis_name(line: &str) -> Option<&str> {
+    let (name, _) = line.split_once('=')?;
+    (!name.is_empty()
+        && name.trim() == name
+        && name
+            .bytes()
+            .all(|b| (0x20..=0x7d).contains(&b) && b != b'='))
+    .then_some(name)
+}
+
+/// The tags `text`, read from `path`, holds.
+pub fn read(path: &Path, text: &str) -> Result<Sheet> {
+    let read = match format_of(path, text) {
+        Some(Format::Vorbis) => Ok(vorbis(text)),
+        Some(Format::FfMetadata) => Ok(ffmetadata(text)),
+        Some(Format::Json) => json(text),
+        Some(Format::Cue) => crate::cue::read(text),
+        None => bail!("holds no tags muman reads"),
+    };
+    let sheet = read.with_context(|| format!("reading {}", path.display()))?;
+    if sheet.tracks.is_empty()
+        || (sheet.album.is_empty() && sheet.tracks.iter().all(|t| t.tags.is_empty()))
+    {
+        bail!("{} holds no tag a song is given by hand", path.display());
+    }
+    Ok(sheet)
+}
+
+fn vorbis(text: &str) -> Sheet {
+    let mut sheet = Sheet::default();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        match (vorbis_name(line), pairs.last_mut()) {
+            (Some(name), _) => pairs.push((name.to_string(), line[name.len() + 1..].to_string())),
+            // metaflac writes a value's newlines as they are.
+            (None, Some((_, value))) => {
+                value.push('\n');
+                value.push_str(line);
+            }
+            (None, None) => {}
+        }
+    }
+    let mut tags = Tags::new();
+    for (name, value) in pairs {
+        sheet.add(&mut tags, &name, &value);
+    }
+    sheet.tracks.push(Track {
+        tags,
+        ..Track::default()
+    });
+    sheet
+}
+
+fn ffmetadata(text: &str) -> Sheet {
+    let mut sheet = Sheet::default();
+    let mut tags = Tags::new();
+    let text = text.trim_start_matches('\u{feff}');
+    let mut lines = text.lines().peekable();
+    if lines.peek().is_some_and(|l| l.starts_with(FFMETADATA)) {
+        lines.next();
+    }
+    while let Some(line) = lines.next() {
+        if line.starts_with('[') {
+            break;
+        }
+        if line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        let mut entry = line.to_string();
+        // An odd run of backslashes ends in one escaping the newline.
+        while entry.chars().rev().take_while(|c| *c == '\\').count() % 2 == 1 {
+            entry.pop();
+            entry.push('\n');
+            entry.push_str(lines.next().unwrap_or_default());
+        }
+        let (name, value) = split_escaped(&entry);
+        match value {
+            Some(_) if name.contains('=') => {
+                sheet.skip(format!("{name:?}, which is no tag name"));
+            }
+            Some(value) => sheet.add(&mut tags, &name, &value),
+            None => {}
+        }
+    }
+    sheet.tracks.push(Track {
+        tags,
+        ..Track::default()
+    });
+    sheet
+}
+
+/// An ffmetadata line's key and value, each unescaped; no value when it
+/// holds no unescaped `=`.
+fn split_escaped(line: &str) -> (String, Option<String>) {
+    let mut key = String::new();
+    let mut value: Option<String> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        let c = if c == '\\' {
+            chars.next().unwrap_or('\\')
+        } else if c == '=' && value.is_none() {
+            value = Some(String::new());
+            continue;
+        } else {
+            c
+        };
+        match &mut value {
+            Some(v) => v.push(c),
+            None => key.push(c),
+        }
+    }
+    (key, value)
+}
+
+fn json(text: &str) -> Result<Sheet> {
+    let objects: Vec<Value> = match serde_json::from_str::<Value>(text) {
+        Ok(Value::Array(items)) => items,
+        Ok(v @ Value::Object(_)) => vec![v],
+        Ok(_) => bail!("holds no object of tags"),
+        Err(whole) => {
+            let mut read = Vec::new();
+            let mut broken = Vec::new();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match serde_json::from_str(line) {
+                    Ok(v) => read.push(v),
+                    Err(_) => broken.push(n + 1),
+                }
+            }
+            if read.is_empty() {
+                return Err(whole).context("reading its JSON");
+            }
+            let mut sheet = Sheet::default();
+            for n in broken {
+                sheet.skip(format!("line {n}, which is no JSON"));
+            }
+            return tracks_of(sheet, &read);
+        }
+    };
+    tracks_of(Sheet::default(), &objects)
+}
+
+fn tracks_of(mut sheet: Sheet, objects: &[Value]) -> Result<Sheet> {
+    for o in objects {
+        let track = object(&mut sheet, o)?;
+        sheet.tracks.push(track);
+    }
+    Ok(sheet)
+}
+
+/// beets' field names and the Vorbis names they set, as Picard names
+/// them. Gains, lyrics, the encoder and the fingerprint are read too, so
+/// that skipping them is reported as a Vorbis comment's would be.
+const BEETS: [(&str, &str); 55] = [
+    ("title", "TITLE"),
+    ("artist", "ARTIST"),
+    ("artists", "ARTIST"),
+    ("artist_sort", "ARTISTSORT"),
+    ("album", "ALBUM"),
+    ("albumartist", "ALBUMARTIST"),
+    ("albumartists", "ALBUMARTIST"),
+    ("albumartist_sort", "ALBUMARTISTSORT"),
+    ("track", "TRACKNUMBER"),
+    ("tracktotal", "TRACKTOTAL"),
+    ("disc", "DISCNUMBER"),
+    ("disctotal", "DISCTOTAL"),
+    ("disctitle", "DISCSUBTITLE"),
+    ("genre", "GENRE"),
+    ("composer", "COMPOSER"),
+    ("composer_sort", "COMPOSERSORT"),
+    ("lyricist", "LYRICIST"),
+    ("arranger", "ARRANGER"),
+    ("work", "WORK"),
+    ("grouping", "GROUPING"),
+    ("comments", "COMMENT"),
+    ("bpm", "BPM"),
+    ("initial_key", "KEY"),
+    ("comp", "COMPILATION"),
+    ("label", "LABEL"),
+    ("catalognum", "CATALOGNUMBER"),
+    ("barcode", "BARCODE"),
+    ("asin", "ASIN"),
+    ("albumtype", "RELEASETYPE"),
+    ("albumtypes", "RELEASETYPE"),
+    ("albumstatus", "RELEASESTATUS"),
+    ("media", "MEDIA"),
+    ("script", "SCRIPT"),
+    ("language", "LANGUAGE"),
+    ("country", "RELEASECOUNTRY"),
+    ("isrc", "ISRC"),
+    ("mb_trackid", "MUSICBRAINZ_TRACKID"),
+    ("mb_releasetrackid", "MUSICBRAINZ_RELEASETRACKID"),
+    ("mb_albumid", "MUSICBRAINZ_ALBUMID"),
+    ("mb_releasegroupid", "MUSICBRAINZ_RELEASEGROUPID"),
+    ("mb_artistid", "MUSICBRAINZ_ARTISTID"),
+    ("mb_artistids", "MUSICBRAINZ_ARTISTID"),
+    ("mb_albumartistid", "MUSICBRAINZ_ALBUMARTISTID"),
+    ("mb_albumartistids", "MUSICBRAINZ_ALBUMARTISTID"),
+    ("mb_workid", "MUSICBRAINZ_WORKID"),
+    ("acoustid_id", "ACOUSTID_ID"),
+    ("acoustid_fingerprint", "ACOUSTID_FINGERPRINT"),
+    ("lyrics", "LYRICS"),
+    ("encoder", "ENCODER"),
+    ("rg_track_gain", "REPLAYGAIN_TRACK_GAIN"),
+    ("rg_track_peak", "REPLAYGAIN_TRACK_PEAK"),
+    ("rg_album_gain", "REPLAYGAIN_ALBUM_GAIN"),
+    ("rg_album_peak", "REPLAYGAIN_ALBUM_PEAK"),
+    ("r128_track_gain", "R128_TRACK_GAIN"),
+    ("r128_album_gain", "R128_ALBUM_GAIN"),
+];
+
+/// The parts of the dates beets keeps as numbers, and the Vorbis names
+/// of the dates they make.
+/// beets' credit as written, as "A feat. B", and the field naming each
+/// artist of it. Where both are given, the artists are the tag's values,
+/// so the credit is no artist of its own.
+const CREDITS: [(&str, &str); 2] = [("artist", "artists"), ("albumartist", "albumartists")];
+
+const BEETS_DATES: [(&str, &str); 2] = [("", "DATE"), ("original_", "ORIGINALDATE")];
+
+/// beets' fields of its own: what it measured of the file, where it
+/// keeps it and its own IDs, none a tag of the song. Any other field
+/// [`BEETS`] does not name is reported as skipped.
+const BEETS_OWN: [&str; 17] = [
+    "path",
+    "mtime",
+    "added",
+    "id",
+    "album_id",
+    "artpath",
+    "data_source",
+    "format",
+    "bitrate",
+    "bitrate_mode",
+    "samplerate",
+    "bitdepth",
+    "channels",
+    "length",
+    "filesize",
+    "encoder_info",
+    "encoder_settings",
+];
+
+fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
+    let Some(map) = o.as_object() else {
+        bail!("holds a value that is no object of tags");
+    };
+    // beets names the medium in `media` too, as a word.
+    if map.get("media").is_some_and(Value::is_array) || map.contains_key("release-group") {
+        bail!("holds a MusicBrainz release, which names no one recording");
+    }
+    if map.contains_key("artist-credit") {
+        let record = crate::musicbrainz::parse_recording(&o.to_string(), None)?;
+        return Ok(recorded(sheet, &record));
+    }
+    if map.contains_key("artists")
+        && map.contains_key("id")
+        && map.contains_key("title")
+        && let Ok(record) = serde_json::from_value::<crate::musicbrainz::Record>(o.clone())
+    {
+        return Ok(recorded(sheet, &record));
+    }
+    let mut tags = Tags::new();
+    let text = |v: &Value| match v {
+        Value::String(s) => vec![s.clone()],
+        Value::Number(n) if n.as_f64() != Some(0.0) => {
+            vec![whole(v).map_or_else(|| n.to_string(), |w| w.to_string())]
+        }
+        Value::Bool(true) => vec!["1".to_string()],
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let listed = |name: &str| map.get(name).map(text).is_some_and(|v| !v.is_empty());
+    for (name, key) in BEETS {
+        if CREDITS
+            .iter()
+            .any(|(credit, each)| name == *credit && listed(each))
+        {
+            continue;
+        }
+        for value in map.get(name).map(text).unwrap_or_default() {
+            sheet.add(&mut tags, key, &value);
+        }
+    }
+    let part = |k: &str| map.get(k).and_then(whole);
+    for (prefix, key) in BEETS_DATES {
+        let part = |p: &str| part(&format!("{prefix}{p}"));
+        if let Some(year) = part("year") {
+            let date = match (part("month"), part("day")) {
+                (Some(month), Some(day)) => format!("{year:04}-{month:02}-{day:02}"),
+                (Some(month), None) => format!("{year:04}-{month:02}"),
+                _ => format!("{year:04}"),
+            };
+            sheet.add(&mut tags, key, &date);
+        }
+    }
+    let dated = |name: &str| {
+        BEETS_DATES.iter().any(|(prefix, _)| {
+            name.strip_prefix(prefix)
+                .is_some_and(|p| ["year", "month", "day"].contains(&p))
+        })
+    };
+    for (name, value) in map {
+        let read = BEETS.iter().any(|(n, _)| n == name) || BEETS_OWN.contains(&name.as_str());
+        if !read && !dated(name) && text(value).iter().any(|v| !v.trim().is_empty()) {
+            sheet.skip(format!("{name:?}, which has no Vorbis name muman knows"));
+        }
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let length_ms = map
+        .get("length")
+        .and_then(|v| match v {
+            Value::String(s) => s.trim().parse().ok(),
+            v => v.as_f64(),
+        })
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .map(|s| (s * 1000.0).round() as i64);
+    let number = map
+        .get("track")
+        .and_then(whole)
+        .and_then(|n| u32::try_from(n).ok());
+    Ok(Track {
+        tags,
+        number: number.filter(|&n| n > 0),
+        length_ms,
+        file: None,
+    })
+}
+
+/// A positive whole number however beets writes it: `3`, `3.0` or `"3"`.
+fn whole(v: &Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return (n > 0).then_some(n);
+    }
+    let f = match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    }?;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (f.is_finite() && f >= 1.0 && f.fract() == 0.0 && f < 1e15).then_some(f as u64)
+}
+
+fn recorded(sheet: &mut Sheet, record: &crate::musicbrainz::Record) -> Track {
+    let mut tags = Tags::new();
+    for (field, offer) in tags::from_record(record) {
+        for value in &offer.values {
+            sheet.add(&mut tags, field.vorbis(), value);
+        }
+    }
+    Track {
+        tags,
+        number: None,
+        length_ms: record.length_ms.and_then(|ms| i64::try_from(ms).ok()),
+        file: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn values<'a>(tags: &'a Tags, name: &str) -> Vec<&'a str> {
+        tags.iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn vorbis_comments_read_with_repeats_continued_lines_and_skips() {
+        let text = "TITLE=Lantern Weather\nartist=Marlo Venn\nARTIST=Kiri Hoshino\n\
+            TRACKNUMBER=3/12\nCOMMENT=one\ntwo\nREPLAYGAIN_TRACK_GAIN=-3.2 dB\n\
+            ENCODER=some encoder\nDATE=20110304\nMOOD=calm\n";
+        let path = Path::new("Lantern Weather.txt");
+        assert_eq!(format_of(path, text), Some(Format::Vorbis));
+        let sheet = read(path, text).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        assert_eq!(values(tags, "ARTIST"), ["Marlo Venn", "Kiri Hoshino"]);
+        assert_eq!(values(tags, "TRACKNUMBER"), ["3"]);
+        assert_eq!(values(tags, "TRACKTOTAL"), ["12"]);
+        assert_eq!(values(tags, "COMMENT"), ["one\ntwo"]);
+        assert_eq!(values(tags, "DATE"), ["2011-03-04"]);
+        assert_eq!(values(tags, "MOOD"), ["calm"]);
+        assert_eq!(values(tags, "REPLAYGAIN_TRACK_GAIN"), [] as [&str; 0]);
+        assert_eq!(values(tags, "ENCODER"), [] as [&str; 0]);
+        assert_eq!(sheet.skipped.len(), 2, "{:?}", sheet.skipped);
+    }
+
+    #[test]
+    fn plain_text_is_no_tag_file() {
+        let lyrics = "Under the lantern\nweather turns = to rain\nand the moths\n";
+        assert_eq!(format_of(Path::new("words.txt"), lyrics), None);
+        assert_eq!(format_of(Path::new("a.txt"), "A=1\nB=2\n"), None);
+        assert!(read(Path::new("words.txt"), lyrics).is_err());
+    }
+
+    #[test]
+    fn ffmetadata_unescapes_and_stops_at_its_first_section() {
+        let text = ";FFMETADATA1\ntitle=Copper \\= Moth\n; a comment\nartist=Marlo\\\nVenn\n\
+            album=The Glass Orchards\\;\n[CHAPTER]\nTIMEBASE=1/1000\ntitle=Chapter One\n";
+        let sheet = read(Path::new("tags.ffmeta"), text).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        assert_eq!(values(tags, "TITLE"), ["Copper = Moth"]);
+        assert_eq!(values(tags, "ARTIST"), ["Marlo\nVenn"]);
+        assert_eq!(values(tags, "ALBUM"), ["The Glass Orchards;"]);
+        assert_eq!(
+            format_of(Path::new("x.txt"), text),
+            Some(Format::FfMetadata)
+        );
+    }
+
+    #[test]
+    fn beets_json_reads_as_an_object_an_array_or_lines() {
+        let one = r#"{"title": "Lantern Weather", "artists": ["Marlo Venn"], "album": "The Glass Orchards",
+            "track": 3, "tracktotal": 0, "year": 2011, "month": 3, "day": 0, "length": 221.4,
+            "mb_trackid": "00000000-0000-4000-8000-000000000001", "path": "/x/y.flac", "bitrate": 900000}"#;
+        let sheet = read(Path::new("song.json"), one).unwrap();
+        let track = &sheet.tracks[0];
+        assert_eq!(values(&track.tags, "DATE"), ["2011-03"]);
+        assert_eq!(values(&track.tags, "TRACKNUMBER"), ["3"]);
+        assert_eq!(values(&track.tags, "TRACKTOTAL"), [] as [&str; 0]);
+        assert_eq!(
+            values(&track.tags, "MUSICBRAINZ_TRACKID"),
+            ["00000000-0000-4000-8000-000000000001"]
+        );
+        assert_eq!(track.length_ms, Some(221_400));
+        assert_eq!(track.number, Some(3));
+        let lines = format!("{}\n{}\n", one.replace('\n', " "), one.replace('\n', " "));
+        assert_eq!(read(Path::new("all.json"), &lines).unwrap().tracks.len(), 2);
+        let array = format!("[{one}, {one}]");
+        assert_eq!(read(Path::new("all.json"), &array).unwrap().tracks.len(), 2);
+    }
+
+    #[test]
+    fn every_beets_field_with_a_vorbis_name_is_read_and_any_other_reported() {
+        let one = r#"{"title": "Harbor Lights at Noon", "artist": "Ada Quill", "album": "The Glass Orchards",
+            "track": 2, "label": "Saltmarsh Records", "bpm": 120, "composer": "Tamsin Orr",
+            "lyricist": "Ferris Gale", "catalognum": "SM-001", "media": "CD", "comp": true,
+            "albumtypes": ["album", "compilation"], "comments": "a quiet one", "original_year": 1999,
+            "original_month": 4, "rg_track_gain": -6.5, "style": "Coastal", "artist_credit": "A. Quill",
+            "tracktotal": 0, "disc": 0, "isrc": "", "mb_trackid": "", "year": 0, "arranger": null,
+            "path": "/x/y.flac", "mtime": 1700000000.5, "id": 7, "album_id": 3, "bitrate": 900000,
+            "format": "FLAC", "length": 50.0, "data_source": "MusicBrainz"}"#;
+        let sheet = read(Path::new("beets.json"), one).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        let names: Vec<&str> = tags.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "TITLE",
+                "ARTIST",
+                "ALBUM",
+                "TRACKNUMBER",
+                "COMPOSER",
+                "LYRICIST",
+                "COMMENT",
+                "BPM",
+                "COMPILATION",
+                "LABEL",
+                "CATALOGNUMBER",
+                "RELEASETYPE",
+                "MEDIA",
+                "ORIGINALDATE",
+            ]
+        );
+        assert_eq!(values(tags, "LABEL"), ["Saltmarsh Records"]);
+        assert_eq!(values(tags, "BPM"), ["120"]);
+        assert_eq!(values(tags, "LYRICIST"), ["Ferris Gale"]);
+        assert_eq!(values(tags, "COMPILATION"), ["1"]);
+        assert_eq!(values(tags, "RELEASETYPE"), ["album", "compilation"]);
+        assert_eq!(values(tags, "ORIGINALDATE"), ["1999-04"]);
+        assert_eq!(
+            sheet.skipped,
+            [
+                "REPLAYGAIN_TRACK_GAIN, which describes another file",
+                "\"artist_credit\", which has no Vorbis name muman knows",
+                "\"style\", which has no Vorbis name muman knows",
+            ]
+        );
+    }
+
+    #[test]
+    fn beets_numbers_read_as_strings_or_whole_floats_and_a_broken_line_is_skipped() {
+        let one = r#"{"title": "Copper Moth", "track": "4", "disc": 1.0, "year": "2011", "length": "200"}"#;
+        let lines = format!("{one}\n{{\"title\": \"Rooms\n\n{one}\n");
+        let sheet = read(Path::new("all.jsonl"), &lines).unwrap();
+        assert_eq!(sheet.tracks.len(), 2);
+        assert_eq!(sheet.skipped, ["line 2, which is no JSON"]);
+        let track = &sheet.tracks[0];
+        assert_eq!(track.number, Some(4));
+        assert_eq!(values(&track.tags, "TRACKNUMBER"), ["4"]);
+        assert_eq!(values(&track.tags, "DISCNUMBER"), ["1"]);
+        assert_eq!(values(&track.tags, "DATE"), ["2011"]);
+        assert_eq!(track.length_ms, Some(200_000));
+        assert!(read(Path::new("x.json"), "{\"title\": \n").is_err());
+    }
+
+    #[test]
+    fn names_with_spaces_at_their_ends_or_escaped_equals_set_nothing() {
+        assert_eq!(vorbis_name("title = Lantern"), None);
+        assert_eq!(vorbis_name(" TITLE=Lantern"), None);
+        assert_eq!(vorbis_name("ALBUM ARTIST=Marlo"), Some("ALBUM ARTIST"));
+        let sheet = read(
+            Path::new("x.ffmeta"),
+            ";FFMETADATA1\ntitle=Lantern\na\\=b=c\ntitle=Lantern Weather\n",
+        )
+        .unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["Lantern Weather"]);
+        assert_eq!(sheet.skipped, ["\"a=b\", which is no tag name"]);
+    }
+
+    #[test]
+    fn a_musicbrainz_recording_reads_through_its_record() {
+        let ws = r#"{"id": "00000000-0000-4000-8000-000000000002", "title": "Copper Moth", "length": 200000,
+            "artist-credit": [{"name": "Marlo Venn", "artist": {"id": "00000000-0000-4000-8000-000000000003", "name": "Marlo Venn"}}],
+            "isrcs": ["XX0000000001"], "releases": []}"#;
+        let track = &read(Path::new("rec.json"), ws).unwrap().tracks[0];
+        assert_eq!(values(&track.tags, "TITLE"), ["Copper Moth"]);
+        assert_eq!(values(&track.tags, "ISRC"), ["XX0000000001"]);
+        assert_eq!(track.length_ms, Some(200_000));
+    }
+
+    #[test]
+    fn a_file_that_sets_nothing_is_refused() {
+        for empty in ["[]", "", "  \n"] {
+            assert!(read(Path::new("tags.json"), empty).is_err(), "{empty:?}");
+        }
+        let gains = "TITLE=x\nREPLAYGAIN_TRACK_GAIN=-1 dB\n";
+        assert!(read(Path::new("a.txt"), gains).is_ok());
+        assert!(
+            read(
+                Path::new("a.txt"),
+                "REPLAYGAIN_TRACK_GAIN=-1 dB\nREPLAYGAIN_TRACK_PEAK=1\n"
+            )
+            .is_err()
+        );
+        let release = r#"{"id": "00000000-0000-4000-8000-000000000004", "title": "The Glass Orchards",
+            "artist-credit": [{"name": "Marlo Venn"}], "media": []}"#;
+        assert!(read(Path::new("release.json"), release).is_err());
+    }
+
+    #[test]
+    fn whatever_describes_another_file_is_skipped_in_any_spelling() {
+        let text = "TITLE=x\nREPLAYGAIN_REFERENCE_LOUDNESS=89.0 dB\nlyrics-eng=sung words\n\
+            UNSYNCED LYRICS=more\nMP3GAIN_MINMAX=1,2\nmajor_brand=M4A\ncreation_time=2011\n\
+            iTunes_CDDB_1=x\nacoustid_fingerprint=AQAA\nr128_track_gain=0\n";
+        let sheet = read(Path::new("a.txt"), text).unwrap();
+        assert_eq!(sheet.tracks[0].tags.len(), 1, "{:?}", sheet.tracks[0].tags);
+    }
+
+    #[test]
+    fn a_long_comment_runs_over_lines_and_values_are_clean() {
+        let text = "TITLE=x\nARTIST=y\nCOMMENT=a\nb\nc\nd\ne\n";
+        assert_eq!(format_of(Path::new("a.txt"), text), Some(Format::Vorbis));
+        let sheet = read(Path::new("a.txt"), text).unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "COMMENT"), ["a\nb\nc\nd\ne"]);
+        assert_eq!(
+            format_of(Path::new("a.txt"), "a quiet line\nTITLE=x\nARTIST=y\n"),
+            None
+        );
+        let long = format!("TITLE=x\u{7}{}\n", "é".repeat(5000));
+        let sheet = read(Path::new("a.txt"), &long).unwrap();
+        let title = &values(&sheet.tracks[0].tags, "TITLE")[0];
+        assert!(title.len() <= MOST_BYTES && !title.contains('\u{7}'));
+    }
+
+    #[test]
+    fn ffmetadata_continues_on_an_odd_run_of_backslashes_and_reads_without_its_header() {
+        let sheet = read(Path::new("x.ffmeta"), ";FFMETADATA1\ntitle=a\\\\\\\nb\n").unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["a\\\nb"]);
+        let bare = read(
+            Path::new("x.ffmeta"),
+            "title=Copper Moth\nartist=Marlo Venn\n",
+        )
+        .unwrap();
+        assert_eq!(values(&bare.tracks[0].tags, "TITLE"), ["Copper Moth"]);
+    }
+
+    #[test]
+    fn dates_and_counts_are_real_ones() {
+        assert_eq!(date("2011-03-04T10:00:00Z"), Some("2011-03-04".into()));
+        for bad in ["2011-13", "2011-00", "2011-13-45", "20111399", "0000", "11"] {
+            assert_eq!(date(bad), None, "{bad}");
+        }
+        let sheet = read(Path::new("a.txt"), "TITLE=x\nTRACKTOTAL=abc\nDISCTOTAL=2\n").unwrap();
+        assert_eq!(values(&sheet.tracks[0].tags, "TRACKTOTAL"), [] as [&str; 0]);
+        assert_eq!(values(&sheet.tracks[0].tags, "DISCTOTAL"), ["2"]);
+    }
+
+    #[test]
+    fn album_tags_give_way_to_a_tracks_own() {
+        let sheet = Sheet {
+            album: vec![
+                ("ARTIST".into(), vec!["Marlo Venn".into()]),
+                ("ALBUM".into(), vec!["Orchards".into()]),
+            ],
+            tracks: vec![Track {
+                tags: vec![("ARTIST".into(), vec!["Kiri Hoshino".into()])],
+                ..Track::default()
+            }],
+            skipped: Vec::new(),
+        };
+        assert_eq!(
+            sheet.tags_of(0),
+            [
+                ("ARTIST".to_string(), vec!["Kiri Hoshino".to_string()]),
+                ("ALBUM".into(), vec!["Orchards".into()])
+            ]
+        );
+        assert_eq!(date("2011-3"), None);
+        assert_eq!(date("2011"), Some("2011".into()));
+    }
+
+    #[test]
+    fn a_beets_credit_joined_in_one_field_is_not_one_more_artist() {
+        // beets keeps the credit as written in `artist` and each artist in
+        // `artists`; a song's ARTIST is each artist, a value apiece.
+        let one = r#"{"title": "Copper Moth", "artist": "Ada Quill feat. Marlo Venn",
+            "artists": ["Ada Quill", "Marlo Venn"], "albumartist": "Ada Quill & Tamsin Orr",
+            "albumartists": ["Ada Quill", "Tamsin Orr"]}"#;
+        let sheet = read(Path::new("beets.json"), one).unwrap();
+        let tags = &sheet.tracks[0].tags;
+        assert_eq!(
+            values(tags, "ARTIST"),
+            ["Ada Quill", "Marlo Venn"],
+            "{tags:?}"
+        );
+        assert_eq!(
+            values(tags, "ALBUMARTIST"),
+            ["Ada Quill", "Tamsin Orr"],
+            "{tags:?}"
+        );
+    }
+}

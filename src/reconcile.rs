@@ -52,6 +52,9 @@ pub struct Options {
     /// Take what each fetched source holds now where it differs from
     /// what its song was built from.
     pub accept: bool,
+    /// Library files changed before the sync, as an undo puts files back,
+    /// which its `changed` hook counts with its own.
+    pub before: crate::history::Changed,
 }
 
 /// Songs left alone for a file not muman's that a run names one by one;
@@ -70,6 +73,8 @@ pub struct Measuring<'a> {
     pub say_unread: bool,
     /// Keep what has been measured so far, as a crash would lose it.
     pub checkpoint: &'a mut dyn FnMut(&State) -> Result<()>,
+    /// The analyses of the whole audio a source measured takes.
+    pub analyses: Vec<crate::analysis::Kind>,
 }
 
 impl std::fmt::Debug for Measuring<'_> {
@@ -136,7 +141,12 @@ pub fn measure<R: Runner, W: Write>(
         parallel::builds(),
         |(n, l)| {
             let _working = step.working(&progress::label(&l.path));
-            facts::gather(runner, l, &scratch.join(format!("facts-{n}")))
+            facts::gather(
+                runner,
+                l,
+                &scratch.join(format!("facts-{n}")),
+                &how.analyses,
+            )
         },
         |chunk, measured| {
             for ((_, located), result) in chunk.iter().zip(measured) {
@@ -308,6 +318,168 @@ fn hash<R: Runner, W: Write>(
     Ok(true)
 }
 
+/// Take the looks of the pictures of every source in `keys` whose
+/// measures hold but whose looks were taken another way, decoding only
+/// its pictures. Returns whether any were.
+pub fn look<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<Located> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| {
+            state
+                .facts
+                .get(&l.key)
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.pictured())
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!("Hashing the covers of {} source(s)", due.len()),
+    )?;
+    let step = progress::step("Hashing covers", Some(due.len() as u64));
+    let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
+    let read = parallel::map(&numbered, parallel::builds(), |(n, l)| {
+        let _working = step.working(&progress::label(&l.path));
+        facts::look(runner, l, &scratch.join(format!("look-{n}")))
+    });
+    for (located, result) in due.iter().zip(read) {
+        let Some(f) = state.facts.get_mut(&located.key) else {
+            continue;
+        };
+        match result {
+            Ok(looks) => f.take_looks(&looks),
+            Err(e) => {
+                crate::ui::warning(
+                    out,
+                    &format!("Could not read the covers of {}: {e:#}", located.key),
+                )?;
+                f.take_looks(&[]);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Analyze, for each of `wanted`, every source whose measures hold but
+/// lack it, by one decode of its own rather than measuring it all again.
+/// Returns whether any was.
+fn analyze<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    wanted: &[crate::analysis::Kind],
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<(Located, Vec<crate::analysis::Kind>)> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter_map(|l| {
+            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
+            let kinds = f.unanalyzed(wanted);
+            (!kinds.is_empty()).then_some((l, kinds))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(out, &format!("Analyzing {} source(s)", due.len()))?;
+    let step = progress::step("Analyzing", Some(due.len() as u64));
+    let numbered: Vec<(usize, &(Located, Vec<crate::analysis::Kind>))> =
+        due.iter().enumerate().collect();
+    let facts = &state.facts;
+    let read = parallel::map(&numbered, parallel::builds(), |(n, (l, kinds))| {
+        let _working = step.working(&progress::label(&l.path));
+        let audio = facts.get(&l.key).and_then(|f| f.audio.as_ref())?;
+        let scratch = scratch.join(format!("analyze-{n}"));
+        Some(facts::analyze(runner, l, audio, kinds, &scratch))
+    });
+    for ((located, kinds), result) in due.iter().zip(read) {
+        let Some(audio) = state
+            .facts
+            .get_mut(&located.key)
+            .and_then(|f| f.audio.as_mut())
+        else {
+            continue;
+        };
+        let analysis = match result {
+            Some(Ok(a)) => a,
+            Some(Err(e)) => {
+                crate::ui::warning(out, &format!("Could not analyze {}: {e:#}", located.key))?;
+                crate::analysis::Pass::new(kinds.clone()).finish()
+            }
+            None => continue,
+        };
+        audio.analysis.merge(analysis);
+    }
+    Ok(true)
+}
+
+/// Analyze the audio of every source in `keys` that `audio` mixes into
+/// another layout, as mixed, where it is not already. Returns whether any
+/// was.
+fn analyze_mixes<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    settings: &crate::settings::Settings,
+    out: &mut W,
+) -> Result<bool> {
+    let wanted = crate::analysis::wanted(&settings.loudness);
+    if wanted.is_empty() {
+        return Ok(false);
+    }
+    let due: Vec<(
+        Located,
+        crate::facts::AudioFacts,
+        String,
+        crate::codec::Layout,
+    )> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter_map(|l| {
+            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
+            let audio = f.audio.as_ref()?;
+            let layout = settings.audio.written(&audio.shape()).0?;
+            let rev = f.audio_rev();
+            let unmixed = state
+                .mix(&l.key, &rev, layout)
+                .is_none_or(|a| !a.stale(&wanted).is_empty());
+            unmixed.then(|| (l, audio.clone(), rev, layout))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(out, &format!("Analyzing {} mix(es)", due.len()))?;
+    let step = progress::step("Analyzing mixes", Some(due.len() as u64));
+    let read = parallel::map(&due, parallel::builds(), |(l, audio, _, layout)| {
+        let _working = step.working(&progress::label(&l.path));
+        facts::analyze_mix(runner, l, audio, crate::codec::mix_filter(*layout), &wanted)
+    });
+    for ((located, _, rev, layout), analysis) in due.into_iter().zip(read) {
+        state.record_mix(state::Mix {
+            source: located.key,
+            audio: rev,
+            layout,
+            analysis,
+        });
+    }
+    Ok(true)
+}
+
 /// Make every comparison the songs' resolving may ask for that is not
 /// made already at the sources' revisions. Returns whether any was.
 fn compare<R: Runner, W: Write>(
@@ -343,7 +515,7 @@ fn compare<R: Runner, W: Write>(
     crate::ui::info(
         out,
         &format!(
-            "Comparing {} pair(s) of {} recording(s)",
+            "Comparing {} pair(s), decoding {} recording(s)",
             due.len().div_ceil(2),
             keys.len()
         ),
@@ -370,6 +542,7 @@ fn compare<R: Runner, W: Write>(
             coverage: 0.0,
         });
         let ms = |e: &[f64]| i64::try_from(e.len()).unwrap_or(i64::MAX) * 10;
+        let outside = align::outside(ea, eb, &found);
         Some(Aligned {
             a: a.clone(),
             b: b.clone(),
@@ -381,7 +554,9 @@ fn compare<R: Runner, W: Write>(
             coverage: found.coverage,
             a_ms: ms(ea),
             b_ms: ms(eb),
-            a_extra_ms: align::audible_outside(ea, eb.len(), &found),
+            a_extra_ms: outside.extra_ms,
+            a_lacks_ms: outside.lacks_ms,
+            b_lacks_ms: outside.track_lacks_ms,
         })
     });
     for aligned in compared.into_iter().flatten() {
@@ -439,8 +614,22 @@ fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     if old.lyrics != new.lyrics {
         what.push("lyrics");
     }
-    if old.tags != new.tags {
+    let other_tags = |p: &Plan| {
+        p.tags
+            .iter()
+            .filter(|(k, _)| {
+                !crate::tags::Field::named(k).is_some_and(crate::tags::Field::is_loudness)
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if other_tags(old) != other_tags(new) {
         what.push("tags");
+    }
+    if old.held_loudness() != new.held_loudness()
+        || old.tags.len() - other_tags(old).len() != new.tags.len() - other_tags(new).len()
+    {
+        what.push("loudness");
     }
     what
 }
@@ -535,15 +724,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
     crate::manifest::present(home)?;
-    if crate::platform::within(&dirs.library, &home.join("sources"))
-        || crate::platform::same_path(&dirs.library, home)
-    {
-        anyhow::bail!(
-            "the library {} is in the home's sources, where muman would read the songs it \
-             writes back as new ones; choose a folder outside them",
-            dirs.library.display()
-        );
-    }
+    dirs.apart()?;
     let _library = if opts.dry_run {
         None
     } else {
@@ -576,6 +757,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         retry: opts.retry,
         say_unread: true,
         checkpoint: &mut |s: &State| persist(home, s, opts.dry_run, &lock),
+        analyses: crate::analysis::wanted(&manifest.settings.loudness),
     };
     measure(
         runner,
@@ -589,6 +771,20 @@ pub fn reconcile_into<R: Runner, W: Write>(
     // Here rather than in every measuring, so the plans' real sizes are
     // named anew by the fitting that reads them.
     if hash(runner, &store, &listed, &mut state, temp.path(), out)? {
+        persist(home, &state, opts.dry_run, &lock)?;
+    }
+    let analyses = crate::analysis::wanted(&manifest.settings.loudness);
+    let analyzed = analyze(
+        runner,
+        &store,
+        &listed,
+        &mut state,
+        temp.path(),
+        &analyses,
+        out,
+    )?;
+    let mixed = analyze_mixes(runner, &store, &listed, &mut state, &manifest.settings, out)?;
+    if analyzed || mixed {
         persist(home, &state, opts.dry_run, &lock)?;
     }
     let renames = sites_found(&manifest, &state);
@@ -648,6 +844,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             scratch: workshop.path(),
             library: &dirs.library,
             kept: limit::kept(&state, &dirs.library, &failed, block),
+            force: opts.force,
         };
         let fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
         if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {
@@ -666,9 +863,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
     }
     let files = files_of(&planned, &manifest, &state.outputs);
     let drifts = crate::held::drifts(&manifest, &state.facts);
-    let (taken, kept): (Vec<&Drift>, Vec<&Drift>) =
-        drifts.iter().partition(|d| opts.accept || d.followed());
-    let holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    let cut = if opts.force {
+        BTreeSet::new()
+    } else {
+        cut_since_built(&planned, &drifts, &state.facts)
+    };
+    let (taken, kept): (Vec<&Drift>, Vec<&Drift>) = drifts
+        .iter()
+        .filter(|d| !cut.contains(&d.song))
+        .partition(|d| opts.accept || d.followed());
+    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    holding.extend(&cut);
     let decided = decide(
         &planned,
         &files,
@@ -685,6 +890,28 @@ pub fn reconcile_into<R: Runner, W: Write>(
         (opts.accept, opts.force),
         out,
     )?;
+    for ((n, r), d) in planned.iter().zip(&decided) {
+        let Some(f) = state
+            .facts
+            .get(&r.plan.audio.key)
+            .filter(|_| cut.contains(n))
+        else {
+            continue;
+        };
+        if let (Doing::Held { .. }, Some(said), Some(held)) = (d, f.cut_from, f.duration) {
+            ok = false;
+            crate::ui::error(
+                out,
+                &format!(
+                    "Failed: {}: {} holds {held:.0} s of audio where its header says {said:.0} s, \
+                     cut off since its song was built; its file is left as built \
+                     (`sync --force` writes it from what the source holds now)",
+                    name_of(&manifest.songs[*n], Some(r), &state.facts),
+                    r.plan.audio.key
+                ),
+            )?;
+        }
+    }
 
     if opts.dry_run {
         let shown = Shown {
@@ -769,7 +996,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 }
             }
             Doing::Move { .. }
-                if changed_since_written(&dirs.library, &state.outputs, &path_of(r)) =>
+                if edited_since_written(&dirs.library, &state.outputs, &path_of(r)) =>
             {
                 Doing::Guard { file: path_of(r) }
             }
@@ -806,6 +1033,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 },
             );
         }
+        // Recorded ahead of a new file as of one written over, so a run
+        // stopped among them is undone, the hand edit it applied with it.
+        ledger.checkpoint()?;
         pending.save(home)?;
     }
     let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
@@ -859,12 +1089,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
             }
             _ => None,
         };
-        if let Some(written) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
+        if let Some((mut written, path)) = kept.and_then(|p| Some((old.get(&p)?.clone(), p))) {
+            // Equal to the plan written as its file holds it, the plan now
+            // also keeps the gain the mode asks, as a song written does.
+            if *d == Doing::Keep {
+                written.plan = Some(r.plan.clone());
+            }
             outputs.insert(
-                written.1,
+                path,
                 Written {
                     sources: manifest.songs[*n].sources.clone(),
-                    ..written.0
+                    ..written
                 },
             );
         }
@@ -887,7 +1122,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
             ),
         )?;
     }
-    let mut changed = false;
     let mut written = 0_usize;
     let mut learned = Vec::new();
     let every = opts.checkpoint.unwrap_or(CHECKPOINT);
@@ -921,7 +1155,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
             let name = name_of(song, Some(r), &state.facts);
             match result {
                 Ok(done) => {
-                    changed = true;
                     // A new format writes the song beside its old file, under
                     // another extension.
                     let stem = done.audio.with_extension("");
@@ -1042,6 +1275,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     state
         .alignments
         .retain(|a| kept.contains(&a.a) && kept.contains(&a.b));
+    state.mixes.retain(|m| kept.contains(&m.source));
     state.save(home)?;
     for edit in crate::held::records(&manifest, &state.facts, &taken) {
         manifest.edit(edit);
@@ -1049,18 +1283,22 @@ pub fn reconcile_into<R: Runner, W: Write>(
     manifest.save_locked(&lock)?;
     if let Some(run) = run {
         run.saw(&manifest);
+        run.synced();
     }
-    if changed || !removed.is_empty() {
+    let counts = [
+        ("written", written + opts.before.written),
+        ("moved", arrived.len() + opts.before.moved),
+        ("removed", removed.len() + opts.before.removed),
+    ];
+    if counts.iter().any(|(_, n)| *n > 0) {
         if manifest.settings.library.touch_root {
             touch(&dirs.library, out)?;
         }
-        let (written, removed) = (written.to_string(), removed.len().to_string());
+        let counts = counts.map(|(name, n)| (name, n.to_string()));
         let library = dirs.library.to_string_lossy();
-        let values = [
-            ("library", library.as_ref()),
-            ("written", written.as_str()),
-            ("removed", removed.as_str()),
-        ];
+        let values: Vec<(&str, &str)> = std::iter::once(("library", library.as_ref()))
+            .chain(counts.iter().map(|(name, n)| (*name, n.as_str())))
+            .collect();
         hooks::run(runner, &manifest.hooks, hooks::Event::Changed, &values, out)?;
     }
     Ok(ok)
@@ -1173,8 +1411,6 @@ fn fit_summary<W: Write>(fitted: &limit::Fitted, out: &mut W) -> Result<()> {
     Ok(())
 }
 
-/// Whether a file muman wrote has changed since, by its size and
-/// time: a tagger or player that rewrote it.
 /// What `old` records of the song's file, when that file is the song as
 /// it would be written now: its plan, its file there and not empty, its
 /// lyrics there.
@@ -1226,15 +1462,49 @@ fn out_of_space(e: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `file` is empty, as a disk that filled up leaves one: it holds
+/// no one's work, so it counts as unchanged since written and a sync
+/// writes it again, as `check` says.
+fn emptied(file: &Path) -> bool {
+    std::fs::metadata(file).is_ok_and(|m| m.len() == 0)
+}
+
+/// Whether a file muman wrote has changed since, by its size and
+/// time: a tagger or player that rewrote it.
 pub(crate) fn changed_since_written(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
 ) -> bool {
+    if emptied(&library.join(path)) {
+        return false;
+    }
     old.get(path)
         .and_then(|w| w.stamp.as_ref())
         .zip(store::stamp_text(&library.join(path)))
         .is_some_and(|(was, now)| *was != now)
+}
+
+/// [`changed_since_written`], or, its size and time as written, its
+/// bytes not the ones written: a tagger set to keep files' times, its
+/// edit fitting the tag's padding. The bytes are read only here, for a
+/// file about to be written over, moved with new tags or removed, so a
+/// sync reads no file it leaves as it is.
+pub(crate) fn edited_since_written(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+) -> bool {
+    if changed_since_written(library, old, path) {
+        return true;
+    }
+    let file = library.join(path);
+    let Some(written) = old.get(path).filter(|w| w.stamp.is_some()) else {
+        return false;
+    };
+    written.digest.as_ref().is_some_and(|was| {
+        !emptied(&file) && crate::facts::digest_file(&file).is_some_and(|now| now != *was)
+    })
 }
 
 /// Which file the state records is each song's, one file to one song:
@@ -1251,7 +1521,7 @@ pub(crate) fn files_of(
 ) -> BTreeMap<usize, PathBuf> {
     let own = |keys: &[SourceKey]| -> BTreeSet<SourceKey> {
         keys.iter()
-            .filter(|k| !crate::provider::is_kept(k))
+            .filter(|k| !crate::manifest::shareable(k))
             .cloned()
             .collect()
     };
@@ -1281,6 +1551,9 @@ pub(crate) fn files_of(
 fn media_equal(a: &Plan, b: &Plan) -> bool {
     a.version == b.version
         && a.format == b.format
+        && a.chain() == b.chain()
+        // A retag sets an Opus header's gain, but only a write puts back the one it had.
+        && (a.opus_header().is_none() || b.opus_header().is_some())
         && a.audio == b.audio
         && a.cover == b.cover
         && a.lyrics == b.lyrics
@@ -1358,6 +1631,28 @@ fn say_drifts<W: Write>(
     Ok(())
 }
 
+/// The songs of `planned` whose audio would come from a source whose
+/// audio changed since the song was built and is cut off now, as a copy
+/// stopped short leaves a file: written from it, the song would lose what
+/// its file holds past the cut, so the file is held as built.
+fn cut_since_built(
+    planned: &[PlannedSong],
+    drifts: &[Drift],
+    facts: &BTreeMap<SourceKey, Facts>,
+) -> BTreeSet<usize> {
+    planned
+        .iter()
+        .filter(|(n, r)| {
+            let key = &r.plan.audio.key;
+            facts.get(key).is_some_and(|f| f.cut_from.is_some())
+                && drifts.iter().any(|d| {
+                    d.song == *n && d.key == *key && d.changed.contains(&crate::held::Aspect::Audio)
+                })
+        })
+        .map(|(n, _)| *n)
+        .collect()
+}
+
 /// Each of `planned` kept as it is, decided before any moves: its file
 /// as it would be written, or one built before from what a source in
 /// `holding` no longer holds.
@@ -1433,8 +1728,7 @@ fn decide(
             && was.lyrics.as_ref().is_none_or(|l| library.join(l).exists());
         let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
         let retag = was.plan.as_ref() != Some(&r.plan);
-        let changed = changed_since_written(library, old, from);
-        if same_media && !(changed && retag) {
+        if same_media && !(retag && edited_since_written(library, old, from)) {
             moving.push((i, from.clone(), path, retag));
         }
     }
@@ -1496,11 +1790,11 @@ fn decide(
                 && was
                     .and_then(|w| w.plan.as_ref())
                     .is_some_and(|p| media_equal(p, &r.plan));
-            if let Some(file) = file.filter(|f| changed_since_written(library, old, f)) {
+            if let Some(file) = file.filter(|f| edited_since_written(library, old, f)) {
                 return Doing::Guard { file: file.clone() };
             }
             // Whosever it is, a changed file at the path is not written over.
-            if changed_since_written(library, old, &path) {
+            if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
             if !foreign(library, old, &path).is_empty() {
@@ -1599,7 +1893,10 @@ pub(crate) fn plan<W: Write>(
     for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
         crate::ui::info(out, &line)?;
     }
-    for line in crate::settings::stale_warnings(&manifest.stale_defaults) {
+    for line in crate::settings::stale_warnings(&manifest.stale_defaults)
+        .into_iter()
+        .chain(manifest.misspelled())
+    {
         crate::ui::warning(out, &line)?;
     }
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));
@@ -1644,6 +1941,7 @@ pub(crate) fn plan<W: Write>(
             )?;
         }
     }
+    crate::loudness::settle(&mut planned, state, &manifest.settings);
     separate(
         &mut planned,
         &naming,
@@ -1763,7 +2061,7 @@ fn prune_plan(
         }
         let fate = if written.sources.iter().any(|k| failed.contains(k)) {
             Pruned::KeptForFailed
-        } else if changed_since_written(library, old, path)
+        } else if edited_since_written(library, old, path)
             && !(forced
                 && outputs
                     .values()
@@ -2079,9 +2377,12 @@ fn tally<W: Write>(
         parts.push(format!("{failed} failed"));
     }
     if parts.is_empty() {
-        if showing.matched.is_some() {
-            crate::ui::info(out, "No song matches the query")?;
-        }
+        let said = if showing.matched.is_some() {
+            "No song matches the query"
+        } else {
+            "No song listed yet; `muman add` adds one"
+        };
+        crate::ui::info(out, said)?;
         return Ok(());
     }
     let hidden = showing.matched.is_none() && !showing.all && fates.contains_key(&Fate::Kept);
@@ -2255,7 +2556,7 @@ pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
         for key in written
             .sources
             .iter()
-            .filter(|k| !crate::provider::is_kept(k))
+            .filter(|k| !crate::manifest::shareable(k))
         {
             if let Some(other) = owners.insert(key, path) {
                 return Err(format!("{key} made both {other:?} and {path:?}"));

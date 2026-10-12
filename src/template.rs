@@ -118,6 +118,17 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_artist_falls_back_to_the_album_artist_with_or() {
+        let t = Template::new("{{ artist or album_artist }}").unwrap();
+        let none = Fields {
+            artist: String::new(),
+            ..fields()
+        };
+        assert_eq!(t.render(&none).unwrap(), "The Paper Comets");
+        assert_eq!(t.render(&fields()).unwrap(), "Paper Comets");
+    }
+
+    #[test]
     fn the_default_template_reads_artist_album_and_numbered_title() {
         let t = Template::new(DEFAULT_TEMPLATE).unwrap();
         assert_eq!(

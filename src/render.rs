@@ -13,9 +13,13 @@
 //! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
 //! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
 //! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
-//! name; in WavPack each is an APEv2 item, by the name `lofty` gives it or
-//! its own. Opus holds ReplayGain's gains as R128's and no peaks, as
-//! RFC 7845 tells its players to read them. The cover is a front-cover
+//! name. An MP4 comment of several values is one atom holding a `data`
+//! atom for each, as iTunes, Picard and mutagen write one: `lofty` makes
+//! a generic tag's values an atom each, and a reader that takes one atom
+//! a name, as ffmpeg's does, then sees only the last. In WavPack each
+//! comment is an APEv2 item, by the name `lofty` gives it or its own.
+//! Opus holds ReplayGain's gains as R128's and no peaks, as RFC 7845
+//! tells its players to read them. The cover is a front-cover
 //! picture written through `lofty`: a
 //! JPEG or PNG without borders as its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
@@ -109,8 +113,9 @@ impl Inputs {
     }
 }
 
-fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output {
-    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{index}")];
+fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
+    let format = plan.format;
+    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
     args.extend(match format {
         Format::Copy { .. } => vec!["-c:a".into(), "copy".into()],
         Format::Encode {
@@ -118,7 +123,7 @@ fn audio_output(format: Format, input: usize, index: u32, path: &Path) -> Output
             kbps,
             adapt,
             mix,
-        } => codec.encoder_args(kbps, adapt, mix),
+        } => codec.encoder_args(kbps, adapt, mix, plan.chain()),
     });
     // Tags are written from the plan alone; ffmpeg would carry the
     // container's, chapters as comments among them.
@@ -179,7 +184,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut inputs = Inputs::default();
     let source = locate(&plan.audio.key)?;
     let n = inputs.index(&source.path);
-    let mut outputs = vec![audio_output(plan.format, n, plan.audio.index, &audio_part)];
+    let mut outputs = vec![audio_output(plan, n, &audio_part)];
     let mut problems = Vec::new();
 
     let cover = match &plan.cover {
@@ -279,6 +284,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             problems.push(format!("no cover: {e:#}"));
             write_tags(&audio_part, plan.format, &tags, None)?;
         }
+        set_opus_header(&audio_part, plan)?;
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
                 fs::write(&lyrics_part, text)
@@ -399,7 +405,8 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         {
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
-        write_tags(&staged, plan.format, &tags, picture)
+        write_tags(&staged, plan.format, &tags, picture)?;
+        set_opus_header(&staged, plan)
     })();
     if let Err(e) = result {
         let _ = fs::remove_file(&staged);
@@ -413,6 +420,21 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         lyrics: lyrics.map(Path::to_path_buf),
         problems: Vec::new(),
     })
+}
+
+/// The gain `plan` gives its Opus header, set in `path` once its tags
+/// are written, as [`crate::ogg`] sets it.
+fn set_opus_header(path: &Path, plan: &Plan) -> Result<()> {
+    let Some(gain) = plan.opus_header() else {
+        return Ok(());
+    };
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    crate::ogg::set_output_gain(&mut file, gain)
+        .with_context(|| format!("setting the gain of {}", path.display()))
 }
 
 fn size_of(path: &Path) -> u64 {
@@ -526,20 +548,15 @@ fn lyrics_plan(
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
 ) -> Result<Option<String>> {
-    let file = match &lyrics.at {
-        LyricsAt::Stream { index } => {
-            let n = inputs.index(&source.path);
-            let mut args: Vec<OsString> = vec!["-map".into(), format!("{n}:{index}").into()];
-            args.extend(LRC_ARGS.iter().map(OsString::from));
-            outputs.push(Output::new(args, raw));
-            return Ok(None);
-        }
-        LyricsAt::Sidecar => source
-            .lyrics
-            .clone()
-            .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?,
-        LyricsAt::File => source.path.clone(),
-    };
+    if let LyricsAt::Stream { index } = &lyrics.at {
+        let n = inputs.index(&source.path);
+        let mut args: Vec<OsString> = vec!["-map".into(), format!("{n}:{index}").into()];
+        args.extend(LRC_ARGS.iter().map(OsString::from));
+        outputs.push(Output::new(args, raw));
+        return Ok(None);
+    }
+    let file = lyrics_file(&lyrics.at, source)
+        .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
     let text =
         lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
     Ok(Some(lyrics::shift_lrc(
@@ -547,6 +564,16 @@ fn lyrics_plan(
         lyrics.shift_ms,
         lyrics.stretch_ppm,
     )))
+}
+
+/// The file lyrics at `at` of `source` are read from; none for a stream,
+/// or lyrics beside it that are gone.
+pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
+    match at {
+        LyricsAt::Stream { .. } => None,
+        LyricsAt::Sidecar => source.lyrics.clone(),
+        LyricsAt::File => Some(source.path.clone()),
+    }
 }
 
 fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
@@ -592,7 +619,12 @@ fn write_tags(
         }
         Container::Mp4 => {
             let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
-            let mut ilst = Ilst::from(generic);
+            // A generic tag converts to an atom a value; inserted again,
+            // the values of one name merge into one atom.
+            let mut ilst = Ilst::new();
+            for atom in Ilst::from(generic) {
+                ilst.insert(atom);
+            }
             for (key, values) in own {
                 let ident = AtomIdent::Freeform {
                     mean: "com.apple.iTunes".into(),

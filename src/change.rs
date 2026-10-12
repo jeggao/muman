@@ -62,6 +62,9 @@ pub fn pick(
     let found: Vec<usize> = (0..views.len())
         .filter(|n| !views[*n].keys.is_empty() && query.matches(&views[*n]))
         .collect();
+    if found.is_empty() && verb == "restore" {
+        return refuse("No removed song matches the query; `muman list --removed` lists them");
+    }
     if found.is_empty() {
         return refuse("No song matches the query");
     }
@@ -71,9 +74,11 @@ pub fn pick(
     let labels: Vec<String> = found.iter().map(|n| label(&views[*n])).collect();
     match prompter {
         Some(p) => {
+            let every: Vec<usize> = (0..labels.len()).collect();
             let picked = p.choose(
                 &format!("{} songs match; which to {verb}?", found.len()),
                 &labels,
+                &every,
             )?;
             Ok(picked
                 .into_iter()
@@ -96,6 +101,7 @@ pub fn confirmed<W: Write>(
     out: &mut W,
 ) -> Result<bool> {
     if confirm.dry_run {
+        crate::ui::info(out, "Dry run: nothing changed")?;
         return Ok(false);
     }
     if confirm.yes {
@@ -196,6 +202,7 @@ pub fn remove<W: Write>(
     purge: bool,
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    run: &mut crate::history::Run,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -225,7 +232,7 @@ pub fn remove<W: Write>(
             // As the sync after does: a song's files stay whole when its
             // audio changed since written.
             let changed =
-                crate::reconcile::changed_since_written(&dirs.library, &read.state.outputs, path);
+                crate::reconcile::edited_since_written(&dirs.library, &read.state.outputs, path);
             let how = if changed {
                 "leaves in place, changed since muman wrote it,"
             } else {
@@ -246,8 +253,20 @@ pub fn remove<W: Write>(
                         .enumerate()
                         .any(|(m, s)| !picked.contains(&m) && s.has(k))
             };
+            // A removed song's sources stay, so that restore gets it whole.
+            let held = |k: &SourceKey| read.manifest.removed.iter().any(|r| r.sources.contains(k));
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
+                if held(key) {
+                    for file in store_files(&store, dirs, key)? {
+                        writeln!(
+                            out,
+                            "    keeps {}, which a removed song lists",
+                            file.display()
+                        )?;
+                    }
+                    continue;
+                }
                 for file in store_files(&store, dirs, key)? {
                     let how = if own { "trashes" } else { "deletes" };
                     writeln!(out, "    {how} {}", file.display())?;
@@ -272,6 +291,7 @@ pub fn remove<W: Write>(
     read.save(&picked)?;
     for (file, own) in doomed {
         if own {
+            run.trashed(&dirs.home, &file);
             to_trash(&file).with_context(|| format!("moving {} to the trash", file.display()))?;
         } else {
             match std::fs::remove_file(&file) {
@@ -288,7 +308,7 @@ pub fn remove<W: Write>(
 /// Move a file of the user's own to the desktop's trash. On macOS this
 /// asks the file manager API directly rather than scripting Finder,
 /// which prompts for permission and fails over SSH.
-fn to_trash(file: &Path) -> Result<(), trash::Error> {
+pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
     #[allow(unused_mut)]
     let mut trash = trash::TrashContext::default();
     #[cfg(target_os = "macos")]
@@ -310,7 +330,12 @@ pub fn restore<W: Write>(
 ) -> Result<bool> {
     let mut manifest = Manifest::load(&dirs.home)?;
     let query = Query::parse(terms, &query::extractors(&manifest))?;
-    let views: Vec<View> = manifest.removed.iter().map(query::removed_view).collect();
+    let state = State::load(&dirs.home)?;
+    let views: Vec<View> = manifest
+        .removed
+        .iter()
+        .map(|r| query::removed_view(r, &state))
+        .collect();
     query.check_fields(&views)?;
     let picked = pick(
         &views,
@@ -322,6 +347,27 @@ pub fn restore<W: Write>(
     if picked.is_empty() {
         crate::ui::info(out, "Nothing restored")?;
         return Ok(false);
+    }
+    // A file of your own `remove --purge` trashed would leave its song
+    // listed with nothing to make it from, and every sync failing.
+    let store = Store::scan(dirs)?;
+    let gone: Vec<String> = picked
+        .iter()
+        .flat_map(|n| &manifest.removed[*n].sources)
+        .filter_map(|k| match k {
+            SourceKey::Manual(m) if store.locate(k).is_none() => {
+                Some(format!("  {}", dirs.manual().join(m.path()).display()))
+            }
+            _ => None,
+        })
+        .collect();
+    if !gone.is_empty() {
+        return Err(Refused(format!(
+            "These files of your own are gone, as `remove --purge` moves them to the \
+             trash; put them back, then restore again:\n{}",
+            gone.join("\n")
+        ))
+        .into());
     }
     crate::ui::info(out, &format!("Listing {} song(s) again:", picked.len()))?;
     for n in &picked {
@@ -408,17 +454,22 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                     "`{term}`: {lower} is no tag; set a tag, audio, cover, lyrics or lyrics_offset"
                 ));
             }
-            _ => match (
-                tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
-                v,
-            ) {
-                (Some((_, values)), Some(v)) => values.push(v.to_string()),
-                (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
-                (None, v) => tags.push((
-                    name.to_string(),
-                    v.map(str::to_string).into_iter().collect(),
-                )),
-            },
+            _ => {
+                if let Some(why) = v.and_then(|v| crate::tags::bad_value(name, v)) {
+                    return refuse(why);
+                }
+                match (
+                    tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
+                    v,
+                ) {
+                    (Some((_, values)), Some(v)) => values.push(v.to_string()),
+                    (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
+                    (None, v) => tags.push((
+                        name.to_string(),
+                        v.map(str::to_string).into_iter().collect(),
+                    )),
+                }
+            }
         }
     }
     let mut assigns: Vec<Assign> = tags.into_iter().map(|(n, v)| Assign::Tag(n, v)).collect();
@@ -443,8 +494,10 @@ impl Assign {
                     format!("{name}: {now} → {}", values.join("; "))
                 }
             }
+            Self::Pin(pin, Some(v)) if v == "false" => format!("{pin}: none taken"),
             Self::Pin(pin, Some(key)) => format!("{pin}: pinned to {key}"),
             Self::Pin(pin, None) => format!("{pin}: picked by measure"),
+            Self::Offset(Some(ms)) if *ms < 0 => format!("lyrics earlier by {} ms", -ms),
             Self::Offset(Some(ms)) => format!("lyrics later by {ms} ms"),
             Self::Offset(None) => "lyrics offset: none".to_string(),
         }
@@ -459,10 +512,11 @@ impl Assign {
             Self::Pin(pin, Some(v)) => {
                 let key = SourceKey::parse(v)?;
                 if !song.has(&key) {
-                    bail!(
+                    return Err(Refused(format!(
                         "{key} is not a source of the song listing {}",
                         song.id().map(ToString::to_string).unwrap_or_default()
-                    );
+                    ))
+                    .into());
                 }
                 table.insert(pin, value(v.as_str()));
             }
@@ -491,7 +545,7 @@ pub fn set<W: Write>(
     mut prompter: Option<&mut dyn Prompter>,
     out: &mut W,
 ) -> Result<bool> {
-    let (query_terms, assigns) = split_terms(terms)?;
+    let (query_terms, assigns) = split_terms(terms).map_err(|e| Refused(format!("{e:#}")))?;
     if assigns.is_empty() {
         return refuse("Nothing to set: give NAME=VALUE or NAME!");
     }

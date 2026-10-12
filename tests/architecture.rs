@@ -67,8 +67,8 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
 const MUTATIONS: &[(&str, usize, &str)] = &[
     (
         "atomic.rs",
-        4,
-        "the primitives every other write goes through, and scratch folders",
+        5,
+        "the primitives every other write goes through, scratch folders, and the library's lock file as it is let go",
     ),
     (
         "library.rs",
@@ -82,8 +82,8 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "history.rs",
-        11,
-        "run records, the files kept for undo, and undo putting them back",
+        15,
+        "run records, the files kept for undo, undo putting them back or removing lyrics it added and the copies `add` made, and an undone run's record let go of once its sync ends",
     ),
     (
         "store.rs",
@@ -271,6 +271,31 @@ fn audio_is_mixed_only_to_fit_a_codec_or_to_print_it() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn samples_are_changed_only_as_a_plan_s_chain_says() {
+    let filters = [
+        "volume=",
+        "loudnorm",
+        "dynaudnorm",
+        "acompressor",
+        "alimiter",
+    ];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file != "codec.rs" {
+            for line in lines_with(&text, &filters) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "render a gain or dynamics filter in `codec::Codec::encoder_args`, from the plan's \
+         chain, so a song's samples change only as its plan says:\n{}",
+        wrong.join("\n")
+    );
 }
 
 #[test]

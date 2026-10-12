@@ -147,6 +147,7 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
             .iter()
             .map(|(f, v)| (f.vorbis().to_string(), vec![(*v).to_string()]))
             .collect(),
+        loudness: None,
     };
     let resolved = Resolved {
         plan,

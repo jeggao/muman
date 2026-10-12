@@ -7,24 +7,33 @@
 //! Every library write lands as a new file renamed into place, so a hard
 //! link to the old one keeps its bytes; a file is linked where the
 //! filesystem allows, else copied, while the `[history]` budget lasts.
-//! The budget is of every kept run together: a run that needs room lets
-//! go of the oldest runs first, and past it, a run that rewrites the
-//! whole library keeps part of it and loses nothing. The history is safe
-//! to lose: it only makes `undo` possible, and a history that cannot be
-//! written, as a folder made read-only, costs a run only that, with a
-//! warning.
+//! The budget is of every kept run together, and each run that records
+//! holds the history to it: the files of the oldest runs go first, as the
+//! run needs room and again as it ends, so a budget lowered since binds
+//! the runs kept before it too. The budget and the count are those of the
+//! song list as the run begins, a hand edit since the last run included,
+//! which is the run's to apply. A run whose files went keeps its record:
+//! `undo` puts its song list back and has the sync write those files
+//! again from their sources, as for any file not kept. Past the budget, a
+//! run that rewrites the whole library keeps part of it and loses
+//! nothing. The history is safe to lose: it only makes `undo` possible,
+//! and a history that cannot be written, as a folder made read-only,
+//! costs a run only that, with a warning.
 //!
 //! The record is written ahead of what it records: before the run moves,
 //! writes over or removes a library file, which a sync does only through
-//! [`crate::library::Ledger`], and again as it goes, so a run
-//! stopped partway, by a crash or Ctrl-C, is still listed, as
+//! [`crate::library::Ledger`], or writes a new one, and again as it goes,
+//! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
 //! interrupted, and can be undone. A folder with no record, left by a run
 //! stopped before it wrote one, holds nothing `undo` could use and is
 //! let go of with the runs past the count. A file such a run moved before
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
-//! reversed, as a song retagged where it moved to needs.
+//! reversed, as a song retagged where it moved to needs. A file the user
+//! had changed since muman wrote it, which only a forced run writes over,
+//! is noted so as it is kept and put back with the stamp it no longer
+//! matches, still the user's to the sync after.
 //!
 //! A run's song list before is the one the last kept run left, so a hand
 //! edit is undone with the run that applied it. A command that changes
@@ -37,9 +46,23 @@
 //! refuses when the song list changed after the run, by hand or
 //! otherwise, rather than lose those changes. It marks the record
 //! `undoing` before it changes anything and skips each step already
-//! done, so an undo stopped partway finishes when run again. A purge
+//! done, so an undo stopped partway finishes when run again. The record
+//! goes only once the sync after it has brought the library in line:
+//! the song list and the state put back, it is marked `undone`, so an
+//! undo stopped in that sync is still the latest run, which the next
+//! `undo` finishes rather than undo the run before it too, and `check`
+//! names. A run begun meanwhile begins from the song list put back, and
+//! one whose sync ends finishes the undo, letting go of the record. A purge
 //! cannot be undone in full: a fetched source is fetched again by the
-//! next sync, and a file of the user's own is in the desktop's trash.
+//! next sync, and a file of the user's own is in the desktop's trash,
+//! which muman cannot take it back from on every platform. The run
+//! records each it trashed, and `undo` refuses until the user puts them
+//! back, rather than list their songs again with nothing to make them.
+//! What `add` copied into the sources is recorded with a digest of it,
+//! and `undo` takes each copy out with its song, else the next sync
+//! would list it again as a file dropped in: a copy as made is deleted,
+//! the file it came from untouched, and one changed since goes to the
+//! trash.
 //!
 //! `run.json` carries a `version`; a record without one is of version 1.
 
@@ -88,6 +111,10 @@ struct Record {
     /// Set by an `undo` under way, so a second one finishes it.
     #[serde(default)]
     undoing: bool,
+    /// Set once that undo put the song list and the state back, leaving
+    /// only its sync to do.
+    #[serde(default)]
+    undone: bool,
     songs_before: Option<String>,
     songs_after: Option<String>,
     #[serde(with = "crate::relpath::portable_keys")]
@@ -98,12 +125,25 @@ struct Record {
     /// Those kept under the run's `files`.
     #[serde(with = "crate::relpath::portable_keys")]
     kept: BTreeSet<PathBuf>,
+    /// Those of them that were muman's files changed since it wrote
+    /// them, as a forced run writes over a file retagged by hand: put
+    /// back, they are still changed since written.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    changed: BTreeSet<PathBuf>,
     /// The bytes those take.
     #[serde(default)]
     bytes: u64,
     /// Library files the run moved, in the order it moved them.
     #[serde(default)]
     moves: Vec<Moved>,
+    /// Files of the user's own the run moved to the desktop's trash,
+    /// under the home.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    trashed: BTreeSet<PathBuf>,
+    /// Files `add` copied into the sources, under the home, with a digest
+    /// of each as copied.
+    #[serde(default, with = "crate::relpath::portable_keys")]
+    copied: BTreeMap<PathBuf, String>,
 }
 
 /// One run, recording as it goes; written ahead by [`Run::checkpoint`]
@@ -115,13 +155,18 @@ pub struct Run {
     outputs_known: bool,
     /// The other kept runs, oldest first, with the bytes each keeps.
     others: Vec<(PathBuf, u64)>,
-    /// The song list's `[history]`, read as the run began.
+    /// The song list's `[history]` as the run began, a hand edit since
+    /// the last run included.
     limits: crate::settings::History,
     /// Whether the history could not be written: the run goes on, and
     /// cannot be undone.
     lost: bool,
     /// The song list as the run last read or wrote it.
     seen: Seen,
+    /// An undo stopped in its sync, which this run's sync finishes.
+    finishes: Option<PathBuf>,
+    /// Whether the run's sync reached its end.
+    synced: bool,
     /// Held while the run lasts, so no other begins meanwhile.
     _runs: atomic::Lock,
 }
@@ -179,9 +224,32 @@ struct Head {
     #[serde(default = "complete")]
     complete: bool,
     #[serde(default)]
+    undoing: bool,
+    #[serde(default)]
+    undone: bool,
+    #[serde(default)]
+    songs_before: Option<String>,
+    #[serde(default)]
     songs_after: Option<String>,
     #[serde(default)]
     bytes: u64,
+}
+
+impl Head {
+    /// The song list the run left, when it says: as it ended, or as an
+    /// undo of it put it back.
+    fn left(self) -> Option<String> {
+        if self.undone {
+            Some(
+                self.songs_before
+                    .unwrap_or_else(|| crate::manifest::NEW.to_string()),
+            )
+        } else if self.complete && !self.undoing {
+            self.songs_after
+        } else {
+            None
+        }
+    }
 }
 
 fn head(dir: &Path) -> Option<Head> {
@@ -227,18 +295,26 @@ impl Run {
         let last = runs(home)
             .ok()
             .and_then(|mut r| r.pop())
-            .and_then(|dir| head(&dir));
-        let songs_before = match last {
-            Some(last) if last.complete && last.songs_after.is_some() => last.songs_after,
-            _ => {
-                // Read whole, not halfway through another run's save.
-                let _lock = atomic::Lock::folder(home)?;
-                songs_text(home)?
+            .and_then(|dir| Some((head(&dir)?, dir)));
+        let finishes = last
+            .as_ref()
+            .filter(|(h, _)| h.undone)
+            .map(|(_, dir)| dir.clone());
+        let now = {
+            // Read whole, not halfway through another run's save.
+            let _lock = atomic::Lock::folder(home)?;
+            songs_text(home)
+        };
+        let (songs_before, now) = match (last.and_then(|(h, _)| h.left()), now) {
+            (Some(left), now) => (Some(left), now.ok().flatten()),
+            (None, now) => {
+                let now = now?;
+                (now.clone(), now)
             }
         };
         // A song list that does not read keeps the default history; the
         // run itself reports why it does not read.
-        let limits = songs_before
+        let limits = now
             .as_deref()
             .and_then(|t| t.parse().ok())
             .and_then(|doc| crate::settings::read(&doc).ok())
@@ -269,6 +345,8 @@ impl Run {
             limits,
             lost: false,
             seen: Seen::Not,
+            finishes,
+            synced: false,
             _runs: runs_lock,
         })
     }
@@ -278,6 +356,12 @@ impl Run {
     /// the next run's.
     pub fn saw(&mut self, manifest: &crate::manifest::Manifest) {
         self.seen = Seen::As(manifest.text().map(str::to_string));
+    }
+
+    /// Note that the run's sync reached its end, the library in line with
+    /// the song list: an undo stopped in its own sync is finished.
+    pub fn synced(&mut self) {
+        self.synced = true;
     }
 
     /// The song list the run leaves: as it last saw it, else as it is.
@@ -333,14 +417,7 @@ impl Run {
         if meta.len() > budget {
             return Ok(());
         }
-        let others = |o: &[(PathBuf, u64)]| o.iter().map(|(_, b)| b).sum::<u64>();
-        while self.record.bytes + meta.len() + others(&self.others) > budget
-            && !self.others.is_empty()
-        {
-            let (oldest, _) = self.others.remove(0);
-            std::fs::remove_dir_all(&oldest)
-                .with_context(|| format!("removing {}", oldest.display()))?;
-        }
+        make_room(&mut self.others, self.record.bytes + meta.len(), budget)?;
         if self.record.bytes + meta.len() > budget {
             return Ok(());
         }
@@ -354,6 +431,15 @@ impl Run {
         if kept {
             self.record.bytes += meta.len();
             self.record.kept.insert(rel.to_path_buf());
+            // A copy with new times, its bytes muman's, is no change.
+            let outputs = &self.record.outputs;
+            let changed = crate::reconcile::changed_since_written(library, outputs, rel)
+                && outputs.get(rel).is_some_and(|w| {
+                    w.digest.is_none() || crate::facts::digest_file(&from) != w.digest
+                });
+            if changed {
+                self.record.changed.insert(rel.to_path_buf());
+            }
         }
         Ok(())
     }
@@ -364,6 +450,23 @@ impl Run {
             from: from.to_path_buf(),
             to: to.to_path_buf(),
         });
+    }
+
+    /// Record that the run moved `file`, under `home`, to the desktop's
+    /// trash, which muman cannot take it back from on every platform.
+    pub fn trashed(&mut self, home: &Path, file: &Path) {
+        if let Ok(rel) = file.strip_prefix(home) {
+            self.record.trashed.insert(rel.to_path_buf());
+        }
+    }
+
+    /// Record that the run copied `file`, under `home`, into the
+    /// sources, so `undo` takes the copy out with the song.
+    pub fn copied(&mut self, home: &Path, file: &Path) {
+        if let (Ok(rel), Some(digest)) = (file.strip_prefix(home), crate::facts::digest_file(file))
+        {
+            self.record.copied.insert(rel.to_path_buf(), digest);
+        }
     }
 
     /// Forget a move the run could not make.
@@ -397,6 +500,9 @@ impl Run {
     /// folders without a record.
     pub fn finish(mut self, home: &Path) -> Result<()> {
         let _lock = atomic::Lock::folder(home)?;
+        if let Some(undone) = self.finishes.as_ref().filter(|_| self.synced) {
+            let _ = std::fs::remove_dir_all(undone);
+        }
         self.record.songs_after = self.songs_left(home)?;
         self.record.complete = true;
         if self.lost {
@@ -404,6 +510,7 @@ impl Run {
         }
         if self.record.touched.is_empty()
             && self.record.moves.is_empty()
+            && self.record.copied.is_empty()
             && self.record.songs_after == self.record.songs_before
             && self.record.outputs_equal_current(home)
         {
@@ -418,10 +525,64 @@ impl Run {
             let _ = std::fs::remove_dir_all(stray);
         }
         let all = runs(home).unwrap_or_default();
-        for old in all.iter().take(all.len().saturating_sub(self.limits.runs)) {
+        let past = all.len().saturating_sub(self.limits.runs);
+        for old in all.iter().take(past) {
             let _ = std::fs::remove_dir_all(old);
         }
+        let mut others: Vec<(PathBuf, u64)> = all
+            .into_iter()
+            .skip(past)
+            .filter(|dir| *dir != self.dir)
+            .map(|dir| {
+                let bytes = held(&dir);
+                (dir, bytes)
+            })
+            .collect();
+        let _ = make_room(&mut others, self.record.bytes, self.limits.max_size.0);
         Ok(())
+    }
+}
+
+/// Let go of the files the oldest of `others` keep, oldest first, until
+/// they take no more than `budget` with the `mine` bytes of the run
+/// recording; each entry's bytes become none as its files go.
+fn make_room(others: &mut [(PathBuf, u64)], mine: u64, budget: u64) -> Result<()> {
+    let mut total = mine + others.iter().map(|(_, b)| b).sum::<u64>();
+    for (dir, bytes) in others.iter_mut() {
+        if total <= budget {
+            break;
+        }
+        if *bytes > 0 {
+            let_go(dir)?;
+            total -= *bytes;
+            *bytes = 0;
+        }
+    }
+    Ok(())
+}
+
+/// Let go of the files a run keeps and keep its record, which then lists
+/// none kept, so `undo` has them written again from their sources; a run
+/// whose record does not read goes whole.
+fn let_go(dir: &Path) -> Result<()> {
+    let record = std::fs::read(dir.join(RECORD))
+        .ok()
+        .and_then(|t| serde_json::from_slice::<Record>(&t).ok());
+    let gone = match record {
+        Some(mut record) => {
+            record.kept.clear();
+            record.bytes = 0;
+            let text = serde_json::to_vec(&record).context("writing the run record")?;
+            atomic::write(dir, &atomic::Name::new(RECORD)?, &text)?;
+            dir.join("files")
+        }
+        None => dir.to_path_buf(),
+    };
+    match std::fs::remove_dir_all(&gone) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("removing {}", gone.display()))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -439,9 +600,19 @@ impl Record {
 /// when no such run is kept to tell.
 #[must_use]
 pub fn songs_as_last_left(home: &Path) -> Option<bool> {
-    let last = runs(home).ok()?.pop().and_then(|dir| head(&dir))?;
-    let after = last.songs_after.filter(|_| last.complete)?;
+    let after = runs(home).ok()?.pop().and_then(|dir| head(&dir))?.left()?;
     Some(songs_text(home).ok()?.as_deref() == Some(after.as_str()))
+}
+
+/// Whether the latest run kept is an undo stopped partway, which the
+/// next `undo` finishes.
+#[must_use]
+pub fn undo_stopped(home: &Path) -> bool {
+    runs(home)
+        .ok()
+        .and_then(|mut r| r.pop())
+        .and_then(|dir| head(&dir))
+        .is_some_and(|h| h.undoing)
 }
 
 /// The outputs a run stopped partway left where they were: each file it
@@ -540,6 +711,26 @@ impl UndoPlan {
     }
 }
 
+/// Refuse until every file of the user's the run trashed is back: its
+/// song would be listed again with no file to make it from.
+fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
+    let gone: Vec<String> = record
+        .trashed
+        .iter()
+        .filter(|rel| !home.join(rel).exists())
+        .map(|rel| format!("  {}", home.join(rel).display()))
+        .collect();
+    if !gone.is_empty() {
+        return Err(crate::change::Refused(format!(
+            "The last run moved these to the trash; put them back there, then undo \
+             again:\n{}",
+            gone.join("\n")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 /// What undoing the latest run would do, refused as `undo` itself would
 /// be: when the song list changed since, or the run wrote another
 /// library folder.
@@ -587,7 +778,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             }
             let why = if !owned.contains(rel) {
                 "is not muman's"
-            } else if crate::reconcile::changed_since_written(&dirs.library, &state.outputs, rel) {
+            } else if crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel) {
                 "changed since muman wrote it"
             } else {
                 continue;
@@ -599,14 +790,20 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             .into());
         }
     }
+    all_trashed_back(home, &record)?;
     let mut lines = Vec::new();
+    if record.undoing {
+        lines.push("Finish the undo stopped partway".to_string());
+    }
     if !record.complete {
         lines.push("The run was stopped before it ended".to_string());
     }
-    if record.songs_before != record.songs_after {
+    if record.songs_before != record.songs_after && !record.undone {
         lines.push("Put the song list back as it was".to_string());
     }
-    for rel in &record.touched {
+    // What an undo stopped partway put back already is not said again.
+    let back = |rel: &PathBuf| record.undoing && !dir.join("files").join(rel).exists();
+    for rel in record.touched.iter().filter(|rel| !back(rel)) {
         let how = if record.kept.contains(rel) {
             "put back"
         } else {
@@ -614,13 +811,17 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         };
         lines.push(format!("{}: {how}", crate::relpath::show(rel)));
     }
-    for m in &record.moves {
+    let moved_back = |m: &Moved| {
+        record.undoing && dirs.library.join(&m.from).exists() && !dirs.library.join(&m.to).exists()
+    };
+    for m in record.moves.iter().filter(|m| !moved_back(m)) {
         lines.push(format!(
             "{}: moved back from {}",
             crate::relpath::show(&m.from),
             crate::relpath::show(&m.to)
         ));
     }
+    lines.extend(copies_said(home, &record));
     let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
     let added = state
         .outputs
@@ -644,17 +845,51 @@ fn latest(home: &Path) -> Result<(PathBuf, Record)> {
     Ok((dir, record))
 }
 
+/// Library files a step changed before the sync after it, which that
+/// sync's `changed` hook counts with its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Changed {
+    pub written: usize,
+    pub moved: usize,
+    pub removed: usize,
+}
+
+/// An undo whose song list and state are back, its record kept until
+/// the sync after it ends: [`Undone::finish`] lets go of it.
+#[derive(Debug)]
+#[must_use]
+pub struct Undone {
+    dir: PathBuf,
+    changed: Changed,
+}
+
+impl Undone {
+    /// The library files the undo put back, moved back and removed.
+    #[must_use]
+    pub fn changed(&self) -> Changed {
+        self.changed
+    }
+
+    /// Let go of the run's record, the sync after the undo ended.
+    pub fn finish(self) -> Result<()> {
+        std::fs::remove_dir_all(&self.dir)
+            .with_context(|| format!("removing {}", self.dir.display()))
+    }
+}
+
 /// Carry out `plan`, made under the lock the caller holds: the song
 /// list and the state back as they were before the run, its moved files
 /// back where they were and its kept files in place. The sync that
 /// follows writes again what was not kept and removes what the run
-/// added. An undo stopped partway finishes when run again.
-pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
+/// added, then finishes the undo. An undo stopped partway, in its sync
+/// too, finishes when run again.
+pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone> {
     let home = &dirs.home;
     let UndoPlan {
         dir, mut record, ..
     } = plan;
     let mut state = State::load(home)?;
+    let mut changed = Changed::default();
     if !record.undoing {
         record.undoing = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
@@ -675,6 +910,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
         atomic::rename(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
             .with_context(|| format!("putting back {}", to.display()))?;
+        changed.written += 1;
         crate::ui::info(out, &format!("Put back: {}", crate::relpath::show(rel)))?;
     }
     for m in record.moves.iter().rev() {
@@ -687,6 +923,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
         atomic::rename(&to, &from).with_context(|| format!("moving back {}", to.display()))?;
+        changed.moved += 1;
         crate::ui::info(
             out,
             &format!("Moved back: {}", crate::relpath::show(&m.from)),
@@ -694,7 +931,118 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     }
     let left: Vec<PathBuf> = record.moves.iter().map(|m| m.to.clone()).collect();
     crate::library::remove_empty_folders(&dirs.library, &left);
-    let mut outputs = state.outputs.clone();
+    // Lyrics the run wrote beside a song it had before are recorded by
+    // nothing once its record is put back, so they go now.
+    for (rel, now) in &state.outputs {
+        let Some(lyrics) = &now.lyrics else { continue };
+        let before = record.outputs.get(rel).and_then(|b| b.lyrics.as_ref());
+        let path = dirs.library.join(lyrics);
+        if record.outputs.contains_key(rel)
+            && before != Some(lyrics)
+            && !record.kept.contains(lyrics)
+            && path.exists()
+        {
+            atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+            changed.removed += 1;
+            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(lyrics)))?;
+        }
+    }
+    state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library);
+    take_out_copies(dirs, &record, out)?;
+    // A home that had no song list before gets one that lists nothing, so
+    // the sync after removes what the run added.
+    let before = record
+        .songs_before
+        .as_deref()
+        .unwrap_or(crate::manifest::NEW);
+    atomic::write(home, &atomic::Name::new(MANIFEST)?, before.as_bytes())?;
+    state.save(home)?;
+    if !record.undone {
+        record.undone = true;
+        let text = serde_json::to_vec(&record).context("writing the run record")?;
+        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
+    }
+    Ok(Undone { dir, changed })
+}
+
+/// What undoing does with each copy `add` made that is still there, a
+/// line each.
+fn copies_said(home: &Path, record: &Record) -> Vec<String> {
+    record
+        .copied
+        .iter()
+        .filter(|(rel, _)| home.join(rel).exists())
+        .map(|(rel, digest)| {
+            let how = if as_copied(&home.join(rel), digest) {
+                "deleted"
+            } else {
+                "changed since, moved to the trash"
+            };
+            format!(
+                "{}: the copy the run made, {how}",
+                crate::relpath::show(rel)
+            )
+        })
+        .collect()
+}
+
+/// Take out each copy `add` made that is still there, and the folders
+/// that leaves empty in the sources.
+fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Result<()> {
+    let home = &dirs.home;
+    for (rel, digest) in &record.copied {
+        let copy = home.join(rel);
+        if !copy.exists() {
+            continue;
+        }
+        if as_copied(&copy, digest) {
+            std::fs::remove_file(&copy).with_context(|| format!("deleting {}", copy.display()))?;
+            crate::ui::info(
+                out,
+                &format!("Deleted the copy the run made: {}", copy.display()),
+            )?;
+        } else {
+            crate::change::to_trash(&copy)
+                .with_context(|| format!("moving {} to the trash", copy.display()))?;
+            crate::ui::info(
+                out,
+                &format!(
+                    "Moved the copy the run made, changed since, to the trash: {}",
+                    copy.display()
+                ),
+            )?;
+        }
+        let sources = home.join("sources");
+        for folder in copy
+            .ancestors()
+            .skip(1)
+            .take_while(|f| f.starts_with(&sources))
+        {
+            if *folder == dirs.manual()
+                || *folder == dirs.ytdlp()
+                || std::fs::remove_dir(folder).is_err()
+            {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `file` holds the bytes it was copied with.
+fn as_copied(file: &Path, digest: &str) -> bool {
+    crate::facts::digest_file(file).as_deref() == Some(digest)
+}
+
+/// The outputs once `record`'s run is undone, from `now`'s: as the run
+/// found them, each file put back stamped as it lies, and each the run
+/// wrote over and did not keep left for the sync after to write again.
+fn outputs_put_back(
+    record: &Record,
+    now: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+) -> BTreeMap<PathBuf, Written> {
+    let mut outputs = now.clone();
     for m in &record.moves {
         outputs.remove(&m.to);
     }
@@ -706,27 +1054,28 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<()> {
     {
         outputs.remove(rel);
     }
+    // A file moved back holds what the run wrote over it where it went,
+    // unless what it held there was kept and put back.
+    let written_over: BTreeSet<&PathBuf> = record
+        .moves
+        .iter()
+        .filter(|m| record.touched.contains(&m.to) && !record.kept.contains(&m.to))
+        .map(|m| &m.from)
+        .collect();
     for (rel, before) in &record.outputs {
         let mut written = before.clone();
         if record.kept.contains(rel) {
-            written.stamp = store::stamp_text(&dirs.library.join(rel));
-        } else if record.touched.contains(rel) {
+            // One changed since written keeps the stamp it no longer matches.
+            if !record.changed.contains(rel) {
+                written.stamp = store::stamp_text(&library.join(rel));
+            }
+        } else if record.touched.contains(rel) || written_over.contains(rel) {
             written.plan = None;
             written.stamp = None;
         }
         outputs.insert(rel.clone(), written);
     }
-    state.outputs = outputs;
-    // A home that had no song list before gets one that lists nothing, so
-    // the sync after removes what the run added.
-    let before = record
-        .songs_before
-        .as_deref()
-        .unwrap_or(crate::manifest::NEW);
-    atomic::write(home, &atomic::Name::new(MANIFEST)?, before.as_bytes())?;
-    state.save(home)?;
-    std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
-    Ok(())
+    outputs
 }
 
 #[cfg(test)]
@@ -784,7 +1133,10 @@ mod tests {
         run.finish(&d.home).unwrap();
 
         assert_eq!(plan(&d).unwrap().lines().to_vec().len(), 2);
-        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(d.home.join(MANIFEST)).unwrap(),
             "before"
@@ -884,7 +1236,10 @@ mod tests {
 
         let said = plan(&d).unwrap().lines().to_vec();
         assert_eq!(said[0], "The run was stopped before it ended", "{said:?}");
-        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
             "old"
@@ -916,7 +1271,10 @@ mod tests {
                 .lines()
                 .contains(&"A/x.opus: moved back from B/x.opus".to_string())
         );
-        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
             "old"
@@ -950,7 +1308,10 @@ mod tests {
         std::fs::write(d.home.join(MANIFEST), "after").unwrap();
         run.finish(&d.home).unwrap();
 
-        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
             "old"
@@ -960,6 +1321,48 @@ mod tests {
         assert_eq!(
             back.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/x.opus")]
+        );
+    }
+
+    #[test]
+    fn a_move_then_a_retag_not_kept_is_written_again_where_it_moves_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(
+            d.home.join(MANIFEST),
+            "version = 1\n[history]\nmax_size = \"2 B\"\n",
+        )
+        .unwrap();
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        run.keep(&d.library, Path::new("B/x.opus")).unwrap();
+        std::fs::remove_file(d.library.join("B/x.opus")).unwrap();
+        std::fs::write(d.library.join("B/x.opus"), "retagged").unwrap();
+        let w = state.outputs.remove(Path::new("A/x.opus")).unwrap();
+        let stamp = store::stamp_text(&d.library.join("B/x.opus"));
+        state
+            .outputs
+            .insert("B/x.opus".into(), Written { stamp, ..w });
+        state.save(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.finish(&d.home).unwrap();
+
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.library.join("A/x.opus")).unwrap(),
+            "retagged"
+        );
+        let back = State::load(&d.home).unwrap();
+        let written = &back.outputs[Path::new("A/x.opus")];
+        assert!(
+            written.plan.is_none() && written.stamp.is_none(),
+            "the next sync writes it again: {written:?}"
         );
     }
 
@@ -1129,10 +1532,40 @@ mod tests {
         .unwrap();
         std::fs::rename(at.join("files/A/x.opus"), d.library.join("A/x.opus")).unwrap();
         std::fs::write(d.home.join(MANIFEST), "before").unwrap();
-        undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap();
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
         let back = State::load(&d.home).unwrap();
         assert!(back.outputs.contains_key(Path::new("A/x.opus")));
         assert_eq!(runs(&d.home).unwrap(), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn an_undo_stopped_before_its_sync_ended_is_finished_by_a_run_that_syncs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.keep(&d.library, Path::new("A/x.opus")).unwrap();
+        std::fs::remove_file(d.library.join("A/x.opus")).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        state.outputs.clear();
+        state.save(&d.home).unwrap();
+        run.finish(&d.home).unwrap();
+
+        drop(undo(&d, plan(&d).unwrap(), &mut Vec::new()).unwrap());
+        assert_eq!(runs(&d.home).unwrap().len(), 1, "still the latest run");
+        assert!(undo_stopped(&d.home));
+        assert_eq!(songs_as_last_left(&d.home), Some(true));
+        let again = plan(&d).unwrap();
+        assert_eq!(again.lines(), ["Finish the undo stopped partway"]);
+
+        let mut run = Run::begin(&d.home).unwrap();
+        assert_eq!(run.record.songs_before.as_deref(), Some("before"));
+        run.synced();
+        run.finish(&d.home).unwrap();
+        assert!(runs(&d.home).unwrap().is_empty(), "{:?}", runs(&d.home));
     }
 
     #[test]
@@ -1169,7 +1602,58 @@ mod tests {
             run.finish(&d.home).unwrap();
         }
         let kept: Vec<u64> = runs(&d.home).unwrap().iter().map(|r| held(r)).collect();
-        assert_eq!(kept, [600 << 10], "the older run made room: {kept:?}");
+        assert_eq!(kept, [0, 600 << 10], "the older run made room: {kept:?}");
+    }
+
+    #[test]
+    fn a_budget_lowered_since_lets_go_of_the_files_of_runs_kept_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.keep(&d.library, Path::new("A/x.opus")).unwrap();
+        std::fs::remove_file(d.library.join("A/x.opus")).unwrap();
+        let lowered = "version = 1\n[history]\nmax_size = \"2 B\"\n";
+        std::fs::write(d.home.join(MANIFEST), lowered).unwrap();
+        state.outputs.clear();
+        state.save(&d.home).unwrap();
+        run.finish(&d.home).unwrap();
+        let earlier = runs(&d.home).unwrap()[0].clone();
+        assert_eq!(held(&earlier), 3);
+
+        let run = Run::begin(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), format!("{lowered}# edited\n")).unwrap();
+        run.finish(&d.home).unwrap();
+        let kept = runs(&d.home).unwrap();
+        assert_eq!(kept.len(), 2, "the earlier run keeps its record");
+        assert_eq!(kept[0], earlier);
+        assert_eq!(held(&earlier), 0);
+        assert!(!earlier.join("files").exists());
+
+        undo(&d, plan(&d).unwrap(), &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        let undoing = plan(&d).unwrap();
+        assert_eq!(
+            undoing.lines(),
+            [
+                "Put the song list back as it was",
+                "A/x.opus: written again from its sources"
+            ]
+        );
+        undo(&d, undoing, &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.home.join(MANIFEST)).unwrap(),
+            "before"
+        );
+        let back = State::load(&d.home).unwrap();
+        let written = &back.outputs[Path::new("A/x.opus")];
+        assert!(written.plan.is_none() && written.stamp.is_none());
+        assert!(!d.library.join("A/x.opus").exists());
     }
 
     #[test]

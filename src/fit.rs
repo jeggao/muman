@@ -34,6 +34,16 @@
 //! no encoding to estimate. Ties go by key, so the songs' order changes
 //! nothing.
 //!
+//! **Raising.** The step that makes the total fit can free more than was
+//! missing, and songs lowered before it, at less loss per byte or at
+//! none, would then stay lowered with room left that could hold them. So
+//! once the total fits, each song lowered is raised back to the best rung
+//! that still fits: the songs whose last step lost the most for each byte
+//! saved first, then by key. As the total only grows while songs are
+//! raised, no song is left that could be written at any rung above its
+//! own within the limit. A rung that saves nothing over the first is
+//! never raised to.
+//!
 //! **Settling.** A rung's size is an estimate until it is made and
 //! measured, and estimates miss: a VBR encoder spends more on some music
 //! than its bitrate. [`settle`] is the one loop that turns a fit on
@@ -420,6 +430,7 @@ pub fn allocate(items: &[Item], policy: &Policy) -> Result<Fit, u64> {
     let mut heap: BinaryHeap<Step<'_>> = (0..items.len())
         .filter_map(|i| step(items, &hulls, i, 0))
         .collect();
+    let mut last = vec![0.0; items.len()];
     while projected(sum) > policy.max {
         let Some(next) = heap.pop() else {
             break;
@@ -428,15 +439,41 @@ pub fn allocate(items: &[Item], policy: &Policy) -> Result<Fit, u64> {
         let now = hulls[next.item][next.to].rung;
         sum = sum.moved(&rungs[choice[next.item]], &rungs[now]);
         choice[next.item] = now;
+        last[next.item] = next.slope;
         heap.extend(step(items, &hulls, next.item, next.to));
     }
     if projected(sum) > policy.max {
         return Err(floor);
     }
+    raise(items, policy, &last, &mut choice, &mut sum);
     Ok(Fit {
         choice,
         total: projected(sum),
     })
+}
+
+/// Raise each item the sweep lowered back to the best rung that still
+/// fits, as the module docs say: those whose `last` step lost the most
+/// for each byte saved first, ties by key.
+fn raise(items: &[Item], policy: &Policy, last: &[f64], choice: &mut [usize], sum: &mut Sum) {
+    let mut lowered: Vec<usize> = (0..items.len()).filter(|i| choice[*i] > 0).collect();
+    lowered.sort_by(|a, b| {
+        last[*b]
+            .total_cmp(&last[*a])
+            .then_with(|| items[*a].key.cmp(&items[*b].key))
+    });
+    for i in lowered {
+        let rungs = &items[i].rungs;
+        let from = &rungs[choice[i]];
+        let better = (0..choice[i]).find(|c| {
+            (*c == 0 || rungs[*c].bytes < rungs[0].bytes)
+                && sum.moved(from, &rungs[*c]).projected(policy.sigmas) <= policy.max
+        });
+        if let Some(c) = better {
+            *sum = sum.moved(from, &rungs[c]);
+            choice[i] = c;
+        }
+    }
 }
 
 /// How [`settle`] ended.
@@ -641,6 +678,31 @@ mod tests {
             "the lowest bitrate still transparent"
         );
         assert!(fit.total <= 12 * MB);
+    }
+
+    #[test]
+    fn room_left_once_fitted_raises_songs_back() {
+        let flac = Format::Copy { codec: Codec::Flac };
+        let items: Vec<Item> = [25.0, 30.0, 35.0, 40.0, 45.0, 60.0]
+            .into_iter()
+            .enumerate()
+            .map(|(n, seconds)| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let bytes = (seconds * 125_000.0) as u64;
+                song(&format!("s{n}"), flac, bytes, true, seconds)
+            })
+            .collect();
+        let max = 15_700_000;
+        let fit = allocate(&items, &Policy::exact(max)).unwrap();
+        assert!(fit.total <= max, "{}", fit.total);
+        assert_eq!(fit.choice[0], 0, "the first fits at its best: {fit:?}");
+        for (i, c) in fit.choice.iter().enumerate() {
+            let rungs = &items[i].rungs;
+            for higher in 0..*c {
+                let raised = fit.total - rungs[*c].bytes + rungs[higher].bytes;
+                assert!(raised > max, "song {i} fits at rung {higher}: {fit:?}");
+            }
+        }
     }
 
     #[test]
