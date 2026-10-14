@@ -233,6 +233,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   commented-out hint for another setting the table sets or hints at
   already, by its name or an older one, where `[audio]` got a second
   `# min_bitrate` hint.
+- **The time left a step says** follows the pace of its last minute,
+  where it was the pace since the step began: after a run of cheap
+  items it said `about 1 s left` with twenty minutes to go, then rose
+  for the rest of the step.
 
 ## [0.3.0] - 2026-10-07
 

@@ -7,8 +7,12 @@
 //! number unused, as a package manager's numbered steps do. Each step counts the items it
 //! has done of how many, and names those under way: a worker holds a
 //! [`Working`] while it is on one, so parallel work shows every song in
-//! hand. The time left is the step's rate so far applied to what is
-//! left.
+//! hand. The time left is the step's recent rate, over the last
+//! [`WINDOW`], applied to what is left: items can differ in cost by
+//! thousands of times, as a lookup record and an hour-long video do, and
+//! the rate since the step began would say "1 s left" after a run of
+//! cheap ones, then rise for the rest of the step. The window ends now,
+//! not at the last item done, so a step stuck on one item says so.
 //!
 //! A run has one status line, whatever steps are under way. A step begun
 //! inside another, as a fetch of what a round of lookups found, takes the
@@ -37,6 +41,7 @@
 //! run's for as long as its guard lives, and a step anywhere reports to
 //! it. Nothing is installed in tests, whose steps report to nothing.
 
+use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -48,6 +53,8 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 pub const PLAIN_EVERY: Duration = Duration::from_secs(10);
 /// How often a JSON `progress` event is written, at most.
 pub const JSON_EVERY: Duration = Duration::from_millis(500);
+/// How far back the rate the time left is told by reaches.
+pub const WINDOW: Duration = Duration::from_secs(60);
 /// A step quicker than this shows no status line, which would only
 /// flicker.
 const SHOW_AFTER: Duration = Duration::from_millis(300);
@@ -176,6 +183,7 @@ impl Progress {
             done: Mutex::new(0),
             working: Mutex::new(Vec::new()),
             note: Mutex::new(None),
+            marks: Mutex::new(VecDeque::new()),
             started: Instant::now(),
             reported: Mutex::new(Reported::default()),
         });
@@ -225,7 +233,7 @@ impl Progress {
                 .with_elapsed(state.started.elapsed())
                 .with_position(done)
                 .with_message(state.doing())
-                .with_style(layout.style())
+                .with_style(layout.style(Arc::clone(state)))
                 .with_prefix(state.title());
             bar.enable_steady_tick(Duration::from_millis(200));
             lock(&state.reported).percent = None;
@@ -237,7 +245,7 @@ impl Progress {
         }
         if let Some(shown) = line.bar.as_mut() {
             if shown.layout != layout {
-                shown.bar.set_style(layout.style());
+                shown.bar.set_style(layout.style(Arc::clone(state)));
                 shown.layout = layout;
             }
             if let Some(t) = total {
@@ -312,6 +320,9 @@ struct State {
     working: Mutex<Vec<String>>,
     /// What the step says of itself when no item is under way.
     note: Mutex<Option<String>>,
+    /// When each count was reached since the step began, back to the
+    /// last before the [`WINDOW`].
+    marks: Mutex<VecDeque<(Duration, u64)>>,
     started: Instant,
     reported: Mutex<Reported>,
 }
@@ -328,10 +339,17 @@ impl State {
         (*lock(&self.done), *lock(&self.total))
     }
 
-    /// The time left at the rate so far, once anything is done.
+    /// The time left at the recent rate, once anything is done.
     fn left(&self) -> Option<Duration> {
         let (done, total) = self.count();
-        left(self.started.elapsed(), done, total?)
+        left(self.started.elapsed(), &lock(&self.marks), done, total?)
+    }
+
+    /// Count `n` more items done, now.
+    fn add(&self, n: u64) {
+        let mut done = lock(&self.done);
+        *done += n;
+        mark(&mut lock(&self.marks), self.started.elapsed(), *done);
     }
 
     /// What is under way, the names of the items in hand first.
@@ -369,7 +387,7 @@ impl Drop for Working<'_> {
                 working.remove(at);
             }
         }
-        *lock(&self.step.state.done) += 1;
+        self.step.state.add(1);
         self.step.update();
     }
 }
@@ -394,7 +412,7 @@ impl Step {
 
     /// Count `n` more items done, with none named under way.
     pub fn advance(&self, n: u64) {
-        *lock(&self.state.done) += n;
+        self.state.add(n);
         self.update();
     }
 
@@ -564,18 +582,14 @@ impl Layout {
         }
     }
 
-    fn style(self) -> ProgressStyle {
+    fn style(self, step: Arc<State>) -> ProgressStyle {
         ProgressStyle::with_template(self.template())
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("=> ")
             .with_key(
                 "left",
-                |state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
-                    if let Some(left) = state
-                        .len()
-                        .and_then(|len| left(state.elapsed(), state.pos(), len))
-                        .filter(|l| l.as_secs() > 0)
-                    {
+                move |_: &indicatif::ProgressState, w: &mut dyn std::fmt::Write| {
+                    if let Some(left) = step.left().filter(|l| l.as_secs() > 0) {
                         let _ = write!(w, "{} left", human(left));
                     }
                 },
@@ -589,14 +603,40 @@ fn columns() -> usize {
     terminal_size::terminal_size_of(io::stderr()).map_or(80, |(w, _)| usize::from(w.0))
 }
 
-/// The time `total - done` items take at the rate `done` took `elapsed`;
-/// nothing until something is done, when there is a rate to go by.
-fn left(elapsed: Duration, done: u64, total: u64) -> Option<Duration> {
+/// `done` reached at `at`, with the marks before the last one at or
+/// before the window's start let go.
+fn mark(marks: &mut VecDeque<(Duration, u64)>, at: Duration, done: u64) {
+    marks.push_back((at, done));
+    let start = at.saturating_sub(WINDOW);
+    while marks.get(1).is_some_and(|(t, _)| *t <= start) {
+        marks.pop_front();
+    }
+}
+
+/// The time `total - done` items take at the rate of the [`WINDOW`]
+/// ending at `elapsed`: from the last of `marks` at or before its start,
+/// else from the step's start. With nothing done since, the time since
+/// counts as one item's, so a stuck step's estimate grows. Nothing until
+/// something is done, when there is a rate to go by.
+fn left(
+    elapsed: Duration,
+    marks: &VecDeque<(Duration, u64)>,
+    done: u64,
+    total: u64,
+) -> Option<Duration> {
     if done == 0 || done >= total {
         return None;
     }
+    let start = elapsed.saturating_sub(WINDOW);
+    let (from, before) = marks
+        .iter()
+        .rev()
+        .find(|(t, _)| *t <= start)
+        .copied()
+        .unwrap_or_default();
     let count = |n: u64| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
-    let per = elapsed.as_secs_f64() / count(done);
+    let per =
+        elapsed.saturating_sub(from).as_secs_f64() / count(done.saturating_sub(before).max(1));
     Some(Duration::from_secs_f64(per * count(total - done)))
 }
 
@@ -915,11 +955,33 @@ mod tests {
         assert_eq!(Layout::of(79, true), Layout::Count);
         assert_eq!(Layout::of(40, true), Layout::Bare);
         assert_eq!(Layout::of(40, false), Layout::Uncounted);
-        assert_eq!(
-            left(Duration::from_secs(10), 1, 4),
-            Some(Duration::from_secs(30))
+    }
+
+    #[test]
+    fn the_time_left_follows_the_recent_rate() {
+        let secs = Duration::from_secs;
+        let mut marks = VecDeque::new();
+        mark(&mut marks, secs(10), 1);
+        assert_eq!(left(secs(10), &marks, 1, 4), Some(secs(30)));
+        assert_eq!(left(secs(10), &VecDeque::new(), 0, 4), None);
+        // A thousand cheap items in a second, then one every 2 s.
+        let mut marks = VecDeque::new();
+        mark(&mut marks, secs(1), 1000);
+        let mut done = 1000;
+        for t in (3..=301).step_by(2) {
+            done += 1;
+            mark(&mut marks, secs(t), done);
+        }
+        let rest = 2000 - done;
+        let estimate = left(secs(301), &marks, done, 2000).unwrap();
+        assert!(
+            estimate.as_secs().abs_diff(2 * rest) <= 2,
+            "{estimate:?} for {rest} items at 2 s each"
         );
-        assert_eq!(left(Duration::from_secs(10), 0, 4), None);
+        assert!(marks.len() <= 32, "{} marks kept", marks.len());
+        // Stuck on one item, the estimate grows.
+        let later = left(secs(400), &marks, done, 2000).unwrap();
+        assert!(later > estimate, "{later:?} after {estimate:?}");
     }
 
     #[test]
