@@ -31,7 +31,7 @@ use crate::resolve::{self, Input, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, Aligned, State, Step, Written};
-use crate::store::{self, Located, Store};
+use crate::store::{self, Kind, Located, Store};
 use crate::tags::{self, Field};
 
 // Each is a flag of its own on the command line.
@@ -133,14 +133,18 @@ pub fn measure<R: Runner, W: Write>(
         return Ok(());
     }
     crate::ui::info(out, &format!("Measuring {} source(s)", due.len()))?;
-    let step = progress::step("Measuring", Some(due.len() as u64));
+    // A lookup record or a picture takes a moment, a song's audio seconds
+    // to minutes: counted as alike, they would make the time left a guess,
+    // so only the audio is counted.
+    let media = due.iter().filter(|l| l.kind == Kind::Media).count();
+    let step = progress::step("Measuring", Some(media as u64));
     let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
     let mut kept = Instant::now();
     parallel::chunked(
         &numbered,
         parallel::builds(),
         |(n, l)| {
-            let _working = step.working(&progress::label(&l.path));
+            let _working = (l.kind == Kind::Media).then(|| step.working(&progress::label(&l.path)));
             facts::gather(
                 runner,
                 l,

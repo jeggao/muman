@@ -236,7 +236,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **The time left a step says** follows the pace of its last minute,
   where it was the pace since the step began: after a run of cheap
   items it said `about 1 s left` with twenty minutes to go, then rose
-  for the rest of the step.
+  for the rest of the step. Measuring counts the audio sources alone,
+  as lookup records and pictures take a moment each.
 
 ## [0.3.0] - 2026-10-07
 
