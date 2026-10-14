@@ -688,8 +688,9 @@ refuses the save.
   out the files to remove or left unused, which are no song's. A
   last line counts the songs shown by what a sync does with each, such
   as `Songs: 2 new, 1 changed, 1 moved, 1240 up to date`.
-- **`info`** counts what the library holds, whether it is in step, the
-  lookups due, and what could be better: narrow, mono or clipped audio,
+- **`info`** counts what the library holds, whether it is in step, by
+  the decisions `status` shows, the lookups due, and what could be
+  better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded; `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by an

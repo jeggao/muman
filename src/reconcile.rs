@@ -861,27 +861,19 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if let Some(run) = run.as_deref_mut() {
         run.outputs_before(&state.outputs);
     }
-    let files = files_of(&planned, &manifest, &state.outputs);
-    let drifts = crate::held::drifts(&manifest, &state.facts);
-    let damaged = if opts.force {
-        BTreeSet::new()
-    } else {
-        damaged_since_built(&planned, &drifts, &state.facts)
-    };
-    let (taken, kept): (Vec<&Drift>, Vec<&Drift>) = drifts
-        .iter()
-        .filter(|d| !damaged.contains(&d.song))
-        .partition(|d| opts.accept || d.followed());
-    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
-    holding.extend(&damaged);
-    let decided = decide(
+    let Foreseen {
+        files,
+        drifts,
+        damaged,
+        decided,
+    } = foresee(
+        &manifest,
+        &state,
         &planned,
-        &files,
-        &state.outputs,
         &dirs.library,
-        opts.force,
-        &holding,
+        (opts.force, opts.accept),
     );
+    let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept);
     say_drifts(
         &taken,
         &kept,
@@ -1561,7 +1553,7 @@ fn media_equal(a: &Plan, b: &Plan) -> bool {
 /// What a sync does with one song, decided for every song before any is
 /// done, so a sync does what `status` says it would.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Doing {
+pub(crate) enum Doing {
     /// Its file is as it would be written.
     Keep,
     /// Its file moves to the song's path, its tags written again when
@@ -1585,6 +1577,57 @@ enum Doing {
     /// Left as built: a source it was built from was fetched again and
     /// holds otherwise, not yet accepted.
     Held { file: PathBuf },
+}
+
+/// What a sync decides for every song, before it does any: each song's
+/// file, the sources holding otherwise than it was built from, those
+/// damaged since, and what it does with each.
+pub(crate) struct Foreseen {
+    pub files: BTreeMap<usize, PathBuf>,
+    pub drifts: Vec<Drift>,
+    pub damaged: BTreeSet<usize>,
+    pub decided: Vec<Doing>,
+}
+
+/// What a sync of `planned` into `library` decides, `force` and `accept`
+/// as given: the one place `sync`, `status` and `info` decide it.
+pub(crate) fn foresee(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    library: &Path,
+    (force, accept): (bool, bool),
+) -> Foreseen {
+    let files = files_of(planned, manifest, &state.outputs);
+    let drifts = crate::held::drifts(manifest, &state.facts);
+    let damaged = if force {
+        BTreeSet::new()
+    } else {
+        damaged_since_built(planned, &drifts, &state.facts)
+    };
+    let (_, kept) = split_drifts(&drifts, &damaged, accept);
+    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    holding.extend(&damaged);
+    let decided = decide(planned, &files, &state.outputs, library, force, &holding);
+    Foreseen {
+        files,
+        drifts,
+        damaged,
+        decided,
+    }
+}
+
+/// `drifts` of songs not `damaged`: those taken, followed or accepted,
+/// and those its song is held as built for.
+fn split_drifts<'a>(
+    drifts: &'a [Drift],
+    damaged: &BTreeSet<usize>,
+    accept: bool,
+) -> (Vec<&'a Drift>, Vec<&'a Drift>) {
+    drifts
+        .iter()
+        .filter(|d| !damaged.contains(&d.song))
+        .partition(|d| accept || d.followed())
 }
 
 /// Say what each source holding otherwise than its song was built
@@ -2041,7 +2084,7 @@ fn foresee_moves<W: Write>(
 /// Take `library` as the folder the outputs are in: the files there as
 /// muman wrote them stay its ([`rehome`]), and those written into another
 /// before are no longer muman's to delete.
-fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
+pub(crate) fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
     if library.exists() && !library.is_dir() {
         anyhow::bail!("the library {} is a file, not a folder", library.display());
     }
@@ -2307,7 +2350,7 @@ impl Showing {
 
 /// What a sync does with a song, as `status` counts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Fate {
+pub(crate) enum Fate {
     New,
     Changed,
     Again,
@@ -2373,7 +2416,7 @@ fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, Source
 }
 
 /// What `status` says a sync does with a song, its file made by `before`.
-fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
+pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
     match d {
         Doing::Keep => (Fate::Kept, "up to date".to_string()),
         Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),

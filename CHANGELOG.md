@@ -257,6 +257,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   them, and only `sync --force`, writing every song again, took them
   back. Each file at its place as muman wrote it, by its size and time
   or, copied with new times, by its bytes, stays muman's now.
+- **`info`** counts the songs up to date, to write, to move and left
+  alone by the decisions a sync makes, as `status` shows them, where it
+  judged them its own way: after a library folder was named anew it
+  said every song would be written there anew and counted them up to
+  date.
 - **`check --decode`** measures each source's audio afresh and names
   what is cut off or missing, where it named any line ffmpeg wrote, a
   warning from its muxer about timestamps among them.
