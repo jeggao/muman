@@ -9,10 +9,10 @@
 //! resumes at one path whatever the uploader is called this time, and a
 //! file anywhere else is not a source ([`Store::leftovers`]). yt-dlp
 //! writes a run's finished files into [`STAGING`], and each is moved to
-//! its place as the run ends ([`place`]). The layout before, named by the
-//! uploader and title as `<uploader>/<title> [<id>].mkv`, is still read,
-//! by the ID, until a run that changes the home moves each file to its
-//! place.
+//! its place as the run ends ([`place`]). A file in the layout before,
+//! named by the uploader and title as `<uploader>/<title> [<id>].mkv`,
+//! stays where it is and is read by its ID; only what is fetched from now
+//! on is kept by its key.
 //!
 //! What each kind of kept record is, its folder, its files and what it
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
@@ -444,12 +444,6 @@ impl Store {
     #[must_use]
     pub fn leftovers(&self) -> &[PathBuf] {
         &self.leftovers
-    }
-
-    /// Each fetched file in the layout before, by the ID its name holds.
-    #[must_use]
-    pub fn legacy(&self) -> &HashMap<String, Vec<PathBuf>> {
-        &self.legacy
     }
 
     #[must_use]
