@@ -227,6 +227,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.
+- **A step with nothing to do** shows nothing, where plain progress
+  said `[5/5] Writing: 0/0, done in 0 s`.
 
 ## [0.3.0] - 2026-10-07
 

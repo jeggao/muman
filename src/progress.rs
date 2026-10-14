@@ -3,8 +3,8 @@
 //! a program reading them, as `--progress` says.
 //!
 //! A command names the steps it may take ([`Progress::plan`]), so a step shows as
-//! `[3/5] Writing`; a step it skips leaves its number unused, as a
-//! package manager's numbered steps do. Each step counts the items it
+//! `[3/5] Writing`; a step it skips, or begins with no items, leaves its
+//! number unused, as a package manager's numbered steps do. Each step counts the items it
 //! has done of how many, and names those under way: a worker holds a
 //! [`Working`] while it is on one, so parallel work shows every song in
 //! hand. The time left is the step's rate so far applied to what is
@@ -157,9 +157,12 @@ impl Progress {
     }
 
     /// Begin a step of `total` items, or of a number not known yet; it
-    /// ends when dropped.
+    /// ends when dropped. A step of no items shows nothing.
     #[must_use]
     pub fn step(&self, name: &str, total: Option<u64>) -> Step {
+        if total == Some(0) && self.inner.kind != Kind::Hidden {
+            return Self::hidden().step(name, total);
+        }
         let plan = lock(&self.inner.plan);
         let index = plan
             .iter()
@@ -840,6 +843,17 @@ mod tests {
         assert!(lines[0].starts_with("Writing: 2/20"), "{text}");
         assert_eq!(lines.len(), 10, "nine tenths, then the end: {text}");
         assert!(lines[9].starts_with("Writing: 20/20, done in"), "{text}");
+    }
+
+    #[test]
+    fn a_step_of_no_items_writes_nothing() {
+        for kind in [Kind::Plain, Kind::Json] {
+            let sink = Shared::default();
+            let progress = Progress::new(kind, Box::new(sink.clone()));
+            progress.plan(&["Measuring", "Writing"]);
+            drop(progress.step("Writing", Some(0)));
+            assert_eq!(sink.text(), "", "{kind:?}");
+        }
     }
 
     #[test]
