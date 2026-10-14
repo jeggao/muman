@@ -1106,25 +1106,16 @@ fn import<R: Runner, W: Write>(
     };
     let mut proposals = Vec::new();
     let mut empty = Vec::new();
+    let mut originals_in = Originals {
+        held: Store::scan(dirs)?,
+        brought: BTreeSet::new(),
+    };
     for path in paths.iter().map(Path::new) {
         let name = path
             .file_name()
             .with_context(|| format!("{} names no file", path.display()))?;
-        if let Some(key) = fetched_key(runner, sites, path) {
-            let folder = path
-                .parent()
-                .and_then(Path::file_name)
-                .map_or_else(|| "unknown".into(), std::ffi::OsStr::to_os_string);
-            copy_new(path, &dirs.ytdlp().join(folder).join(name), copied)?;
-            ui::info(
-                out,
-                &format!("Copied {} into sources/yt-dlp as {key}", path.display()),
-            )?;
-            proposals.push(Proposal {
-                label: key.short(),
-                sources: vec![key],
-                album: None,
-            });
+        if let Some(key) = original(runner, sites, path) {
+            proposals.push(originals_in.bring(dirs, path, key, (out, copied))?);
             continue;
         }
         let to = dirs.manual().join(name);
@@ -1141,8 +1132,21 @@ fn import<R: Runner, W: Write>(
                 path.display()
             );
         }
+        let mut originals = Vec::new();
         if path.is_dir() {
-            copy_tree(path, &to, &mut audio, copied)?;
+            let files = crate::store::walk(path, usize::MAX)?;
+            for file in &files {
+                if let Some(key) = original(runner, sites, file) {
+                    originals.push((file.clone(), key));
+                }
+            }
+            let mut own = |file: &Path| !originals.iter().any(|(o, _)| o == file) && audio(file);
+            if originals.len() < files.len() {
+                copy_tree(path, &to, &mut own, copied)?;
+            }
+            for (file, key) in &originals {
+                proposals.push(originals_in.bring(dirs, file, key.clone(), (out, copied))?);
+            }
         } else if !audio(path) {
             continue;
         } else {
@@ -1155,6 +1159,9 @@ fn import<R: Runner, W: Write>(
         }
         let store = Store::scan(dirs)?;
         let found = media_at(&store, dirs, &to)?;
+        if found.is_empty() && path.is_dir() && !originals.is_empty() {
+            continue;
+        }
         if found.is_empty() && path.is_dir() {
             empty.push(format!(
                 "{}, which holds no song muman reads",
@@ -1187,6 +1194,58 @@ fn import<R: Runner, W: Write>(
     }
     unread.extend(empty);
     Ok(proposals)
+}
+
+/// The originals one `add` copies into the store, and the store as it
+/// was before.
+struct Originals {
+    held: Store,
+    brought: BTreeSet<SourceKey>,
+}
+
+impl Originals {
+    /// `file`, an original of `key`, copied to its key's place, whether
+    /// given or in a folder given; one of a key the store holds already
+    /// is proposed, not copied again.
+    fn bring<W: Write>(
+        &mut self,
+        dirs: &Dirs,
+        file: &Path,
+        key: SourceKey,
+        (out, copied): (&mut W, &mut Vec<PathBuf>),
+    ) -> Result<Proposal> {
+        if self.held.has(&key) || self.brought.contains(&key) {
+            ui::info(
+                out,
+                &format!(
+                    "{} is {key}, which sources/yt-dlp holds already",
+                    file.display()
+                ),
+            )?;
+        } else {
+            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
+            let to = store::fetched_path(&dirs.ytdlp(), &key, ext)
+                .with_context(|| format!("{key} is fetched by no site"))?;
+            copy_new(file, &to, copied)?;
+            ui::info(
+                out,
+                &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
+            )?;
+            self.brought.insert(key.clone());
+        }
+        Ok(Proposal {
+            label: key.short(),
+            sources: vec![key],
+            album: None,
+        })
+    }
+}
+
+/// The key of `file` if it is an original yt-dlp fetched: named as
+/// yt-dlp names one, `<title> [<id>]`, holding the info JSON it embeds.
+fn original<R: Runner>(runner: &R, sites: &crate::sites::Sites, file: &Path) -> Option<SourceKey> {
+    let media = store::kind_of(file) == Some(store::Kind::Media);
+    media.then(|| fetched_key(runner, sites, file)).flatten()
 }
 
 /// Whether `input`, which names nothing on disk, was meant as a path

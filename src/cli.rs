@@ -276,7 +276,8 @@ pub enum Command {
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
         /// or audio files and folders of them, copied into the manual
-        /// folder, or originals yt-dlp fetched, into sources/yt-dlp; or
+        /// folder, an original yt-dlp fetched among them into
+        /// sources/yt-dlp under its key; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
         #[arg(required = true, value_name = "URL|FILE")]

@@ -274,6 +274,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song's lyrics, untimed, though nothing was written: `info` counted the
   song as having lyrics and `list lyrics:yes` matched it. Sources
   measured before are read again once, their subtitles alone.
+- **An original yt-dlp fetched, inside a folder `add` is given,** goes
+  into `sources/yt-dlp` under its key, as one given alone does, where it
+  was copied into the manual folder as a file of your own; one of a key
+  the store holds already is not copied again, where a second copy was
+  kept under the name of the folder it came from.
 - **`check --decode`** measures each source's audio afresh and names
   what is cut off or missing, where it named any line ffmpeg wrote, a
   warning from its muxer about timestamps among them.

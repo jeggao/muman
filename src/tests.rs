@@ -231,13 +231,51 @@ fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
     );
     let (ok, text) = s.run(&fake, &["add", &original]);
     assert!(ok, "{text}");
-    assert!(
-        s.dir
-            .path()
-            .join("home/sources/yt-dlp/chan/Song [aaaaaaaaaaa].mkv")
-            .exists()
-    );
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    assert!(store.join("youtube.com/aaaaaaaaaaa.mkv").exists(), "{text}");
+    assert!(!store.join("chan").exists(), "{text}");
     assert_eq!(s.songs(), [vec![SourceKey::youtube("aaaaaaaaaaa")]]);
+}
+
+#[test]
+fn an_original_in_a_folder_goes_to_its_key_once_and_undo_takes_it_out() {
+    let s = Setup::new();
+    let original = s.file("Downloads/batch/chan/Song [aaaaaaaaaaa].mkv");
+    s.file("Downloads/batch/b.flac");
+    let fake = Fake::default().probe("b.flac", FLAC).info(
+        "aaaaaaaaaaa",
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#,
+    );
+    let folder = s.dir.path().join("Downloads/batch");
+    let (ok, text) = s.run(&fake, &["add", "-y", folder.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let home = s.dir.path().join("home/sources");
+    let placed = home.join("yt-dlp/youtube.com/aaaaaaaaaaa.mkv");
+    assert!(placed.exists(), "{text}");
+    assert!(home.join("manual/batch/b.flac").exists(), "{text}");
+    assert!(
+        !home.join("manual/batch/chan").exists(),
+        "no original in the manual folder: {text}"
+    );
+    let mut songs = s.songs();
+    songs.sort();
+    assert!(
+        songs.contains(&vec![SourceKey::youtube("aaaaaaaaaaa")]),
+        "{songs:?}"
+    );
+
+    let (ok, text) = s.run(&fake, &["add", &original]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("which sources/yt-dlp holds already"),
+        "{text}"
+    );
+    assert_eq!(s.songs().len(), 2, "{text}");
+
+    // The add that changed nothing is no run; undo takes the first back.
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!placed.exists(), "{text}");
 }
 
 #[test]

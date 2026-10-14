@@ -206,8 +206,10 @@ One that fails waits an hour before the next try, doubling each time;
 
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you
 drop it there yourself and the next `sync` lists it. A file that
-yt-dlp fetched elsewhere goes into `sources/yt-dlp` under its key
-instead. A dropped file waits until ten seconds after it arrived,
+yt-dlp fetched elsewhere, named `<title> [<id>]` and holding the info
+yt-dlp embeds, goes into `sources/yt-dlp` under its key instead, given
+alone or in a folder; one of a key the store holds already joins its
+song and is not copied again. A dropped file waits until ten seconds after it arrived,
 whatever modification time a copy kept for it, so one still being
 copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the

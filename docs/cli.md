@@ -73,7 +73,7 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 **Arguments:**
 
-* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into sources/yt-dlp; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
+* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 
