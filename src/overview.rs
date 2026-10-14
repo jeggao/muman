@@ -1,7 +1,10 @@
 //! `muman info`: what the library holds, whether it is in step with
 //! the song list, and what in it could be better. Read from the song
 //! list, the state and the folders alone: nothing is measured, run,
-//! fetched or locked, so it answers at once and changes nothing.
+//! fetched or locked, so it answers at once and changes nothing. Whether
+//! the library is in step is what a sync would do with each song, by the
+//! decisions a sync makes (`reconcile::foresee`), on the state as a
+//! sync would take it, so `info`, `status` and `sync` never disagree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -57,6 +60,8 @@ struct Context<'a> {
     planned: Vec<(usize, Resolved)>,
     /// What planning said of each song it could not plan.
     failures: Vec<u8>,
+    /// The library folder written to before, where it was another.
+    moved_from: Option<PathBuf>,
 }
 
 impl Context<'_> {
@@ -72,10 +77,35 @@ impl Context<'_> {
 /// and its health, every song behind a count when `verbose`.
 pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     let manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
+    // The state as a sync takes it, in memory: a library folder named
+    // anew followed, copies with new times vouched for.
+    let mut state = State::load(&dirs.home)?;
+    let moved_from = state
+        .library
+        .clone()
+        .filter(|l| !crate::platform::same_path(l, &dirs.library));
+    if moved_from.is_some() {
+        reconcile::rehome(&mut state.outputs, &dirs.library);
+    }
+    reconcile::vouch_for_copies(&dirs.library, &mut state);
     let store = Store::scan(dirs)?;
     let mut failures = Vec::new();
-    let (mut planned, _) = reconcile::plan(&manifest, &state, &dirs.library, None, &mut failures)?;
+    // A source a sync fetches is there by the time it plans; a file of
+    // the user's own or a lookup's record missing is not.
+    let on_disk: BTreeSet<SourceKey> = manifest
+        .keys()
+        .into_iter()
+        .filter(|k| {
+            store.has(k) || !matches!(k, SourceKey::Manual(_)) && !crate::provider::is_kept(k)
+        })
+        .collect();
+    let (mut planned, _) = reconcile::plan(
+        &manifest,
+        &state,
+        &dirs.library,
+        Some(&on_disk),
+        &mut failures,
+    )?;
     crate::limit::as_written(&manifest, &state, &mut planned);
     let c = Context {
         dirs,
@@ -85,6 +115,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
         store,
         planned,
         failures,
+        moved_from,
     };
     folders(&c, out)?;
     library(&c, out)?;
@@ -140,7 +171,7 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let seconds: f64 = c
         .planned
         .iter()
-        .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.duration)
+        .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.length())
         .sum();
     row(out, "Playing time", &duration(seconds))?;
     let formats: Vec<String> = Codec::ALL
@@ -246,57 +277,49 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let listed = c.manifest.keys();
     heading(out, "Status")?;
-    if let Some(before) = c.state.library.as_deref().filter(|l| *l != c.dirs.library) {
+    let state = &c.state;
+    if let Some(before) = &c.moved_from {
         crate::ui::warning(
             out,
             &format!(
-                "  Written to {} until now; the next sync writes every song here anew",
+                "  Written to {} until now; the next sync takes the library here as it finds it",
                 before.display()
             ),
         )?;
     }
-    // A song none of whose files is on disk, and none to fetch, fails to
-    // be made, as `status` says, however its file stands.
-    let stranded: BTreeSet<usize> = c
-        .manifest
-        .songs
-        .iter()
-        .enumerate()
-        .filter(|(_, song)| {
-            song.sources.iter().all(|k| {
-                c.store.locate(k).is_none() && matches!(k, SourceKey::Manual(_))
-                    || crate::provider::is_kept(k)
-            })
-        })
-        .map(|(n, _)| n)
-        .collect();
+    let foreseen = reconcile::foresee(
+        &c.manifest,
+        state,
+        &c.planned,
+        &c.dirs.library,
+        (false, false),
+    );
     let mut made: BTreeSet<PathBuf> = BTreeSet::new();
-    let (mut current, mut due) = (0, Group::default());
-    let mut unplanned = Group::default();
-    for (n, r) in &c.planned {
-        let path = reconcile::path_of(r);
-        made.insert(path.clone());
-        if stranded.contains(n) {
-            unplanned.add(&format!("{}: no file of it is on disk", c.name(*n, r)));
-            continue;
+    let (mut current, mut due, mut moving, mut alone) =
+        (0, Group::default(), Group::default(), Group::default());
+    for ((n, r), d) in c.planned.iter().zip(&foreseen.decided) {
+        made.insert(reconcile::path_of(r));
+        if let reconcile::Doing::Move { from, .. } = d {
+            made.insert(from.clone());
         }
-        // An emptied file is written again, as `check` and `status` say.
-        let fresh = c.state.outputs.get(&path).is_some_and(|w| {
-            w.plan.as_ref() == Some(&r.plan)
-                && std::fs::metadata(c.dirs.library.join(&path)).is_ok_and(|m| m.len() > 0)
-        });
-        if fresh {
-            current += 1;
-        } else {
-            due.add(&c.name(*n, r));
+        match reconcile::verdict(d, None, &r.plan).0 {
+            reconcile::Fate::Kept => current += 1,
+            reconcile::Fate::Moved => moving.add(&c.name(*n, r)),
+            reconcile::Fate::Alone => alone.add(&c.name(*n, r)),
+            reconcile::Fate::New | reconcile::Fate::Changed | reconcile::Fate::Again => {
+                due.add(&c.name(*n, r));
+            }
         }
     }
     let mut gone = Group::default();
-    for path in c.state.outputs.keys().filter(|p| !made.contains(*p)) {
+    for path in state.outputs.keys().filter(|p| !made.contains(*p)) {
         gone.add(&crate::relpath::show(path));
     }
+    let mut unplanned = Group::default();
     row(out, "Up to date", &current.to_string())?;
     group(out, c.verbose, "To write", &due)?;
+    group(out, c.verbose, "To move", &moving)?;
+    group(out, c.verbose, "Left alone", &alone)?;
     group(out, c.verbose, "To remove", &gone)?;
     for line in String::from_utf8_lossy(&c.failures).lines() {
         unplanned.add(line.trim_start_matches("Failed: "));
@@ -343,16 +366,21 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         new.add(&SourceKey::Manual(path.into()).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
-    let mut unused = Group::default();
+    let (mut unused, mut strays) = (Group::default(), Group::default());
     for path in c
         .store
         .unused(&listed)
         .iter()
         .filter(|p| !p.starts_with(c.dirs.manual()))
     {
-        unused.add(&path.display().to_string());
+        if c.store.leftovers().contains(path) {
+            strays.add(&path.display().to_string());
+        } else {
+            unused.add(&path.display().to_string());
+        }
     }
     group(out, c.verbose, "Fetched, not listed", &unused)?;
+    group(out, c.verbose, "Strays in sources", &strays)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;
     if let Some(age) = std::fs::metadata(c.dirs.home.join(STATE))
         .and_then(|m| m.modified())
@@ -393,6 +421,7 @@ fn health<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let health = Health::of(&c.manifest, &c.planned, &c.state.facts, &|n, r| {
         c.name(n, r)
     });
+    group(out, c.verbose, "Damaged audio", &health.damaged)?;
     group(out, c.verbose, "Audio under 16 kHz", &health.narrow)?;
     group(out, c.verbose, "Mono audio", &health.mono)?;
     group(out, c.verbose, "Clipped audio", &health.clipped)?;
@@ -410,6 +439,8 @@ fn health<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 /// What could be better in the songs as they would be written.
 #[derive(Default)]
 struct Health {
+    /// Audio cut off or missing some, as [`crate::integrity`] judges it.
+    damaged: Group,
     narrow: Group,
     mono: Group,
     clipped: Group,
@@ -434,6 +465,12 @@ impl Health {
         for (n, r) in planned {
             let name = name(*n, r);
             let plan = &r.plan;
+            if facts
+                .get(&plan.audio.key)
+                .is_some_and(|f| f.damage().is_some())
+            {
+                h.damaged.add(&name);
+            }
             match facts
                 .get(&plan.audio.key)
                 .and_then(|f| f.audio.as_ref()?.quality.as_ref())

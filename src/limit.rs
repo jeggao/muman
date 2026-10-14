@@ -302,7 +302,7 @@ fn ladder(
         .first()
         .map_or_else(|| plan.audio.key.to_string(), ToString::to_string);
     let facts = state.facts.get(&plan.audio.key);
-    let seconds = facts.and_then(|f| f.duration).filter(|d| *d > 0.0);
+    let seconds = facts.and_then(Facts::length).filter(|d| *d > 0.0);
     let (extras, lyrics) = besides_audio(plan);
     let choice = |format: Format, loss: f64| -> Choice {
         let (audio, sigma) = match (facts, seconds) {

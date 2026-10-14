@@ -23,7 +23,12 @@
 //! 1. **Analysis**, here: one decode, many analyzers. Loudness
 //!    ([`crate::loudness`]) is the first; a dynamic-range meter, silence
 //!    at the ends, DC offset or tempo would each be one more [`Kind`],
-//!    one field of [`Analysis`] and a module of their own.
+//!    one field of [`Analysis`] and a module of their own. Integrity
+//!    ([`crate::integrity`]) is measured by the pass itself, which counts
+//!    the frames decoded and the samples that were no number before any
+//!    analyzer sees them, beside what the packets and the stream say
+//!    ([`integrity::Found`]); every source takes it, whatever the
+//!    settings, and a mix, which holds no other packets, none.
 //! 1. **Album pooling**, in [`crate::reconcile`]'s planning: songs are
 //!    grouped by album once, and loudness pools its songs' blocks over
 //!    each group, as an album's loudness range or dynamic range would.
@@ -37,12 +42,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::integrity;
 use crate::loudness;
 
 /// What is analyzed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Loudness,
+    Integrity,
 }
 
 impl Kind {
@@ -52,6 +59,17 @@ impl Kind {
     pub fn method(self) -> &'static str {
         match self {
             Self::Loudness => loudness::METHOD,
+            Self::Integrity => integrity::METHOD,
+        }
+    }
+
+    /// Whether a source's audio mixed into another layout is measured for
+    /// it too, as mixed.
+    #[must_use]
+    pub fn mixed(self) -> bool {
+        match self {
+            Self::Loudness => true,
+            Self::Integrity => false,
         }
     }
 }
@@ -71,6 +89,8 @@ pub struct Measured<T> {
 pub struct Analysis {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness: Option<Measured<loudness::Measure>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<Measured<integrity::Measure>>,
 }
 
 impl Analysis {
@@ -84,6 +104,7 @@ impl Analysis {
             .filter(|&kind| {
                 let method = match kind {
                     Kind::Loudness => self.loudness.as_ref().map(|m| m.method.as_str()),
+                    Kind::Integrity => self.integrity.as_ref().map(|m| m.method.as_str()),
                 };
                 method != Some(kind.method())
             })
@@ -99,21 +120,33 @@ impl Analysis {
             .and_then(|m| m.value.as_ref())
     }
 
+    /// What the integrity measure found, if it was by today's method.
+    #[must_use]
+    pub fn integrity(&self) -> Option<&integrity::Measure> {
+        self.integrity
+            .as_ref()
+            .filter(|m| m.method == integrity::METHOD)
+            .and_then(|m| m.value.as_ref())
+    }
+
     /// `newer` over this analysis: each kind it took replaces this one's.
     pub fn merge(&mut self, newer: Self) {
         if newer.loudness.is_some() {
             self.loudness = newer.loudness;
         }
+        if newer.integrity.is_some() {
+            self.integrity = newer.integrity;
+        }
     }
 }
 
-/// The kinds the settings want measured.
+/// The kinds the settings want measured: integrity always.
 #[must_use]
 pub fn wanted(loudness: &crate::settings::Loudness) -> Vec<Kind> {
     if loudness.measured() {
-        vec![Kind::Loudness]
+        vec![Kind::Integrity, Kind::Loudness]
     } else {
-        Vec::new()
+        vec![Kind::Integrity]
     }
 }
 
@@ -138,6 +171,7 @@ pub trait Analyzer {
 fn start(kind: Kind, stream: &Stream) -> Option<Box<dyn Analyzer>> {
     match kind {
         Kind::Loudness => loudness::Meter::new(stream).map(|m| Box::new(m) as Box<dyn Analyzer>),
+        Kind::Integrity => None,
     }
 }
 
@@ -150,7 +184,7 @@ struct Header {
 
 /// What a WAV header up to its `data` chunk says, `Ok(None)` while more
 /// bytes are needed: the stream and where the samples begin.
-fn parse_header(bytes: &[u8]) -> Result<Option<(Stream, usize)>, String> {
+pub(crate) fn parse_header(bytes: &[u8]) -> Result<Option<(Stream, usize)>, String> {
     if bytes.len() < 12 {
         return Ok(None);
     }
@@ -224,6 +258,9 @@ pub struct Pass {
     carry: Vec<u8>,
     frames: Vec<f32>,
     broken: bool,
+    /// Frames read, and samples among them that were no number.
+    counted: u64,
+    unfinite: u64,
 }
 
 impl std::fmt::Debug for Pass {
@@ -244,6 +281,8 @@ impl Pass {
             carry: Vec::new(),
             frames: Vec::new(),
             broken: false,
+            counted: 0,
+            unfinite: 0,
         }
     }
 
@@ -279,12 +318,20 @@ impl Pass {
         let frame = usize::from(stream.channels) * 4;
         self.carry.extend_from_slice(bytes);
         let whole = self.carry.len() / frame * frame;
+        self.counted += (whole / frame) as u64;
         self.frames.clear();
+        let mut unfinite = 0;
         self.frames
             .extend(self.carry[..whole].as_chunks::<4>().0.iter().map(|b| {
                 let s = f32::from_le_bytes(*b);
-                if s.is_finite() { s } else { 0.0 }
+                if s.is_finite() {
+                    s
+                } else {
+                    unfinite += 1;
+                    0.0
+                }
             }));
+        self.unfinite += unfinite;
         self.carry.drain(..whole);
         for a in &mut self.analyzers {
             a.take(&self.frames);
@@ -296,21 +343,28 @@ impl Pass {
         *self = Self::new(std::mem::take(&mut self.kinds));
     }
 
-    /// What was found. Every kind asked for records its method, with no
-    /// value where the stream did not read or held nothing to measure.
+    /// What was found, with what `found` says of the stream beside its
+    /// samples. Every kind asked for records its method, with no value
+    /// where the stream did not read or held nothing to measure.
     #[must_use]
-    pub fn finish(self) -> Analysis {
+    pub fn finish(self, found: &integrity::Found) -> Analysis {
         let mut analysis = Analysis::default();
         for a in self.analyzers {
             a.finish(&mut analysis);
         }
         for kind in self.kinds {
+            let method = kind.method().to_string();
             match kind {
                 Kind::Loudness => {
-                    analysis.loudness.get_or_insert_with(|| Measured {
-                        method: kind.method().to_string(),
+                    analysis.loudness.get_or_insert(Measured {
+                        method,
                         value: None,
                     });
+                }
+                Kind::Integrity => {
+                    let rate = self.header.stream.map(|s| s.rate);
+                    let value = integrity::measure(rate, self.counted, self.unfinite, found);
+                    analysis.integrity = Some(Measured { method, value });
                 }
             }
         }
@@ -322,6 +376,10 @@ impl Pass {
 mod tests {
     use super::*;
     use crate::testing::{sine, wav};
+
+    fn none() -> integrity::Found {
+        integrity::Found::default()
+    }
 
     #[test]
     fn a_header_is_read_whatever_chunks_come_before_the_samples() {
@@ -350,14 +408,14 @@ mod tests {
         let whole = {
             let mut p = Pass::new(vec![Kind::Loudness]);
             p.take(&bytes);
-            p.finish()
+            p.finish(&none())
         };
         for piece in [1, 7, 4093] {
             let mut p = Pass::new(vec![Kind::Loudness]);
             for chunk in bytes.chunks(piece) {
                 p.take(chunk);
             }
-            assert_eq!(p.finish(), whole, "pieces of {piece}");
+            assert_eq!(p.finish(&none()), whole, "pieces of {piece}");
         }
         assert!(whole.loudness().is_some());
     }
@@ -372,14 +430,14 @@ mod tests {
         p.take(&bytes);
         let mut q = Pass::new(vec![Kind::Loudness]);
         q.take(&bytes);
-        assert_eq!(p.finish(), q.finish());
+        assert_eq!(p.finish(&none()), q.finish(&none()));
     }
 
     #[test]
     fn a_kind_asked_for_records_its_method_though_nothing_read() {
         let mut p = Pass::new(vec![Kind::Loudness]);
         p.take(b"not audio at all");
-        let a = p.finish();
+        let a = p.finish(&none());
         assert_eq!(
             a.loudness.as_ref().map(|m| m.method.as_str()),
             Some(loudness::METHOD)
@@ -390,6 +448,69 @@ mod tests {
             Analysis::default().stale(&[Kind::Loudness]),
             [Kind::Loudness]
         );
-        assert!(Pass::new(Vec::new()).finish().loudness.is_none());
+        assert!(Pass::new(Vec::new()).finish(&none()).loudness.is_none());
+    }
+
+    #[test]
+    fn the_pass_counts_the_frames_decoded_and_the_samples_no_number() {
+        let mut samples = sine(8000, 2, 440.0, 0.5, 3.0);
+        samples[10] = f32::NAN;
+        samples[11] = f32::INFINITY;
+        let bytes = wav(8000, 2, None, &samples);
+        let measure = |cut: usize| {
+            let mut p = Pass::new(vec![Kind::Integrity]);
+            p.take(&bytes[..bytes.len() / 3]);
+            p.again();
+            for chunk in bytes.chunks(cut) {
+                p.take(chunk);
+            }
+            *p.finish(&none()).integrity().unwrap()
+        };
+        let whole = measure(bytes.len());
+        assert!((whole.decoded - 3.0).abs() < 1e-9, "{whole:?}");
+        assert_eq!(whole.unfinite, 2);
+        assert_eq!(whole.span, None, "no packets listed");
+        assert_eq!(measure(7), whole, "however it is cut");
+        let found = integrity::Found {
+            said: Some(3.0),
+            timeline: Some(integrity::Timeline {
+                start: 0.0,
+                end: 3.0,
+                holes: 0.0,
+            }),
+        };
+        let mut p = Pass::new(vec![Kind::Integrity, Kind::Loudness]);
+        p.take(&bytes);
+        let a = p.finish(&found);
+        assert_eq!(a.integrity().unwrap().span, Some((0.0, 3.0)));
+        assert_eq!(a.integrity().unwrap().damage(), None);
+        assert!(a.loudness().is_some(), "every analyzer saw finite samples");
+    }
+
+    #[test]
+    fn integrity_is_always_wanted_caught_up_once_and_never_of_a_mix() {
+        let off = crate::settings::Loudness {
+            mode: crate::settings::LoudnessMode::Off,
+            ..crate::settings::Loudness::default()
+        };
+        assert_eq!(wanted(&off), [Kind::Integrity]);
+        assert!(wanted(&crate::settings::Loudness::default()).contains(&Kind::Loudness));
+        let old = Analysis {
+            loudness: Some(Measured {
+                method: loudness::METHOD.into(),
+                value: None,
+            }),
+            integrity: None,
+        };
+        assert_eq!(
+            old.stale(&[Kind::Integrity, Kind::Loudness]),
+            [Kind::Integrity]
+        );
+        let mut p = Pass::new(vec![Kind::Integrity]);
+        p.take(b"not audio at all");
+        let unread = p.finish(&none());
+        assert_eq!(unread.stale(&[Kind::Integrity]), [] as [Kind; 0]);
+        assert!(unread.integrity().is_none());
+        assert!(!Kind::Integrity.mixed() && Kind::Loudness.mixed());
     }
 }

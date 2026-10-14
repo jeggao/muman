@@ -276,7 +276,8 @@ pub enum Command {
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
         /// or audio files and folders of them, copied into the manual
-        /// folder, or originals yt-dlp fetched, into sources/yt-dlp; or
+        /// folder, an original yt-dlp fetched among them into
+        /// sources/yt-dlp under its key; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
         #[arg(required = true, value_name = "URL|FILE")]
@@ -439,9 +440,10 @@ pub enum Command {
     },
     /// Check the library against what muman recorded: files missing,
     /// empty or changed since written, left by an interrupted run, or
-    /// not muman's; sources missing or unreadable.
+    /// not muman's; sources missing, unreadable or damaged.
     Check {
-        /// Also decode every source in full, to find a truncated download.
+        /// Decode every source in full again, to find audio cut off or
+        /// missing in a file changed since it was measured.
         #[arg(long)]
         decode: bool,
 

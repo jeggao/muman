@@ -88,6 +88,46 @@ fn an_emptied_file_is_to_write_as_status_says() {
 }
 
 #[test]
+fn a_library_moved_counts_as_a_sync_would_take_it() {
+    let (dir, dirs) = home();
+    songs(&dirs, &["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let mut out = Vec::new();
+    assert!(reconcile(&fake(), &dirs, Options::default(), None, &mut out).unwrap());
+    let moved = Dirs {
+        library: dir.path().join("elsewhere"),
+        ..dirs.clone()
+    };
+    std::fs::rename(&dirs.library, &moved.library).unwrap();
+    let text = info_text(&moved, false);
+    assert!(
+        text.contains("takes the library here as it finds it"),
+        "{text}"
+    );
+    assert_eq!(value(&text, "Up to date"), "2", "{text}");
+    assert_eq!(value(&text, "Not muman's"), "0", "{text}");
+    // One file changed by another program is left alone, as a sync leaves it.
+    let file = crate::store::walk(&moved.library, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.extension().is_some_and(|e| e == "opus"))
+        .unwrap();
+    let mut bytes = std::fs::read(&file).unwrap();
+    bytes.extend(b"tagged elsewhere");
+    std::fs::write(&file, bytes).unwrap();
+    let text = info_text(&moved, false);
+    assert_eq!(value(&text, "Up to date"), "1", "{text}");
+    assert_eq!(value(&text, "Left alone"), "1", "{text}");
+    let mut said = Vec::new();
+    let options = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    reconcile(&fake(), &moved, options, None, &mut said).unwrap();
+    let said = crate::ui::plain(&String::from_utf8(said).unwrap());
+    assert!(said.contains("1 left alone, 1 up to date"), "{said}");
+}
+
+#[test]
 fn sources_are_counted_by_where_they_come_from_and_kept_ones_can_lie_unused() {
     let (_dir, dirs) = home();
     std::fs::create_dir_all(dirs.lrclib()).unwrap();

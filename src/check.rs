@@ -1,14 +1,15 @@
 //! `muman check`: the library and the sources against what earlier
-//! runs recorded. Reads only, takes no lock; `--decode` decodes every
-//! listed source in full, where a truncated download fails, and
+//! runs recorded. Reads only, takes no lock; damage is what each
+//! source's integrity measure found ([`crate::integrity`]), and
+//! `--decode` measures it afresh for every listed source, as files can
+//! change on disk unseen, and
 //! `--upstream` asks each site whether it still serves each fetched
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
 
 use std::collections::BTreeSet;
-use std::ffi::OsString;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -20,40 +21,6 @@ use crate::runner::{Line, Runner};
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{self, Kind, Store};
-
-fn decode_command(path: &Path) -> Vec<OsString> {
-    let mut cmd: Vec<OsString> = [
-        "ffmpeg",
-        "-hide_banner",
-        "-nostdin",
-        "-v",
-        "error",
-        "-xerror",
-        "-i",
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
-    cmd.push(path.as_os_str().to_os_string());
-    cmd.extend(["-map", "0:a:0", "-f", "null", "-"].map(OsString::from));
-    cmd
-}
-
-/// Whether `path` decodes in full: ffmpeg exits 0 past a broken frame,
-/// so any error it writes counts.
-fn decodes<R: Runner>(runner: &R, path: &Path) -> Result<()> {
-    let mut errors = Vec::new();
-    let ok = runner.stream(&decode_command(path), &mut |line| {
-        if let Line::Err(text) = line {
-            errors.push(text.trim().to_string());
-        }
-    })?;
-    match errors.first() {
-        Some(first) => anyhow::bail!("{first}"),
-        None if !ok => anyhow::bail!("ffmpeg failed"),
-        None => Ok(()),
-    }
-}
 
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
@@ -214,14 +181,8 @@ pub fn check<R: Runner, W: Write, D: Write>(
         let rev = store.locate(k)?.rev();
         Some((k, state.facts.get(k).filter(|f| f.holds_for(&rev))?))
     }) {
-        if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
-            problem(
-                report,
-                format!(
-                    "Cut off, as a copy or a download stopped: {key} holds {held:.0} s of audio \
-                     where its header says {said:.0} s"
-                ),
-            )?;
+        if let Some(damage) = f.damage() {
+            problem(report, format!("Damaged audio: {}", damage.describe(key)))?;
         }
     }
     for (key, failure) in &state.failures {
@@ -233,23 +194,54 @@ pub fn check<R: Runner, W: Write, D: Write>(
             ),
         )?;
     }
+    let media: Vec<_> = listed
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter(|l| l.kind == Kind::Media)
+        .collect();
     if decode {
-        let media: Vec<_> = listed
-            .iter()
-            .filter_map(|k| store.locate(k))
-            .filter(|l| l.kind == Kind::Media)
-            .collect();
-        crate::ui::info(out, &format!("Decoding {} source(s)", media.len()))?;
+        if !media.is_empty() {
+            crate::ui::info(out, &format!("Decoding {} source(s)", media.len()))?;
+        }
         out.flush()?;
+        let scratch = crate::atomic::Scratch::new()?;
         let step = crate::progress::step("Decoding", Some(media.len() as u64));
-        let decoded = parallel::map(&media, parallel::builds(), |l| {
+        let numbered: Vec<(usize, &store::Located)> = media.iter().enumerate().collect();
+        let measured = parallel::map(&numbered, parallel::builds(), |(n, l)| {
             let _working = step.working(&crate::progress::label(&l.path));
-            decodes(runner, &l.path)
+            crate::facts::integrity(runner, l, &scratch.path().join(format!("decode-{n}")))
         });
-        for (l, result) in media.iter().zip(decoded) {
-            if let Err(e) = result {
-                problem(report, format!("Does not decode in full: {}: {e:#}", l.key))?;
+        for (l, result) in media.iter().zip(measured) {
+            match result {
+                Ok(m) => {
+                    if let Some(damage) = m.as_ref().and_then(crate::integrity::Measure::damage) {
+                        problem(
+                            report,
+                            format!("Damaged audio: {}", damage.describe(&l.key)),
+                        )?;
+                    }
+                }
+                Err(e) => problem(report, format!("Does not decode: {}: {e:#}", l.key))?,
             }
+        }
+    } else {
+        let unchecked = media
+            .iter()
+            .filter(|l| {
+                state
+                    .facts
+                    .get(&l.key)
+                    .is_some_and(|f| f.holds_for(&l.rev()) && f.integrity().is_none())
+            })
+            .count();
+        if unchecked > 0 {
+            crate::ui::info(
+                report,
+                &format!(
+                    "{unchecked} source(s) not checked for damage yet: `sync` or `status` \
+                     measures them, `check --decode` here"
+                ),
+            )?;
         }
     }
     if upstream {

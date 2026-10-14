@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use clap::Parser;
 
@@ -230,13 +231,51 @@ fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
     );
     let (ok, text) = s.run(&fake, &["add", &original]);
     assert!(ok, "{text}");
-    assert!(
-        s.dir
-            .path()
-            .join("home/sources/yt-dlp/chan/Song [aaaaaaaaaaa].mkv")
-            .exists()
-    );
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    assert!(store.join("youtube.com/aaaaaaaaaaa.mkv").exists(), "{text}");
+    assert!(!store.join("chan").exists(), "{text}");
     assert_eq!(s.songs(), [vec![SourceKey::youtube("aaaaaaaaaaa")]]);
+}
+
+#[test]
+fn an_original_in_a_folder_goes_to_its_key_once_and_undo_takes_it_out() {
+    let s = Setup::new();
+    let original = s.file("Downloads/batch/chan/Song [aaaaaaaaaaa].mkv");
+    s.file("Downloads/batch/b.flac");
+    let fake = Fake::default().probe("b.flac", FLAC).info(
+        "aaaaaaaaaaa",
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#,
+    );
+    let folder = s.dir.path().join("Downloads/batch");
+    let (ok, text) = s.run(&fake, &["add", "-y", folder.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let home = s.dir.path().join("home/sources");
+    let placed = home.join("yt-dlp/youtube.com/aaaaaaaaaaa.mkv");
+    assert!(placed.exists(), "{text}");
+    assert!(home.join("manual/batch/b.flac").exists(), "{text}");
+    assert!(
+        !home.join("manual/batch/chan").exists(),
+        "no original in the manual folder: {text}"
+    );
+    let mut songs = s.songs();
+    songs.sort();
+    assert!(
+        songs.contains(&vec![SourceKey::youtube("aaaaaaaaaaa")]),
+        "{songs:?}"
+    );
+
+    let (ok, text) = s.run(&fake, &["add", &original]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("which sources/yt-dlp holds already"),
+        "{text}"
+    );
+    assert_eq!(s.songs().len(), 2, "{text}");
+
+    // The add that changed nothing is no run; undo takes the first back.
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!placed.exists(), "{text}");
 }
 
 #[test]
@@ -277,6 +316,87 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
         "{text}"
     );
     assert!(text.contains("Added:"), "{text}");
+}
+
+#[test]
+fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
+    let s = Setup::new();
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\
+         [providers.youtube-music]\nenabled = false\n\
+         [providers.youtube]\nenabled = false\n\
+         [providers.lrclib]\nenabled = false\n\
+         [providers.acoustid]\nenabled = false\n\
+         [providers.musicbrainz]\nenabled = false\n\
+         [providers.coverart]\nenabled = false\n\
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    s.written(
+        "home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv",
+        "a copy with holes",
+    );
+    let info =
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#;
+    // Three seconds lost from its middle, as a download that lost pieces.
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let damaged = Fake {
+        timelines: vec![("aaaaaaaaaaa".into(), holed)],
+        hashes: vec![("aaaaaaaaaaa".into(), 1)],
+        ..Fake::default()
+    }
+    .info("aaaaaaaaaaa", info);
+    let (_, text) = s.run(&damaged, &["sync", "--offline"]);
+    assert!(text.contains("lacks"), "{text}");
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+    assert!(state.damaged.contains_key(&key));
+
+    // Fetched again, whole: taken without `--accept`.
+    let staged = store
+        .join(crate::store::STAGING)
+        .join("Youtube/aaaaaaaaaaa.mkv");
+    let whole = Fake {
+        hashes: vec![("aaaaaaaaaaa".into(), 2)],
+        on_stream: Some(Box::new(move |args: &[String]| {
+            let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
+            std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+            std::fs::write(&staged, b"a whole copy").unwrap();
+            let line = format!(
+                "Youtube aaaaaaaaaaa {}\n",
+                serde_json::to_string(&staged).unwrap()
+            );
+            std::fs::write(done, line).unwrap();
+            true
+        })),
+        ..Fake::default()
+    }
+    .info("aaaaaaaaaaa", info);
+    let (ok, text) = s.run(&whole, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 1 damaged source(s) again"),
+        "{text}"
+    );
+    assert!(
+        text.contains("taken, a whole copy in place of a damaged one"),
+        "{text}"
+    );
+    assert!(text.contains("Updated (audio"), "{text}");
+    let (ok, again) = s.run(&whole, &["sync"]);
+    assert!(ok && !again.contains("Fetching"), "{again}");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert!(!state.failures.contains_key(&key) && state.damaged.is_empty());
 }
 
 #[test]
@@ -743,10 +863,15 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
     let built = std::fs::read(&file).unwrap();
     std::fs::write(&source, "a copy stopped short").unwrap();
-    let cut = Fake {
+    let mut cut = Fake {
         held: vec![("a.flac".into(), 3)],
         ..flacs()
     };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
     let mut out = Vec::new();
     let ok = run_with(
         &s.job(&["sync"]),
@@ -759,7 +884,10 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(!ok, "a failure: {text}");
-    assert!(text.contains("cut off since its song was built"), "{text}");
+    assert!(
+        text.contains("cut off") && text.contains("since its song was built"),
+        "{text}"
+    );
     assert!(!text.contains("Updated"), "{text}");
     assert_eq!(std::fs::read(&file).unwrap(), built, "{text}");
     let mut report = Vec::new();
@@ -773,7 +901,10 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     )
     .unwrap();
     let report = String::from_utf8(report).unwrap();
-    assert!(!clean && report.contains("Cut off"), "{report}");
+    assert!(
+        !clean && report.contains("Damaged audio") && report.contains("cut off"),
+        "{report}"
+    );
     let mut out = Vec::new();
     run_with(
         &s.job(&["sync", "--force"]),
@@ -786,6 +917,47 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("Updated (audio"), "{text}");
+}
+
+#[test]
+fn check_decode_measures_each_source_afresh_and_names_its_damage() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let check = |fake: &Fake, args: &[&str]| {
+        let mut report = Vec::new();
+        let clean = run_with(
+            &s.job(args),
+            fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut report,
+        )
+        .unwrap();
+        (clean, String::from_utf8(report).unwrap())
+    };
+    let (clean, report) = check(&flacs(), &["check", "--decode"]);
+    assert!(clean, "{report}");
+    // The file lost three seconds since it was measured.
+    let mut list = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(list, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let holed = Fake {
+        timelines: vec![("a.flac".into(), list)],
+        ..flacs()
+    };
+    let (clean, report) = check(&holed, &["check"]);
+    assert!(clean, "measured before: {report}");
+    let (clean, report) = check(&holed, &["check", "--decode"]);
+    assert!(!clean, "{report}");
+    assert!(
+        report.contains("Damaged audio: manual:a.flac lacks"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -1820,6 +1992,65 @@ fn a_library_put_back_from_a_copy_with_new_times_is_still_muman_s() {
     assert!(ok, "{text}");
     assert!(!text.contains("changed since muman wrote it"), "{text}");
     assert!(text.contains("Updated"), "{text}");
+}
+
+#[test]
+fn a_library_moved_or_copied_elsewhere_keeps_the_files_muman_wrote() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    // Copied elsewhere with new times, as a copy without times leaves it,
+    // and copied again with the song's file changed since.
+    let copy = |to: &str, edit: bool| {
+        let to = s.dir.path().join(to);
+        for file in crate::store::files_below(&lib, usize::MAX, |_| true).unwrap() {
+            let at = to.join(file.strip_prefix(&lib).unwrap());
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            let mut bytes = std::fs::read(&file).unwrap();
+            if edit && at.extension().is_some_and(|e| e == "flac") {
+                bytes.extend(b"retagged");
+            }
+            std::fs::write(&at, bytes).unwrap();
+        }
+        to
+    };
+    let run_in = |library: &Path, args: &[&str]| {
+        let mut job = s.job(args);
+        job.dirs.library = library.to_path_buf();
+        let mut out = Vec::new();
+        let ok = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let copied = copy("elsewhere", false);
+    let (ok, text) = run_in(&copied, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("1 file(s) here as muman wrote them stay its"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+    let (ok, text) = run_in(&copied, &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok && text.contains("Updated"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+
+    let edited = copy("edited", true);
+    let (_, text) = run_in(&edited, &["sync"]);
+    assert!(
+        text.contains("0 file(s) here as muman wrote them stay its"),
+        "{text}"
+    );
+    assert!(text.contains("Left alone, not muman's"), "{text}");
 }
 
 #[test]

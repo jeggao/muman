@@ -87,6 +87,7 @@ use serde::{Deserialize, Serialize};
 use crate::clean::{self, Albums, Settings};
 use crate::codec::{Adapt, Chain, Codec, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
+use crate::integrity::Damage;
 use crate::loudness::Gains;
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
@@ -586,7 +587,9 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let audio = facts.audio.as_ref().map_or(0, |a| a.index);
     let format = match facts.audio.as_ref() {
         // A file cut off breaks off mid-frame; copied, so would the song.
-        Some(a) if facts.cut_from.is_some() => Format::encoded(a, input.audio),
+        Some(a) if matches!(facts.damage(), Some(Damage::Cut { .. })) => {
+            Format::encoded(a, input.audio)
+        }
         Some(a) => Format::of(a, input.audio),
         None => bail!("no source of this song has audio"),
     };
@@ -665,6 +668,12 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
         }
         bail!("the pinned audio, {pin}, has no audio on disk");
     }
+    // Audio a source lacks counts against it as audio another source shows
+    // it lacks does; where one of the song's sources lacks some, each one
+    // compared with none is scored by its own, so an intact copy wins.
+    let any_missing = audible
+        .iter()
+        .any(|(_, _, f)| matches!(f.damage(), Some(Damage::Missing { .. })));
     let ranked = audible.iter().map(|(n, key, facts)| {
         let compared: Vec<&Aligned> = audible
             .iter()
@@ -678,7 +687,11 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             .min()
             .or_else(|| compared.iter().map(|a| a.unmatched_ms()).min());
         let lacks = compared.iter().map(|a| a.a_lacks_ms).max().unwrap_or(0);
-        let unmatched = beyond.map(|ms| ms + lacks);
+        let damage = facts.damage();
+        let missing = damage.map_or(0, |d| d.missing_ms());
+        let unmatched = beyond
+            .map(|ms| ms + lacks.max(missing))
+            .or_else(|| any_missing.then_some(missing));
         let q = facts.audio.as_ref().and_then(|a| a.quality);
         let w = input.quality;
         let [unknown, sum] = score(&[
@@ -731,6 +744,11 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                 q.clipping * 100.0
             ),
             (_, None) => "not measured".to_string(),
+        };
+        let why = match damage {
+            Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
+            Some(Damage::Missing { seconds, .. }) => format!("{why}, {seconds:.1} s missing"),
+            None => why,
         };
         (rank, (*key).clone(), why)
     });
@@ -847,7 +865,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
     let duration_ms = input
         .facts
         .get(audio)
-        .and_then(|f| f.duration)
+        .and_then(Facts::length)
         .map_or(0.0, units::ms_of_seconds);
     let mut best: Option<(Rank, LyricsRef, String)> = None;
     for (n, key, facts) in input.present() {
@@ -865,7 +883,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                 _ => continue,
             }
         };
-        for l in &facts.lyrics {
+        // A subtitle of only `♪` writes no lyrics, so is none.
+        for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
             let Some(preference) = lyrics::preference(input.lyrics, &l.language) else {
                 continue;
             };

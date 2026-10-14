@@ -36,7 +36,7 @@ Exit codes:
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
-* `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
+* `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing, unreadable or damaged
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits; the library itself is left as it is
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
@@ -73,7 +73,7 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 **Arguments:**
 
-* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, or originals yt-dlp fetched, into sources/yt-dlp; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
+* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 
@@ -291,13 +291,13 @@ Delete fetched sources and lookup records no song uses: an upload a release took
 
 ### `muman check`
 
-Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing or unreadable
+Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing, unreadable or damaged
 
 **Usage:** `muman check [OPTIONS]`
 
 **Options:**
 
-* `--decode` — Also decode every source in full, to find a truncated download
+* `--decode` — Decode every source in full again, to find audio cut off or missing in a file changed since it was measured
 * `--upstream` — Also ask each site whether it still serves each fetched source as its song records, downloading nothing: a source re-encoded, no longer served in its format, or taken down
 
 

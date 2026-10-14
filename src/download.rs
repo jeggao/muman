@@ -4,8 +4,11 @@
 //! yt-dlp runs with `--ignore-config`, so a personal config cannot change
 //! what a source holds; the song list's `[ytdlp]` is how options reach
 //! it. Unfinished downloads wait in `partial/` under the state root,
-//! beside the store, so an interrupted one resumes on the next run and a
-//! finished one is renamed into the store rather than copied.
+//! beside the store, named by the extractor and ID alone, so an
+//! interrupted one resumes at the same path on the next run whatever
+//! its uploader is called by then; a finished one is renamed into the
+//! store's staging folder rather than copied, and from there to its
+//! key's place ([`crate::store::place`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -14,33 +17,12 @@ use crate::settings::Ytdlp;
 use crate::sites::Sites;
 use crate::source::SourceKey;
 
-/// `<handle>/<title> [<id>].mkv`. The byte limits keep a long title in
-/// a multi-byte script under the filesystem's 255-byte name limit; the
-/// fallbacks cover a channel with no handle.
-pub const OUTPUT_TEMPLATE: &str =
-    "%(uploader_id,channel_id,uploader|unknown).80B/%(title).150B [%(id)s].%(ext)s";
+/// `<extractor>/<id>.mkv`: what names a download the same every time it
+/// is tried, nothing a site may rename.
+pub const OUTPUT_TEMPLATE: &str = "%(extractor_key)s/%(id)s.%(ext)s";
 
-/// The default template's name, under a folder chosen beforehand.
-#[must_use]
-pub fn template_in(folder: &str) -> String {
-    format!("{}/%(title).150B [%(id)s].%(ext)s", escape(folder))
-}
-
-/// A template naming one file exactly, whatever its extension ends up.
-#[must_use]
-pub fn template_at(relative: &Path) -> String {
-    format!(
-        "{}.%(ext)s",
-        escape(&relative.with_extension("").to_string_lossy())
-    )
-}
-
-fn escape(literal: &str) -> String {
-    literal.replace('%', "%%")
-}
-
-/// Where a run's files go: the store, partial downloads, and the list of
-/// finished files.
+/// Where a run's files go: the store's staging folder, partial
+/// downloads, and the list of finished files.
 #[derive(Debug, Clone, Copy)]
 pub struct Places<'a> {
     pub store: &'a Path,
@@ -63,7 +45,6 @@ pub struct Places<'a> {
 #[must_use]
 pub fn ytdlp_command(
     places: &Places<'_>,
-    template: &str,
     archive: Option<&Path>,
     urls: &[String],
 ) -> Vec<OsString> {
@@ -114,7 +95,7 @@ pub fn ytdlp_command(
     .into_iter()
     .map(OsString::from)
     .collect();
-    cmd.push(template.into());
+    cmd.push(OUTPUT_TEMPLATE.into());
     let options = places.options;
     for (flag, value) in [
         ("--format", options.format.clone()),
@@ -288,7 +269,7 @@ mod tests {
     #[test]
     fn urls_follow_the_option_terminator() {
         let urls = vec!["-dashid".to_string(), "https://x".to_string()];
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &urls);
+        let cmd = ytdlp_command(&places(None), None, &urls);
         let end = cmd.iter().position(|a| a == "--").expect("terminator");
         assert_eq!(
             &cmd[end + 1..],
@@ -298,7 +279,7 @@ mod tests {
 
     #[test]
     fn originals_and_temp_are_separate_paths() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         let paths = value_after(&cmd, "--paths");
         assert_eq!(
             paths,
@@ -308,12 +289,7 @@ mod tests {
 
     #[test]
     fn an_archive_is_passed_when_given() {
-        let cmd = ytdlp_command(
-            &places(None),
-            OUTPUT_TEMPLATE,
-            Some(Path::new("/t/skip")),
-            &[],
-        );
+        let cmd = ytdlp_command(&places(None), Some(Path::new("/t/skip")), &[]);
         assert_eq!(
             value_after(&cmd, "--download-archive"),
             vec![&OsString::from("/t/skip")]
@@ -322,7 +298,7 @@ mod tests {
 
     #[test]
     fn every_original_ends_up_matroska() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert_eq!(
             value_after(&cmd, "--merge-output-format"),
             vec![&OsString::from("mkv")]
@@ -335,20 +311,20 @@ mod tests {
 
     #[test]
     fn a_personal_config_is_ignored() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert_eq!(cmd[1], "--ignore-config");
     }
 
     #[test]
     fn translated_captions_are_skipped() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         let args = value_after(&cmd, "--extractor-args");
         assert!(args[0].to_string_lossy().contains("skip=translated_subs"));
     }
 
     #[test]
     fn with_the_plugin_original_captions_are_kept_too() {
-        let cmd = ytdlp_command(&places(Some(Path::new("/p"))), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(Some(Path::new("/p"))), None, &[]);
         assert!(cmd.iter().any(|a| a == "--write-auto-subs"));
         let clear = cmd.iter().position(|a| a == "--no-plugin-dirs").unwrap();
         let add = cmd.iter().position(|a| a == "--plugin-dirs").unwrap();
@@ -370,13 +346,13 @@ mod tests {
 
     #[test]
     fn without_an_archive_nothing_is_skipped() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert!(!cmd.iter().any(|a| a == "--download-archive"));
     }
 
     #[test]
     fn progress_is_one_line_each() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert!(cmd.iter().any(|a| a == "--newline"));
         assert_eq!(value_after(&cmd, "--progress-template").len(), 1);
     }
@@ -394,24 +370,15 @@ mod tests {
     }
 
     #[test]
-    fn templates_escape_literal_percents() {
-        assert_eq!(template_in("100%"), "100%%/%(title).150B [%(id)s].%(ext)s");
-        assert_eq!(
-            template_at(Path::new("chan/50% [id].mkv")),
-            "chan/50%% [id].%(ext)s"
-        );
-    }
-
-    #[test]
     fn without_the_plugin_no_generated_captions_are_asked_for() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert!(!cmd.iter().any(|a| a == "--write-auto-subs"));
         assert!(!cmd.iter().any(|a| a == "--use-postprocessor"));
     }
 
     #[test]
     fn the_address_given_is_kept_in_the_info_json() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         assert_eq!(
             value_after(&cmd, "--parse-metadata"),
             vec![&OsString::from("original_url:(?P<muman_original_url>.+)")]
@@ -420,7 +387,7 @@ mod tests {
 
     #[test]
     fn subtitles_are_embedded_and_not_kept() {
-        let cmd = ytdlp_command(&places(None), OUTPUT_TEMPLATE, None, &[]);
+        let cmd = ytdlp_command(&places(None), None, &[]);
         for flag in ["--embed-subs", "--write-subs"] {
             assert!(cmd.iter().any(|a| a == flag), "{flag}");
         }

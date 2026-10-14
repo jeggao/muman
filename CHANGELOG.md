@@ -34,6 +34,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   giving way to the artists it names, and `--verbose` names what was
   skipped.
 
+- **A damaged download is fetched again.** Audio cut off or missing
+  from what yt-dlp fetched is fetched again on the next sync, then less
+  often, up to five copies or until `sync --retry`, and a whole copy is
+  taken in its place without `sync --accept`.
 - **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
   no lookup, no fetch, and URLs refused.
 - **`sync` on a new home writes the song list,** every setting in it, so
@@ -41,6 +45,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Fetched sources are kept by their key,** at
+  `sources/yt-dlp/<site>/<id>.mkv`, where they were named by their
+  uploader and title, which a site may call otherwise from one fetch to
+  the next: an unfinished download was left behind rather than resumed,
+  and one source could be kept twice, unseen. A file there that is no
+  source, as a subtitle yt-dlp could not embed, is named by `info` and
+  deleted by `purge`. Sources fetched before stay where they are, read
+  as ever. An older muman finds no source fetched in this layout, and
+  would fetch those again.
 - **The first sync measures every song's loudness and retags it.** It
   decodes each source once, in full, then writes the tags of every
   song again, encoding none: a `written` hook runs for each song, and
@@ -227,6 +240,53 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **The library's lock file** in the system's temporary folder is
   removed as each run lets go of it, where one stayed for every library
   folder muman ever wrote.
+- **A step with nothing to do** shows nothing, where plain progress
+  said `[5/5] Writing: 0/0, done in 0 s`.
+- **A setting added to an older song list** comes without the
+  commented-out hint for another setting the table sets or hints at
+  already, by its name or an older one, where `[audio]` got a second
+  `# min_bitrate` hint.
+- **The time left a step says** follows the pace of its last minute,
+  where it was the pace since the step began: after a run of cheap
+  items it said `about 1 s left` with twenty minutes to go, then rose
+  for the rest of the step. Measuring counts the audio sources alone,
+  as lookup records and pictures take a moment each.
+- **A subtitle running past the audio is no cut-off.** A source was
+  judged cut off by the file's length, which counts its subtitles too,
+  so most videos with subtitles were: `check` named each and failed,
+  and their songs were encoded again where the audio would have been
+  copied. The audio stream's own length is read now, and those songs
+  are copied on the next sync.
+- **Damaged audio is found.** Each source's decode is measured against
+  its packets: audio cut off, its packets ending before its stream says,
+  and audio missing, as holes a download that lost pieces leaves or
+  packets too corrupt to decode, which passed as whole. `sync` warns,
+  `check` names each, `info` counts the songs, and a source missing
+  audio ranks below any whole copy of the recording. Sources measured
+  before are checked once, on the next sync, by one decode each.
+- **A library folder moved or copied keeps its files muman's.** Named
+  anew, by `--library` or `[library] path`, a library left every file
+  there alone as not muman's, so `set` and `remove` no longer touched
+  them, and only `sync --force`, writing every song again, took them
+  back. Each file at its place as muman wrote it, by its size and time
+  or, copied with new times, by its bytes, stays muman's now.
+- **`info`** counts the songs up to date, to write, to move and left
+  alone by the decisions a sync makes, as `status` shows them, where it
+  judged them its own way: after a library folder was named anew it
+  said every song would be written there anew and counted them up to
+  date.
+- **A subtitle of only `♪` is no lyrics,** where it was picked as a
+  song's lyrics, untimed, though nothing was written: `info` counted the
+  song as having lyrics and `list lyrics:yes` matched it. Sources
+  measured before are read again once, their subtitles alone.
+- **An original yt-dlp fetched, inside a folder `add` is given,** goes
+  into `sources/yt-dlp` under its key, as one given alone does, where it
+  was copied into the manual folder as a file of your own; one of a key
+  the store holds already is not copied again, where a second copy was
+  kept under the name of the folder it came from.
+- **`check --decode`** measures each source's audio afresh and names
+  what is cut off or missing, where it named any line ffmpeg wrote, a
+  warning from its muxer about timestamps among them.
 
 ## [0.3.0] - 2026-10-07
 

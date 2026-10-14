@@ -31,7 +31,7 @@ use crate::resolve::{self, Input, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, Aligned, State, Step, Written};
-use crate::store::{self, Located, Store};
+use crate::store::{self, Kind, Located, Store};
 use crate::tags::{self, Field};
 
 // Each is a flag of its own on the command line.
@@ -126,21 +126,26 @@ pub fn measure<R: Runner, W: Write>(
         )?;
     }
     let retagged = retag(runner, store, keys, state, scratch, out)?;
+    let relyriced = relyric(runner, store, keys, state, scratch, out)?;
     if due.is_empty() {
-        if retagged {
+        if retagged || relyriced {
             (how.checkpoint)(state)?;
         }
         return Ok(());
     }
     crate::ui::info(out, &format!("Measuring {} source(s)", due.len()))?;
-    let step = progress::step("Measuring", Some(due.len() as u64));
+    // A lookup record or a picture takes a moment, a song's audio seconds
+    // to minutes: counted as alike, they would make the time left a guess,
+    // so only the audio is counted.
+    let media = due.iter().filter(|l| l.kind == Kind::Media).count();
+    let step = progress::step("Measuring", Some(media as u64));
     let numbered: Vec<(usize, &Located)> = due.iter().enumerate().collect();
     let mut kept = Instant::now();
     parallel::chunked(
         &numbered,
         parallel::builds(),
         |(n, l)| {
-            let _working = step.working(&progress::label(&l.path));
+            let _working = (l.kind == Kind::Media).then(|| step.working(&progress::label(&l.path)));
             facts::gather(
                 runner,
                 l,
@@ -157,7 +162,15 @@ pub fn measure<R: Runner, W: Write>(
                             state.rebase(&located.key, &old, &f);
                         }
                         state.facts.insert(located.key.clone(), f);
-                        state.clear_failure(&located.key);
+                        // Whether a copy fetched again is whole is the
+                        // damage noted after measuring's to say.
+                        if state
+                            .failures
+                            .get(&located.key)
+                            .is_none_or(|f| f.step != Step::Refetch)
+                        {
+                            state.clear_failure(&located.key);
+                        }
                     }
                     // No fault of the source's: recorded, it would wait for `--retry`.
                     Err(e) if out_of_space(&e) => {
@@ -188,14 +201,8 @@ pub fn measure<R: Runner, W: Write>(
 /// What a source's measures hold that its song is worse for, said once
 /// when it is measured.
 fn warn_of<W: Write>(out: &mut W, key: &SourceKey, f: &crate::facts::Facts) -> Result<()> {
-    if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
-        crate::ui::warning(
-            out,
-            &format!(
-                "{key} holds {held:.0} s of audio where its header says \
-                 {said:.0} s: cut off, as a copy or a download stopped"
-            ),
-        )?;
+    if let Some(damage) = f.damage() {
+        crate::ui::warning(out, &damage.describe(key))?;
     }
     if f.audio.as_ref().is_some_and(|a| a.quality.is_none()) {
         crate::ui::warning(
@@ -261,6 +268,61 @@ fn retag<R: Runner, W: Write>(
                     f.tags = tags;
                     f.release = release;
                     f.tags_method = tags::METHOD.to_string();
+                }
+            }
+            Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,
+        }
+    }
+    Ok(true)
+}
+
+/// Read again whether the lyrics of each source whose measures still hold
+/// sing anything, where they were measured before muman asked, decoding
+/// no audio. Returns whether any were.
+fn relyric<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<(Located, Vec<crate::facts::LyricsAt>)> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter_map(|l| {
+            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
+            let at: Vec<_> = f
+                .lyrics
+                .iter()
+                .filter(|x| x.sings.is_none())
+                .map(|x| x.at.clone())
+                .collect();
+            (!at.is_empty()).then_some((l, at))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!("Reading the lyrics of {} source(s)", due.len()),
+    )?;
+    let numbered: Vec<(usize, &(Located, Vec<crate::facts::LyricsAt>))> =
+        due.iter().enumerate().collect();
+    let read = parallel::map(&numbered, parallel::builds(), |(n, (l, at))| {
+        facts::relyric(runner, l, at, &scratch.join(format!("lyrics-{n}")))
+    });
+    for ((located, asked), result) in due.iter().zip(read) {
+        match result {
+            Ok(found) => {
+                if let Some(f) = state.facts.get_mut(&located.key) {
+                    // What does not read again stays lyrics, as it was,
+                    // rather than be read again on every sync.
+                    for l in f.lyrics.iter_mut().filter(|l| asked.contains(&l.at)) {
+                        let sings = found.iter().find(|(at, _)| *at == l.at).map(|(_, s)| *s);
+                        l.sings = Some(sings.unwrap_or(true));
+                    }
                 }
             }
             Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,
@@ -417,7 +479,8 @@ fn analyze<R: Runner, W: Write>(
             Some(Ok(a)) => a,
             Some(Err(e)) => {
                 crate::ui::warning(out, &format!("Could not analyze {}: {e:#}", located.key))?;
-                crate::analysis::Pass::new(kinds.clone()).finish()
+                crate::analysis::Pass::new(kinds.clone())
+                    .finish(&crate::integrity::Found::default())
             }
             None => continue,
         };
@@ -437,7 +500,8 @@ fn analyze_mixes<R: Runner, W: Write>(
     settings: &crate::settings::Settings,
     out: &mut W,
 ) -> Result<bool> {
-    let wanted = crate::analysis::wanted(&settings.loudness);
+    let mut wanted = crate::analysis::wanted(&settings.loudness);
+    wanted.retain(|k| k.mixed());
     if wanted.is_empty() {
         return Ok(false);
     }
@@ -787,6 +851,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if analyzed || mixed {
         persist(home, &state, opts.dry_run, &lock)?;
     }
+    if !opts.dry_run {
+        note_damage(&manifest, &store, &mut state);
+    }
     let renames = sites_found(&manifest, &state);
     for (from, to) in &renames {
         let line = if opts.dry_run {
@@ -861,53 +928,44 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if let Some(run) = run.as_deref_mut() {
         run.outputs_before(&state.outputs);
     }
-    let files = files_of(&planned, &manifest, &state.outputs);
-    let drifts = crate::held::drifts(&manifest, &state.facts);
-    let cut = if opts.force {
-        BTreeSet::new()
-    } else {
-        cut_since_built(&planned, &drifts, &state.facts)
-    };
-    let (taken, kept): (Vec<&Drift>, Vec<&Drift>) = drifts
-        .iter()
-        .filter(|d| !cut.contains(&d.song))
-        .partition(|d| opts.accept || d.followed());
-    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
-    holding.extend(&cut);
-    let decided = decide(
+    let Foreseen {
+        files,
+        drifts,
+        damaged,
+        decided,
+    } = foresee(
+        &manifest,
+        &state,
         &planned,
-        &files,
-        &state.outputs,
         &dirs.library,
-        opts.force,
-        &holding,
+        (opts.force, opts.accept),
     );
+    let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept, &state);
     say_drifts(
-        &taken,
-        &kept,
+        (&taken, &kept),
         &planned,
         &decided,
-        (opts.accept, opts.force),
+        opts.force,
+        &|d| whole_again(d, &state),
         out,
     )?;
     for ((n, r), d) in planned.iter().zip(&decided) {
         let Some(f) = state
             .facts
             .get(&r.plan.audio.key)
-            .filter(|_| cut.contains(n))
+            .filter(|_| damaged.contains(n))
         else {
             continue;
         };
-        if let (Doing::Held { .. }, Some(said), Some(held)) = (d, f.cut_from, f.duration) {
+        if let (Doing::Held { .. }, Some(damage)) = (d, f.damage()) {
             ok = false;
             crate::ui::error(
                 out,
                 &format!(
-                    "Failed: {}: {} holds {held:.0} s of audio where its header says {said:.0} s, \
-                     cut off since its song was built; its file is left as built \
+                    "Failed: {}: {}, since its song was built; its file is left as built \
                      (`sync --force` writes it from what the source holds now)",
                     name_of(&manifest.songs[*n], Some(r), &state.facts),
-                    r.plan.audio.key
+                    damage.describe(&r.plan.audio.key)
                 ),
             )?;
         }
@@ -1562,7 +1620,7 @@ fn media_equal(a: &Plan, b: &Plan) -> bool {
 /// What a sync does with one song, decided for every song before any is
 /// done, so a sync does what `status` says it would.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Doing {
+pub(crate) enum Doing {
     /// Its file is as it would be written.
     Keep,
     /// Its file moves to the song's path, its tags written again when
@@ -1588,22 +1646,139 @@ enum Doing {
     Held { file: PathBuf },
 }
 
+/// What a sync decides for every song, before it does any: each song's
+/// file, the sources holding otherwise than it was built from, those
+/// damaged since, and what it does with each.
+pub(crate) struct Foreseen {
+    pub files: BTreeMap<usize, PathBuf>,
+    pub drifts: Vec<Drift>,
+    pub damaged: BTreeSet<usize>,
+    pub decided: Vec<Doing>,
+}
+
+/// What a sync of `planned` into `library` decides, `force` and `accept`
+/// as given: the one place `sync`, `status` and `info` decide it.
+pub(crate) fn foresee(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    library: &Path,
+    (force, accept): (bool, bool),
+) -> Foreseen {
+    let files = files_of(planned, manifest, &state.outputs);
+    let drifts = crate::held::drifts(manifest, &state.facts);
+    let damaged = if force {
+        BTreeSet::new()
+    } else {
+        damaged_since_built(planned, &drifts, &state.facts)
+    };
+    let (_, kept) = split_drifts(&drifts, &damaged, accept, state);
+    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    holding.extend(&damaged);
+    let decided = decide(planned, &files, &state.outputs, library, force, &holding);
+    Foreseen {
+        files,
+        drifts,
+        damaged,
+        decided,
+    }
+}
+
+/// `drifts` of songs not `damaged`: those taken, followed, accepted or
+/// whole in place of a damaged copy, and those its song is held as built
+/// for.
+fn split_drifts<'a>(
+    drifts: &'a [Drift],
+    damaged: &BTreeSet<usize>,
+    accept: bool,
+    state: &State,
+) -> (Vec<&'a Drift>, Vec<&'a Drift>) {
+    drifts
+        .iter()
+        .filter(|d| !damaged.contains(&d.song))
+        .partition(|d| accept || d.followed() || whole_again(d, state))
+}
+
+/// Whether `d` is a whole copy of a download fetched again because the
+/// copy its song was built from was damaged: taken as fetched, as no
+/// one chose the damage.
+fn whole_again(d: &Drift, state: &State) -> bool {
+    let undamaged = state
+        .facts
+        .get(&d.key)
+        .is_some_and(|f| f.damage().is_none());
+    undamaged && d.was.audio.is_some() && state.damaged.get(&d.key) == d.was.audio.as_ref()
+}
+
+/// Note each fetched source found damaged, to be fetched again: once for
+/// each damaged copy, counted by its revision; and let go of the note,
+/// and of the audio recorded for it, once a whole copy is measured and
+/// its song's record names it.
+fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
+    let sites = &manifest.settings.sites;
+    for key in manifest.keys() {
+        if !matches!(key, SourceKey::Remote { .. }) || crate::provider::is_kept(&key) {
+            continue;
+        }
+        let Some(located) = store.locate(&key) else {
+            continue;
+        };
+        let rev = located.rev();
+        let Some(facts) = state.facts.get(&key).filter(|f| f.holds_for(&rev)) else {
+            continue;
+        };
+        let held = manifest.song_with(&key).and_then(|s| s.held.get(&key));
+        let fetchable =
+            sites.fetch_url(&key).is_some() || held.and_then(|h| h.url.as_ref()).is_some();
+        let refetching = state
+            .failures
+            .get(&key)
+            .filter(|f| f.step == Step::Refetch)
+            .map(|f| f.rev.clone());
+        match facts.damage() {
+            Some(damage) if fetchable => {
+                if refetching.is_some_and(|r| r.as_deref() == Some(rev.as_str())) {
+                    continue;
+                }
+                let audio = crate::held::Held::now(&key, facts, sites).and_then(|h| h.audio);
+                let said = damage.describe(&key);
+                if let Some(audio) = audio {
+                    state.damaged.entry(key.clone()).or_insert(audio);
+                }
+                state.record_failure(&key, Step::Refetch, Some(rev), said);
+            }
+            Some(_) => {}
+            None => {
+                if refetching.is_some() {
+                    state.clear_failure(&key);
+                }
+                let recorded = held.and_then(|h| h.audio.as_ref());
+                if state.damaged.get(&key).is_some_and(|d| Some(d) != recorded) {
+                    state.damaged.remove(&key);
+                }
+            }
+        }
+    }
+}
+
 /// Say what each source holding otherwise than its song was built
 /// from does to the song: followed or taken, or left as built while its
 /// file is there.
 fn say_drifts<W: Write>(
-    taken: &[&Drift],
-    kept: &[&Drift],
+    (taken, kept): (&[&Drift], &[&Drift]),
     planned: &[PlannedSong],
     decided: &[Doing],
-    (accept, force): (bool, bool),
+    force: bool,
+    whole: &dyn Fn(&Drift) -> bool,
     out: &mut W,
 ) -> Result<()> {
     for d in taken {
-        let how = if accept && !d.followed() {
-            "taken, as `--accept` asks"
-        } else {
+        let how = if d.followed() {
             "its song follows it, a file of your own"
+        } else if whole(d) {
+            "taken, a whole copy in place of a damaged one"
+        } else {
+            "taken, as `--accept` asks"
         };
         crate::ui::info(out, &format!("{}; {how}", d.show()))?;
     }
@@ -1632,10 +1807,11 @@ fn say_drifts<W: Write>(
 }
 
 /// The songs of `planned` whose audio would come from a source whose
-/// audio changed since the song was built and is cut off now, as a copy
-/// stopped short leaves a file: written from it, the song would lose what
-/// its file holds past the cut, so the file is held as built.
-fn cut_since_built(
+/// audio changed since the song was built and is damaged now, as a copy
+/// stopped short or a download that lost pieces leaves a file: written
+/// from it, the song would lose what its file holds, so the file is held
+/// as built.
+fn damaged_since_built(
     planned: &[PlannedSong],
     drifts: &[Drift],
     facts: &BTreeMap<SourceKey, Facts>,
@@ -1644,7 +1820,7 @@ fn cut_since_built(
         .iter()
         .filter(|(n, r)| {
             let key = &r.plan.audio.key;
-            facts.get(key).is_some_and(|f| f.cut_from.is_some())
+            facts.get(key).is_some_and(|f| f.damage().is_some())
                 && drifts.iter().any(|d| {
                     d.song == *n && d.key == *key && d.changed.contains(&crate::held::Aspect::Audio)
                 })
@@ -1955,17 +2131,57 @@ pub(crate) fn plan<W: Write>(
 /// back or a copy made without its times. Only those are read.
 pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
     for (path, written) in &mut state.outputs {
-        let file = library.join(path);
-        let (Some(was), Some(digest)) = (&written.stamp, &written.digest) else {
-            continue;
-        };
-        let Some(now) = store::stamp_text(&file).filter(|now| now != was) else {
-            continue;
-        };
-        if crate::facts::digest_file(&file).as_ref() == Some(digest) {
+        if let AsWritten::Copied(now) = as_written(&library.join(path), written) {
             written.stamp = Some(now);
         }
     }
+}
+
+/// Whether a file is as muman wrote it.
+enum AsWritten {
+    /// By its size and time.
+    Same,
+    /// By its bytes, a copy having given it this stamp, new times.
+    Copied(String),
+    /// Changed, not there, or written before muman recorded how.
+    Not,
+}
+
+/// Whether `file` is as `written` records muman wrote it.
+fn as_written(file: &Path, written: &Written) -> AsWritten {
+    let (Some(was), Some(now)) = (&written.stamp, store::stamp_text(file)) else {
+        return AsWritten::Not;
+    };
+    if now == *was {
+        return AsWritten::Same;
+    }
+    match &written.digest {
+        Some(digest) if crate::facts::digest_file(file).as_ref() == Some(digest) => {
+            AsWritten::Copied(now)
+        }
+        _ => AsWritten::Not,
+    }
+}
+
+/// The outputs of a library folder named anew, as `--library` or the
+/// song list names another: each whose file is at its place in `library`
+/// as muman wrote it, moved there or copied, stays muman's, re-stamped
+/// where a copy gave it new times; the rest are let go of, to be written
+/// anew, or left alone where another file is in the way. How many were
+/// kept and let go of.
+pub(crate) fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -> (usize, usize) {
+    let before = outputs.len();
+    outputs.retain(
+        |path, written| match as_written(&library.join(path), written) {
+            AsWritten::Copied(now) => {
+                written.stamp = Some(now);
+                true
+            }
+            AsWritten::Same => true,
+            AsWritten::Not => false,
+        },
+    );
+    (outputs.len(), before - outputs.len())
 }
 
 /// For a dry run, the manual files the next sync will follow to where
@@ -1998,25 +2214,27 @@ fn foresee_moves<W: Write>(
     Ok(())
 }
 
-/// Take `library` as the folder the outputs are in; the files written
-/// into another before are no longer muman's to delete.
-fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
+/// Take `library` as the folder the outputs are in: the files there as
+/// muman wrote them stay its ([`rehome`]), and those written into another
+/// before are no longer muman's to delete.
+pub(crate) fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
     if library.exists() && !library.is_dir() {
         anyhow::bail!("the library {} is a file, not a folder", library.display());
     }
     if let Some(before) = state
         .library
-        .as_deref()
+        .clone()
         .filter(|l| !crate::platform::same_path(l, library))
     {
+        let (kept, gone) = rehome(&mut state.outputs, library);
         crate::ui::warning(
             out,
             &format!(
-                "The library moved from {}; the files written there are left alone",
+                "The library moved from {}: {kept} file(s) here as muman wrote them stay its, \
+                 {gone} are written here anew; the files left there are left alone",
                 before.display()
             ),
         )?;
-        state.outputs.clear();
     }
     state.library = Some(library.to_path_buf());
     Ok(())
@@ -2265,7 +2483,7 @@ impl Showing {
 
 /// What a sync does with a song, as `status` counts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Fate {
+pub(crate) enum Fate {
     New,
     Changed,
     Again,
@@ -2331,7 +2549,7 @@ fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, Source
 }
 
 /// What `status` says a sync does with a song, its file made by `before`.
-fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
+pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
     match d {
         Doing::Keep => (Fate::Kept, "up to date".to_string()),
         Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),

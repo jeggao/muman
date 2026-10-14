@@ -404,7 +404,7 @@ fn candidates(
             .as_ref()
             .and_then(|k| state.facts.get(k))
             .or_else(|| facts.iter().copied().find(|f| f.audio.is_some()))
-            .and_then(|f| f.duration)
+            .and_then(facts::Facts::length)
             .map(|s| (s * 1000.0).round() as i64);
         let mut stems = BTreeSet::new();
         let mut ids = BTreeSet::new();

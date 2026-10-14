@@ -174,12 +174,12 @@ impl Read {
 
 /// Every file in the store a key brings: what yt-dlp fetched under its
 /// ID, or a manual file with its own lyrics and pictures.
-fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBuf>> {
-    Ok(match key {
+fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
+    match key {
         SourceKey::Remote { site, id } if crate::store::kept(site).is_some() => {
             crate::store::kept(site).map_or_else(Vec::new, |k| k.files(dirs, id))
         }
-        SourceKey::Remote { id, .. } => store.fetched_files(id)?,
+        SourceKey::Remote { .. } => store.fetched_files(key),
         SourceKey::Manual(_) => store.locate(key).map_or_else(Vec::new, |l| {
             let stem = l.path.with_extension("");
             std::iter::once(l.path.clone())
@@ -191,7 +191,7 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Result<Vec<PathBu
                 )
                 .collect()
         }),
-    })
+    }
 }
 
 /// Remove the songs the query picks, and with `purge` their sources.
@@ -258,7 +258,7 @@ pub fn remove<W: Write>(
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
-                    for file in store_files(&store, dirs, key)? {
+                    for file in store_files(&store, dirs, key) {
                         writeln!(
                             out,
                             "    keeps {}, which a removed song lists",
@@ -267,7 +267,7 @@ pub fn remove<W: Write>(
                     }
                     continue;
                 }
-                for file in store_files(&store, dirs, key)? {
+                for file in store_files(&store, dirs, key) {
                     let how = if own { "trashes" } else { "deletes" };
                     writeln!(out, "    {how} {}", file.display())?;
                     doomed.push((file, own));

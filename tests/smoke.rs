@@ -376,3 +376,77 @@ fn lyrics_pictures_and_cue_sheets_are_given_to_their_songs() {
         "{genres:?}"
     );
 }
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_subtitle_past_the_audio_is_no_cut_and_damaged_audio_is_found() {
+    let h = Home::new();
+    let dir = h.root.join("in");
+    std::fs::create_dir_all(&dir).unwrap();
+    let noise = |seed: u32, seconds: u32| {
+        format!("anoisesrc=d={seconds}:c=pink:r=48000:a=0.4:seed={seed},tremolo=f=3:d=0.8")
+    };
+    let opus = |name: &str, seed: u32| {
+        let path = dir.join(name);
+        let source = noise(seed, 10);
+        let args = ["-f", "lavfi", "-i", &source, "-ac", "2", "-c:a", "libopus"];
+        ffmpeg(&args, &path);
+        path
+    };
+
+    // A subtitle cue running two seconds past ten seconds of audio.
+    let audio = opus("sung.mka", 11);
+    let vtt = dir.join("cues.vtt");
+    std::fs::write(&vtt, "WEBVTT\n\n00:00:01.000 --> 00:00:12.000\nla la\n").unwrap();
+    let subtitled = dir.join("Subtitled.mkv");
+    let (sung, cues) = (audio.to_str().unwrap(), vtt.to_str().unwrap());
+    ffmpeg(
+        &[
+            "-i", sung, "-i", cues, "-map", "0", "-map", "1", "-c", "copy",
+        ],
+        &subtitled,
+    );
+    let added = h.muman(&["add", "--new", subtitled.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+    assert!(!text(&added).contains("cut off"), "{}", text(&added));
+    assert_eq!(h.library_files("opus").len(), 1, "copied, not encoded");
+    let checked = h.muman(&["check"]);
+    assert!(checked.status.success(), "{}", text(&checked));
+
+    // Three seconds lost from the middle, as a download that lost pieces.
+    let whole = opus("whole.mka", 12);
+    let (first, rest) = (dir.join("first.mka"), dir.join("rest.mka"));
+    let whole = whole.to_str().unwrap();
+    ffmpeg(&["-i", whole, "-t", "3", "-c", "copy"], &first);
+    ffmpeg(&["-ss", "6", "-i", whole, "-c", "copy"], &rest);
+    let list = dir.join("pieces.txt");
+    std::fs::write(&list, "file 'first.mka'\nduration 6\nfile 'rest.mka'\n").unwrap();
+    let holed = dir.join("Holed.mka");
+    let pieces = list.to_str().unwrap();
+    ffmpeg(
+        &["-f", "concat", "-safe", "0", "-i", pieces, "-c", "copy"],
+        &holed,
+    );
+    // A FLAC whose last bytes were never copied.
+    let cut = h.song("Cut.flac", 13, "Low Orchard");
+    let bytes = std::fs::read(&cut).unwrap();
+    std::fs::write(&cut, &bytes[..bytes.len() * 2 / 5]).unwrap();
+
+    let added = h.muman(&[
+        "add",
+        "--new",
+        holed.to_str().unwrap(),
+        cut.to_str().unwrap(),
+    ]);
+    let said = text(&added);
+    assert!(said.contains("lacks") && said.contains("holes"), "{said}");
+    assert!(said.contains("cut off"), "{said}");
+    let checked = h.muman(&["check"]);
+    assert_eq!(checked.status.code(), Some(4), "{}", text(&checked));
+    assert_eq!(
+        text(&checked).matches("Damaged audio").count(),
+        2,
+        "{}",
+        text(&checked)
+    );
+}

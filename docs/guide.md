@@ -19,7 +19,7 @@ holds only what muman renders from it.
 |---|---|
 | `songs.toml` | The song list: every song, its sources, tags and pins, and the settings |
 | `state.json` | Which library files muman wrote and from what, and every source's measures |
-| `sources/yt-dlp/<handle>/<title> [<id>].mkv` | What yt-dlp fetched, video, subtitles and metadata in one file |
+| `sources/yt-dlp/<site>/<id>.mkv` | What yt-dlp fetched, video, subtitles and metadata in one file, at a path of its key alone; anything else there is no source, and `purge` deletes it |
 | `sources/manual/` | Files you dropped in, at any depth, with lyrics and pictures beside them |
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
@@ -206,8 +206,10 @@ One that fails waits an hour before the next try, doubling each time;
 
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you
 drop it there yourself and the next `sync` lists it. A file that
-yt-dlp fetched elsewhere goes into `sources/yt-dlp` under its key
-instead. A dropped file waits until ten seconds after it arrived,
+yt-dlp fetched elsewhere, named `<title> [<id>]` and holding the info
+yt-dlp embeds, goes into `sources/yt-dlp` under its key instead, given
+alone or in a folder; one of a key the store holds already joins its
+song and is not copied again. A dropped file waits until ten seconds after it arrived,
 whatever modification time a copy kept for it, so one still being
 copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
@@ -251,11 +253,21 @@ home made from the song list alone, is built from what its sources hold
 now, and the warning stays until accepted. A file of your own in
 `sources/manual`, or a picture or `.lrc` beside it, is yours to change:
 its song follows it, said in a line, and its record is written anew.
-A source whose audio changed and is now cut off, holding less than its
-header says, as a copy or a download stopped short leaves it, is not
-followed: its song keeps the file it was built from and fails, exit 4,
-until you put the whole file back or `sync --force` writes the song
-from what it holds. `check --upstream` asks each site whether a fetch again would bring
+A source whose audio changed and is now damaged is not followed: its
+song keeps the file it was built from and fails, exit 4, until you put
+the whole file back or `sync --force` writes the song from what it
+holds. Damage is found in the decode every source has: audio **cut
+off**, its packets ending before its audio stream says, as a copy or a
+download stopped short leaves it; or audio **missing**, less decoding
+than its packets span, as holes a download that lost pieces leaves, or
+packets too corrupt to decode. The length a file states counts every
+stream in it, so a subtitle running past the audio is no cut. A cut-off
+source is encoded rather than copied, so its song ends cleanly; one
+missing audio ranks below any copy of the recording that is whole. A
+damaged download is fetched again, at once and then less often, up to
+five times or until `sync --retry`; the whole copy it brings is taken,
+without `--accept`, as nobody chose the damage. A damaged file of your
+own is named, and left for you to replace. `check --upstream` asks each site whether a fetch again would bring
 other audio or tags before any is lost
 ([status, info and check](#status-info-and-check)).
 
@@ -682,14 +694,16 @@ refuses the save.
   out the files to remove or left unused, which are no song's. A
   last line counts the songs shown by what a sync does with each, such
   as `Songs: 2 new, 1 changed, 1 moved, 1240 up to date`.
-- **`info`** counts what the library holds, whether it is in step, the
-  lookups due, and what could be better: narrow, mono or clipped audio,
+- **`info`** counts what the library holds, whether it is in step, by
+  the decisions `status` shows, the lookups due, and what could be
+  better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded; `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by an
-  interrupted run or not muman's, and sources missing, unreadable or cut
-  off;
-  `--decode` decodes every source in full to find a truncated download.
+  interrupted run or not muman's, and sources missing, unreadable, cut
+  off or missing audio; `info` counts the songs made from damaged audio;
+  `--decode` decodes every source in full again, to find damage in a
+  file changed since it was measured.
   `--upstream` asks each site, downloading nothing, whether it still
   serves each fetched source in the format and at the size its song
   records, with the same tags, and names each it serves otherwise:

@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 use crate::testing::{Fake, words};
 
@@ -1996,14 +1998,17 @@ fn a_gain_put_in_opus_headers_leaves_a_flac_song_alone() {
 }
 
 #[test]
-fn loudness_off_measures_nothing_and_keeps_what_sources_carry() {
+fn loudness_off_levels_nothing_and_keeps_what_sources_carry() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
-    assert!(!fake.ran(crate::ffmpeg::PIPE));
+    assert!(
+        fake.ran(crate::ffmpeg::PIPE),
+        "decoded for its integrity all the same"
+    );
     assert!(
         plans(&h)
             .iter()
@@ -2039,6 +2044,102 @@ fn facts_measured_before_loudness_are_analyzed_alone() {
             .iter()
             .all(|p| tag(p, "REPLAYGAIN_TRACK_GAIN").is_some())
     );
+}
+
+#[test]
+fn facts_measured_before_integrity_are_caught_up_by_one_decode() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.run(&fake, Options::default());
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let mut state = State::load(&h.dirs.home).unwrap();
+    let audio = state.facts.get_mut(&key).unwrap().audio.as_mut().unwrap();
+    assert!(
+        audio.analysis.integrity().is_some(),
+        "measured with the rest"
+    );
+    audio.analysis.integrity = None;
+    state.save(&h.dirs.home).unwrap();
+    let before = fake.calls().len();
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("Analyzing 1 source(s)"), "{text}");
+    let calls = fake.calls();
+    let new = &calls[before..];
+    let piped: Vec<&Vec<String>> = new
+        .iter()
+        .filter(|c| c.iter().any(|a| a == crate::ffmpeg::PIPE))
+        .collect();
+    assert_eq!(piped.len(), 1, "{new:?}");
+    assert!(
+        piped[0].iter().any(|a| a == "framecrc"),
+        "its packets listed"
+    );
+    assert!(
+        new.iter().any(|c| c[0] == "ffprobe"),
+        "its stream's length read"
+    );
+    let state = State::load(&h.dirs.home).unwrap();
+    let measure = state.facts[&key]
+        .audio
+        .as_ref()
+        .unwrap()
+        .analysis
+        .integrity();
+    assert!(measure.is_some_and(|m| m.span.is_some()), "{measure:?}");
+}
+
+#[test]
+fn a_subtitle_of_only_notes_is_no_lyrics_and_old_facts_learn_it() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let mut fake = infos(&["aaaaaaaaaaa"]);
+    fake.lrc = Some("[00:01.28]♪♪♪\n".into());
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
+    assert!(plans(&h).iter().all(|p| p.lyrics.is_none()));
+
+    // Facts measured before muman asked are read again, alone.
+    let mut state = State::load(&h.dirs.home).unwrap();
+    state.facts.get_mut(&key).unwrap().lyrics[0].sings = None;
+    state.save(&h.dirs.home).unwrap();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(text.contains("Reading the lyrics of 1 source(s)"), "{text}");
+    assert!(!text.contains("Measuring"), "{text}");
+    assert!(!text.contains("has changed"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(!again.contains("Reading the lyrics"), "{again}");
+}
+
+#[test]
+fn a_damaged_file_of_your_own_is_named_and_never_fetched() {
+    let h = home();
+    let file = h.dirs.manual().join("a.flac");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "a.flac").unwrap();
+    h.songs("[[song]]\nsources = [\"manual:a.flac\"]\n");
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let fake = Fake {
+        timelines: vec![("a.flac".into(), holed)],
+        ..Fake::default()
+    }
+    .probe("a.flac", crate::testing::FLAC);
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("manual:a.flac lacks"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(state.failures.is_empty() && state.damaged.is_empty());
 }
 
 #[test]
