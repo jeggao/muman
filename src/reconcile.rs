@@ -126,8 +126,9 @@ pub fn measure<R: Runner, W: Write>(
         )?;
     }
     let retagged = retag(runner, store, keys, state, scratch, out)?;
+    let relyriced = relyric(runner, store, keys, state, scratch, out)?;
     if due.is_empty() {
-        if retagged {
+        if retagged || relyriced {
             (how.checkpoint)(state)?;
         }
         return Ok(());
@@ -259,6 +260,61 @@ fn retag<R: Runner, W: Write>(
                     f.tags = tags;
                     f.release = release;
                     f.tags_method = tags::METHOD.to_string();
+                }
+            }
+            Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,
+        }
+    }
+    Ok(true)
+}
+
+/// Read again whether the lyrics of each source whose measures still hold
+/// sing anything, where they were measured before muman asked, decoding
+/// no audio. Returns whether any were.
+fn relyric<R: Runner, W: Write>(
+    runner: &R,
+    store: &Store,
+    keys: &BTreeSet<SourceKey>,
+    state: &mut State,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    let due: Vec<(Located, Vec<crate::facts::LyricsAt>)> = keys
+        .iter()
+        .filter_map(|k| store.locate(k))
+        .filter_map(|l| {
+            let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
+            let at: Vec<_> = f
+                .lyrics
+                .iter()
+                .filter(|x| x.sings.is_none())
+                .map(|x| x.at.clone())
+                .collect();
+            (!at.is_empty()).then_some((l, at))
+        })
+        .collect();
+    if due.is_empty() {
+        return Ok(false);
+    }
+    crate::ui::info(
+        out,
+        &format!("Reading the lyrics of {} source(s)", due.len()),
+    )?;
+    let numbered: Vec<(usize, &(Located, Vec<crate::facts::LyricsAt>))> =
+        due.iter().enumerate().collect();
+    let read = parallel::map(&numbered, parallel::builds(), |(n, (l, at))| {
+        facts::relyric(runner, l, at, &scratch.join(format!("lyrics-{n}")))
+    });
+    for ((located, asked), result) in due.iter().zip(read) {
+        match result {
+            Ok(found) => {
+                if let Some(f) = state.facts.get_mut(&located.key) {
+                    // What does not read again stays lyrics, as it was,
+                    // rather than be read again on every sync.
+                    for l in f.lyrics.iter_mut().filter(|l| asked.contains(&l.at)) {
+                        let sings = found.iter().find(|(at, _)| *at == l.at).map(|(_, s)| *s);
+                        l.sings = Some(sings.unwrap_or(true));
+                    }
                 }
             }
             Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,

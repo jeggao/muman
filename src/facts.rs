@@ -385,6 +385,24 @@ pub struct LyricsFacts {
     pub stated_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// Whether they sing any word, rather than only `♪` or a credit;
+    /// `None` where measured before muman asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sings: Option<bool>,
+}
+
+impl LyricsFacts {
+    /// Whether they may be a song's lyrics: any that sing a word, and
+    /// any not read for it yet.
+    #[must_use]
+    pub fn sings_any(&self) -> bool {
+        self.sings != Some(false)
+    }
+}
+
+/// Whether lyrics or a subtitle sing any word.
+fn sings(text: &str) -> bool {
+    !lyrics::sung(text).trim().is_empty()
 }
 
 /// The digests of what one source offers, by where each part sits.
@@ -508,6 +526,55 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     Ok((tags_of(info.as_ref(), &probed, &located.path), release))
 }
 
+/// Whether each of `at`, lyrics of `located` measured before muman asked,
+/// sings any word: subtitles extracted again by one ffmpeg run, files
+/// read. What does not read again is left out.
+pub fn relyric<R: Runner>(
+    runner: &R,
+    located: &Located,
+    at: &[LyricsAt],
+    scratch: &Path,
+) -> Result<Vec<(LyricsAt, bool)>> {
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let mut found = Vec::new();
+    let mut streams = Vec::new();
+    for place in at {
+        let file = match place {
+            LyricsAt::Stream { index } => {
+                streams.push(*index);
+                continue;
+            }
+            LyricsAt::Sidecar => located.lyrics.as_deref(),
+            LyricsAt::File => Some(located.path.as_path()),
+        };
+        if let Some(text) = file.and_then(|f| read_text(f).ok()) {
+            found.push((place.clone(), sings(&text)));
+        }
+    }
+    let outputs: Vec<Output> = streams
+        .iter()
+        .map(|index| {
+            let mut args: Vec<std::ffi::OsString> = ["-map".to_string(), format!("0:{index}")]
+                .into_iter()
+                .map(Into::into)
+                .collect();
+            args.extend(LRC_ARGS.iter().map(Into::into));
+            Output::new(args, &scratch.join(format!("sub{index}.lrc")))
+        })
+        .collect();
+    let inputs = [Input::from(located.path.as_path())];
+    for ((index, output), result) in streams
+        .iter()
+        .zip(&outputs)
+        .zip(ffmpeg::run(runner, &inputs, &outputs))
+    {
+        if let Some(text) = result.ok().and_then(|()| read_text(&output.path).ok()) {
+            found.push((LyricsAt::Stream { index: *index }, sings(&text)));
+        }
+    }
+    Ok(found)
+}
+
 /// The digest of the tags a media file offers as written: of the fields
 /// of its info JSON, dumped into `scratch`, that tags are read from, for
 /// what yt-dlp fetched; else of its own tags.
@@ -557,6 +624,7 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
         timing: lyrics::timing(&lyrics::clean_lrc(text)),
         stated_ms: lyrics::stated_length(text),
         digest: None,
+        sings: Some(sings(text)),
     }
 }
 
@@ -945,6 +1013,7 @@ fn media<R: Runner>(
                         timing: lyrics::timing(&lyrics::clean_lrc(&text)),
                         stated_ms: None,
                         digest: None,
+                        sings: Some(sings(&text)),
                     });
                 }
             }

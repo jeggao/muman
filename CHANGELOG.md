@@ -262,6 +262,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   judged them its own way: after a library folder was named anew it
   said every song would be written there anew and counted them up to
   date.
+- **A subtitle of only `♪` is no lyrics,** where it was picked as a
+  song's lyrics, untimed, though nothing was written: `info` counted the
+  song as having lyrics and `list lyrics:yes` matched it. Sources
+  measured before are read again once, their subtitles alone.
 - **`check --decode`** measures each source's audio afresh and names
   what is cut off or missing, where it named any line ffmpeg wrote, a
   warning from its muxer about timestamps among them.

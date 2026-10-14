@@ -82,6 +82,7 @@ fn lyrics(f: &mut Facts, at: LyricsAt, code: &str, lines: usize) {
         }),
         stated_ms: None,
         digest: None,
+        sings: Some(true),
     });
 }
 

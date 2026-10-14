@@ -883,7 +883,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                 _ => continue,
             }
         };
-        for l in &facts.lyrics {
+        // A subtitle of only `♪` writes no lyrics, so is none.
+        for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
             let Some(preference) = lyrics::preference(input.lyrics, &l.language) else {
                 continue;
             };

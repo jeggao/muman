@@ -2089,6 +2089,35 @@ fn facts_measured_before_integrity_are_caught_up_by_one_decode() {
 }
 
 #[test]
+fn a_subtitle_of_only_notes_is_no_lyrics_and_old_facts_learn_it() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let mut fake = infos(&["aaaaaaaaaaa"]);
+    fake.lrc = Some("[00:01.28]♪♪♪\n".into());
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
+    assert!(plans(&h).iter().all(|p| p.lyrics.is_none()));
+
+    // Facts measured before muman asked are read again, alone.
+    let mut state = State::load(&h.dirs.home).unwrap();
+    state.facts.get_mut(&key).unwrap().lyrics[0].sings = None;
+    state.save(&h.dirs.home).unwrap();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(text.contains("Reading the lyrics of 1 source(s)"), "{text}");
+    assert!(!text.contains("Measuring"), "{text}");
+    assert!(!text.contains("has changed"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
+    let (_, again) = h.run(&fake, Options::default());
+    assert!(!again.contains("Reading the lyrics"), "{again}");
+}
+
+#[test]
 fn a_song_mixed_is_levelled_by_its_mix() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
