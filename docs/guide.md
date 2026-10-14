@@ -695,7 +695,8 @@ refuses the save.
 - **`check`** reports library files missing, empty, changed, left by an
   interrupted run or not muman's, and sources missing, unreadable, cut
   off or missing audio; `info` counts the songs made from damaged audio;
-  `--decode` decodes every source in full to find a truncated download.
+  `--decode` decodes every source in full again, to find damage in a
+  file changed since it was measured.
   `--upstream` asks each site, downloading nothing, whether it still
   serves each fetched source in the format and at the size its song
   records, with the same tags, and names each it serves otherwise:

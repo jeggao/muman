@@ -1221,6 +1221,42 @@ pub fn analyze<R: Runner>(
     Ok(with_opus_gain(pass.finish(&found), gain))
 }
 
+/// The integrity of `located`'s audio measured afresh, by one ffprobe and
+/// one ffmpeg run, whatever its facts say; `None` for a file of no audio.
+pub fn integrity<R: Runner>(
+    runner: &R,
+    located: &Located,
+    scratch: &Path,
+) -> Result<Option<integrity::Measure>> {
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
+    let Some(audio) = probed.audio else {
+        return Ok(None);
+    };
+    let packets = scratch.join("packets.crc");
+    let outputs = [Output::new(packets_output(0, audio.index), &packets)];
+    let piped = Output::new(
+        analysis_output(0, audio.index, None),
+        Path::new(ffmpeg::PIPE),
+    );
+    let mut pass = Pass::new(vec![analysis::Kind::Integrity]);
+    let inputs = [Input::from(located.path.as_path())];
+    let (listed, decoded) =
+        ffmpeg::run_piped(runner, &inputs, &outputs, &piped, &mut |p| pass.piped(&p));
+    decoded?;
+    let timeline = listed
+        .first()
+        .is_some_and(Result::is_ok)
+        .then(|| std::fs::read_to_string(&packets).ok())
+        .flatten()
+        .and_then(|text| Timeline::parse(&text));
+    let found = Found {
+        said: audio.duration,
+        timeline,
+    };
+    Ok(pass.finish(&found).integrity().copied())
+}
+
 /// The analyses of `wanted` of `audio` mixed through `filter`, as a song
 /// mixed into another layout is written.
 pub fn analyze_mix<R: Runner>(

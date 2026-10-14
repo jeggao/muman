@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use clap::Parser;
 
@@ -797,6 +798,47 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("Updated (audio"), "{text}");
+}
+
+#[test]
+fn check_decode_measures_each_source_afresh_and_names_its_damage() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let check = |fake: &Fake, args: &[&str]| {
+        let mut report = Vec::new();
+        let clean = run_with(
+            &s.job(args),
+            fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut report,
+        )
+        .unwrap();
+        (clean, String::from_utf8(report).unwrap())
+    };
+    let (clean, report) = check(&flacs(), &["check", "--decode"]);
+    assert!(clean, "{report}");
+    // The file lost three seconds since it was measured.
+    let mut list = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(list, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let holed = Fake {
+        timelines: vec![("a.flac".into(), list)],
+        ..flacs()
+    };
+    let (clean, report) = check(&holed, &["check"]);
+    assert!(clean, "measured before: {report}");
+    let (clean, report) = check(&holed, &["check", "--decode"]);
+    assert!(!clean, "{report}");
+    assert!(
+        report.contains("Damaged audio: manual:a.flac lacks"),
+        "{report}"
+    );
 }
 
 #[test]

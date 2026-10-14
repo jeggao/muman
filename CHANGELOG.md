@@ -251,6 +251,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `check` names each, `info` counts the songs, and a source missing
   audio ranks below any whole copy of the recording. Sources measured
   before are checked once, on the next sync, by one decode each.
+- **`check --decode`** measures each source's audio afresh and names
+  what is cut off or missing, where it named any line ffmpeg wrote, a
+  warning from its muxer about timestamps among them.
 
 ## [0.3.0] - 2026-10-07
 

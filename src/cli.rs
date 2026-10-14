@@ -439,9 +439,10 @@ pub enum Command {
     },
     /// Check the library against what muman recorded: files missing,
     /// empty or changed since written, left by an interrupted run, or
-    /// not muman's; sources missing or unreadable.
+    /// not muman's; sources missing, unreadable or damaged.
     Check {
-        /// Also decode every source in full, to find a truncated download.
+        /// Decode every source in full again, to find audio cut off or
+        /// missing in a file changed since it was measured.
         #[arg(long)]
         decode: bool,
 
