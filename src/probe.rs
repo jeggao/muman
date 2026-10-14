@@ -9,10 +9,12 @@ use serde::Deserialize;
 
 /// Names which audio stream is taken and what is read of it and of the
 /// file; facts read by another are made again, so changing any means
-/// changing this.
+/// changing this. What only a versioned analysis reads, as the integrity
+/// measure reads [`Audio::duration`], is versioned by that analysis
+/// instead, and caught up without measuring every source again.
 pub const METHOD: &str = "probe/3";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Audio {
     /// Absolute stream index, as `-map 0:<index>` takes it.
     pub index: u32,
@@ -28,6 +30,10 @@ pub struct Audio {
     pub bits: u32,
     /// Whether samples decode as floating point.
     pub float: bool,
+    /// Seconds, the stream's own length: its `duration`, else the
+    /// `DURATION` tag Matroska keeps for each stream. The file's length
+    /// counts every stream, a subtitle running past the audio too.
+    pub duration: Option<f64>,
 }
 
 impl Audio {
@@ -128,6 +134,8 @@ struct Stream {
     #[serde(default)]
     sample_fmt: String,
     #[serde(default)]
+    duration: Option<String>,
+    #[serde(default)]
     bits_per_sample: u32,
     #[serde(default)]
     bits_per_raw_sample: Option<String>,
@@ -170,6 +178,12 @@ impl Stream {
                 .unwrap_or(48_000),
             bits,
             float,
+            duration: self
+                .duration
+                .as_deref()
+                .and_then(|d| d.parse().ok())
+                .or_else(|| self.tag("DURATION").as_deref().and_then(clock_seconds))
+                .filter(|d: &f64| d.is_finite() && *d >= 0.0),
         }
     }
 
@@ -199,6 +213,20 @@ impl Stream {
             .to_string(),
         )
     }
+}
+
+/// Seconds of a clock time as Matroska writes a stream's length,
+/// `HH:MM:SS.nnnnnnnnn`.
+fn clock_seconds(text: &str) -> Option<f64> {
+    let mut parts = text.trim().split(':');
+    let (h, m, s) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let h: u32 = h.parse().ok()?;
+    let m: u32 = m.parse().ok()?;
+    let s: f64 = s.parse().ok()?;
+    (m < 60 && (0.0..60.0).contains(&s)).then(|| f64::from(h) * 3600.0 + f64::from(m) * 60.0 + s)
 }
 
 #[must_use]
@@ -303,7 +331,8 @@ mod tests {
     const FIXTURE: &str = r#"{"streams": [
         {"index": 0, "codec_name": "vp9", "codec_type": "video", "width": 1920, "height": 1080},
         {"index": 1, "codec_name": "opus", "codec_type": "audio", "channels": 2,
-         "sample_rate": "48000", "tags": {"language": "eng"}},
+         "sample_rate": "48000",
+         "tags": {"language": "eng", "DURATION": "00:03:44.261000000"}},
         {"index": 2, "codec_name": "webvtt", "codec_type": "subtitle",
          "tags": {"language": "zho", "title": "Chinese (Traditional)"}},
         {"index": 3, "codec_name": "webvtt", "codec_type": "subtitle",
@@ -312,7 +341,7 @@ mod tests {
          "tags": {"filename": "info.json", "mimetype": "application/json"}},
         {"index": 8, "codec_type": "attachment",
          "tags": {"filename": "cover.webp", "mimetype": "image/webp"}}
-    ], "format": {"duration": "224.281000", "tags": {"TITLE": "Song"}}}"#;
+    ], "format": {"duration": "226.400000", "tags": {"TITLE": "Song"}}}"#;
 
     #[test]
     fn reads_audio_subtitles_attachments_and_format() {
@@ -328,6 +357,7 @@ mod tests {
                 sample_rate: 48_000,
                 bits: 0,
                 float: false,
+                duration: Some(224.261),
             })
         );
         assert_eq!(o.subtitles.len(), 2);
@@ -339,8 +369,31 @@ mod tests {
             [1]
         );
         assert!(o.pictures.is_empty(), "the video stream is no picture");
-        assert_eq!(o.duration, Some(224.281));
+        assert_eq!(
+            o.duration,
+            Some(226.4),
+            "the file's length, its subtitles' too"
+        );
         assert_eq!(o.tags.get("title").map(String::as_str), Some("Song"));
+    }
+
+    #[test]
+    fn a_stream_says_its_own_length_by_its_duration_or_its_tag() {
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+            "sample_rate": "44100", "channels": 2, "duration": "358.516463"}],
+            "format": {"duration": "358.516463"}}"#;
+        let o = parse(json.as_bytes()).unwrap();
+        assert_eq!(o.audio.unwrap().duration, Some(358.516_463));
+        assert_eq!(clock_seconds("01:02:03.5"), Some(3723.5));
+        for bad in ["", "3:04", "00:61:00.0", "00:00:75.0", "a:b:c", "1:2:3:4"] {
+            assert_eq!(clock_seconds(bad), None, "{bad}");
+        }
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "opus",
+            "tags": {"DURATION": "soon"}}]}"#;
+        assert_eq!(
+            parse(json.as_bytes()).unwrap().audio.unwrap().duration,
+            None
+        );
     }
 
     #[test]
