@@ -30,6 +30,7 @@ pub mod hooks;
 pub mod http;
 pub mod identify;
 pub mod info;
+pub mod integrity;
 pub mod library;
 pub mod limit;
 pub mod lookup;

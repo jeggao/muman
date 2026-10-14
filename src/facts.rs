@@ -51,6 +51,7 @@ use crate::analysis::{self, Analysis, Pass};
 use crate::ffmpeg::{self, Input, Output, Piped};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
+use crate::integrity::{Found, Timeline};
 use crate::lyrics::{self, Language, Timing};
 use crate::picture::{self, Look};
 use crate::probe::{self, Probed};
@@ -836,7 +837,7 @@ fn media<R: Runner>(
             Output::new(packets_output(0, a.index), &scratch.join("packets.crc")),
             Measured::Packets,
         ));
-        if !wanted.is_empty() && a.codec == "opus" {
+        if wanted.contains(&analysis::Kind::Loudness) && a.codec == "opus" {
             outputs.push((
                 Output::new(opus_head_output(0, a.index), &scratch.join("head.opus")),
                 Measured::OpusHead,
@@ -896,6 +897,7 @@ fn media<R: Runner>(
     let mut segments = Vec::new();
     let mut bytes = None;
     let mut packets_end = None;
+    let mut timeline = None;
     let mut digests = Digests::default();
     let mut opus_gain = 0;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
@@ -910,6 +912,7 @@ fn media<R: Runner>(
                 let text = std::fs::read_to_string(&output.path).unwrap_or_default();
                 bytes = packet_bytes(&text);
                 packets_end = packet_seconds(&text);
+                timeline = Timeline::parse(&text);
             }
             Measured::Segment(path) => segments.push(quality::read_segment(&path, channels)),
             Measured::Subtitle(index, language) => {
@@ -937,7 +940,11 @@ fn media<R: Runner>(
             Measured::OpusHead => opus_gain = read_opus_gain(&output.path),
         }
     }
-    let analysis = with_opus_gain(pass.finish(), opus_gain);
+    let found = Found {
+        said: probed.audio.as_ref().and_then(|a| a.duration),
+        timeline,
+    };
+    let analysis = with_opus_gain(pass.finish(&found), opus_gain);
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
     // Lyrics beside a song that do not read cost the song only them.
@@ -1138,7 +1145,9 @@ fn with_opus_gain(mut analysis: Analysis, gain: i16) -> Analysis {
 }
 
 /// The analyses of `wanted` of `audio`, a stream of `located`, by one run
-/// of their own: for facts measured before they were asked for.
+/// of their own: for facts measured before they were asked for. The
+/// integrity measure reads the stream's own length again and lists its
+/// packets in that run, which facts kept from before it do not hold.
 pub fn analyze<R: Runner>(
     runner: &R,
     located: &Located,
@@ -1147,12 +1156,16 @@ pub fn analyze<R: Runner>(
     scratch: &Path,
 ) -> Result<Analysis> {
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let integrity = wanted.contains(&analysis::Kind::Integrity);
     let head = scratch.join("head.opus");
-    let outputs = if audio.codec == "opus" {
-        vec![Output::new(opus_head_output(0, audio.index), &head)]
-    } else {
-        Vec::new()
-    };
+    let packets = scratch.join("packets.crc");
+    let mut outputs = Vec::new();
+    if wanted.contains(&analysis::Kind::Loudness) && audio.codec == "opus" {
+        outputs.push(Output::new(opus_head_output(0, audio.index), &head));
+    }
+    if integrity {
+        outputs.push(Output::new(packets_output(0, audio.index), &packets));
+    }
     let piped = Output::new(
         analysis_output(0, audio.index, None),
         Path::new(ffmpeg::PIPE),
@@ -1161,12 +1174,34 @@ pub fn analyze<R: Runner>(
     let inputs = [Input::from(located.path.as_path())];
     let (results, _) =
         ffmpeg::run_piped(runner, &inputs, &outputs, &piped, &mut |p| pass.piped(&p));
-    let gain = if results.first().is_some_and(Result::is_ok) {
+    let wrote = |path: &Path| {
+        outputs
+            .iter()
+            .zip(&results)
+            .any(|(o, r)| o.path == path && r.is_ok())
+    };
+    let gain = if wrote(&head) {
         read_opus_gain(&head)
     } else {
         0
     };
-    Ok(with_opus_gain(pass.finish(), gain))
+    let found = if integrity {
+        let said = runner
+            .output(&probe::ffprobe_command(&located.path))
+            .ok()
+            .and_then(|json| probe::parse(&json).ok())
+            .and_then(|p| p.audio)
+            .filter(|a| a.index == audio.index)
+            .and_then(|a| a.duration);
+        let timeline = wrote(&packets)
+            .then(|| std::fs::read_to_string(&packets).ok())
+            .flatten()
+            .and_then(|text| Timeline::parse(&text));
+        Found { said, timeline }
+    } else {
+        Found::default()
+    };
+    Ok(with_opus_gain(pass.finish(&found), gain))
 }
 
 /// The analyses of `wanted` of `audio` mixed through `filter`, as a song
@@ -1185,7 +1220,7 @@ pub fn analyze_mix<R: Runner>(
     let mut pass = Pass::new(wanted.to_vec());
     let inputs = [Input::from(located.path.as_path())];
     let _ = ffmpeg::run_piped(runner, &inputs, &[], &piped, &mut |p| pass.piped(&p));
-    pass.finish()
+    pass.finish(&Found::default())
 }
 
 /// The ffmpeg output options that list every packet of the audio stream

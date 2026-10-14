@@ -421,7 +421,8 @@ fn analyze<R: Runner, W: Write>(
             Some(Ok(a)) => a,
             Some(Err(e)) => {
                 crate::ui::warning(out, &format!("Could not analyze {}: {e:#}", located.key))?;
-                crate::analysis::Pass::new(kinds.clone()).finish()
+                crate::analysis::Pass::new(kinds.clone())
+                    .finish(&crate::integrity::Found::default())
             }
             None => continue,
         };
@@ -441,7 +442,8 @@ fn analyze_mixes<R: Runner, W: Write>(
     settings: &crate::settings::Settings,
     out: &mut W,
 ) -> Result<bool> {
-    let wanted = crate::analysis::wanted(&settings.loudness);
+    let mut wanted = crate::analysis::wanted(&settings.loudness);
+    wanted.retain(|k| k.mixed());
     if wanted.is_empty() {
         return Ok(false);
     }

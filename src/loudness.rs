@@ -779,7 +779,9 @@ mod tests {
     fn measure(rate: u32, channels: u16, mask: Option<u32>, samples: &[f32]) -> Option<Measure> {
         let mut p = Pass::new(vec![Kind::Loudness]);
         p.take(&wav(rate, channels, mask, samples));
-        p.finish().loudness.and_then(|m| m.value)
+        p.finish(&crate::integrity::Found::default())
+            .loudness
+            .and_then(|m| m.value)
     }
 
     /// A 1 kHz sine at `dbfs` peak in every one of `channels`.
@@ -841,7 +843,7 @@ mod tests {
     fn silence_has_no_loudness_but_its_method_is_recorded() {
         let mut p = Pass::new(vec![Kind::Loudness]);
         p.take(&wav(48_000, 2, None, &vec![0.0; 96_000]));
-        let a = p.finish();
+        let a = p.finish(&crate::integrity::Found::default());
         assert_eq!(a.loudness.as_ref().unwrap().method, METHOD);
         assert!(a.loudness().is_none());
     }

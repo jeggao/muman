@@ -1996,14 +1996,17 @@ fn a_gain_put_in_opus_headers_leaves_a_flac_song_alone() {
 }
 
 #[test]
-fn loudness_off_measures_nothing_and_keeps_what_sources_carry() {
+fn loudness_off_levels_nothing_and_keeps_what_sources_carry() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
     h.songs("[loudness]\nmode = \"off\"\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
     let fake = infos(&["aaaaaaaaaaa"]);
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
-    assert!(!fake.ran(crate::ffmpeg::PIPE));
+    assert!(
+        fake.ran(crate::ffmpeg::PIPE),
+        "decoded for its integrity all the same"
+    );
     assert!(
         plans(&h)
             .iter()
@@ -2039,6 +2042,50 @@ fn facts_measured_before_loudness_are_analyzed_alone() {
             .iter()
             .all(|p| tag(p, "REPLAYGAIN_TRACK_GAIN").is_some())
     );
+}
+
+#[test]
+fn facts_measured_before_integrity_are_caught_up_by_one_decode() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    let fake = infos(&["aaaaaaaaaaa"]);
+    h.run(&fake, Options::default());
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let mut state = State::load(&h.dirs.home).unwrap();
+    let audio = state.facts.get_mut(&key).unwrap().audio.as_mut().unwrap();
+    assert!(
+        audio.analysis.integrity().is_some(),
+        "measured with the rest"
+    );
+    audio.analysis.integrity = None;
+    state.save(&h.dirs.home).unwrap();
+    let before = fake.calls().len();
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("Analyzing 1 source(s)"), "{text}");
+    let calls = fake.calls();
+    let new = &calls[before..];
+    let piped: Vec<&Vec<String>> = new
+        .iter()
+        .filter(|c| c.iter().any(|a| a == crate::ffmpeg::PIPE))
+        .collect();
+    assert_eq!(piped.len(), 1, "{new:?}");
+    assert!(
+        piped[0].iter().any(|a| a == "framecrc"),
+        "its packets listed"
+    );
+    assert!(
+        new.iter().any(|c| c[0] == "ffprobe"),
+        "its stream's length read"
+    );
+    let state = State::load(&h.dirs.home).unwrap();
+    let measure = state.facts[&key]
+        .audio
+        .as_ref()
+        .unwrap()
+        .analysis
+        .integrity();
+    assert!(measure.is_some_and(|m| m.span.is_some()), "{measure:?}");
 }
 
 #[test]
