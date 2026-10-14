@@ -19,7 +19,6 @@ use crate::atomic::Lock;
 use crate::cli::Confirm;
 use crate::dirs::Dirs;
 use crate::manifest::Manifest;
-use crate::source::id_of;
 use crate::store::{self, Store};
 use crate::ui::Prompter;
 
@@ -36,7 +35,7 @@ pub fn purge<W: Write>(
     let store = Store::scan(dirs)?;
     let mut known = manifest.keys();
     known.extend(manifest.removed_keys());
-    let doomed = unused_files(dirs, &store, &known)?;
+    let doomed = unused_files(dirs, &store, &known);
     if doomed.is_empty() {
         crate::ui::success(out, "Nothing unused to delete")?;
         return Ok(false);
@@ -75,13 +74,11 @@ fn unused_files(
     dirs: &Dirs,
     store: &Store,
     known: &BTreeSet<crate::source::SourceKey>,
-) -> Result<Vec<PathBuf>> {
+) -> Vec<PathBuf> {
     let mut doomed = BTreeSet::new();
     for path in store.unused(known) {
         if path.starts_with(dirs.ytdlp()) {
-            if let Some(id) = id_of(&path) {
-                doomed.extend(store.fetched_files(&id)?);
-            }
+            doomed.extend(store.fetched_files_at(&path));
             continue;
         }
         let kind = store::KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
@@ -90,7 +87,7 @@ fn unused_files(
             doomed.extend(kind.files(dirs, id));
         }
     }
-    Ok(doomed.into_iter().collect())
+    doomed.into_iter().collect()
 }
 
 #[cfg(test)]

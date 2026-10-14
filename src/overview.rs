@@ -366,16 +366,21 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         new.add(&SourceKey::Manual(path.into()).to_string());
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
-    let mut unused = Group::default();
+    let (mut unused, mut strays) = (Group::default(), Group::default());
     for path in c
         .store
         .unused(&listed)
         .iter()
         .filter(|p| !p.starts_with(c.dirs.manual()))
     {
-        unused.add(&path.display().to_string());
+        if c.store.leftovers().contains(path) {
+            strays.add(&path.display().to_string());
+        } else {
+            unused.add(&path.display().to_string());
+        }
     }
     group(out, c.verbose, "Fetched, not listed", &unused)?;
+    group(out, c.verbose, "Strays in sources", &strays)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;
     if let Some(age) = std::fs::metadata(c.dirs.home.join(STATE))
         .and_then(|m| m.modified())

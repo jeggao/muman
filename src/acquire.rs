@@ -31,6 +31,8 @@ use crate::ytdlp_log::Relay;
 /// finished, one at a time, its lines relayed as they come.
 #[derive(Debug)]
 pub struct Fetcher<'a> {
+    /// The store's folder of what yt-dlp fetched, each file at its key's
+    /// place.
     pub store: &'a Path,
     pub temp: &'a Path,
     /// Where yt-dlp keeps what it has not finished: beside the store, so
@@ -46,16 +48,16 @@ pub struct Fetcher<'a> {
 }
 
 impl Fetcher<'_> {
-    /// Whether yt-dlp succeeded, and the files it finished.
+    /// Whether yt-dlp succeeded, and the files it finished, each at its
+    /// key's place.
     pub fn fetch<R: Runner, W: Write>(
         &self,
         runner: &R,
         out: &mut W,
-        template: &str,
         archive: Option<&Path>,
         urls: &[String],
     ) -> Result<(bool, Vec<Fetched>)> {
-        self.fetch_as(runner, out, template, archive, urls, None)
+        self.fetch_as(runner, out, archive, urls, None)
     }
 
     /// [`Self::fetch`], asking for `format` in place of `[ytdlp] format`
@@ -64,7 +66,6 @@ impl Fetcher<'_> {
         &self,
         runner: &R,
         out: &mut W,
-        template: &str,
         archive: Option<&Path>,
         urls: &[String],
         format: Option<&str>,
@@ -84,8 +85,9 @@ impl Fetcher<'_> {
             std::fs::write(&batch, urls.join("\n"))
                 .with_context(|| format!("writing {}", batch.display()))?;
         }
+        let staging = self.store.join(crate::store::STAGING);
         let places = download::Places {
-            store: self.store,
+            store: &staging,
             temp: self.partial,
             done: &done,
             plugins: self.plugins,
@@ -100,16 +102,26 @@ impl Fetcher<'_> {
             videos.then_some(urls.len() as u64).filter(|n| *n > 0),
         );
         let urls = if long { &[][..] } else { urls };
-        let cmd = download::ytdlp_command(&places, template, archive, urls);
+        let cmd = download::ytdlp_command(&places, archive, urls);
         let ok = {
             let live = self.live && !crate::progress::drawing();
             let mut relay = Relay::new(out, live).counting(&step);
             runner.stream(&cmd, &mut |line| relay.line(line))?
         };
-        let fetched = std::fs::read_to_string(&done)
+        let mut fetched = std::fs::read_to_string(&done)
             .map(|s| download::finished(&s, self.sites))
             .unwrap_or_default();
-        Ok((ok, fetched))
+        let mut arrived = Vec::new();
+        for mut f in fetched.drain(..) {
+            match crate::store::place(self.store, &f.key, &f.path) {
+                Ok(path) => {
+                    f.path = path;
+                    arrived.push(f);
+                }
+                Err(e) => crate::ui::warning(out, &format!("{e:#}"))?,
+            }
+        }
+        Ok((ok, arrived))
     }
 }
 
@@ -396,13 +408,9 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         let archive = self.temp().join("archive");
         let skip: Vec<SourceKey> = self.known.iter().cloned().collect();
         std::fs::write(&archive, download::archive_lines(&skip, self.fetcher.sites))?;
-        let (fine, fetched) = self.fetcher.fetch(
-            self.runner,
-            self.out,
-            download::OUTPUT_TEMPLATE,
-            Some(&archive),
-            &listed.urls,
-        )?;
+        let (fine, fetched) =
+            self.fetcher
+                .fetch(self.runner, self.out, Some(&archive), &listed.urls)?;
         if !fine {
             ok = false;
             crate::ui::warning(
@@ -415,9 +423,17 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                 continue;
             }
             let id = f.key.id().unwrap_or_default().to_string();
+            // Named by its listing's title before its tags are read; a
+            // file at its key's place is named by its ID alone.
+            let label = listed
+                .videos
+                .iter()
+                .find(|v| v.id == id)
+                .and_then(|v| v.title.clone())
+                .unwrap_or_else(|| f.key.short());
             add.proposals.push(Proposal {
                 album: place(&id),
-                label: label_of(&f.path),
+                label,
                 sources: vec![f.key],
             });
         }
@@ -492,8 +508,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                     watch_url(&track.id)
                 ),
             )?;
-            let template = download::template_in(&video.folder());
-            if !self.store.has(&track_key) && !self.fetch_one(&template, &track_key)? {
+            if !self.store.has(&track_key) && !self.fetch_one(&track_key)? {
                 ok = false;
                 crate::ui::warning(self.out, "  the track failed; keeping the upload")?;
                 continue;
@@ -509,7 +524,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                         "  the same recording, {shift} ms apart: keeping the upload too, for its lyrics"
                     ),
                 )?;
-                if self.fetch_one(&template, &upload_key)? {
+                if self.fetch_one(&upload_key)? {
                     sources.push(upload_key);
                 } else {
                     ok = false;
@@ -546,13 +561,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
     }
 
     /// Fetch one source by its key's URL; whether it arrived.
-    pub(crate) fn fetch_one(&mut self, template: &str, key: &SourceKey) -> Result<bool> {
+    pub(crate) fn fetch_one(&mut self, key: &SourceKey) -> Result<bool> {
         let Some(url) = self.fetcher.sites.fetch_url(key) else {
             return Ok(false);
         };
-        let (ok, fetched) = self
-            .fetcher
-            .fetch(self.runner, self.out, template, None, &[url])?;
+        let (ok, fetched) = self.fetcher.fetch(self.runner, self.out, None, &[url])?;
         Ok(ok && fetched.iter().any(|f| &f.key == key))
     }
 
@@ -613,14 +626,9 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         }
         let mut fetched = Vec::new();
         for (format, urls) in &by_format {
-            let (_, got) = self.fetcher.fetch_as(
-                self.runner,
-                self.out,
-                download::OUTPUT_TEMPLATE,
-                None,
-                urls,
-                format.as_deref(),
-            )?;
+            let (_, got) =
+                self.fetcher
+                    .fetch_as(self.runner, self.out, None, urls, format.as_deref())?;
             fetched.extend(got);
         }
         let mut failed = Vec::new();
@@ -631,18 +639,6 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             }
         }
         Ok((failed.is_empty(), failed))
-    }
-}
-
-/// A file's name without its ID and extension, to name it by.
-fn label_of(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match stem.rfind(" [") {
-        Some(at) if stem.ends_with(']') => stem[..at].to_string(),
-        _ => stem,
     }
 }
 

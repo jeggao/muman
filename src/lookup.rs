@@ -56,7 +56,6 @@ use crate::acquire::{self, Acquire};
 use crate::align::Alignment;
 use crate::coverart;
 use crate::dirs::Dirs;
-use crate::download;
 use crate::facts::Facts;
 use crate::lrclib::{self, Found, Query, Record};
 use crate::manifest::{Edit, Manifest};
@@ -468,20 +467,6 @@ fn join(
     known.insert(key.clone());
 }
 
-/// The yt-dlp template that fetches beside the file of `from`.
-fn template_beside(store: &Store, from: &SourceKey) -> String {
-    let folder = store
-        .locate(from)
-        .and_then(|l| {
-            l.path
-                .parent()
-                .and_then(Path::file_name)
-                .map(|f| f.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "unknown".to_string());
-    download::template_in(&folder)
-}
-
 /// What a run has made of its lookups across its rounds, and so what a
 /// round may still make: each provider's lookups against its `per_run`,
 /// the lookups each source has made, and the providers that refused. A
@@ -839,8 +824,7 @@ pub fn run<R: Runner, W: Write>(
                                 watch_url(&track.id)
                             ),
                         )?;
-                        let template = template_beside(&store, &d.from);
-                        if !store.has(&key) && !acquire.fetch_one(&template, &key)? {
+                        if !store.has(&key) && !acquire.fetch_one(&key)? {
                             ok = false;
                             crate::ui::warning(
                                 acquire.out,
@@ -883,8 +867,7 @@ pub fn run<R: Runner, W: Write>(
                                 alignment.offset_ms
                             ),
                         )?;
-                        let template = template_beside(&store, &d.from);
-                        if acquire.fetch_one(&template, &key)? {
+                        if acquire.fetch_one(&key)? {
                             join(&mut manifest, &mut acquire.known, &d.from, &key);
                             joined += 1;
                             Outcome::Found(key)

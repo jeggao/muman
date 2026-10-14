@@ -1,7 +1,18 @@
-//! The sources on disk: what yt-dlp fetched, found by the ID in each
-//! file's name, the records LRCLIB, MusicBrainz and Cover Art Archive
-//! lookups kept, by theirs, and the manual folder, where a song's file brings the lyrics
-//! and pictures beside it.
+//! The sources on disk: what yt-dlp fetched, each at its key's place,
+//! the records LRCLIB, MusicBrainz and Cover Art Archive lookups kept, by
+//! their IDs, and the manual folder, where a song's file brings the
+//! lyrics and pictures beside it.
+//!
+//! A fetched source is kept at a path of its key alone,
+//! `sources/yt-dlp/<site>/<id>.<ext>` ([`fetched_path`]), a `/` in its
+//! ID written `⧸`: a key has one place, so it has one file, a download
+//! resumes at one path whatever the uploader is called this time, and a
+//! file anywhere else is not a source ([`Store::leftovers`]). yt-dlp
+//! writes a run's finished files into [`STAGING`], and each is moved to
+//! its place as the run ends ([`place`]). The layout before, named by the
+//! uploader and title as `<uploader>/<title> [<id>].mkv`, is still read,
+//! by the ID, until a run that changes the home moves each file to its
+//! place.
 //!
 //! What each kind of kept record is, its folder, its files and what it
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
@@ -21,6 +32,88 @@ use anyhow::{Context, Result};
 use crate::dirs::Dirs;
 use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
 use crate::source::{SourceKey, id_of};
+
+/// The folder in the store yt-dlp writes a run's finished files into,
+/// each moved to its key's place as the run ends: hidden, so no scan
+/// takes what is in it for a source, and in the store rather than with
+/// the unfinished downloads, which are cleared by their age, as a file
+/// yt-dlp dated by the server's clock would seem.
+pub const STAGING: &str = ".incoming";
+
+/// Where the file of the fetched source `key` is kept, of extension
+/// `ext`: `<site>/<id>.<ext>`, a `/` in its ID written `⧸` as yt-dlp
+/// writes one in a name. `None` for a key no fetch makes.
+#[must_use]
+pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> {
+    let SourceKey::Remote { site, id } = key else {
+        return None;
+    };
+    if kept(site).is_some() {
+        return None;
+    }
+    Some(
+        root.join(site)
+            .join(format!("{}.{ext}", id.replace('/', "⧸"))),
+    )
+}
+
+/// The key of a file at its key's place in `root`, as [`fetched_path`]
+/// names it.
+fn key_at(root: &Path, file: &Path) -> Option<SourceKey> {
+    let rel = file.strip_prefix(root).ok()?;
+    let mut parts = rel.components();
+    let site = parts.next()?.as_os_str().to_str()?;
+    let name = Path::new(parts.next()?.as_os_str());
+    if parts.next().is_some() {
+        return None;
+    }
+    let id = name.file_stem()?.to_str()?.replace('⧸', "/");
+    let key = SourceKey::parse(&format!("{site}:{id}")).ok()?;
+    matches!(&key, SourceKey::Remote { site: s, .. } if s == site && kept(s).is_none())
+        .then_some(key)
+}
+
+/// Move `from`, what yt-dlp fetched for `key`, to its key's place in
+/// `root`, replacing the key's file there and dropping one of another
+/// extension, so a key has one file. Refused where a filesystem that
+/// ignores case holds another key's file there, of an ID differing from
+/// this one's only in case.
+pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
+    let ext = from.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
+    let to =
+        fetched_path(root, key, ext).with_context(|| format!("{key} is fetched by no site"))?;
+    if to == from {
+        return Ok(to);
+    }
+    let folder = to.parent().unwrap_or(root);
+    std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
+    let stem = to.file_stem().unwrap_or_default().to_os_string();
+    let names: Vec<std::ffi::OsString> = std::fs::read_dir(folder)
+        .with_context(|| format!("reading {}", folder.display()))?
+        .filter_map(|e| Some(e.ok()?.file_name()))
+        .collect();
+    let to_name = to.file_name().unwrap_or_default();
+    if to.exists() && !names.iter().any(|n| n == to_name) {
+        anyhow::bail!(
+            "{} holds another source's file, its ID differing from {key}'s only in case, \
+             which this filesystem does not tell apart",
+            to.display()
+        );
+    }
+    crate::atomic::rename(from, &to)
+        .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+    for name in &names {
+        let other = folder.join(name);
+        if name != to_name
+            && other.file_stem() == Some(stem.as_os_str())
+            && kind_of(&other) == Some(Kind::Media)
+        {
+            crate::atomic::remove(&other)
+                .with_context(|| format!("deleting {}", other.display()))?;
+        }
+    }
+    Ok(to)
+}
 
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
@@ -226,8 +319,14 @@ pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
 pub struct Store {
     manual_root: PathBuf,
     fetched_root: PathBuf,
-    /// yt-dlp's files by ID, a `.mkv` before any other.
-    fetched: HashMap<String, PathBuf>,
+    /// What yt-dlp fetched, each at its key's place.
+    fetched: BTreeMap<SourceKey, PathBuf>,
+    /// What yt-dlp fetched in the layout before, by the ID its name
+    /// holds, a `.mkv` first.
+    legacy: HashMap<String, Vec<PathBuf>>,
+    /// Files in the store that are no source: a subtitle yt-dlp left
+    /// beside its video, a second file of one key, a file of no key.
+    leftovers: Vec<PathBuf>,
     /// Kept records by scheme, then ID.
     kept: HashMap<&'static str, HashMap<String, PathBuf>>,
     /// Manual files by their path in the manual folder.
@@ -249,21 +348,39 @@ impl Store {
             fetched_root: dirs.ytdlp(),
             ..Self::default()
         };
-        for file in walk(&dirs.ytdlp(), 2)? {
-            let Some(id) = id_of(&file) else {
+        let root = dirs.ytdlp();
+        let mkv_first = |a: &PathBuf, b: &PathBuf| {
+            let mkv = |p: &PathBuf| p.extension().is_none_or(|e| e != "mkv");
+            mkv(a).cmp(&mkv(b)).then_with(|| a.cmp(b))
+        };
+        for file in walk(&root, 2)? {
+            let media = kind_of(&file) == Some(Kind::Media);
+            if let (true, Some(id)) = (media, id_of(&file)) {
+                store.legacy.entry(id).or_default().push(file);
+                continue;
+            }
+            let Some(key) = key_at(&root, &file).filter(|_| media) else {
+                store.leftovers.push(file);
                 continue;
             };
-            if kind_of(&file) != Some(Kind::Media) {
-                continue;
-            }
-            let better = store
-                .fetched
-                .get(&id)
-                .is_none_or(|have| have.extension().is_none_or(|e| e != "mkv"));
-            if better {
-                store.fetched.insert(id, file);
+            match store.fetched.remove(&key) {
+                Some(have) => {
+                    let mut both = [have, file];
+                    both.sort_by(mkv_first);
+                    let [keep, extra] = both;
+                    store.leftovers.push(extra);
+                    store.fetched.insert(key, keep);
+                }
+                None => {
+                    store.fetched.insert(key, file);
+                }
             }
         }
+        for files in store.legacy.values_mut() {
+            files.sort_by(mkv_first);
+            store.leftovers.extend(files.drain(1..));
+        }
+        store.leftovers.sort();
         for kind in &KEPT {
             let mut found: HashMap<String, PathBuf> = HashMap::new();
             for file in walk(&kind.dir(dirs), 1)? {
@@ -323,15 +440,40 @@ impl Store {
         &self.twins
     }
 
+    /// Files in the store that are no source, which `purge` deletes.
+    #[must_use]
+    pub fn leftovers(&self) -> &[PathBuf] {
+        &self.leftovers
+    }
+
+    /// Each fetched file in the layout before, by the ID its name holds.
+    #[must_use]
+    pub fn legacy(&self) -> &HashMap<String, Vec<PathBuf>> {
+        &self.legacy
+    }
+
     #[must_use]
     pub fn has(&self, key: &SourceKey) -> bool {
         match key {
             SourceKey::Remote { site, id } => match kept(site) {
                 Some(kind) => self.kept_file(kind, id).is_some(),
-                None => self.fetched.contains_key(id),
+                None => self.fetched_file(key).is_some(),
             },
             SourceKey::Manual(rel) => self.manual.contains_key(rel.path()),
         }
+    }
+
+    /// The file of the fetched source `key`: at its place, else in the
+    /// layout before, by its ID.
+    fn fetched_file(&self, key: &SourceKey) -> Option<&PathBuf> {
+        self.fetched.get(key).or_else(|| {
+            let id = key.id()?;
+            let bare = id.rsplit('/').next().unwrap_or(id);
+            self.legacy
+                .get(id)
+                .or_else(|| self.legacy.get(bare))
+                .and_then(|files| files.first())
+        })
     }
 
     #[must_use]
@@ -347,9 +489,9 @@ impl Store {
                     covers: Vec::new(),
                 })
             }
-            SourceKey::Remote { id, .. } => Some(Located {
+            SourceKey::Remote { .. } => Some(Located {
                 key: key.clone(),
-                path: self.fetched.get(id)?.clone(),
+                path: self.fetched_file(key)?.clone(),
                 kind: Kind::Media,
                 lyrics: None,
                 covers: Vec::new(),
@@ -373,12 +515,66 @@ impl Store {
         }
     }
 
-    /// Every file yt-dlp fetched for `id`, whatever its extension.
-    pub fn fetched_files(&self, id: &str) -> Result<Vec<PathBuf>> {
-        Ok(walk(&self.fetched_root, 2)?
+    /// Every file yt-dlp fetched for `key`: its file, and what it left
+    /// beside it, as a subtitle or a file of another extension.
+    #[must_use]
+    pub fn fetched_files(&self, key: &SourceKey) -> Vec<PathBuf> {
+        let Some(id) = key.id() else {
+            return Vec::new();
+        };
+        let bare = id.rsplit('/').next().unwrap_or(id);
+        let mut files: Vec<PathBuf> = self.fetched_file(key).into_iter().cloned().collect();
+        let place = fetched_path(&self.fetched_root, key, "mkv");
+        let stem = place.as_deref().and_then(Path::file_stem);
+        let tagged = format!("[{bare}]");
+        files.extend(
+            self.leftovers
+                .iter()
+                .filter(|p| {
+                    let at_place = place.as_deref().and_then(Path::parent) == p.parent()
+                        && p.file_name().zip(stem).is_some_and(|(name, stem)| {
+                            name.to_string_lossy()
+                                .starts_with(&format!("{}.", stem.to_string_lossy()))
+                        });
+                    let named = p
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().contains(&tagged));
+                    at_place || named
+                })
+                .cloned(),
+        );
+        files.sort();
+        files.dedup();
+        files
+    }
+
+    /// Every file yt-dlp fetched that comes with `file`, one of them: the
+    /// files of its key, or of the ID its name holds in the layout before,
+    /// or a file of no key alone.
+    #[must_use]
+    pub fn fetched_files_at(&self, file: &Path) -> Vec<PathBuf> {
+        if let Some(key) = key_at(&self.fetched_root, file) {
+            return self.fetched_files(&key);
+        }
+        let Some(id) = id_of(file) else {
+            return vec![file.to_path_buf()];
+        };
+        let tagged = format!("[{id}]");
+        let mut files: Vec<PathBuf> = self
+            .legacy
+            .get(&id)
             .into_iter()
-            .filter(|p| id_of(p).as_deref() == Some(id))
-            .collect())
+            .flatten()
+            .chain(self.leftovers.iter().filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().contains(&tagged))
+            }))
+            .cloned()
+            .collect();
+        files.push(file.to_path_buf());
+        files.sort();
+        files.dedup();
+        files
     }
 
     /// Delete what yt-dlp fetched for each of `keys` no song in `listed`
@@ -390,13 +586,13 @@ impl Store {
     ) -> Result<Vec<PathBuf>> {
         let mut gone = Vec::new();
         for key in keys.iter().filter(|k| !listed.contains(*k)) {
-            let SourceKey::Remote { site, id } = key else {
+            let SourceKey::Remote { site, .. } = key else {
                 continue;
             };
             if kept(site).is_some() {
                 continue;
             }
-            for file in self.fetched_files(id)? {
+            for file in self.fetched_files(key) {
                 match crate::atomic::remove(&file) {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                         return Err(e).with_context(|| format!("deleting {}", file.display()));
@@ -495,6 +691,8 @@ impl Store {
         let mut unused: Vec<PathBuf> = self
             .fetched
             .values()
+            .chain(self.legacy.values().flatten())
+            .chain(&self.leftovers)
             .chain(self.kept.values().flat_map(HashMap::values))
             .chain(
                 self.manual
@@ -712,6 +910,70 @@ mod tests {
         );
         assert!(!store.has(&SourceKey::youtube("bbbbbbbbbbb")));
         assert!(!store.has(&SourceKey::youtube("ccccccccccc")));
+    }
+
+    #[test]
+    fn a_fetched_source_is_at_its_key_s_place_and_the_rest_is_left_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let mkv = touch(dir.path(), "sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv");
+        let webm = touch(dir.path(), "sources/yt-dlp/youtube.com/aaaaaaaaaaa.webm");
+        let vtt = touch(dir.path(), "sources/yt-dlp/youtube.com/aaaaaaaaaaa.en.vtt");
+        let other = touch(dir.path(), "sources/yt-dlp/soundcloud.com/aaaaaaaaaaa.mkv");
+        let loose = touch(dir.path(), "sources/yt-dlp/notes.txt");
+        let tube = SourceKey::youtube("aaaaaaaaaaa");
+        let cloud = SourceKey::parse("soundcloud.com:aaaaaaaaaaa").unwrap();
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(store.locate(&tube).unwrap().path, mkv);
+        assert_eq!(store.locate(&cloud).unwrap().path, other);
+        assert_eq!(
+            store.leftovers(),
+            [loose.clone(), vtt.clone(), webm.clone()]
+        );
+        assert_eq!(
+            store.fetched_files(&tube),
+            [vtt.clone(), mkv.clone(), webm.clone()]
+        );
+        assert_eq!(store.fetched_files(&cloud), std::slice::from_ref(&other));
+        assert_eq!(
+            store.unused(&BTreeSet::from([tube, cloud])),
+            [loose, vtt, webm],
+            "what is no source is clutter"
+        );
+    }
+
+    #[test]
+    fn a_file_fetched_is_placed_at_its_key_and_replaces_the_key_s_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sources/yt-dlp");
+        let key = SourceKey::youtube("-bbbbbbbbbb");
+        let first = touch(
+            dir.path(),
+            "sources/yt-dlp/.incoming/Youtube/-bbbbbbbbbb.webm",
+        );
+        let placed = place(&root, &key, &first).unwrap();
+        assert_eq!(placed, root.join("youtube.com").join("-bbbbbbbbbb.webm"));
+        assert!(!first.exists());
+        let again = touch(
+            dir.path(),
+            "sources/yt-dlp/.incoming/Youtube/-bbbbbbbbbb.mkv",
+        );
+        let placed = place(&root, &key, &again).unwrap();
+        assert_eq!(placed, root.join("youtube.com").join("-bbbbbbbbbb.mkv"));
+        assert!(!root.join("youtube.com").join("-bbbbbbbbbb.webm").exists());
+        let store = Store::scan(&dirs(dir.path())).unwrap();
+        assert_eq!(store.locate(&key).unwrap().path, placed);
+        assert!(store.leftovers().is_empty(), "{:?}", store.leftovers());
+        let list = SourceKey::parse("youtube.com:playlist/PLabc").unwrap();
+        assert_eq!(
+            fetched_path(&root, &list, "mkv").unwrap(),
+            root.join("youtube.com").join("playlist⧸PLabc.mkv")
+        );
+        assert_eq!(
+            key_at(&root, &root.join("youtube.com/playlist⧸PLabc.mkv")),
+            Some(list)
+        );
+        assert_eq!(fetched_path(&root, &manual("a.flac"), "mkv"), None);
     }
 
     #[test]

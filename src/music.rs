@@ -149,23 +149,6 @@ impl Entry {
             .as_ref()
             .map(|s| s.keys().any(|lang| lang != "live_chat"))
     }
-
-    /// The originals folder yt-dlp's template would pick for this video,
-    /// so its track is kept beside the channel's other videos.
-    #[must_use]
-    pub fn folder(&self) -> String {
-        let handle = self
-            .uploader_id
-            .as_deref()
-            .map(|h| h.trim_start_matches('@'));
-        [handle, self.channel_id.as_deref(), self.uploader.as_deref()]
-            .into_iter()
-            .flatten()
-            .map(str::trim)
-            .find(|s| !s.is_empty())
-            .unwrap_or("unknown")
-            .replace('/', "⧸")
-    }
 }
 
 /// What a URL names, listed flat in one JSON object: a video whole, a
@@ -882,16 +865,5 @@ not json
         };
         assert!(flat.is_track());
         assert!(!video().is_track());
-    }
-
-    #[test]
-    fn the_folder_is_the_handle_without_its_at() {
-        assert_eq!(video().folder(), "marlo_ven");
-        let none = Entry {
-            uploader_id: None,
-            channel_id: Some("UCx".into()),
-            ..video()
-        };
-        assert_eq!(none.folder(), "UCx");
     }
 }

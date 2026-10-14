@@ -189,7 +189,7 @@ fn each_new_video_is_proposed_as_a_song_and_known_ones_are_skipped() {
     assert!(ok, "{text}");
     let proposed: Vec<&Vec<SourceKey>> = add.proposals.iter().map(|p| &p.sources).collect();
     assert_eq!(proposed, [&vec![SourceKey::youtube("vid00000010")]]);
-    assert_eq!(add.proposals[0].label, "Song vid00000010");
+    assert_eq!(add.proposals[0].label, "vid00000010", "named by its key");
     assert!(
         text.contains("yt-dlp: [download] vid00000010"),
         "yt-dlp's lines are labeled: {text}"
@@ -267,15 +267,6 @@ fn missing_sources_are_fetched_again_without_the_archive() {
             .unwrap()
             .has(&SourceKey::youtube("vid00000009"))
     );
-}
-
-#[test]
-fn a_label_drops_the_id() {
-    assert_eq!(
-        label_of(Path::new("/s/c/Song ⧸ B [vid00000001].mkv")),
-        "Song ⧸ B"
-    );
-    assert_eq!(label_of(Path::new("/m/Plain.flac")), "Plain");
 }
 
 #[test]

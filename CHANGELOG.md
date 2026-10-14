@@ -41,6 +41,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Fetched sources are kept by their key,** at
+  `sources/yt-dlp/<site>/<id>.mkv`, where they were named by their
+  uploader and title, which a site may call otherwise from one fetch to
+  the next: an unfinished download was left behind rather than resumed,
+  and one source could be kept twice, unseen. A file there that is no
+  source, as a subtitle yt-dlp could not embed, is named by `info` and
+  deleted by `purge`. An older muman finds no fetched source in this
+  layout, and would fetch them all again.
 - **The first sync measures every song's loudness and retags it.** It
   decodes each source once, in full, then writes the tags of every
   song again, encoding none: a `written` hook runs for each song, and
