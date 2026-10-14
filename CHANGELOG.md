@@ -229,6 +229,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   folder muman ever wrote.
 - **A step with nothing to do** shows nothing, where plain progress
   said `[5/5] Writing: 0/0, done in 0 s`.
+- **A setting added to an older song list** comes without the
+  commented-out hint for another setting the table sets or hints at
+  already, by its name or an older one, where `[audio]` got a second
+  `# min_bitrate` hint.
 
 ## [0.3.0] - 2026-10-07
 

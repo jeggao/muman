@@ -341,6 +341,17 @@ pub fn stale_warnings(stale: &[Stale]) -> Vec<String> {
     lines
 }
 
+/// The names a setting called `new` now had in earlier editions.
+pub(crate) fn old_names(new: &str) -> impl Iterator<Item = &'static str> {
+    HISTORY
+        .iter()
+        .flat_map(|e| e.steps)
+        .filter_map(move |s| match s {
+            Step::Rename(r) if r.new == new => Some(r.old),
+            _ => None,
+        })
+}
+
 /// The edition `doc` names, the first when it names none.
 #[must_use]
 pub fn edition_of(doc: &DocumentMut) -> i64 {

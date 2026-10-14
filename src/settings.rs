@@ -740,7 +740,8 @@ fn fill_item(item: &mut Item, default: &Table) -> bool {
                         ahead(t);
                     }
                     if let Some(key) = default.key(key) {
-                        table.insert_formatted(key, want);
+                        let key = without_hints_held(key, table);
+                        table.insert_formatted(&key, want);
                     }
                     changed = true;
                 }
@@ -757,6 +758,48 @@ fn fill_item(item: &mut Item, default: &Table) -> bool {
         }
     }
     changed
+}
+
+/// `key` from `new.toml`, with the comments above it, for `table` to
+/// take: a commented-out setting ahead of it in `new.toml`, as
+/// `# min_bitrate = "64 kb/s"` ahead of `layouts`, comes along in its
+/// comments, so each block of lines ending in such a hint is dropped
+/// where `table` sets that setting or hints at it already, by its name
+/// or an older one.
+fn without_hints_held(key: &toml_edit::Key, table: &Table) -> toml_edit::Key {
+    let mut key = key.clone();
+    let Some(prefix) = key.leaf_decor().prefix().and_then(|p| p.as_str()) else {
+        return key;
+    };
+    let hinted: Vec<String> = table
+        .iter()
+        .filter_map(|(k, _)| table.key(k)?.leaf_decor().prefix()?.as_str())
+        .flat_map(|p| p.lines().filter_map(hint).map(str::to_string))
+        .collect();
+    let has = |name: &str| table.contains_key(name) || hinted.iter().any(|h| h == name);
+    let held = |name: &str| has(name) || crate::migrate::old_names(name).any(has);
+    let mut kept = String::new();
+    let mut block = String::new();
+    for line in prefix.split_inclusive('\n') {
+        block.push_str(line);
+        if let Some(name) = hint(line) {
+            if !held(name) {
+                kept.push_str(&block);
+            }
+            block.clear();
+        }
+    }
+    kept.push_str(&block);
+    key.leaf_decor_mut().set_prefix(kept);
+    key
+}
+
+/// The setting a commented-out line sets, as `max_path` of
+/// `# max_path = 250`.
+fn hint(line: &str) -> Option<&str> {
+    let (name, _) = line.trim().strip_prefix('#')?.split_once('=')?;
+    let name = name.trim();
+    (!name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')).then_some(name)
 }
 
 /// `table` and the tables in it placed before every table a file read
@@ -1092,6 +1135,31 @@ mod tests {
                 "{path:?} is not set"
             );
         }
+    }
+
+    #[test]
+    fn a_setting_added_brings_no_hint_at_one_the_table_has() {
+        let filled = |text: &str| {
+            let mut d = doc(text);
+            fill(&mut d, &EDITIONS);
+            d["audio"].as_table().unwrap().to_string()
+        };
+        let hints = |text: &str| text.matches("# min_bitrate = ").count();
+        let set = filled("[audio]\nmin_bitrate = \"96 kb/s\"\n");
+        assert_eq!(hints(&set), 0, "{set}");
+        assert!(set.contains("layouts = "), "{set}");
+        let old = filled("[audio]\n# min_kbps = 64\nlossy = \"opus\"\n");
+        assert_eq!(hints(&old), 0, "{old}");
+        assert!(old.contains("# Speaker layouts"), "{old}");
+        let bare = filled("[audio]\nlossy = \"opus\"\n");
+        assert_eq!(hints(&bare), 1, "{bare}");
+        let library = |text: &str| {
+            let mut d = doc(text);
+            fill(&mut d, &EDITIONS);
+            d["library"].as_table().unwrap().to_string()
+        };
+        let max_path = library("[library]\nmax_path = 250\n");
+        assert!(!max_path.contains("# max_path = "), "{max_path}");
     }
 
     #[test]
