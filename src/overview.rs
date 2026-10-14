@@ -3,7 +3,7 @@
 //! list, the state and the folders alone: nothing is measured, run,
 //! fetched or locked, so it answers at once and changes nothing. Whether
 //! the library is in step is what a sync would do with each song, by the
-//! decisions a sync makes ([`reconcile::foresee`]), on the state as a
+//! decisions a sync makes (`reconcile::foresee`), on the state as a
 //! sync would take it, so `info`, `status` and `sync` never disagree.
 
 use std::collections::{BTreeMap, BTreeSet};

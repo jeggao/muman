@@ -198,7 +198,7 @@ impl Facts {
         self.audio.as_ref()?.analysis.integrity()
     }
 
-    /// What its audio lacks, as [`integrity`] judges it: the one place a
+    /// What its audio lacks, as [`crate::integrity`] judges it: the one place a
     /// source is judged cut off or missing audio.
     #[must_use]
     pub fn damage(&self) -> Option<Damage> {
