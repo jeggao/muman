@@ -263,7 +263,11 @@ than its packets span, as holes a download that lost pieces leaves, or
 packets too corrupt to decode. The length a file states counts every
 stream in it, so a subtitle running past the audio is no cut. A cut-off
 source is encoded rather than copied, so its song ends cleanly; one
-missing audio ranks below any copy of the recording that is whole. `check --upstream` asks each site whether a fetch again would bring
+missing audio ranks below any copy of the recording that is whole. A
+damaged download is fetched again, at once and then less often, up to
+five times or until `sync --retry`; the whole copy it brings is taken,
+without `--accept`, as nobody chose the damage. A damaged file of your
+own is named, and left for you to replace. `check --upstream` asks each site whether a fetch again would bring
 other audio or tags before any is lost
 ([status, info and check](#status-info-and-check)).
 

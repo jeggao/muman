@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 use crate::testing::{Fake, words};
 
@@ -2115,6 +2117,29 @@ fn a_subtitle_of_only_notes_is_no_lyrics_and_old_facts_learn_it() {
     assert_eq!(state.facts[&key].lyrics[0].sings, Some(false));
     let (_, again) = h.run(&fake, Options::default());
     assert!(!again.contains("Reading the lyrics"), "{again}");
+}
+
+#[test]
+fn a_damaged_file_of_your_own_is_named_and_never_fetched() {
+    let h = home();
+    let file = h.dirs.manual().join("a.flac");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "a.flac").unwrap();
+    h.songs("[[song]]\nsources = [\"manual:a.flac\"]\n");
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let fake = Fake {
+        timelines: vec![("a.flac".into(), holed)],
+        ..Fake::default()
+    }
+    .probe("a.flac", crate::testing::FLAC);
+    let (_, text) = h.run(&fake, Options::default());
+    assert!(text.contains("manual:a.flac lacks"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert!(state.failures.is_empty() && state.damaged.is_empty());
 }
 
 #[test]

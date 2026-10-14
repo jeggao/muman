@@ -319,6 +319,87 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
 }
 
 #[test]
+fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
+    let s = Setup::new();
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\
+         [providers.youtube-music]\nenabled = false\n\
+         [providers.youtube]\nenabled = false\n\
+         [providers.lrclib]\nenabled = false\n\
+         [providers.acoustid]\nenabled = false\n\
+         [providers.musicbrainz]\nenabled = false\n\
+         [providers.coverart]\nenabled = false\n\
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    s.written(
+        "home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv",
+        "a copy with holes",
+    );
+    let info =
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#;
+    // Three seconds lost from its middle, as a download that lost pieces.
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let damaged = Fake {
+        timelines: vec![("aaaaaaaaaaa".into(), holed)],
+        hashes: vec![("aaaaaaaaaaa".into(), 1)],
+        ..Fake::default()
+    }
+    .info("aaaaaaaaaaa", info);
+    let (_, text) = s.run(&damaged, &["sync", "--offline"]);
+    assert!(text.contains("lacks"), "{text}");
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+    assert!(state.damaged.contains_key(&key));
+
+    // Fetched again, whole: taken without `--accept`.
+    let staged = store
+        .join(crate::store::STAGING)
+        .join("Youtube/aaaaaaaaaaa.mkv");
+    let whole = Fake {
+        hashes: vec![("aaaaaaaaaaa".into(), 2)],
+        on_stream: Some(Box::new(move |args: &[String]| {
+            let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
+            std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+            std::fs::write(&staged, b"a whole copy").unwrap();
+            let line = format!(
+                "Youtube aaaaaaaaaaa {}\n",
+                serde_json::to_string(&staged).unwrap()
+            );
+            std::fs::write(done, line).unwrap();
+            true
+        })),
+        ..Fake::default()
+    }
+    .info("aaaaaaaaaaa", info);
+    let (ok, text) = s.run(&whole, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 1 damaged source(s) again"),
+        "{text}"
+    );
+    assert!(
+        text.contains("taken, a whole copy in place of a damaged one"),
+        "{text}"
+    );
+    assert!(text.contains("Updated (audio"), "{text}");
+    let (ok, again) = s.run(&whole, &["sync"]);
+    assert!(ok && !again.contains("Fetching"), "{again}");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert!(!state.failures.contains_key(&key) && state.damaged.is_empty());
+}
+
+#[test]
 fn status_changes_nothing() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

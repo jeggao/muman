@@ -583,10 +583,24 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         type Urls = Vec<(SourceKey, String)>;
         let now = state::now_secs();
         let held = |k: &SourceKey| manifest.song_with(k).and_then(|s| s.held.get(k));
+        // A damaged download is fetched again as a missing one is, its
+        // whole copy taking the damaged one's place.
+        let damaged = |k: &SourceKey| {
+            failures
+                .get(k)
+                .is_some_and(|f| f.step == Step::Refetch && (retry || f.due(None, now)))
+        };
+        let refetched = manifest.keys().into_iter().filter(|k| damaged(k)).count();
+        if refetched > 0 {
+            crate::ui::info(
+                self.out,
+                &format!("Fetching {refetched} damaged source(s) again"),
+            )?;
+        }
         let (gone, waiting): (Urls, Urls) = manifest
             .keys()
             .into_iter()
-            .filter(|k| !self.store.has(k))
+            .filter(|k| !self.store.has(k) || damaged(k))
             .filter_map(|k| {
                 let url = self
                     .fetcher
@@ -597,6 +611,7 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             })
             .partition(|(k, _)| {
                 retry
+                    || damaged(k)
                     || failures
                         .get(k)
                         .filter(|f| f.step == Step::Fetch)
@@ -614,10 +629,15 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         if gone.is_empty() {
             return Ok((true, Vec::new()));
         }
-        crate::ui::info(
-            self.out,
-            &format!("Fetching {} missing source(s) again", gone.len()),
-        )?;
+        if gone.len() > refetched {
+            crate::ui::info(
+                self.out,
+                &format!(
+                    "Fetching {} missing source(s) again",
+                    gone.len() - refetched
+                ),
+            )?;
+        }
         let configured = self.fetcher.options.format.clone();
         let mut by_format: BTreeMap<Option<String>, Vec<String>> = BTreeMap::new();
         for (key, url) in &gone {

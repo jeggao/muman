@@ -34,6 +34,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   giving way to the artists it names, and `--verbose` names what was
   skipped.
 
+- **A damaged download is fetched again.** Audio cut off or missing
+  from what yt-dlp fetched is fetched again on the next sync, then less
+  often, up to five copies or until `sync --retry`, and a whole copy is
+  taken in its place without `sync --accept`.
 - **`--offline`, or `MUMAN_OFFLINE=1`,** reaches no network for a run:
   no lookup, no fetch, and URLs refused.
 - **`sync` on a new home writes the song list,** every setting in it, so

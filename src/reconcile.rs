@@ -162,7 +162,15 @@ pub fn measure<R: Runner, W: Write>(
                             state.rebase(&located.key, &old, &f);
                         }
                         state.facts.insert(located.key.clone(), f);
-                        state.clear_failure(&located.key);
+                        // Whether a copy fetched again is whole is the
+                        // damage noted after measuring's to say.
+                        if state
+                            .failures
+                            .get(&located.key)
+                            .is_none_or(|f| f.step != Step::Refetch)
+                        {
+                            state.clear_failure(&located.key);
+                        }
                     }
                     // No fault of the source's: recorded, it would wait for `--retry`.
                     Err(e) if out_of_space(&e) => {
@@ -843,6 +851,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if analyzed || mixed {
         persist(home, &state, opts.dry_run, &lock)?;
     }
+    if !opts.dry_run {
+        note_damage(&manifest, &store, &mut state);
+    }
     let renames = sites_found(&manifest, &state);
     for (from, to) in &renames {
         let line = if opts.dry_run {
@@ -929,13 +940,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &dirs.library,
         (opts.force, opts.accept),
     );
-    let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept);
+    let (taken, kept) = split_drifts(&drifts, &damaged, opts.accept, &state);
     say_drifts(
-        &taken,
-        &kept,
+        (&taken, &kept),
         &planned,
         &decided,
-        (opts.accept, opts.force),
+        opts.force,
+        &|d| whole_again(d, &state),
         out,
     )?;
     for ((n, r), d) in planned.iter().zip(&decided) {
@@ -1661,7 +1672,7 @@ pub(crate) fn foresee(
     } else {
         damaged_since_built(planned, &drifts, &state.facts)
     };
-    let (_, kept) = split_drifts(&drifts, &damaged, accept);
+    let (_, kept) = split_drifts(&drifts, &damaged, accept, state);
     let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
     holding.extend(&damaged);
     let decided = decide(planned, &files, &state.outputs, library, force, &holding);
@@ -1673,35 +1684,101 @@ pub(crate) fn foresee(
     }
 }
 
-/// `drifts` of songs not `damaged`: those taken, followed or accepted,
-/// and those its song is held as built for.
+/// `drifts` of songs not `damaged`: those taken, followed, accepted or
+/// whole in place of a damaged copy, and those its song is held as built
+/// for.
 fn split_drifts<'a>(
     drifts: &'a [Drift],
     damaged: &BTreeSet<usize>,
     accept: bool,
+    state: &State,
 ) -> (Vec<&'a Drift>, Vec<&'a Drift>) {
     drifts
         .iter()
         .filter(|d| !damaged.contains(&d.song))
-        .partition(|d| accept || d.followed())
+        .partition(|d| accept || d.followed() || whole_again(d, state))
+}
+
+/// Whether `d` is a whole copy of a download fetched again because the
+/// copy its song was built from was damaged: taken as fetched, as no
+/// one chose the damage.
+fn whole_again(d: &Drift, state: &State) -> bool {
+    let undamaged = state
+        .facts
+        .get(&d.key)
+        .is_some_and(|f| f.damage().is_none());
+    undamaged && d.was.audio.is_some() && state.damaged.get(&d.key) == d.was.audio.as_ref()
+}
+
+/// Note each fetched source found damaged, to be fetched again: once for
+/// each damaged copy, counted by its revision; and let go of the note,
+/// and of the audio recorded for it, once a whole copy is measured and
+/// its song's record names it.
+fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
+    let sites = &manifest.settings.sites;
+    for key in manifest.keys() {
+        if !matches!(key, SourceKey::Remote { .. }) || crate::provider::is_kept(&key) {
+            continue;
+        }
+        let Some(located) = store.locate(&key) else {
+            continue;
+        };
+        let rev = located.rev();
+        let Some(facts) = state.facts.get(&key).filter(|f| f.holds_for(&rev)) else {
+            continue;
+        };
+        let held = manifest.song_with(&key).and_then(|s| s.held.get(&key));
+        let fetchable =
+            sites.fetch_url(&key).is_some() || held.and_then(|h| h.url.as_ref()).is_some();
+        let refetching = state
+            .failures
+            .get(&key)
+            .filter(|f| f.step == Step::Refetch)
+            .map(|f| f.rev.clone());
+        match facts.damage() {
+            Some(damage) if fetchable => {
+                if refetching.is_some_and(|r| r.as_deref() == Some(rev.as_str())) {
+                    continue;
+                }
+                let audio = crate::held::Held::now(&key, facts, sites).and_then(|h| h.audio);
+                let said = damage.describe(&key);
+                if let Some(audio) = audio {
+                    state.damaged.entry(key.clone()).or_insert(audio);
+                }
+                state.record_failure(&key, Step::Refetch, Some(rev), said);
+            }
+            Some(_) => {}
+            None => {
+                if refetching.is_some() {
+                    state.clear_failure(&key);
+                }
+                let recorded = held.and_then(|h| h.audio.as_ref());
+                if state.damaged.get(&key).is_some_and(|d| Some(d) != recorded) {
+                    state.damaged.remove(&key);
+                }
+            }
+        }
+    }
 }
 
 /// Say what each source holding otherwise than its song was built
 /// from does to the song: followed or taken, or left as built while its
 /// file is there.
 fn say_drifts<W: Write>(
-    taken: &[&Drift],
-    kept: &[&Drift],
+    (taken, kept): (&[&Drift], &[&Drift]),
     planned: &[PlannedSong],
     decided: &[Doing],
-    (accept, force): (bool, bool),
+    force: bool,
+    whole: &dyn Fn(&Drift) -> bool,
     out: &mut W,
 ) -> Result<()> {
     for d in taken {
-        let how = if accept && !d.followed() {
-            "taken, as `--accept` asks"
-        } else {
+        let how = if d.followed() {
             "its song follows it, a file of your own"
+        } else if whole(d) {
+            "taken, a whole copy in place of a damaged one"
+        } else {
+            "taken, as `--accept` asks"
         };
         crate::ui::info(out, &format!("{}; {how}", d.show()))?;
     }

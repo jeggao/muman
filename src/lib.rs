@@ -745,7 +745,13 @@ fn fetch_missing<R: Runner, W: Write>(
     }
     if !failed.is_empty() || !arrived.is_empty() {
         for (key, error) in failed {
-            state.record_failure(&key, state::Step::Fetch, None, error);
+            // A damaged download that did not come again counts against
+            // its tries, and keeps the damaged copy's revision.
+            let (step, rev) = match state.failures.get(&key) {
+                Some(f) if f.step == state::Step::Refetch => (state::Step::Refetch, f.rev.clone()),
+                _ => (state::Step::Fetch, None),
+            };
+            state.record_failure(&key, step, rev, error);
         }
         State::keep_measures(&job.dirs.home, &state)?;
     }

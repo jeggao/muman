@@ -10,6 +10,7 @@
 //! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
+//! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
 //!
 //! An output with no plan is one muman owns but cannot vouch for, as each
 //! a run records just before writing it, new or written over: a crash
@@ -105,6 +106,15 @@ pub struct State {
     /// in the manual folder, was taken out of it by hand.
     #[serde(default, deserialize_with = "lenient_list")]
     pub listed: Vec<SourceKey>,
+    /// The audio a fetched source held, as the song list records it, when
+    /// it was found damaged and asked for again: a whole copy fetched in
+    /// its place is taken without `sync --accept`.
+    #[serde(
+        default,
+        deserialize_with = "lenient_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub damaged: BTreeMap<SourceKey, String>,
     /// Sources whose failures this process cleared, for a merge to clear
     /// on disk.
     #[serde(skip)]
@@ -268,23 +278,36 @@ pub enum Step {
     Measure,
     /// Fetching it again after it went missing.
     Fetch,
+    /// Fetching it again, its copy found damaged.
+    Refetch,
 }
 
 /// The longest a failed fetch waits before it is tried again.
 const MAX_WAIT_SECS: u64 = 7 * 24 * 3600;
 
+/// Copies of a download fetched again, each found damaged or failing,
+/// after which muman stops asking until `sync --retry`.
+pub const REFETCH_TRIES: u32 = 5;
+
 impl Failure {
     /// Whether the step is due again: a measure when the file changed, a
-    /// fetch once an hour has passed, doubling with each failure.
+    /// fetch once an hour has passed, doubling with each failure; a
+    /// damaged download's first fetch again at once, the next as a failed
+    /// fetch's, and none after [`REFETCH_TRIES`].
     #[must_use]
     pub fn due(&self, rev: Option<&str>, now: u64) -> bool {
+        let wait = |failed: u32| {
+            3600_u64
+                .saturating_mul(1 << failed.saturating_sub(1).min(16))
+                .min(MAX_WAIT_SECS)
+        };
         match self.step {
             Step::Measure => self.rev.as_deref() != rev,
-            Step::Fetch => {
-                let wait = 3600_u64
-                    .saturating_mul(1 << self.count.saturating_sub(1).min(16))
-                    .min(MAX_WAIT_SECS);
-                now.saturating_sub(self.last) >= wait
+            Step::Fetch => now.saturating_sub(self.last) >= wait(self.count),
+            Step::Refetch => {
+                self.count <= 1
+                    || self.count <= REFETCH_TRIES
+                        && now.saturating_sub(self.last) >= wait(self.count - 1)
             }
         }
     }
@@ -643,6 +666,28 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_damaged_download_is_fetched_again_at_once_then_less_often_then_not() {
+        let failure = |count: u32| Failure {
+            step: Step::Refetch,
+            rev: None,
+            error: String::new(),
+            count,
+            last: 1_000_000,
+        };
+        let hour = 3600;
+        assert!(failure(1).due(None, 1_000_000), "the first at once");
+        assert!(!failure(2).due(None, 1_000_000 + hour - 1));
+        assert!(failure(2).due(None, 1_000_000 + hour));
+        assert!(!failure(3).due(None, 1_000_000 + hour));
+        assert!(failure(3).due(None, 1_000_000 + 2 * hour));
+        assert!(failure(REFETCH_TRIES).due(None, 1_000_000 + 30 * 24 * hour));
+        assert!(
+            !failure(REFETCH_TRIES + 1).due(None, 1_000_000 + 30 * 24 * hour),
+            "given up on until `--retry`"
+        );
+    }
 
     #[test]
     fn an_instrumental_is_asked_again_and_a_listed_find_survives_a_new_method() {
