@@ -51,7 +51,7 @@ use crate::analysis::{self, Analysis, Pass};
 use crate::ffmpeg::{self, Input, Output, Piped};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
-use crate::integrity::{Found, Timeline};
+use crate::integrity::{self, Damage, Found, Timeline};
 use crate::lyrics::{self, Language, Timing};
 use crate::picture::{self, Look};
 use crate::probe::{self, Probed};
@@ -76,6 +76,7 @@ pub struct Facts {
     /// The revision of the files they were measured on.
     pub rev: String,
     pub method: String,
+    /// The file's length, every stream's; [`Facts::length`] is its audio's.
     pub duration: Option<f64>,
     pub audio: Option<AudioFacts>,
     pub covers: Vec<CoverFacts>,
@@ -90,10 +91,6 @@ pub struct Facts {
     pub release: bool,
     #[serde(default, deserialize_with = "fingerprint::read_stored")]
     pub print: Option<Print>,
-    /// The length a cut-off file's header said, where its packets end
-    /// sooner, at [`Facts::duration`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cut_from: Option<f64>,
     /// What the source holds that a library file cannot keep.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unkept: Vec<Unkept>,
@@ -195,6 +192,34 @@ impl Facts {
         self.hash_method == HASH_METHOD
     }
 
+    /// What the integrity measure found of its audio, by today's method.
+    #[must_use]
+    pub fn integrity(&self) -> Option<&integrity::Measure> {
+        self.audio.as_ref()?.analysis.integrity()
+    }
+
+    /// What its audio lacks, as [`integrity`] judges it: the one place a
+    /// source is judged cut off or missing audio.
+    #[must_use]
+    pub fn damage(&self) -> Option<Damage> {
+        self.integrity()?.damage()
+    }
+
+    /// Seconds its audio plays: to where a cut-off file's packets end,
+    /// else its audio stream's own length, else the file's, which counts
+    /// its other streams too, else its packets' span.
+    #[must_use]
+    pub fn length(&self) -> Option<f64> {
+        let measure = self.integrity();
+        if let Some(Damage::Cut { ends, .. }) = self.damage() {
+            return Some(ends);
+        }
+        measure
+            .and_then(|m| m.said)
+            .or(self.duration)
+            .or_else(|| measure.and_then(|m| m.span).map(|(_, end)| end))
+    }
+
     /// The analyses of `wanted` the audio lacks; none for no audio.
     #[must_use]
     pub fn unanalyzed(&self, wanted: &[analysis::Kind]) -> Vec<analysis::Kind> {
@@ -240,7 +265,6 @@ impl Facts {
             tags_method: tags::METHOD.to_string(),
             release: false,
             print: None,
-            cut_from: None,
             unkept: Vec::new(),
             served: None,
             tags_digest: None,
@@ -896,7 +920,6 @@ fn media<R: Runner>(
         .is_some_and(|a| a.float && a.is_lossless());
     let mut segments = Vec::new();
     let mut bytes = None;
-    let mut packets_end = None;
     let mut timeline = None;
     let mut digests = Digests::default();
     let mut opus_gain = 0;
@@ -911,7 +934,6 @@ fn media<R: Runner>(
             Measured::Packets => {
                 let text = std::fs::read_to_string(&output.path).unwrap_or_default();
                 bytes = packet_bytes(&text);
-                packets_end = packet_seconds(&text);
                 timeline = Timeline::parse(&text);
             }
             Measured::Segment(path) => segments.push(quality::read_segment(&path, channels)),
@@ -951,14 +973,13 @@ fn media<R: Runner>(
     if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
         facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
     }
-    if let (Some(said), Some(held), Some(a)) = (facts.duration, packets_end, &probed.audio)
-        && held + CUT_SLACK_S < said
+    // Segments placed by a length the packets fall short of read nothing.
+    if let (Some(Damage::Cut { ends, .. }), Some(a)) = (
+        analysis.integrity().and_then(integrity::Measure::damage),
+        &probed.audio,
+    ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
     {
-        facts.duration = Some(held);
-        facts.cut_from = Some(said);
-        if quality::audio(&segments, a.sample_rate, headroom).is_none() {
-            segments = measure_segments(runner, located, a, held, scratch);
-        }
+        segments = measure_segments(runner, located, a, ends, scratch);
     }
     facts.unkept = unkept(&located.path);
     facts.audio = probed.audio.map(|a| AudioFacts {
@@ -1064,12 +1085,8 @@ fn cuesheet_emphasis(block: &[u8]) -> bool {
     false
 }
 
-/// Seconds a file's packets may fall short of what its header says
-/// before it counts as cut off: a container rounds its length.
-const CUT_SLACK_S: f64 = 1.0;
-
 /// The segments of a source's audio `held` seconds long, decoded again
-/// where its header said it ran longer.
+/// where its audio stream said it ran longer.
 fn measure_segments<R: Runner>(
     runner: &R,
     located: &Located,
@@ -1247,28 +1264,6 @@ pub fn packet_bytes(text: &str) -> Option<u64> {
 
 fn read_packets(path: &Path) -> Option<u64> {
     packet_bytes(&std::fs::read_to_string(path).ok()?)
-}
-
-/// Where the last packet a `framecrc` list holds ends, in seconds: the
-/// length of the audio the file holds, whatever its header says.
-#[must_use]
-pub fn packet_seconds(text: &str) -> Option<f64> {
-    let (num, den) = text
-        .lines()
-        .find_map(|l| l.strip_prefix("#tb 0:"))?
-        .trim()
-        .split_once('/')?;
-    let (num, den): (f64, f64) = (num.trim().parse().ok()?, den.trim().parse().ok()?);
-    let end = text
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .filter_map(|l| {
-            let mut fields = l.split(',').skip(2).map(|f| f.trim().parse::<i64>().ok());
-            Some(fields.next()?? + fields.next()??)
-        })
-        .max()?;
-    #[allow(clippy::cast_precision_loss)]
-    (den > 0.0).then(|| end as f64 * num / den)
 }
 
 /// The bytes of a located source's audio stream `index`, by one ffmpeg

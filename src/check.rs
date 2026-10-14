@@ -214,14 +214,8 @@ pub fn check<R: Runner, W: Write, D: Write>(
         let rev = store.locate(k)?.rev();
         Some((k, state.facts.get(k).filter(|f| f.holds_for(&rev))?))
     }) {
-        if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
-            problem(
-                report,
-                format!(
-                    "Cut off, as a copy or a download stopped: {key} holds {held:.0} s of audio \
-                     where its header says {said:.0} s"
-                ),
-            )?;
+        if let Some(damage) = f.damage() {
+            problem(report, format!("Damaged audio: {}", damage.describe(key)))?;
         }
     }
     for (key, failure) in &state.failures {

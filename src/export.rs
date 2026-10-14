@@ -477,7 +477,7 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
     let facts = state.facts.get(&song.plan.audio.key);
     let (Some(_), Some(seconds), Some(audio)) = (
         &song.sources,
-        facts.and_then(|f| f.duration),
+        facts.and_then(crate::facts::Facts::length),
         facts.and_then(|f| f.audio.as_ref()),
     ) else {
         return item;

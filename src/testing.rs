@@ -67,6 +67,9 @@ pub struct Fake {
     pub packets: Vec<(String, u64)>,
     /// The whole seconds an audio stream's packets run to, by path fragment.
     pub held: Vec<(String, u32)>,
+    /// A stream's packets as `framecrc` lists them, by path fragment, in
+    /// place of one packet as long as its audio.
+    pub timelines: Vec<(String, String)>,
     /// What the streams of a path holding the fragment hash as, in place
     /// of its bytes: a file fetched again holding other audio.
     pub hashes: Vec<(String, u64)>,
@@ -262,13 +265,25 @@ impl Fake {
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),
             "flac" => SILENCE_FLAC.to_vec(),
-            // A stream's packets, as many bytes as 200 s at 128 kbit/s, over
-            // ten hours, longer than any header, unless the tables say otherwise.
+            // A stream's packets, as many bytes as 200 s at 128 kbit/s,
+            // running as long as the audio its analysis decodes, unless the
+            // tables say otherwise.
             "framecrc" => {
-                let bytes = find(&self.packets, &input).copied().unwrap_or(3_200_000);
-                let ticks =
-                    find(&self.held, &input).map_or(1_728_000_000, |s| i64::from(*s) * 48_000);
-                format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
+                if let Some(list) = find(&self.timelines, &input) {
+                    list.clone().into_bytes()
+                } else {
+                    let bytes = find(&self.packets, &input).copied().unwrap_or(3_200_000);
+                    let ticks = find(&self.held, &input).map_or_else(
+                        || {
+                            let wav = find(&self.wavs, &input).cloned().unwrap_or_else(quiet_wav);
+                            #[allow(clippy::cast_possible_truncation)]
+                            let ticks = (wav_seconds(&wav) * 48_000.0).round() as i64;
+                            ticks
+                        },
+                        |s| i64::from(*s) * 48_000,
+                    );
+                    format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
+                }
             }
             // A stream hashes as its file's bytes and the stream mapped.
             "hash" => {
@@ -291,6 +306,20 @@ impl Fake {
         };
         fs::write(&path, bytes)?;
         Ok(())
+    }
+}
+
+/// Seconds of audio a WAV as [`wav`] writes holds.
+#[must_use]
+pub fn wav_seconds(bytes: &[u8]) -> f64 {
+    match crate::analysis::parse_header(bytes) {
+        Ok(Some((stream, body))) => {
+            let frame = usize::from(stream.channels) * 4;
+            #[allow(clippy::cast_precision_loss)]
+            let frames = (bytes.len() - body) as f64 / frame as f64;
+            frames / f64::from(stream.rate)
+        }
+        _ => 0.0,
     }
 }
 

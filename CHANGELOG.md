@@ -238,6 +238,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   items it said `about 1 s left` with twenty minutes to go, then rose
   for the rest of the step. Measuring counts the audio sources alone,
   as lookup records and pictures take a moment each.
+- **A subtitle running past the audio is no cut-off.** A source was
+  judged cut off by the file's length, which counts its subtitles too,
+  so most videos with subtitles were: `check` named each and failed,
+  and their songs were encoded again where the audio would have been
+  copied. The audio stream's own length is read now, and those songs
+  are copied on the next sync.
+- **Damaged audio is found.** Each source's decode is measured against
+  its packets: audio cut off, its packets ending before its stream says,
+  and audio missing, as holes a download that lost pieces leaves or
+  packets too corrupt to decode, which passed as whole. `sync` warns,
+  `check` names each, `info` counts the songs, and a source missing
+  audio ranks below any whole copy of the recording. Sources measured
+  before are checked once, on the next sync, by one decode each.
 
 ## [0.3.0] - 2026-10-07
 

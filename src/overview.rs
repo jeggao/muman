@@ -140,7 +140,7 @@ fn library<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let seconds: f64 = c
         .planned
         .iter()
-        .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.duration)
+        .filter_map(|(_, r)| c.state.facts.get(&r.plan.audio.key)?.length())
         .sum();
     row(out, "Playing time", &duration(seconds))?;
     let formats: Vec<String> = Codec::ALL
@@ -393,6 +393,7 @@ fn health<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let health = Health::of(&c.manifest, &c.planned, &c.state.facts, &|n, r| {
         c.name(n, r)
     });
+    group(out, c.verbose, "Damaged audio", &health.damaged)?;
     group(out, c.verbose, "Audio under 16 kHz", &health.narrow)?;
     group(out, c.verbose, "Mono audio", &health.mono)?;
     group(out, c.verbose, "Clipped audio", &health.clipped)?;
@@ -410,6 +411,8 @@ fn health<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
 /// What could be better in the songs as they would be written.
 #[derive(Default)]
 struct Health {
+    /// Audio cut off or missing some, as [`crate::integrity`] judges it.
+    damaged: Group,
     narrow: Group,
     mono: Group,
     clipped: Group,
@@ -434,6 +437,12 @@ impl Health {
         for (n, r) in planned {
             let name = name(*n, r);
             let plan = &r.plan;
+            if facts
+                .get(&plan.audio.key)
+                .is_some_and(|f| f.damage().is_some())
+            {
+                h.damaged.add(&name);
+            }
             match facts
                 .get(&plan.audio.key)
                 .and_then(|f| f.audio.as_ref()?.quality.as_ref())

@@ -251,11 +251,17 @@ home made from the song list alone, is built from what its sources hold
 now, and the warning stays until accepted. A file of your own in
 `sources/manual`, or a picture or `.lrc` beside it, is yours to change:
 its song follows it, said in a line, and its record is written anew.
-A source whose audio changed and is now cut off, holding less than its
-header says, as a copy or a download stopped short leaves it, is not
-followed: its song keeps the file it was built from and fails, exit 4,
-until you put the whole file back or `sync --force` writes the song
-from what it holds. `check --upstream` asks each site whether a fetch again would bring
+A source whose audio changed and is now damaged is not followed: its
+song keeps the file it was built from and fails, exit 4, until you put
+the whole file back or `sync --force` writes the song from what it
+holds. Damage is found in the decode every source has: audio **cut
+off**, its packets ending before its audio stream says, as a copy or a
+download stopped short leaves it; or audio **missing**, less decoding
+than its packets span, as holes a download that lost pieces leaves, or
+packets too corrupt to decode. The length a file states counts every
+stream in it, so a subtitle running past the audio is no cut. A cut-off
+source is encoded rather than copied, so its song ends cleanly; one
+missing audio ranks below any copy of the recording that is whole. `check --upstream` asks each site whether a fetch again would bring
 other audio or tags before any is lost
 ([status, info and check](#status-info-and-check)).
 
@@ -687,8 +693,8 @@ refuses the save.
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded; `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by an
-  interrupted run or not muman's, and sources missing, unreadable or cut
-  off;
+  interrupted run or not muman's, and sources missing, unreadable, cut
+  off or missing audio; `info` counts the songs made from damaged audio;
   `--decode` decodes every source in full to find a truncated download.
   `--upstream` asks each site, downloading nothing, whether it still
   serves each fetched source in the format and at the size its song

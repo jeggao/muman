@@ -1045,7 +1045,16 @@ fn a_file_cut_off_is_encoded_however_it_is_coded() {
     let facts = BTreeMap::from([(key.clone(), f.clone())]);
     let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
-    f.cut_from = Some(40.0);
+    f.audio.as_mut().unwrap().analysis.integrity = Some(crate::analysis::Measured {
+        method: crate::integrity::METHOD.into(),
+        value: Some(crate::integrity::Measure {
+            said: Some(40.0),
+            decoded: 22.0,
+            span: Some((0.0, 22.0)),
+            holes: 0.0,
+            unfinite: 0,
+        }),
+    });
     let facts = BTreeMap::from([(key.clone(), f)]);
     let r = run(&song(&[key]), &facts, &[]);
     assert!(
@@ -1059,6 +1068,71 @@ fn a_file_cut_off_is_encoded_however_it_is_coded() {
         "{:?}",
         r.plan.format
     );
+}
+
+/// `f` with its integrity measured: `said` by its stream, packets over
+/// `span`, `decoded` of them decoding.
+fn measured(mut f: Facts, said: f64, span: f64, decoded: f64) -> Facts {
+    f.audio.as_mut().unwrap().analysis.integrity = Some(crate::analysis::Measured {
+        method: crate::integrity::METHOD.into(),
+        value: Some(crate::integrity::Measure {
+            said: Some(said),
+            decoded,
+            span: Some((0.0, span)),
+            holes: span - decoded,
+            unfinite: 0,
+        }),
+    });
+    f
+}
+
+#[test]
+fn audio_missing_from_a_source_ranks_it_below_an_intact_one() {
+    let damaged = manual("upload.flac");
+    let intact = manual("track.mp3");
+    // The damaged one is lossless and wider: only what it lacks can lose it.
+    let facts = BTreeMap::from([
+        (
+            damaged.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 189.0),
+        ),
+        (
+            intact.clone(),
+            measured(audio("mp3", 16.0), 200.0, 200.0, 200.0),
+        ),
+    ]);
+    let r = run(&song(&[damaged.clone(), intact.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, intact, "{:?}", r.why);
+    let alone = BTreeMap::from([(
+        damaged.clone(),
+        measured(audio("flac", 22.0), 200.0, 200.0, 189.0),
+    )]);
+    let r = run(&song(std::slice::from_ref(&damaged)), &alone, &[]);
+    assert_eq!(
+        r.plan.format,
+        Format::Copy { codec: Codec::Flac },
+        "encoding mends no hole"
+    );
+    assert!(r.why.audio.contains("11.0 s missing"), "{:?}", r.why);
+}
+
+#[test]
+fn a_song_with_no_damaged_source_is_ranked_as_ever() {
+    let a = manual("a.flac");
+    let b = manual("b.mp3");
+    let bare = BTreeMap::from([
+        (a.clone(), audio("flac", 22.0)),
+        (b.clone(), audio("mp3", 16.0)),
+    ]);
+    let whole = BTreeMap::from([
+        (
+            a.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 200.0),
+        ),
+        (b.clone(), measured(audio("mp3", 16.0), 200.0, 200.0, 200.0)),
+    ]);
+    let s = song(&[a, b]);
+    assert_eq!(run(&s, &bare, &[]).plan, run(&s, &whole, &[]).plan);
 }
 
 #[test]

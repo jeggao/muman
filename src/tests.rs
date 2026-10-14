@@ -743,10 +743,15 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
     let built = std::fs::read(&file).unwrap();
     std::fs::write(&source, "a copy stopped short").unwrap();
-    let cut = Fake {
+    let mut cut = Fake {
         held: vec![("a.flac".into(), 3)],
         ..flacs()
     };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
     let mut out = Vec::new();
     let ok = run_with(
         &s.job(&["sync"]),
@@ -759,7 +764,10 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     .unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(!ok, "a failure: {text}");
-    assert!(text.contains("cut off since its song was built"), "{text}");
+    assert!(
+        text.contains("cut off") && text.contains("since its song was built"),
+        "{text}"
+    );
     assert!(!text.contains("Updated"), "{text}");
     assert_eq!(std::fs::read(&file).unwrap(), built, "{text}");
     let mut report = Vec::new();
@@ -773,7 +781,10 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
     )
     .unwrap();
     let report = String::from_utf8(report).unwrap();
-    assert!(!clean && report.contains("Cut off"), "{report}");
+    assert!(
+        !clean && report.contains("Damaged audio") && report.contains("cut off"),
+        "{report}"
+    );
     let mut out = Vec::new();
     run_with(
         &s.job(&["sync", "--force"]),

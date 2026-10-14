@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::*;
 use crate::source::SourceKey;
 use crate::testing::{FLAC, Fake};
@@ -151,32 +153,88 @@ fn facts_round_trip_through_json() {
 }
 
 #[test]
-fn a_file_cut_off_is_as_long_as_its_packets_and_measured_within_them() {
-    let real = "#tb 0: 1/44100\n#media_type 0: audio\n\
-                0,    2195456,    2195456,     4096,     5610, 0x1517d997\n\
-                0,    2199552,    2199552,     4096,     2234, 0x74706144\n";
-    let held = packet_seconds(real).unwrap();
-    assert!((held - 49.97).abs() < 0.01, "{held}");
-    assert_eq!(
-        packet_seconds("0, 0, 0, 960, 1, 0x0\n"),
-        None,
-        "no time base"
-    );
-
+fn a_file_cut_off_is_judged_by_its_stream_and_measured_within_its_packets() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "A/Song.flac");
-    let fake = Fake {
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    let wanted = [crate::analysis::Kind::Integrity];
+    let cut = Fake {
         held: vec![("Song.flac".into(), 50)],
+        wavs: vec![("Song.flac".into(), wav_of(50.0))],
+        ..Fake::default()
+    }
+    .probe("Song.flac", &said);
+    let facts = gather(&cut, &source, &dir.path().join("cut"), &wanted).unwrap();
+    assert_eq!(
+        facts.damage(),
+        Some(crate::integrity::Damage::Cut {
+            said: 200.0,
+            ends: 50.0
+        })
+    );
+    assert_eq!((facts.duration, facts.length()), (Some(200.0), Some(50.0)));
+    assert!(facts.audio.unwrap().quality.is_some());
+    let whole = Fake {
+        wavs: vec![("Song.flac".into(), wav_of(200.0))],
+        ..Fake::default()
+    }
+    .probe("Song.flac", &said);
+    let facts = gather(&whole, &source, &dir.path().join("whole"), &wanted).unwrap();
+    assert_eq!((facts.damage(), facts.length()), (None, Some(200.0)));
+}
+
+#[test]
+fn a_subtitle_running_past_the_audio_cuts_nothing_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "chan/Song [aaaaaaaaaaa].mkv");
+    let probe = crate::testing::ORIGINAL
+        .replace(
+            r#""sample_rate": "48000"}"#,
+            r#""sample_rate": "48000", "tags": {"DURATION": "00:00:02.000000000"}}"#,
+        )
+        .replace(r#""duration": "200.0""#, r#""duration": "4.0""#);
+    let fake = Fake::default().probe("Song", &probe);
+    let wanted = [crate::analysis::Kind::Integrity];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap();
+    assert!(facts.integrity().is_some());
+    assert_eq!((facts.damage(), facts.length()), (None, Some(2.0)));
+    assert_eq!(facts.duration, Some(4.0), "the file's, its subtitle's too");
+}
+
+#[test]
+fn holes_in_its_packets_are_missing_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let mut list = "#tb 0: 1/1000\n".to_string();
+    for n in (0..500).filter(|n| !(150..325).contains(n)) {
+        let pts = n * 20;
+        let _ = writeln!(list, "0, {pts}, {pts}, 20, 300, 0x0");
+    }
+    let fake = Fake {
+        timelines: vec![("Song.flac".into(), list)],
+        wavs: vec![("Song.flac".into(), wav_of(6.5))],
         ..Fake::default()
     }
     .probe("Song.flac", crate::testing::FLAC);
-    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
-    assert_eq!(facts.duration, Some(50.0));
-    assert_eq!(facts.cut_from, Some(200.0));
-    assert!(facts.audio.unwrap().quality.is_some());
-    let whole = Fake::default().probe("Song.flac", crate::testing::FLAC);
-    let facts = gather(&whole, &source, &dir.path().join("whole"), &[]).unwrap();
-    assert_eq!((facts.duration, facts.cut_from), (Some(200.0), None));
+    let wanted = [crate::analysis::Kind::Integrity];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap();
+    let Some(crate::integrity::Damage::Missing { seconds, holes }) = facts.damage() else {
+        panic!("{:?}", facts.integrity());
+    };
+    assert!((seconds - 3.5).abs() < 0.01 && (holes - 3.5).abs() < 0.01);
+}
+
+/// `seconds` of quiet tone as an analysis decodes it.
+fn wav_of(seconds: f64) -> Vec<u8> {
+    crate::testing::wav(
+        8000,
+        1,
+        None,
+        &crate::testing::sine(8000, 1, 1000.0, 0.1, seconds),
+    )
 }
 
 /// A `CUESHEET` block of tracks with these flags and one index each.

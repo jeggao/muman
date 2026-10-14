@@ -176,7 +176,7 @@ pub fn query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<Quer
         title: tag_of(r, Field::Title)?,
         artist: tag_of(r, Field::Artist)?,
         album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
-        seconds: facts.get(&r.plan.audio.key)?.duration?,
+        seconds: facts.get(&r.plan.audio.key)?.length()?,
     })
 }
 
@@ -188,7 +188,7 @@ pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Optio
     let audio = facts.get(&r.plan.audio.key)?;
     Some(acoustid::Query {
         print: audio.print.clone()?,
-        seconds: audio.duration?,
+        seconds: audio.length()?,
         title: tag_of(r, Field::Title),
         artist: tag_of(r, Field::Artist),
         album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),

@@ -192,14 +192,8 @@ pub fn measure<R: Runner, W: Write>(
 /// What a source's measures hold that its song is worse for, said once
 /// when it is measured.
 fn warn_of<W: Write>(out: &mut W, key: &SourceKey, f: &crate::facts::Facts) -> Result<()> {
-    if let (Some(said), Some(held)) = (f.cut_from, f.duration) {
-        crate::ui::warning(
-            out,
-            &format!(
-                "{key} holds {held:.0} s of audio where its header says \
-                 {said:.0} s: cut off, as a copy or a download stopped"
-            ),
-        )?;
+    if let Some(damage) = f.damage() {
+        crate::ui::warning(out, &damage.describe(key))?;
     }
     if f.audio.as_ref().is_some_and(|a| a.quality.is_none()) {
         crate::ui::warning(
@@ -869,17 +863,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
     }
     let files = files_of(&planned, &manifest, &state.outputs);
     let drifts = crate::held::drifts(&manifest, &state.facts);
-    let cut = if opts.force {
+    let damaged = if opts.force {
         BTreeSet::new()
     } else {
-        cut_since_built(&planned, &drifts, &state.facts)
+        damaged_since_built(&planned, &drifts, &state.facts)
     };
     let (taken, kept): (Vec<&Drift>, Vec<&Drift>) = drifts
         .iter()
-        .filter(|d| !cut.contains(&d.song))
+        .filter(|d| !damaged.contains(&d.song))
         .partition(|d| opts.accept || d.followed());
     let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
-    holding.extend(&cut);
+    holding.extend(&damaged);
     let decided = decide(
         &planned,
         &files,
@@ -900,20 +894,19 @@ pub fn reconcile_into<R: Runner, W: Write>(
         let Some(f) = state
             .facts
             .get(&r.plan.audio.key)
-            .filter(|_| cut.contains(n))
+            .filter(|_| damaged.contains(n))
         else {
             continue;
         };
-        if let (Doing::Held { .. }, Some(said), Some(held)) = (d, f.cut_from, f.duration) {
+        if let (Doing::Held { .. }, Some(damage)) = (d, f.damage()) {
             ok = false;
             crate::ui::error(
                 out,
                 &format!(
-                    "Failed: {}: {} holds {held:.0} s of audio where its header says {said:.0} s, \
-                     cut off since its song was built; its file is left as built \
+                    "Failed: {}: {}, since its song was built; its file is left as built \
                      (`sync --force` writes it from what the source holds now)",
                     name_of(&manifest.songs[*n], Some(r), &state.facts),
-                    r.plan.audio.key
+                    damage.describe(&r.plan.audio.key)
                 ),
             )?;
         }
@@ -1638,10 +1631,11 @@ fn say_drifts<W: Write>(
 }
 
 /// The songs of `planned` whose audio would come from a source whose
-/// audio changed since the song was built and is cut off now, as a copy
-/// stopped short leaves a file: written from it, the song would lose what
-/// its file holds past the cut, so the file is held as built.
-fn cut_since_built(
+/// audio changed since the song was built and is damaged now, as a copy
+/// stopped short or a download that lost pieces leaves a file: written
+/// from it, the song would lose what its file holds, so the file is held
+/// as built.
+fn damaged_since_built(
     planned: &[PlannedSong],
     drifts: &[Drift],
     facts: &BTreeMap<SourceKey, Facts>,
@@ -1650,7 +1644,7 @@ fn cut_since_built(
         .iter()
         .filter(|(n, r)| {
             let key = &r.plan.audio.key;
-            facts.get(key).is_some_and(|f| f.cut_from.is_some())
+            facts.get(key).is_some_and(|f| f.damage().is_some())
                 && drifts.iter().any(|d| {
                     d.song == *n && d.key == *key && d.changed.contains(&crate::held::Aspect::Audio)
                 })
