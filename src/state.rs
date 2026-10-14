@@ -22,7 +22,10 @@
 //! dropped from `outputs`, no longer muman's. A file at a song's path
 //! that no output names, the user's own, is not written over either
 //! unless forced, and then is kept for `undo` first. When the library
-//! folder moves, the files in the old one are left alone.
+//! folder moves, each output whose file is at its place in the new one
+//! as written, by its size and time or its bytes, stays muman's, so a
+//! library moved or copied is not taken for the user's; the files in the
+//! old one are left alone.
 //!
 //! A source that could not be read is not read again until its revision,
 //! each of its files' size and modification time, changes; one that could

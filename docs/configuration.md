@@ -15,7 +15,7 @@ muman is configured in two places, split by what a setting is about:
 | Flag | Variable | Names |
 |---|---|---|
 | `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
-| `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path`. Named anew, the library is written there in full, and the files in the folder before are left alone, no longer muman's, even if you go back to it |
+| `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path`. Named anew, each file found at its place there as muman wrote it, the library moved or copied, stays muman's, and the rest is written there; the files in the folder before are left alone, muman's again only as far as they are as written when you go back to it |
 | `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookups, no fetching, URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
 | | `MUMAN_FFMPEG` | The ffmpeg to run |

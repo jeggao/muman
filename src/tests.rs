@@ -1876,6 +1876,65 @@ fn a_library_put_back_from_a_copy_with_new_times_is_still_muman_s() {
 }
 
 #[test]
+fn a_library_moved_or_copied_elsewhere_keeps_the_files_muman_wrote() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    // Copied elsewhere with new times, as a copy without times leaves it,
+    // and copied again with the song's file changed since.
+    let copy = |to: &str, edit: bool| {
+        let to = s.dir.path().join(to);
+        for file in crate::store::files_below(&lib, usize::MAX, |_| true).unwrap() {
+            let at = to.join(file.strip_prefix(&lib).unwrap());
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            let mut bytes = std::fs::read(&file).unwrap();
+            if edit && at.extension().is_some_and(|e| e == "flac") {
+                bytes.extend(b"retagged");
+            }
+            std::fs::write(&at, bytes).unwrap();
+        }
+        to
+    };
+    let run_in = |library: &Path, args: &[&str]| {
+        let mut job = s.job(args);
+        job.dirs.library = library.to_path_buf();
+        let mut out = Vec::new();
+        let ok = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        (ok, String::from_utf8(out).unwrap())
+    };
+    let copied = copy("elsewhere", false);
+    let (ok, text) = run_in(&copied, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("1 file(s) here as muman wrote them stay its"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+    let (ok, text) = run_in(&copied, &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok && text.contains("Updated"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+
+    let edited = copy("edited", true);
+    let (_, text) = run_in(&edited, &["sync"]);
+    assert!(
+        text.contains("0 file(s) here as muman wrote them stay its"),
+        "{text}"
+    );
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+}
+
+#[test]
 fn an_export_of_a_song_list_edited_since_the_last_run_is_refused() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -251,6 +251,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `check` names each, `info` counts the songs, and a source missing
   audio ranks below any whole copy of the recording. Sources measured
   before are checked once, on the next sync, by one decode each.
+- **A library folder moved or copied keeps its files muman's.** Named
+  anew, by `--library` or `[library] path`, a library left every file
+  there alone as not muman's, so `set` and `remove` no longer touched
+  them, and only `sync --force`, writing every song again, took them
+  back. Each file at its place as muman wrote it, by its size and time
+  or, copied with new times, by its bytes, stays muman's now.
 - **`check --decode`** measures each source's audio afresh and names
   what is cut off or missing, where it named any line ffmpeg wrote, a
   warning from its muxer about timestamps among them.

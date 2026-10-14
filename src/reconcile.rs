@@ -1955,17 +1955,57 @@ pub(crate) fn plan<W: Write>(
 /// back or a copy made without its times. Only those are read.
 pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
     for (path, written) in &mut state.outputs {
-        let file = library.join(path);
-        let (Some(was), Some(digest)) = (&written.stamp, &written.digest) else {
-            continue;
-        };
-        let Some(now) = store::stamp_text(&file).filter(|now| now != was) else {
-            continue;
-        };
-        if crate::facts::digest_file(&file).as_ref() == Some(digest) {
+        if let AsWritten::Copied(now) = as_written(&library.join(path), written) {
             written.stamp = Some(now);
         }
     }
+}
+
+/// Whether a file is as muman wrote it.
+enum AsWritten {
+    /// By its size and time.
+    Same,
+    /// By its bytes, a copy having given it this stamp, new times.
+    Copied(String),
+    /// Changed, not there, or written before muman recorded how.
+    Not,
+}
+
+/// Whether `file` is as `written` records muman wrote it.
+fn as_written(file: &Path, written: &Written) -> AsWritten {
+    let (Some(was), Some(now)) = (&written.stamp, store::stamp_text(file)) else {
+        return AsWritten::Not;
+    };
+    if now == *was {
+        return AsWritten::Same;
+    }
+    match &written.digest {
+        Some(digest) if crate::facts::digest_file(file).as_ref() == Some(digest) => {
+            AsWritten::Copied(now)
+        }
+        _ => AsWritten::Not,
+    }
+}
+
+/// The outputs of a library folder named anew, as `--library` or the
+/// song list names another: each whose file is at its place in `library`
+/// as muman wrote it, moved there or copied, stays muman's, re-stamped
+/// where a copy gave it new times; the rest are let go of, to be written
+/// anew, or left alone where another file is in the way. How many were
+/// kept and let go of.
+pub(crate) fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -> (usize, usize) {
+    let before = outputs.len();
+    outputs.retain(
+        |path, written| match as_written(&library.join(path), written) {
+            AsWritten::Copied(now) => {
+                written.stamp = Some(now);
+                true
+            }
+            AsWritten::Same => true,
+            AsWritten::Not => false,
+        },
+    );
+    (outputs.len(), before - outputs.len())
 }
 
 /// For a dry run, the manual files the next sync will follow to where
@@ -1998,25 +2038,27 @@ fn foresee_moves<W: Write>(
     Ok(())
 }
 
-/// Take `library` as the folder the outputs are in; the files written
-/// into another before are no longer muman's to delete.
+/// Take `library` as the folder the outputs are in: the files there as
+/// muman wrote them stay its ([`rehome`]), and those written into another
+/// before are no longer muman's to delete.
 fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
     if library.exists() && !library.is_dir() {
         anyhow::bail!("the library {} is a file, not a folder", library.display());
     }
     if let Some(before) = state
         .library
-        .as_deref()
+        .clone()
         .filter(|l| !crate::platform::same_path(l, library))
     {
+        let (kept, gone) = rehome(&mut state.outputs, library);
         crate::ui::warning(
             out,
             &format!(
-                "The library moved from {}; the files written there are left alone",
+                "The library moved from {}: {kept} file(s) here as muman wrote them stay its, \
+                 {gone} are written here anew; the files left there are left alone",
                 before.display()
             ),
         )?;
-        state.outputs.clear();
     }
     state.library = Some(library.to_path_buf());
     Ok(())
