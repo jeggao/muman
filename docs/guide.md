@@ -439,10 +439,11 @@ ISRC and IDs only from a source that titles the recording as the song
 is titled. The release's, album, album artist, track, disc, date, totals, country and
 the release's MusicBrainz IDs, come together from the one source whose
 album ranks best, so an album never splits across folders and one
-release's IDs never mix with another's; a song on no album is a single
-named for its title. ReplayGain's track gain and peak are measured from
-the audio the song is, and its album gain and peak over every song of
-its album, as [Loudness](configuration.md#loudness) says; with
+release's IDs never mix with another's; of albums that rank alike, the
+source holding more of the release's fields wins before the order of
+`sources`. A song on no album is a single named for its title.
+ReplayGain's track gain and peak are measured from the audio the song
+is, and its album gain and peak over every song of its album, as [Loudness](configuration.md#loudness) says; with
 `[loudness] mode = "off"`, they come only from the tags of the source
 whose audio the song is, the album's only when the release's fields come
 from it too, since another source's loudness is not this audio's. An

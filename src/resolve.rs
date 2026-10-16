@@ -62,8 +62,11 @@
 //! The release fields, album, album artist, track, disc, date, totals,
 //! country and release IDs, come from the one source whose album ranks
 //! best, so an album's tracks never split across folders and a release's
-//! MusicBrainz IDs never mix with another's; with none, the song is a
-//! single named for its final title, without release fields but a date.
+//! MusicBrainz IDs never mix with another's. Of albums that rank alike,
+//! the source holding the most release fields wins before the order of
+//! `sources`, as a release's own record over an upload that names its
+//! album alone. With no album, the song is a single named for its final
+//! title, without release fields but a date.
 //! The album artist is one a source names, else the first credited
 //! artist as finally set, a hand-set one included, never the joined
 //! `ARTIST`.
@@ -1005,6 +1008,40 @@ fn best_offer<'c, 'a>(
     field: Field,
     from: &dyn Fn(&SourceKey) -> bool,
 ) -> Option<&'c Candidate<'a>> {
+    best_offer_then(candidates, field, from, |_| ())
+}
+
+/// The source of the best album: offers alike in name rank by the release
+/// fields their source holds, most first, so a source holding the whole
+/// release wins over one naming its album alone.
+fn best_album<'c, 'a>(
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+) -> Option<&'c Candidate<'a>> {
+    let holds = |key: &SourceKey| {
+        Field::of(Scope::Release)
+            .filter(|f| {
+                candidates
+                    .get(f)
+                    .into_iter()
+                    .flatten()
+                    .any(|c| c.key == key && !c.offer.values.is_empty())
+            })
+            .count()
+    };
+    best_offer_then(candidates, Field::Album, &|_| true, |key| {
+        std::cmp::Reverse(holds(key))
+    })
+    .filter(|c| c.offer.structured)
+}
+
+/// [`best_offer`], with offers that rank alike ranked by `then`, least
+/// first, before the order of `sources` breaks the last tie.
+fn best_offer_then<'c, 'a, K: Ord>(
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+    field: Field,
+    from: &dyn Fn(&SourceKey) -> bool,
+    then: impl Fn(&SourceKey) -> K,
+) -> Option<&'c Candidate<'a>> {
     let offers: Vec<&Candidate<'a>> = candidates
         .get(&field)?
         .iter()
@@ -1026,6 +1063,7 @@ fn best_offer<'c, 'a>(
                 .map(|v| tags::decorations(v))
                 .sum::<usize>(),
             std::cmp::Reverse(agreeing(&c.offer)),
+            then(c.key),
             c.n,
         )
     })
@@ -1146,7 +1184,7 @@ fn resolve_tags(
         }
     }
     // The release fields come whole from the source with the best album.
-    let release = best_offer(&candidates, Field::Album, &any).filter(|c| c.offer.structured);
+    let release = best_album(&candidates);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
             if let Some(c) = best_offer(&candidates, field, &|k| k == album.key) {
