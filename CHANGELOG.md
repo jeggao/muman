@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-15
+
+### Fixed
+
+- **No yanked crate in the build.** muman 0.4.0 locked zip 8, every
+  release of which is yanked, so `cargo install --locked muman` warned
+  of it; muman builds with zip 9.
+
 ## [0.4.0] - 2026-10-15
 
 ### Added
@@ -1050,7 +1058,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jeggao/muman/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jeggao/muman/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jeggao/muman/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/jeggao/muman/compare/v0.2.2...v0.2.3
