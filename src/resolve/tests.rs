@@ -711,6 +711,8 @@ fn an_album_never_splits_across_sources() {
     fa.rev = "a".into();
     tag(&mut fa, Field::Album, &["Record"], true);
     tag(&mut fa, Field::Track, &["2"], true);
+    tag(&mut fa, Field::TrackTotal, &["9"], true);
+    tag(&mut fa, Field::Disc, &["1"], true);
     let mut fb = audio("opus", 20.0);
     fb.rev = "b".into();
     tag(&mut fb, Field::Album, &["Record (Deluxe)"], true);
@@ -734,6 +736,114 @@ fn an_album_never_splits_across_sources() {
     );
 }
 
+/// A song's album named alike by an upload that holds nothing more and
+/// by a record that holds the whole release.
+fn thin_and_full_album() -> (SourceKey, SourceKey, BTreeMap<SourceKey, Facts>) {
+    let (thin, full) = (yt("ttttttttttt"), manual("full.flac"));
+    let mut ft = audio("opus", 20.0);
+    ft.rev = "thin".into();
+    tag(&mut ft, Field::Album, &["Record"], true);
+    let mut ff = audio("flac", 22.0);
+    ff.rev = "full".into();
+    tag(&mut ff, Field::Album, &["Record"], true);
+    tag(&mut ff, Field::AlbumArtist, &["Marlo Venn"], true);
+    tag(&mut ff, Field::Track, &["4"], true);
+    tag(&mut ff, Field::TrackTotal, &["11"], true);
+    tag(&mut ff, Field::Date, &["2020-01-01"], true);
+    tag(
+        &mut ff,
+        Field::MusicBrainzAlbumId,
+        &["00000000-0000-0000-0000-00000000000a"],
+        true,
+    );
+    let facts = BTreeMap::from([(thin.clone(), ft), (full.clone(), ff)]);
+    (thin, full, facts)
+}
+
+fn get(r: &Resolved, key: &str) -> Option<String> {
+    r.plan
+        .tags
+        .iter()
+        .find(|(t, _)| t == key)
+        .map(|(_, v)| v.join("|"))
+}
+
+#[test]
+fn of_albums_named_alike_the_source_holding_more_of_the_release_wins() {
+    let (thin, full, facts) = thin_and_full_album();
+    let r = run(&song(&[thin.clone(), full.clone()]), &facts, &[]);
+    for key in ["ALBUM", "ALBUMARTIST", "TRACKNUMBER", "TRACKTOTAL", "DATE"] {
+        assert_eq!(why(&r, key).from, full.to_string(), "{key}");
+    }
+    assert_eq!(get(&r, "TRACKNUMBER").as_deref(), Some("4"));
+    assert_eq!(
+        get(&r, "MUSICBRAINZ_ALBUMID").as_deref(),
+        Some("00000000-0000-0000-0000-00000000000a")
+    );
+}
+
+#[test]
+fn the_album_picked_is_the_same_in_every_order_and_every_run() {
+    let (thin, full, facts) = thin_and_full_album();
+    let first = run(&song(&[thin.clone(), full.clone()]), &facts, &[]);
+    for _ in 0..3 {
+        let again = run(&song(&[thin.clone(), full.clone()]), &facts, &[]);
+        assert_eq!(again.plan, first.plan);
+        assert_eq!(again.plan.tags, first.plan.tags);
+    }
+    let reversed = run(&song(&[full.clone(), thin.clone()]), &facts, &[]);
+    assert_eq!(reversed.plan.tags, first.plan.tags);
+    assert_eq!(why(&reversed, "ALBUM").from, why(&first, "ALBUM").from);
+}
+
+#[test]
+fn of_albums_alike_holding_as_much_the_order_of_sources_decides() {
+    let (a, b) = (manual("a.flac"), manual("b.flac"));
+    let mut fa = audio("flac", 22.0);
+    fa.rev = "a".into();
+    tag(&mut fa, Field::Album, &["Record"], true);
+    tag(&mut fa, Field::Track, &["2"], true);
+    let mut fb = audio("flac", 22.0);
+    fb.rev = "b".into();
+    tag(&mut fb, Field::Album, &["Record"], true);
+    tag(&mut fb, Field::Track, &["7"], true);
+    let facts = BTreeMap::from([(a.clone(), fa), (b.clone(), fb)]);
+    let ab = run(&song(&[a.clone(), b.clone()]), &facts, &[]);
+    assert_eq!(get(&ab, "TRACKNUMBER").as_deref(), Some("2"));
+    let ba = run(&song(&[b, a]), &facts, &[]);
+    assert_eq!(get(&ba, "TRACKNUMBER").as_deref(), Some("7"));
+}
+
+#[test]
+fn holding_more_of_the_release_never_outranks_a_better_album() {
+    let (thin, full, mut facts) = thin_and_full_album();
+    let full_facts = facts.get_mut(&full).unwrap();
+    tag(full_facts, Field::Album, &["Record"], false);
+    let r = run(&song(&[full.clone(), thin.clone()]), &facts, &[]);
+    assert_eq!(
+        why(&r, "ALBUM").from,
+        thin.to_string(),
+        "a structured album over one read off a title"
+    );
+    assert_eq!(get(&r, "TRACKNUMBER"), None, "nor its fields with it");
+
+    let (thin, full, mut facts) = thin_and_full_album();
+    tag(
+        facts.get_mut(&full).unwrap(),
+        Field::Album,
+        &["Another Record"],
+        true,
+    );
+    let other = manual("other.flac");
+    let mut fo = audio("flac", 16.0);
+    fo.rev = "other".into();
+    tag(&mut fo, Field::Album, &["Record"], true);
+    facts.insert(other.clone(), fo);
+    let r = run(&song(&[full, thin, other]), &facts, &[]);
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Record"), "two agree");
+    assert_eq!(get(&r, "TRACKNUMBER"), None);
+}
+
 #[test]
 fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
     let (a, mb) = (
@@ -742,6 +852,8 @@ fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
     );
     let mut fa = audio("flac", 22.0);
     tag(&mut fa, Field::Album, &["Record"], true);
+    tag(&mut fa, Field::Track, &["2"], true);
+    tag(&mut fa, Field::Date, &["2020-01-01"], true);
     tag(&mut fa, Field::Isrc, &["XX0000000001"], true);
     let mut fmb = Facts::unreadable("mb".into());
     tag(&mut fmb, Field::Album, &["Record (Deluxe)"], true);

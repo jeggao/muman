@@ -70,6 +70,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Of two sources whose albums rank alike,** the one holding more of
+  the release's fields, as track, date and IDs, gives them all, where
+  the first listed did even when it named the album alone.
 - **`add Song.flac Song.lrc`** copies the lyrics once, beside their
   song, where it failed saying they existed already.
 - **`undo` of a run that gave a song lyrics** removes the `.lrc` it
