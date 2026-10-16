@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15
+
 ### Added
 
 - **Loudness normalization.** Every song is measured whole, as EBU R128
@@ -33,7 +35,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   field under the name Picard writes it as, a credit as "A feat. B"
   giving way to the artists it names, and `--verbose` names what was
   skipped.
-
 - **A damaged download is fetched again.** Audio cut off or missing
   from what yt-dlp fetched is fetched again on the next sync, then less
   often, up to five copies or until `sync --retry`, and a whole copy is
@@ -1049,7 +1050,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jeggao/muman/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jeggao/muman/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/jeggao/muman/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/jeggao/muman/compare/v0.2.1...v0.2.2
