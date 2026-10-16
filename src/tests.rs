@@ -1566,7 +1566,7 @@ fn unzip(path: &Path) -> BTreeMap<String, Vec<u8>> {
             let mut entry = zip.by_index(n).unwrap();
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-            (entry.name().to_string(), bytes)
+            (entry.name().unwrap().into_owned(), bytes)
         })
         .collect()
 }
