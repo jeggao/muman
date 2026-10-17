@@ -181,10 +181,12 @@ pub struct TagArgs {
     #[arg(long, value_name = "DATE", value_parser = date)]
     pub date: Option<String>,
 
-    #[arg(long, value_name = "N", help = "The track number on its disc")]
+    #[arg(long, value_name = "N", help = "The track number on its disc",
+          value_parser = clap::value_parser!(u32).range(1..))]
     pub track: Option<u32>,
 
-    #[arg(long, value_name = "N", help = "The disc number")]
+    #[arg(long, value_name = "N", help = "The disc number",
+          value_parser = clap::value_parser!(u32).range(1..))]
     pub disc: Option<u32>,
 
     /// Any Vorbis comment; given again with one name, one more value.

@@ -871,9 +871,10 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
         let sources = owned_keys(t, &what, n, &mut owner)?;
-        if sources.is_empty() {
+        let Some(first) = sources.first() else {
             bail!("{what} lists no source: give it one, or delete it");
-        }
+        };
+        let what = format!("{what} ({first})");
         let lyrics = match t.get("lyrics") {
             None => None,
             Some(item) if item.as_bool() == Some(false) => Some(LyricsPin::None),
@@ -1645,29 +1646,37 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
     changed
 }
 
-/// Strings, numbers, booleans (as `1` and `0`), and lists of them, each
-/// read as its field's kind reads it; anything else is skipped, and an
-/// empty value sets nothing. A value its field cannot hold, as a date
-/// that is none, refuses the song list, naming the song as `what`.
+/// Strings, numbers, booleans (as `1` and `0`), TOML dates, and lists of
+/// them, each read as its field's kind reads it; an empty value sets
+/// nothing. A value its field cannot hold, as a date that is none, or of
+/// any other type, as a table, refuses the song list, naming the song as
+/// `what`.
 fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
     let Some(t) = item.and_then(Item::as_table_like) else {
         return Ok(Vec::new());
     };
-    let scalar = |v: &Value| match v {
-        Value::String(s) => Some(s.value().trim().to_string()).filter(|s| !s.is_empty()),
-        Value::Integer(i) => Some(i.value().to_string()),
-        Value::Float(f) => Some(f.value().to_string()),
-        Value::Boolean(b) => Some(if *b.value() { "1" } else { "0" }.to_string()),
-        _ => None,
+    let scalar = |key: &str, v: &Value| match v {
+        Value::String(s) => Ok(Some(s.value().trim().to_string()).filter(|s| !s.is_empty())),
+        Value::Integer(i) => Ok(Some(i.value().to_string())),
+        Value::Float(f) => Ok(Some(f.value().to_string())),
+        Value::Boolean(b) => Ok(Some(if *b.value() { "1" } else { "0" }.to_string())),
+        Value::Datetime(d) => Ok(Some(d.value().to_string())),
+        _ => Err(anyhow::anyhow!(
+            "{what}: tags.{key} is no text, number, yes or no, date or list of them"
+        )),
     };
     let mut tags = Vec::new();
     for (key, item) in t.iter() {
         let Some(value) = item.as_value() else {
-            continue;
+            bail!("{what}: tags.{key} is no text, number, yes or no, date or list of them");
         };
         let raw: Vec<String> = match value {
-            Value::Array(list) => list.iter().filter_map(scalar).collect(),
-            v => scalar(v).into_iter().collect(),
+            Value::Array(list) => list
+                .iter()
+                .map(|v| scalar(key, v))
+                .filter_map(Result::transpose)
+                .collect::<Result<_>>()?,
+            v => scalar(key, v)?.into_iter().collect(),
         };
         let values = raw
             .iter()

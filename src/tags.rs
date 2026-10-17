@@ -299,7 +299,7 @@ impl Kind {
             Self::Mbid => mbid(v).ok_or("no MusicBrainz ID"),
             Self::Gain => gain(v).ok_or("no gain: give one as -6.12 dB"),
             Self::Peak => peak(v).ok_or("no peak: give one as 0.988312"),
-            Self::Decimal => decimal(v).ok_or("no number: give one as 128, or 127.5"),
+            Self::Decimal => decimal(v).ok_or("no tempo: give one from 1 to 9999, as 127.5"),
             Self::Flag => flag(v).ok_or("no yes or no: give 1 or 0"),
             Self::MusicalKey => {
                 (!v.is_empty() && v.chars().count() <= 16 && !v.chars().any(char::is_control))
@@ -342,8 +342,17 @@ fn date(text: &str) -> Option<String> {
     match parts[1..] {
         [] => Some((*year).to_string()),
         [m] if digits(m) && within(m, 12) => Some(format!("{year}-{m:0>2}")),
-        [m, d] if digits(m) && digits(d) && within(m, 12) && within(d, 31) => {
-            Some(format!("{year}-{m:0>2}-{d:0>2}"))
+        [m, d] if digits(m) && digits(d) && within(m, 12) => {
+            let leap = year
+                .parse::<u32>()
+                .is_ok_and(|y| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+            let days = match m.parse::<u32>().ok()? {
+                2 if leap => 29,
+                2 => 28,
+                4 | 6 | 9 | 11 => 30,
+                _ => 31,
+            };
+            within(d, days).then(|| format!("{year}-{m:0>2}-{d:0>2}"))
         }
         _ => None,
     }
@@ -363,12 +372,12 @@ fn isrc(text: &str) -> Option<String> {
     fine.then_some(code)
 }
 
+/// A tempo to two decimals, whole from 1 to 9999 as `TBPM` and `tmpo`
+/// hold it.
 fn decimal(text: &str) -> Option<String> {
     let n: f64 = text.trim().parse().ok()?;
-    (n.is_finite() && n > 0.0 && n < 10_000.0).then(|| {
-        let n = (n * 100.0).round() / 100.0;
-        format!("{n}")
-    })
+    let n = (n * 100.0).round() / 100.0;
+    (n.is_finite() && (1.0..10_000.0).contains(&n.round())).then(|| format!("{n}"))
 }
 
 fn flag(text: &str) -> Option<String> {
@@ -1087,10 +1096,24 @@ pub fn vorbis_key(name: &str) -> String {
 }
 
 /// `value` of the tag `name` as a song list holds it when set by hand,
-/// read as its field's [`Kind`] says, or what is wrong with it: a number
-/// that is none, a date that is none, or a gain muman measures and writes
-/// over.
+/// read as its field's [`Kind`] says, or what is wrong with it: a name a
+/// Vorbis comment cannot carry (printable ASCII but `=`, as APEv2 keys
+/// are ASCII too), a number that is none, a date that is none, or a gain
+/// muman measures and writes over. An empty value sets nothing, so it is
+/// never wrong.
 pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| (0x20..=0x7D).contains(&b) && b != b'=')
+    {
+        return Err(format!(
+            "{name:?} is no tag name: give one of ASCII letters, digits and marks but ="
+        ));
+    }
+    if value.trim().is_empty() {
+        return Ok(String::new());
+    }
     let key = vorbis_key(name);
     if key.starts_with("REPLAYGAIN_") || key.starts_with("R128_") {
         return Err(format!(
@@ -1397,8 +1420,10 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
 /// The fields a file's own frames, atoms or items hold, read as
 /// [`TABLE`] names where each is written, by its Vorbis name: what
 /// `lofty`'s generic tag reads not, or not whole, as a `TXXX` or a
-/// freeform atom under Picard's capitals, or an `ID3v2.3` artist list
-/// split by `/`.
+/// freeform atom under Picard's capitals, a Vorbis comment its map has
+/// no key for, as `ASIN`, or an `ID3v2.3` genre given by its `ID3v1`
+/// number. An `ID3v2.3` artist is read whole, `/` and all, as Picard
+/// reads it: the slash that would part two names is in one's too.
 fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<String, Vec<String>> {
     use lofty::file::{AudioFile, FileType};
 
@@ -1406,6 +1431,24 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
     let Ok(mut file) = std::fs::File::open(path) else {
         return BTreeMap::new();
     };
+    let comments = match kind {
+        FileType::Flac => lofty::flac::FlacFile::read_from(&mut file, options)
+            .ok()
+            .and_then(|f| f.vorbis_comments().map(vorbis_fields)),
+        FileType::Vorbis => lofty::ogg::VorbisFile::read_from(&mut file, options)
+            .ok()
+            .map(|f| vorbis_fields(f.vorbis_comments())),
+        FileType::Opus => lofty::ogg::OpusFile::read_from(&mut file, options)
+            .ok()
+            .map(|f| vorbis_fields(f.vorbis_comments())),
+        FileType::Speex => lofty::ogg::SpeexFile::read_from(&mut file, options)
+            .ok()
+            .map(|f| vorbis_fields(f.vorbis_comments())),
+        _ => None,
+    };
+    if let Some(comments) = comments {
+        return comments;
+    }
     let read = match kind {
         FileType::Mpeg => lofty::mpeg::MpegFile::read_from(&mut file, options)
             .ok()
@@ -1427,14 +1470,38 @@ fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<Strin
 
 type Read = Vec<(&'static Spec, Vec<String>)>;
 
-fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
-    use lofty::id3::v2::{Frame, FrameId, Id3v2Version};
+/// Every field of [`TABLE`] Vorbis comments hold, under any of its names.
+fn vorbis_fields(comments: &lofty::ogg::tag::VorbisComments) -> BTreeMap<String, Vec<String>> {
+    let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (name, value) in comments.items() {
+        if (Field::named(name).is_some() || r128(name).is_some()) && !value.trim().is_empty() {
+            fields
+                .entry(name.to_ascii_lowercase())
+                .or_default()
+                .push(value.to_string());
+        }
+    }
+    fields
+}
 
-    let split = |text: &str, id: &str| -> Vec<String> {
-        // ID3v2.3 separates the people of these frames by `/`; 2.4 by NUL.
-        let slash = tag.original_version() == Id3v2Version::V3
-            && matches!(id, "TPE1" | "TCOM" | "TEXT" | "TOLY" | "TOPE");
-        text.split(|c| c == '\0' || (slash && c == '/'))
+/// The genres of `TCON`: an `ID3v1` number, `(17)` in 2.3 or `17` in
+/// 2.4, as its name, and a name given after its number once.
+fn genres(tag: &lofty::id3::v2::Id3v2Tag) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for genre in tag.genres().into_iter().flatten() {
+        let genre = genre.trim();
+        if !genre.is_empty() && !out.iter().any(|g| g == genre) {
+            out.push(genre.to_string());
+        }
+    }
+    out
+}
+
+fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
+    use lofty::id3::v2::{Frame, FrameId};
+
+    let split = |text: &str| -> Vec<String> {
+        text.split('\0')
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string)
@@ -1445,10 +1512,11 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
         .iter()
         .map(|spec| {
             let values = match spec.id3 {
+                Id3::Text("TCON") => genres(tag),
                 Id3::Text(id) | Id3::Place(id) => FrameId::new(id)
                     .ok()
                     .and_then(|id| tag.get_text(&id))
-                    .map(|t| split(t, id))
+                    .map(split)
                     .unwrap_or_default(),
                 Id3::Time(id) => frames
                     .iter()
@@ -1463,7 +1531,7 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
                     .iter()
                     .find_map(|f| match f {
                         Frame::UserText(t) if t.description.eq_ignore_ascii_case(name) => {
-                            Some(split(&t.content, "TXXX"))
+                            Some(split(&t.content))
                         }
                         _ => None,
                     })
@@ -1482,18 +1550,18 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
                 Id3::Whole(id) => FrameId::new(id)
                     .ok()
                     .and_then(|id| tag.get_text(&id))
-                    .map(|t| split(t, id))
+                    .map(split)
                     .unwrap_or_default(),
                 Id3::Key => FrameId::new("TKEY")
                     .ok()
                     .and_then(|id| tag.get_text(&id))
-                    .map(|t| split(t, "TKEY"))
+                    .map(split)
                     .or_else(|| {
                         frames.iter().find_map(|f| match f {
                             Frame::UserText(t)
                                 if t.description.eq_ignore_ascii_case("INITIALKEY") =>
                             {
-                                Some(split(&t.content, "TXXX"))
+                                Some(split(&t.content))
                             }
                             _ => None,
                         })
@@ -1899,12 +1967,22 @@ mod tests {
             "July 2019",
             "2019-13",
             "2019-07-32",
+            "2019-02-29",
+            "2019-04-31",
             "0000",
             "19",
             "2019-07-04-01",
         ] {
             assert_eq!(read(Kind::Date, bad), None, "{bad}");
         }
+        assert_eq!(
+            read(Kind::Date, "2020-02-29").as_deref(),
+            Some("2020-02-29")
+        );
+        assert_eq!(read(Kind::Date, "1900-02-29"), None);
+        assert_eq!(read(Kind::Decimal, "0.004"), None, "TBPM would hold 0");
+        assert_eq!(read(Kind::Decimal, "9999.5"), None, "TBPM would hold 10000");
+        assert_eq!(read(Kind::Decimal, "0.5").as_deref(), Some("0.5"));
         assert_eq!(read(Kind::Place, "03/12").as_deref(), Some("3/12"));
         assert_eq!(read(Kind::Place, "0"), None);
         assert_eq!(read(Kind::Count, "3/12"), None);

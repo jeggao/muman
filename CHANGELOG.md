@@ -39,10 +39,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A tag set by hand is read as its field holds it.** A track or disc
   set as `3/12` writes the number and the total, a date as
   `2019/07/04` writes `2019-07-04`, an ISRC is written without its
-  dashes, and `true` is written `1`. A value its field cannot hold, as a
-  date of `July 2019`, a track of `fast` or a ReplayGain gain, which
-  muman measures, refuses the song list, naming the song, where it was
-  written as it was.
+  dashes, `true` is written `1`, and an unquoted TOML date is read as
+  its text. A value its field cannot hold, as a date of `July 2019` or
+  `2019-02-30`, a track of `fast`, a ReplayGain gain, which muman
+  measures, or a table, refuses the song list, naming the song and its
+  first source, where it was written as it was or skipped; so does a tag
+  name of other than printable ASCII, which FLAC and WavPack dropped.
 - **Sources offer only values their fields hold.** A source's date that
   reads as none is no longer written as it was; its tags are read again
   on the next sync.
@@ -75,6 +77,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000
   writes it, rather than adding a tag beside it.
+- **The state file is read back exactly.** A measure read from it could
+  differ from the one written in its last bit, so the first sync after
+  an `add` wrote the file again.
 - **A `work` tag no longer fails an MP3.** Set by hand or from a tag
   file, it was written under a frame that holds no text, and every
   write of the song failed.

@@ -813,6 +813,71 @@ fn a_cover_too_large_for_any_container_is_made_smaller() {
     assert!(fake.ran("mjpeg"));
 }
 
+/// A value of `spec`'s kind as a song list sets it; none for a measure.
+fn sample(spec: &crate::tags::Spec) -> Option<&'static str> {
+    use crate::tags::Kind as K;
+    Some(match spec.kind {
+        K::Text => "Lantern Weather",
+        K::Count => "12",
+        K::Place => "3",
+        K::Date => "2001-05-03",
+        K::Isrc => "XXZZ12400001",
+        K::Mbid => "00000000-0000-4000-8000-0000000000aa",
+        K::Decimal => "127.5",
+        K::Flag => "1",
+        K::MusicalKey => "Abm",
+        K::Barcode => "0012345678905",
+        K::Language => "eng",
+        K::Gain | K::Peak => return None,
+    })
+}
+
+#[test]
+fn every_field_is_read_back_from_every_container_as_written() {
+    use crate::testing::{
+        SILENCE_FLAC, SILENCE_M4A, SILENCE_MP3, SILENCE_OPUS, SILENCE_VORBIS, SILENCE_WV,
+    };
+
+    let tags: Vec<(String, Vec<String>)> = crate::tags::TABLE
+        .iter()
+        .filter_map(|spec| Some((spec.vorbis.to_string(), vec![sample(spec)?.to_string()])))
+        .collect();
+    for (fixture, name, codec) in [
+        (SILENCE_FLAC, "song.flac", Codec::Flac),
+        (SILENCE_OPUS, "song.opus", Codec::Opus),
+        (SILENCE_VORBIS, "song.ogg", Codec::Vorbis),
+        (SILENCE_MP3, "song.mp3", Codec::Mp3),
+        (SILENCE_M4A, "song.m4a", Codec::Aac),
+        (SILENCE_WV, "song.wv", Codec::WavPack),
+    ] {
+        let (_dir, path) = written(fixture, name);
+        write_tags(&path, Format::Copy { codec }, &tags, None).unwrap();
+        assert_eq!(verify(&path, &tags, false), [] as [String; 0], "{name}");
+    }
+}
+
+#[test]
+fn an_id3v2_3_artist_is_read_whole_and_a_genre_number_by_its_name() {
+    use lofty::config::WriteOptions;
+    use lofty::id3::v2::{FrameId, TextInformationFrame};
+    use lofty::tag::TagExt;
+
+    let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    let mut tag = Id3v2Tag::new();
+    for (id, value) in [("TPE1", "Ash/Ember"), ("TCON", "17\0Night Static")] {
+        tag.insert(Frame::Text(TextInformationFrame::new(
+            FrameId::new(id).unwrap(),
+            lofty::TextEncoding::UTF16,
+            value.to_string(),
+        )));
+    }
+    tag.save_to_path(&path, WriteOptions::new().use_id3v23(true))
+        .unwrap();
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read["artist"], ["Ash/Ember"], "Picard reads it as one");
+    assert_eq!(read["genre"], ["Rock", "Night Static"]);
+}
+
 fn extended() -> Vec<(String, Vec<String>)> {
     [
         ("TITLE", vec!["Lantern Weather"]),

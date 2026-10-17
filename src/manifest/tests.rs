@@ -134,7 +134,8 @@ fn a_tag_set_by_hand_is_read_as_its_field_holds_it() {
     write(
         dir.path(),
         "[[song]]\nsources = [\"manual:a.flac\"]\ntags = { date = \"2019/07/04\", \
-         isrc = \"xx-zz1-24-00001\", track = \"03/12\", compilation = false }\n",
+         isrc = \"xx-zz1-24-00001\", track = \"03/12\", compilation = false, \
+         originaldate = 1999-02-03, mood = \"\" }\n",
     );
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(
@@ -144,20 +145,27 @@ fn a_tag_set_by_hand_is_read_as_its_field_holds_it() {
             ("isrc".to_string(), vec!["XXZZ12400001".to_string()]),
             ("track".to_string(), vec!["3/12".to_string()]),
             ("compilation".to_string(), vec!["0".to_string()]),
+            ("originaldate".to_string(), vec!["1999-02-03".to_string()]),
         ]
     );
     for (tags, why) in [
         ("date = \"July 2019\"", "no date"),
+        ("date = \"2019-02-30\"", "no date"),
         ("track = \"fast\"", "no number"),
         ("replaygain_track_gain = \"-3 dB\"", "measured by muman"),
         ("note = \"a\\u0000b\"", "control character"),
+        ("comment = { a = 1 }", "no text"),
+        ("\"Ünï\" = \"x\"", "no tag name"),
     ] {
         write(
             dir.path(),
             &format!("[[song]]\nsources = [\"manual:a.flac\"]\ntags = {{ {tags} }}\n"),
         );
         let e = format!("{:#}", Manifest::load(dir.path()).unwrap_err());
-        assert!(e.contains("song 1: tags.") && e.contains(why), "{e}");
+        assert!(
+            e.contains("song 1 (manual:a.flac): tags.") && e.contains(why),
+            "{e}"
+        );
     }
 }
 
