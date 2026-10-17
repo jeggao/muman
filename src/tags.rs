@@ -1370,10 +1370,16 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
         offer(&mut o, Field::Asin, one(d.asin.as_ref()), true);
         offer(&mut o, Field::Script, one(d.script.as_ref()), true);
     }
+    // The release group's first release, as Picard writes it, else the
+    // recording's, for a record kept before its release told it.
+    let group_date = record
+        .release
+        .as_ref()
+        .and_then(|r| r.details.original_date.as_ref());
     offer(
         &mut o,
         Field::OriginalDate,
-        one(record.original_date.as_ref()),
+        one(group_date.or(record.original_date.as_ref())),
         true,
     );
     o
@@ -2126,12 +2132,22 @@ mod tests {
                     barcode: Some("0012345678905".into()),
                     asin: None,
                     script: Some("Latn".into()),
+                    original_date: None,
                 },
             }),
             original_date: Some("1999-02-01".into()),
         };
         let o = from_record(&record);
         assert_eq!(o[&Field::OriginalDate].values, ["1999-02-01"]);
+        let mut grouped = record.clone();
+        if let Some(r) = grouped.release.as_mut() {
+            r.details.original_date = Some("2001".into());
+        }
+        assert_eq!(
+            from_record(&grouped)[&Field::OriginalDate].values,
+            ["2001"],
+            "the release group's, as Picard's"
+        );
         assert_eq!(o[&Field::ReleaseStatus].values, ["official"]);
         assert_eq!(o[&Field::ReleaseType].values, ["album", "compilation"]);
         assert_eq!(o[&Field::Media].values, ["CD"]);

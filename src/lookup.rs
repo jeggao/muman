@@ -308,13 +308,15 @@ fn entry_of<R: Runner>(runner: &R, sites: &crate::sites::Sites, key: &SourceKey)
 }
 
 /// The pace of a run's requests to each service, shared by every
-/// thread.
+/// thread, and the releases the run has looked up, so an album's songs
+/// ask for theirs once a run, whichever round or refetch asks.
 #[derive(Debug)]
 pub struct Throttles {
     pub lrclib: Throttle,
     pub musicbrainz: Throttle,
     pub acoustid: Throttle,
     pub coverart: Throttle,
+    pub releases: musicbrainz::Releases,
 }
 
 impl Throttles {
@@ -326,6 +328,7 @@ impl Throttles {
             musicbrainz: musicbrainz::throttle(),
             acoustid: acoustid::throttle(),
             coverart: coverart::throttle(),
+            releases: musicbrainz::Releases::default(),
         }
     }
 
@@ -337,6 +340,7 @@ impl Throttles {
             musicbrainz: Throttle::none(),
             acoustid: Throttle::none(),
             coverart: Throttle::none(),
+            releases: musicbrainz::Releases::default(),
         }
     }
 }
@@ -598,7 +602,6 @@ pub fn run<R: Runner, W: Write>(
             .key
             .clone()
             .unwrap_or_default();
-        let releases = musicbrainz::Releases::default();
         let clients = Clients {
             lrclib: lrclib::Client {
                 base: &bases.0,
@@ -609,7 +612,7 @@ pub fn run<R: Runner, W: Write>(
                 base: &bases.1,
                 transport: http,
                 throttle: &throttles.musicbrainz,
-                releases: &releases,
+                releases: &throttles.releases,
             },
             acoustid: acoustid::Client {
                 base: &bases.3,
@@ -942,12 +945,11 @@ pub fn refetch(
         transport: http,
         throttle: &throttles.lrclib,
     };
-    let releases = musicbrainz::Releases::default();
     let musicbrainz = musicbrainz::Client {
         base: &bases.1,
         transport: http,
         throttle: &throttles.musicbrainz,
-        releases: &releases,
+        releases: &throttles.releases,
     };
     let coverart_base = base(manifest, Provider::CoverArt);
     let covers = coverart::Client {

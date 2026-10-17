@@ -380,6 +380,7 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
         r#""track-count": 11, "format": "CD""#,
     )]);
     let looked = r#"{"id": "x", "barcode": "0012345678905", "asin": "B000000001",
+        "release-group": {"first-release-date": "1999-02"},
         "text-representation": {"language": "eng", "script": "Latn"},
         "label-info": [{"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}},
                        {"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}}]}"#;
@@ -398,6 +399,7 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
     assert_eq!(r.details.catalog_numbers, ["HLR-0042"]);
     assert_eq!(r.details.barcode.as_deref(), Some("0012345678905"));
     assert_eq!(r.details.script.as_deref(), Some("Latn"));
+    assert_eq!(r.details.original_date.as_deref(), Some("1999-02"));
     c.find(&query()).unwrap().unwrap();
     let asked = server.asked.lock().unwrap();
     assert_eq!(
@@ -407,5 +409,15 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
             .count(),
         1,
         "{asked:?}"
+    );
+    drop(asked);
+
+    let failing = Server::default()
+        .answer("/ws/2/recording?", &body)
+        .answer("/ws/2/release/", "<html>busy</html>");
+    let c = client(&failing, &throttle);
+    assert!(
+        c.find(&query()).is_err(),
+        "a release that did not answer is asked again, not kept without its details"
     );
 }

@@ -6,11 +6,14 @@
 //! country, IDs, status, types and medium, every one structured, ranked
 //! against the other sources' offers as any tag is
 //! ([`crate::tags::from_record`]). A search answers none of the release's
-//! labels, catalogue numbers, barcode, ASIN or script, so the release is
-//! looked up once more for them, once a run for each release, so an
-//! album's songs ask once; a record kept before has them from when it is
-//! next fetched again. A recording's credits, its performers, producer
-//! and the like, are not asked for.
+//! labels, catalogue numbers, barcode, ASIN or script, nor its release
+//! group's first release, the original date as Picard writes it, so the
+//! release is looked up once more for them, once a run for each
+//! release, so an album's songs ask once; that lookup failing fails the
+//! record's, which is made again rather than kept without them. A record
+//! kept before has them from when it is next fetched again. A
+//! recording's credits, its performers, producer and the like, are not
+//! asked for.
 //!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
@@ -201,15 +204,21 @@ pub struct Details {
     /// ISO 15924, as `Latn`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// The first release of its release group, as Picard's original date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_date: Option<String>,
 }
 
 /// The details of each release looked up in a run, so the songs of one
 /// album ask for its release once.
 pub type Releases = std::sync::Mutex<std::collections::BTreeMap<String, Option<Details>>>;
 
-/// A release as `/ws/2/release/<id>?inc=labels` answers it.
+/// A release as `/ws/2/release/<id>?inc=labels+release-groups` answers
+/// it.
 #[derive(Debug, Deserialize)]
 struct Looked {
+    #[serde(default, rename = "release-group")]
+    group: Option<FirstReleased>,
     #[serde(default)]
     barcode: Option<String>,
     #[serde(default)]
@@ -218,6 +227,12 @@ struct Looked {
     text: Option<Representation>,
     #[serde(default, rename = "label-info", deserialize_with = "or_default")]
     labels: Vec<LabelInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirstReleased {
+    #[serde(default, rename = "first-release-date")]
+    date: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +262,7 @@ impl Looked {
             barcode: text(self.barcode),
             asin: text(self.asin),
             script: text(self.text.and_then(|t| t.script)),
+            original_date: text(self.group.and_then(|g| g.date)),
             ..Details::default()
         };
         for info in self.labels {
@@ -598,39 +614,45 @@ impl Client<'_> {
             return Ok(None);
         };
         let mut record = parse_recording(&body, album).context("reading MusicBrainz's answer")?;
-        self.detail(&mut record);
+        self.detail(&mut record)?;
         Ok(Some(record))
     }
 
     /// `record`'s release given the details only a lookup of it answers,
-    /// once a run for each release. A lookup that fails costs the record
-    /// only its details.
-    fn detail(&self, record: &mut Record) {
+    /// once a run for each release. A release MusicBrainz no longer has
+    /// has none; a lookup that fails fails the record's, so it is made
+    /// again rather than kept without them.
+    fn detail(&self, record: &mut Record) -> Result<()> {
         let Some(release) = record.release.as_mut() else {
-            return;
+            return Ok(());
         };
         let held = self
             .releases
             .lock()
             .ok()
             .and_then(|r| r.get(&release.id).cloned());
-        let details = held.unwrap_or_else(|| {
+        let details = if let Some(details) = held {
+            details
+        } else {
             let path = format!(
-                "/ws/2/release/{}?inc=labels&fmt=json",
+                "/ws/2/release/{}?inc=labels+release-groups&fmt=json",
                 music::percent_encode(&release.id)
             );
-            let looked = self
-                .get(&path)
-                .ok()
-                .flatten()
-                .and_then(|body| serde_json::from_str::<Looked>(&body).ok())
-                .map(Looked::details);
+            let looked = match self.get(&path)? {
+                Some(body) => Some(
+                    serde_json::from_str::<Looked>(&body)
+                        .context("reading MusicBrainz's answer for a release")?
+                        .details(),
+                ),
+                None => None,
+            };
             if let Ok(mut known) = self.releases.lock() {
                 known.insert(release.id.clone(), looked.clone());
             }
             looked
-        });
+        };
         release.details = details.unwrap_or_default();
+        Ok(())
     }
 
     /// The song's recording and the release it is best known from, or
@@ -660,7 +682,7 @@ impl Client<'_> {
             .min_by_key(|r| r.rank(&q.title, album, q.seconds));
         let mut record = best.and_then(|r| r.record(album));
         if let Some(record) = record.as_mut() {
-            self.detail(record);
+            self.detail(record)?;
         }
         Ok(record)
     }

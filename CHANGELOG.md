@@ -18,10 +18,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   comment, and the MusicBrainz work and disc IDs. A tempo is held
   whole in MP3 and M4A, a compilation as M4A's flag, and a key in
   `TKEY` where that frame holds it.
-- **Release details from MusicBrainz**: the original date, release
-  type and status and the medium from the answers muman already asks
-  for, and the label, catalogue number, barcode, ASIN and script from
-  one lookup of the release, asked once for every song of an album.
+- **Release details from MusicBrainz**: the release type and status
+  and the medium from the answers muman already asks for, and the
+  label, catalogue number, barcode, ASIN, script and original date,
+  its release group's first release as Picard writes it, from one
+  lookup of the release, asked once a run for every song of an album.
+  A lookup of it that fails is made again on a later run.
 - **A song's language is its lyrics'**, where no source says another,
   and MP3 lyrics carry it.
 - **`composer`, `bpm` and `key` in the path template.**
