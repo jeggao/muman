@@ -263,10 +263,11 @@ fn retag<R: Runner, W: Write>(
     });
     for (located, result) in due.iter().zip(read) {
         match result {
-            Ok((tags, release)) => {
+            Ok(read) => {
                 if let Some(f) = state.facts.get_mut(&located.key) {
-                    f.tags = tags;
-                    f.release = release;
+                    f.tags = read.tags;
+                    f.release = read.release;
+                    f.chapters = read.chapters;
                     f.tags_method = tags::METHOD.to_string();
                 }
             }
@@ -1615,6 +1616,8 @@ fn media_equal(a: &Plan, b: &Plan) -> bool {
         && a.audio == b.audio
         && a.cover == b.cover
         && a.lyrics == b.lyrics
+        // MP4 chapters are ffmpeg's to write.
+        && a.chapters == b.chapters
 }
 
 /// What a sync does with one song, decided for every song before any is

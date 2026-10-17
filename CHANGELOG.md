@@ -27,6 +27,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A song's language is its lyrics'**, where no source says another,
   and MP3 lyrics carry it.
 - **`composer`, `bpm` and `key` in the path template.**
+- **Chapters are kept.** A source's chapters, as an M4B audiobook or a
+  video in parts has them, are written into its song's file: MP4
+  chapters, `CHAPTER000` comments in FLAC, Ogg and Opus, and `CTOC` and
+  `CHAP` frames in MP3; WavPack holds none. They were dropped. A song
+  whose source has chapters is written once again.
 
 ### Changed
 

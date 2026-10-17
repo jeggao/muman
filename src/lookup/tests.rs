@@ -149,6 +149,7 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
             .collect(),
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let resolved = Resolved {
         plan,

@@ -1647,6 +1647,7 @@ fn a_plan_stored_before_loudness_reads_as_one_with_none() {
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let json = serde_json::to_string(&plan).unwrap();
     assert!(!json.contains("loudness"));
@@ -1680,6 +1681,7 @@ fn a_plan_s_loudness_tags_follow_its_format() {
         ],
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let gains = Gains {
         track: Level {
@@ -1745,6 +1747,7 @@ fn a_gain_a_format_applies_none_of_compares_as_tags() {
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let gains = |apply| Gains {
         track: Level {
@@ -1794,6 +1797,7 @@ fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     // A quiet song the ceiling lets be raised by nothing.
     let gains = |apply| Gains {

@@ -38,6 +38,10 @@
 //! no lyrics past it. Lyrics are cleaned of cues, symbols and credits and moved by
 //! the plan's offset; lyrics from a `.lrc` file need no ffmpeg at all.
 //!
+//! The audio keeps its source's chapters, as [`crate::chapters`] writes
+//! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
+//! file, the tag writers every other's beside the tags.
+//!
 //! A song whose plan changed in its tags alone is tagged again in place,
 //! with the cover and the lyrics its file holds, read as each container
 //! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
@@ -73,6 +77,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
+use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
 use crate::ffmpeg::{self, Output};
@@ -134,7 +139,13 @@ impl Inputs {
     }
 }
 
-fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
+/// The audio's output; `chapters` the input an MP4's chapters are read
+/// from, an `FFMETADATA` file. Tags are written from the plan alone, so
+/// ffmpeg carries none of the container's, nor its chapters, which it
+/// would write as comments; an MP4's chapters are its to write, and it
+/// keeps their titles only where the global and stream metadata alone
+/// are dropped.
+fn audio_output(plan: &Plan, input: usize, chapters: Option<usize>, path: &Path) -> Output {
     let format = plan.format;
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
     args.extend(match format {
@@ -146,9 +157,17 @@ fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
             mix,
         } => codec.encoder_args(kbps, adapt, mix, plan.chain()),
     });
-    // Tags are written from the plan alone; ffmpeg would carry the
-    // container's, chapters as comments among them.
-    args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
+    match chapters {
+        Some(n) => args.extend([
+            "-map_metadata:g".into(),
+            "-1".into(),
+            "-map_metadata:s".into(),
+            "-1".into(),
+            "-map_chapters".into(),
+            n.to_string(),
+        ]),
+        None => args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from)),
+    }
     args.extend(format.codec().muxer_args());
     Output::new(args.into_iter().map(OsString::from).collect(), path)
 }
@@ -205,7 +224,19 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut inputs = Inputs::default();
     let source = locate(&plan.audio.key)?;
     let n = inputs.index(&source.path);
-    let mut outputs = vec![audio_output(plan, n, &audio_part)];
+    let chapters = if plan.format.codec().container() == Container::Mp4 && !plan.chapters.is_empty()
+    {
+        let name = crate::atomic::Name::new("chapters.ffmeta".to_string())?;
+        crate::atomic::write(
+            job.scratch,
+            &name,
+            crate::chapters::ffmetadata(&plan.chapters).as_bytes(),
+        )?;
+        Some(inputs.index(&job.scratch.join(name.as_str())))
+    } else {
+        None
+    };
+    let mut outputs = vec![audio_output(plan, n, chapters, &audio_part)];
     let mut problems = Vec::new();
 
     let cover = match &plan.cover {
@@ -293,12 +324,18 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 .ok()
         });
         // A cover the tags cannot hold costs the song only its cover.
-        if let Err(e) = write_tags(&audio_part, plan.format, &tags, picture.clone()) {
+        if let Err(e) = write_tags(
+            &audio_part,
+            plan.format,
+            &tags,
+            picture.clone(),
+            &plan.chapters,
+        ) {
             if picture.is_none() {
                 return Err(e);
             }
             problems.push(format!("no cover: {e:#}"));
-            write_tags(&audio_part, plan.format, &tags, None)?;
+            write_tags(&audio_part, plan.format, &tags, None, &plan.chapters)?;
         }
         set_opus_header(&audio_part, plan)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
@@ -447,7 +484,7 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
         let covered = picture.is_some();
-        write_tags(&staged, plan.format, &tags, picture)?;
+        write_tags(&staged, plan.format, &tags, picture, &plan.chapters)?;
         set_opus_header(&staged, plan)?;
         Ok(verify(&staged, &tags, covered))
     })();
@@ -707,14 +744,15 @@ fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
 /// The vendor string ffmpeg names its Vorbis comments with, bit-exact.
 const FFMPEG_VENDOR: &str = "ffmpeg";
 
-/// Replace every comment the file carries with the plan's tags and the
-/// cover, keeping the encoder's vendor string and a FLAC's
-/// [`CHANNEL_MASK`].
+/// Replace every comment the file carries with the plan's tags, the
+/// cover and the chapters, keeping the encoder's vendor string and a
+/// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
 fn write_tags(
     path: &Path,
     format: Format,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
+    chapters: &[Chapter],
 ) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -724,11 +762,13 @@ fn write_tags(
     let codec = format.codec();
     let written = match codec.container() {
         Container::Ogg | Container::Flac => {
-            let comments = vorbis_comments(&mut file, path, codec, tags, picture)?;
+            let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(&mut file, WriteOptions::default())
         }
-        Container::Mp3 => id3_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
+        Container::Mp3 => {
+            id3_tag(tags, picture, chapters).save_to(&mut file, WriteOptions::default())
+        }
         Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
         Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
     };
@@ -768,6 +808,7 @@ fn vorbis_comments(
     codec: Codec,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
+    chapters: &[Chapter],
 ) -> Result<VorbisComments> {
     // The vendor string is all that is read: the audio's properties are
     // not, as lofty refuses an Opus stream of mapping family 255 for them.
@@ -820,6 +861,9 @@ fn vorbis_comments(
                 comments.push(name.to_string(), value.clone());
             }
         }
+    }
+    for (name, value) in crate::chapters::vorbis(chapters) {
+        comments.push(name, value);
     }
     if let Some(picture) = picture {
         comments
@@ -942,7 +986,11 @@ fn text_frame(key: &str) -> Option<&'static str> {
 /// frame [`crate::tags::TABLE`] names, several values null-separated as
 /// version 2.4 separates them; a tag of no field into a text frame of its
 /// own where it has one, else a user text frame of its name.
-fn id3_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Id3v2Tag {
+fn id3_tag(
+    tags: &[(String, Vec<String>)],
+    picture: Option<Picture>,
+    chapters: &[Chapter],
+) -> Id3v2Tag {
     let text = |id: &'static str, value: String| {
         FrameId::new(id)
             .ok()
@@ -1027,6 +1075,9 @@ fn id3_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Id3v2Tag
             TextEncoding::UTF8,
             picture,
         )));
+    }
+    for frame in crate::chapters::id3(chapters) {
+        id3.insert(frame);
     }
     canonical_id3(id3)
 }

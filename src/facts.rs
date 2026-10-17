@@ -48,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::analysis::{self, Analysis, Pass};
+use crate::chapters::Chapter;
 use crate::ffmpeg::{self, Input, Output, Piped};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
@@ -100,6 +101,9 @@ pub struct Facts {
     /// channel; read with the tags.
     #[serde(default)]
     pub release: bool,
+    /// Its chapters, read with the tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<Chapter>,
     #[serde(default, deserialize_with = "fingerprint::read_stored")]
     pub print: Option<Print>,
     /// What the source holds that a library file cannot keep.
@@ -280,6 +284,7 @@ impl Facts {
             tags: Offers::new(),
             tags_method: tags::METHOD.to_string(),
             release: false,
+            chapters: Vec::new(),
             print: None,
             unkept: Vec::new(),
             served: None,
@@ -529,22 +534,36 @@ pub fn gather<R: Runner>(
     Ok(facts)
 }
 
-/// The tags of one located source, read again: a media file's are
-/// probed, its pictures not dumped nor anything measured.
-pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<(Offers, bool)> {
+/// What reading a source's tags again finds.
+#[derive(Debug, Default)]
+pub struct Reread {
+    pub tags: Offers,
+    pub release: bool,
+    pub chapters: Vec<Chapter>,
+}
+
+/// The tags of one located source, read again with its chapters: a media
+/// file's are probed, its pictures not dumped nor anything measured.
+pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<Reread> {
     match located.kind {
         Kind::Media => {}
         Kind::Tags => {
             let record = crate::musicbrainz::read(&located.path)?;
-            return Ok((tags::from_record(&record), false));
+            return Ok(Reread {
+                tags: tags::from_record(&record),
+                ..Reread::default()
+            });
         }
-        Kind::Lyrics | Kind::Image => return Ok((Offers::new(), false)),
+        Kind::Lyrics | Kind::Image => return Ok(Reread::default()),
     }
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
     let info = dump_attachments(runner, located, &probed, scratch, false);
-    let release = info.as_ref().is_some_and(VideoInfo::is_release);
-    Ok((tags_of(info.as_ref(), &probed, &located.path), release))
+    Ok(Reread {
+        tags: tags_of(info.as_ref(), &probed, &located.path),
+        release: info.as_ref().is_some_and(VideoInfo::is_release),
+        chapters: probed.chapters,
+    })
 }
 
 /// Whether each of `at`, lyrics of `located` measured before muman asked,
@@ -975,6 +994,7 @@ fn media<R: Runner>(
     let info = dump_attachments(runner, located, &probed, scratch, true);
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
+    facts.chapters.clone_from(&probed.chapters);
     let served = info.as_ref().and_then(Served::of);
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();

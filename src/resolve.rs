@@ -90,7 +90,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Chain, Codec, Layout};
+use crate::codec::{Adapt, Chain, Codec, Container, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
 use crate::loudness::Gains;
@@ -353,6 +353,9 @@ pub struct Plan {
     /// How its tags are written into the file, [`TAGGING`] when it was.
     #[serde(default)]
     pub tagging: u32,
+    /// Its audio's chapters, where its container holds them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<crate::chapters::Chapter>,
 }
 
 /// How tags are written into a file, raised whenever the frames, atoms or
@@ -371,6 +374,7 @@ impl PartialEq for Plan {
             tags,
             loudness: _,
             tagging,
+            chapters,
         } = self;
         *version == other.version
             && *format == other.format
@@ -379,6 +383,7 @@ impl PartialEq for Plan {
             && *lyrics == other.lyrics
             && *tags == other.tags
             && *tagging == other.tagging
+            && *chapters == other.chapters
             && self.held_loudness() == other.held_loudness()
     }
 }
@@ -660,6 +665,13 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             tags,
             loudness: None,
             tagging: TAGGING,
+            chapters: if format.codec().container() == Container::WavPack {
+                Vec::new()
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
+                crate::chapters::within(&facts.chapters, length_ms)
+            },
         },
         stem,
         why: Why {

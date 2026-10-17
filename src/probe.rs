@@ -7,6 +7,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::chapters::Chapter;
+
 /// Names which audio stream is taken and what is read of it and of the
 /// file; facts read by another are made again, so changing any means
 /// changing this. What only a versioned analysis reads, as the integrity
@@ -83,6 +85,7 @@ pub struct Probed {
     /// The container's tags, then the audio stream's where the container
     /// has none by that name, as Ogg keeps them; keys lower-cased.
     pub tags: BTreeMap<String, String>,
+    pub chapters: Vec<Chapter>,
 }
 
 impl Probed {
@@ -107,6 +110,41 @@ struct Probe {
     streams: Vec<Stream>,
     #[serde(default)]
     format: Format,
+    #[serde(default)]
+    chapters: Vec<ProbedChapter>,
+}
+
+#[derive(Deserialize)]
+struct ProbedChapter {
+    #[serde(default)]
+    start_time: Option<String>,
+    #[serde(default)]
+    end_time: Option<String>,
+    #[serde(default)]
+    tags: BTreeMap<String, String>,
+}
+
+impl ProbedChapter {
+    /// The chapter, where its times read and it ends after it starts.
+    fn chapter(&self) -> Option<Chapter> {
+        let ms = |t: &Option<String>| -> Option<u64> {
+            let s: f64 = t.as_deref()?.trim().parse().ok()?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            (s.is_finite() && s >= 0.0).then(|| (s * 1000.0).round() as u64)
+        };
+        let (start_ms, end_ms) = (ms(&self.start_time)?, ms(&self.end_time)?);
+        let title = self
+            .tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default();
+        (end_ms > start_ms).then_some(Chapter {
+            start_ms,
+            end_ms,
+            title,
+        })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -242,6 +280,7 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
         "json",
         "-show_streams",
         "-show_format",
+        "-show_chapters",
         "--",
     ]
     .into_iter()
@@ -251,7 +290,7 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
-/// Parse `ffprobe -show_streams -show_format`. The audio stream a song is
+/// Parse `ffprobe -show_streams -show_format -show_chapters`. The audio stream a song is
 /// made from is the best: lossless before lossy, then the one with the
 /// most channels, then the highest rate, then the first.
 pub fn parse(json: &[u8]) -> Result<Probed> {
@@ -267,6 +306,11 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             .tags
             .into_iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v))
+            .collect(),
+        chapters: probe
+            .chapters
+            .iter()
+            .filter_map(ProbedChapter::chapter)
             .collect(),
         ..Probed::default()
     };
@@ -466,6 +510,34 @@ mod tests {
         assert_eq!(probed(&["Other"]), [false]);
         assert_eq!(probed(&["Other", "Cover (front)"]), [true, false]);
         assert_eq!(probed(&["Cover (back)", "Other"]), [true, false]);
+    }
+
+    #[test]
+    fn chapters_are_read_with_their_titles() {
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+            "channels": 2}],
+          "chapters": [
+            {"id": 0, "time_base": "1/44100", "start": 0, "start_time": "0.000000",
+             "end": 14509414, "end_time": "329.011655", "tags": {"title": "Part One"}},
+            {"id": 1, "start_time": "329.011655", "end_time": "466.017392"},
+            {"id": 2, "start_time": "500.0", "end_time": "500.0"}]}"#;
+        let o = parse(json.as_bytes()).unwrap();
+        assert_eq!(
+            o.chapters,
+            [
+                Chapter {
+                    start_ms: 0,
+                    end_ms: 329_012,
+                    title: "Part One".into()
+                },
+                Chapter {
+                    start_ms: 329_012,
+                    end_ms: 466_017,
+                    title: String::new()
+                },
+            ],
+            "one of no length is none"
+        );
     }
 
     #[test]

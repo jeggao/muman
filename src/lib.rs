@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod atomic;
 pub mod attach;
 pub mod change;
+pub mod chapters;
 pub mod check;
 pub mod clean;
 pub mod cli;

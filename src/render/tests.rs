@@ -74,6 +74,7 @@ fn plan(format: Format) -> Plan {
         ],
         loudness: None,
         tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     }
 }
 
@@ -216,7 +217,7 @@ fn an_opus_file_with_no_speakers_named_is_tagged() {
         "lofty refuses mapping family 255 for its properties"
     );
     let tags = vec![("TITLE".to_string(), vec!["Song".to_string()])];
-    write_tags(&path, Format::Copy { codec: Codec::Opus }, &tags, None).unwrap();
+    write_tags(&path, Format::Copy { codec: Codec::Opus }, &tags, None, &[]).unwrap();
 
     let read = crate::tags::read_file(&path).unwrap();
     assert_eq!(read.get("title"), Some(&vec!["Song".to_string()]));
@@ -256,6 +257,44 @@ fn an_mp3_song_is_tagged_with_id3v2() {
         Some("[00:01.00]line\n[00:30.00]more\n")
     );
     assert_eq!(generic.pictures().len(), 1);
+}
+
+#[test]
+fn an_m4a_s_chapters_are_given_to_ffmpeg_and_no_other_metadata() {
+    let f = fixture();
+    let fake = Fake::default();
+    let mut p = plan(Format::Copy { codec: Codec::Aac });
+    p.chapters = vec![
+        crate::chapters::Chapter {
+            start_ms: 0,
+            end_ms: 500,
+            title: "Part One".into(),
+        },
+        crate::chapters::Chapter {
+            start_ms: 500,
+            end_ms: 1000,
+            title: String::new(),
+        },
+    ];
+    go(&fake, &f, &p).unwrap();
+    let read = |fake: &Fake| {
+        fake.calls()
+            .iter()
+            .flatten()
+            .any(|a| a.ends_with("chapters.ffmeta"))
+    };
+    assert!(read(&fake) && fake.ran("-map_metadata:g"));
+    let opus = Fake::default();
+    go(
+        &opus,
+        &f,
+        &Plan {
+            chapters: p.chapters.clone(),
+            ..plan(Format::Copy { codec: Codec::Opus })
+        },
+    )
+    .unwrap();
+    assert!(!read(&opus), "written as comments, not by ffmpeg");
 }
 
 #[test]
@@ -627,7 +666,7 @@ fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
 
     let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
     let codec = Format::Copy { codec: Codec::Mp3 };
-    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    write_tags(&path, codec, &every_kind(), Some(cover()), &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
     let id3 = mp3.id3v2().unwrap();
@@ -683,7 +722,7 @@ fn an_m4a_holds_each_field_in_the_atom_picard_writes() {
 
     let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
     let codec = Format::Copy { codec: Codec::Aac };
-    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    write_tags(&path, codec, &every_kind(), Some(cover()), &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
     let ilst = m4a.ilst().unwrap();
@@ -734,7 +773,7 @@ fn a_wavpack_file_holds_each_field_in_the_item_picard_writes() {
     let codec = Format::Copy {
         codec: Codec::WavPack,
     };
-    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    write_tags(&path, codec, &every_kind(), Some(cover()), &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let wv = lofty::wavpack::WavPackFile::read_from(&mut file, ParseOptions::new()).unwrap();
     let ape = wv.ape().unwrap();
@@ -767,7 +806,7 @@ fn a_wavpack_file_holds_each_field_in_the_item_picard_writes() {
 fn a_total_with_no_place_is_kept_where_a_place_cannot_hold_it() {
     let tags = vec![("TRACKTOTAL".to_string(), vec!["9".to_string()])];
     let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
-    write_tags(&path, Format::Copy { codec: Codec::Mp3 }, &tags, None).unwrap();
+    write_tags(&path, Format::Copy { codec: Codec::Mp3 }, &tags, None, &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
     let id3 = mp3.id3v2().unwrap();
@@ -785,9 +824,9 @@ fn a_cover_or_a_tag_the_file_does_not_hold_as_written_is_told() {
     let format = Format::Copy {
         codec: Codec::WavPack,
     };
-    write_tags(&path, format, &tags, Some(cover())).unwrap();
+    write_tags(&path, format, &tags, Some(cover()), &[]).unwrap();
     assert_eq!(verify(&path, &tags, true), Vec::<String>::new());
-    write_tags(&path, format, &tags, None).unwrap();
+    write_tags(&path, format, &tags, None, &[]).unwrap();
     assert_eq!(verify(&path, &tags, true), ["cover not held as written"]);
     let more = vec![
         ("TITLE".to_string(), vec!["Lantern Weather".to_string()]),
@@ -863,21 +902,86 @@ fn every_field_is_read_back_from_every_container_as_written() {
         (SILENCE_WV, "song.wv", Codec::WavPack),
     ] {
         let (_dir, path) = written(fixture, name);
-        write_tags(&path, Format::Copy { codec }, &tags, None).unwrap();
+        write_tags(&path, Format::Copy { codec }, &tags, None, &[]).unwrap();
         assert_eq!(verify(&path, &tags, false), [] as [String; 0], "{name}");
     }
+}
+
+#[test]
+fn chapters_are_written_in_each_container_s_own_form() {
+    use crate::chapters::Chapter;
+    use lofty::id3::v2::Frame;
+
+    let chapters = [
+        Chapter {
+            start_ms: 0,
+            end_ms: 400,
+            title: "Part One".into(),
+        },
+        Chapter {
+            start_ms: 400,
+            end_ms: 900,
+            title: "Part Two".into(),
+        },
+    ];
+    let title = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
+    let (_d1, flac) = written(crate::testing::SILENCE_FLAC, "song.flac");
+    write_tags(
+        &flac,
+        Format::Copy { codec: Codec::Flac },
+        &title,
+        None,
+        &chapters,
+    )
+    .unwrap();
+    let mut file = fs::File::open(&flac).unwrap();
+    let read = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let comments = read.vorbis_comments().unwrap();
+    assert_eq!(comments.get("CHAPTER001"), Some("00:00:00.400"));
+    assert_eq!(comments.get("CHAPTER001NAME"), Some("Part Two"));
+
+    let (_d2, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    write_tags(
+        &mp3,
+        Format::Copy { codec: Codec::Mp3 },
+        &title,
+        None,
+        &chapters,
+    )
+    .unwrap();
+    let mut file = fs::File::open(&mp3).unwrap();
+    let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
+        .unwrap()
+        .id3v2()
+        .unwrap()
+        .clone();
+    let frames: Vec<Frame<'_>> = id3.into_iter().collect();
+    let toc = frames.iter().find_map(|f| match f {
+        Frame::TableOfContents(t) => Some(t.entries.len()),
+        _ => None,
+    });
+    assert_eq!(toc, Some(2));
+    let times: Vec<std::ops::Range<u32>> = frames
+        .iter()
+        .filter_map(|f| match f {
+            Frame::Chapter(c) => Some(c.times.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(times, [0..400, 400..900]);
+    assert_eq!(verify(&mp3, &title, false), [] as [String; 0]);
 }
 
 #[test]
 fn a_flac_tagged_after_none_names_the_vendor_a_build_does() {
     let (_dir, path) = written(crate::testing::SILENCE_FLAC, "song.flac");
     let flac = Format::Copy { codec: Codec::Flac };
-    write_tags(&path, flac, &[], None).unwrap();
+    write_tags(&path, flac, &[], None, &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let bare = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
     assert!(bare.vorbis_comments().is_none(), "no tags, no block");
     let title = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
-    write_tags(&path, flac, &title, None).unwrap();
+    write_tags(&path, flac, &title, None, &[]).unwrap();
     let mut file = fs::File::open(&path).unwrap();
     let read = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
     assert_eq!(read.vorbis_comments().unwrap().vendor(), FFMPEG_VENDOR);
@@ -929,7 +1033,14 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
     use lofty::mp4::{AtomData, AtomIdent};
 
     let (_d1, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
-    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &extended(), None).unwrap();
+    write_tags(
+        &mp3,
+        Format::Copy { codec: Codec::Mp3 },
+        &extended(),
+        None,
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&mp3).unwrap();
     let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
         .unwrap()
@@ -954,7 +1065,14 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
     assert_eq!(verify(&mp3, &extended(), false), [] as [String; 0]);
 
     let (_d2, m4a) = written(crate::testing::SILENCE_M4A, "song.m4a");
-    write_tags(&m4a, Format::Copy { codec: Codec::Aac }, &extended(), None).unwrap();
+    write_tags(
+        &m4a,
+        Format::Copy { codec: Codec::Aac },
+        &extended(),
+        None,
+        &[],
+    )
+    .unwrap();
     let mut file = fs::File::open(&m4a).unwrap();
     let m = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
     let ilst = m.ilst().unwrap();
@@ -977,6 +1095,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
         Format::Copy { codec: Codec::Opus },
         &extended(),
         None,
+        &[],
     )
     .unwrap();
     let mut file = fs::File::open(&opus).unwrap();
@@ -1012,7 +1131,7 @@ fn a_key_tkey_cannot_hold_is_kept_as_its_vorbis_name() {
 
     let tags = vec![("KEY".to_string(), vec!["8A".to_string()])];
     let (_dir, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
-    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &tags, None).unwrap();
+    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &tags, None, &[]).unwrap();
     let mut file = fs::File::open(&mp3).unwrap();
     let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
         .unwrap()

@@ -174,6 +174,13 @@ name a Vorbis comment cannot carry, of other than printable ASCII or with
 `add` lists. `muman status` shows each tag's value and the source it
 came from.
 
+A song's audio keeps the chapters of the source it is taken from, as an
+M4B audiobook or a video in parts has them: the song stays one file, and
+a player skips from chapter to chapter within it. They are written as
+MP4 chapters, as `CHAPTER000` and `CHAPTER000NAME` comments in FLAC, Ogg
+and Opus, and as `CTOC` and `CHAP` frames in MP3; WavPack holds none. A
+source of one chapter has none to keep.
+
 The file also holds the settings tables of
 [configuration](configuration.md), `[clean.*]` ([cleaning](#cleaning)),
 and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.

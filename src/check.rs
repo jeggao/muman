@@ -560,6 +560,7 @@ mod tests {
                 tags: Vec::new(),
                 loudness: None,
                 tagging: crate::resolve::TAGGING,
+                chapters: Vec::new(),
             }),
             stamp,
             digest: None,
