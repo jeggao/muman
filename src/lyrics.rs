@@ -317,7 +317,8 @@ fn is_utf8(bytes: &[u8]) -> bool {
 }
 
 /// LRC without its timed lines that are no lyric; untimed lines, the
-/// `[ar:…]` headers among them, stay.
+/// `[ar:…]` headers among them, stay, and so does a timed line of no
+/// words, which ends the line before it where the singing stops.
 #[must_use]
 pub fn clean_lrc(text: &str) -> String {
     let mut out = String::new();
@@ -328,7 +329,7 @@ pub fn clean_lrc(text: &str) -> String {
             timed = true;
             rest = after;
         }
-        if timed && !is_lyric(rest) {
+        if timed && !without_word_times(rest).trim().is_empty() && !is_lyric(rest) {
             continue;
         }
         out.push_str(line);
@@ -345,14 +346,20 @@ pub struct Timing {
     pub last_ms: i64,
 }
 
+/// The timing of the lines that sing a word; a line that ends one, of no
+/// words, is not one.
 #[must_use]
 pub fn timing(text: &str) -> Option<Timing> {
     let mut times = Vec::new();
     for line in text.lines() {
         let mut rest = line;
+        let mut stamps = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(ms);
+            stamps.push(ms);
             rest = after;
+        }
+        if !without_word_times(rest).trim().is_empty() {
+            times.extend(stamps);
         }
     }
     Some(Timing {
@@ -362,24 +369,110 @@ pub fn timing(text: &str) -> Option<Timing> {
     })
 }
 
-/// LRC timed for another cut of the recording: every `[mm:ss.xx]` tag
-/// moved `offset_ms` earlier, then shortened by `stretch_ppm` parts per
-/// million for a cut that plays the recording that much longer. Of the
-/// lines that would start before the track does, the one still sung as
-/// it begins starts at 0:00 and those over by then are dropped; untimed
-/// lines are kept.
-#[must_use]
-pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
-    let timed = |line: &str| {
-        let mut rest = line;
-        let mut times = Vec::new();
-        while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(unstretch(ms.saturating_sub(offset_ms), stretch_ppm));
+/// One line of LRC: the times it starts at and what follows them, its
+/// words with any word times; or a line of no time, as an ID tag.
+enum Line<'a> {
+    Timed { times: Vec<i64>, rest: &'a str },
+    Other(&'a str),
+}
+
+/// LRC read line by line, its `[offset:]` taken out and kept apart, so
+/// moving it moves every time it holds, a word's as a line's.
+struct Lrc<'a> {
+    lines: Vec<Line<'a>>,
+    /// `[offset:]`: how much earlier every time is meant, in ms.
+    offset_ms: i64,
+}
+
+impl<'a> Lrc<'a> {
+    fn parse(text: &'a str) -> Self {
+        let mut offset_ms = 0;
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let mut rest = line;
+            let mut times = Vec::new();
+            while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+                times.push(ms);
+                rest = after;
+            }
+            if !times.is_empty() {
+                lines.push(Line::Timed { times, rest });
+            } else if let Some(offset) = id_tag(line, "offset") {
+                offset_ms = offset.parse().unwrap_or(0);
+            } else {
+                lines.push(Line::Other(line));
+            }
+        }
+        Self { lines, offset_ms }
+    }
+}
+
+/// The value of the line `line` if it is the ID tag `name`, as `[offset:+500]`.
+fn id_tag<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let inner = line.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let (k, v) = inner.split_once(':')?;
+    k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+}
+
+/// A time as LRC writes it, between `open` and `close`, rounded to the
+/// hundredth of a second it holds.
+fn stamp(out: &mut String, ms: i64, open: char, close: char) {
+    let cs = ms.max(0).saturating_add(5) / 10;
+    let _ = write!(
+        out,
+        "{open}{:02}:{:02}.{:02}{close}",
+        cs / 6000,
+        cs / 100 % 60,
+        cs % 100
+    );
+}
+
+/// `words` with each word time, as `<00:12.30>`, moved by `moved`.
+fn move_words(out: &mut String, words: &str, moved: &dyn Fn(i64) -> i64) {
+    let mut rest = words;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let bracketed = after.replacen('>', "]", 1);
+        let timed = after.find('>').zip(lrc_time(&bracketed).map(|(ms, _)| ms));
+        if let Some((close, ms)) = timed {
+            stamp(out, moved(ms), '<', '>');
+            rest = &after[close + 1..];
+        } else {
+            out.push('<');
             rest = after;
         }
-        (times, rest.to_string())
+    }
+    out.push_str(rest);
+}
+
+/// LRC timed for another cut of the recording: every time it holds, a
+/// line's `[mm:ss.xx]` and a word's `<mm:ss.xx>`, moved by its own
+/// `[offset:]`, which it then needs no more, then `offset_ms` earlier,
+/// then shortened by `stretch_ppm` parts per million for a cut that plays
+/// the recording that much longer. Of the lines that would start before
+/// the track does, the one still sung as it begins starts at 0:00 and
+/// those over by then are dropped; untimed lines are kept, but for a
+/// `[length:]`, which no more says how long the lyrics run once moved.
+#[must_use]
+pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
+    let lrc = Lrc::parse(text);
+    let moving = offset_ms != 0 || stretch_ppm != 0 || lrc.offset_ms != 0;
+    let moved = |ms: i64| {
+        unstretch(
+            ms.saturating_sub(lrc.offset_ms).saturating_sub(offset_ms),
+            stretch_ppm,
+        )
     };
-    let all: Vec<i64> = text.lines().flat_map(|l| timed(l).0).collect();
+    let all: Vec<i64> = lrc
+        .lines
+        .iter()
+        .flat_map(|l| match l {
+            Line::Timed { times, .. } => times.clone(),
+            Line::Other(_) => Vec::new(),
+        })
+        .map(moved)
+        .collect();
     let begun = all
         .iter()
         .copied()
@@ -387,35 +480,30 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
         .max()
         .filter(|_| !all.contains(&0));
     let mut out = String::new();
-    for line in text.lines() {
-        let (mut starts, rest) = timed(line);
-        let rest = rest.as_str();
-        if !starts.is_empty() {
-            starts.retain(|ms| *ms >= 0 || Some(*ms) == begun);
-            for ms in &mut starts {
-                *ms = (*ms).max(0);
+    for line in &lrc.lines {
+        match line {
+            Line::Timed { times, rest } => {
+                let starts: Vec<i64> = times
+                    .iter()
+                    .map(|ms| moved(*ms))
+                    .filter(|ms| *ms >= 0 || Some(*ms) == begun)
+                    .collect();
+                if starts.is_empty() {
+                    continue;
+                }
+                for ms in starts {
+                    stamp(&mut out, ms, '[', ']');
+                }
+                move_words(&mut out, rest, &moved);
             }
-            if starts.is_empty() {
-                continue;
-            }
-            for ms in starts {
-                let _ = write!(
-                    out,
-                    "[{:02}:{:02}.{:02}]",
-                    ms / 60_000,
-                    ms / 1000 % 60,
-                    ms / 10 % 100
-                );
-            }
+            Line::Other(text) if moving && id_tag(text, "length").is_some() => continue,
+            Line::Other(text) => out.push_str(text),
         }
-        out.push_str(rest);
         out.push('\n');
     }
     out
 }
 
-/// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
-/// and what follows the bracket.
 /// `ms` played `stretch_ppm` parts per million longer, brought back.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
@@ -425,6 +513,8 @@ fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
     (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
 }
 
+/// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
+/// and what follows the bracket.
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
     let (tag, after) = s.split_once(']')?;
     let (min, sec) = tag.split_once(':')?;
@@ -726,6 +816,46 @@ mod tests {
         assert_eq!(shift_lrc("[00:59.99]x\n", -20, 0), "[01:00.01]x\n");
         // A cut 0.1% slow plays the line at 200.2 s where the track does at 200 s.
         assert_eq!(shift_lrc("[03:20.20]x\n", 0, 1000), "[03:20.00]x\n");
+    }
+
+    #[test]
+    fn a_move_moves_word_times_folds_the_offset_and_rounds() {
+        assert_eq!(
+            shift_lrc("[00:06.00]<00:05.00>the <00:05.40>lamps go out\n", -1000, 0),
+            "[00:07.00]<00:06.00>the <00:06.40>lamps go out\n"
+        );
+        assert_eq!(
+            shift_lrc("[ar:x]\n[offset:+500]\n[00:02.00]on Kessler Row\n", 0, 0),
+            "[ar:x]\n[00:01.50]on Kessler Row\n",
+            "[offset:+500] sings each line 500 ms sooner"
+        );
+        assert_eq!(
+            shift_lrc("[00:30.005]x\n[00:05.129]y\n", 0, 0),
+            "[00:30.01]x\n[00:05.13]y\n"
+        );
+        assert_eq!(
+            shift_lrc("[length:03:00]\n[00:02.00]a\n", 1000, 0),
+            "[00:01.00]a\n",
+            "a length no more says how long the lines run"
+        );
+        assert_eq!(
+            shift_lrc("[length:03:00]\n[00:02.00]a\n", 0, 0),
+            "[length:03:00]\n[00:02.00]a\n"
+        );
+        assert_eq!(
+            shift_lrc("[00:01.00]a <tag> b\n", 0, 0),
+            "[00:01.00]a <tag> b\n"
+        );
+    }
+
+    #[test]
+    fn a_timed_line_of_no_words_ends_the_one_before_and_stays() {
+        let lrc = "[00:02.00]sung\n[00:08.00]\n[00:09.00]♪\n";
+        assert_eq!(clean_lrc(lrc), "[00:02.00]sung\n[00:08.00]\n");
+        assert_eq!(
+            timing(&clean_lrc(lrc)).map(|t| (t.lines, t.last_ms)),
+            Some((1, 2000))
+        );
     }
 
     #[test]

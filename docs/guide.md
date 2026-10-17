@@ -435,7 +435,9 @@ name: a PNG named `.jpg` is written as PNG, and a WebP converted.
 **Lyrics.** Only subtitles a person wrote count; generated captions
 never do. Lyrics from a source other than the chosen audio must be the
 same recording, and are shifted by the offset measured between the two,
-and stretched when one plays a little faster than the other.
+and stretched when one plays a little faster than the other; a word's
+time moves with its line's, and an `[offset:]` the file states is folded
+into every time it holds.
 Cues such as `[Music]`, symbol-only lines and credits are dropped. A
 `.lrc` with no audio of its own is taken as timed for the song; one that
 states its length, as LRCLIB's do, is trusted as far as that length

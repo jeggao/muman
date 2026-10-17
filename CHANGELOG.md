@@ -78,6 +78,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   it does not hold as written is told.
 - **A cover past 16 MiB is made smaller in every container**, not only
   in FLAC: a large PNG made ffmpeg drop every tag of a WavPack file.
+- **Lyrics move whole.** Moving lyrics to another cut of the
+  recording moved each line's time but not its words', which then came
+  before their own line; an `[offset:]` was kept for players to apply
+  and ignored where a line starts before the track; times were cut to
+  the hundredth rather than rounded; a `[length:]` no longer true was
+  kept; and a timed line of no words, which ends the line before it,
+  was dropped.
 - **A name that composes longer still fits.** A name was cut to its
   byte limit before it was composed into Unicode NFC, which can lengthen
   it, so a Devanagari title could pass 255 bytes and fail on every
