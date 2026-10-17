@@ -212,6 +212,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   only one mostly in Latin letters.
 - **M4B audiobooks, MP2, Speex, WMA and Sun `.au` files are audio** to
   `add`, which took them for files it does not read.
+- **A network that is down puts lookups off.** A lookup that reached no
+  server, its name not resolving, its connection refused or never
+  opening, or a proxy refusing to connect it, waited out its whole
+  timeout, as did every other due one after it, and each was recorded
+  failed, to wait an hour, doubling to a week. The first now puts its
+  provider's other lookups off to the next run, recorded as nothing, as
+  a refusal for going too fast does, and a connection waits at most
+  10 s to open. A service that answers with an error still fails that
+  lookup alone.
+- **A refusal holds back a request already given its turn.** A request
+  that took its turn before a service refused for going too fast still
+  went when the turn came; it now waits out the refusal too, and once a
+  service refuses or cannot be reached for the run, no request waiting
+  for its turn is sent.
 
 ## [0.4.1] - 2026-10-15
 

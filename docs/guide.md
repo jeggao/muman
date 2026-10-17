@@ -652,6 +652,11 @@ or by a date, and asks again up to three times; one asking for more
 than two minutes is refusing at once. A
 service still refusing after that leaves its remaining lookups for the
 next run, recorded as nothing, so none waits out a failure's backoff.
+So does a service muman cannot reach, as when the network is down: its
+name not resolving, its connection refused or not open within 10 s, or
+a proxy refusing to connect to it. One lookup finds that out, rather
+than each waiting out its timeout. A service that answers with an
+error, or with what muman cannot read, fails that lookup alone.
 Each request names muman and its repository in its user agent.
 
 ## Choosing songs and changing them

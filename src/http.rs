@@ -12,10 +12,22 @@
 //! A [`Service`] asks through its throttle: a 429 or a 503 is a refusal
 //! for going too fast, which holds every later request back, for as long
 //! as the server's `Retry-After` says when it says, and is asked again up
-//! to [`RETRIES`] times. A service still refusing after that is
-//! [`Refusing`], so a run puts its other lookups off to the next run
-//! rather than record each as failed. `Retry-After` is read in seconds
-//! or as the HTTP date RFC 9110 has servers send.
+//! to [`RETRIES`] times; a request given its turn before the refusal,
+//! still waiting for it, waits again once it comes. A service still
+//! refusing after that is [`Refusing`], so a run puts its other lookups
+//! off to the next run rather than record each as failed. `Retry-After`
+//! is read in seconds or as the HTTP date RFC 9110 has servers send.
+//!
+//! A request that reaches no server, its name not resolving, its
+//! connection refused or not open within [`CONNECT`], or a proxy failing
+//! to connect it, is [`Unreachable`]: the network is down, or the service
+//! is, and every other request would wait out its own timeout to fail
+//! alike, so it too puts the run's other lookups off. A server that
+//! answers, with an error, a body that does not read, or nothing before
+//! the timeout once connected, fails that request alone, so one request
+//! a service cannot answer never holds the others back run after run.
+//! Either way the throttle stops: a later request to the service in the
+//! run, one already waiting its turn too, fails alike without being sent.
 //!
 //! An error's body is kept only as far as `ERROR_EXCERPT`, whitespace
 //! run together: a failure is recorded and printed with it, and a
@@ -26,8 +38,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
 pub enum TransportError {
+    /// No answer in time from a server connected to.
     Timeout,
-    /// DNS, connection refused, TLS and the like.
+    /// No server reached: a name that does not resolve, a connection
+    /// refused or not open in time, a proxy that would not connect.
+    Unreachable(String),
+    /// TLS, a connection cut, a body that does not read and the like.
     Transport(String),
     /// The server answered with a status outside 2xx.
     Status {
@@ -42,6 +58,7 @@ impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeout => f.write_str("timed out"),
+            Self::Unreachable(e) => write!(f, "unreachable: {e}"),
             Self::Transport(e) => write!(f, "transport: {e}"),
             Self::Status { code, body, .. } => write!(f, "status {code}: {body}"),
         }
@@ -147,8 +164,11 @@ impl HttpTransport for UreqTransport {
         headers: &[(&str, &str)],
         timeout: Duration,
     ) -> Result<Vec<u8>, TransportError> {
+        let connect = CONNECT.min(timeout / 2);
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
+            .timeout_resolve(Some(connect))
+            .timeout_connect(Some(connect))
             .http_status_as_error(false)
             .build()
             .into();
@@ -156,11 +176,7 @@ impl HttpTransport for UreqTransport {
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
-        let mut response = match request.call() {
-            Ok(r) => r,
-            Err(ureq::Error::Timeout(_)) => return Err(TransportError::Timeout),
-            Err(e) => return Err(TransportError::Transport(e.to_string())),
-        };
+        let mut response = request.call().map_err(failure)?;
         let code = response.status().as_u16();
         if !(200..300).contains(&code) {
             let retry_after = response
@@ -189,6 +205,42 @@ impl HttpTransport for UreqTransport {
     }
 }
 
+/// The longest a connection may take to open, a proxy's CONNECT and the
+/// TLS handshake included, before the server counts as unreachable: on a
+/// working network it opens in well under a second.
+pub const CONNECT: Duration = Duration::from_secs(10);
+
+/// A call that failed, told by whether it reached a server: the phases
+/// before the request is sent each time out on their own, at most
+/// [`CONNECT`], so a timeout names its phase.
+fn failure(e: ureq::Error) -> TransportError {
+    use std::io::ErrorKind;
+    match e {
+        ureq::Error::Timeout(ureq::Timeout::Resolve | ureq::Timeout::Connect) => {
+            TransportError::Unreachable("the connection did not open in time".into())
+        }
+        ureq::Error::Timeout(_) => TransportError::Timeout,
+        ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed
+        | ureq::Error::ConnectProxyFailed(_)
+        | ureq::Error::InvalidProxyUrl => TransportError::Unreachable(e.to_string()),
+        // A name that does not resolve fails as an I/O error of no kind
+        // of its own; a connection made and then cut has one of these.
+        ureq::Error::Io(ref io)
+            if !matches!(
+                io.kind(),
+                ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            ) =>
+        {
+            TransportError::Unreachable(e.to_string())
+        }
+        e => TransportError::Transport(e.to_string()),
+    }
+}
+
 /// The largest body read: a cover at full size is a few MiB.
 const MAX_BODY: u64 = 64 << 20;
 
@@ -207,13 +259,30 @@ pub fn user_agent() -> String {
 
 /// Requests to one service spaced at least `gap` apart, whichever thread
 /// makes them, each taking the next free turn; a refusal for going too
-/// fast holds every later turn back.
+/// fast holds every later turn back, one taken already too, and a
+/// service refusing or unreachable for the run stops every request.
 #[derive(Debug)]
 pub struct Throttle {
     gap: Duration,
     backoff: Duration,
+    turns: Mutex<Turns>,
+}
+
+#[derive(Debug, Default)]
+struct Turns {
     /// When the next request may go.
-    next: Mutex<Option<Instant>>,
+    next: Option<Instant>,
+    /// Until when the last refusal holds requests back.
+    held: Option<Instant>,
+    /// Why the service is asked nothing more this run.
+    stopped: Option<Stop>,
+}
+
+/// Why a run asks a service nothing more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Stop {
+    Refusing,
+    Unreachable(String),
 }
 
 impl Throttle {
@@ -224,7 +293,7 @@ impl Throttle {
         Self {
             gap,
             backoff,
-            next: Mutex::new(None),
+            turns: Mutex::new(Turns::default()),
         }
     }
 
@@ -234,29 +303,57 @@ impl Throttle {
         Self::new(Duration::ZERO, Duration::ZERO)
     }
 
-    /// Wait for this request's turn.
-    pub fn wait(&self) {
-        let wait = self.take(Instant::now());
-        if !wait.is_zero() {
-            std::thread::sleep(wait);
+    fn turns(&self) -> std::sync::MutexGuard<'_, Turns> {
+        self.turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Wait for this request's turn, and again for a later one when a
+    /// refusal came while it waited; why the service is asked nothing
+    /// when it stopped.
+    fn wait(&self) -> Result<(), Stop> {
+        loop {
+            let wait = self.take(Instant::now())?;
+            if !wait.is_zero() {
+                std::thread::sleep(wait);
+            }
+            if self.ready(Instant::now())? {
+                return Ok(());
+            }
         }
     }
 
     /// Hold every later request back after the `times`th refusal in a row,
     /// at least as long as the server asked.
-    pub fn refused(&self, times: u32, asked: Option<Duration>) {
+    fn refused(&self, times: u32, asked: Option<Duration>) {
         self.hold(Instant::now(), times, asked);
     }
 
+    /// Ask the service nothing more this run; the first reason stays.
+    fn stop(&self, why: Stop) {
+        self.turns().stopped.get_or_insert(why);
+    }
+
     /// Take the next free turn at `now`; how long until it comes.
-    fn take(&self, now: Instant) -> Duration {
-        let mut next = self
-            .next
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let turn = next.map_or(now, |n| n.max(now));
-        *next = Some(turn + self.gap);
-        turn - now
+    fn take(&self, now: Instant) -> Result<Duration, Stop> {
+        let mut turns = self.turns();
+        if let Some(why) = &turns.stopped {
+            return Err(why.clone());
+        }
+        let turn = turns.next.map_or(now, |n| n.max(now));
+        turns.next = Some(turn + self.gap);
+        Ok(turn - now)
+    }
+
+    /// Whether a request whose turn has come at `now` may go: no refusal
+    /// since holds it back, and the service is not stopped.
+    fn ready(&self, now: Instant) -> Result<bool, Stop> {
+        let turns = self.turns();
+        if let Some(why) = &turns.stopped {
+            return Err(why.clone());
+        }
+        Ok(turns.held.is_none_or(|h| h <= now))
     }
 
     fn hold(&self, now: Instant, times: u32, asked: Option<Duration>) {
@@ -264,11 +361,10 @@ impl Throttle {
             .backoff
             .saturating_mul(1 << times.saturating_sub(1).min(16))
             .max(asked.unwrap_or_default().min(MAX_ASKED));
-        let mut next = self
-            .next
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *next = Some(next.map_or(now, |n| n.max(now)).max(now + pause));
+        let until = now + pause;
+        let mut turns = self.turns();
+        turns.held = Some(turns.held.map_or(until, |h| h.max(until)));
+        turns.next = Some(turns.next.map_or(now, |n| n.max(now)).max(until));
     }
 }
 
@@ -281,7 +377,7 @@ pub const RETRIES: u32 = 3;
 
 /// A service still refusing requests for going too fast after
 /// [`RETRIES`] tries.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Refusing {
     pub service: &'static str,
 }
@@ -293,6 +389,32 @@ impl std::fmt::Display for Refusing {
 }
 
 impl std::error::Error for Refusing {}
+
+/// A service no request reaches, and why.
+#[derive(Debug, Clone)]
+pub struct Unreachable {
+    pub service: &'static str,
+    pub why: String,
+}
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} cannot be reached ({})", self.service, self.why)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+/// A copy of `e` when the service failed rather than the request, as
+/// [`Refusing`] or [`Unreachable`]: the run asks that service nothing
+/// more, and records none of what it put off as failed.
+#[must_use]
+pub fn put_off(e: &anyhow::Error) -> Option<anyhow::Error> {
+    if let Some(r) = e.downcast_ref::<Refusing>() {
+        return Some(r.clone().into());
+    }
+    e.downcast_ref::<Unreachable>().map(|u| u.clone().into())
+}
 
 /// One service, asked through `transport` at the pace of `throttle`.
 #[derive(Clone, Copy)]
@@ -312,8 +434,10 @@ impl std::fmt::Debug for Service<'_> {
 
 impl Service<'_> {
     /// GET `url` on its turn, asking again after a refusal; `None` for a
-    /// 404, and [`Refusing`] when the refusals outlast the retries. Any
-    /// other failure is the [`TransportError`], in the context of `url`.
+    /// 404, [`Refusing`] when the refusals outlast the retries, and
+    /// [`Unreachable`] when no server is reached. Either of those stops
+    /// the throttle, so a request after it fails alike unsent. Any other
+    /// failure is the [`TransportError`], in the context of `url`.
     pub fn get(
         &self,
         url: &str,
@@ -322,7 +446,7 @@ impl Service<'_> {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let mut refused = 0;
         loop {
-            self.throttle.wait();
+            self.throttle.wait().map_err(|why| self.error(why))?;
             match self.transport.get(url, headers, timeout) {
                 Ok(body) => return Ok(Some(body)),
                 Err(TransportError::Status { code: 404, .. }) => return Ok(None),
@@ -332,13 +456,33 @@ impl Service<'_> {
                     ..
                 }) => {
                     if refused == RETRIES || retry_after.is_some_and(|a| a > MAX_ASKED) {
-                        return Err(Refusing { service: self.name }.into());
+                        return Err(self.stop(Stop::Refusing));
                     }
                     refused += 1;
                     self.throttle.refused(refused, retry_after);
                 }
+                Err(TransportError::Unreachable(why)) => {
+                    return Err(self.stop(Stop::Unreachable(why)));
+                }
                 Err(e) => return Err(anyhow::Error::new(e).context(url.to_string())),
             }
+        }
+    }
+
+    /// Stop the throttle for `why`, and say so.
+    fn stop(&self, why: Stop) -> anyhow::Error {
+        self.throttle.stop(why.clone());
+        self.error(why)
+    }
+
+    fn error(&self, why: Stop) -> anyhow::Error {
+        match why {
+            Stop::Refusing => Refusing { service: self.name }.into(),
+            Stop::Unreachable(why) => Unreachable {
+                service: self.name,
+                why,
+            }
+            .into(),
         }
     }
 
@@ -396,22 +540,175 @@ mod tests {
     #[test]
     fn a_throttle_spaces_turns_across_callers_and_holds_back_after_a_refusal() {
         let t = Throttle::new(Duration::from_secs(1), Duration::from_secs(2));
+        let take = |at| t.take(at).unwrap();
         let start = Instant::now();
-        assert_eq!(t.take(start), Duration::ZERO);
-        assert_eq!(t.take(start), Duration::from_secs(1));
-        assert_eq!(t.take(start), Duration::from_secs(2));
+        assert_eq!(take(start), Duration::ZERO);
+        assert_eq!(take(start), Duration::from_secs(1));
+        assert_eq!(take(start), Duration::from_secs(2));
         let later = start + Duration::from_secs(10);
-        assert_eq!(t.take(later), Duration::ZERO, "an idle gap is not saved up");
+        assert_eq!(take(later), Duration::ZERO, "an idle gap is not saved up");
         t.hold(later, 2, None);
-        assert_eq!(t.take(later), Duration::from_secs(4));
-        assert_eq!(t.take(later), Duration::from_secs(5));
+        assert_eq!(take(later), Duration::from_secs(4));
+        assert_eq!(take(later), Duration::from_secs(5));
         let after = later + Duration::from_secs(60);
         t.hold(after, 1, Some(Duration::from_secs(30)));
         assert_eq!(
-            t.take(after),
+            take(after),
             Duration::from_secs(30),
             "the server's wait is kept"
         );
+    }
+
+    #[test]
+    fn a_turn_given_before_a_refusal_waits_out_its_hold() {
+        let t = Throttle::new(Duration::from_secs(1), Duration::from_secs(5));
+        let start = Instant::now();
+        assert_eq!(t.take(start), Ok(Duration::ZERO));
+        assert_eq!(t.take(start), Ok(Duration::from_secs(1)));
+        t.hold(start, 1, None);
+        let turn = start + Duration::from_secs(1);
+        assert_eq!(t.ready(turn), Ok(false), "the refusal came after the turn");
+        assert_eq!(t.take(turn), Ok(Duration::from_secs(4)));
+        assert_eq!(t.ready(start + Duration::from_secs(5)), Ok(true));
+    }
+
+    /// Answers `/a` with a 503 once, slowly, and everything else at once;
+    /// says when `/a` is first asked, and keeps when each was.
+    struct Slow {
+        asked: Mutex<Vec<(String, Instant)>>,
+        entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    }
+
+    impl HttpTransport for Slow {
+        fn get(
+            &self,
+            url: &str,
+            _: &[(&str, &str)],
+            _: Duration,
+        ) -> Result<Vec<u8>, TransportError> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((url.to_string(), Instant::now()));
+            if url.ends_with("/a")
+                && let Some(entered) = self.entered.lock().unwrap().take()
+            {
+                entered.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+                return Err(TransportError::Status {
+                    code: 503,
+                    body: String::new(),
+                    retry_after: None,
+                });
+            }
+            Ok(b"ok".to_vec())
+        }
+    }
+
+    #[test]
+    fn a_request_waiting_its_turn_is_held_back_by_a_refusal_meanwhile() {
+        let (entered, first) = std::sync::mpsc::channel();
+        let slow = Slow {
+            asked: Mutex::new(Vec::new()),
+            entered: Mutex::new(Some(entered)),
+        };
+        let throttle = Throttle::new(Duration::from_millis(300), Duration::from_secs(1));
+        let service = Service {
+            name: "Lumo Lyrics",
+            transport: &slow,
+            throttle: &throttle,
+        };
+        let start = Instant::now();
+        std::thread::scope(|s| {
+            s.spawn(|| service.get("http://lyrics.test/a", &[], Duration::from_secs(1)));
+            first.recv().unwrap();
+            s.spawn(|| service.get("http://lyrics.test/b", &[], Duration::from_secs(1)));
+        });
+        let asked = slow.asked.lock().unwrap();
+        let (_, b) = asked.iter().find(|(u, _)| u.ends_with("/b")).unwrap();
+        assert!(
+            b.duration_since(start) >= Duration::from_millis(900),
+            "asked {:?} after the start, inside the hold",
+            b.duration_since(start)
+        );
+    }
+
+    /// Fails every request as reaching no server, counting them.
+    #[derive(Default)]
+    struct Down {
+        asked: Mutex<usize>,
+    }
+
+    impl HttpTransport for Down {
+        fn get(&self, _: &str, _: &[(&str, &str)], _: Duration) -> Result<Vec<u8>, TransportError> {
+            *self.asked.lock().unwrap() += 1;
+            Err(TransportError::Unreachable("connection refused".into()))
+        }
+    }
+
+    #[test]
+    fn a_call_that_reached_no_server_is_told_from_one_that_did() {
+        use std::io::{Error, ErrorKind};
+        let unreachable = |e| matches!(failure(e), TransportError::Unreachable(_));
+        assert!(unreachable(ureq::Error::HostNotFound));
+        assert!(unreachable(ureq::Error::ConnectProxyFailed(
+            "proxy server responded 503/Service Unavailable".into()
+        )));
+        assert!(unreachable(ureq::Error::Io(
+            ErrorKind::ConnectionRefused.into()
+        )));
+        assert!(unreachable(ureq::Error::Io(Error::other(
+            "failed to lookup address information"
+        ))));
+        assert!(unreachable(ureq::Error::Timeout(ureq::Timeout::Connect)));
+        assert!(matches!(
+            failure(ureq::Error::Timeout(ureq::Timeout::RecvResponse)),
+            TransportError::Timeout
+        ));
+        assert!(matches!(
+            failure(ureq::Error::Io(ErrorKind::ConnectionReset.into())),
+            TransportError::Transport(_)
+        ));
+    }
+
+    #[test]
+    fn a_service_unreachable_or_refusing_is_asked_nothing_more_in_the_run() {
+        let down = Down::default();
+        let throttle = Throttle::none();
+        let service = Service {
+            name: "Lumo Lyrics",
+            transport: &down,
+            throttle: &throttle,
+        };
+        for _ in 0..2 {
+            let e = service
+                .get("http://lyrics.test/a", &[], Duration::from_secs(1))
+                .unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                "Lumo Lyrics cannot be reached (connection refused)"
+            );
+            assert!(put_off(&e.context("asking")).is_some());
+        }
+        assert_eq!(*down.asked.lock().unwrap(), 1, "the second is not sent");
+
+        let transport = Scripted {
+            script: Mutex::new(vec![429; 4]),
+            retry_after: None,
+        };
+        let throttle = Throttle::none();
+        let service = Service {
+            name: "Lumo Lyrics",
+            transport: &transport,
+            throttle: &throttle,
+        };
+        let ask = || service.get("http://lyrics.test/a", &[], Duration::from_secs(1));
+        assert!(ask().unwrap_err().downcast_ref::<Refusing>().is_some());
+        assert!(
+            ask().unwrap_err().downcast_ref::<Refusing>().is_some(),
+            "the server would answer now, but is not asked"
+        );
+        assert!(put_off(&self::ask(&[500], None).unwrap_err()).is_none());
     }
 
     /// Answers each request with the next of `script`, then 200.

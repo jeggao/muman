@@ -17,9 +17,12 @@
 //! | Found a source, or declined | Never |
 //!
 //! A lookup a service refused for going too fast, after the retries
-//! [`crate::http::Service`] makes, is recorded as nothing at all: it and
-//! the provider's other lookups that run, in its later rounds too, are put
-//! off to the next run.
+//! [`crate::http::Service`] makes, or that reached no server, as when the
+//! network is down ([`crate::http::Unreachable`]), is recorded as nothing
+//! at all: it and the provider's other lookups that run, in its later
+//! rounds too, are put off to the next run, rather than each waiting out
+//! its timeout and then a failure's backoff. A service that answered with
+//! an error, or with what does not read, failed that lookup alone.
 //!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Its MusicBrainz lookup
@@ -49,9 +52,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::Path;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
-use crate::http::{HttpTransport, Refusing, Throttle};
+use crate::http::{self, HttpTransport, Throttle};
 use anyhow::{Context, Result, anyhow};
 
 use crate::acoustid;
@@ -298,10 +301,7 @@ enum Hit {
 fn again(hit: &Result<Hit>) -> Result<Hit> {
     match hit {
         Ok(h) => Ok(h.clone()),
-        Err(e) => match e.downcast_ref::<Refusing>() {
-            Some(r) => Err(Refusing { service: r.service }.into()),
-            None => Err(anyhow!("{e:#}")),
-        },
+        Err(e) => Err(http::put_off(e).unwrap_or_else(|| anyhow!("{e:#}"))),
     }
 }
 
@@ -348,17 +348,6 @@ impl Throttles {
             coverart: Throttle::none(),
             releases: musicbrainz::Releases::default(),
         }
-    }
-}
-
-/// What a provider's service is called when it refuses.
-fn service_of(p: Provider) -> &'static str {
-    match p {
-        Provider::Lrclib => "LRCLIB",
-        Provider::MusicBrainz => "MusicBrainz",
-        Provider::AcoustId => "AcoustID",
-        Provider::CoverArt => "the Cover Art Archive",
-        _ => "YouTube",
     }
 }
 
@@ -479,10 +468,10 @@ fn join(
 
 /// What a run has made of its lookups across its rounds, and so what a
 /// round may still make: each provider's lookups against its `per_run`,
-/// the lookups each source has made, and the providers that refused. A
-/// round asks [`ThisRun::admit`] alone, so a song makes at most one lookup
-/// per provider a run, a refusing provider is asked nothing more, and
-/// `per_run` counts the whole run.
+/// the lookups each source has made, and the providers whose service
+/// refused or could not be reached. A round asks [`ThisRun::admit`] alone,
+/// so a song makes at most one lookup per provider a run, such a provider
+/// is asked nothing more, and `per_run` counts the whole run.
 #[derive(Debug, Default)]
 struct ThisRun {
     made: BTreeMap<Provider, usize>,
@@ -515,7 +504,8 @@ impl ThisRun {
         admitted
     }
 
-    /// `provider` refused for going too fast: nothing more is asked of it.
+    /// `provider`'s service refused for going too fast, or could not be
+    /// reached: nothing more is asked of it.
     fn refused(&mut self, provider: Provider) {
         self.refusing.insert(provider);
     }
@@ -660,14 +650,11 @@ pub fn run<R: Runner, W: Write>(
                 })
                 .collect();
             let asking: Vec<usize> = (0..group.len()).filter(|i| first[*i] == *i).collect();
-            let refusing = AtomicBool::new(false);
+            let stopped: OnceLock<anyhow::Error> = OnceLock::new();
             let asked = parallel::map(&asking, workers, |&i| {
                 let d = group[i];
-                if refusing.load(Ordering::Relaxed) {
-                    return Err(Refusing {
-                        service: service_of(p),
-                    }
-                    .into());
+                if let Some(e) = stopped.get().and_then(http::put_off) {
+                    return Err(e);
                 }
                 let _working = step.working(&reconcile::name_of(
                     &manifest.songs[d.song],
@@ -694,11 +681,8 @@ pub fn run<R: Runner, W: Write>(
                     // at once would write one file.
                     &audio.join(format!("{}-{}", d.song, d.find)),
                 );
-                if hit
-                    .as_ref()
-                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
-                {
-                    refusing.store(true, Ordering::Relaxed);
+                if let Some(e) = hit.as_ref().err().and_then(http::put_off) {
+                    let _ = stopped.set(e);
                 }
                 hit
             });
@@ -715,9 +699,7 @@ pub fn run<R: Runner, W: Write>(
 
         let printed = hits.iter().any(|(d, hit)| {
             matches!(d.find, Provider::AcoustId | Provider::MusicBrainz)
-                && !hit
-                    .as_ref()
-                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
+                && !hit.as_ref().is_err_and(|e| http::put_off(e).is_some())
         });
         let mut replaced = Vec::new();
         let mut joined = 0_usize;
@@ -728,16 +710,17 @@ pub fn run<R: Runner, W: Write>(
                 resolved.get(&d.song).copied(),
                 &state.facts,
             );
+            if let Err(e) = &hit
+                && let Some(why) = http::put_off(e)
+            {
+                put_off.entry(d.find).or_insert((0, why.to_string())).0 += 1;
+                continue;
+            }
             let outcome = match hit {
                 // No yt-dlp fails every lookup alike; the run stops and
                 // says so, rather than putting each song off for a week.
                 Err(e) if e.downcast_ref::<crate::runner::MissingTool>().is_some() => {
                     return Err(e);
-                }
-                Err(e) if e.downcast_ref::<Refusing>().is_some() => {
-                    let entry = put_off.entry(d.find).or_insert((0, e.to_string()));
-                    entry.0 += 1;
-                    continue;
                 }
                 Err(e) => {
                     crate::ui::warning(

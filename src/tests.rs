@@ -1473,6 +1473,45 @@ fn lookups_a_refusing_service_left_wait_for_the_next_run_unrecorded() {
 }
 
 #[test]
+fn lookups_on_a_network_that_is_down_wait_for_the_next_run_unrecorded() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let down = Server {
+        unreachable: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&down, &["sync"]);
+    assert!(
+        text.contains(
+            "LRCLIB cannot be reached (connection refused): 2 lookup(s) on lrclib wait for the next run"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("lookup failed"), "{text}");
+    let asked = down
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/"))
+        .count();
+    assert!(
+        asked <= 2,
+        "one request per lookup under way at most: {asked}"
+    );
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(state.lookups.is_empty(), "{:?}", state.lookups);
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics from LRCLIB"),
+        "asked again at once: {text}"
+    );
+}
+
+#[test]
 fn a_song_lrclib_lacks_is_not_asked_again_for_a_week() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

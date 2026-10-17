@@ -269,12 +269,14 @@ pub mod testing {
 
     /// Answers each GET from the first record whose path fragment the
     /// URL holds; 404 for any other. A `refusing` server answers every
-    /// GET with a 429.
+    /// GET with a 429, and an `unreachable` one is never reached, as on
+    /// a network that is down.
     #[derive(Debug, Default)]
     pub struct Server {
         pub answers: Vec<(String, Vec<u8>)>,
         pub asked: Mutex<Vec<String>>,
         pub refusing: bool,
+        pub unreachable: bool,
     }
 
     impl Server {
@@ -299,6 +301,9 @@ pub mod testing {
         ) -> Result<Vec<u8>, TransportError> {
             assert!(headers.iter().any(|(k, _)| *k == "User-Agent"));
             self.asked.lock().unwrap().push(url.to_string());
+            if self.unreachable {
+                return Err(TransportError::Unreachable("connection refused".into()));
+            }
             if self.refusing {
                 return Err(TransportError::Status {
                     code: 429,
