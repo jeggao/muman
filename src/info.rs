@@ -5,6 +5,13 @@
 //! is read leniently: a value of a type a field does not hold loses that
 //! field alone, never the file, whose title, IDs and page say which
 //! source it is.
+//!
+//! As yt-dlp writes it, it also holds what each request of the fetch
+//! sent: the cookies, a login among them when `[ytdlp] args` passes
+//! `--cookies` or `--cookies-from-browser`, and the HTTP headers, at the
+//! top and again in each format and thumbnail. A source keeps none of
+//! them ([`without_sent`]), so a home backed up or a source handed on
+//! carries no login; muman reads none of them.
 
 use std::collections::BTreeMap;
 
@@ -135,7 +142,7 @@ pub const TAG_FIELDS: [&str; 19] = [
 ];
 
 /// The digest of [`TAG_FIELDS`] in an info JSON, as they are there:
-/// the rest of it changes on every fetch, as its time and cookies do.
+/// the rest of it changes on every fetch, as its time does.
 #[must_use]
 pub fn tags_digest(json: &[u8]) -> Option<String> {
     let all: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(json).ok()?;
@@ -144,6 +151,37 @@ pub fn tags_digest(json: &[u8]) -> Option<String> {
         .filter(|(k, v)| TAG_FIELDS.contains(&k.as_str()) && !v.is_null())
         .collect();
     Some(crate::facts::digest(&serde_json::to_vec(&read).ok()?))
+}
+
+/// The fields of an info JSON, at any depth, holding what a request
+/// sent.
+const SENT: [&str; 2] = ["cookies", "http_headers"];
+
+/// `json` without the fields of [`SENT`], or `None` when it holds none
+/// or does not read.
+#[must_use]
+pub fn without_sent(json: &[u8]) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(json).ok()?;
+    if !drop_sent(&mut value) {
+        return None;
+    }
+    serde_json::to_vec(&value).ok()
+}
+
+/// Drop the fields of [`SENT`] from `value` and all it holds; whether
+/// any was there.
+fn drop_sent(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let mut dropped = false;
+            for key in SENT {
+                dropped |= fields.remove(key).is_some();
+            }
+            fields.values_mut().fold(dropped, |d, v| drop_sent(v) | d)
+        }
+        serde_json::Value::Array(items) => items.iter_mut().fold(false, |d, v| drop_sent(v) | d),
+        _ => false,
+    }
 }
 
 /// A field's value, or its default when it holds another type.
@@ -283,6 +321,32 @@ mod tests {
 
     fn info(json: &str) -> VideoInfo {
         parse(json.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn what_a_request_sent_is_dropped_and_nothing_read_is() {
+        let fetched = r#"{"id": "vid00000001", "title": "Lantern Weather", "epoch": 1,
+            "cookies": "sess=TOKEN-0001; Domain=.video.test",
+            "http_headers": {"User-Agent": "Agent/1", "Authorization": "TOKEN-0002"},
+            "muman_original_url": "https://video.test/v/vid00000001",
+            "formats": [{"format_id": "251", "filesize": 100, "acodec": "opus",
+                "cookies": "sess=TOKEN-0001", "http_headers": {"Referer": "https://video.test/"}}],
+            "thumbnails": [{"url": "https://video.test/t.jpg", "http_headers": {"Cookie": "TOKEN-0003"}}]}"#;
+        let kept = without_sent(fetched.as_bytes()).unwrap();
+        let text = String::from_utf8(kept.clone()).unwrap();
+        for sent in ["TOKEN-", "cookies", "http_headers", "User-Agent"] {
+            assert!(!text.contains(sent), "{sent} in {text}");
+        }
+        assert_eq!(tags_digest(&kept), tags_digest(fetched.as_bytes()));
+        let i = parse(&kept).unwrap();
+        assert_eq!(i.title.as_deref(), Some("Lantern Weather"));
+        assert_eq!(
+            i.muman_original_url.as_deref(),
+            Some("https://video.test/v/vid00000001")
+        );
+        assert_eq!(i.formats[0].filesize, Some(100));
+        assert_eq!(without_sent(&kept), None, "nothing left to drop");
+        assert_eq!(without_sent(b"not json"), None);
     }
 
     #[test]

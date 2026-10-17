@@ -108,6 +108,12 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         "the URL list and download archive handed to yt-dlp, in scratch",
     ),
     (
+        "download.rs",
+        2,
+        "a file just fetched or copied in, written again without the cookies \
+         and headers of its info JSON, that JSON kept in scratch",
+    ),
+    (
         "editor.rs",
         1,
         "the file the editor is opened on, in scratch",

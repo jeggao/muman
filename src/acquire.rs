@@ -113,6 +113,15 @@ impl Fetcher<'_> {
             .unwrap_or_default();
         let mut arrived = Vec::new();
         for mut f in fetched.drain(..) {
+            if let Err(e) = download::scrub(runner, &f.path, self.temp) {
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "{} keeps the cookies and headers it was fetched with: {e:#}",
+                        f.path.display()
+                    ),
+                )?;
+            }
             match crate::store::place(self.store, &f.key, &f.path) {
                 Ok(path) => {
                     f.path = path;

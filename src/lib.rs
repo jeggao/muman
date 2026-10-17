@@ -1146,6 +1146,7 @@ fn import<R: Runner, W: Write>(
     let mut originals_in = Originals {
         held: Store::scan(dirs)?,
         brought: BTreeSet::new(),
+        runner,
     };
     for path in paths.iter().map(Path::new) {
         let name = path
@@ -1256,15 +1257,17 @@ fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<
 
 /// The originals one `add` copies into the store, and the store as it
 /// was before.
-struct Originals {
+struct Originals<'a, R> {
     held: Store,
     brought: BTreeSet<SourceKey>,
+    runner: &'a R,
 }
 
-impl Originals {
+impl<R: Runner> Originals<'_, R> {
     /// `file`, an original of `key`, copied to its key's place, whether
-    /// given or in a folder given; one of a key the store holds already
-    /// is proposed, not copied again.
+    /// given or in a folder given, its info JSON scrubbed as a fetch's
+    /// is; one of a key the store holds already is proposed, not copied
+    /// again.
     fn bring<W: Write>(
         &mut self,
         dirs: &Dirs,
@@ -1289,6 +1292,17 @@ impl Originals {
                 out,
                 &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
             )?;
+            let scrubbed =
+                atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
+            if let Err(e) = scrubbed {
+                ui::warning(
+                    out,
+                    &format!(
+                        "{} keeps the cookies and headers it was fetched with: {e:#}",
+                        to.display()
+                    ),
+                )?;
+            }
             self.brought.insert(key.clone());
         }
         Ok(Proposal {

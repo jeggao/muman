@@ -232,6 +232,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   now waits an hour, doubling, until it is found again or `sync --retry`
   asks at once. One whose service refuses or cannot be reached waits for
   the next run, as a lookup does, and is not counted as failed.
+- **A fetched source keeps no cookies or headers.** The info JSON yt-dlp
+  embeds in each file held the cookies and HTTP headers its requests
+  sent, a login passed with `--cookies` or `--cookies-from-browser` in
+  `[ytdlp] args` among them; each file fetched, or given to `add` as one
+  yt-dlp fetched, is now written once more without them. Sources fetched
+  before are left as they are, cookies and all: `purge` deletes only
+  sources no song uses, so to clean one, delete its file and the next
+  `sync` fetches it again without them, its song warning if the site
+  now serves other audio or tags.
 
 ## [0.4.1] - 2026-10-15
 

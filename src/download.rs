@@ -9,13 +9,28 @@
 //! its uploader is called by then; a finished one is renamed into the
 //! store's staging folder rather than copied, and from there to its
 //! key's place ([`crate::store::place`]).
+//!
+//! The info JSON yt-dlp embeds holds the cookies and headers its
+//! requests sent ([`crate::info`]), and no yt-dlp option leaves them out
+//! of the formats it lists, which muman reads. So each finished file is
+//! [`scrub`]bed before it is placed: its info JSON dumped, those fields
+//! dropped, and the file remuxed once with the JSON put back in its
+//! place. A remux keeps every stream's packets, pictures and chapters, so
+//! nothing a source is measured or known by changes. A file whose JSON
+//! holds none of them, or none at all, is left as it is.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
+use serde::Deserialize;
+
+use crate::runner::Runner;
 use crate::settings::Ytdlp;
 use crate::sites::Sites;
 use crate::source::SourceKey;
+use crate::{ffmpeg, info, probe};
 
 /// `<extractor>/<id>.mkv`: what names a download the same every time it
 /// is tried, nothing a site may rename.
@@ -232,6 +247,126 @@ pub fn finished(done: &str, sites: &Sites) -> Vec<Fetched> {
         .collect()
 }
 
+/// One stream of a file being scrubbed, as ffprobe lists it.
+#[derive(Debug, Default, Deserialize)]
+struct Stream {
+    index: usize,
+    #[serde(default)]
+    codec_type: String,
+    #[serde(default)]
+    disposition: BTreeMap<String, u8>,
+    #[serde(default)]
+    tags: BTreeMap<String, String>,
+}
+
+impl Stream {
+    fn tag(&self, key: &str) -> Option<&str> {
+        self.tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Streams {
+    #[serde(default)]
+    streams: Vec<Stream>,
+}
+
+/// Drop what the fetch's requests sent from the info JSON embedded in
+/// the Matroska file at `path`, its scratch in `scratch`; whether the
+/// file was written again.
+///
+/// ffmpeg reads a JPEG or PNG attachment as a picture stream, which a
+/// copy would write back as a video track, so each is dumped by its
+/// packet, its bytes as they are, and attached again as it was.
+pub fn scrub<R: Runner>(runner: &R, path: &Path, scratch: &Path) -> Result<bool> {
+    let probed: Streams = serde_json::from_slice(&runner.output(&probe::ffprobe_command(path))?)
+        .context("parsing ffprobe JSON")?;
+    let attachments: Vec<&Stream> = probed
+        .streams
+        .iter()
+        .filter(|s| s.codec_type == "attachment")
+        .collect();
+    let Some(ordinal) = attachments.iter().position(|s| {
+        s.tag("filename")
+            .is_some_and(|f| f.eq_ignore_ascii_case("info.json"))
+    }) else {
+        return Ok(false);
+    };
+    let pictures: Vec<&Stream> = probed
+        .streams
+        .iter()
+        .filter(|s| s.disposition.get("attached_pic") == Some(&1))
+        .collect();
+    let scratch = scratch.join("scrub");
+    std::fs::create_dir_all(&scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let json = scratch.join("info.json");
+    let dumped: Vec<PathBuf> = (0..pictures.len())
+        .map(|n| scratch.join(format!("picture-{n}")))
+        .collect();
+    let mut dump = ffmpeg::dump_command(&[(path, vec![(ordinal, json.clone())])]);
+    let at = dump.iter().position(|a| a == "-map").unwrap_or(dump.len());
+    let packets = pictures.iter().zip(&dumped).flat_map(|(p, to)| {
+        [
+            "-map".into(),
+            format!("0:{}", p.index).into(),
+            "-c".into(),
+            "copy".into(),
+            "-f".into(),
+            "data".into(),
+            to.as_os_str().to_os_string(),
+        ]
+    });
+    dump.splice(at..at, packets.collect::<Vec<OsString>>());
+    runner.run(&dump)?;
+    let read = std::fs::read(&json).with_context(|| format!("reading {}", json.display()))?;
+    let Some(kept) = info::without_sent(&read) else {
+        return Ok(false);
+    };
+    std::fs::write(&json, kept).with_context(|| format!("writing {}", json.display()))?;
+
+    let mut cmd = ffmpeg::base();
+    cmd.push("-i".into());
+    cmd.push(path.as_os_str().to_os_string());
+    cmd.extend(["-map", "0"].map(OsString::from));
+    for dropped in std::iter::once(attachments[ordinal]).chain(pictures.iter().copied()) {
+        cmd.push("-map".into());
+        cmd.push(format!("-0:{}", dropped.index).into());
+    }
+    // As yt-dlp copies a file it fetched: a data stream, as an MP4's
+    // chapter track, does not go into Matroska.
+    cmd.extend(["-dn", "-ignore_unknown", "-c", "copy"].map(OsString::from));
+    let attach = std::iter::once((json.as_path(), "application/json", "info.json")).chain(
+        pictures.iter().zip(&dumped).map(|(p, to)| {
+            (
+                to.as_path(),
+                p.tag("mimetype").unwrap_or("image/jpeg"),
+                p.tag("filename").unwrap_or("cover.jpg"),
+            )
+        }),
+    );
+    for (n, (file, mimetype, filename)) in attach.enumerate() {
+        let specifier = format!("-metadata:s:t:{}", attachments.len() - 1 + n);
+        cmd.push("-attach".into());
+        cmd.push(file.as_os_str().to_os_string());
+        cmd.push(specifier.clone().into());
+        cmd.push(format!("mimetype={mimetype}").into());
+        cmd.push(specifier.into());
+        cmd.push(format!("filename={filename}").into());
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".scrubbed");
+    let to = path.with_file_name(name);
+    cmd.extend(["-f", "matroska"].map(OsString::from));
+    cmd.push(to.as_os_str().to_os_string());
+    runner.run(&cmd)?;
+    crate::atomic::rename(&to, path)
+        .with_context(|| format!("moving {} to {}", to.display(), path.display()))?;
+    Ok(true)
+}
+
 /// A `--download-archive` naming every key in `keys`, so a playlist's
 /// videos already kept are skipped without being looked at.
 #[must_use]
@@ -383,6 +518,59 @@ mod tests {
             value_after(&cmd, "--parse-metadata"),
             vec![&OsString::from("original_url:(?P<muman_original_url>.+)")]
         );
+    }
+
+    /// A fetch's streams: audio, its info JSON, a JPEG cover ffmpeg reads
+    /// as a picture, and a WebP one it leaves an attachment.
+    const FETCHED: &str = r#"{"streams": [
+        {"index": 0, "codec_type": "audio", "codec_name": "opus"},
+        {"index": 1, "codec_type": "attachment", "tags": {"filename": "info.json", "mimetype": "application/json"}},
+        {"index": 2, "codec_type": "video", "codec_name": "mjpeg", "disposition": {"attached_pic": 1},
+         "tags": {"filename": "cover.jpg", "mimetype": "image/jpeg"}},
+        {"index": 3, "codec_type": "attachment", "tags": {"filename": "cover.webp", "mimetype": "image/webp"}}
+    ]}"#;
+
+    #[test]
+    fn a_fetched_file_keeps_no_cookie_or_header_and_every_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("vid00000001.mkv");
+        std::fs::write(&file, b"mkv").unwrap();
+        let fake = crate::testing::Fake::default()
+            .probe("vid00000001", FETCHED)
+            .info(
+                "vid00000001",
+                r#"{"id": "vid00000001", "title": "Lantern Weather", "cookies": "sess=TOKEN-0001",
+                    "formats": [{"format_id": "251", "http_headers": {"Cookie": "TOKEN-0001"}}]}"#,
+            );
+        assert!(scrub(&fake, &file, dir.path()).unwrap());
+        let attached = fake.attached.lock().unwrap();
+        assert!(!attached[0].contains("TOKEN"), "{attached:?}");
+        assert!(attached[0].contains("Lantern Weather"), "{attached:?}");
+        let remux = fake
+            .calls()
+            .into_iter()
+            .find(|c| c.iter().any(|a| a == "-attach"))
+            .unwrap()
+            .join(" ");
+        assert!(remux.contains("-map 0 -map -0:1 -map -0:2 "), "{remux}");
+        assert!(
+            remux.contains(
+                "-metadata:s:t:1 mimetype=application/json -metadata:s:t:1 filename=info.json"
+            ),
+            "{remux}"
+        );
+        assert!(
+            remux
+                .contains("-metadata:s:t:2 mimetype=image/jpeg -metadata:s:t:2 filename=cover.jpg"),
+            "{remux}"
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), b"mkv");
+
+        let clean = crate::testing::Fake::default()
+            .probe("vid00000001", FETCHED)
+            .info("vid00000001", r#"{"id": "vid00000001"}"#);
+        assert!(!scrub(&clean, &file, dir.path()).unwrap());
+        assert!(clean.attached.lock().unwrap().is_empty());
     }
 
     #[test]

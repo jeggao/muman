@@ -371,6 +371,57 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
 }
 
 #[test]
+fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
+    let s = Setup::new();
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    let fake = Fake {
+        on_stream: Some(Box::new(move |args: &[String]| {
+            let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
+            let path = store.join(".incoming/Youtube/aaaaaaaaaaa.mkv");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"mkv").unwrap();
+            std::fs::write(
+                done,
+                format!(
+                    "Youtube aaaaaaaaaaa {}\n",
+                    serde_json::to_string(&path).unwrap()
+                ),
+            )
+            .unwrap();
+            true
+        })),
+        ..Fake::default()
+    }
+    .info(
+        "aaaaaaaaaaa",
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song",
+            "cookies": "SID=TOKEN-0001", "http_headers": {"User-Agent": "Agent/1"}}"#,
+    );
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        ],
+    );
+    assert!(ok, "{text}");
+    let attached = fake.attached.lock().unwrap();
+    assert_eq!(attached.len(), 1, "{text}");
+    assert!(
+        !attached[0].contains("TOKEN") && !attached[0].contains("Agent/1"),
+        "{attached:?}"
+    );
+    assert!(
+        s.dir
+            .path()
+            .join("home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv")
+            .exists(),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
     let s = Setup::new();
     s.written(

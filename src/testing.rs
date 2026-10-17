@@ -80,6 +80,9 @@ pub struct Fake {
     #[allow(clippy::type_complexity)]
     pub on_stream: Option<Box<dyn Fn(&[String]) -> bool + Sync>>,
     pub calls: Mutex<Vec<Vec<String>>>,
+    /// The first file each run that attaches one attached, as text; the
+    /// run copies its input whole.
+    pub attached: Mutex<Vec<String>>,
 }
 
 fn find<'a, T>(table: &'a [(String, T)], path: &str) -> Option<&'a T> {
@@ -381,6 +384,17 @@ impl Runner for Fake {
             .filter(|(f, _)| *f == "-i")
             .map(|(_, p)| p.clone())
             .collect();
+        if let Some(at) = args.iter().position(|a| a == "-attach") {
+            self.attached
+                .lock()
+                .unwrap()
+                .push(fs::read_to_string(&args[at + 1])?);
+            fs::copy(
+                &inputs[0],
+                args.last().map(String::as_str).unwrap_or_default(),
+            )?;
+            return Ok(());
+        }
         if args.iter().any(|a| a.starts_with("-dump_attachment")) {
             for (i, a) in args.iter().enumerate() {
                 if !a.starts_with("-dump_attachment") {
