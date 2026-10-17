@@ -17,6 +17,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   as text or a `null` among a video's artists made muman ignore all of
   yt-dlp's info JSON, so the file was added as a manual source with no
   tags; now only that field is lost.
+- **Subtitles in a legacy encoding keep every line.** An `.srt` or
+  `.vtt` given to `add` in an encoding other than UTF-8, as Windows-1252
+  or Shift-JIS, lost each cue ffmpeg could not read as UTF-8; it is
+  decoded as lyrics files are before it is converted.
 
 ## [0.4.1] - 2026-10-15
 

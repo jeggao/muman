@@ -795,6 +795,25 @@ fn ids_of(tags: &Tags) -> BTreeSet<String> {
         .collect()
 }
 
+/// The subtitles at `path` converted to LRC at `lrc`, its bytes. ffmpeg
+/// reads subtitles as UTF-8 and drops each cue that is not, so they reach
+/// it as the text [`lyrics::decode`] makes of them, written beside `lrc`.
+fn subtitles_as_lrc<R: Runner>(runner: &R, path: &Path, lrc: &Path) -> Result<Vec<u8>> {
+    let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let scratch = lrc.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    let name = crate::atomic::Name::new(format!("subtitles.{}", extension(path)))?;
+    crate::atomic::write(scratch, &name, lyrics::decode(&raw).as_bytes())?;
+    let args: Vec<std::ffi::OsString> = facts::LRC_ARGS.iter().map(Into::into).collect();
+    let output = crate::ffmpeg::Output::new(args, lrc);
+    let decoded = scratch.join(name.as_str());
+    let ran = crate::ffmpeg::run_outputs(runner, &[&decoded], std::slice::from_ref(&output));
+    if !ran.into_iter().all(|r| r.is_ok()) {
+        bail!("{} reads as no subtitles", path.display());
+    }
+    std::fs::read(lrc).with_context(|| format!("reading {}", lrc.display()))
+}
+
 /// Read `path` into what it asks, converting subtitles to LRC in
 /// `scratch`.
 fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> Result<Item> {
@@ -817,16 +836,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
         What::Lyrics => {
             let text = if matches!(extension(path).as_str(), "srt" | "vtt") {
                 let lrc = scratch.join(format!("{}.lrc", clues.stem.len()));
-                let args: Vec<std::ffi::OsString> =
-                    facts::LRC_ARGS.iter().map(Into::into).collect();
-                let output = crate::ffmpeg::Output::new(args, &lrc);
-                let ran =
-                    crate::ffmpeg::run_outputs(runner, &[path], std::slice::from_ref(&output));
-                if !ran.into_iter().all(|r| r.is_ok()) {
-                    bail!("{} reads as no subtitles", path.display());
-                }
-                let converted =
-                    std::fs::read(&lrc).with_context(|| format!("reading {}", lrc.display()))?;
+                let converted = subtitles_as_lrc(runner, path, &lrc)?;
                 clues.digest = Some(facts::digest(&converted));
                 let text = lyrics::decode(&converted);
                 bytes = Some(converted);
