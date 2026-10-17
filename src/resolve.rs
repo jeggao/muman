@@ -213,7 +213,9 @@ impl Format {
         match codec.adapt(&shape) {
             Some(adapt) => Self::Encode {
                 codec,
-                kbps: settings.kbps(codec, shape.channels),
+                kbps: settings
+                    .kbps(codec, shape.channels)
+                    .map(|k| codec.kbps_at(k, shape.sample_rate)),
                 adapt,
                 mix: None,
             },
@@ -245,7 +247,9 @@ impl Format {
             .unwrap_or((Codec::WavPack, None));
         Self::Encode {
             codec,
-            kbps: settings.kbps(codec, shape.channels),
+            kbps: settings
+                .kbps(codec, shape.channels)
+                .map(|k| codec.kbps_at(k, shape.sample_rate)),
             adapt,
             mix,
         }
@@ -1210,6 +1214,18 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
             cleaned: artist.cleaned,
         };
         insert_in_order(written, Field::AlbumArtist, slot);
+    }
+    // Several artists are written joined, and listed as Picard lists them.
+    if get(written, Field::Artists).is_none()
+        && artists.len() > 1
+        && let Some(artist) = get(written, Field::Artist)
+    {
+        let slot = Slot {
+            values: artists.to_vec(),
+            from: artist.from,
+            cleaned: artist.cleaned,
+        };
+        insert_in_order(written, Field::Artists, slot);
     }
     if get(written, Field::Album).is_none()
         && let Some(title) = get(written, Field::Title)

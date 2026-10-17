@@ -252,6 +252,11 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
     };
     assert_eq!(get("TITLE").as_deref(), Some("Song (feat. Wren)"));
     assert_eq!(get("ARTIST").as_deref(), Some("Hoshi7ne, Hollis Wren"));
+    assert_eq!(
+        get("ARTISTS").as_deref(),
+        Some("Hoshi7ne|Hollis Wren"),
+        "listed as Picard lists them"
+    );
     assert_eq!(get("ALBUM").as_deref(), Some("Record"));
     assert_eq!(get("ALBUMARTIST").as_deref(), Some("Hoshi7ne"));
     assert_eq!(get("DATE").as_deref(), Some("2026-05-27"));
@@ -1364,7 +1369,7 @@ fn audio_a_codec_cannot_hold_is_written_in_one_that_can() {
             24,
             false,
             &*AUDIO,
-            encoded(Codec::WavPack, None),
+            encoded(Codec::WavPack, Some(Adapt::Depth(24))),
         ),
     ];
     for (codec, channels, layout, bits, float, settings, format) in cases {

@@ -284,6 +284,10 @@ pub enum Adapt {
     Discrete,
     /// Resampled to this rate.
     Resample(u32),
+    /// Written as samples of this many bits, as the source's integers
+    /// are: WavPack is given 24-bit audio as 32-bit samples, and names it
+    /// so unless told.
+    Depth(u32),
 }
 
 /// The Vorbis layouts by channel count, the ones Opus holds.
@@ -431,7 +435,22 @@ impl Codec {
                 r if r % 11_025 == 0 => Some(Adapt::Resample(44_100)),
                 _ => Some(Adapt::Resample(48_000)),
             }),
-            Self::WavPack => Some(None),
+            Self::WavPack => Some(
+                (!shape.float && (17..32).contains(&shape.bits))
+                    .then_some(Adapt::Depth(shape.bits)),
+            ),
+        }
+    }
+
+    /// `kbps` as this codec encodes audio at `sample_rate`: MP3 holds at
+    /// most 64 kb/s below 16 kHz and 160 below 32 kHz, the bitrates of
+    /// MPEG-2.5 and MPEG-2, and LAME writes no more whatever it is asked.
+    #[must_use]
+    pub fn kbps_at(self, kbps: u32, sample_rate: u32) -> u32 {
+        match self {
+            Self::Mp3 if sample_rate < 16_000 => kbps.min(64),
+            Self::Mp3 if sample_rate < 32_000 => kbps.min(160),
+            _ => kbps,
         }
     }
 
@@ -523,6 +542,9 @@ impl Codec {
             }
             Some(Adapt::Discrete) => args.extend(["-mapping_family", "255"].map(String::from)),
             Some(Adapt::Resample(rate)) => args.extend(["-ar".to_string(), rate.to_string()]),
+            Some(Adapt::Depth(bits)) => {
+                args.extend(["-bits_per_raw_sample".to_string(), bits.to_string()]);
+            }
             None => {}
         }
         if !filters.is_empty() {
@@ -598,9 +620,10 @@ mod tests {
     #[test]
     fn a_lossless_codec_takes_only_what_it_keeps_whole() {
         let stereo = shape(2, Some("stereo"), 24, false);
-        for codec in [Codec::Flac, Codec::Alac, Codec::WavPack] {
+        for codec in [Codec::Flac, Codec::Alac] {
             assert_eq!(codec.adapt(&stereo), Some(None), "{codec}");
         }
+        assert_eq!(Codec::WavPack.adapt(&stereo), Some(Some(Adapt::Depth(24))));
         let wide = shape(12, Some("7.1.4"), 24, false);
         let deep = shape(2, Some("stereo"), 32, false);
         let float = shape(2, Some("stereo"), 32, true);
@@ -612,7 +635,8 @@ mod tests {
         }
         assert_eq!(Codec::Flac.adapt(&side), Some(None));
         assert_eq!(Codec::Alac.adapt(&side), None);
-        for held in [&wide, &deep, &float, &side] {
+        assert_eq!(Codec::WavPack.adapt(&wide), Some(Some(Adapt::Depth(24))));
+        for held in [&deep, &float, &side] {
             assert_eq!(Codec::WavPack.adapt(held), Some(None));
         }
     }
@@ -662,6 +686,37 @@ mod tests {
                 "{codec}"
             );
         }
+    }
+
+    #[test]
+    fn wavpack_is_told_the_depth_of_its_integers() {
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 24, false)),
+            Some(Some(Adapt::Depth(24)))
+        );
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 16, false)),
+            Some(None)
+        );
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 32, true)),
+            Some(None)
+        );
+        assert!(
+            Codec::WavPack
+                .encoder_args(None, Some(Adapt::Depth(24)), None, Chain::default())
+                .windows(2)
+                .any(|w| w == ["-bits_per_raw_sample", "24"])
+        );
+    }
+
+    #[test]
+    fn mp3_is_planned_at_the_bitrate_its_rate_holds() {
+        assert_eq!(Codec::Mp3.kbps_at(320, 11_025), 64);
+        assert_eq!(Codec::Mp3.kbps_at(320, 22_050), 160);
+        assert_eq!(Codec::Mp3.kbps_at(128, 22_050), 128);
+        assert_eq!(Codec::Mp3.kbps_at(320, 44_100), 320);
+        assert_eq!(Codec::Opus.kbps_at(320, 8_000), 320);
     }
 
     #[test]

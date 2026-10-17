@@ -195,6 +195,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   was never seen, and the song was written without one; it is read
   from the atom. Sources measured before keep what they had until they
   are measured again.
+- **Several artists are listed in `ARTISTS`** as Picard lists them,
+  beside `ARTIST`, which holds them joined; the list was lost.
+- **An MP3 of a low sample rate is planned at the bitrate it holds**:
+  64 kb/s below 16 kHz and 160 below 32 kHz, which LAME writes whatever
+  it is asked, so `max_size` counts what is written.
+- **24-bit audio in WavPack is named 24-bit.** It was named 32-bit,
+  as ffmpeg hands it to the encoder; its samples were whole either way.
+  Only such songs are encoded again.
 - **A cover is looked up after the release it is of.** The Cover Art
   Archive was asked in the same round as AcoustID and MusicBrainz,
   before the song had a release's IDs, so it searched for the album by
