@@ -135,6 +135,46 @@ fn segments_stay_inside_the_recording() {
 }
 
 #[test]
+fn segments_that_fell_silent_are_taken_where_it_sounds() {
+    let mut sounding = vec![true; 10];
+    sounding.extend([false; 30]);
+    let starts = sounding_starts(&sounding).unwrap();
+    assert!(
+        starts
+            .iter()
+            .all(|s| s + quality::SEGMENT_SECONDS / 2.0 <= 10.0),
+        "{starts:?}"
+    );
+    assert_eq!(sounding_starts(&[false; 40]), None);
+    let late = [vec![false; 300], vec![true; 3]].concat();
+    assert_eq!(
+        sounding_starts(&late).unwrap(),
+        [303.0 - quality::SEGMENT_SECONDS],
+        "a hidden track at the end"
+    );
+}
+
+#[test]
+fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let mut f = Facts::unreadable(source.rev());
+    f.method = before_sound();
+    f.audio = Some(AudioFacts {
+        quality: Some(AudioQuality {
+            bandwidth_hz: 20_000.0,
+            incoherence: 0.5,
+            clipping: 0.0,
+            bits: 16,
+        }),
+        ..AudioFacts::default()
+    });
+    assert!(f.holds_for(&source.rev()));
+    f.audio.as_mut().unwrap().quality = None;
+    assert!(!f.holds_for(&source.rev()), "measured again");
+}
+
+#[test]
 fn facts_round_trip_through_json() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");

@@ -5,7 +5,11 @@
 //! Audio is measured on short excerpts at a quarter, half and three
 //! quarters of its length, decoded at the source's own rate, every channel
 //! as it is: a mix into two would add channels into clipping that none of
-//! them holds, and cancel channels in opposite phase.
+//! them holds, and cancel channels in opposite phase. Where all three fall
+//! in silence, as on a track whose song ends long before a hidden one, they
+//! are taken again at a quarter, half and three quarters of the seconds
+//! that sound, as the whole decode of [`crate::analysis`] found them, so a
+//! source with any sound is never judged to have none.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
 //!   highest band standing 20 dB above all bands past a short guard, the
@@ -56,7 +60,10 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/7";
+pub const METHOD: &str = "quality/8";
+/// The method before excerpts that all fell silent were placed again in
+/// what sounds: what it measured holds, unless it found no sound.
+pub const BEFORE_SOUND: &str = "quality/7";
 
 /// Seconds of audio measured at each of [`SEGMENTS`].
 pub const SEGMENT_SECONDS: f64 = 8.0;
@@ -96,8 +103,9 @@ const WALL_DB: f64 = 20.0;
 /// can fall nearly as steeply as a lowpass: with a 15 dB wall, soft piano
 /// showed walls at 1 to 1.3 kHz.
 const WALL_MIN_HZ: f64 = 2000.0;
-/// Frames quieter than this RMS, about -60 dBFS, say nothing of bandwidth.
-const SILENT_RMS: f64 = 1e-3;
+/// Frames quieter than this RMS, about -60 dBFS, say nothing of bandwidth,
+/// and a second of the whole decode this quiet holds no sound.
+pub const SILENT_RMS: f64 = 1e-3;
 /// Energy no gain and lag between the channels explains, below this share,
 /// is a mono source in two channels. On the recordings `WALL_DB` was
 /// calibrated on, stereo ones, the 78 rpm transfers among them, left 0.19

@@ -144,6 +144,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   typed only "other" is no cover beside one typed the front cover. A
   picture named as its song is a front whatever the song's name, as
   `Back Home.jpg` beside `Back Home.flac`.
+- **A source whose sound sits away from its middle is measured.**
+  Audio was judged on three short excerpts at a quarter, half and three
+  quarters of its length, and a track whose song ends long before a
+  hidden one, all three silent, was judged to have no sound and ranked
+  after every other source. Where all three fall silent they are taken
+  again where the whole decode found sound; sources judged soundless
+  before are measured once again.
 - **A cover is looked up after the release it is of.** The Cover Art
   Archive was asked in the same round as AcoustID and MusicBrainz,
   before the song had a release's IDs, so it searched for the album by

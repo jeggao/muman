@@ -71,6 +71,17 @@ pub fn method() -> String {
     )
 }
 
+/// [`method`] before excerpts that fell silent were taken again: facts it
+/// made hold, unless they found no sound.
+fn before_sound() -> String {
+    format!(
+        "{}+{}+{}",
+        quality::BEFORE_SOUND,
+        fingerprint::METHOD,
+        probe::METHOD
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Facts {
     /// The revision of the files they were measured on.
@@ -145,7 +156,12 @@ impl Facts {
         // Facts recorded before revisions held change times hold while
         // the sizes and modification times do, as they did then.
         let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
-        same && self.method == method()
+        same && (self.method == method() || self.method == before_sound() && !self.soundless())
+    }
+
+    /// Whether its audio measured no sound to judge.
+    fn soundless(&self) -> bool {
+        self.audio.as_ref().is_some_and(|a| a.quality.is_none())
     }
 
     /// What a plan names its audio by: its digest, or, where it has
@@ -806,6 +822,29 @@ fn segment_starts(duration: Option<f64>) -> Vec<f64> {
         .collect()
 }
 
+/// Where segments start that sound, by the seconds of a whole decode that
+/// do: centred on the seconds at [`quality::SEGMENTS`]' shares of them,
+/// within the audio. `None` where no second sounds.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn sounding_starts(sounding: &[bool]) -> Option<Vec<f64>> {
+    let sound: Vec<usize> = (0..sounding.len()).filter(|&s| sounding[s]).collect();
+    let last = sound.len().checked_sub(1)?;
+    let latest = (sounding.len() as f64 - quality::SEGMENT_SECONDS).max(0.0);
+    let mut starts: Vec<f64> = quality::SEGMENTS
+        .iter()
+        .map(|share| {
+            let second = sound[(last as f64 * share).round() as usize] as f64;
+            (second + 0.5 - quality::SEGMENT_SECONDS / 2.0).clamp(0.0, latest)
+        })
+        .collect();
+    starts.dedup();
+    Some(starts)
+}
+
 /// What one ffmpeg output measures, to read back once it ran.
 enum Measured {
     OpusHead,
@@ -1066,6 +1105,7 @@ fn media<R: Runner>(
         said: probed.audio.as_ref().and_then(|a| a.duration),
         timeline,
     };
+    let sounding = pass.sounding();
     let analysis = with_opus_gain(pass.finish(&found), opus_gain);
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
@@ -1079,7 +1119,14 @@ fn media<R: Runner>(
         &probed.audio,
     ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
     {
-        segments = measure_segments(runner, located, a, ends, scratch);
+        segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+    }
+    // Excerpts that all fell in silence are taken again where it sounds.
+    if let Some(a) = &probed.audio
+        && quality::audio(&segments, a.sample_rate, headroom).is_none()
+        && let Some(starts) = sounding_starts(&sounding)
+    {
+        segments = measure_segments(runner, located, a, &starts, scratch);
     }
     facts.unkept = unkept(&located.path);
     facts.audio = probed.audio.map(|a| AudioFacts {
@@ -1185,16 +1232,16 @@ fn cuesheet_emphasis(block: &[u8]) -> bool {
     false
 }
 
-/// The segments of a source's audio `held` seconds long, decoded again
-/// where its audio stream said it ran longer.
+/// The segments of a source's audio from `starts`, decoded again: where
+/// its audio stream said it ran longer than it holds, or where the first
+/// segments all fell in silence.
 fn measure_segments<R: Runner>(
     runner: &R,
     located: &Located,
     audio: &probe::Audio,
-    held: f64,
+    starts: &[f64],
     scratch: &Path,
 ) -> Vec<quality::Segment> {
-    let starts = segment_starts(Some(held));
     let inputs: Vec<Input> = starts
         .iter()
         .map(|start| Input::new(quality::segment_input(*start), &located.path))
