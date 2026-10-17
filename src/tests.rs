@@ -173,6 +173,56 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
 }
 
 #[test]
+fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    std::fs::write(&song, crate::testing::SILENCE_FLAC).unwrap();
+    let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push(TagItem::new(
+        ItemKey::TrackTitle,
+        ItemValue::Text("Song".into()),
+    ));
+    tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+    tag.save_to_path(Path::new(&song), WriteOptions::default())
+        .unwrap();
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    let written = s.dir.path().join("lib/Unknown Artist/Song/Song.lrc");
+    assert_eq!(
+        std::fs::read_to_string(&written).ok().as_deref(),
+        Some(lrc),
+        "{text}"
+    );
+
+    let home = s.dir.path().join("home");
+    let key = SourceKey::Manual("Song.flac".into());
+    let own = |state: &State| {
+        state.facts[&key]
+            .lyrics
+            .iter()
+            .any(|l| l.at == crate::facts::LyricsAt::Tag)
+    };
+    let mut state = State::load(&home).unwrap();
+    let facts = state.facts.get_mut(&key).unwrap();
+    facts.lyrics.clear();
+    facts.tags_method = String::new();
+    state.save(&home).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        ok && text.contains("Reading the tags of 1 source(s)"),
+        "{text}"
+    );
+    assert!(
+        own(&State::load(&home).unwrap()),
+        "facts made before learn them"
+    );
+}
+
+#[test]
 fn tags_given_to_add_are_set_on_the_song_and_written() {
     let s = Setup::new();
     let song = s.file("rips/Song.flac");

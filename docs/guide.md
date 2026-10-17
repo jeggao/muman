@@ -461,7 +461,11 @@ never do. Lyrics from a source other than the chosen audio must be the
 same recording, and are shifted by the offset measured between the two,
 and stretched when one plays a little faster than the other; a word's
 time moves with its line's, and an `[offset:]` the file states is folded
-into every time it holds.
+into every time it holds. A song file's own lyrics tag, `USLT` in an MP3,
+`LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A or
+`Lyrics` in APEv2, is lyrics of that source, timed when its text is
+LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not list
+ranks after those in a language it does.
 Cues such as `[Music]` or `(Guitar solo)`, symbol-only lines and the
 credits before the first line sung or after the last are dropped; a
 line in brackets of other words is sung, as a backing vocal is. A

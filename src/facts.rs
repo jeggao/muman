@@ -34,6 +34,11 @@
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
 //!
+//! A media file's own lyrics tag, as `USLT` or `LYRICS`, is lyrics of
+//! that source ([`LyricsAt::Tag`]), read by `lofty` with its tags and
+//! known by the digest of its text; facts made before muman read it
+//! learn it when their tags are read again, by [`retag`].
+//!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the graymap its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
@@ -400,6 +405,9 @@ pub enum LyricsAt {
     Sidecar,
     /// The source is the `.lrc`.
     File,
+    /// The lyrics tag a media file holds, as `USLT` or `LYRICS`
+    /// ([`tags::lyrics_in`]).
+    Tag,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -543,10 +551,13 @@ pub struct Reread {
     pub tags: Offers,
     pub release: bool,
     pub chapters: Vec<Chapter>,
+    /// The lyrics its tags hold.
+    pub lyrics: Option<LyricsFacts>,
 }
 
-/// The tags of one located source, read again with its chapters: a media
-/// file's are probed, its pictures not dumped nor anything measured.
+/// The tags of one located source, read again with its chapters and the
+/// lyrics its tags hold: a media file's are probed, its pictures not
+/// dumped nor anything measured.
 pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<Reread> {
     match located.kind {
         Kind::Media => {}
@@ -566,6 +577,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
         tags: tags_of(info.as_ref(), &probed, &located.path),
         release: info.as_ref().is_some_and(VideoInfo::is_release),
         chapters: probed.chapters,
+        lyrics: tag_lyrics(located),
     })
 }
 
@@ -589,6 +601,12 @@ pub fn relyric<R: Runner>(
             }
             LyricsAt::Sidecar => located.lyrics.as_deref(),
             LyricsAt::File => Some(located.path.as_path()),
+            LyricsAt::Tag => {
+                if let Some(l) = tag_lyrics(located) {
+                    found.push((LyricsAt::Tag, l.sings_any()));
+                }
+                continue;
+            }
         };
         if let Some(text) = file.and_then(|f| read_text(f).ok()) {
             found.push((place.clone(), sings(&text)));
@@ -658,6 +676,19 @@ fn read_text(path: &Path) -> Result<String> {
         anyhow::bail!("{} holds no text", path.display());
     }
     Ok(text)
+}
+
+/// The lyrics a media file's own tags hold, measured as any lyrics are,
+/// in the language a `USLT` frame names, and known by their text's
+/// digest.
+#[must_use]
+pub fn tag_lyrics(located: &Located) -> Option<LyricsFacts> {
+    let (text, language) = tags::lyrics_in(&located.path)?;
+    Some(LyricsFacts {
+        language: language.map_or(Language::Unstated, Language::Tag),
+        digest: Some(digest(text.as_bytes())),
+        ..lyrics_of(LyricsAt::Tag, &text)
+    })
 }
 
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
@@ -1008,6 +1039,9 @@ pub fn hash<R: Runner>(
         }
     }
     file_digests(located, &probed, scratch, &mut digests);
+    if let Some(d) = tag_lyrics(located).and_then(|l| l.digest) {
+        digests.lyrics.push((LyricsAt::Tag, d));
+    }
     digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     Ok((digests, info.as_ref().and_then(Served::of)))
 }
@@ -1164,6 +1198,12 @@ fn media<R: Runner>(
     // Lyrics beside a song that do not read cost the song only them.
     if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
         facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
+    }
+    if let Some(l) = tag_lyrics(located) {
+        digests
+            .lyrics
+            .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));
+        facts.lyrics.push(l);
     }
     // Segments placed by a length the packets fall short of read nothing.
     if let (Some(Damage::Cut { ends, .. }), Some(a)) = (

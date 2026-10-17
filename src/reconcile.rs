@@ -269,6 +269,8 @@ fn retag<R: Runner, W: Write>(
                     f.release = read.release;
                     f.chapters = read.chapters;
                     f.tags_method = tags::METHOD.to_string();
+                    f.lyrics.retain(|l| l.at != facts::LyricsAt::Tag);
+                    f.lyrics.extend(read.lyrics);
                 }
             }
             Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,

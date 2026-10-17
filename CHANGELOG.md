@@ -81,6 +81,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An MP3 with a date of no calendar can be tagged again.** A date
   that is none, written into an MP3, made every later change to the
   song's tags fail.
+- **A song file's own lyrics are its lyrics.** Lyrics a source holds in
+  its tags, `USLT` in MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis
+  comment, `©lyr` in M4A and `Lyrics` in APEv2, were never read, so a
+  song whose only lyrics were embedded was written without any. They
+  are lyrics of that source, ranked as any are, timed when they are
+  LRC, in the language a `USLT` frame names. Every source's tags are
+  read again once to find them.
 - **Sung lines in brackets or shaped as credits are kept.** Any line
   wholly in parentheses was dropped as a cue, and any line starting
   `Music by`, `Mix:` or the like as a credit, so backing vocals and

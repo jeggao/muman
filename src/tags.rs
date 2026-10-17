@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::clean;
 use crate::info::VideoInfo;
 
-/// Names how a source's tags are read. Tags read by another are read
-/// again, without measuring the source again, so changing what a file
-/// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/9";
+/// Names how a source's tags, and the lyrics among a file's, are read.
+/// Tags read by another are read again, without measuring the source
+/// again, so changing what a file or an info JSON offers means changing
+/// this.
+pub const METHOD: &str = "tags/10";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1423,6 +1424,40 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
     Some(tags)
 }
 
+/// The lyrics a file's own tags hold, as `lofty` reads them: `USLT` in
+/// `ID3v2`, `LYRICS` or else `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr`
+/// in MP4 and `Lyrics` in APEv2; with the ISO 639-2 language a `USLT`
+/// frame names, unless it names none, as `XXX` or `und`.
+#[must_use]
+pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::{ItemKey, ItemValue};
+
+    let file = read_tagged(path).ok()?;
+    let primary = file.primary_tag().map(lofty::tag::Tag::tag_type);
+    let mut ordered: Vec<&lofty::tag::Tag> = file.tags().iter().collect();
+    ordered.sort_by_key(|t| Some(t.tag_type()) != primary);
+    [ItemKey::Lyrics, ItemKey::UnsyncLyrics]
+        .iter()
+        .find_map(|key| {
+            ordered
+                .iter()
+                .flat_map(|t| t.items())
+                .filter(|i| i.key() == *key)
+                .find_map(|i| match i.value() {
+                    ItemValue::Text(text) if !text.trim().is_empty() => Some((text, i.lang())),
+                    _ => None,
+                })
+        })
+        .map(|(text, lang)| {
+            let lang = String::from_utf8_lossy(lang).to_ascii_lowercase();
+            let named = lang.len() == 3
+                && lang.bytes().all(|b| b.is_ascii_lowercase())
+                && !matches!(lang.as_str(), "xxx" | "und" | "zxx" | "mis" | "mul");
+            (text.clone(), named.then_some(lang))
+        })
+}
+
 /// The fields a file's own frames, atoms or items hold, read as
 /// [`TABLE`] names where each is written, by its Vorbis name: what
 /// `lofty`'s generic tag reads not, or not whole, as a `TXXX` or a
@@ -2232,6 +2267,69 @@ mod tests {
         assert_eq!(o[&Field::Track].values, ["7"]);
         assert_eq!(o[&Field::TrackTotal].values, ["12"]);
         assert!(read_file(&dir.path().join("none.flac")).is_none());
+    }
+
+    #[test]
+    fn a_file_s_own_lyrics_are_read_with_the_language_a_uslt_frame_names() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+        let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+        let dir = tempfile::tempdir().unwrap();
+        let formats = [
+            (
+                "a.flac",
+                crate::testing::SILENCE_FLAC,
+                TagType::VorbisComments,
+                ItemKey::Lyrics,
+            ),
+            (
+                "a.opus",
+                crate::testing::SILENCE_OPUS,
+                TagType::VorbisComments,
+                ItemKey::UnsyncLyrics,
+            ),
+            (
+                "a.m4a",
+                crate::testing::SILENCE_M4A,
+                TagType::Mp4Ilst,
+                ItemKey::Lyrics,
+            ),
+            (
+                "a.wv",
+                crate::testing::SILENCE_WV,
+                TagType::Ape,
+                ItemKey::Lyrics,
+            ),
+            (
+                "a.mp3",
+                crate::testing::SILENCE_MP3,
+                TagType::Id3v2,
+                ItemKey::UnsyncLyrics,
+            ),
+            (
+                "b.mp3",
+                crate::testing::SILENCE_MP3,
+                TagType::Id3v2,
+                ItemKey::UnsyncLyrics,
+            ),
+        ];
+        for (name, bytes, kind, key) in formats {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            assert_eq!(lyrics_in(&path), None, "{name}");
+            let mut tag = Tag::new(kind);
+            let mut item = TagItem::new(key, ItemValue::Text(lrc.into()));
+            item.set_lang(if name == "a.mp3" { *b"jpn" } else { *b"XXX" });
+            tag.push(item);
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            let language = (name == "a.mp3").then(|| "jpn".to_string());
+            assert_eq!(
+                lyrics_in(&path),
+                Some((lrc.to_string(), language)),
+                "{name}"
+            );
+        }
     }
 
     #[test]

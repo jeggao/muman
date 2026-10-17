@@ -61,6 +61,12 @@
 //! timed lines win over untimed or missing ones. A `.lrc` that states no
 //! length is taken as timed for the song.
 //!
+//! A media file's own lyrics tag is lyrics of that source, timed when
+//! its text is LRC. One in a language no preference names, as a `USLT`
+//! frame marked `jpn` where only `en` is preferred, ranks after every
+//! preferred language rather than not at all: a subtitle is one of many a
+//! site offers, but a file's own lyrics are what someone chose to keep.
+//!
 //! The release fields, album, album artist, track, disc, date, totals,
 //! country and release IDs, come from the one source whose album ranks
 //! best, so an album's tracks never split across folders and a release's
@@ -945,7 +951,9 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         };
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
-            let Some(preference) = lyrics::preference(input.lyrics, &l.language) else {
+            let Some(preference) = lyrics::preference(input.lyrics, &l.language).or_else(|| {
+                (l.at == LyricsAt::Tag && !input.lyrics.is_empty()).then_some(input.lyrics.len())
+            }) else {
                 continue;
             };
             let confidence = match l.stated_ms {

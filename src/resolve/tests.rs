@@ -1514,6 +1514,38 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
+fn a_file_s_own_lyrics_in_a_language_not_preferred_rank_after_the_preferred() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    lyrics(&mut f, LyricsAt::Tag, "ja", 12);
+    f.lyrics[0].language = Language::Tag("jpn".into());
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert_eq!(
+        r.plan.lyrics.map(|l| l.at),
+        Some(LyricsAt::Tag),
+        "{:?}",
+        r.why
+    );
+    assert!(
+        r.plan
+            .tags
+            .contains(&("LANGUAGE".into(), vec!["jpn".into()]))
+    );
+
+    f.lyrics[0].at = LyricsAt::Stream { index: 2 };
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert!(r.plan.lyrics.is_none(), "a subtitle in another language");
+
+    f.lyrics[0].at = LyricsAt::Tag;
+    lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(r.plan.lyrics.map(|l| l.at), Some(LyricsAt::Sidecar));
+}
+
+#[test]
 fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
     let key = manual("x");
     let mut f = audio("flac", 1.0);

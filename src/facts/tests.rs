@@ -105,6 +105,34 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
 }
 
 #[test]
+fn a_file_s_own_lyrics_tag_is_lyrics_of_it_measured_hashed_and_read_again() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    std::fs::write(&source.path, crate::testing::SILENCE_FLAC).unwrap();
+    let lrc = "[00:01.00]first invented line\n[00:03.00][Chorus]\n[00:05.00]last line\n";
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+    tag.save_to_path(&source.path, WriteOptions::default())
+        .unwrap();
+    let fake = Fake::default().probe("Song.flac", FLAC);
+    let scratch = dir.path().join("scratch");
+    let facts = gather(&fake, &source, &scratch, &[]).unwrap();
+    let own = facts.lyrics.iter().find(|l| l.at == LyricsAt::Tag).unwrap();
+    assert_eq!(own.timing.unwrap().lines, 2, "the cue is no lyric");
+    assert_eq!(own.language, Language::Unstated);
+    assert!(own.digest.is_some());
+    let (digests, _) = hash(&fake, &source, &scratch).unwrap();
+    assert_eq!(digests.lyrics(&LyricsAt::Tag), own.digest);
+    let again = retag(&fake, &source, &scratch).unwrap().lyrics;
+    assert_eq!(again.as_ref(), Some(own));
+    let found = relyric(&fake, &source, &[LyricsAt::Tag], &scratch).unwrap();
+    assert_eq!(found, [(LyricsAt::Tag, true)]);
+}
+
+#[test]
 fn a_failed_measure_costs_only_itself() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");

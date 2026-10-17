@@ -712,10 +712,15 @@ fn lyrics_plan(
         outputs.push(Output::new(args, raw));
         return Ok(None);
     }
-    let file = lyrics_file(&lyrics.at, source)
-        .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
-    let text =
-        lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
+    let text = if lyrics.at == LyricsAt::Tag {
+        crate::tags::lyrics_in(&source.path)
+            .ok_or_else(|| anyhow!("the lyrics in {} are gone", source.path.display()))?
+            .0
+    } else {
+        let file = lyrics_file(&lyrics.at, source)
+            .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
+        lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?)
+    };
     Ok(Some(lyrics::shift_lrc(
         &lyrics::clean_lrc(&text),
         lyrics.shift_ms,
@@ -723,11 +728,11 @@ fn lyrics_plan(
     )))
 }
 
-/// The file lyrics at `at` of `source` are read from; none for a stream,
-/// or lyrics beside it that are gone.
+/// The file lyrics at `at` of `source` are read from; none for a stream
+/// or a tag, or lyrics beside it that are gone.
 pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
     match at {
-        LyricsAt::Stream { .. } => None,
+        LyricsAt::Stream { .. } | LyricsAt::Tag => None,
         LyricsAt::Sidecar => source.lyrics.clone(),
         LyricsAt::File => Some(source.path.clone()),
     }
