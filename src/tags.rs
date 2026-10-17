@@ -1002,7 +1002,12 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 pub(crate) fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    lofty::probe::Probe::open(path)?
+    let mut probe = lofty::probe::Probe::open(path)?;
+    // A file being written, as `song.opus.part`, is known by its bytes.
+    if probe.file_type().is_none() {
+        probe = probe.guess_file_type()?;
+    }
+    probe
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
 }

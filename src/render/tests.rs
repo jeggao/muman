@@ -442,6 +442,9 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
             adapt: None,
             mix: None,
         },
+        Format::Copy {
+            codec: Codec::WavPack,
+        },
     ];
     for format in formats {
         let f = fixture();
@@ -461,7 +464,16 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         let tag = file.primary_tag().unwrap();
         assert_eq!(tag.title().as_deref(), Some("Paper Comets"), "{format:?}");
         assert_eq!(tag.artist().as_deref(), Some("A, B"), "{format:?}");
-        assert_eq!(tag.pictures().len(), 1, "{format:?}: the cover stays");
+        assert!(
+            again.problems.is_empty(),
+            "{format:?}: {:?}",
+            again.problems
+        );
+        let pictures = match format.codec() {
+            Codec::WavPack => usize::from(ape_cover(&library.join(&again.audio)).is_some()),
+            _ => tag.pictures().len(),
+        };
+        assert_eq!(pictures, 1, "{format:?}: the cover stays");
         let lyrics = tag
             .get_string(ItemKey::Lyrics)
             .or_else(|| tag.get_string(ItemKey::UnsyncLyrics));
@@ -760,4 +772,39 @@ fn a_total_with_no_place_is_kept_where_a_place_cannot_hold_it() {
         id3.get_text(&lofty::id3::v2::FrameId::new("TRCK").unwrap())
             .is_none()
     );
+}
+
+#[test]
+fn a_cover_or_a_tag_the_file_does_not_hold_as_written_is_told() {
+    let (_dir, path) = written(crate::testing::SILENCE_WV, "song.wv");
+    let tags = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
+    let format = Format::Copy {
+        codec: Codec::WavPack,
+    };
+    write_tags(&path, format, &tags, Some(cover())).unwrap();
+    assert_eq!(verify(&path, &tags, true), Vec::<String>::new());
+    write_tags(&path, format, &tags, None).unwrap();
+    assert_eq!(verify(&path, &tags, true), ["cover not held as written"]);
+    let more = vec![
+        ("TITLE".to_string(), vec!["Lantern Weather".to_string()]),
+        ("ALBUM".to_string(), vec!["Glass Orchards".to_string()]),
+    ];
+    assert_eq!(
+        verify(&path, &more, false),
+        ["tags not held as written: ALBUM"]
+    );
+}
+
+#[test]
+fn a_cover_too_large_for_any_container_is_made_smaller() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.png");
+    let mut bytes = crate::testing::PIXEL.to_vec();
+    bytes.resize(FLAC_BLOCK + 1, 0);
+    fs::write(&path, &bytes).unwrap();
+    let huge = read_picture(&path, MimeType::Png).unwrap();
+    let fake = Fake::default();
+    let fitted = fit_cover(&fake, huge, &path, dir.path()).unwrap();
+    assert!(fitted.data().len() <= FLAC_BLOCK);
+    assert!(fake.ran("mjpeg"));
 }

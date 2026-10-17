@@ -31,10 +31,18 @@
 //! The cover is a front-cover picture: a JPEG or PNG without borders as
 //! its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
-//! metadata block holds at most 16 MiB, so a cover past it is made a JPEG
-//! at most 3000 pixels wide, and lyrics past it are not embedded. Lyrics are
-//! cleaned of cues, symbols and credits and moved by the plan's offset;
-//! lyrics from a `.lrc` file need no ffmpeg at all.
+//! metadata block holds at most 16 MiB, as does the same block in Ogg,
+//! and ffmpeg reads no APEv2 tag past that, so in every container a cover
+//! past it is made a JPEG at most 3000 pixels wide; FLAC embeds no lyrics
+//! past it. Lyrics are cleaned of cues, symbols and credits and moved by
+//! the plan's offset; lyrics from a `.lrc` file need no ffmpeg at all.
+//!
+//! A song whose plan changed in its tags alone is tagged again in place,
+//! with the cover and the lyrics its file holds, read as each container
+//! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
+//! `Cover Art (Front)` is read itself. Every file written is read back as
+//! a source's tags are, and a field or a cover it does not hold as
+//! written is told as a problem of the song, never lost unseen.
 //!
 //! Starting ffmpeg can cost 100 ms or more against a few milliseconds of
 //! work, so a song is one ffmpeg run writing every output; only when that
@@ -247,15 +255,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 Some(e) => Err(anyhow!("{e}")),
                 None => read_picture(&c.path, c.mime),
             };
-            read.and_then(|p| {
-                if flac {
-                    fit_flac(runner, p, &c.path, job.scratch)
-                } else {
-                    Ok(p)
-                }
-            })
-            .map_err(|e| problems.push(format!("no cover: {e:#}")))
-            .ok()
+            read.and_then(|p| fit_cover(runner, p, &c.path, job.scratch))
+                .map_err(|e| problems.push(format!("no cover: {e:#}")))
+                .ok()
         });
         let text = match (&plan.lyrics, lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
@@ -297,6 +299,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             write_tags(&audio_part, plan.format, &tags, None)?;
         }
         set_opus_header(&audio_part, plan)?;
+        problems.extend(verify(&audio_part, &tags, picture.is_some()));
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
                 fs::write(&lyrics_part, text)
@@ -332,15 +335,18 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
 }
 
 /// The most a FLAC metadata block holds, as its 24-bit length allows,
-/// less room for a picture block's own fields.
+/// less room for a picture block's own fields. Ogg holds a cover as such
+/// a block too, and ffmpeg reads no APEv2 tag past 16 MiB, so a cover is
+/// held to it in every container.
 const FLAC_BLOCK: usize = (1 << 24) - 1 - 1024;
 
-/// The widest a cover too large for FLAC is made.
-const FLAC_COVER_WIDTH: u32 = 3000;
+/// The widest a cover too large to hold is made.
+const COVER_WIDTH: u32 = 3000;
 
-/// `picture`, read from `path`, as a FLAC file can hold it: as it is when
-/// it fits, else made a JPEG at most [`FLAC_COVER_WIDTH`] pixels wide.
-fn fit_flac<R: Runner>(
+/// `picture`, read from `path`, as every container can hold it: as it is
+/// when it fits [`FLAC_BLOCK`], else made a JPEG at most [`COVER_WIDTH`]
+/// pixels wide.
+fn fit_cover<R: Runner>(
     runner: &R,
     picture: Picture,
     path: &Path,
@@ -350,7 +356,7 @@ fn fit_flac<R: Runner>(
         return Ok(picture);
     }
     let smaller = scratch.join("cover-fit.jpg");
-    let scale = format!("scale='min({FLAC_COVER_WIDTH},iw)':-2");
+    let scale = format!("scale='min({COVER_WIDTH},iw)':-2");
     let output = Output::of(
         &[
             "-map",
@@ -394,18 +400,20 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         std::io::copy(&mut fs::File::open(&path)?, &mut fs::File::create(&staged)?)
     })()
     .with_context(|| format!("copying {}", path.display()))?;
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<Vec<String>> {
         // The copy is the file byte for byte, and a `.part` names no format.
         let held = crate::tags::read_tagged(&path)
             .with_context(|| format!("reading the tags of {}", path.display()))?;
         let tag = held.primary_tag();
-        let picture = tag.and_then(|t| {
-            t.pictures()
-                .iter()
-                .find(|p| p.pic_type() == PictureType::CoverFront)
-                .or_else(|| t.pictures().first())
-                .cloned()
-        });
+        let picture = tag
+            .and_then(|t| {
+                t.pictures()
+                    .iter()
+                    .find(|p| p.pic_type() == PictureType::CoverFront)
+                    .or_else(|| t.pictures().first())
+                    .cloned()
+            })
+            .or_else(|| ape_cover(&path));
         let mut tags = plan.tags.clone();
         let embedded = plan.lyrics.as_ref().is_some_and(|l| l.placement.embedded());
         if let Some(text) = tag
@@ -417,21 +425,78 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         {
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
+        let covered = picture.is_some();
         write_tags(&staged, plan.format, &tags, picture)?;
-        set_opus_header(&staged, plan)
+        set_opus_header(&staged, plan)?;
+        Ok(verify(&staged, &tags, covered))
     })();
-    if let Err(e) = result {
-        let _ = fs::remove_file(&staged);
-        return Err(e);
-    }
+    let problems = match result {
+        Ok(problems) => problems,
+        Err(e) => {
+            let _ = fs::remove_file(&staged);
+            return Err(e);
+        }
+    };
     rename(&staged, &path)?;
     Ok(Rendered {
         audio_bytes: size_of(&path),
         lyrics_bytes: lyrics.map_or(0, |l| size_of(&library.join(l))),
         audio: audio.to_path_buf(),
         lyrics: lyrics.map(Path::to_path_buf),
-        problems: Vec::new(),
+        problems,
     })
+}
+
+/// The front cover of the WavPack file at `path`, which `lofty`'s
+/// generic tag reads not from APEv2's `Cover Art (Front)`.
+fn ape_cover(path: &Path) -> Option<Picture> {
+    let key = PictureType::CoverFront.as_ape_key()?;
+    let mut file = fs::File::open(path).ok()?;
+    let options = ParseOptions::new().read_properties(false);
+    let wv = lofty::wavpack::WavPackFile::read_from(&mut file, options).ok()?;
+    match wv.ape()?.get(key)?.value() {
+        ItemValue::Binary(bytes) => Picture::from_ape_bytes(key, bytes).ok(),
+        _ => None,
+    }
+}
+
+/// What of `tags` and the cover the file at `path` does not hold as they
+/// were written, read back as a source's tags are read: each field but
+/// the gains, which Opus holds rounded to its own steps.
+fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<String> {
+    use lofty::file::TaggedFileExt;
+
+    let as_read = |t: BTreeMap<String, Vec<String>>| crate::tags::from_container(&t);
+    let wanted = as_read(
+        tags.iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+            .collect(),
+    );
+    let held = crate::tags::read_file(path)
+        .map(as_read)
+        .unwrap_or_default();
+    let differ: Vec<&str> = wanted
+        .iter()
+        .filter(|(f, offer)| {
+            !f.is_loudness() && held.get(f).map(|o| &o.values) != Some(&offer.values)
+        })
+        .map(|(f, _)| f.vorbis())
+        .collect();
+    let mut problems = Vec::new();
+    if !differ.is_empty() {
+        problems.push(format!("tags not held as written: {}", differ.join(", ")));
+    }
+    let pictured = || {
+        crate::tags::read_tagged(path)
+            .ok()
+            .and_then(|f| f.primary_tag().map(|t| !t.pictures().is_empty()))
+            .unwrap_or(false)
+            || ape_cover(path).is_some()
+    };
+    if covered && !pictured() {
+        problems.push("cover not held as written".to_string());
+    }
+    problems
 }
 
 /// The gain `plan` gives its Opus header, set in `path` once its tags

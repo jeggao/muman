@@ -67,6 +67,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A picture is known by its bytes, not its name.** A PNG named `.jpg`
   was embedded as a JPEG, and a WebP named `.jpg` as a JPEG atom no
   player reads; each is written as what it is.
+- **A WavPack song keeps its cover when its tags change.** Changing a
+  tag of a WavPack song wrote it again without its cover, and no later
+  run noticed; every file written is now read back, and a tag or a cover
+  it does not hold as written is told.
+- **A cover past 16 MiB is made smaller in every container**, not only
+  in FLAC: a large PNG made ffmpeg drop every tag of a WavPack file.
 - **A back cover is no song's cover.** A source's back cover, disc or
   booklet could be embedded as the front cover when it was the sharper
   picture; it is taken only when no other picture is.
