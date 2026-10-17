@@ -723,7 +723,7 @@ fn separate(planned: &mut [(usize, Resolved)], naming: &Naming, max_name: usize)
         // A manual file's name may hold what a path must not.
         let id = naming.value(&r.plan.audio.key.short());
         for n in 1.. {
-            r.stem = naming::suffixed(&base, &id, n, max_name);
+            r.stem = naming::suffixed(&base, &id, n, max_name, naming.name_units(base.parent()));
             if taken.insert(lower(r)) {
                 break;
             }

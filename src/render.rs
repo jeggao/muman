@@ -32,9 +32,10 @@
 //! its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
 //! metadata block holds at most 16 MiB, as does the same block in Ogg,
-//! and ffmpeg reads no APEv2 tag past that, so in every container a cover
-//! past it is made a JPEG at most 3000 pixels wide; FLAC embeds no lyrics
-//! past it. Lyrics are cleaned of cues, symbols and credits and moved by
+//! where it is base64 and so a third larger, and ffmpeg reads no APEv2
+//! tag past that, its other items counted, so in every container a cover
+//! past what is left is made a JPEG at most 3000 pixels wide; FLAC embeds
+//! no lyrics past it. Lyrics are cleaned of cues, symbols and credits and moved by
 //! the plan's offset; lyrics from a `.lrc` file need no ffmpeg at all.
 //!
 //! A song whose plan changed in its tags alone is tagged again in place,
@@ -250,15 +251,6 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             return Err(anyhow!("{e}"));
         }
         let flac = plan.format.codec().container() == Container::Flac;
-        let picture = cover.and_then(|c| {
-            let read = match failed(&c.path).filter(|_| c.by_run) {
-                Some(e) => Err(anyhow!("{e}")),
-                None => read_picture(&c.path, c.mime),
-            };
-            read.and_then(|p| fit_cover(runner, p, &c.path, job.scratch))
-                .map_err(|e| problems.push(format!("no cover: {e:#}")))
-                .ok()
-        });
         let text = match (&plan.lyrics, lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -290,6 +282,16 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 tags.push(("LYRICS".to_string(), vec![text.clone()]));
             }
         }
+        let room = cover_room(plan.format.codec().container(), &tags);
+        let picture = cover.and_then(|c| {
+            let read = match failed(&c.path).filter(|_| c.by_run) {
+                Some(e) => Err(anyhow!("{e}")),
+                None => read_picture(&c.path, c.mime),
+            };
+            read.and_then(|p| fit_cover(runner, p, room, &c.path, job.scratch))
+                .map_err(|e| problems.push(format!("no cover: {e:#}")))
+                .ok()
+        });
         // A cover the tags cannot hold costs the song only its cover.
         if let Err(e) = write_tags(&audio_part, plan.format, &tags, picture.clone()) {
             if picture.is_none() {
@@ -340,19 +342,38 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
 /// held to it in every container.
 const FLAC_BLOCK: usize = (1 << 24) - 1 - 1024;
 
+/// The most bytes of picture `container` holds beside `tags`: a FLAC
+/// block's; in Ogg, three quarters of it, as the block is a comment in
+/// base64, four bytes for every three, and `lofty` reads no comment past
+/// 16 MiB; in WavPack, what the APEv2 tag's 16 MiB leaves beside the
+/// other items, embedded lyrics among them.
+fn cover_room(container: Container, tags: &[(String, Vec<String>)]) -> usize {
+    match container {
+        Container::Ogg => FLAC_BLOCK / 4 * 3 - 1024,
+        Container::WavPack => {
+            let items: usize = tags
+                .iter()
+                .flat_map(|(name, values)| values.iter().map(move |v| name.len() + v.len() + 16))
+                .sum();
+            FLAC_BLOCK.saturating_sub(items)
+        }
+        Container::Flac | Container::Mp3 | Container::Mp4 => FLAC_BLOCK,
+    }
+}
+
 /// The widest a cover too large to hold is made.
 const COVER_WIDTH: u32 = 3000;
 
-/// `picture`, read from `path`, as every container can hold it: as it is
-/// when it fits [`FLAC_BLOCK`], else made a JPEG at most [`COVER_WIDTH`]
-/// pixels wide.
+/// `picture`, read from `path`, in `room` bytes ([`cover_room`]): as it
+/// is when it fits, else made a JPEG at most [`COVER_WIDTH`] pixels wide.
 fn fit_cover<R: Runner>(
     runner: &R,
     picture: Picture,
+    room: usize,
     path: &Path,
     scratch: &Path,
 ) -> Result<Picture> {
-    if picture.data().len() <= FLAC_BLOCK {
+    if picture.data().len() <= room {
         return Ok(picture);
     }
     let smaller = scratch.join("cover-fit.jpg");
@@ -376,9 +397,9 @@ fn fit_cover<R: Runner>(
     );
     runner.run(&ffmpeg::outputs_command(&[path], &[output]))?;
     let fitted = read_picture(&smaller, MimeType::Jpeg)?;
-    if fitted.data().len() > FLAC_BLOCK {
+    if fitted.data().len() > room {
         return Err(anyhow!(
-            "{} even as a JPEG, more than a FLAC file holds",
+            "{} even as a JPEG, more than the file's tags hold",
             crate::units::Size(fitted.data().len() as u64)
         ));
     }

@@ -1003,7 +1003,12 @@ fn media<R: Runner>(
         plain.push(output.clone());
         outputs.push((
             output,
-            Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover), named_other(cover)),
+            Measured::Cover(
+                CoverAt::Sidecar(n),
+                mimetype_of(cover),
+                // Named as its song, a sidecar says nothing of its side.
+                named_other(cover) && cover.file_stem() != located.path.file_stem(),
+            ),
         ));
     }
     let channels = probed.audio.as_ref().map_or(1, |a| a.channels as usize);

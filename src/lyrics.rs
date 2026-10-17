@@ -311,8 +311,8 @@ pub fn decode(bytes: &[u8]) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// UTF-16 with no byte-order mark, told by its zero bytes: text mostly in
-/// Latin letters has one in every pair, on the side its byte order says.
+/// UTF-16 with no byte-order mark, told by its zero bytes: an ASCII
+/// character has one in its pair, on the side its byte order says.
 fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     if encoding_rs::Encoding::for_bom(bytes).is_some() || bytes.len() < 4 {
         return None;
@@ -322,9 +322,12 @@ fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     let (high, low) = pairs.iter().fold((0, 0), |(h, l), p| {
         (h + usize::from(p[1] == 0), l + usize::from(p[0] == 0))
     });
-    if high * 2 > total && low * 10 < total {
+    // UTF-8 and the legacy encodings hold no NUL; an LRC's times and
+    // brackets put one in every other byte of an eighth of its pairs at
+    // the least, whatever script its words are in.
+    if high * 8 > total && low * 10 < total {
         Some(encoding_rs::UTF_16LE)
-    } else if low * 2 > total && high * 10 < total {
+    } else if low * 8 > total && high * 10 < total {
         Some(encoding_rs::UTF_16BE)
     } else {
         None
@@ -362,7 +365,8 @@ fn is_utf8(bytes: &[u8]) -> bool {
 pub fn clean_lrc(text: &str) -> String {
     let mut out = String::new();
     for line in text.lines() {
-        let mut rest = line;
+        let line = &unmarked(line);
+        let mut rest = line.as_str();
         let mut timed = false;
         while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
             timed = true;
@@ -374,6 +378,32 @@ pub fn clean_lrc(text: &str) -> String {
         out.push_str(line);
         out.push('\n');
     }
+    out
+}
+
+/// `line` without the markup subtitles carry into LRC: an HTML-like tag,
+/// as `<i>` or `</font>`, and an ASS override, as `{\an8}`. A word time,
+/// `<00:12.34>`, is no markup.
+fn unmarked(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find(['<', '{']) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let close = if tail.starts_with('<') { '>' } else { '}' };
+        let markup = match tail[1..].chars().next() {
+            Some(c) if close == '>' => c.is_ascii_alphabetic() || c == '/',
+            Some(c) => c == '\\',
+            None => false,
+        };
+        if let Some(end) = tail.find(close).filter(|_| markup) {
+            rest = &tail[end + 1..];
+        } else {
+            out.push_str(&tail[..1]);
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
     out
 }
 
@@ -659,10 +689,26 @@ mod tests {
         assert_eq!(decode(&le), lrc);
         assert_eq!(decode(&be), lrc);
         assert!(is_text(lrc));
+        let cyrillic = "[00:07.43]Пример первой строки песни\n[00:11.00]и второй строки\n";
+        let le: Vec<u8> = cyrillic.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode(&le), cyrillic);
         let noise: Vec<u8> = (0..4000_u32)
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
         assert!(!is_text(&decode(&noise)));
+    }
+
+    #[test]
+    fn subtitle_markup_is_no_lyric() {
+        assert_eq!(
+            clean_lrc("[00:40.00]<i>Third</i> line in <font color=\"#fff\">ink</font>\n"),
+            "[00:40.00]Third line in ink\n"
+        );
+        assert_eq!(
+            clean_lrc("[00:41.00]{\\an8}<00:41.50>Lantern <00:42.00>weather\n"),
+            "[00:41.00]<00:41.50>Lantern <00:42.00>weather\n"
+        );
+        assert_eq!(clean_lrc("[00:43.00]a < b {c}\n"), "[00:43.00]a < b {c}\n");
     }
 
     #[test]

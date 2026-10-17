@@ -272,6 +272,7 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
     };
     let mut unreadable = None;
     let mut audio_tags = BTreeMap::new();
+    let mut fronts = Vec::new();
     for stream in probe.streams {
         match stream.codec_type.as_str() {
             // ffprobe gives a sample rate of 0 to a stream it could not
@@ -298,12 +299,14 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             }),
             "video" => {
                 if let Some(mimetype) = stream.picture_type() {
+                    let kind = stream.tag("comment");
+                    fronts.push(kind.as_deref().map(str::trim) == Some("Cover (front)"));
                     probed.pictures.push(Picture {
                         index: stream.index,
                         mimetype,
                         width: stream.width,
                         height: stream.height,
-                        other: crate::picture::typed_other(stream.tag("comment").as_deref()),
+                        other: crate::picture::typed_other(kind.as_deref()),
                     });
                 }
             }
@@ -316,6 +319,13 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
                 });
             }
             _ => {}
+        }
+    }
+    // A picture typed `Other` may be the cover, unless one beside it is
+    // typed the front cover.
+    if fronts.contains(&true) {
+        for (picture, front) in probed.pictures.iter_mut().zip(fronts) {
+            picture.other |= !front;
         }
     }
     for (k, v) in audio_tags {
@@ -428,6 +438,34 @@ mod tests {
              "disposition": {"attached_pic": 1}}]}"#;
         let o = parse(json.as_bytes()).unwrap();
         assert_eq!(o.pictures[0].mimetype, "image/png");
+    }
+
+    #[test]
+    fn a_picture_typed_other_is_the_cover_only_beside_no_front() {
+        let picture = |index: u32, kind: &str| {
+            format!(
+                r#"{{"index": {index}, "codec_type": "video", "codec_name": "mjpeg",
+                    "width": 600, "height": 600, "disposition": {{"attached_pic": 1}},
+                    "tags": {{"comment": "{kind}"}}}}"#
+            )
+        };
+        let probed = |kinds: &[&str]| {
+            let streams: Vec<String> = kinds
+                .iter()
+                .zip(1..)
+                .map(|(kind, index)| picture(index, kind))
+                .collect();
+            let json = format!(
+                r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+                    "channels": 2}}, {}]}}"#,
+                streams.join(",")
+            );
+            let o = parse(json.as_bytes()).unwrap();
+            o.pictures.iter().map(|p| p.other).collect::<Vec<_>>()
+        };
+        assert_eq!(probed(&["Other"]), [false]);
+        assert_eq!(probed(&["Other", "Cover (front)"]), [true, false]);
+        assert_eq!(probed(&["Cover (back)", "Other"]), [true, false]);
     }
 
     #[test]

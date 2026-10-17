@@ -808,9 +808,21 @@ fn a_cover_too_large_for_any_container_is_made_smaller() {
     fs::write(&path, &bytes).unwrap();
     let huge = read_picture(&path, MimeType::Png).unwrap();
     let fake = Fake::default();
-    let fitted = fit_cover(&fake, huge, &path, dir.path()).unwrap();
+    let fitted = fit_cover(&fake, huge, FLAC_BLOCK, &path, dir.path()).unwrap();
     assert!(fitted.data().len() <= FLAC_BLOCK);
     assert!(fake.ran("mjpeg"));
+}
+
+#[test]
+fn a_cover_is_held_to_what_each_container_leaves_it() {
+    let lyrics = vec![("LYRICS".to_string(), vec!["x".repeat(1 << 20)])];
+    assert_eq!(cover_room(Container::Flac, &lyrics), FLAC_BLOCK);
+    let ogg = cover_room(Container::Ogg, &[]);
+    assert!(
+        (ogg + 1024).div_ceil(3) * 4 < 1 << 24,
+        "its base64 is read by lofty"
+    );
+    assert!(cover_room(Container::WavPack, &lyrics) < FLAC_BLOCK - (1 << 20));
 }
 
 /// A value of `spec`'s kind as a song list sets it; none for a measure.

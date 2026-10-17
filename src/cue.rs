@@ -187,7 +187,9 @@ pub fn read(text: &str) -> Result<Sheet> {
         .find(|(k, _)| k == "ALBUMARTIST")
         .map(|(_, v)| v.clone())
         .unwrap_or_default();
-    let numbered = tracks.iter().filter(|t| t.number.is_some()).count();
+    // A disc's numbers, a data track's among them: a mixed-mode CD's
+    // audio is tracks 2 on, so its total is its last number, not a count.
+    let numbered = tracks.iter().filter_map(|t| t.number).max().unwrap_or(0);
     for t in &mut tracks {
         if !performer.is_empty() && !t.tags.iter().any(|(k, _)| k == "ARTIST") {
             t.tags.push(("ARTIST".to_string(), performer.clone()));
@@ -297,5 +299,18 @@ mod tests {
         );
         assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["Lantern Weather"]);
         assert_eq!(values(&sheet.album, "TRACKTOTAL"), ["2"]);
+
+        let mixed = read(
+            "FILE \"01 Data.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n\
+             FILE \"02 Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n\
+             FILE \"03 Paper Comets.flac\" WAVE\n  TRACK 03 AUDIO\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(mixed.tracks.len(), 2);
+        assert_eq!(
+            values(&mixed.album, "TRACKTOTAL"),
+            ["3"],
+            "no number past its total"
+        );
     }
 }

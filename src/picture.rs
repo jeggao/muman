@@ -336,7 +336,8 @@ pub fn sniff_file(path: &std::path::Path) -> Option<&'static str> {
 
 /// Whether a picture's `ID3v2` or FLAC picture type, as ffprobe names it
 /// (`Cover (back)`, `Media (e.g. label side of CD)`), says it shows no
-/// front cover; one of type `Other`, or of none, may be the cover.
+/// front cover; one of type `Other`, or of none, may be the cover, unless
+/// the file holds one typed the front cover ([`crate::probe`]).
 #[must_use]
 pub fn typed_other(kind: Option<&str>) -> bool {
     kind.map(str::trim)

@@ -100,8 +100,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   tag of a WavPack song wrote it again without its cover, and no later
   run noticed; every file written is now read back, and a tag or a cover
   it does not hold as written is told.
-- **A cover past 16 MiB is made smaller in every container**, not only
-  in FLAC: a large PNG made ffmpeg drop every tag of a WavPack file.
+- **A cover past what a container holds is made smaller in every
+  one**, not only in FLAC: a large PNG made ffmpeg drop every tag of a
+  WavPack file, its lyrics counted, and a cover past 12 MiB, a third
+  larger as Ogg holds it, made every later tag change of an Opus or Ogg
+  Vorbis song fail.
 - **Lyrics move whole.** Moving lyrics to another cut of the
   recording moved each line's time but not its words', which then came
   before their own line; an `[offset:]` was kept for players to apply
@@ -119,7 +122,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track, its pregaps in the file before, as EAC writes it, was refused;
   a `FILE` path with `\` matched no song outside Windows; a name left
   unquoted was cut at its first space; and a data track counted as a
-  song.
+  song. A sheet of a mixed-mode CD, its data first, gives no track a
+  number past its total.
 - **A song past an hour gets its lyrics.** LRCLIB refuses a duration
   past 3600 s, and its refusal ended the lookup; such a song is now
   found by search.
@@ -132,7 +136,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   only a list of one is.
 - **A back cover is no song's cover.** A source's back cover, disc or
   booklet could be embedded as the front cover when it was the sharper
-  picture; it is taken only when no other picture is.
+  picture; it is taken only when no other picture is, and a picture
+  typed only "other" is no cover beside one typed the front cover. A
+  picture named as its song is a front whatever the song's name, as
+  `Back Home.jpg` beside `Back Home.flac`.
+- **A name told apart from another keeps within `max_path`.** The ID
+  added to a name two songs share could take the path past it.
+- **Subtitles converted to lyrics lose their markup**, as `<i>`, and an
+  `.lrc` in UTF-16 without a byte-order mark is read in any script, not
+  only one mostly in Latin letters.
+- **M4B audiobooks, MP2, Speex, WMA and Sun `.au` files are audio** to
+  `add`, which took them for files it does not read.
 
 ## [0.4.1] - 2026-10-15
 

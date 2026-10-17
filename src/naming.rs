@@ -115,6 +115,16 @@ impl Naming {
         })
     }
 
+    /// The UTF-16 units `max_path` leaves a file name in `folder`, a
+    /// path relative to the library folder; `None` without a `max_path`.
+    #[must_use]
+    pub fn name_units(&self, folder: Option<&Path>) -> Option<usize> {
+        let taken = folder
+            .filter(|f| !f.as_os_str().is_empty())
+            .map_or(0, |f| units(&f.to_string_lossy()) + 1);
+        self.room.map(|room| room.saturating_sub(taken))
+    }
+
     /// The song's library path without its extension, relative to the
     /// library folder; never empty, never outside it.
     pub fn stem(&self, tags: &Tags<'_>) -> Result<PathBuf> {
@@ -296,9 +306,16 @@ fn number(text: &str) -> Option<u32> {
 
 /// `stem` told apart by `id`, and by `n` when that is not enough:
 /// `Song [id]`, `Song [id 2]`. The name is cut so the whole stays within
-/// `max_name` bytes with room for the extension and a temporary suffix.
+/// `max_name` bytes, and `max_units` UTF-16 units where a `max_path`
+/// sets them, with room for the extension and a temporary suffix.
 #[must_use]
-pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
+pub fn suffixed(
+    stem: &Path,
+    id: &str,
+    n: u32,
+    max_name: usize,
+    max_units: Option<usize>,
+) -> PathBuf {
     let number = if n > 1 {
         format!(" {n}")
     } else {
@@ -306,15 +323,21 @@ pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
     };
     // The extension and `.moving`, the longest temporary suffix.
     let room = max_name.saturating_sub(".flac.moving".len());
-    // The ID cut too, so the name keeps a start of its own.
+    let units_room = max_units.map(|u| u.saturating_sub(".flac.moving".len()));
+    // The ID cut too, so the name keeps a start of its own; a byte is at
+    // most a unit.
     let id_room = room
+        .min(units_room.unwrap_or(usize::MAX))
         .saturating_sub(" []".len() + number.len() + KEPT_BYTES)
         .min(ID_BYTES);
     let suffix = format!(" [{}{number}]", cut(id, id_room).trim());
     let name = stem
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let name = cut(&name, room.saturating_sub(suffix.len()));
+    let mut name = cut(&name, room.saturating_sub(suffix.len()));
+    if let Some(units_room) = units_room {
+        name = cut_units(&name, units_room.saturating_sub(units(&suffix)));
+    }
     let named = format!("{}{suffix}", name.trim_end());
     stem.with_file_name(named.trim_start())
 }
@@ -534,10 +557,19 @@ mod tests {
     }
 
     #[test]
+    fn a_name_told_apart_stays_within_max_path() {
+        let id = "a-long-source-file-name-made-up-to-tell-two-songs-apart";
+        let named = suffixed(Path::new("A/Same Title Here"), id, 2, 200, Some(32));
+        let name = named.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("Same"), "{name}");
+        assert!(units(name) + ".flac.moving".len() <= 32, "{name}");
+    }
+
+    #[test]
     fn a_long_id_telling_names_apart_leaves_room_for_the_name() {
         let id = "i".repeat(80);
         for n in [1, 2, 12] {
-            let named = suffixed(Path::new("A/Lantern Weather"), &id, n, MIN_NAME_BYTES);
+            let named = suffixed(Path::new("A/Lantern Weather"), &id, n, MIN_NAME_BYTES, None);
             let name = named.file_name().unwrap().to_str().unwrap();
             assert!(name.starts_with("Lantern"), "{name}");
             assert!(
@@ -570,11 +602,11 @@ mod tests {
     #[test]
     fn a_suffix_tells_two_songs_apart() {
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 1, 200),
+            suffixed(&path(&["A", "B", "Song"]), "id", 1, 200, None),
             path(&["A", "B", "Song [id]"])
         );
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 2, 200),
+            suffixed(&path(&["A", "B", "Song"]), "id", 2, 200, None),
             path(&["A", "B", "Song [id 2]"])
         );
     }
@@ -586,7 +618,7 @@ mod tests {
             .unwrap();
         let name = stem.file_name().unwrap().to_str().unwrap().len();
         assert!(name > 120 && name <= 200 - SUFFIX_ROOM, "{name}");
-        let long = suffixed(&stem, &"i".repeat(100), 3, 200);
+        let long = suffixed(&stem, &"i".repeat(100), 3, 200, None);
         let total = long.file_name().unwrap().to_str().unwrap().len() + ".flac.moving".len();
         assert!(total <= 200, "{total}");
     }
