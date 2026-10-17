@@ -180,13 +180,16 @@ impl Format {
     }
 
     /// The format `audio` is written in under `settings`: copied where its
-    /// codec may be and its layout is taken as it is.
+    /// codec may be and its layout is taken as it is. A mix only the codec
+    /// it would be encoded to asks, as MP3's two channels, keeps no audio
+    /// from being copied.
     #[must_use]
     pub fn of(audio: &AudioFacts, settings: &Audio) -> Self {
         let encoded = Self::encoded(audio, settings);
+        let (mix, _) = settings.written(&audio.shape());
         match Codec::probed(&audio.codec) {
             Some(codec)
-                if encoded.mix().is_none()
+                if mix.is_none()
                     && (codec == encoded.codec() || settings.codecs.contains(&codec)) =>
             {
                 Self::Copy { codec }

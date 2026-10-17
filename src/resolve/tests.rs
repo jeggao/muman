@@ -1599,9 +1599,25 @@ fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
     a.channels = 6;
     a.layout = Some("5.1".into());
     let facts = BTreeMap::from([(key.clone(), f)]);
-    let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+    let r = run_with(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &[],
+        &settings,
+        &QUALITY,
+    );
     assert_eq!(r.plan.format.codec(), Codec::Mp3);
     assert_eq!(r.plan.format.mix(), Some(Layout::STEREO), "MP3 holds two");
+    let copying = Audio {
+        codecs: vec![Codec::Aac],
+        ..settings.clone()
+    };
+    let r = run_with(&song(&[key]), &facts, &[], &copying, &QUALITY);
+    assert_eq!(
+        r.plan.format,
+        Format::Copy { codec: Codec::Aac },
+        "a mix only an MP3 would ask keeps no AAC from being copied"
+    );
     let aac = Audio {
         lossy: Codec::Aac,
         ..settings

@@ -247,9 +247,9 @@ scope = "track"
 
 `audio` encodes again every song it would have copied, so a lossy
 source loses a generation; for an Opus library, `header` levels as
-well without it. MP3 and AAC fold more channels than they hold into
-fewer without a mix muman makes, and such a song keeps its source's
-measure. The first sync after loudness is measured decodes every source
+well without it. Audio with more channels than MP3 or AAC holds is
+mixed by muman into the first `[audio] downmix` layout the codec holds,
+and measured as mixed. The first sync after loudness is measured decodes every source
 once, in full; later syncs measure only new sources.
 
 ## How sources are ranked

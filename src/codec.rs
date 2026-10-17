@@ -417,6 +417,11 @@ impl Codec {
                     Some(l) if AAC_SIDE_LAYOUTS.contains(&l) && vorbis.is_some() => {
                         Some(Adapt::Relabel(shape.channels))
                     }
+                    // The encoder takes no surround it is not told the
+                    // speakers of, as an Opus of mapping family 255 holds.
+                    None if shape.channels > 2 && vorbis.is_some() => {
+                        Some(Adapt::Relabel(shape.channels))
+                    }
                     _ => None,
                 }
             }),
@@ -642,6 +647,12 @@ mod tests {
             Some(Some(Adapt::Relabel(5)))
         );
         assert_eq!(at(Codec::Aac, 4, Some("quad(side)")), Some(None));
+        assert_eq!(
+            at(Codec::Aac, 3, None),
+            Some(Some(Adapt::Relabel(3))),
+            "an Opus of mapping family 255 names no speakers"
+        );
+        assert_eq!(at(Codec::Aac, 2, None), Some(None));
         assert_eq!(at(Codec::Aac, 12, Some("7.1.4")), None);
         for codec in Codec::ALL {
             let most = codec.max_channels().unwrap_or(255);

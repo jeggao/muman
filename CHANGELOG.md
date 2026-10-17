@@ -70,8 +70,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   encoder to fold in, unscaled, and its loudness tags were the
   source's, several dB off what plays. It is mixed into the first
   `[audio] downmix` layout the codec holds and measured as mixed; AAC
-  in 5.1 with side speakers names them in the standard layout. Only
-  such songs are encoded again.
+  in 5.1 with side speakers, or of channels no speakers are named for,
+  as an Opus of mapping family 255, which failed every sync, names them
+  in the standard layout. Only such songs are encoded again.
 - **An MP3 with a date of no calendar can be tagged again.** A date
   that is none, written into an MP3, made every later change to the
   song's tags fail.
