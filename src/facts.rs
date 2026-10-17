@@ -362,6 +362,10 @@ pub struct CoverFacts {
     /// How it looks, to tell it from other pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look: Option<Look>,
+    /// Whether the file holding it, by its picture type or its name, says
+    /// it shows no front cover: a back, a disc or a booklet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub other: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -497,6 +501,7 @@ pub fn gather<R: Runner>(
                 quality,
                 digest: digest_file(&located.path),
                 look,
+                other: named_other(&located.path),
             });
         }
         Kind::Tags => {
@@ -628,7 +633,18 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
     }
 }
 
+/// Whether a picture file's name says it shows no front cover.
+fn named_other(path: &Path) -> bool {
+    path.file_stem()
+        .is_some_and(|stem| crate::picture::named_other(&stem.to_string_lossy()))
+}
+
+/// A picture file's media type by its bytes, else by its name's
+/// extension.
 fn mimetype_of(path: &Path) -> String {
+    if let Some(sniffed) = crate::picture::sniff_file(path) {
+        return sniffed.to_string();
+    }
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -677,7 +693,7 @@ fn cover_outputs(
     probed: &Probed,
     scratch: &Path,
     inputs: &mut Vec<Input>,
-) -> Vec<(Output, CoverAt, String)> {
+) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
     for p in &probed.pictures {
         outputs.push((
@@ -687,6 +703,7 @@ fn cover_outputs(
             ),
             CoverAt::Picture { index: p.index },
             p.mimetype.clone(),
+            p.other,
         ));
     }
     for a in probed.image_attachments() {
@@ -701,7 +718,14 @@ fn cover_outputs(
                 &scratch.join(format!("att{}.pgm", a.ordinal)),
             ),
             CoverAt::Attachment { ordinal: a.ordinal },
-            a.mimetype.clone(),
+            crate::picture::sniff_file(&dumped).map_or_else(|| a.mimetype.clone(), str::to_string),
+            crate::picture::named_other(
+                Path::new(&a.filename)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default()
+                    .as_ref(),
+            ),
         ));
     }
     outputs
@@ -749,9 +773,9 @@ pub fn look<R: Runner>(
             let covers = cover_outputs(&probed, scratch, &mut inputs);
             let mut looks = Vec::new();
             if !covers.is_empty() {
-                let plain: Vec<Output> = covers.iter().map(|(o, _, _)| o.clone()).collect();
+                let plain: Vec<Output> = covers.iter().map(|(o, ..)| o.clone()).collect();
                 let results = ffmpeg::run(runner, &inputs, &plain);
-                for ((output, at, _), result) in covers.into_iter().zip(results) {
+                for ((output, at, ..), result) in covers.into_iter().zip(results) {
                     looks.push((at, result.ok().and_then(|()| measure_image(&output.path).1)));
                 }
             }
@@ -789,7 +813,8 @@ enum Measured {
     Packets,
     Segment(PathBuf),
     Subtitle(u32, Language),
-    Cover(CoverAt, String),
+    /// A picture, its media type, and whether it shows no front cover.
+    Cover(CoverAt, String, bool),
     Hash(Part),
 }
 
@@ -955,8 +980,8 @@ fn media<R: Runner>(
             ));
         }
     }
-    for (output, at, mimetype) in cover_outputs(&probed, scratch, &mut inputs) {
-        outputs.push((output, Measured::Cover(at, mimetype)));
+    for (output, at, mimetype, other) in cover_outputs(&probed, scratch, &mut inputs) {
+        outputs.push((output, Measured::Cover(at, mimetype, other)));
     }
 
     let mut plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
@@ -978,7 +1003,7 @@ fn media<R: Runner>(
         plain.push(output.clone());
         outputs.push((
             output,
-            Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover)),
+            Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover), named_other(cover)),
         ));
     }
     let channels = probed.audio.as_ref().map_or(1, |a| a.channels as usize);
@@ -1017,7 +1042,7 @@ fn media<R: Runner>(
                     });
                 }
             }
-            Measured::Cover(at, mimetype) => {
+            Measured::Cover(at, mimetype, other) => {
                 let (quality, look) = measure_image(&output.path);
                 facts.covers.push(CoverFacts {
                     at,
@@ -1025,6 +1050,7 @@ fn media<R: Runner>(
                     quality,
                     digest: None,
                     look,
+                    other,
                 });
             }
             Measured::Hash(part) => note_hash(&mut digests, part, &output.path),

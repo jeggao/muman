@@ -68,6 +68,8 @@ pub struct Picture {
     pub mimetype: String,
     pub width: u32,
     pub height: u32,
+    /// Whether its picture type says it shows no front cover.
+    pub other: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -195,22 +197,23 @@ impl Stream {
             .filter(|v| !v.is_empty())
     }
 
-    /// The image type of a picture stream, from its tag or its codec.
+    /// The image type of a picture stream: by the codec ffmpeg reads its
+    /// bytes as, over the type its tag says, which a file may get wrong.
     fn picture_type(&self) -> Option<String> {
-        if let Some(m) = self.tag("mimetype").filter(|m| m.starts_with("image/")) {
-            return Some(m);
-        }
-        if self.disposition.get("attached_pic") != Some(&1) {
+        let read = match self.codec_name.as_str() {
+            "mjpeg" => Some("image/jpeg"),
+            "png" => Some("image/png"),
+            "webp" => Some("image/webp"),
+            _ => None,
+        };
+        let said = self.tag("mimetype").filter(|m| m.starts_with("image/"));
+        if said.is_none() && self.disposition.get("attached_pic") != Some(&1) {
             return None;
         }
         Some(
-            match self.codec_name.as_str() {
-                "mjpeg" => "image/jpeg",
-                "png" => "image/png",
-                "webp" => "image/webp",
-                _ => "image/unknown",
-            }
-            .to_string(),
+            read.map(str::to_string)
+                .or(said)
+                .unwrap_or_else(|| "image/unknown".into()),
         )
     }
 }
@@ -300,6 +303,7 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
                         mimetype,
                         width: stream.width,
                         height: stream.height,
+                        other: crate::picture::typed_other(stream.tag("comment").as_deref()),
                     });
                 }
             }
@@ -410,6 +414,7 @@ mod tests {
                 mimetype: "image/jpeg".into(),
                 width: 1400,
                 height: 1400,
+                other: false,
             }]
         );
         assert_eq!(o.image_attachments().count(), 0);

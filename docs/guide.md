@@ -426,7 +426,11 @@ or more than eight channels in FLAC, is written in one that can, as
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
 Effective resolution is the size up to which a picture keeps its
-detail, so an upscale measures the size it was made from.
+detail, so an upscale measures the size it was made from. A picture
+whose file says it shows no front cover, by its picture type (a back, a
+disc, a booklet) or by its name (`back.jpg`, `cd.png`), is taken only
+when no other picture is. A picture is known by its bytes, never by its
+name: a PNG named `.jpg` is written as PNG, and a WebP converted.
 
 **Lyrics.** Only subtitles a person wrote count; generated captions
 never do. Lyrics from a source other than the chosen audio must be the

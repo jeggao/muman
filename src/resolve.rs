@@ -820,7 +820,9 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
                     q.map(|q| q.blockiness_bucket(w.blockiness.step)),
                 ),
             ]);
-            let rank: Rank = vec![unknown, sum, order];
+            // A back cover, a disc or a booklet is no song's cover while
+            // any other picture is.
+            let rank: Rank = vec![i64::from(cover.other), unknown, sum, order];
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }

@@ -64,6 +64,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   names it.
 - **An ID3v2.3 artist list is read as several artists**, split at its
   `/` as that version separates them.
+- **A picture is known by its bytes, not its name.** A PNG named `.jpg`
+  was embedded as a JPEG, and a WebP named `.jpg` as a JPEG atom no
+  player reads; each is written as what it is.
+- **A back cover is no song's cover.** A source's back cover, disc or
+  booklet could be embedded as the front cover when it was the sharper
+  picture; it is taken only when no other picture is.
 
 ## [0.4.1] - 2026-10-15
 

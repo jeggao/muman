@@ -68,6 +68,7 @@ fn cover(f: &mut Facts, at: CoverAt, q: ImageQuality) {
         quality: Some(q),
         digest: None,
         look: None,
+        other: false,
     });
 }
 
@@ -1460,6 +1461,25 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
     let facts = BTreeMap::from([(key.clone(), f)]);
     let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
+}
+
+#[test]
+fn a_back_cover_is_no_song_s_cover_however_sharp() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    let sharp = |side: u32| ImageQuality {
+        width: side,
+        height: side,
+        content: full(side, side),
+        effective: side,
+        blockiness: 0.0,
+    };
+    cover(&mut f, CoverAt::Picture { index: 1 }, sharp(300));
+    cover(&mut f, CoverAt::Picture { index: 2 }, sharp(1200));
+    f.covers[1].other = true;
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(r.plan.cover.unwrap().at, CoverAt::Picture { index: 1 });
 }
 
 #[test]

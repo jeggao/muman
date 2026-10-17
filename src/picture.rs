@@ -301,9 +301,78 @@ pub fn alike(a: &Look, b: &Look) -> Alike {
     }
 }
 
+/// The media type of a picture by its first bytes, whatever its name or
+/// its container says: JPEG, PNG, WebP, GIF or BMP; `None` for any other.
+#[must_use]
+pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\xFF\xD8\xFF") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG") {
+        Some("image/png")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()) {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"BM") && bytes.len() > 26 {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
+/// The media type of the picture file at `path` by its first bytes.
+#[must_use]
+pub fn sniff_file(path: &std::path::Path) -> Option<&'static str> {
+    use std::io::Read;
+
+    let mut head = Vec::with_capacity(32);
+    std::fs::File::open(path)
+        .ok()?
+        .take(32)
+        .read_to_end(&mut head)
+        .ok()?;
+    sniff(&head)
+}
+
+/// Whether a picture's `ID3v2` or FLAC picture type, as ffprobe names it
+/// (`Cover (back)`, `Media (e.g. label side of CD)`), says it shows no
+/// front cover; one of type `Other`, or of none, may be the cover.
+#[must_use]
+pub fn typed_other(kind: Option<&str>) -> bool {
+    kind.map(str::trim)
+        .is_some_and(|k| !k.is_empty() && k != "Cover (front)" && k != "Other")
+}
+
+/// Whether a picture file's name says it shows no front cover:
+/// `back.jpg`, `cd.png`, `Booklet 2.jpg`; a name saying `front` never.
+#[must_use]
+pub fn named_other(stem: &str) -> bool {
+    const WORDS: [&str; 9] = [
+        "back", "disc", "cd", "booklet", "inlay", "inside", "tray", "media", "leaflet",
+    ];
+    let lower = stem.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
+    !words.contains(&"front") && words.iter().any(|w| WORDS.contains(w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_is_told_by_its_bytes_and_its_side_by_its_label() {
+        assert_eq!(sniff(crate::testing::PIXEL), Some("image/png"));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some("image/jpeg"));
+        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8X"), Some("image/webp"));
+        assert_eq!(sniff(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff(b"\x89PN"), None, "cut short");
+        assert!(!typed_other(Some("Cover (front)")) && !typed_other(Some("Other")));
+        assert!(!typed_other(None));
+        assert!(typed_other(Some("Cover (back)")));
+        assert!(typed_other(Some("Media (e.g. label side of CD)")));
+        assert!(named_other("back") && named_other("CD 1") && named_other("Booklet-2"));
+        assert!(!named_other("Front Cover") && !named_other("folder") && !named_other("abcd"));
+    }
 
     /// An invented cover: rings and a bar, on `[0, 1)²`.
     fn art(x: f64, y: f64, seed: f64) -> f64 {

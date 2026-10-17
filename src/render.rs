@@ -535,6 +535,12 @@ fn cover_plan<R: Runner>(
             .ok_or_else(|| anyhow!("the picture beside {} is gone", source.path.display()))?,
         CoverAt::File => source.path.clone(),
     };
+    // A file's bytes say what it is, whatever its name or its container
+    // says: a PNG named `.jpg` is kept as PNG, and a WebP converted.
+    let as_is = match crate::picture::sniff_file(&file) {
+        Some(sniffed) => is_kept_as_is(sniffed).filter(|_| cover.crop.is_none()),
+        None => as_is,
+    };
     if let Some(mime) = as_is {
         return Ok(CoverPlan {
             path: file,
@@ -590,6 +596,15 @@ pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
 
 fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mime = match crate::picture::sniff(&bytes) {
+        Some(sniffed) => is_kept_as_is(sniffed).ok_or_else(|| {
+            anyhow!(
+                "the cover {} is {sniffed}, which no file holds",
+                path.display()
+            )
+        })?,
+        None => mime,
+    };
     Ok(Picture::unchecked(bytes)
         .pic_type(PictureType::CoverFront)
         .mime_type(mime)
