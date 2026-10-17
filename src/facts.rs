@@ -702,6 +702,13 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
     }
 }
 
+/// Whether `a` and `b` are named alike but for their extensions, in any
+/// case, as a sidecar is matched to its song.
+fn named_as(a: &Path, b: &Path) -> bool {
+    let stem = |p: &Path| crate::relpath::folded(Path::new(p.file_stem().unwrap_or_default()));
+    stem(a) == stem(b)
+}
+
 /// Whether a picture file's name says it shows no front cover.
 fn named_other(path: &Path) -> bool {
     path.file_stem()
@@ -1132,7 +1139,7 @@ fn media<R: Runner>(
                 CoverAt::Sidecar(n),
                 mimetype_of(cover),
                 // Named as its song, a sidecar says nothing of its side.
-                named_other(cover) && cover.file_stem() != located.path.file_stem(),
+                named_other(cover) && !named_as(cover, &located.path),
             ),
         ));
     }

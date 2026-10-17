@@ -131,8 +131,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   that read the item's file name show it.
 - **MP3 lyrics carry their language** where the song's `LANGUAGE` tag
   names it.
-- **An ID3v2.3 artist list is read as several artists**, split at its
-  `/` as that version separates them.
 - **A picture is known by its bytes, not its name.** A PNG named `.jpg`
   was embedded as a JPEG, and a WebP named `.jpg` as a JPEG atom no
   player reads; each is written as what it is.

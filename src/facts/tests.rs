@@ -160,6 +160,13 @@ fn a_standalone_lrc_is_lyrics_only() {
 }
 
 #[test]
+fn a_sidecar_is_named_as_its_song_in_any_case() {
+    let song = Path::new("a/Back Home.flac");
+    assert!(named_as(Path::new("a/back home.JPG"), song));
+    assert!(!named_as(Path::new("a/back.jpg"), song));
+}
+
+#[test]
 fn segments_stay_inside_the_recording() {
     assert_eq!(segment_starts(None), [0.0]);
     assert_eq!(segment_starts(Some(10.0)), [0.0]);
