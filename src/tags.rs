@@ -14,7 +14,7 @@ use crate::info::VideoInfo;
 /// Names how a source's tags are read. Tags read by another are read
 /// again, without measuring the source again, so changing what a file
 /// or an info JSON offers means changing this.
-pub const METHOD: &str = "tags/8";
+pub const METHOD: &str = "tags/9";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -39,8 +39,8 @@ pub enum Scope {
 
 /// A tag muman knows: how sources offer it, how a song list names it,
 /// and where a song's value comes from. Adding a field is a variant and
-/// its row in each `match` below; reading it from a file's tags, ranking
-/// it and writing it follow. Picard's names are used where they differ,
+/// its row in [`TABLE`]; reading it from a file's tags, ranking it and
+/// writing it follow. Picard's names are used where they differ,
 /// so a library tagged by muman and by Picard agrees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,62 +109,22 @@ impl Field {
         Self::AlbumPeak,
     ];
 
+    /// Its row of [`TABLE`].
+    #[must_use]
+    pub fn spec(self) -> &'static Spec {
+        &TABLE[self as usize]
+    }
+
     /// The Vorbis comment field it is written as.
     #[must_use]
     pub fn vorbis(self) -> &'static str {
-        match self {
-            Self::Title => "TITLE",
-            Self::Artist => "ARTIST",
-            Self::Album => "ALBUM",
-            Self::AlbumArtist => "ALBUMARTIST",
-            Self::Track => "TRACKNUMBER",
-            Self::Disc => "DISCNUMBER",
-            Self::Date => "DATE",
-            Self::Genre => "GENRE",
-            Self::Isrc => "ISRC",
-            Self::TrackTotal => "TRACKTOTAL",
-            Self::DiscTotal => "DISCTOTAL",
-            Self::ReleaseCountry => "RELEASECOUNTRY",
-            Self::MusicBrainzTrackId => "MUSICBRAINZ_TRACKID",
-            Self::MusicBrainzReleaseTrackId => "MUSICBRAINZ_RELEASETRACKID",
-            Self::MusicBrainzAlbumId => "MUSICBRAINZ_ALBUMID",
-            Self::MusicBrainzReleaseGroupId => "MUSICBRAINZ_RELEASEGROUPID",
-            Self::MusicBrainzArtistId => "MUSICBRAINZ_ARTISTID",
-            Self::MusicBrainzAlbumArtistId => "MUSICBRAINZ_ALBUMARTISTID",
-            Self::TrackGain => "REPLAYGAIN_TRACK_GAIN",
-            Self::TrackPeak => "REPLAYGAIN_TRACK_PEAK",
-            Self::AlbumGain => "REPLAYGAIN_ALBUM_GAIN",
-            Self::AlbumPeak => "REPLAYGAIN_ALBUM_PEAK",
-        }
+        self.spec().vorbis
     }
 
     /// Its other names, lower-cased: the common spellings a song list may
     /// use, and the names ffprobe reports for MP3 and MP4 files.
     fn aliases(self) -> &'static [&'static str] {
-        match self {
-            Self::AlbumArtist => &["album_artist"],
-            Self::Track => &["track", "track_number"],
-            Self::Disc => &["disc", "disc_number"],
-            Self::Date => &["year"],
-            Self::Isrc => &["tsrc"],
-            Self::TrackTotal => &["track_total", "totaltracks"],
-            Self::DiscTotal => &["disc_total", "totaldiscs"],
-            Self::ReleaseCountry => &["release_country", "musicbrainz album release country"],
-            Self::MusicBrainzTrackId => &["musicbrainz track id"],
-            Self::MusicBrainzReleaseTrackId => &["musicbrainz release track id"],
-            Self::MusicBrainzAlbumId => &["musicbrainz album id"],
-            Self::MusicBrainzReleaseGroupId => &["musicbrainz release group id"],
-            Self::MusicBrainzArtistId => &["musicbrainz artist id"],
-            Self::MusicBrainzAlbumArtistId => &["musicbrainz album artist id"],
-            Self::Title
-            | Self::Artist
-            | Self::Album
-            | Self::Genre
-            | Self::TrackGain
-            | Self::TrackPeak
-            | Self::AlbumGain
-            | Self::AlbumPeak => &[],
-        }
+        self.spec().aliases
     }
 
     /// Whether it is one of ReplayGain's gains and peaks.
@@ -175,39 +135,14 @@ impl Field {
 
     #[must_use]
     pub fn scope(self) -> Scope {
-        match self {
-            Self::Title | Self::Artist | Self::Genre => Scope::Recording,
-            Self::Isrc | Self::MusicBrainzTrackId | Self::MusicBrainzArtistId => Scope::RecordingId,
-            Self::Album
-            | Self::AlbumArtist
-            | Self::Track
-            | Self::Disc
-            | Self::Date
-            | Self::TrackTotal
-            | Self::DiscTotal
-            | Self::ReleaseCountry
-            | Self::MusicBrainzReleaseTrackId
-            | Self::MusicBrainzAlbumId
-            | Self::MusicBrainzReleaseGroupId
-            | Self::MusicBrainzAlbumArtistId => Scope::Release,
-            Self::TrackGain | Self::TrackPeak => Scope::Loudness,
-            Self::AlbumGain | Self::AlbumPeak => Scope::AlbumLoudness,
-        }
+        self.spec().scope
     }
 
     /// Whether its values are identifiers, several to a value in a file
     /// that joins them, and never cleaned.
     #[must_use]
     pub fn is_id(self) -> bool {
-        matches!(
-            self,
-            Self::MusicBrainzTrackId
-                | Self::MusicBrainzReleaseTrackId
-                | Self::MusicBrainzAlbumId
-                | Self::MusicBrainzReleaseGroupId
-                | Self::MusicBrainzArtistId
-                | Self::MusicBrainzAlbumArtistId
-        )
+        self.spec().kind == Kind::Mbid
     }
 
     /// The fields of one scope, in the order written.
@@ -226,6 +161,285 @@ impl Field {
     }
 }
 
+/// What a field's values are: how each is read, from a source or a song
+/// list, and how it is written. A value is held as the text muman writes
+/// it, whatever spelling it came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Any text but control characters, which cut a C string short or
+    /// move a terminal's cursor; a line break or a tab stays.
+    Text,
+    /// A count from 1, as a track's total.
+    Count,
+    /// A place from 1, and the count it is of after a `/`: `3`, `3/12`.
+    Place,
+    /// A year, a month or a day of a real calendar: `YYYY`, `YYYY-MM` or
+    /// `YYYY-MM-DD`; read from `YYYYMMDD`, with `/` or `.` between its
+    /// parts, and with a time after it, which is cut.
+    Date,
+    /// An ISRC, ISO 3901's 12 letters and digits: a country, a
+    /// registrant, a year and a number. The dashes it is shown with are
+    /// dropped and its letters upper-cased.
+    Isrc,
+    /// A MusicBrainz ID: a UUID, lower-cased.
+    Mbid,
+    /// A ReplayGain gain, measured by muman: `-6.12 dB`.
+    Gain,
+    /// A ReplayGain peak, measured by muman: full scale 1, six decimals.
+    Peak,
+}
+
+impl Kind {
+    /// `value` as muman writes a value of this kind, or why it is none.
+    pub fn read(self, value: &str) -> Result<String, &'static str> {
+        let v = value.trim();
+        match self {
+            Self::Text => {
+                if v.chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+                {
+                    Err("text with a control character in it")
+                } else {
+                    Ok(v.to_string())
+                }
+            }
+            Self::Count => count(v)
+                .map(|n| n.to_string())
+                .ok_or("no count: give one as 12"),
+            Self::Place => {
+                let read = match v.split_once('/') {
+                    Some((n, of)) => count(n).zip(count(of)).map(|(n, of)| format!("{n}/{of}")),
+                    None => count(v).map(|n| n.to_string()),
+                };
+                read.ok_or("no number: give one as 3, or 3/12")
+            }
+            Self::Date => date(v).ok_or("no date: give YYYY-MM-DD, YYYY-MM or a year"),
+            Self::Isrc => isrc(v).ok_or("no ISRC: give its 12 letters and digits"),
+            Self::Mbid => mbid(v).ok_or("no MusicBrainz ID"),
+            Self::Gain => gain(v).ok_or("no gain: give one as -6.12 dB"),
+            Self::Peak => peak(v).ok_or("no peak: give one as 0.988312"),
+        }
+    }
+}
+
+/// A count from 1, from digits alone.
+fn count(text: &str) -> Option<u32> {
+    let t = text.trim();
+    (!t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| t.parse().ok())
+        .flatten()
+        .filter(|&n| n > 0)
+}
+
+/// A date of a real calendar as Vorbis comments write it, from any common
+/// spelling: see [`Kind::Date`].
+fn date(text: &str) -> Option<String> {
+    let t = text.trim();
+    let t = match t.split_once(['T', ' ']) {
+        Some((day, _)) => day,
+        None => t,
+    };
+    let parts: Vec<&str> = if t.len() == 8 && t.bytes().all(|b| b.is_ascii_digit()) {
+        vec![&t[..4], &t[4..6], &t[6..]]
+    } else {
+        t.split(['-', '/', '.']).collect()
+    };
+    let digits = |p: &str| !p.is_empty() && p.len() <= 2 && p.bytes().all(|b| b.is_ascii_digit());
+    let within = |p: &str, most: u32| p.parse::<u32>().is_ok_and(|v| (1..=most).contains(&v));
+    let year = parts
+        .first()
+        .filter(|y| y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit()) && **y != "0000")?;
+    match parts[1..] {
+        [] => Some((*year).to_string()),
+        [m] if digits(m) && within(m, 12) => Some(format!("{year}-{m:0>2}")),
+        [m, d] if digits(m) && digits(d) && within(m, 12) && within(d, 31) => {
+            Some(format!("{year}-{m:0>2}-{d:0>2}"))
+        }
+        _ => None,
+    }
+}
+
+fn isrc(text: &str) -> Option<String> {
+    let code: String = text
+        .chars()
+        .filter(|c| !matches!(c, '-' | ' '))
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    let b = code.as_bytes();
+    let fine = b.len() == 12
+        && b[..2].iter().all(u8::is_ascii_uppercase)
+        && b[2..5].iter().all(u8::is_ascii_alphanumeric)
+        && b[5..].iter().all(u8::is_ascii_digit);
+    fine.then_some(code)
+}
+
+fn mbid(text: &str) -> Option<String> {
+    let id = text.trim().to_ascii_lowercase();
+    let fine = id.len() == 36
+        && id.char_indices().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        });
+    fine.then_some(id)
+}
+
+/// One row of [`TABLE`]: all muman knows of a field.
+#[derive(Debug)]
+pub struct Spec {
+    pub field: Field,
+    /// The Vorbis comment it is written as, Picard's name for it.
+    pub vorbis: &'static str,
+    aliases: &'static [&'static str],
+    pub kind: Kind,
+    pub scope: Scope,
+}
+
+const fn row(
+    field: Field,
+    vorbis: &'static str,
+    aliases: &'static [&'static str],
+    kind: Kind,
+    scope: Scope,
+) -> Spec {
+    Spec {
+        field,
+        vorbis,
+        aliases,
+        kind,
+        scope,
+    }
+}
+
+/// Every field muman knows, in [`Field::ALL`]'s order.
+pub static TABLE: [Spec; 22] = {
+    use Field as F;
+    use Kind as K;
+    use Scope as S;
+    [
+        row(F::Title, "TITLE", &[], K::Text, S::Recording),
+        row(F::Artist, "ARTIST", &[], K::Text, S::Recording),
+        row(F::Album, "ALBUM", &[], K::Text, S::Release),
+        row(
+            F::AlbumArtist,
+            "ALBUMARTIST",
+            &["album_artist", "album artist"],
+            K::Text,
+            S::Release,
+        ),
+        row(
+            F::Track,
+            "TRACKNUMBER",
+            &["track", "track_number"],
+            K::Place,
+            S::Release,
+        ),
+        row(
+            F::Disc,
+            "DISCNUMBER",
+            &["disc", "disc_number"],
+            K::Place,
+            S::Release,
+        ),
+        row(F::Date, "DATE", &["year"], K::Date, S::Release),
+        row(F::Genre, "GENRE", &[], K::Text, S::Recording),
+        row(F::Isrc, "ISRC", &["tsrc"], K::Isrc, S::RecordingId),
+        row(
+            F::TrackTotal,
+            "TRACKTOTAL",
+            &["track_total", "totaltracks"],
+            K::Count,
+            S::Release,
+        ),
+        row(
+            F::DiscTotal,
+            "DISCTOTAL",
+            &["disc_total", "totaldiscs"],
+            K::Count,
+            S::Release,
+        ),
+        row(
+            F::ReleaseCountry,
+            "RELEASECOUNTRY",
+            &["release_country", "musicbrainz album release country"],
+            K::Text,
+            S::Release,
+        ),
+        row(
+            F::MusicBrainzTrackId,
+            "MUSICBRAINZ_TRACKID",
+            &["musicbrainz track id"],
+            K::Mbid,
+            S::RecordingId,
+        ),
+        row(
+            F::MusicBrainzReleaseTrackId,
+            "MUSICBRAINZ_RELEASETRACKID",
+            &["musicbrainz release track id"],
+            K::Mbid,
+            S::Release,
+        ),
+        row(
+            F::MusicBrainzAlbumId,
+            "MUSICBRAINZ_ALBUMID",
+            &["musicbrainz album id"],
+            K::Mbid,
+            S::Release,
+        ),
+        row(
+            F::MusicBrainzReleaseGroupId,
+            "MUSICBRAINZ_RELEASEGROUPID",
+            &["musicbrainz release group id"],
+            K::Mbid,
+            S::Release,
+        ),
+        row(
+            F::MusicBrainzArtistId,
+            "MUSICBRAINZ_ARTISTID",
+            &["musicbrainz artist id"],
+            K::Mbid,
+            S::RecordingId,
+        ),
+        row(
+            F::MusicBrainzAlbumArtistId,
+            "MUSICBRAINZ_ALBUMARTISTID",
+            &["musicbrainz album artist id"],
+            K::Mbid,
+            S::Release,
+        ),
+        row(
+            F::TrackGain,
+            "REPLAYGAIN_TRACK_GAIN",
+            &[],
+            K::Gain,
+            S::Loudness,
+        ),
+        row(
+            F::TrackPeak,
+            "REPLAYGAIN_TRACK_PEAK",
+            &[],
+            K::Peak,
+            S::Loudness,
+        ),
+        row(
+            F::AlbumGain,
+            "REPLAYGAIN_ALBUM_GAIN",
+            &[],
+            K::Gain,
+            S::AlbumLoudness,
+        ),
+        row(
+            F::AlbumPeak,
+            "REPLAYGAIN_ALBUM_PEAK",
+            &[],
+            K::Peak,
+            S::AlbumLoudness,
+        ),
+    ]
+};
+
 /// The Vorbis comment field a song list's tag name sets: a known field
 /// under its own spelling, any other upper-cased.
 #[must_use]
@@ -233,36 +447,32 @@ pub fn vorbis_key(name: &str) -> String {
     Field::named(name).map_or_else(|| name.to_ascii_uppercase(), |f| f.vorbis().to_string())
 }
 
-/// What is wrong with `value` as `name`'s, set by hand: a number that is
-/// none, a date that is none, or a gain muman measures and writes over.
-#[must_use]
-pub fn bad_value(name: &str, value: &str) -> Option<String> {
+/// `value` of the tag `name` as a song list holds it when set by hand,
+/// read as its field's [`Kind`] says, or what is wrong with it: a number
+/// that is none, a date that is none, or a gain muman measures and writes
+/// over.
+pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     let key = vorbis_key(name);
-    let v = value.trim();
-    match key.as_str() {
-        "TRACKNUMBER" | "DISCNUMBER" | "TRACKTOTAL" | "DISCTOTAL" => {
-            let whole = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
-            let fine = match v.split_once('/') {
-                Some((n, of)) => whole(n) && whole(of),
-                None => whole(v),
-            };
-            (!fine).then(|| format!("`{value}` is no number for {name}: give one as 3, or 3/12"))
-        }
-        "DATE" | "ORIGINALDATE" => {
-            let digits = |n: &str, len| n.len() == len && n.bytes().all(|b| b.is_ascii_digit());
-            let month = v
-                .split_once('-')
-                .is_some_and(|(y, m)| digits(y, 4) && digits(m, 2));
-            (!(digits(v, 4) || month || iso_date(v).is_some())).then(|| {
-                format!("`{value}` is no date for {name}: give YYYY-MM-DD, YYYY-MM or a year")
-            })
-        }
-        k if k.starts_with("REPLAYGAIN_") || k.starts_with("R128_") => Some(format!(
+    if key.starts_with("REPLAYGAIN_") || key.starts_with("R128_") {
+        return Err(format!(
             "{name} is measured by muman and written over on every sync; set [loudness] in \
              the song list instead"
-        )),
-        _ => None,
+        ));
     }
+    let kind = match Field::named(name) {
+        Some(f) => f.spec().kind,
+        None if key == "ORIGINALDATE" => Kind::Date,
+        None => Kind::Text,
+    };
+    kind.read(value)
+        .map_err(|why| format!("{name} = {value:?} is {why}"))
+}
+
+/// What is wrong with `value` as `name`'s, set by hand, as [`by_hand`]
+/// reads it.
+#[must_use]
+pub fn bad_value(name: &str, value: &str) -> Option<String> {
+    by_hand(name, value).err()
 }
 
 /// One source's value for a field.
@@ -283,15 +493,13 @@ pub type Offers = BTreeMap<Field, Offer>;
 const MAX_VALUE: usize = 4096;
 
 /// Offer `values` for `field`. Every source's values pass here, so a
-/// count reads alike whatever offers it: no leading zeros, and 0, which
-/// counts nothing, is none. A control character, which cuts a C string
+/// value reads alike whatever offers it, as its field's [`Kind`] reads
+/// it: a count with no leading zeros, a date as `YYYY-MM-DD`, and one
+/// that reads as none, as a count of 0, dropped. A control character, which cuts a C string
 /// short or moves a terminal's cursor, and one reordering the text are
 /// dropped, a line break or tab spaced.
 fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: bool) {
-    let counts = matches!(
-        field,
-        Field::Track | Field::Disc | Field::TrackTotal | Field::DiscTotal
-    );
+    let kind = field.spec().kind;
     let values: Vec<String> = values
         .into_iter()
         .filter(|v| v.len() <= MAX_VALUE)
@@ -305,12 +513,7 @@ fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: boo
                     c => Some(c),
                 })
                 .collect();
-            let v = v.trim();
-            if counts && v.bytes().all(|b| b.is_ascii_digit()) {
-                v.trim_start_matches('0').to_string()
-            } else {
-                v.to_string()
-            }
+            kind.read(&v).unwrap_or_default()
         })
         .filter(|v| !v.is_empty())
         .fold(Vec::new(), |mut seen, v| {
@@ -784,6 +987,76 @@ mod tests {
         assert_eq!(o[&Field::MusicBrainzArtistId].values.len(), 2);
         assert_eq!(o[&Field::Disc].values, ["1"]);
         assert_eq!(o[&Field::DiscTotal].values, ["3"], "a tag of its own wins");
+    }
+
+    #[test]
+    fn a_value_is_read_as_its_kind_spells_it() {
+        let read = |kind: Kind, v| kind.read(v).ok();
+        for (v, want) in [
+            ("2019", "2019"),
+            ("2019-7", "2019-07"),
+            ("2019/07/04", "2019-07-04"),
+            ("20190704", "2019-07-04"),
+            ("2019.07.04", "2019-07-04"),
+            ("2019-07-04T10:00:00Z", "2019-07-04"),
+            ("2019-07-04 10:00", "2019-07-04"),
+        ] {
+            assert_eq!(read(Kind::Date, v).as_deref(), Some(want), "{v}");
+        }
+        for bad in [
+            "July 2019",
+            "2019-13",
+            "2019-07-32",
+            "0000",
+            "19",
+            "2019-07-04-01",
+        ] {
+            assert_eq!(read(Kind::Date, bad), None, "{bad}");
+        }
+        assert_eq!(read(Kind::Place, "03/12").as_deref(), Some("3/12"));
+        assert_eq!(read(Kind::Place, "0"), None);
+        assert_eq!(read(Kind::Count, "3/12"), None);
+        assert_eq!(
+            read(Kind::Isrc, "xx-zz1-24-00001").as_deref(),
+            Some("XXZZ12400001")
+        );
+        assert_eq!(read(Kind::Isrc, "XXZZ124000"), None);
+        assert_eq!(
+            read(Kind::Mbid, "00000000-0000-0000-0000-00000000000A").as_deref(),
+            Some("00000000-0000-0000-0000-00000000000a")
+        );
+        assert_eq!(read(Kind::Mbid, "not-an-id"), None);
+        assert_eq!(read(Kind::Text, "a\u{0}b"), None);
+        assert_eq!(
+            read(Kind::Text, "two\nlines").as_deref(),
+            Some("two\nlines")
+        );
+    }
+
+    #[test]
+    fn a_source_s_value_its_field_cannot_hold_is_not_offered() {
+        let tags = BTreeMap::from([
+            ("date".to_string(), "2019/07/04".to_string()),
+            ("isrc".to_string(), "xx-zz1-24-00001".to_string()),
+            ("musicbrainz track id".to_string(), "none".to_string()),
+        ]);
+        let o = from_container(&each(tags));
+        assert_eq!(o[&Field::Date].values, ["2019-07-04"]);
+        assert_eq!(o[&Field::Isrc].values, ["XXZZ12400001"]);
+        assert!(!o.contains_key(&Field::MusicBrainzTrackId));
+        let o = from_container(&each(BTreeMap::from([(
+            "date".to_string(),
+            "July 2019".to_string(),
+        )])));
+        assert!(!o.contains_key(&Field::Date));
+    }
+
+    #[test]
+    fn the_table_holds_every_field_in_its_order() {
+        for (n, field) in Field::ALL.into_iter().enumerate() {
+            assert_eq!(TABLE[n].field, field);
+        }
+        assert_eq!(Field::named("Album Artist"), Some(Field::AlbumArtist));
     }
 
     #[test]

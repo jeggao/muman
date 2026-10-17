@@ -7,6 +7,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **A tag set by hand is read as its field holds it.** A track or disc
+  set as `3/12` writes the number and the total, a date as
+  `2019/07/04` writes `2019-07-04`, an ISRC is written without its
+  dashes, and `true` is written `1`. A value its field cannot hold, as a
+  date of `July 2019`, a track of `fast` or a ReplayGain gain, which
+  muman measures, refuses the song list, naming the song, where it was
+  written as it was.
+- **Sources offer only values their fields hold.** A source's date that
+  reads as none is no longer written as it was; its tags are read again
+  on the next sync.
+
 ### Fixed
 
 - **Opus of three, four or more than eight channels is written.** A
@@ -28,6 +41,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `[audio] downmix` layout the codec holds and measured as mixed; AAC
   in 5.1 with side speakers names them in the standard layout. Only
   such songs are encoded again.
+- **An MP3 with a date of no calendar can be tagged again.** A date
+  that is none, written into an MP3, made every later change to the
+  song's tags fail.
+- **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
+  track 0 of the old total, and FLAC the number and a stale total.
+- **`album artist` names the album artist** in a tag file, as foobar2000
+  writes it, rather than adding a tag beside it.
 
 ## [0.4.1] - 2026-10-15
 

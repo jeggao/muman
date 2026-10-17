@@ -1463,6 +1463,34 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
+fn a_place_set_by_hand_with_its_count_writes_both() {
+    let key = manual("x");
+    let facts = BTreeMap::from([(key.clone(), audio("flac", 1.0))]);
+    let mut s = song(std::slice::from_ref(&key));
+    s.tags = vec![
+        ("track".into(), vec!["5/9".into()]),
+        ("disc".into(), vec!["2/3".into()]),
+        ("disc_total".into(), vec!["4".into()]),
+    ];
+    let r = run(&s, &facts, &[]);
+    let value = |k: &str| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(value("TRACKNUMBER"), Some(vec!["5".to_string()]));
+    assert_eq!(value("TRACKTOTAL"), Some(vec!["9".to_string()]));
+    assert_eq!(value("DISCNUMBER"), Some(vec!["2".to_string()]));
+    assert_eq!(
+        value("DISCTOTAL"),
+        Some(vec!["4".to_string()]),
+        "named itself"
+    );
+}
+
+#[test]
 fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
     let settings = Audio {
         lossy: Codec::Mp3,

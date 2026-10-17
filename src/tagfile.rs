@@ -169,15 +169,10 @@ impl Sheet {
                     put(total_key, t.to_string());
                 }
             }
-            "DATE" => match date(value) {
-                Some(d) => put(key, d),
-                None => self.skip(format!("DATE {value:?}, which reads as no date")),
+            _ => match tags::by_hand(key, value) {
+                Ok(v) => put(key, v),
+                Err(why) => self.skip(why),
             },
-            "TRACKTOTAL" | "DISCTOTAL" => match number(value) {
-                Some(n) => put(key, n.to_string()),
-                None => self.skip(format!("{key} {value:?}, which is no count")),
-            },
-            _ => put(key, value.to_string()),
         }
     }
 
@@ -190,31 +185,6 @@ impl Sheet {
 
 fn number(s: &str) -> Option<u32> {
     s.trim().parse().ok().filter(|&n| n > 0)
-}
-
-/// A date as Vorbis comments write it: a year, a month or a day, of a
-/// real calendar; a time after it, as iTunes writes one, is cut.
-fn date(s: &str) -> Option<String> {
-    let s = s.trim();
-    let s = match s.split_once('T') {
-        Some((day, _)) if day.len() == 10 => day,
-        _ => s,
-    };
-    let iso = if s.len() == 8 {
-        tags::iso_date(s)?
-    } else {
-        s.to_string()
-    };
-    let parts: Vec<&str> = iso.split('-').collect();
-    let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|b| b.is_ascii_digit());
-    let within = |p: &str, most: u32| p.parse::<u32>().is_ok_and(|v| (1..=most).contains(&v));
-    let fine = match parts[..] {
-        [y] => digits(y, 4),
-        [y, m] => digits(y, 4) && digits(m, 2) && within(m, 12),
-        [y, m, d] => digits(y, 4) && digits(m, 2) && digits(d, 2) && within(m, 12) && within(d, 31),
-        _ => false,
-    };
-    (fine && parts[0] != "0000").then_some(iso)
 }
 
 /// What kind of tag file `path`, holding `text`, is, if any.
@@ -854,6 +824,7 @@ mod tests {
 
     #[test]
     fn dates_and_counts_are_real_ones() {
+        let date = |s| tags::Kind::Date.read(s).ok();
         assert_eq!(date("2011-03-04T10:00:00Z"), Some("2011-03-04".into()));
         for bad in ["2011-13", "2011-00", "2011-13-45", "20111399", "0000", "11"] {
             assert_eq!(date(bad), None, "{bad}");
@@ -883,7 +854,8 @@ mod tests {
                 ("ALBUM".into(), vec!["Orchards".into()])
             ]
         );
-        assert_eq!(date("2011-3"), None);
+        let date = |s| tags::Kind::Date.read(s).ok();
+        assert_eq!(date("2011-3"), Some("2011-03".into()));
         assert_eq!(date("2011"), Some("2011".into()));
     }
 

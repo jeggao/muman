@@ -1292,6 +1292,52 @@ fn set_by_hand(input: &Input<'_>, written: &mut Vec<(String, Slot)>) {
     for (name, values) in &input.song.tags {
         set(tags::vorbis_key(name), values.clone(), "song.tags");
     }
+    split_places(input, written);
+}
+
+/// A track or disc set by hand as `3/12` written as its number, its count
+/// written as the total, unless the song list names the total itself.
+fn split_places(input: &Input<'_>, written: &mut Vec<(String, Slot)>) {
+    let named = |field: Field| {
+        let hand = input
+            .song
+            .tags
+            .iter()
+            .chain(input.album.iter().flat_map(|a| &a.tags));
+        hand.into_iter()
+            .any(|(name, _)| Field::named(name) == Some(field))
+            || (field == Field::TrackTotal && input.album.is_some_and(|a| a.tracks.is_some()))
+    };
+    for (place, total) in [
+        (Field::Track, Field::TrackTotal),
+        (Field::Disc, Field::DiscTotal),
+    ] {
+        let Some(slot) = written
+            .iter_mut()
+            .find(|(k, _)| k == place.vorbis())
+            .map(|(_, s)| s)
+        else {
+            continue;
+        };
+        let Some((n, of)) = slot.values.first().and_then(|v| v.split_once('/')) else {
+            continue;
+        };
+        let (n, of) = (n.to_string(), of.to_string());
+        slot.values = vec![n];
+        let from = slot.from.clone();
+        if named(total) {
+            continue;
+        }
+        let total_slot = Slot {
+            values: vec![of],
+            from,
+            cleaned: Vec::new(),
+        };
+        match written.iter_mut().find(|(k, _)| k == total.vorbis()) {
+            Some((_, s)) => *s = total_slot,
+            None => insert_in_order(written, total, total_slot),
+        }
+    }
 }
 
 #[cfg(test)]

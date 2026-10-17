@@ -236,12 +236,9 @@ fn name_value(text: &str) -> Result<(String, String), String> {
 }
 
 fn date(text: &str) -> Result<String, String> {
-    let text = text.trim();
-    if text.len() == 4 && text.bytes().all(|b| b.is_ascii_digit()) {
-        return Ok(text.to_string());
-    }
-    crate::tags::iso_date(text)
-        .ok_or_else(|| format!("`{text}` is no date: give YYYY-MM-DD or a year"))
+    crate::tags::Kind::Date
+        .read(text)
+        .map_err(|why| format!("`{}` is {why}", text.trim()))
 }
 
 const QUERY_HELP: &str = "\

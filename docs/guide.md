@@ -146,9 +146,15 @@ it was served from.
 `tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
-(`musicbrainz_trackid`, `musicbrainz_albumid` and the like),
-`replaygain_track_gain` and its `_peak` and `album_` kin, or any
-other Vorbis comment name; a list sets a tag several times. `add
+(`musicbrainz_trackid`, `musicbrainz_albumid` and the like), or any
+other Vorbis comment name; a list sets a tag several times, and `true`
+or `false` is written `1` or `0`. Each value is read as its field holds
+it: a track or disc as `3`, or `3/12`, which sets the total too unless
+the song names it; a date as `YYYY-MM-DD`, `YYYY-MM` or a year, read
+from `2019/07/04` or `20190704` too; an ISRC without the dashes it is
+shown with. A value its field cannot hold, as a date of `July 2019`, or
+a ReplayGain gain or peak, which muman measures, refuses the song list,
+naming the song. `add
 --artist`, `--album` and the other tag flags set these on every song an
 `add` lists. `muman status` shows each tag's value and the source it
 came from.
@@ -452,8 +458,9 @@ no peaks, as Opus players read them, and an Opus source's R128 gains are
 read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
 `3/12` offers its total too. Fields with no tag of their own in MP3 or
-MP4 are written as Picard writes them there. A value over 4 KiB is
-offered by no source, and control characters and those that reorder
+MP4 are written as Picard writes them there. A value its field cannot
+hold, as a date that is none, and a value over 4 KiB are offered by no
+source, and control characters and those that reorder
 text are dropped from every value.
 
 ### Cleaning
