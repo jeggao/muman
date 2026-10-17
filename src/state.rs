@@ -472,6 +472,10 @@ impl State {
     pub fn save(&self, home: &Path) -> Result<()> {
         let mut text = serde_json::to_vec_pretty(self).context("writing the state")?;
         text.push(b'\n');
+        // A run that changed nothing leaves the home untouched.
+        if std::fs::read(home.join(STATE)).is_ok_and(|held| held == text) {
+            return Ok(());
+        }
         atomic::write(home, &atomic::Name::new(STATE)?, &text)
     }
 
@@ -932,6 +936,20 @@ mod tests {
         state.record_alignment(aligned(0, 1.0, 1, 1));
         state.record_alignment(aligned(5, 1.0, 1, 1));
         state.save(dir.path()).unwrap();
+        let file = dir.path().join(STATE);
+        let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+        state.save(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().modified().unwrap(),
+            then,
+            "the same state is not written again"
+        );
         let back = State::load(dir.path()).unwrap();
         assert_eq!(back.replaced, state.replaced);
         assert_eq!(

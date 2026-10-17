@@ -869,6 +869,21 @@ fn every_field_is_read_back_from_every_container_as_written() {
 }
 
 #[test]
+fn a_flac_tagged_after_none_names_the_vendor_a_build_does() {
+    let (_dir, path) = written(crate::testing::SILENCE_FLAC, "song.flac");
+    let flac = Format::Copy { codec: Codec::Flac };
+    write_tags(&path, flac, &[], None).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let bare = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    assert!(bare.vorbis_comments().is_none(), "no tags, no block");
+    let title = vec![("TITLE".to_string(), vec!["Lantern Weather".to_string()])];
+    write_tags(&path, flac, &title, None).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let read = FlacFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    assert_eq!(read.vorbis_comments().unwrap().vendor(), FFMPEG_VENDOR);
+}
+
+#[test]
 fn an_id3v2_3_artist_is_read_whole_and_a_genre_number_by_its_name() {
     use lofty::config::WriteOptions;
     use lofty::id3::v2::{FrameId, TextInformationFrame};

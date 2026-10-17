@@ -704,6 +704,9 @@ fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
         .build())
 }
 
+/// The vendor string ffmpeg names its Vorbis comments with, bit-exact.
+const FFMPEG_VENDOR: &str = "ffmpeg";
+
 /// Replace every comment the file carries with the plan's tags and the
 /// cover, keeping the encoder's vendor string and a FLAC's
 /// [`CHANNEL_MASK`].
@@ -791,7 +794,9 @@ fn vorbis_comments(
             let flac = FlacFile::read_from(file, options).with_context(reading)?;
             let own = flac.vorbis_comments();
             (
-                own.map(|c| c.vendor().to_string()).unwrap_or_default(),
+                // ffmpeg writes no comment block for a FLAC of no tags, and
+                // the vendor it would have named with it.
+                own.map_or_else(|| FFMPEG_VENDOR.to_string(), |c| c.vendor().to_string()),
                 own.and_then(|c| c.get(CHANNEL_MASK)).map(str::to_string),
             )
         }

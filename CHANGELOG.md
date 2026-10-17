@@ -77,9 +77,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000
   writes it, rather than adding a tag beside it.
-- **The state file is read back exactly.** A measure read from it could
-  differ from the one written in its last bit, so the first sync after
-  an `add` wrote the file again.
+- **The state file is read back exactly, and written only when it
+  changes.** A measure read from it could differ from the one written
+  in its last bit, so the first sync after an `add` wrote the file
+  again; and a sync with nothing to do wrote it anew all the same.
 - **A `work` tag no longer fails an MP3.** Set by hand or from a tag
   file, it was written under a frame that holds no text, and every
   write of the song failed.
