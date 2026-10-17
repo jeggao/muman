@@ -91,6 +91,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   sync; `max_path` cut names inside a flag or an emoji.
 - **Names Windows holds as one are told apart** by case as NTFS folds
   it: `ΟΔΟΣ` and `οδοσ` were written as two files where Windows keeps one.
+- **Cue sheets as rippers write them are read.** A sheet of one file a
+  track, its pregaps in the file before, as EAC writes it, was refused;
+  a `FILE` path with `\` matched no song outside Windows; a name left
+  unquoted was cut at its first space; and a data track counted as a
+  song.
+- **A song past an hour gets its lyrics.** LRCLIB refuses a duration
+  past 3600 s, and its refusal ended the lookup; such a song is now
+  found by search.
+- **Lyrics streams in more languages are found** where a file names
+  them by ISO 639-2, as Swedish `swe` or Hebrew `heb`.
+- **Exported files keep their time.** The zip's times were read as the
+  extracting machine's local time; each entry also carries its time in
+  UTC, as Info-ZIP, 7-Zip and libarchive read it.
+- **yt-dlp's list of every artist on an album is not its album artist**;
+  only a list of one is.
 - **A back cover is no song's cover.** A source's back cover, disc or
   booklet could be embedded as the front cover when it was the sharper
   picture; it is taken only when no other picture is.

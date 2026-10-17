@@ -691,10 +691,15 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         false,
     );
     offer(&mut o, Field::Album, one(info.album.as_ref()), true);
+    // yt-dlp's `album_artists` lists every artist on the album, which is
+    // the album's artist only when it names one.
     offer(
         &mut o,
         Field::AlbumArtist,
-        info.album_artists.clone().unwrap_or_default(),
+        info.album_artists
+            .clone()
+            .filter(|all| all.len() == 1)
+            .unwrap_or_default(),
         true,
     );
     offer(
@@ -1205,6 +1210,18 @@ mod tests {
         assert_eq!(o[&Field::Artist].values, ["A", "B"]);
         assert_eq!(o[&Field::Album].values, ["Record"]);
         assert_eq!(o[&Field::Date].values, ["2024-01-02"]);
+    }
+
+    #[test]
+    fn every_artist_on_an_album_is_not_its_artist() {
+        let o = from_info(&info(
+            r#"{"title": "Song", "album": "Record", "album_artists": ["Marlo Venn", "Kiri Hoshino"]}"#,
+        ));
+        assert!(!o.contains_key(&Field::AlbumArtist));
+        let o = from_info(&info(
+            r#"{"title": "Song", "album": "Record", "album_artists": ["Marlo Venn"]}"#,
+        ));
+        assert_eq!(o[&Field::AlbumArtist].values, ["Marlo Venn"]);
     }
 
     #[test]
