@@ -1270,8 +1270,10 @@ pub fn from_info(info: &VideoInfo) -> Offers {
 }
 
 /// What a MusicBrainz record offers: the recording's title, artists,
-/// ISRCs and IDs, and its release's album, album artist, track, disc,
-/// date, track total, country and IDs.
+/// ISRCs, IDs and first release's date, and its release's album, album
+/// artist, track, disc, date, track total, country, IDs, status, types
+/// and medium, and the labels, catalogue numbers, barcode, ASIN and
+/// script a lookup of the release answers.
 #[must_use]
 pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
@@ -1319,7 +1321,39 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
             r.artist_ids.clone(),
             true,
         );
+        // Picard writes a release's status and types in lower case.
+        let lower = |v: &String| v.to_lowercase();
+        offer(
+            &mut o,
+            Field::ReleaseStatus,
+            r.status.iter().map(lower).collect(),
+            true,
+        );
+        offer(
+            &mut o,
+            Field::ReleaseType,
+            r.types.iter().map(lower).collect(),
+            true,
+        );
+        offer(&mut o, Field::Media, one(r.media.as_ref()), true);
+        let d = &r.details;
+        offer(&mut o, Field::Label, d.labels.clone(), true);
+        offer(
+            &mut o,
+            Field::CatalogNumber,
+            d.catalog_numbers.clone(),
+            true,
+        );
+        offer(&mut o, Field::Barcode, one(d.barcode.as_ref()), true);
+        offer(&mut o, Field::Asin, one(d.asin.as_ref()), true);
+        offer(&mut o, Field::Script, one(d.script.as_ref()), true);
     }
+    offer(
+        &mut o,
+        Field::OriginalDate,
+        one(record.original_date.as_ref()),
+        true,
+    );
     o
 }
 
@@ -1978,6 +2012,7 @@ mod tests {
             isrcs: Vec::new(),
             length_ms: None,
             release: None,
+            original_date: None,
         };
         let o = from_record(&record);
         assert_eq!(o[&Field::Title].values, ["Escape Title[2J"]);
@@ -2005,9 +2040,28 @@ mod tests {
                 tracks: Some(12),
                 track_id: None,
                 disc: Some(1),
+                status: Some("Official".into()),
+                types: vec!["Album".into(), "Compilation".into()],
+                media: Some("CD".into()),
+                details: crate::musicbrainz::Details {
+                    labels: vec!["Harbor Lights Records".into()],
+                    catalog_numbers: vec!["HLR-0042".into()],
+                    barcode: Some("0012345678905".into()),
+                    asin: None,
+                    script: Some("Latn".into()),
+                },
             }),
+            original_date: Some("1999-02-01".into()),
         };
         let o = from_record(&record);
+        assert_eq!(o[&Field::OriginalDate].values, ["1999-02-01"]);
+        assert_eq!(o[&Field::ReleaseStatus].values, ["official"]);
+        assert_eq!(o[&Field::ReleaseType].values, ["album", "compilation"]);
+        assert_eq!(o[&Field::Media].values, ["CD"]);
+        assert_eq!(o[&Field::Label].values, ["Harbor Lights Records"]);
+        assert_eq!(o[&Field::CatalogNumber].values, ["HLR-0042"]);
+        assert_eq!(o[&Field::Barcode].values, ["0012345678905"]);
+        assert_eq!(o[&Field::Script].values, ["Latn"]);
         assert_eq!(o[&Field::Artist].values, ["A", "B"]);
         assert_eq!(o[&Field::Date].values, ["2004"]);
         assert_eq!(o[&Field::Track].values, ["3"]);
@@ -2018,7 +2072,7 @@ mod tests {
         );
         assert!(!o.contains_key(&Field::MusicBrainzReleaseTrackId));
         assert!(o.values().all(|v| v.structured));
-        assert_eq!(o.len(), 15);
+        assert_eq!(o.len(), 23);
     }
 
     #[test]

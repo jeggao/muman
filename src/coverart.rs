@@ -201,10 +201,12 @@ mod tests {
 
     fn found(server: &Server, q: &Query) -> Result<Option<Cover>> {
         let throttle = Throttle::none();
+        let releases = musicbrainz::Releases::default();
         let musicbrainz = musicbrainz::Client {
             base: "http://mb.test",
             transport: server,
             throttle: &throttle,
+            releases: &releases,
         };
         Client {
             base: "http://caa.test/",

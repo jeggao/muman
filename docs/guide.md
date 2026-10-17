@@ -531,7 +531,7 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube` | A video that is not a release | Searching YouTube for the artist and title: the first video with a person's subtitles that is the same recording, the artist's channel first |
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
-| `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
+| `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, dates, ISRCs and IDs, the release's type, status and medium, and its label, catalogue number and barcode from one more request a release | Title, first artist and length, preferring the song's album |
 | `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is |
 | `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz |
 

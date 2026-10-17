@@ -598,6 +598,7 @@ pub fn run<R: Runner, W: Write>(
             .key
             .clone()
             .unwrap_or_default();
+        let releases = musicbrainz::Releases::default();
         let clients = Clients {
             lrclib: lrclib::Client {
                 base: &bases.0,
@@ -608,6 +609,7 @@ pub fn run<R: Runner, W: Write>(
                 base: &bases.1,
                 transport: http,
                 throttle: &throttles.musicbrainz,
+                releases: &releases,
             },
             acoustid: acoustid::Client {
                 base: &bases.3,
@@ -940,10 +942,12 @@ pub fn refetch(
         transport: http,
         throttle: &throttles.lrclib,
     };
+    let releases = musicbrainz::Releases::default();
     let musicbrainz = musicbrainz::Client {
         base: &bases.1,
         transport: http,
         throttle: &throttles.musicbrainz,
+        releases: &releases,
     };
     let coverart_base = base(manifest, Provider::CoverArt);
     let covers = coverart::Client {
