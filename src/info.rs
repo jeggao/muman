@@ -1,90 +1,97 @@
 //! yt-dlp's info JSON, embedded in each file it fetched.
+//!
+//! Each of yt-dlp's extractors fills it its own way, and one may write a
+//! number as text, a count as a float or a `null` in a list. Every field
+//! is read leniently: a value of a type a field does not hold loses that
+//! field alone, never the file, whose title, IDs and page say which
+//! source it is.
 
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde::de::{DeserializeOwned, Deserializer};
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct VideoInfo {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub extractor_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub title: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub track: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "texts")]
     pub artists: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub artist: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "texts")]
     pub creators: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub creator: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub album: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "texts")]
     pub album_artists: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub album_artist: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole")]
     pub track_number: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole")]
     pub disc_number: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "texts")]
     pub genres: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub genre: Option<String>,
     /// `YYYYMMDD`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub release_date: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole")]
     pub release_year: Option<u32>,
     /// `YYYYMMDD`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub upload_date: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub uploader: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub channel: Option<String>,
     /// Language code to the formats it was offered in; only `name` is read.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub subtitles: BTreeMap<String, Vec<SubtitleFormat>>,
     /// The same, for captions the site generated.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub automatic_captions: BTreeMap<String, Vec<SubtitleFormat>>,
     /// The format fetched: one ID, or a video's and an audio's joined by
     /// `+`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub format_id: Option<String>,
     /// Every format the site offered.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "each")]
     pub formats: Vec<Format>,
     /// The page the video was fetched from.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub webpage_url: Option<String>,
     /// The address yt-dlp was given, which an info JSON it embeds leaves
     /// out.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub original_url: Option<String>,
     /// That address, copied where the embedded info JSON keeps it.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub muman_original_url: Option<String>,
 }
 
 /// One format a site offered, as yt-dlp lists it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 pub struct Format {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub format_id: String,
     /// Exact, where the site says it; `filesize_approx` is not read.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "whole")]
     pub filesize: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub acodec: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub vcodec: Option<String>,
 }
 
@@ -100,7 +107,7 @@ impl Format {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct SubtitleFormat {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub name: Option<String>,
 }
 
@@ -137,6 +144,48 @@ pub fn tags_digest(json: &[u8]) -> Option<String> {
         .filter(|(k, v)| TAG_FIELDS.contains(&k.as_str()) && !v.is_null())
         .collect();
     Some(crate::facts::digest(&serde_json::to_vec(&read).ok()?))
+}
+
+/// A field's value, or its default when it holds another type.
+fn lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(d: D) -> Result<T, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// A list's items of the type it holds, the others dropped: a `null`
+/// among a video's artists loses that one.
+fn each<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+fn texts<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.is_array().then(|| each(value).unwrap_or_default()))
+}
+
+/// A whole number, written as one, as a float or as text.
+fn whole<'de, D: Deserializer<'de>, T: TryFrom<u64>>(d: D) -> Result<Option<T>, D::Error> {
+    let n = match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n.as_u64().or_else(|| {
+            n.as_f64()
+                .filter(|f| f.is_finite() && *f >= 0.0 && f.fract() == 0.0)
+                .map(|f| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n = f as u64;
+                    n
+                })
+        }),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    };
+    Ok(n.and_then(|n| T::try_from(n).ok()))
 }
 
 pub fn parse(json: &[u8]) -> Result<VideoInfo> {
@@ -281,6 +330,26 @@ mod tests {
                 .to_string(),
             "tunes.example:a"
         );
+    }
+
+    #[test]
+    fn a_field_of_another_type_loses_that_field_alone() {
+        let i = info(
+            r#"{"id": "vid00000001", "title": "Lantern Weather", "track_number": "3",
+                "disc_number": 2.0, "release_year": -1, "artists": ["Marlo Venn", null],
+                "album": 7, "formats": [{"format_id": "251", "filesize": 1.5e6}, 3]}"#,
+        );
+        assert_eq!(i.id.as_deref(), Some("vid00000001"));
+        assert_eq!(i.title.as_deref(), Some("Lantern Weather"));
+        assert_eq!(i.track_number, Some(3));
+        assert_eq!(i.disc_number, Some(2));
+        assert_eq!(i.release_year, None);
+        assert_eq!(i.artists, Some(vec!["Marlo Venn".to_string()]));
+        assert_eq!(i.album, None);
+        assert_eq!(i.formats.len(), 1);
+        assert_eq!(i.formats[0].filesize, Some(1_500_000));
+        let i = info(r#"{"title": "T", "track_number": "three", "filesize": 0.5}"#);
+        assert_eq!((i.title.as_deref(), i.track_number), (Some("T"), None));
     }
 
     #[test]

@@ -13,6 +13,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   source in a layout no Vorbis layout names, as 2.1, 3.1 or 7.1.4,
   written to Opus failed on every sync: its tags could not be written
   into the file ffmpeg made.
+- **An info JSON with one odd field is still read.** A number written
+  as text or a `null` among a video's artists made muman ignore all of
+  yt-dlp's info JSON, so the file was added as a manual source with no
+  tags; now only that field is lost.
 
 ## [0.4.1] - 2026-10-15
 
