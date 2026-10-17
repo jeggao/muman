@@ -157,8 +157,9 @@ pub fn tags_digest(json: &[u8]) -> Option<String> {
 /// sent.
 const SENT: [&str; 2] = ["cookies", "http_headers"];
 
-/// `json` without the fields of [`SENT`], or `None` when it holds none
-/// or does not read.
+/// `json` without the fields holding what a request sent, `cookies` and
+/// `http_headers` at any depth, or `None` when it holds none or does not
+/// read.
 #[must_use]
 pub fn without_sent(json: &[u8]) -> Option<Vec<u8>> {
     let mut value: serde_json::Value = serde_json::from_slice(json).ok()?;
