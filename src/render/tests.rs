@@ -859,7 +859,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
     assert_eq!(text("TSOP").as_deref(), Some("Venn, Marlo"));
     assert_eq!(text("GRP1").as_deref(), Some("Night Songs"));
     assert_eq!(id3.get_user_text("BARCODE"), Some("0012345678905"));
-    assert!(verify(&mp3, &extended(), false).is_empty());
+    assert_eq!(verify(&mp3, &extended(), false), [] as [String; 0]);
 
     let (_d2, m4a) = written(crate::testing::SILENCE_M4A, "song.m4a");
     write_tags(&m4a, Format::Copy { codec: Codec::Aac }, &extended(), None).unwrap();
@@ -877,7 +877,7 @@ fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
     let cpil = ilst.get(&AtomIdent::Fourcc(*b"cpil")).unwrap();
     assert!(cpil.data().any(|d| matches!(d, AtomData::Bool(true))
         || matches!(d, AtomData::Unknown { data, .. } if data == &[1])));
-    assert!(verify(&m4a, &extended(), false).is_empty());
+    assert_eq!(verify(&m4a, &extended(), false), [] as [String; 0]);
 
     let (_d3, opus) = written(crate::testing::SILENCE_OPUS, "song.opus");
     write_tags(
@@ -929,5 +929,5 @@ fn a_key_tkey_cannot_hold_is_kept_as_its_vorbis_name() {
         .clone();
     assert!(id3.get_text(&FrameId::new("TKEY").unwrap()).is_none());
     assert_eq!(id3.get_user_text("INITIALKEY"), Some("8A"));
-    assert!(verify(&mp3, &tags, false).is_empty());
+    assert_eq!(verify(&mp3, &tags, false), [] as [String; 0]);
 }
