@@ -377,7 +377,8 @@ pub fn clean_lrc(text: &str) -> String {
     out
 }
 
-/// The timed lines of LRC: how many, and the first and last time.
+/// The timed lines of LRC that sing a word, as a line of no words only
+/// ends the one before: how many, and the first and last time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timing {
     pub lines: usize,
@@ -385,8 +386,6 @@ pub struct Timing {
     pub last_ms: i64,
 }
 
-/// The timing of the lines that sing a word; a line that ends one, of no
-/// words, is not one.
 #[must_use]
 pub fn timing(text: &str) -> Option<Timing> {
     let mut times = Vec::new();
@@ -543,15 +542,6 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
     out
 }
 
-/// `ms` played `stretch_ppm` parts per million longer, brought back.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
-    if stretch_ppm == 0 {
-        return ms;
-    }
-    (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
-}
-
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
@@ -575,6 +565,15 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
         .checked_add(whole.parse::<i64>().ok()?.checked_mul(1000)?)?
         .checked_add(frac_ms)?;
     Some((ms, after))
+}
+
+/// `ms` played `stretch_ppm` parts per million longer, brought back.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
+    if stretch_ppm == 0 {
+        return ms;
+    }
+    (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
 }
 
 #[cfg(test)]

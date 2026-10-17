@@ -1195,13 +1195,12 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         false,
     );
     offer(&mut o, Field::Album, one(info.album.as_ref()), true);
-    // yt-dlp's `album_artists` lists every artist on the album, which is
-    // the album's artist only when it names one.
     offer(
         &mut o,
         Field::AlbumArtist,
         info.album_artists
             .clone()
+            // Every artist on the album: its artist only when it names one.
             .filter(|all| all.len() == 1)
             .unwrap_or_default(),
         true,
