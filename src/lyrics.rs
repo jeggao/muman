@@ -9,6 +9,14 @@
 //! language tag is used only when the info JSON says nothing about
 //! subtitles, and it is the weaker match: yt-dlp tags Filipino `fin`,
 //! the code for Finnish.
+//!
+//! A line is no lyric when it is a cue or a credit. A cue is blank, only
+//! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
+//! `(Guitar solo)`, `（間奏）`); brackets of other words hold a backing
+//! vocal, which is sung. A credit is a credit word, a separator and a
+//! name, and is one only in a block at the start or end of the lyrics,
+//! where credits sit: between two lines sung, `Music by the water` is
+//! sung too.
 
 use crate::units;
 use std::fmt::Write as _;
@@ -153,49 +161,204 @@ pub fn pick<'a>(
         .map(|(_, s)| s)
 }
 
-/// Whether a line of lyrics is sung: not blank, not only music symbols,
-/// not a bracketed cue as `[Music]`, not a credit as `作詞：…`.
-#[must_use]
-pub fn is_lyric(text: &str) -> bool {
-    const CREDITS: [&str; 18] = [
-        "lyrics",
-        "lyric",
-        "music",
-        "composer",
-        "composed",
-        "arrange",
-        "arranged",
-        "arrangement",
-        "vocal",
-        "vocals",
-        "illust",
-        "illustration",
-        "movie",
-        "mix",
-        "作詞",
-        "作曲",
-        "編曲",
-        "動画",
-    ];
-    let t = text.trim();
-    if t.chars().all(|c| !c.is_alphanumeric()) {
-        return false;
-    }
-    let pairs = [('[', ']'), ('(', ')'), ('（', '）'), ('【', '】')];
-    if pairs.iter().any(|(o, c)| {
-        t.starts_with(*o)
-            && t.ends_with(*c)
-            && t[o.len_utf8()..].find(*c) == Some(t.len() - o.len_utf8() - c.len_utf8())
-    }) {
-        return false;
-    }
-    let lower = t.to_lowercase();
-    !CREDITS.iter().any(|word| {
-        lower.strip_prefix(word).is_some_and(|rest| {
-            let rest = rest.trim_start();
-            rest.starts_with([':', '：', '/', '・']) || rest.starts_with("by ")
+/// What a line of lyrics is, read on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Sung,
+    /// Blank, only music symbols, or a bracketed cue as `[Music]`.
+    Cue,
+    /// Shaped as a credit, `作詞：…` or `Music by …`: one only where
+    /// credits sit, before the first line sung or after the last.
+    Credit,
+}
+
+/// Words that make a wholly bracketed line a cue: a section, a sound
+/// that is not sung, or a repeat. A line in brackets of other words, as
+/// `(Down by the river)`, is a backing vocal and sung.
+const CUES: [&str; 44] = [
+    "instrumental",
+    "music",
+    "applause",
+    "laughter",
+    "laughing",
+    "laughs",
+    "cheering",
+    "cheers",
+    "chorus",
+    "prechorus",
+    "verse",
+    "intro",
+    "outro",
+    "bridge",
+    "hook",
+    "refrain",
+    "solo",
+    "interlude",
+    "repeat",
+    "repeats",
+    "spoken",
+    "speaking",
+    "inaudible",
+    "unintelligible",
+    "humming",
+    "mv",
+    "音楽",
+    "間奏",
+    "前奏",
+    "後奏",
+    "拍手",
+    "笑い",
+    "歓声",
+    "サビ",
+    "繰り返し",
+    "語り",
+    "セリフ",
+    "台詞",
+    "ソロ",
+    "ギターソロ",
+    "イントロ",
+    "アウトロ",
+    "コーラス",
+    "ブリッジ",
+];
+
+/// Words a cue may hold beside its cue words, as `(Guitar solo)` or
+/// `[Music fades out]`, which alone make no cue.
+const CUE_FILLERS: [&str; 26] = [
+    "a",
+    "and",
+    "the",
+    "of",
+    "with",
+    "in",
+    "out",
+    "pre",
+    "post",
+    "part",
+    "end",
+    "x",
+    "break",
+    "fade",
+    "fades",
+    "fading",
+    "playing",
+    "plays",
+    "continues",
+    "ends",
+    "guitar",
+    "piano",
+    "drum",
+    "drums",
+    "bass",
+    "crowd",
+];
+
+/// Words that open a credit, as `Music by …` or `作曲：…`.
+const CREDITS: [&str; 18] = [
+    "lyrics",
+    "lyric",
+    "music",
+    "composer",
+    "composed",
+    "arrange",
+    "arranged",
+    "arrangement",
+    "vocal",
+    "vocals",
+    "illust",
+    "illustration",
+    "movie",
+    "mix",
+    "作詞",
+    "作曲",
+    "編曲",
+    "動画",
+];
+
+/// Whether a word is a repeat, as `x2` or `3x`.
+fn is_repeat(word: &str) -> bool {
+    let digits = word
+        .strip_prefix('x')
+        .or_else(|| word.strip_suffix('x'))
+        .unwrap_or("");
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether the words inside a pair of brackets are a cue's: every one a
+/// cue word, a filler or a number, and one at least a cue word or a
+/// repeat. What follows a colon names who sings, as `[Chorus: …]`.
+fn is_cue(inner: &str) -> bool {
+    let head = inner.split([':', '：']).next().unwrap_or(inner);
+    let lower = head.to_lowercase().replace('×', "x");
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let cue = |w: &&str| CUES.contains(w) || is_repeat(w);
+    words.iter().any(cue)
+        && words
+            .iter()
+            .all(|w| cue(w) || CUE_FILLERS.contains(w) || w.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether `text` is shaped as a credit: a credit word, then `:`, `/`,
+/// `・` or `by`, then a name, which starts with no lowercase letter;
+/// `Lyrics/music: …` chains two.
+fn is_credit(text: &str) -> bool {
+    CREDITS.iter().any(|word| {
+        let Some(rest) = text
+            .get(..word.len())
+            .filter(|head| head.eq_ignore_ascii_case(word))
+            .map(|_| text[word.len()..].trim_start())
+        else {
+            return false;
+        };
+        let name = rest
+            .strip_prefix([':', '：', '/', '・'])
+            .or_else(|| rest.strip_prefix("by "))
+            .or_else(|| rest.strip_prefix("By "));
+        name.map(str::trim_start).is_some_and(|name| {
+            is_credit(name) || name.chars().next().is_some_and(|c| !c.is_lowercase())
         })
     })
+}
+
+/// What the line `text` is, read on its own.
+fn kind(text: &str) -> Kind {
+    let t = text.trim();
+    if t.chars().all(|c| !c.is_alphanumeric()) {
+        return Kind::Cue;
+    }
+    let pairs = [('[', ']'), ('(', ')'), ('（', '）'), ('【', '】')];
+    let bracketed = pairs.iter().find_map(|(o, c)| {
+        let inner = t.strip_prefix(*o)?.strip_suffix(*c)?;
+        (!inner.contains(*c)).then_some(inner)
+    });
+    if bracketed.is_some_and(is_cue) {
+        Kind::Cue
+    } else if is_credit(t) {
+        Kind::Credit
+    } else {
+        Kind::Sung
+    }
+}
+
+/// Which of `lines`, one text's lines of words in order, are no lyric:
+/// the cues, and the credits in a block at its start or end. A credit's
+/// shape between two lines sung is a line sung, as `Music by the water`.
+fn unsung<S: AsRef<str>>(lines: &[S]) -> Vec<bool> {
+    let kinds: Vec<Kind> = lines.iter().map(|l| kind(l.as_ref())).collect();
+    let first = kinds.iter().position(|k| *k == Kind::Sung);
+    let last = kinds.iter().rposition(|k| *k == Kind::Sung);
+    kinds
+        .iter()
+        .enumerate()
+        .map(|(i, k)| match (k, first, last) {
+            (Kind::Sung, ..) => false,
+            (Kind::Credit, Some(first), Some(last)) => i < first || i > last,
+            _ => true,
+        })
+        .collect()
 }
 
 /// The value of the first ID tag `name` in the LRC `text`, read in any
@@ -273,7 +436,7 @@ fn without_word_times(line: &str) -> String {
 /// untimed line but the ID tags, without the lines that are no lyric.
 #[must_use]
 pub fn sung(text: &str) -> String {
-    let mut out = String::new();
+    let mut words = Vec::new();
     for line in text.lines() {
         let mut rest = line.trim();
         let mut timed = false;
@@ -281,10 +444,16 @@ pub fn sung(text: &str) -> String {
             timed = true;
             rest = after;
         }
-        let words = without_word_times(rest);
-        let header = !timed && words.starts_with('[') && words.ends_with(']');
-        if !header && !words.trim().is_empty() && is_lyric(&words) {
-            out.push_str(words.trim());
+        let line = without_word_times(rest);
+        let header = !timed && line.starts_with('[') && line.ends_with(']');
+        if !header && !line.trim().is_empty() {
+            words.push(line.trim().to_string());
+        }
+    }
+    let mut out = String::new();
+    for (line, unsung) in words.iter().zip(unsung(&words)) {
+        if !unsung {
+            out.push_str(line);
             out.push('\n');
         }
     }
@@ -363,20 +532,32 @@ fn is_utf8(bytes: &[u8]) -> bool {
 /// words, which ends the line before it where the singing stops.
 #[must_use]
 pub fn clean_lrc(text: &str) -> String {
+    let lines: Vec<String> = text.lines().map(unmarked).collect();
+    let words: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let mut rest = line.as_str();
+            let mut timed = false;
+            while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+                timed = true;
+                rest = after;
+            }
+            let words = without_word_times(rest);
+            (timed && !words.trim().is_empty()).then_some((i, words))
+        })
+        .collect();
+    let texts: Vec<&str> = words.iter().map(|(_, w)| w.as_str()).collect();
+    let mut dropped = vec![false; lines.len()];
+    for ((i, _), unsung) in words.iter().zip(unsung(&texts)) {
+        dropped[*i] = unsung;
+    }
     let mut out = String::new();
-    for line in text.lines() {
-        let line = &unmarked(line);
-        let mut rest = line.as_str();
-        let mut timed = false;
-        while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            timed = true;
-            rest = after;
+    for (line, dropped) in lines.iter().zip(dropped) {
+        if !dropped {
+            out.push_str(line);
+            out.push('\n');
         }
-        if timed && !without_word_times(rest).trim().is_empty() && !is_lyric(rest) {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
     }
     out
 }
@@ -840,17 +1021,47 @@ mod tests {
             "Music by X",
             "Lyrics: Y",
             "【MV】",
+            "[Chorus]",
+            "[Verse 2: Marlo Venn]",
+            "(Guitar solo)",
+            "(x2)",
+            "（間奏）",
+            "Lyrics/music: Marlo Venn",
         ] {
-            assert!(!is_lyric(no), "{no}");
+            assert_eq!(sung(no), "", "{no}");
         }
         for yes in [
             "Music fills the harbor",
             "(I) miss the tide (so)",
             "灯台の夢",
             "Lyrics of a song I wrote",
+            "(Down by the river, down by the shore)",
+            "Music by the water plays all night",
+            "Mix: the night and the morning light",
         ] {
-            assert!(is_lyric(yes), "{yes}");
+            assert_eq!(sung(yes), format!("{yes}\n"), "{yes}");
         }
+    }
+
+    #[test]
+    fn a_credit_is_one_only_before_the_first_line_sung_or_after_the_last() {
+        let lrc = "[00:01.00]Lyrics: Marlo Venn\n[00:02.00]作曲：ほしのきり\n\
+                   [00:05.00]The lamps along the quay\n\
+                   [00:08.00](Down by the quay, down by the lamps)\n\
+                   [00:11.00]Music by Ada Quill burns low\n\
+                   [00:14.00][Chorus]\n[00:17.00]Last of the lamps\n\
+                   [00:20.00]Mix: Tobin Ash\n";
+        assert_eq!(
+            clean_lrc(lrc),
+            "[00:05.00]The lamps along the quay\n\
+             [00:08.00](Down by the quay, down by the lamps)\n\
+             [00:11.00]Music by Ada Quill burns low\n\
+             [00:17.00]Last of the lamps\n"
+        );
+        assert_eq!(
+            sung("Arranged by Tobin Ash\n\nfirst line\nArranged by Tobin Ash\nlast line\n"),
+            "first line\nArranged by Tobin Ash\nlast line\n"
+        );
     }
 
     #[test]

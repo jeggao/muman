@@ -81,6 +81,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An MP3 with a date of no calendar can be tagged again.** A date
   that is none, written into an MP3, made every later change to the
   song's tags fail.
+- **Sung lines in brackets or shaped as credits are kept.** Any line
+  wholly in parentheses was dropped as a cue, and any line starting
+  `Music by`, `Mix:` or the like as a credit, so backing vocals and
+  lines such as `Music by the water` were lost. A bracketed line is a
+  cue only when its words are, as `[Chorus]` or `(Guitar solo)`, and a
+  credit only before the first line sung or after the last, with a
+  name after its word.
 - **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000
