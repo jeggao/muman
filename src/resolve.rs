@@ -211,17 +211,18 @@ impl Format {
     }
 
     /// `audio` encoded under `settings`, whatever its codec: mixed into
-    /// another layout where `[audio] layouts` takes not its own, then to
+    /// another layout where `[audio] layouts` takes not its own or the
+    /// codec holds fewer channels ([`Audio::written_in`]), then to
     /// `[audio] lossy` or `lossless`, or where a lossless codec there
     /// cannot keep every channel and sample, to FLAC or else WavPack.
     #[must_use]
     pub fn encoded(audio: &AudioFacts, settings: &Audio) -> Self {
-        let (mix, shape) = settings.written(&audio.shape());
         let wanted = if audio.is_lossless() {
             settings.lossless
         } else {
             settings.lossy
         };
+        let (mix, shape) = settings.written_in(wanted, &audio.shape());
         let fallbacks: &[Codec] = if wanted.is_lossless() {
             &[Codec::Flac, Codec::WavPack]
         } else {

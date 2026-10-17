@@ -21,6 +21,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `.vtt` given to `add` in an encoding other than UTF-8, as Windows-1252
   or Shift-JIS, lost each cue ffmpeg could not read as UTF-8; it is
   decoded as lyrics files are before it is converted.
+- **Surround sources are mixed, not folded, into MP3 and AAC.** Audio
+  with more channels than MP3's two or AAC's eight was left to the
+  encoder to fold in, unscaled, and its loudness tags were the
+  source's, several dB off what plays. It is mixed into the first
+  `[audio] downmix` layout the codec holds and measured as mixed; AAC
+  in 5.1 with side speakers names them in the standard layout. Only
+  such songs are encoded again.
 
 ## [0.4.1] - 2026-10-15
 

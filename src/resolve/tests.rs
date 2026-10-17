@@ -1463,6 +1463,36 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
+fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
+    let settings = Audio {
+        lossy: Codec::Mp3,
+        downmix: vec![Layout::named("5.1").unwrap(), Layout::STEREO],
+        ..AUDIO.clone()
+    };
+    let key = manual("x");
+    let mut f = audio("aac", 1.0);
+    let a = f.audio.as_mut().unwrap();
+    a.channels = 6;
+    a.layout = Some("5.1".into());
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+    assert_eq!(r.plan.format.codec(), Codec::Mp3);
+    assert_eq!(r.plan.format.mix(), Some(Layout::STEREO), "MP3 holds two");
+    let aac = Audio {
+        lossy: Codec::Aac,
+        ..settings
+    };
+    let shape = crate::codec::Shape {
+        channels: 12,
+        layout: Some("7.1.4"),
+        sample_rate: 48_000,
+        bits: 0,
+        float: false,
+    };
+    assert_eq!(aac.written_in(Codec::Aac, &shape).0, Layout::named("5.1"));
+}
+
+#[test]
 fn a_plan_stored_before_loudness_reads_as_one_with_none() {
     let plan = Plan {
         version: 3,

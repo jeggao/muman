@@ -516,7 +516,7 @@ fn analyze_mixes<R: Runner, W: Write>(
         .filter_map(|l| {
             let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
             let audio = f.audio.as_ref()?;
-            let layout = settings.audio.written(&audio.shape()).0?;
+            let layout = crate::resolve::Format::encoded(audio, &settings.audio).mix()?;
             let rev = f.audio_rev();
             let unmixed = state
                 .mix(&l.key, &rev, layout)

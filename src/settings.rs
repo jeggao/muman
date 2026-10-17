@@ -296,6 +296,31 @@ impl Audio {
         (Some(*mix), mixed)
     }
 
+    /// [`Self::written`] for audio written in `codec`: audio with more
+    /// channels than a lossy codec holds is mixed into the first of
+    /// `downmix` it holds, else stereo, so the codec never folds them in.
+    #[must_use]
+    pub fn written_in<'a>(&self, codec: Codec, shape: &Shape<'a>) -> (Option<Layout>, Shape<'a>) {
+        let (mix, written) = self.written(shape);
+        match codec.max_channels() {
+            Some(most) if written.channels > most => {
+                let layout = self
+                    .downmix
+                    .iter()
+                    .copied()
+                    .find(|l| l.channels() <= most)
+                    .unwrap_or(Layout::STEREO);
+                let mixed = Shape {
+                    channels: layout.channels(),
+                    layout: Some(layout.name()),
+                    ..shape.clone()
+                };
+                (Some(layout), mixed)
+            }
+            _ => (mix, written),
+        }
+    }
+
     fn check(&self) -> Result<()> {
         if self.downmix.is_empty() {
             bail!("[audio] downmix names no layout to mix audio into");

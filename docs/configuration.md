@@ -157,14 +157,15 @@ encoder mix speakers anew to make it fit:
 | `wavpack` | Any channels; integer samples of up to 32 bits, or 32-bit float |
 | `opus` | Any channels: Vorbis layouts as they are, side speakers named as back ones, any other with no speakers named |
 | `vorbis` | Any channels, speakers named by their count; resampled to 44.1 or 48 kHz from a rate it cannot encode at |
-| `aac` | Up to 8 channels; more are folded in |
-| `mp3` | Two channels; more are folded in |
+| `aac` | Up to 8 channels; 5.0 and 5.1 with side speakers named as back ones |
+| `mp3` | Up to 2 channels |
 
 Lossless audio that `lossless` cannot hold whole is written as FLAC if
 FLAC can hold it, and as WavPack otherwise: a 7.1 master under
 `lossless = "alac"` becomes FLAC, a 32-bit or float one WavPack, so a
 float master louder than full scale keeps its peaks. 64-bit float is
-written at 32.
+written at 32. Lossy audio with more channels than `lossy` holds is mixed
+into the first of `[audio] downmix` it holds, or else stereo, as below.
 
 `[audio] layouts` lists the speaker layouts a song is written in as it
 is, by ffmpeg's names; a name with no variant in parentheses takes its

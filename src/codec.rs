@@ -38,8 +38,16 @@
 //!   no speakers named, each channel kept.
 //! - **Vorbis** names speakers by their count alone, and is resampled to
 //!   44.1 or 48 kHz from a rate its bitrate modes do not take.
-//! - **AAC** holds eight channels and **MP3** two; ffmpeg folds more into
-//!   them.
+//! - **AAC** holds eight channels, its five- and six-channel layouts with
+//!   back speakers; one with side speakers instead is relabelled to it,
+//!   as for Opus, else the file would name its speakers in a program
+//!   configuration element many decoders ignore. **MP3** holds two.
+//!
+//! A lossy codec is never left to fold more channels than it holds into
+//! the ones it has: ffmpeg would mix them unscaled, and the loudness
+//! written would be the source's, not the mix's. Such audio is mixed
+//! first, as `[audio] downmix` says, into the first of its layouts the
+//! codec holds ([`Codec::max_channels`]).
 //!
 //! Every container is written bit-exact: ffmpeg otherwise gives each Ogg
 //! stream a random serial number, so one plan rendered twice would differ
@@ -284,6 +292,10 @@ const VORBIS_LAYOUTS: [&str; 8] = ["mono", "stereo", "3.0", "quad", "5.0", "5.1"
 /// Layouts that are a Vorbis one with side speakers for back ones.
 const SIDE_LAYOUTS: [&str; 3] = ["quad(side)", "5.0(side)", "5.1(side)"];
 
+/// Layouts AAC names in a program configuration element alone, which
+/// with back speakers for side ones it names by its channel count.
+const AAC_SIDE_LAYOUTS: [&str; 2] = ["5.0(side)", "5.1(side)"];
+
 /// The layouts ffmpeg's ALAC encoder holds.
 const ALAC_LAYOUTS: [&str; 8] = [
     "mono",
@@ -399,12 +411,34 @@ impl Codec {
                     _ => Some(Adapt::Discrete),
                 })
             }
+            Self::Aac => (shape.channels <= 8).then(|| {
+                let vorbis = VORBIS_LAYOUTS.get(shape.channels as usize - 1).copied();
+                match shape.layout {
+                    Some(l) if AAC_SIDE_LAYOUTS.contains(&l) && vorbis.is_some() => {
+                        Some(Adapt::Relabel(shape.channels))
+                    }
+                    _ => None,
+                }
+            }),
+            Self::Mp3 => (shape.channels <= 2).then_some(None),
             Self::Vorbis => Some(match shape.sample_rate {
                 16_000 | 32_000 | 44_100 | 48_000 => None,
                 r if r % 11_025 == 0 => Some(Adapt::Resample(44_100)),
                 _ => Some(Adapt::Resample(48_000)),
             }),
-            Self::WavPack | Self::Aac | Self::Mp3 => Some(None),
+            Self::WavPack => Some(None),
+        }
+    }
+
+    /// The most channels a lossy codec holds, past which audio is mixed
+    /// into fewer before it is encoded; `None` for one that holds as many
+    /// as any source has, or a lossless one, which another replaces.
+    #[must_use]
+    pub fn max_channels(self) -> Option<u32> {
+        match self {
+            Self::Mp3 => Some(2),
+            Self::Aac => Some(8),
+            Self::Opus | Self::Vorbis | Self::Flac | Self::Alac | Self::WavPack => None,
         }
     }
 
@@ -591,6 +625,32 @@ mod tests {
                 [2..4],
             ["-af", "channelmap=channel_layout=5.1"]
         );
+    }
+
+    #[test]
+    fn a_lossy_codec_takes_no_more_channels_than_it_holds() {
+        let at = |codec: Codec, channels, layout| codec.adapt(&shape(channels, layout, 16, false));
+        assert_eq!(at(Codec::Mp3, 2, Some("stereo")), Some(None));
+        assert_eq!(at(Codec::Mp3, 6, Some("5.1")), None);
+        assert_eq!(at(Codec::Aac, 6, Some("5.1")), Some(None));
+        assert_eq!(
+            at(Codec::Aac, 6, Some("5.1(side)")),
+            Some(Some(Adapt::Relabel(6)))
+        );
+        assert_eq!(
+            at(Codec::Aac, 5, Some("5.0(side)")),
+            Some(Some(Adapt::Relabel(5)))
+        );
+        assert_eq!(at(Codec::Aac, 4, Some("quad(side)")), Some(None));
+        assert_eq!(at(Codec::Aac, 12, Some("7.1.4")), None);
+        for codec in Codec::ALL {
+            let most = codec.max_channels().unwrap_or(255);
+            let wide = shape(most, None, 16, false);
+            assert!(
+                codec.is_lossless() || codec.adapt(&wide).is_some(),
+                "{codec}"
+            );
+        }
     }
 
     #[test]
