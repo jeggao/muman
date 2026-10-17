@@ -85,6 +85,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A home on a filesystem without extended attributes fetches.** yt-dlp
+  was asked to write each file's source URL into its extended
+  attributes, and on a filesystem with none, as some network and
+  removable drives and sandboxes have, failed the whole download after
+  fetching it. muman reads nothing from them: the URL is in the info
+  JSON each file embeds.
 - **Opus of three, four or more than eight channels is written.** A
   source in a layout no Vorbis layout names, as 2.1, 3.1 or 7.1.4,
   written to Opus failed on every sync: its tags could not be written

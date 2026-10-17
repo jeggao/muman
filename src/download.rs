@@ -123,11 +123,6 @@ pub fn ytdlp_command(
         cmd.push(flag.into());
         cmd.push(value.into());
     }
-    // Extended attributes keep the source URL with the file; Windows'
-    // and many removable filesystems have none to keep it in.
-    if cfg!(unix) {
-        cmd.push("--xattrs".into());
-    }
     let plugins = places.plugins.filter(|_| options.plugins);
     let extractor = extractor_args(plugins.is_some());
     // skip=translated_subs leaves the translations of the speech
