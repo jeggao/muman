@@ -24,6 +24,11 @@
 //! its timeout and then a failure's backoff. A service that answered with
 //! an error, or with what does not read, failed that lookup alone.
 //!
+//! A listed record the store no longer holds is fetched again by its ID
+//! ([`refetch`]); one that fails, or that its service no longer has,
+//! waits as a source yt-dlp fetches does, an hour doubling, recorded in
+//! the state's `failures`.
+//!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Its MusicBrainz lookup
 //! waits while its AcoustID lookup is due, since both find a MusicBrainz
@@ -914,16 +919,30 @@ pub fn run<R: Runner, W: Write>(
     Ok(ok)
 }
 
+/// What [`refetch`] made of the records gone from the store.
+#[derive(Debug, Default)]
+pub struct Refetched {
+    /// Each record that could not be fetched again, with why.
+    pub failed: Vec<(SourceKey, String)>,
+    /// How many records wait for the next run, their service refusing or
+    /// unreachable, by why.
+    pub put_off: BTreeMap<String, usize>,
+    /// How many records were not asked for, as their fetch failed lately.
+    pub waiting: usize,
+}
+
 /// Fetch again every listed LRCLIB, MusicBrainz or Cover Art Archive
 /// record gone from the store, by its ID, asking each at the pace of
-/// `throttles`.
-/// Returns each that could not be, with why.
+/// `throttles`; one whose fetch `failures` records waits as a fetch
+/// does, unless `retry`.
 pub fn refetch(
     dirs: &Dirs,
     manifest: &Manifest,
     http: &(dyn HttpTransport + Sync),
     throttles: &Throttles,
-) -> Result<Vec<(SourceKey, String)>> {
+    failures: &BTreeMap<SourceKey, state::Failure>,
+    retry: bool,
+) -> Result<Refetched> {
     let store = Store::scan(dirs)?;
     let bases = (
         base(manifest, Provider::Lrclib),
@@ -957,12 +976,20 @@ pub fn refetch(
             .and_then(|f| f.tags.get(&Field::Album))
             .and_then(|o| o.values.first().cloned())
     };
-    let mut failed = Vec::new();
+    let now = state::now_secs();
+    let mut refetched = Refetched::default();
     for key in manifest.keys() {
         let SourceKey::Remote { site, id } = &key else {
             continue;
         };
-        if store.has(&key) {
+        if store.has(&key) || ![LRCLIB, MUSICBRAINZ, COVERART].contains(&site.as_str()) {
+            continue;
+        }
+        let failed_lately = failures
+            .get(&key)
+            .is_some_and(|f| f.step == state::Step::Fetch && !f.due(None, now));
+        if failed_lately && !retry {
+            refetched.waiting += 1;
             continue;
         }
         let kept = match site.as_str() {
@@ -989,11 +1016,16 @@ pub fn refetch(
         };
         match kept {
             Ok(Some(_)) => {}
-            Ok(None) => failed.push((key.clone(), "no such record".to_string())),
-            Err(e) => failed.push((key.clone(), format!("{e:#}"))),
+            Ok(None) => refetched
+                .failed
+                .push((key.clone(), "no such record".to_string())),
+            Err(e) => match http::put_off(&e) {
+                Some(why) => *refetched.put_off.entry(why.to_string()).or_default() += 1,
+                None => refetched.failed.push((key.clone(), format!("{e:#}"))),
+            },
         }
     }
-    Ok(failed)
+    Ok(refetched)
 }
 
 #[cfg(test)]

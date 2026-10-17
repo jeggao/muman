@@ -728,12 +728,34 @@ fn fetch_missing<R: Runner, W: Write>(
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
     })?;
-    let records = lookup::refetch(&job.dirs, manifest, http, &job.throttles)?;
-    for (key, error) in &records {
+    let records = lookup::refetch(
+        &job.dirs,
+        manifest,
+        http,
+        &job.throttles,
+        &state.failures,
+        retry,
+    )?;
+    if records.waiting > 0 {
+        ui::warning(
+            out,
+            &format!(
+                "Not fetching {} missing record(s) that failed lately; `sync --retry` tries now",
+                records.waiting
+            ),
+        )?;
+    }
+    for (why, n) in &records.put_off {
+        ui::warning(
+            out,
+            &format!("{why}: {n} missing record(s) wait for the next run"),
+        )?;
+    }
+    for (key, error) in &records.failed {
         ok = false;
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
-    failed.extend(records);
+    failed.extend(records.failed);
     let store = Store::scan(&job.dirs)?;
     let arrived: Vec<SourceKey> = state
         .failures

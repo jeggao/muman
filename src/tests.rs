@@ -1512,6 +1512,68 @@ fn lookups_on_a_network_that_is_down_wait_for_the_next_run_unrecorded() {
 }
 
 #[test]
+fn a_listed_record_no_longer_there_is_asked_for_again_only_when_due() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    let kept = s.dir.path().join("home/sources/lrclib/7.lrc");
+    std::fs::remove_file(&kept).unwrap();
+    let key = SourceKey::parse("lrclib:7").unwrap();
+    let failure = || {
+        State::load(&s.dir.path().join("home"))
+            .unwrap()
+            .failures
+            .get(&key)
+            .map(|f| f.count)
+    };
+    let asked_again = |server: &Server| {
+        server
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/api/get/7"))
+    };
+
+    let down = Server {
+        unreachable: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&down, &["sync"]);
+    assert!(
+        text.contains("1 missing record(s) wait for the next run"),
+        "{text}"
+    );
+    assert_eq!(failure(), None, "a network that is down fails nothing");
+
+    let gone = Server::default();
+    let (_, text) = s.run_against(&gone, &["sync"]);
+    assert!(asked_again(&gone), "{text}");
+    assert!(
+        text.contains("Could not fetch lrclib:7 again: no such record"),
+        "{text}"
+    );
+    assert_eq!(failure(), Some(1));
+
+    let gone = Server::default();
+    let (_, text) = s.run_against(&gone, &["sync"]);
+    assert!(!asked_again(&gone), "it waits an hour: {text}");
+    assert!(
+        text.contains("Not fetching 1 missing record(s) that failed lately"),
+        "{text}"
+    );
+    assert_eq!(failure(), Some(1));
+
+    let back = Server::default().answer("/api/get/7", RECORD);
+    let (ok, text) = s.run_against(&back, &["sync", "--retry"]);
+    assert!(ok, "{text}");
+    assert!(asked_again(&back) && kept.exists(), "{text}");
+    assert_eq!(failure(), None, "found again, it is cleared");
+}
+
+#[test]
 fn a_song_lrclib_lacks_is_not_asked_again_for_a_week() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

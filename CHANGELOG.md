@@ -226,6 +226,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   went when the turn came; it now waits out the refusal too, and once a
   service refuses or cannot be reached for the run, no request waiting
   for its turn is sent.
+- **A listed record that is gone is asked for less often.** A song's
+  `lrclib:`, `musicbrainz:` or `coverart:` record that its service no
+  longer has was asked for on every sync; like any fetch that fails, it
+  now waits an hour, doubling, until it is found again or `sync --retry`
+  asks at once. One whose service refuses or cannot be reached waits for
+  the next run, as a lookup does, and is not counted as failed.
 
 ## [0.4.1] - 2026-10-15
 

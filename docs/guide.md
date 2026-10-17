@@ -228,7 +228,10 @@ next, then as `[ytdlp] format` says; a video of another site from the
 address its `[sites]` table gives, else the page its song records, as
 that site's formats are numbered by their place in its list.
 One that fails waits an hour before the next try, doubling each time;
-`sync --retry` tries at once. yt-dlp is needed only by runs that fetch.
+`sync --retry` tries at once. A record a [lookup](#lookups-and-providers)
+kept, gone from the store, is fetched again by its ID, and waits alike
+when that fails or its service no longer has it. yt-dlp is needed only
+by runs that fetch.
 
 ### Manual files and sidecars
 
