@@ -609,7 +609,17 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     };
     let cover = pick_cover(input);
     let lyrics = pick_lyrics(input, &audio_key);
-    let (tags, tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
+    let (mut tags, mut tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
+    if let Some(code) = lyrics.as_ref().and_then(|(l, _)| lyrics_language(input, l))
+        && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
+    {
+        insert_comment(&mut tags, Field::Language, vec![code]);
+        tag_why.push(TagWhy {
+            key: Field::Language.vorbis().to_string(),
+            from: "the lyrics' language".to_string(),
+            cleaned: Vec::new(),
+        });
+    }
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -626,6 +636,9 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         date: get(Field::Date),
         track: get(Field::Track),
         disc: get(Field::Disc),
+        composer: get(Field::Composer),
+        bpm: get(Field::Bpm),
+        key: get(Field::InitialKey),
         id: &id,
     })?;
     Ok(Resolved {
@@ -793,6 +806,19 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
         None if stereo => "stereo".to_string(),
         None => "mono".to_string(),
     }
+}
+
+/// The ISO 639-2 code of the language the lyrics `lyrics` names are in,
+/// if their source says it.
+fn lyrics_language(input: &Input<'_>, lyrics: &LyricsRef) -> Option<String> {
+    let facts = input.facts.get(&lyrics.key)?;
+    let found = facts.lyrics.iter().find(|l| l.at == lyrics.at)?;
+    let code = match &found.language {
+        crate::lyrics::Language::Codes(codes) => codes.first()?.clone(),
+        crate::lyrics::Language::Tag(tag) => tag.clone(),
+        crate::lyrics::Language::Unstated => return None,
+    };
+    crate::tags::Kind::Language.read(&code).ok()
 }
 
 fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {

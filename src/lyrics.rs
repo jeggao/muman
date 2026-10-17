@@ -35,6 +35,13 @@ fn base(code: &str) -> &str {
     code.split(['-', '_']).next().unwrap_or(code)
 }
 
+/// The ISO 639-2 code of the language a two-letter code names, the
+/// terminologic one where it has two, as `ID3v2` marks a language.
+#[must_use]
+pub fn iso639_2_of(code: &str) -> Option<&'static str> {
+    iso639_2(code).first().copied()
+}
+
 /// ISO 639-2 codes, bibliographic and terminologic, for the languages
 /// subtitles are commonly offered in.
 fn iso639_2(code: &str) -> &'static [&'static str] {

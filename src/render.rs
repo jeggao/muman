@@ -475,10 +475,17 @@ fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<Str
     let held = crate::tags::read_file(path)
         .map(as_read)
         .unwrap_or_default();
+    // A container holding whole numbers holds a tempo rounded.
+    let alike = |f: &Field, a: &[String], b: &[String]| {
+        a == b || (f.spec().kind == crate::tags::Kind::Decimal && wholes(a) == wholes(b))
+    };
     let differ: Vec<&str> = wanted
         .iter()
         .filter(|(f, offer)| {
-            !f.is_loudness() && held.get(f).map(|o| &o.values) != Some(&offer.values)
+            !f.is_loudness()
+                && !held
+                    .get(f)
+                    .is_some_and(|o| alike(f, &o.values, &offer.values))
         })
         .map(|(f, _)| f.vorbis())
         .collect();
@@ -781,8 +788,11 @@ fn vorbis_comments(
         tags
     };
     for (key, values) in tags {
-        for value in values {
-            comments.push(key.clone(), value.clone());
+        let also = Field::named(key).map_or(&[][..], |f| f.spec().also_vorbis);
+        for name in std::iter::once(key.as_str()).chain(also.iter().copied()) {
+            for value in values {
+                comments.push(name.to_string(), value.clone());
+            }
         }
     }
     if let Some(picture) = picture {
@@ -823,6 +833,21 @@ fn values_of(tags: &[(String, Vec<String>)], field: Field) -> &[String] {
     tags.iter()
         .find(|(k, _)| k == field.vorbis())
         .map_or(&[], |(_, v)| v.as_slice())
+}
+
+/// Numbers as a format holding whole ones takes them, rounded: a tempo of
+/// 127.5 is 128 in `TBPM` and `tmpo`.
+fn wholes(values: &[String]) -> Vec<i64> {
+    values
+        .iter()
+        .filter_map(|v| v.parse::<f64>().ok())
+        .filter(|n| n.is_finite())
+        .map(|n| {
+            #[allow(clippy::cast_possible_truncation)]
+            let n = n.round() as i64;
+            n
+        })
+        .collect()
 }
 
 /// The total a place's field is counted against, and the place a total
@@ -928,15 +953,21 @@ fn id3_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Id3v2Tag
                 }),
                 Id3::Place(id) => text(id, place_text(tags, spec.field, values)),
                 Id3::Within => total_alone(tags, spec.field).then(|| user(spec.vorbis, joined)),
-            },
-            None => match key.as_str() {
-                "LYRICS" => Some(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+                Id3::Whole(id) => {
+                    let numbers: Vec<String> = wholes(values).iter().map(i64::to_string).collect();
+                    text(id, numbers.join("\0"))
+                }
+                Id3::Key if values.iter().all(|k| crate::tags::id3_key(k)) => text("TKEY", joined),
+                Id3::Key => Some(user("INITIALKEY", joined)),
+                Id3::Comment => Some(Frame::Comment(CommentFrame::new(
                     TextEncoding::UTF8,
                     language,
                     String::new(),
                     joined,
                 ))),
-                "COMMENT" => Some(Frame::Comment(CommentFrame::new(
+            },
+            None => match key.as_str() {
+                "LYRICS" => Some(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
                     TextEncoding::UTF8,
                     language,
                     String::new(),
@@ -986,7 +1017,6 @@ fn ilst_of(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Ilst {
     let own = |key: &str| -> AtomIdent<'static> {
         let named = match key {
             "LYRICS" => Some("©lyr"),
-            "COMMENT" => Some("©cmt"),
             _ => ItemKey::from_key(TagType::VorbisComments, key)
                 .and_then(|k| k.map_key(TagType::Mp4Ilst)),
         };
@@ -1010,6 +1040,27 @@ fn ilst_of(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Ilst {
             Some(spec) => match spec.mp4 {
                 Mp4::Text(name) => AtomIdent::Fourcc(crate::tags::fourcc(name)),
                 Mp4::Free(name) => free(name),
+                // iTunes holds a tempo as a 16-bit integer, and a flag as a byte.
+                Mp4::Whole(name) => {
+                    if let Some(n) = wholes(values).first().and_then(|n| i16::try_from(*n).ok()) {
+                        ilst.insert(Atom::new(
+                            AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                            AtomData::Unknown {
+                                code: lofty::mp4::DataType::BeSignedInteger,
+                                data: n.to_be_bytes().to_vec(),
+                            },
+                        ));
+                    }
+                    continue;
+                }
+                Mp4::Flag(name) => {
+                    let on = values.first().is_some_and(|v| v == "1");
+                    ilst.insert(Atom::new(
+                        AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                        AtomData::Bool(on),
+                    ));
+                    continue;
+                }
                 Mp4::Place(_) | Mp4::Within => {
                     let n = number(values.first());
                     match (spec.field, n) {
@@ -1055,7 +1106,6 @@ fn ape_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> ApeTag {
         } else {
             let name = match key.as_str() {
                 "LYRICS" => "Lyrics".to_string(),
-                "COMMENT" => "Comment".to_string(),
                 _ => ItemKey::from_key(TagType::VorbisComments, key)
                     .and_then(|k| k.map_key(TagType::Ape))
                     .map_or_else(|| key.clone(), str::to_string),

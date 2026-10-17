@@ -7,6 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Thirty more tags**, read from every source's own tags and from tag
+  files, set by hand, and written where Picard writes each in every
+  format: tempo (`bpm`), key, compilation, composer, lyricist,
+  conductor, remixer, label, catalogue number, barcode, ASIN, artists,
+  the sort names, original date, release type and status, media,
+  script, disc subtitle, mood, grouping, work, language, copyright,
+  comment, and the MusicBrainz work and disc IDs. A tempo is held
+  whole in MP3 and M4A, a compilation as M4A's flag, and a key in
+  `TKEY` where that frame holds it.
+- **A song's language is its lyrics'**, where no source says another,
+  and MP3 lyrics carry it.
+- **`composer`, `bpm` and `key` in the path template.**
+
 ### Changed
 
 - **`[library] max_path` counts characters as Windows does**, in UTF-16

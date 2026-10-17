@@ -77,6 +77,9 @@ pub struct Tags<'a> {
     pub date: Option<&'a str>,
     pub track: Option<&'a str>,
     pub disc: Option<&'a str>,
+    pub composer: Option<&'a str>,
+    pub bpm: Option<&'a str>,
+    pub key: Option<&'a str>,
     pub id: &'a str,
 }
 
@@ -155,6 +158,9 @@ impl Naming {
             track,
             disc,
             artists,
+            composer: safe(tags.composer),
+            bpm: safe(tags.bpm),
+            key: safe(tags.key),
             id: self.value(tags.id),
         };
         let rendered = self.template.render(&fields)?;

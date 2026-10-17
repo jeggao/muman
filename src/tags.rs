@@ -80,11 +80,44 @@ pub enum Field {
     AlbumGain,
     #[serde(rename = "replaygain_album_peak")]
     AlbumPeak,
+    Bpm,
+    InitialKey,
+    Compilation,
+    Composer,
+    Lyricist,
+    Conductor,
+    Remixer,
+    Label,
+    CatalogNumber,
+    Barcode,
+    Asin,
+    Artists,
+    ArtistSort,
+    AlbumArtistSort,
+    TitleSort,
+    AlbumSort,
+    ComposerSort,
+    OriginalDate,
+    ReleaseType,
+    ReleaseStatus,
+    Media,
+    Script,
+    DiscSubtitle,
+    Mood,
+    Grouping,
+    Work,
+    Language,
+    Copyright,
+    Comment,
+    #[serde(rename = "musicbrainz_workid")]
+    MusicBrainzWorkId,
+    #[serde(rename = "musicbrainz_discid")]
+    MusicBrainzDiscId,
 }
 
 impl Field {
     /// Every field, in the order written.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 53] = [
         Self::Title,
         Self::Artist,
         Self::Album,
@@ -107,6 +140,37 @@ impl Field {
         Self::TrackPeak,
         Self::AlbumGain,
         Self::AlbumPeak,
+        Self::Bpm,
+        Self::InitialKey,
+        Self::Compilation,
+        Self::Composer,
+        Self::Lyricist,
+        Self::Conductor,
+        Self::Remixer,
+        Self::Label,
+        Self::CatalogNumber,
+        Self::Barcode,
+        Self::Asin,
+        Self::Artists,
+        Self::ArtistSort,
+        Self::AlbumArtistSort,
+        Self::TitleSort,
+        Self::AlbumSort,
+        Self::ComposerSort,
+        Self::OriginalDate,
+        Self::ReleaseType,
+        Self::ReleaseStatus,
+        Self::Media,
+        Self::Script,
+        Self::DiscSubtitle,
+        Self::Mood,
+        Self::Grouping,
+        Self::Work,
+        Self::Language,
+        Self::Copyright,
+        Self::Comment,
+        Self::MusicBrainzWorkId,
+        Self::MusicBrainzDiscId,
     ];
 
     /// Its row of [`TABLE`].
@@ -156,7 +220,12 @@ impl Field {
     pub fn named(name: &str) -> Option<Self> {
         let lower = name.trim().to_ascii_lowercase();
         Self::ALL.into_iter().find(|f| {
-            f.vorbis().eq_ignore_ascii_case(&lower) || f.aliases().contains(&lower.as_str())
+            f.vorbis().eq_ignore_ascii_case(&lower)
+                || f.aliases().contains(&lower.as_str())
+                || f.spec()
+                    .also_vorbis
+                    .iter()
+                    .any(|v| v.eq_ignore_ascii_case(&lower))
         })
     }
 }
@@ -185,6 +254,18 @@ pub enum Kind {
     Mbid,
     /// A ReplayGain gain, measured by muman: `-6.12 dB`.
     Gain,
+    /// A number of up to two decimals, as a tempo in beats a minute.
+    Decimal,
+    /// Yes or no, written `1` or `0`.
+    Flag,
+    /// A musical key, as `Abm`, `F#`, or a DJ tool's `8A`.
+    MusicalKey,
+    /// A product's barcode, its digits alone, leading zeros kept: a UPC's
+    /// 12, an EAN's 13 or 8, a GTIN's 14.
+    Barcode,
+    /// A language by its ISO 639-2 code, as `jpn`; a two-letter one, as
+    /// `ja`, read as it.
+    Language,
     /// A ReplayGain peak, measured by muman: full scale 1, six decimals.
     Peak,
 }
@@ -218,6 +299,15 @@ impl Kind {
             Self::Mbid => mbid(v).ok_or("no MusicBrainz ID"),
             Self::Gain => gain(v).ok_or("no gain: give one as -6.12 dB"),
             Self::Peak => peak(v).ok_or("no peak: give one as 0.988312"),
+            Self::Decimal => decimal(v).ok_or("no number: give one as 128, or 127.5"),
+            Self::Flag => flag(v).ok_or("no yes or no: give 1 or 0"),
+            Self::MusicalKey => {
+                (!v.is_empty() && v.chars().count() <= 16 && !v.chars().any(char::is_control))
+                    .then(|| v.to_string())
+                    .ok_or("no key: give one as Abm")
+            }
+            Self::Barcode => barcode(v).ok_or("no barcode: give its 8 to 14 digits"),
+            Self::Language => language(v).ok_or("no language: give its ISO 639-2 code, as jpn"),
         }
     }
 }
@@ -273,6 +363,54 @@ fn isrc(text: &str) -> Option<String> {
     fine.then_some(code)
 }
 
+fn decimal(text: &str) -> Option<String> {
+    let n: f64 = text.trim().parse().ok()?;
+    (n.is_finite() && n > 0.0 && n < 10_000.0).then(|| {
+        let n = (n * 100.0).round() / 100.0;
+        format!("{n}")
+    })
+}
+
+fn flag(text: &str) -> Option<String> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Some("1".into()),
+        "0" | "false" | "no" => Some("0".into()),
+        _ => None,
+    }
+}
+
+fn barcode(text: &str) -> Option<String> {
+    let digits: String = text.chars().filter(|c| !matches!(c, ' ' | '-')).collect();
+    (matches!(digits.len(), 8 | 12 | 13 | 14) && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then_some(digits)
+}
+
+fn language(text: &str) -> Option<String> {
+    let code = text.trim().to_ascii_lowercase();
+    match code.len() {
+        3 if code.bytes().all(|b| b.is_ascii_lowercase()) => Some(code),
+        2 => crate::lyrics::iso639_2_of(&code).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Whether `key` is written as `ID3v2`'s `TKEY` holds one: a note `A` to
+/// `G`, then `b` or `#`, then `m` for minor; or `o` for no key.
+#[must_use]
+pub fn id3_key(key: &str) -> bool {
+    if key == "o" {
+        return true;
+    }
+    let Some((note, rest)) = key.as_bytes().split_first() else {
+        return false;
+    };
+    let rest = rest
+        .strip_prefix(b"b")
+        .or_else(|| rest.strip_prefix(b"#"))
+        .unwrap_or(rest);
+    (b'A'..=b'G').contains(note) && (rest.is_empty() || rest == b"m")
+}
+
 fn mbid(text: &str) -> Option<String> {
     let id = text.trim().to_ascii_lowercase();
     let fine = id.len() == 36
@@ -301,6 +439,13 @@ pub enum Id3 {
     Place(&'static str),
     /// Within another field's frame: a total in its place's.
     Within,
+    /// A text frame holding a whole number, as `TBPM`.
+    Whole(&'static str),
+    /// `TKEY`, in the notation it holds; a key written otherwise is a user
+    /// text frame of its Vorbis name.
+    Key,
+    /// A comment frame, `COMM`, of no description.
+    Comment,
 }
 
 /// Where a field is written in MP4's iTunes atoms, as Picard writes it.
@@ -314,6 +459,10 @@ pub enum Mp4 {
     Free(&'static str),
     /// Within another field's atom: a total in its place's.
     Within,
+    /// An atom holding a whole number, as `tmpo`.
+    Whole(&'static str),
+    /// An atom holding yes or no, as `cpil`.
+    Flag(&'static str),
 }
 
 /// The `MusicBrainz` owner of the unique file identifier it writes.
@@ -325,6 +474,9 @@ pub struct Spec {
     pub field: Field,
     /// The Vorbis comment it is written as, Picard's name for it.
     pub vorbis: &'static str,
+    /// Other Vorbis comments it is written as too, where readers differ
+    /// on its name: a key is `KEY` to Picard, `INITIALKEY` to DJ tools.
+    pub also_vorbis: &'static [&'static str],
     aliases: &'static [&'static str],
     pub kind: Kind,
     pub scope: Scope,
@@ -335,7 +487,7 @@ pub struct Spec {
 }
 
 /// Every field muman knows, in [`Field::ALL`]'s order.
-pub static TABLE: [Spec; 22] = {
+pub static TABLE: [Spec; 53] = {
     use Field as F;
     use Kind as K;
     use Scope as S;
@@ -343,6 +495,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field,
             vorbis,
+            also_vorbis: &[],
             aliases: &[],
             kind: Kind::Mbid,
             scope,
@@ -355,6 +508,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field,
             vorbis,
+            also_vorbis: &[],
             aliases: &[],
             kind,
             scope,
@@ -367,6 +521,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Title,
             vorbis: "TITLE",
+            also_vorbis: &[],
             aliases: &[],
             kind: K::Text,
             scope: S::Recording,
@@ -377,6 +532,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Artist,
             vorbis: "ARTIST",
+            also_vorbis: &[],
             aliases: &[],
             kind: K::Text,
             scope: S::Recording,
@@ -387,6 +543,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Album,
             vorbis: "ALBUM",
+            also_vorbis: &[],
             aliases: &[],
             kind: K::Text,
             scope: S::Release,
@@ -397,6 +554,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::AlbumArtist,
             vorbis: "ALBUMARTIST",
+            also_vorbis: &[],
             aliases: &["album_artist", "album artist"],
             kind: K::Text,
             scope: S::Release,
@@ -407,6 +565,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Track,
             vorbis: "TRACKNUMBER",
+            also_vorbis: &[],
             aliases: &["track", "track_number"],
             kind: K::Place,
             scope: S::Release,
@@ -417,6 +576,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Disc,
             vorbis: "DISCNUMBER",
+            also_vorbis: &[],
             aliases: &["disc", "disc_number"],
             kind: K::Place,
             scope: S::Release,
@@ -427,6 +587,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Date,
             vorbis: "DATE",
+            also_vorbis: &[],
             aliases: &["year"],
             kind: K::Date,
             scope: S::Release,
@@ -437,6 +598,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Genre,
             vorbis: "GENRE",
+            also_vorbis: &[],
             aliases: &[],
             kind: K::Text,
             scope: S::Recording,
@@ -447,6 +609,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::Isrc,
             vorbis: "ISRC",
+            also_vorbis: &[],
             aliases: &["tsrc"],
             kind: K::Isrc,
             scope: S::RecordingId,
@@ -457,6 +620,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::TrackTotal,
             vorbis: "TRACKTOTAL",
+            also_vorbis: &[],
             aliases: &["track_total", "totaltracks"],
             kind: K::Count,
             scope: S::Release,
@@ -467,6 +631,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::DiscTotal,
             vorbis: "DISCTOTAL",
+            also_vorbis: &[],
             aliases: &["disc_total", "totaldiscs"],
             kind: K::Count,
             scope: S::Release,
@@ -477,6 +642,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::ReleaseCountry,
             vorbis: "RELEASECOUNTRY",
+            also_vorbis: &[],
             aliases: &["release_country", "musicbrainz album release country"],
             kind: K::Text,
             scope: S::Release,
@@ -487,6 +653,7 @@ pub static TABLE: [Spec; 22] = {
         Spec {
             field: F::MusicBrainzTrackId,
             vorbis: "MUSICBRAINZ_TRACKID",
+            also_vorbis: &[],
             aliases: &["musicbrainz track id"],
             kind: K::Mbid,
             scope: S::RecordingId,
@@ -553,6 +720,347 @@ pub static TABLE: [Spec; 22] = {
             K::Peak,
             S::AlbumLoudness,
         ),
+        Spec {
+            field: F::Bpm,
+            vorbis: "BPM",
+            also_vorbis: &[],
+            aliases: &["tbpm", "tmpo", "tempo"],
+            kind: K::Decimal,
+            scope: S::Recording,
+            id3: Id3::Whole("TBPM"),
+            mp4: Mp4::Whole("tmpo"),
+            ape: Some("BPM"),
+        },
+        Spec {
+            field: F::InitialKey,
+            vorbis: "KEY",
+            also_vorbis: &["INITIALKEY"],
+            aliases: &["initialkey", "initial_key", "tkey"],
+            kind: K::MusicalKey,
+            scope: S::Recording,
+            id3: Id3::Key,
+            mp4: Mp4::Free("initialkey"),
+            ape: Some("KEY"),
+        },
+        Spec {
+            field: F::Compilation,
+            vorbis: "COMPILATION",
+            also_vorbis: &[],
+            aliases: &["tcmp", "cpil", "comp"],
+            kind: K::Flag,
+            scope: S::Release,
+            id3: Id3::Text("TCMP"),
+            mp4: Mp4::Flag("cpil"),
+            ape: Some("Compilation"),
+        },
+        Spec {
+            field: F::Composer,
+            vorbis: "COMPOSER",
+            also_vorbis: &[],
+            aliases: &["tcom"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TCOM"),
+            mp4: Mp4::Text("©wrt"),
+            ape: Some("Composer"),
+        },
+        Spec {
+            field: F::Lyricist,
+            vorbis: "LYRICIST",
+            also_vorbis: &[],
+            aliases: &["text"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TEXT"),
+            mp4: Mp4::Free("LYRICIST"),
+            ape: Some("Lyricist"),
+        },
+        Spec {
+            field: F::Conductor,
+            vorbis: "CONDUCTOR",
+            also_vorbis: &[],
+            aliases: &["tpe3"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TPE3"),
+            mp4: Mp4::Free("CONDUCTOR"),
+            ape: Some("Conductor"),
+        },
+        Spec {
+            field: F::Remixer,
+            vorbis: "REMIXER",
+            also_vorbis: &[],
+            aliases: &["tpe4", "mixartist"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TPE4"),
+            mp4: Mp4::Free("REMIXER"),
+            ape: Some("MixArtist"),
+        },
+        Spec {
+            field: F::Label,
+            vorbis: "LABEL",
+            also_vorbis: &[],
+            aliases: &["publisher", "organization", "tpub"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TPUB"),
+            mp4: Mp4::Free("LABEL"),
+            ape: Some("Label"),
+        },
+        Spec {
+            field: F::CatalogNumber,
+            vorbis: "CATALOGNUMBER",
+            also_vorbis: &[],
+            aliases: &["catalog_number", "catalognum"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("CATALOGNUMBER"),
+            mp4: Mp4::Free("CATALOGNUMBER"),
+            ape: Some("CatalogNumber"),
+        },
+        Spec {
+            field: F::Barcode,
+            vorbis: "BARCODE",
+            also_vorbis: &[],
+            aliases: &["upc", "ean"],
+            kind: K::Barcode,
+            scope: S::Release,
+            id3: Id3::User("BARCODE"),
+            mp4: Mp4::Free("BARCODE"),
+            ape: Some("Barcode"),
+        },
+        Spec {
+            field: F::Asin,
+            vorbis: "ASIN",
+            also_vorbis: &[],
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("ASIN"),
+            mp4: Mp4::Free("ASIN"),
+            ape: Some("ASIN"),
+        },
+        Spec {
+            field: F::Artists,
+            vorbis: "ARTISTS",
+            also_vorbis: &[],
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::User("ARTISTS"),
+            mp4: Mp4::Free("ARTISTS"),
+            ape: Some("Artists"),
+        },
+        Spec {
+            field: F::ArtistSort,
+            vorbis: "ARTISTSORT",
+            also_vorbis: &[],
+            aliases: &["artist_sort", "tsop", "soar"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TSOP"),
+            mp4: Mp4::Text("soar"),
+            ape: Some("ArtistSort"),
+        },
+        Spec {
+            field: F::AlbumArtistSort,
+            vorbis: "ALBUMARTISTSORT",
+            also_vorbis: &[],
+            aliases: &["album_artist_sort", "tso2", "soaa"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TSO2"),
+            mp4: Mp4::Text("soaa"),
+            ape: Some("AlbumArtistSort"),
+        },
+        Spec {
+            field: F::TitleSort,
+            vorbis: "TITLESORT",
+            also_vorbis: &[],
+            aliases: &["title_sort", "tsot", "sonm"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TSOT"),
+            mp4: Mp4::Text("sonm"),
+            ape: Some("TitleSort"),
+        },
+        Spec {
+            field: F::AlbumSort,
+            vorbis: "ALBUMSORT",
+            also_vorbis: &[],
+            aliases: &["album_sort", "tsoa", "soal"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TSOA"),
+            mp4: Mp4::Text("soal"),
+            ape: Some("AlbumSort"),
+        },
+        Spec {
+            field: F::ComposerSort,
+            vorbis: "COMPOSERSORT",
+            also_vorbis: &[],
+            aliases: &["composer_sort", "tsoc", "soco"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TSOC"),
+            mp4: Mp4::Text("soco"),
+            ape: Some("ComposerSort"),
+        },
+        Spec {
+            field: F::OriginalDate,
+            vorbis: "ORIGINALDATE",
+            also_vorbis: &[],
+            aliases: &["original_date", "tdor"],
+            kind: K::Date,
+            scope: S::Release,
+            id3: Id3::Time("TDOR"),
+            mp4: Mp4::Free("ORIGINALDATE"),
+            ape: Some("ORIGINALDATE"),
+        },
+        Spec {
+            field: F::ReleaseType,
+            vorbis: "RELEASETYPE",
+            also_vorbis: &[],
+            aliases: &["release_type", "musicbrainz album type"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("MusicBrainz Album Type"),
+            mp4: Mp4::Free("MusicBrainz Album Type"),
+            ape: Some("MUSICBRAINZ_ALBUMTYPE"),
+        },
+        Spec {
+            field: F::ReleaseStatus,
+            vorbis: "RELEASESTATUS",
+            also_vorbis: &[],
+            aliases: &["release_status", "musicbrainz album status"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("MusicBrainz Album Status"),
+            mp4: Mp4::Free("MusicBrainz Album Status"),
+            ape: Some("MUSICBRAINZ_ALBUMSTATUS"),
+        },
+        Spec {
+            field: F::Media,
+            vorbis: "MEDIA",
+            also_vorbis: &[],
+            aliases: &["tmed"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TMED"),
+            mp4: Mp4::Free("MEDIA"),
+            ape: Some("Media"),
+        },
+        Spec {
+            field: F::Script,
+            vorbis: "SCRIPT",
+            also_vorbis: &[],
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("SCRIPT"),
+            mp4: Mp4::Free("SCRIPT"),
+            ape: Some("Script"),
+        },
+        Spec {
+            field: F::DiscSubtitle,
+            vorbis: "DISCSUBTITLE",
+            also_vorbis: &[],
+            aliases: &["disc_subtitle", "tsst"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TSST"),
+            mp4: Mp4::Free("DISCSUBTITLE"),
+            ape: Some("DiscSubtitle"),
+        },
+        Spec {
+            field: F::Mood,
+            vorbis: "MOOD",
+            also_vorbis: &[],
+            aliases: &["tmoo"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TMOO"),
+            mp4: Mp4::Free("MOOD"),
+            ape: Some("Mood"),
+        },
+        Spec {
+            field: F::Grouping,
+            vorbis: "GROUPING",
+            also_vorbis: &[],
+            aliases: &["grp1", "©grp"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("GRP1"),
+            mp4: Mp4::Text("©grp"),
+            ape: Some("Grouping"),
+        },
+        Spec {
+            field: F::Work,
+            vorbis: "WORK",
+            also_vorbis: &[],
+            aliases: &["tit1", "©wrk"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TIT1"),
+            mp4: Mp4::Text("©wrk"),
+            ape: Some("Work"),
+        },
+        Spec {
+            field: F::Language,
+            vorbis: "LANGUAGE",
+            also_vorbis: &[],
+            aliases: &["tlan"],
+            kind: K::Language,
+            scope: S::Recording,
+            id3: Id3::Text("TLAN"),
+            mp4: Mp4::Free("LANGUAGE"),
+            ape: Some("Language"),
+        },
+        Spec {
+            field: F::Copyright,
+            vorbis: "COPYRIGHT",
+            also_vorbis: &[],
+            aliases: &["tcop", "cprt"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TCOP"),
+            mp4: Mp4::Text("cprt"),
+            ape: Some("Copyright"),
+        },
+        Spec {
+            field: F::Comment,
+            vorbis: "COMMENT",
+            also_vorbis: &[],
+            aliases: &["comm", "description"],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Comment,
+            mp4: Mp4::Text("©cmt"),
+            ape: Some("Comment"),
+        },
+        Spec {
+            field: F::MusicBrainzWorkId,
+            vorbis: "MUSICBRAINZ_WORKID",
+            also_vorbis: &[],
+            aliases: &["musicbrainz work id"],
+            kind: K::Mbid,
+            scope: S::RecordingId,
+            id3: Id3::User("MusicBrainz Work Id"),
+            mp4: Mp4::Free("MusicBrainz Work Id"),
+            ape: Some("MUSICBRAINZ_WORKID"),
+        },
+        Spec {
+            field: F::MusicBrainzDiscId,
+            vorbis: "MUSICBRAINZ_DISCID",
+            also_vorbis: &[],
+            aliases: &["musicbrainz disc id"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("MusicBrainz Disc Id"),
+            mp4: Mp4::Free("MusicBrainz Disc Id"),
+            ape: Some("MUSICBRAINZ_DISCID"),
+        },
     ]
 };
 
@@ -590,11 +1098,7 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
              the song list instead"
         ));
     }
-    let kind = match Field::named(name) {
-        Some(f) => f.spec().kind,
-        None if key == "ORIGINALDATE" => Kind::Date,
-        None => Kind::Text,
-    };
+    let kind = Field::named(name).map_or(Kind::Text, |f| f.spec().kind);
     kind.read(value)
         .map_err(|why| format!("{name} = {value:?} is {why}"))
 }
@@ -942,6 +1446,36 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
                     .into_iter()
                     .collect(),
                 Id3::Within => Vec::new(),
+                Id3::Whole(id) => FrameId::new(id)
+                    .ok()
+                    .and_then(|id| tag.get_text(&id))
+                    .map(|t| split(t, id))
+                    .unwrap_or_default(),
+                Id3::Key => FrameId::new("TKEY")
+                    .ok()
+                    .and_then(|id| tag.get_text(&id))
+                    .map(|t| split(t, "TKEY"))
+                    .or_else(|| {
+                        frames.iter().find_map(|f| match f {
+                            Frame::UserText(t)
+                                if t.description.eq_ignore_ascii_case("INITIALKEY") =>
+                            {
+                                Some(split(&t.content, "TXXX"))
+                            }
+                            _ => None,
+                        })
+                    })
+                    .unwrap_or_default(),
+                Id3::Comment => frames
+                    .iter()
+                    .find_map(|f| match f {
+                        Frame::Comment(c) if c.description.is_empty() => {
+                            Some(c.content.to_string())
+                        }
+                        _ => None,
+                    })
+                    .into_iter()
+                    .collect(),
             };
             (spec, values)
         })
@@ -975,6 +1509,33 @@ fn ilst_fields(ilst: &lofty::mp4::Ilst) -> Read {
                 Mp4::Free(name) => all(&|i| {
                     matches!(i, AtomIdent::Freeform { name: n, .. } if n.eq_ignore_ascii_case(name))
                 }),
+                Mp4::Whole(name) => ilst
+                    .get(&AtomIdent::Fourcc(fourcc(name)))
+                    .into_iter()
+                    .flat_map(lofty::mp4::Atom::data)
+                    .filter_map(|d| match d {
+                        AtomData::SignedInteger(n) => Some(n.to_string()),
+                        AtomData::UnsignedInteger(n) => Some(n.to_string()),
+                        AtomData::Unknown { data, .. } if !data.is_empty() && data.len() <= 4 => {
+                            let mut be = [0; 4];
+                            be[4 - data.len()..].copy_from_slice(data);
+                            Some(u32::from_be_bytes(be).to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                Mp4::Flag(name) => ilst
+                    .get(&AtomIdent::Fourcc(fourcc(name)))
+                    .into_iter()
+                    .flat_map(lofty::mp4::Atom::data)
+                    .filter_map(|d| match d {
+                        AtomData::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
+                        AtomData::Unknown { data, .. } => {
+                            data.first().map(|b| if *b == 0 { "0" } else { "1" }.to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
                 Mp4::Place(_) | Mp4::Within => {
                     let n = match spec.field {
                         Field::Track => ilst.track(),
@@ -1257,7 +1818,7 @@ mod tests {
             ("album_artist".to_string(), "A".to_string()),
             ("track".to_string(), "03/12".to_string()),
             ("date".to_string(), "2001-05-06T00:00:00".to_string()),
-            ("comment".to_string(), "x".to_string()),
+            ("encoder".to_string(), "x".to_string()),
         ]);
         let o = from_container(&each(tags));
         assert_eq!(o[&Field::Track].values, ["3"]);
@@ -1347,6 +1908,28 @@ mod tests {
             "July 2019".to_string(),
         )])));
         assert!(!o.contains_key(&Field::Date));
+    }
+
+    #[test]
+    fn extended_kinds_read_as_their_formats_hold_them() {
+        let read = |kind: Kind, v| kind.read(v).ok();
+        assert_eq!(read(Kind::Decimal, "127.50").as_deref(), Some("127.5"));
+        assert_eq!(read(Kind::Decimal, "128").as_deref(), Some("128"));
+        assert_eq!(read(Kind::Decimal, "fast"), None);
+        assert_eq!(read(Kind::Flag, "true").as_deref(), Some("1"));
+        assert_eq!(read(Kind::Flag, "maybe"), None);
+        assert_eq!(
+            read(Kind::Barcode, "0 12345 67890 5").as_deref(),
+            Some("012345678905")
+        );
+        assert_eq!(read(Kind::Barcode, "12345"), None);
+        assert_eq!(read(Kind::Language, "ja").as_deref(), Some("jpn"));
+        assert_eq!(read(Kind::Language, "SWE").as_deref(), Some("swe"));
+        assert!(id3_key("Abm") && id3_key("F#") && id3_key("C") && id3_key("o"));
+        assert!(!id3_key("8A") && !id3_key("H") && !id3_key("A minor") && !id3_key("Am#"));
+        assert_eq!(Field::named("initialkey"), Some(Field::InitialKey));
+        assert_eq!(Field::named("INITIALKEY"), Some(Field::InitialKey));
+        assert_eq!(Field::named("publisher"), Some(Field::Label));
     }
 
     #[test]

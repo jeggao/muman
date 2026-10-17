@@ -326,6 +326,8 @@ the extension. `/` in the template separates folders.
 | Variable | Holds |
 |---|---|
 | `album`, `album_artist` | The album and its artist, or the fallback names when missing |
+| `bpm`, `key` | The tempo and the musical key, or empty |
+| `composer` | The composer, or empty |
 | `artist`, `artists` | The first artist, and every artist as a list; empty when missing, with no fallback name, so `{{ artist or album_artist }}` gives one |
 | `date`, `year` | The date as tagged, and its first four digits |
 | `disc`, `track` | The disc and track numbers, or none |

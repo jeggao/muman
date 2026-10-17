@@ -8,6 +8,7 @@
 //! | `year` | The first four digits of `date`, or empty |
 //! | `track`, `disc` | The track and disc numbers, or none, which writes nothing |
 //! | `disc_track` | `"03 "` on a first disc, `"2-03 "` on a later one, `""` without a track |
+//! | `composer`, `bpm`, `key` | The composer, the tempo and the musical key, or empty |
 //! | `id` | The ID or file name of the song's audio source |
 //!
 //! Besides MiniJinja's own filters (`default`, `lower`, `upper`,
@@ -35,6 +36,9 @@ pub struct Fields {
     pub track: Option<u32>,
     pub disc: Option<u32>,
     pub disc_track: String,
+    pub composer: String,
+    pub bpm: String,
+    pub key: String,
     pub id: String,
 }
 

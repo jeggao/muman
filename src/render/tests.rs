@@ -638,7 +638,11 @@ fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
     assert_eq!(text("TPOS"), Some("2"));
     assert_eq!(text("TSRC"), Some("XXZZ12400001\0XXZZ12400002"));
     assert_eq!(text("TCOM"), Some("Odile Marsh"));
-    assert_eq!(id3.get_user_text("WORK"), Some("Harbor Suite"));
+    assert_eq!(
+        text("TIT1"),
+        Some("Harbor Suite"),
+        "the work, as iTunes reads it"
+    );
     assert_eq!(id3.get_user_text("REPLAYGAIN_TRACK_GAIN"), Some("-6.12 dB"));
     assert_eq!(
         id3.get_user_text("MusicBrainz Album Id"),
@@ -807,4 +811,123 @@ fn a_cover_too_large_for_any_container_is_made_smaller() {
     let fitted = fit_cover(&fake, huge, &path, dir.path()).unwrap();
     assert!(fitted.data().len() <= FLAC_BLOCK);
     assert!(fake.ran("mjpeg"));
+}
+
+fn extended() -> Vec<(String, Vec<String>)> {
+    [
+        ("TITLE", vec!["Lantern Weather"]),
+        ("BPM", vec!["127.5"]),
+        ("KEY", vec!["Abm"]),
+        ("COMPILATION", vec!["1"]),
+        ("LABEL", vec!["Harbor Lights Records"]),
+        ("BARCODE", vec!["0012345678905"]),
+        ("ARTISTSORT", vec!["Venn, Marlo"]),
+        ("ORIGINALDATE", vec!["2001-05-03"]),
+        ("GROUPING", vec!["Night Songs"]),
+        ("COMMENT", vec!["take two"]),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.into_iter().map(str::to_string).collect()))
+    .collect()
+}
+
+#[test]
+fn extended_tags_are_written_as_each_container_types_them_and_read_back() {
+    use lofty::id3::v2::FrameId;
+    use lofty::mp4::{AtomData, AtomIdent};
+
+    let (_d1, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &extended(), None).unwrap();
+    let mut file = fs::File::open(&mp3).unwrap();
+    let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
+        .unwrap()
+        .id3v2()
+        .unwrap()
+        .clone();
+    let text = |id: &str| {
+        id3.get_text(&FrameId::new(id.to_string()).unwrap())
+            .map(str::to_string)
+    };
+    assert_eq!(
+        text("TBPM").as_deref(),
+        Some("128"),
+        "TBPM holds a whole number"
+    );
+    assert_eq!(text("TKEY").as_deref(), Some("Abm"));
+    assert_eq!(text("TCMP").as_deref(), Some("1"));
+    assert_eq!(text("TPUB").as_deref(), Some("Harbor Lights Records"));
+    assert_eq!(text("TSOP").as_deref(), Some("Venn, Marlo"));
+    assert_eq!(text("GRP1").as_deref(), Some("Night Songs"));
+    assert_eq!(id3.get_user_text("BARCODE"), Some("0012345678905"));
+    assert!(verify(&mp3, &extended(), false).is_empty());
+
+    let (_d2, m4a) = written(crate::testing::SILENCE_M4A, "song.m4a");
+    write_tags(&m4a, Format::Copy { codec: Codec::Aac }, &extended(), None).unwrap();
+    let mut file = fs::File::open(&m4a).unwrap();
+    let m = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+    let ilst = m.ilst().unwrap();
+    let tmpo = ilst.get(&AtomIdent::Fourcc(*b"tmpo")).unwrap();
+    assert!(
+        tmpo.data().any(
+            |d| matches!(d, AtomData::Unknown { data, .. } if data == &[0, 128])
+                || matches!(d, AtomData::SignedInteger(128))
+        ),
+        "tmpo is a 16-bit integer"
+    );
+    let cpil = ilst.get(&AtomIdent::Fourcc(*b"cpil")).unwrap();
+    assert!(cpil.data().any(|d| matches!(d, AtomData::Bool(true))
+        || matches!(d, AtomData::Unknown { data, .. } if data == &[1])));
+    assert!(verify(&m4a, &extended(), false).is_empty());
+
+    let (_d3, opus) = written(crate::testing::SILENCE_OPUS, "song.opus");
+    write_tags(
+        &opus,
+        Format::Copy { codec: Codec::Opus },
+        &extended(),
+        None,
+    )
+    .unwrap();
+    let mut file = fs::File::open(&opus).unwrap();
+    let ogg = OpusFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let c = ogg.vorbis_comments();
+    assert_eq!(c.get("KEY"), Some("Abm"));
+    assert_eq!(c.get("INITIALKEY"), Some("Abm"), "as DJ tools name it");
+    assert_eq!(c.get("BPM"), Some("127.5"));
+
+    for path in [&mp3, &m4a, &opus] {
+        let offers = crate::tags::from_container(&crate::tags::read_file(path).unwrap());
+        assert_eq!(
+            offers[&Field::InitialKey].values,
+            ["Abm"],
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            offers[&Field::Compilation].values,
+            ["1"],
+            "{}",
+            path.display()
+        );
+        assert_eq!(offers[&Field::Label].values, ["Harbor Lights Records"]);
+        assert_eq!(offers[&Field::OriginalDate].values, ["2001-05-03"]);
+        assert!(offers.contains_key(&Field::Bpm), "{}", path.display());
+    }
+}
+
+#[test]
+fn a_key_tkey_cannot_hold_is_kept_as_its_vorbis_name() {
+    use lofty::id3::v2::FrameId;
+
+    let tags = vec![("KEY".to_string(), vec!["8A".to_string()])];
+    let (_dir, mp3) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    write_tags(&mp3, Format::Copy { codec: Codec::Mp3 }, &tags, None).unwrap();
+    let mut file = fs::File::open(&mp3).unwrap();
+    let id3 = MpegFile::read_from(&mut file, ParseOptions::new())
+        .unwrap()
+        .id3v2()
+        .unwrap()
+        .clone();
+    assert!(id3.get_text(&FrameId::new("TKEY").unwrap()).is_none());
+    assert_eq!(id3.get_user_text("INITIALKEY"), Some("8A"));
+    assert!(verify(&mp3, &tags, false).is_empty());
 }

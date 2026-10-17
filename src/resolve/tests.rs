@@ -1464,6 +1464,32 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
+fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert!(r.plan.lyrics.is_some());
+    let language = |r: &Resolved| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(k, _)| k == "LANGUAGE")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(language(&r), Some(vec!["eng".to_string()]));
+    tag(&mut f, Field::Language, &["jpn"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(
+        language(&r),
+        Some(vec!["jpn".to_string()]),
+        "the source's own"
+    );
+}
+
+#[test]
 fn a_back_cover_is_no_song_s_cover_however_sharp() {
     let key = manual("x");
     let mut f = audio("flac", 1.0);

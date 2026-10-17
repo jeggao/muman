@@ -146,13 +146,25 @@ it was served from.
 `tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
-(`musicbrainz_trackid`, `musicbrainz_albumid` and the like), or any
-other Vorbis comment name; a list sets a tag several times, and `true`
+(`musicbrainz_trackid`, `musicbrainz_albumid` and the like); `bpm`,
+`initialkey`, `compilation`, `composer`, `lyricist`, `conductor`,
+`remixer`, `label`, `catalognumber`, `barcode`, `asin`, `artists`,
+`artistsort`, `albumartistsort`, `titlesort`, `albumsort`,
+`composersort`, `originaldate`, `releasetype`, `releasestatus`, `media`,
+`script`, `discsubtitle`, `mood`, `grouping`, `work`, `language`,
+`copyright` and `comment`, each written where Picard writes it in each
+format; or any other Vorbis comment name; a list sets a tag several times, and `true`
 or `false` is written `1` or `0`. Each value is read as its field holds
 it: a track or disc as `3`, or `3/12`, which sets the total too unless
 the song names it; a date as `YYYY-MM-DD`, `YYYY-MM` or a year, read
 from `2019/07/04` or `20190704` too; an ISRC without the dashes it is
-shown with. A value its field cannot hold, as a date of `July 2019`, or
+shown with; a tempo as a number of up to two decimals, rounded where a
+format holds whole ones (`TBPM`, `tmpo`); a barcode as its digits; a
+language as its ISO 639-2 code, as `jpn`. A key is written as `KEY` and
+`INITIALKEY` in Vorbis comments, as Picard and DJ tools name it, and in
+`TKEY` where it is a key as that frame holds one (`Abm`, `F#`), else as
+a user text frame. Without a `language` of its own, a song's is its
+lyrics' language. A value its field cannot hold, as a date of `July 2019`, or
 a ReplayGain gain or peak, which muman measures, refuses the song list,
 naming the song. `add
 --artist`, `--album` and the other tag flags set these on every song an
