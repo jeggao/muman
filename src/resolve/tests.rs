@@ -1534,10 +1534,18 @@ fn a_plan_stored_before_loudness_reads_as_one_with_none() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
     };
     let json = serde_json::to_string(&plan).unwrap();
     assert!(!json.contains("loudness"));
     assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+    let before = json.replace(&format!(r#","tagging":{}"#, crate::resolve::TAGGING), "");
+    let stored: Plan = serde_json::from_str(&before).unwrap();
+    assert_eq!(
+        stored.tagging, 0,
+        "a plan tagged before tagging was counted"
+    );
+    assert_ne!(stored, plan, "so its song is tagged again");
 }
 
 #[test]
@@ -1559,6 +1567,7 @@ fn a_plan_s_loudness_tags_follow_its_format() {
             ("GENRE".into(), vec!["Ambient".into()]),
         ],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
     };
     let gains = Gains {
         track: Level {
@@ -1623,6 +1632,7 @@ fn a_gain_a_format_applies_none_of_compares_as_tags() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
     };
     let gains = |apply| Gains {
         track: Level {
@@ -1671,6 +1681,7 @@ fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
     };
     // A quiet song the ceiling lets be raised by nothing.
     let gains = |apply| Gains {

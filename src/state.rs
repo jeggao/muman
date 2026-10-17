@@ -773,6 +773,7 @@ mod tests {
             lyrics: None,
             tags: Vec::new(),
             loudness: None,
+            tagging: crate::resolve::TAGGING,
         };
         let mut disk = State::default();
         disk.facts.insert(key.clone(), old.clone());
@@ -825,6 +826,7 @@ mod tests {
             lyrics: None,
             tags: Vec::new(),
             loudness: None,
+            tagging: crate::resolve::TAGGING,
         };
         let old = SourceKey::Remote {
             site: "youtube".into(),

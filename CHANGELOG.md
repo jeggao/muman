@@ -9,6 +9,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Every song is tagged once again on the first sync.** MP3, M4A and
+  WavPack files are tagged as Picard tags them; their audio is not
+  written again.
 - **A tag set by hand is read as its field holds it.** A track or disc
   set as `3/12` writes the number and the total, a date as
   `2019/07/04` writes `2019-07-04`, an ISRC is written without its
@@ -48,6 +51,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000
   writes it, rather than adding a tag beside it.
+- **A `work` tag no longer fails an MP3.** Set by hand or from a tag
+  file, it was written under a frame that holds no text, and every
+  write of the song failed.
+- **MP3 keeps every value of a tag.** Several ISRCs, labels or sort
+  names were cut to the first.
+- **ReplayGain in M4A is named as Picard names it**, in capitals, and
+  read from M4A files Picard tagged.
+- **A WavPack cover is named by its format**, so ffmpeg and players
+  that read the item's file name show it.
+- **MP3 lyrics carry their language** where the song's `LANGUAGE` tag
+  names it.
+- **An ID3v2.3 artist list is read as several artists**, split at its
+  `/` as that version separates them.
 
 ## [0.4.1] - 2026-10-15
 

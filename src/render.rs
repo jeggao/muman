@@ -10,18 +10,26 @@
 //!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
-//! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
-//! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
-//! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
-//! name. An MP4 comment of several values is one atom holding a `data`
-//! atom for each, as iTunes, Picard and mutagen write one: `lofty` makes
-//! a generic tag's values an atom each, and a reader that takes one atom
-//! a name, as ffmpeg's does, then sees only the last. In WavPack each
-//! comment is an APEv2 item, by the name `lofty` gives it or its own.
-//! Opus holds ReplayGain's gains as R128's and no peaks, as RFC 7845
-//! tells its players to read them. The cover is a front-cover
-//! picture written through `lofty`: a
-//! JPEG or PNG without borders as its own bytes, any other converted to
+//! among them, are dropped. They are Vorbis comments in Ogg and FLAC. In
+//! MP3, MP4 and WavPack each field muman knows is written into the frame,
+//! atom or item [`crate::tags::TABLE`] names, as Picard writes it: never
+//! through `lofty`'s generic tag, which keeps one value of a frame type in
+//! `ID3v2`, drops a track that is no bare number, and writes some names
+//! under frames that hold no text, which fails the whole write. A track or
+//! disc and its total are one `3/12`, a date `ID3v2`'s timestamp frame.
+//! A comment of no field takes the text frame or atom `lofty` names for
+//! it, if it names one that holds plain text, else a `TXXX` frame, an
+//! iTunes freeform atom or an APEv2 item of its name; a producer,
+//! arranger, engineer or mixer is a role in `TIPL`. Several values are
+//! null-separated in `ID3v2.4` and APEv2, and in MP4 one atom holds a
+//! `data` atom for each, as iTunes, Picard and mutagen write one: a reader
+//! that takes one atom a name, as ffmpeg's does, would see only the last
+//! of several atoms. `ID3v2` marks lyrics and comments with the language
+//! the song's `LANGUAGE` tag names. Opus holds ReplayGain's gains as
+//! R128's and no peaks, as RFC 7845 tells its players to read them.
+//!
+//! The cover is a front-cover picture: a JPEG or PNG without borders as
+//! its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
 //! metadata block holds at most 16 MiB, so a cover past it is made a JPEG
 //! at most 3000 pixels wide, and lyrics past it are not embedded. Lyrics are
@@ -45,12 +53,16 @@ use lofty::ape::{ApeItem, ApeTag};
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::flac::FlacFile;
-use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+use lofty::id3::v2::{
+    AttachedPictureFrame, CommentFrame, ExtendedTextFrame, Frame, FrameId, Id3v2Tag, KeyValueFrame,
+    TextInformationFrame, TimestampFrame, UniqueFileIdentifierFrame, UnsynchronizedTextFrame,
+};
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
 use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
+use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
 use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
@@ -61,7 +73,7 @@ use crate::runner::Runner;
 use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::store::Located;
-use crate::tags::Field;
+use crate::tags::{Field, Id3, Mp4};
 
 #[derive(Debug)]
 pub struct Job<'a> {
@@ -605,48 +617,9 @@ fn write_tags(
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(&mut file, WriteOptions::default())
         }
-        Container::Mp3 => {
-            let (generic, own) = generic_tag(TagType::Id3v2, tags, picture);
-            let mut id3 = Id3v2Tag::from(generic);
-            for (key, values) in own {
-                id3.insert(Frame::UserText(ExtendedTextFrame::new(
-                    TextEncoding::UTF8,
-                    key.clone(),
-                    values.join("\0"),
-                )));
-            }
-            canonical_id3(id3).save_to(&mut file, WriteOptions::default())
-        }
-        Container::Mp4 => {
-            let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
-            // A generic tag converts to an atom a value; inserted again,
-            // the values of one name merge into one atom.
-            let mut ilst = Ilst::new();
-            for atom in Ilst::from(generic) {
-                ilst.insert(atom);
-            }
-            for (key, values) in own {
-                let ident = AtomIdent::Freeform {
-                    mean: "com.apple.iTunes".into(),
-                    name: key.clone().into(),
-                };
-                let data = values.iter().cloned().map(AtomData::UTF8).collect();
-                if let Some(atom) = Atom::from_collection(ident, data) {
-                    ilst.insert(atom);
-                }
-            }
-            ilst.save_to(&mut file, WriteOptions::default())
-        }
-        Container::WavPack => {
-            let (generic, own) = generic_tag(TagType::Ape, tags, picture);
-            let mut ape = ApeTag::from(generic);
-            for (key, values) in own {
-                if let Ok(item) = ApeItem::new(key.clone(), ItemValue::Text(values.join("\0"))) {
-                    ape.insert(item);
-                }
-            }
-            ape.save_to(&mut file, WriteOptions::default())
-        }
+        Container::Mp3 => id3_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
+        Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
+        Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
     };
     written.with_context(|| format!("writing tags to {}", path.display()))
 }
@@ -765,43 +738,268 @@ fn opus_gains(tags: &[(String, Vec<String>)]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// The tags `lofty` can map into `kind`, as a generic tag holding the
-/// cover too, and the rest, which the format keeps under their own names.
-fn generic_tag(
-    kind: TagType,
-    tags: &[(String, Vec<String>)],
-    picture: Option<Picture>,
-) -> (Tag, Vec<(&String, &Vec<String>)>) {
-    // The format writes these as frames of their own kind, or folds them
-    // into another, so they map to no key of it.
-    let special = [
-        ItemKey::TrackNumber,
-        ItemKey::TrackTotal,
-        ItemKey::DiscNumber,
-        ItemKey::DiscTotal,
-        ItemKey::UnsyncLyrics,
-    ];
-    let mut generic = Tag::new(kind);
-    let mut own = Vec::new();
+/// The values `tags` holds under `field`'s name.
+fn values_of(tags: &[(String, Vec<String>)], field: Field) -> &[String] {
+    tags.iter()
+        .find(|(k, _)| k == field.vorbis())
+        .map_or(&[], |(_, v)| v.as_slice())
+}
+
+/// The total a place's field is counted against, and the place a total
+/// counts.
+fn paired(field: Field) -> Option<Field> {
+    match field {
+        Field::Track => Some(Field::TrackTotal),
+        Field::Disc => Some(Field::DiscTotal),
+        Field::TrackTotal => Some(Field::Track),
+        Field::DiscTotal => Some(Field::Disc),
+        _ => None,
+    }
+}
+
+/// A place and the total it is counted against as one text: `3/12`, or
+/// `3` with no total.
+fn place_text(tags: &[(String, Vec<String>)], field: Field, values: &[String]) -> String {
+    let n = values
+        .first()
+        .map_or("", |v| v.split('/').next().unwrap_or(v));
+    match paired(field).and_then(|t| values_of(tags, t).first()) {
+        Some(total) => format!("{n}/{total}"),
+        None => n.to_string(),
+    }
+}
+
+/// A total written where its place cannot hold it: no place is set.
+fn total_alone(tags: &[(String, Vec<String>)], field: Field) -> bool {
+    paired(field).is_some_and(|place| values_of(tags, place).is_empty())
+}
+
+/// The ISO 639-2 code a song's `LANGUAGE` tag names, as `ID3v2` marks the
+/// language of its lyrics and comments with.
+fn language_of(tags: &[(String, Vec<String>)]) -> Lang {
+    tags.iter()
+        .find(|(k, _)| k == "LANGUAGE")
+        .and_then(|(_, v)| v.first())
+        .and_then(|code| <Lang>::try_from(code.to_ascii_lowercase().as_bytes()).ok())
+        .filter(|code| code.iter().all(u8::is_ascii_lowercase))
+        .unwrap_or(UNKNOWN_LANGUAGE)
+}
+
+/// The role a tag names in `ID3v2`'s involved people list, `TIPL`.
+fn involved(key: &str) -> Option<&'static str> {
+    match ItemKey::from_key(TagType::VorbisComments, key)? {
+        ItemKey::Producer => Some("producer"),
+        ItemKey::Arranger => Some("arranger"),
+        ItemKey::Engineer => Some("engineer"),
+        ItemKey::MixDj => Some("DJ-mix"),
+        ItemKey::MixEngineer => Some("mix"),
+        _ => None,
+    }
+}
+
+/// A text frame of its own `lofty` names for a tag muman knows no field
+/// for, as `TCOM` for `COMPOSER`; never a frame another field writes or
+/// one holding no plain text.
+fn text_frame(key: &str) -> Option<&'static str> {
+    let id = ItemKey::from_key(TagType::VorbisComments, key)?.map_key(TagType::Id3v2)?;
+    let taken = ["TXXX", "TIPL", "TMCL", "TRCK", "TPOS"];
+    (id.len() == 4 && id.starts_with('T') && !id.starts_with("TD") && !taken.contains(&id))
+        .then_some(id)
+}
+
+/// `ID3v2` frames written as Picard writes them: each field into the
+/// frame [`crate::tags::TABLE`] names, several values null-separated as
+/// version 2.4 separates them; a tag of no field into a text frame of its
+/// own where it has one, else a user text frame of its name.
+fn id3_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Id3v2Tag {
+    let text = |id: &'static str, value: String| {
+        FrameId::new(id)
+            .ok()
+            .map(|id| Frame::Text(TextInformationFrame::new(id, TextEncoding::UTF8, value)))
+    };
+    let user = |key: &str, value: String| {
+        Frame::UserText(ExtendedTextFrame::new(
+            TextEncoding::UTF8,
+            key.to_string(),
+            value,
+        ))
+    };
+    let language = language_of(tags);
+    let mut id3 = Id3v2Tag::new();
+    let mut roles = Vec::new();
     for (key, values) in tags {
-        let item = ItemKey::from_key(TagType::VorbisComments, key).map(|item| match item {
-            // ID3v2 keeps lyrics in an unsynchronised lyrics frame.
-            ItemKey::Lyrics if item.map_key(kind).is_none() => ItemKey::UnsyncLyrics,
-            item => item,
-        });
-        match item.filter(|item| item.map_key(kind).is_some() || special.contains(item)) {
-            Some(item) => {
-                for value in values {
-                    generic.push(TagItem::new(item, ItemValue::Text(value.clone())));
-                }
+        let joined = values.join("\0");
+        let frame = match Field::named(key).map(Field::spec) {
+            Some(spec) => match spec.id3 {
+                Id3::Text(id) => text(id, joined),
+                Id3::Time(id) => values
+                    .first()
+                    .and_then(|v| v.parse::<Timestamp>().ok())
+                    .zip(FrameId::new(id).ok())
+                    .map(|(at, id)| {
+                        Frame::Timestamp(TimestampFrame::new(id, TextEncoding::UTF8, at))
+                    }),
+                Id3::User(name) => Some(user(name, joined)),
+                Id3::Ufid => values.first().map(|id| {
+                    Frame::UniqueFileIdentifier(UniqueFileIdentifierFrame::new(
+                        crate::tags::UFID_OWNER,
+                        id.as_bytes().to_vec(),
+                    ))
+                }),
+                Id3::Place(id) => text(id, place_text(tags, spec.field, values)),
+                Id3::Within => total_alone(tags, spec.field).then(|| user(spec.vorbis, joined)),
+            },
+            None => match key.as_str() {
+                "LYRICS" => Some(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+                    TextEncoding::UTF8,
+                    language,
+                    String::new(),
+                    joined,
+                ))),
+                "COMMENT" => Some(Frame::Comment(CommentFrame::new(
+                    TextEncoding::UTF8,
+                    language,
+                    String::new(),
+                    joined,
+                ))),
+                _ => match (involved(key), text_frame(key)) {
+                    (Some(role), _) => {
+                        roles.extend(values.iter().map(|v| (role.into(), v.clone().into())));
+                        None
+                    }
+                    (None, Some(id)) => text(id, joined),
+                    (None, None) => Some(user(key, joined)),
+                },
+            },
+        };
+        if let Some(frame) = frame {
+            id3.insert(frame);
+        }
+    }
+    if !roles.is_empty()
+        && let Ok(id) = FrameId::new("TIPL")
+    {
+        id3.insert(Frame::KeyValue(KeyValueFrame::new(
+            id,
+            TextEncoding::UTF8,
+            roles,
+        )));
+    }
+    if let Some(picture) = picture {
+        id3.insert(Frame::Picture(AttachedPictureFrame::new(
+            TextEncoding::UTF8,
+            picture,
+        )));
+    }
+    canonical_id3(id3)
+}
+
+/// MP4's iTunes atoms written as Picard writes them: each field into the
+/// atom [`crate::tags::TABLE`] names, a value of several one atom of
+/// several data; a tag of no field into the text atom `lofty` names for
+/// it, else iTunes' freeform atom of its name.
+fn ilst_of(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Ilst {
+    let free = |name: &str| AtomIdent::Freeform {
+        mean: "com.apple.iTunes".into(),
+        name: name.to_string().into(),
+    };
+    let own = |key: &str| -> AtomIdent<'static> {
+        let named = match key {
+            "LYRICS" => Some("©lyr"),
+            "COMMENT" => Some("©cmt"),
+            _ => ItemKey::from_key(TagType::VorbisComments, key)
+                .and_then(|k| k.map_key(TagType::Mp4Ilst)),
+        };
+        match named {
+            Some(n) if n.starts_with('©') && n.chars().count() == 4 => {
+                AtomIdent::Fourcc(crate::tags::fourcc(n))
             }
-            None => own.push((key, values)),
+            Some(n) if ["aART", "soar", "soaa", "soal", "sonm", "soco"].contains(&n) => {
+                AtomIdent::Fourcc(crate::tags::fourcc(n))
+            }
+            Some(n) if n.starts_with("----:com.apple.iTunes:") => {
+                free(&n["----:com.apple.iTunes:".len()..])
+            }
+            _ => free(key),
+        }
+    };
+    let mut ilst = Ilst::new();
+    let number = |v: Option<&String>| v.and_then(|v| v.split('/').next()?.parse::<u32>().ok());
+    for (key, values) in tags {
+        let ident = match Field::named(key).map(Field::spec) {
+            Some(spec) => match spec.mp4 {
+                Mp4::Text(name) => AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                Mp4::Free(name) => free(name),
+                Mp4::Place(_) | Mp4::Within => {
+                    let n = number(values.first());
+                    match (spec.field, n) {
+                        (Field::Track, Some(n)) => ilst.set_track(n),
+                        (Field::Disc, Some(n)) => ilst.set_disk(n),
+                        (Field::TrackTotal, Some(n)) => ilst.set_track_total(n),
+                        (Field::DiscTotal, Some(n)) => ilst.set_disk_total(n),
+                        _ => {}
+                    }
+                    continue;
+                }
+            },
+            None => own(key),
+        };
+        let data = values.iter().cloned().map(AtomData::UTF8).collect();
+        if let Some(atom) = Atom::from_collection(ident, data) {
+            ilst.insert(atom);
         }
     }
     if let Some(picture) = picture {
-        generic.push_picture(picture);
+        ilst.insert_picture(picture);
     }
-    (generic, own)
+    ilst
+}
+
+/// APEv2 items written as Picard writes them, several values
+/// null-separated; the cover as `Cover Art (Front)`, named by a file name
+/// whose extension tells readers its format.
+fn ape_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> ApeTag {
+    let mut ape = ApeTag::new();
+    for (key, values) in tags {
+        let (name, value) = if let Some(spec) = Field::named(key).map(Field::spec) {
+            match spec.ape {
+                Some(name) if matches!(spec.id3, Id3::Place(_)) => {
+                    (name.to_string(), place_text(tags, spec.field, values))
+                }
+                Some(name) => (name.to_string(), values.join("\0")),
+                None if total_alone(tags, spec.field) => {
+                    (spec.vorbis.to_string(), values.join("\0"))
+                }
+                None => continue,
+            }
+        } else {
+            let name = match key.as_str() {
+                "LYRICS" => "Lyrics".to_string(),
+                "COMMENT" => "Comment".to_string(),
+                _ => ItemKey::from_key(TagType::VorbisComments, key)
+                    .and_then(|k| k.map_key(TagType::Ape))
+                    .map_or_else(|| key.clone(), str::to_string),
+            };
+            (name, values.join("\0"))
+        };
+        if let Ok(item) = ApeItem::new(name, ItemValue::Text(value)) {
+            ape.insert(item);
+        }
+    }
+    if let Some(mut picture) = picture {
+        let extension = match picture.mime_type() {
+            Some(MimeType::Png) => "png",
+            _ => "jpg",
+        };
+        picture.set_description(Some(format!("cover.{extension}")));
+        let key = PictureType::CoverFront
+            .as_ape_key()
+            .unwrap_or("Cover Art (Front)");
+        if let Ok(item) = ApeItem::new(key.to_string(), ItemValue::Binary(picture.as_ape_bytes())) {
+            ape.insert(item);
+        }
+    }
+    ape
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {

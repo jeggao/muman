@@ -559,6 +559,7 @@ mod tests {
                 lyrics: None,
                 tags: Vec::new(),
                 loudness: None,
+                tagging: crate::resolve::TAGGING,
             }),
             stamp,
             digest: None,

@@ -250,6 +250,49 @@ fn songs_are_levelled_as_ffmpeg_measures_them_and_opus_by_its_header() {
     assert_eq!(tag(written, "R128_TRACK_GAIN").as_deref(), Some("-1280"));
 }
 
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn every_container_holds_the_tags_ffprobe_reads() {
+    let h = Home::new();
+    let songs = h.root.join("home").join("songs.toml");
+    let list = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        format!("{list}\n[audio]\ncodecs = [\"mp3\", \"aac\"]\nlossless = \"wavpack\"\n"),
+    )
+    .unwrap();
+    for (name, seed, title) in [
+        ("one.mp3", 5, "Lantern Weather"),
+        ("two.m4a", 6, "Low Orchard"),
+        ("three.flac", 7, "Copper Moth"),
+    ] {
+        let song = h.song(name, seed, title);
+        let added = h.muman(&["add", "-y", song.to_str().unwrap()]);
+        assert!(added.status.success(), "{}", text(&added));
+    }
+    let set = h.muman(&[
+        "set",
+        "-y",
+        "--all",
+        "artist:comets",
+        "track=5/9",
+        "date=2019/07/04",
+        "work=Harbor Suite",
+    ]);
+    assert!(set.status.success(), "{}", text(&set));
+    let synced = h.muman(&["sync"]);
+    assert!(synced.status.success(), "{}", text(&synced));
+    for (ext, track, date) in [
+        ("mp3", "track", "date"),
+        ("m4a", "track", "date"),
+        ("wv", "Track", "Year"),
+    ] {
+        let written = &h.library_files(ext)[0];
+        assert_eq!(tag(written, track).as_deref(), Some("5/9"), "{ext}");
+        assert_eq!(tag(written, date).as_deref(), Some("2019-07-04"), "{ext}");
+    }
+}
+
 /// `out` made by ffmpeg from `args`, or the test fails.
 fn ffmpeg(args: &[&str], out: &Path) {
     let ok = Command::new("ffmpeg")

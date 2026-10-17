@@ -286,6 +286,39 @@ fn mbid(text: &str) -> Option<String> {
     fine.then_some(id)
 }
 
+/// Where a field is written in an `ID3v2` tag, as Picard writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Id3 {
+    /// A text frame of its own, as `TIT2`; several values null-separated.
+    Text(&'static str),
+    /// A time frame, as `TDRC`.
+    Time(&'static str),
+    /// A user text frame, `TXXX`, of this description.
+    User(&'static str),
+    /// The unique file identifier MusicBrainz owns.
+    Ufid,
+    /// A place's frame, `TRCK` or `TPOS`, holding `3/12`.
+    Place(&'static str),
+    /// Within another field's frame: a total in its place's.
+    Within,
+}
+
+/// Where a field is written in MP4's iTunes atoms, as Picard writes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mp4 {
+    /// An atom of its own holding text, as `©nam`.
+    Text(&'static str),
+    /// A pair of numbers, `trkn` or `disk`: the place and its total.
+    Place(&'static str),
+    /// iTunes' freeform atom of this name.
+    Free(&'static str),
+    /// Within another field's atom: a total in its place's.
+    Within,
+}
+
+/// The `MusicBrainz` owner of the unique file identifier it writes.
+pub const UFID_OWNER: &str = "http://musicbrainz.org";
+
 /// One row of [`TABLE`]: all muman knows of a field.
 #[derive(Debug)]
 pub struct Spec {
@@ -295,22 +328,10 @@ pub struct Spec {
     aliases: &'static [&'static str],
     pub kind: Kind,
     pub scope: Scope,
-}
-
-const fn row(
-    field: Field,
-    vorbis: &'static str,
-    aliases: &'static [&'static str],
-    kind: Kind,
-    scope: Scope,
-) -> Spec {
-    Spec {
-        field,
-        vorbis,
-        aliases,
-        kind,
-        scope,
-    }
+    pub id3: Id3,
+    pub mp4: Mp4,
+    /// Its APEv2 key; `None` for a total, written in its place's.
+    pub ape: Option<&'static str>,
 }
 
 /// Every field muman knows, in [`Field::ALL`]'s order.
@@ -318,127 +339,237 @@ pub static TABLE: [Spec; 22] = {
     use Field as F;
     use Kind as K;
     use Scope as S;
+    const fn mbid(field: Field, vorbis: &'static str, picard: &'static str, scope: Scope) -> Spec {
+        Spec {
+            field,
+            vorbis,
+            aliases: &[],
+            kind: Kind::Mbid,
+            scope,
+            id3: Id3::User(picard),
+            mp4: Mp4::Free(picard),
+            ape: Some(vorbis),
+        }
+    }
+    const fn loudness(field: Field, vorbis: &'static str, kind: Kind, scope: Scope) -> Spec {
+        Spec {
+            field,
+            vorbis,
+            aliases: &[],
+            kind,
+            scope,
+            id3: Id3::User(vorbis),
+            mp4: Mp4::Free(vorbis),
+            ape: Some(vorbis),
+        }
+    }
     [
-        row(F::Title, "TITLE", &[], K::Text, S::Recording),
-        row(F::Artist, "ARTIST", &[], K::Text, S::Recording),
-        row(F::Album, "ALBUM", &[], K::Text, S::Release),
-        row(
-            F::AlbumArtist,
-            "ALBUMARTIST",
-            &["album_artist", "album artist"],
-            K::Text,
-            S::Release,
-        ),
-        row(
-            F::Track,
-            "TRACKNUMBER",
-            &["track", "track_number"],
-            K::Place,
-            S::Release,
-        ),
-        row(
-            F::Disc,
-            "DISCNUMBER",
-            &["disc", "disc_number"],
-            K::Place,
-            S::Release,
-        ),
-        row(F::Date, "DATE", &["year"], K::Date, S::Release),
-        row(F::Genre, "GENRE", &[], K::Text, S::Recording),
-        row(F::Isrc, "ISRC", &["tsrc"], K::Isrc, S::RecordingId),
-        row(
-            F::TrackTotal,
-            "TRACKTOTAL",
-            &["track_total", "totaltracks"],
-            K::Count,
-            S::Release,
-        ),
-        row(
-            F::DiscTotal,
-            "DISCTOTAL",
-            &["disc_total", "totaldiscs"],
-            K::Count,
-            S::Release,
-        ),
-        row(
-            F::ReleaseCountry,
-            "RELEASECOUNTRY",
-            &["release_country", "musicbrainz album release country"],
-            K::Text,
-            S::Release,
-        ),
-        row(
-            F::MusicBrainzTrackId,
-            "MUSICBRAINZ_TRACKID",
-            &["musicbrainz track id"],
-            K::Mbid,
-            S::RecordingId,
-        ),
-        row(
-            F::MusicBrainzReleaseTrackId,
-            "MUSICBRAINZ_RELEASETRACKID",
-            &["musicbrainz release track id"],
-            K::Mbid,
-            S::Release,
-        ),
-        row(
-            F::MusicBrainzAlbumId,
-            "MUSICBRAINZ_ALBUMID",
-            &["musicbrainz album id"],
-            K::Mbid,
-            S::Release,
-        ),
-        row(
-            F::MusicBrainzReleaseGroupId,
-            "MUSICBRAINZ_RELEASEGROUPID",
-            &["musicbrainz release group id"],
-            K::Mbid,
-            S::Release,
-        ),
-        row(
-            F::MusicBrainzArtistId,
-            "MUSICBRAINZ_ARTISTID",
-            &["musicbrainz artist id"],
-            K::Mbid,
-            S::RecordingId,
-        ),
-        row(
-            F::MusicBrainzAlbumArtistId,
-            "MUSICBRAINZ_ALBUMARTISTID",
-            &["musicbrainz album artist id"],
-            K::Mbid,
-            S::Release,
-        ),
-        row(
-            F::TrackGain,
-            "REPLAYGAIN_TRACK_GAIN",
-            &[],
-            K::Gain,
-            S::Loudness,
-        ),
-        row(
-            F::TrackPeak,
-            "REPLAYGAIN_TRACK_PEAK",
-            &[],
-            K::Peak,
-            S::Loudness,
-        ),
-        row(
+        Spec {
+            field: F::Title,
+            vorbis: "TITLE",
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TIT2"),
+            mp4: Mp4::Text("©nam"),
+            ape: Some("Title"),
+        },
+        Spec {
+            field: F::Artist,
+            vorbis: "ARTIST",
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TPE1"),
+            mp4: Mp4::Text("©ART"),
+            ape: Some("Artist"),
+        },
+        Spec {
+            field: F::Album,
+            vorbis: "ALBUM",
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TALB"),
+            mp4: Mp4::Text("©alb"),
+            ape: Some("Album"),
+        },
+        Spec {
+            field: F::AlbumArtist,
+            vorbis: "ALBUMARTIST",
+            aliases: &["album_artist", "album artist"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::Text("TPE2"),
+            mp4: Mp4::Text("aART"),
+            ape: Some("Album Artist"),
+        },
+        Spec {
+            field: F::Track,
+            vorbis: "TRACKNUMBER",
+            aliases: &["track", "track_number"],
+            kind: K::Place,
+            scope: S::Release,
+            id3: Id3::Place("TRCK"),
+            mp4: Mp4::Place("trkn"),
+            ape: Some("Track"),
+        },
+        Spec {
+            field: F::Disc,
+            vorbis: "DISCNUMBER",
+            aliases: &["disc", "disc_number"],
+            kind: K::Place,
+            scope: S::Release,
+            id3: Id3::Place("TPOS"),
+            mp4: Mp4::Place("disk"),
+            ape: Some("Disc"),
+        },
+        Spec {
+            field: F::Date,
+            vorbis: "DATE",
+            aliases: &["year"],
+            kind: K::Date,
+            scope: S::Release,
+            id3: Id3::Time("TDRC"),
+            mp4: Mp4::Text("©day"),
+            ape: Some("Year"),
+        },
+        Spec {
+            field: F::Genre,
+            vorbis: "GENRE",
+            aliases: &[],
+            kind: K::Text,
+            scope: S::Recording,
+            id3: Id3::Text("TCON"),
+            mp4: Mp4::Text("©gen"),
+            ape: Some("Genre"),
+        },
+        Spec {
+            field: F::Isrc,
+            vorbis: "ISRC",
+            aliases: &["tsrc"],
+            kind: K::Isrc,
+            scope: S::RecordingId,
+            id3: Id3::Text("TSRC"),
+            mp4: Mp4::Free("ISRC"),
+            ape: Some("ISRC"),
+        },
+        Spec {
+            field: F::TrackTotal,
+            vorbis: "TRACKTOTAL",
+            aliases: &["track_total", "totaltracks"],
+            kind: K::Count,
+            scope: S::Release,
+            id3: Id3::Within,
+            mp4: Mp4::Within,
+            ape: None,
+        },
+        Spec {
+            field: F::DiscTotal,
+            vorbis: "DISCTOTAL",
+            aliases: &["disc_total", "totaldiscs"],
+            kind: K::Count,
+            scope: S::Release,
+            id3: Id3::Within,
+            mp4: Mp4::Within,
+            ape: None,
+        },
+        Spec {
+            field: F::ReleaseCountry,
+            vorbis: "RELEASECOUNTRY",
+            aliases: &["release_country", "musicbrainz album release country"],
+            kind: K::Text,
+            scope: S::Release,
+            id3: Id3::User("MusicBrainz Album Release Country"),
+            mp4: Mp4::Free("MusicBrainz Album Release Country"),
+            ape: Some("RELEASECOUNTRY"),
+        },
+        Spec {
+            field: F::MusicBrainzTrackId,
+            vorbis: "MUSICBRAINZ_TRACKID",
+            aliases: &["musicbrainz track id"],
+            kind: K::Mbid,
+            scope: S::RecordingId,
+            id3: Id3::Ufid,
+            mp4: Mp4::Free("MusicBrainz Track Id"),
+            ape: Some("MUSICBRAINZ_TRACKID"),
+        },
+        Spec {
+            aliases: &["musicbrainz release track id"],
+            ..mbid(
+                F::MusicBrainzReleaseTrackId,
+                "MUSICBRAINZ_RELEASETRACKID",
+                "MusicBrainz Release Track Id",
+                S::Release,
+            )
+        },
+        Spec {
+            aliases: &["musicbrainz album id"],
+            ..mbid(
+                F::MusicBrainzAlbumId,
+                "MUSICBRAINZ_ALBUMID",
+                "MusicBrainz Album Id",
+                S::Release,
+            )
+        },
+        Spec {
+            aliases: &["musicbrainz release group id"],
+            ..mbid(
+                F::MusicBrainzReleaseGroupId,
+                "MUSICBRAINZ_RELEASEGROUPID",
+                "MusicBrainz Release Group Id",
+                S::Release,
+            )
+        },
+        Spec {
+            aliases: &["musicbrainz artist id"],
+            ..mbid(
+                F::MusicBrainzArtistId,
+                "MUSICBRAINZ_ARTISTID",
+                "MusicBrainz Artist Id",
+                S::RecordingId,
+            )
+        },
+        Spec {
+            aliases: &["musicbrainz album artist id"],
+            ..mbid(
+                F::MusicBrainzAlbumArtistId,
+                "MUSICBRAINZ_ALBUMARTISTID",
+                "MusicBrainz Album Artist Id",
+                S::Release,
+            )
+        },
+        loudness(F::TrackGain, "REPLAYGAIN_TRACK_GAIN", K::Gain, S::Loudness),
+        loudness(F::TrackPeak, "REPLAYGAIN_TRACK_PEAK", K::Peak, S::Loudness),
+        loudness(
             F::AlbumGain,
             "REPLAYGAIN_ALBUM_GAIN",
-            &[],
             K::Gain,
             S::AlbumLoudness,
         ),
-        row(
+        loudness(
             F::AlbumPeak,
             "REPLAYGAIN_ALBUM_PEAK",
-            &[],
             K::Peak,
             S::AlbumLoudness,
         ),
     ]
 };
+
+/// An MP4 atom's four bytes from its name as Picard spells it: `©` is the
+/// byte 0xA9 in every one.
+#[must_use]
+pub fn fourcc(name: &str) -> [u8; 4] {
+    let mut out = [0; 4];
+    for (at, c) in out.iter_mut().zip(name.chars()) {
+        *at = if c == '©' {
+            0xA9
+        } else {
+            u8::try_from(c).unwrap_or(b'?')
+        };
+    }
+    out
+}
 
 /// The Vorbis comment field a song list's tag name sets: a known field
 /// under its own spelling, any other upper-cased.
@@ -717,7 +848,152 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
             tags.entry(name).or_insert(values);
         }
     }
+    tags.extend(native(path, file.file_type()));
     Some(tags)
+}
+
+/// The fields a file's own frames, atoms or items hold, read as
+/// [`TABLE`] names where each is written, by its Vorbis name: what
+/// `lofty`'s generic tag reads not, or not whole, as a `TXXX` or a
+/// freeform atom under Picard's capitals, or an `ID3v2.3` artist list
+/// split by `/`.
+fn native(path: &std::path::Path, kind: lofty::file::FileType) -> BTreeMap<String, Vec<String>> {
+    use lofty::file::{AudioFile, FileType};
+
+    let options = lofty::config::ParseOptions::new().read_properties(false);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return BTreeMap::new();
+    };
+    let read = match kind {
+        FileType::Mpeg => lofty::mpeg::MpegFile::read_from(&mut file, options)
+            .ok()
+            .and_then(|f| f.id3v2().map(id3_fields)),
+        FileType::Mp4 => lofty::mp4::Mp4File::read_from(&mut file, options)
+            .ok()
+            .and_then(|f| f.ilst().map(ilst_fields)),
+        FileType::WavPack => lofty::wavpack::WavPackFile::read_from(&mut file, options)
+            .ok()
+            .and_then(|f| f.ape().map(ape_fields)),
+        _ => None,
+    };
+    read.unwrap_or_default()
+        .into_iter()
+        .filter(|(_, values)| !values.is_empty())
+        .map(|(spec, values)| (spec.vorbis.to_ascii_lowercase(), values))
+        .collect()
+}
+
+type Read = Vec<(&'static Spec, Vec<String>)>;
+
+fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
+    use lofty::id3::v2::{Frame, FrameId, Id3v2Version};
+
+    let split = |text: &str, id: &str| -> Vec<String> {
+        // ID3v2.3 separates the people of these frames by `/`; 2.4 by NUL.
+        let slash = tag.original_version() == Id3v2Version::V3
+            && matches!(id, "TPE1" | "TCOM" | "TEXT" | "TOLY" | "TOPE");
+        text.split(|c| c == '\0' || (slash && c == '/'))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let frames: Vec<&Frame<'_>> = tag.into_iter().collect();
+    TABLE
+        .iter()
+        .map(|spec| {
+            let values = match spec.id3 {
+                Id3::Text(id) | Id3::Place(id) => FrameId::new(id)
+                    .ok()
+                    .and_then(|id| tag.get_text(&id))
+                    .map(|t| split(t, id))
+                    .unwrap_or_default(),
+                Id3::Time(id) => frames
+                    .iter()
+                    .find_map(|f| match f {
+                        Frame::Timestamp(t) if f.id_str() == id => Some(t.timestamp.to_string()),
+                        Frame::Text(t) if f.id_str() == id => Some(t.value.to_string()),
+                        _ => None,
+                    })
+                    .into_iter()
+                    .collect(),
+                Id3::User(name) => frames
+                    .iter()
+                    .find_map(|f| match f {
+                        Frame::UserText(t) if t.description.eq_ignore_ascii_case(name) => {
+                            Some(split(&t.content, "TXXX"))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                Id3::Ufid => frames
+                    .iter()
+                    .find_map(|f| match f {
+                        Frame::UniqueFileIdentifier(u) if u.owner == UFID_OWNER => {
+                            String::from_utf8(u.identifier.to_vec()).ok()
+                        }
+                        _ => None,
+                    })
+                    .into_iter()
+                    .collect(),
+                Id3::Within => Vec::new(),
+            };
+            (spec, values)
+        })
+        .collect()
+}
+
+fn ilst_fields(ilst: &lofty::mp4::Ilst) -> Read {
+    use lofty::mp4::{AtomData, AtomIdent};
+    use lofty::tag::Accessor;
+
+    let texts = |atom: &lofty::mp4::Atom<'_>| -> Vec<String> {
+        atom.data()
+            .filter_map(|d| match d {
+                AtomData::UTF8(t) | AtomData::UTF16(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // A writer may repeat an atom a value, rather than give one several.
+    let all = |is: &dyn Fn(&AtomIdent<'_>) -> bool| -> Vec<String> {
+        ilst.into_iter()
+            .filter(|a| is(a.ident()))
+            .flat_map(texts)
+            .collect()
+    };
+    TABLE
+        .iter()
+        .map(|spec| {
+            let values = match spec.mp4 {
+                Mp4::Text(name) => all(&|i| *i == AtomIdent::Fourcc(fourcc(name))),
+                Mp4::Free(name) => all(&|i| {
+                    matches!(i, AtomIdent::Freeform { name: n, .. } if n.eq_ignore_ascii_case(name))
+                }),
+                Mp4::Place(_) | Mp4::Within => {
+                    let n = match spec.field {
+                        Field::Track => ilst.track(),
+                        Field::Disc => ilst.disk(),
+                        Field::TrackTotal => ilst.track_total(),
+                        _ => ilst.disk_total(),
+                    };
+                    n.filter(|&n| n > 0).map(|n| n.to_string()).into_iter().collect()
+                }
+            };
+            (spec, values)
+        })
+        .collect()
+}
+
+fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
+    TABLE
+        .iter()
+        .filter_map(|spec| {
+            let item = ape.get(spec.ape?)?;
+            let values = item.text_values()?.map(str::to_string).collect();
+            Some((spec, values))
+        })
+        .collect()
 }
 
 /// The file at `path` read by `lofty` for its tags alone. Its audio's

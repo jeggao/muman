@@ -457,8 +457,9 @@ Opus file holds the gains as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` and
 no peaks, as Opus players read them, and an Opus source's R128 gains are
 read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
-`3/12` offers its total too. Fields with no tag of their own in MP3 or
-MP4 are written as Picard writes them there. A value its field cannot
+`3/12` offers its total too. In MP3, MP4 and WavPack every field is
+written into the frame, atom or item Picard writes it in, and read back
+from it, so a library tagged by muman and by Picard agrees. A value its field cannot
 hold, as a date that is none, and a value over 4 KiB are offered by no
 source, and control characters and those that reorder
 text are dropped from every value.

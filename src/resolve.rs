@@ -345,7 +345,15 @@ pub struct Plan {
     /// ReplayGain tags are derived from them and the format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness: Option<Gains>,
+    /// How its tags are written into the file, [`TAGGING`] when it was.
+    #[serde(default)]
+    pub tagging: u32,
 }
+
+/// How tags are written into a file, raised whenever the frames, atoms or
+/// items one plan's tags are written as change, so every song is tagged
+/// again, its audio left as it is.
+pub const TAGGING: u32 = 1;
 
 impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
@@ -357,6 +365,7 @@ impl PartialEq for Plan {
             lyrics,
             tags,
             loudness: _,
+            tagging,
         } = self;
         *version == other.version
             && *format == other.format
@@ -364,6 +373,7 @@ impl PartialEq for Plan {
             && *cover == other.cover
             && *lyrics == other.lyrics
             && *tags == other.tags
+            && *tagging == other.tagging
             && self.held_loudness() == other.held_loudness()
     }
 }
@@ -631,6 +641,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             lyrics: lyrics.as_ref().map(|(l, _)| l.clone()),
             tags,
             loudness: None,
+            tagging: TAGGING,
         },
         stem,
         why: Why {

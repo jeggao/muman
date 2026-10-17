@@ -73,6 +73,7 @@ fn plan(format: Format) -> Plan {
             ("ALBUM".into(), vec!["Record".into()]),
         ],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
     }
 }
 
@@ -559,5 +560,204 @@ fn opus_holds_gains_as_r128_and_no_peaks() {
             tag("R128_TRACK_GAIN", "-2847"),
             tag("R128_ALBUM_GAIN", "-1024"),
         ]
+    );
+}
+
+/// Tags that touch every way a field is written: several values, a place
+/// and its total, a date, IDs, a gain, a role, a tag of no field and one
+/// lofty would write under a frame of no text.
+fn every_kind() -> Vec<(String, Vec<String>)> {
+    [
+        ("TITLE", vec!["Lantern Weather"]),
+        ("ARTIST", vec!["Marlo Venn", "Kiri Hoshino"]),
+        ("TRACKNUMBER", vec!["5"]),
+        ("TRACKTOTAL", vec!["9"]),
+        ("DISCNUMBER", vec!["2"]),
+        ("DATE", vec!["2019-07"]),
+        ("ISRC", vec!["XXZZ12400001", "XXZZ12400002"]),
+        (
+            "MUSICBRAINZ_TRACKID",
+            vec!["00000000-0000-0000-0000-000000000001"],
+        ),
+        (
+            "MUSICBRAINZ_ALBUMID",
+            vec!["00000000-0000-0000-0000-000000000002"],
+        ),
+        ("REPLAYGAIN_TRACK_GAIN", vec!["-6.12 dB"]),
+        ("PRODUCER", vec!["Ada Quill", "Bram Feld"]),
+        ("COMPOSER", vec!["Odile Marsh"]),
+        ("WORK", vec!["Harbor Suite"]),
+        ("LANGUAGE", vec!["jpn"]),
+        ("LYRICS", vec!["[00:01.00]the lamps go out\n"]),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.into_iter().map(str::to_string).collect()))
+    .collect()
+}
+
+fn written(fixture: &[u8], name: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    fs::write(&path, fixture).unwrap();
+    (dir, path)
+}
+
+fn cover() -> Picture {
+    Picture::unchecked(crate::testing::PIXEL.to_vec())
+        .pic_type(PictureType::CoverFront)
+        .mime_type(MimeType::Png)
+        .build()
+}
+
+#[test]
+fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
+    use lofty::id3::v2::{FrameId, Id3v2Version};
+
+    let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    let codec = Format::Copy { codec: Codec::Mp3 };
+    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let id3 = mp3.id3v2().unwrap();
+    assert_eq!(id3.original_version(), Id3v2Version::V4);
+    let text = |id: &str| id3.get_text(&FrameId::new(id.to_string()).unwrap());
+    assert_eq!(text("TPE1"), Some("Marlo Venn\0Kiri Hoshino"));
+    assert_eq!(text("TRCK"), Some("5/9"));
+    assert_eq!(text("TPOS"), Some("2"));
+    assert_eq!(text("TSRC"), Some("XXZZ12400001\0XXZZ12400002"));
+    assert_eq!(text("TCOM"), Some("Odile Marsh"));
+    assert_eq!(id3.get_user_text("WORK"), Some("Harbor Suite"));
+    assert_eq!(id3.get_user_text("REPLAYGAIN_TRACK_GAIN"), Some("-6.12 dB"));
+    assert_eq!(
+        id3.get_user_text("MusicBrainz Album Id"),
+        Some("00000000-0000-0000-0000-000000000002")
+    );
+    let frames: Vec<&Frame<'_>> = id3.into_iter().collect();
+    assert!(frames.iter().any(|f| matches!(f, Frame::Timestamp(t)
+        if f.id_str() == "TDRC" && t.timestamp.to_string() == "2019-07")));
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(f, Frame::UniqueFileIdentifier(u)
+        if u.identifier.as_ref() == b"00000000-0000-0000-0000-000000000001"))
+    );
+    assert!(frames.iter().any(|f| matches!(f, Frame::KeyValue(k)
+        if f.id_str() == "TIPL" && k.key_value_pairs.len() == 2)));
+    assert!(
+        frames
+            .iter()
+            .any(|f| matches!(f, Frame::UnsynchronizedText(u)
+        if &u.language == b"jpn"))
+    );
+    assert_eq!(frames.iter().filter(|f| f.id_str() == "APIC").count(), 1);
+
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read["artist"], ["Marlo Venn", "Kiri Hoshino"]);
+    assert_eq!(read["isrc"], ["XXZZ12400001", "XXZZ12400002"]);
+    assert_eq!(read["replaygain_track_gain"], ["-6.12 dB"]);
+    assert_eq!(
+        read["musicbrainz_trackid"],
+        ["00000000-0000-0000-0000-000000000001"]
+    );
+}
+
+#[test]
+fn an_m4a_holds_each_field_in_the_atom_picard_writes() {
+    use lofty::mp4::{AtomData, AtomIdent};
+
+    let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
+    let codec = Format::Copy { codec: Codec::Aac };
+    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let m4a = Mp4File::read_from(&mut file, ParseOptions::new()).unwrap();
+    let ilst = m4a.ilst().unwrap();
+    assert_eq!((ilst.track(), ilst.track_total()), (Some(5), Some(9)));
+    assert_eq!(ilst.disk(), Some(2));
+    let free = |name: &str| -> Vec<String> {
+        ilst.get(&AtomIdent::Freeform {
+            mean: "com.apple.iTunes".into(),
+            name: name.to_string().into(),
+        })
+        .map(|a| {
+            a.data()
+                .filter_map(|d| match d {
+                    AtomData::UTF8(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    };
+    assert_eq!(
+        free("REPLAYGAIN_TRACK_GAIN"),
+        ["-6.12 dB"],
+        "Picard's capitals"
+    );
+    assert_eq!(free("ISRC"), ["XXZZ12400001", "XXZZ12400002"]);
+    assert_eq!(
+        free("MusicBrainz Track Id"),
+        ["00000000-0000-0000-0000-000000000001"]
+    );
+    let wrt = ilst.get(&AtomIdent::Fourcc(*b"\xa9wrt")).unwrap();
+    assert!(
+        wrt.data()
+            .any(|d| matches!(d, AtomData::UTF8(s) if s == "Odile Marsh"))
+    );
+    assert!(ilst.get(&AtomIdent::Fourcc(*b"\xa9lyr")).is_some());
+    assert_eq!(ilst.pictures().unwrap().count(), 1);
+
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read["tracknumber"], ["5"]);
+    assert_eq!(read["tracktotal"], ["9"]);
+    assert_eq!(read["replaygain_track_gain"], ["-6.12 dB"]);
+}
+
+#[test]
+fn a_wavpack_file_holds_each_field_in_the_item_picard_writes() {
+    let (_dir, path) = written(crate::testing::SILENCE_WV, "song.wv");
+    let codec = Format::Copy {
+        codec: Codec::WavPack,
+    };
+    write_tags(&path, codec, &every_kind(), Some(cover())).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let wv = lofty::wavpack::WavPackFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let ape = wv.ape().unwrap();
+    let text = |key: &str| match ape.get(key).map(lofty::ape::ApeItem::value) {
+        Some(ItemValue::Text(t)) => Some(t.clone()),
+        _ => None,
+    };
+    assert_eq!(text("Track").as_deref(), Some("5/9"));
+    assert_eq!(text("Disc").as_deref(), Some("2"));
+    assert_eq!(text("Year").as_deref(), Some("2019-07"));
+    assert_eq!(text("ISRC").as_deref(), Some("XXZZ12400001\0XXZZ12400002"));
+    assert_eq!(text("Artist").as_deref(), Some("Marlo Venn\0Kiri Hoshino"));
+    assert!(text("TRACKTOTAL").is_none(), "the total is in Track");
+    match ape.get("Cover Art (Front)").map(lofty::ape::ApeItem::value) {
+        Some(ItemValue::Binary(b)) => {
+            assert!(
+                b.starts_with(b"cover.png\0"),
+                "named so readers tell its format"
+            );
+        }
+        other => panic!("no cover: {other:?}"),
+    }
+
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read["tracknumber"], ["5/9"]);
+    assert_eq!(read["artist"], ["Marlo Venn", "Kiri Hoshino"]);
+}
+
+#[test]
+fn a_total_with_no_place_is_kept_where_a_place_cannot_hold_it() {
+    let tags = vec![("TRACKTOTAL".to_string(), vec!["9".to_string()])];
+    let (_dir, path) = written(crate::testing::SILENCE_MP3, "song.mp3");
+    write_tags(&path, Format::Copy { codec: Codec::Mp3 }, &tags, None).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    let mp3 = MpegFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    let id3 = mp3.id3v2().unwrap();
+    assert_eq!(id3.get_user_text("TRACKTOTAL"), Some("9"));
+    assert!(
+        id3.get_text(&lofty::id3::v2::FrameId::new("TRCK").unwrap())
+            .is_none()
     );
 }
