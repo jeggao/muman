@@ -9,6 +9,14 @@
 //! language tag is used only when the info JSON says nothing about
 //! subtitles, and it is the weaker match: yt-dlp tags Filipino `fin`,
 //! the code for Finnish.
+//!
+//! A line is no lyric when it is a cue or a credit. A cue is blank, only
+//! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
+//! `(Guitar solo)`, `（間奏）`); brackets of other words hold a backing
+//! vocal, which is sung. A credit is a credit word, a separator and a
+//! name, and is one only in a block at the start or end of the lyrics,
+//! where credits sit: between two lines sung, `Music by the water` is
+//! sung too.
 
 use crate::units;
 use std::fmt::Write as _;
@@ -35,6 +43,13 @@ fn base(code: &str) -> &str {
     code.split(['-', '_']).next().unwrap_or(code)
 }
 
+/// The ISO 639-2 code of the language a two-letter code names, the
+/// terminologic one where it has two, as `ID3v2` marks a language.
+#[must_use]
+pub fn iso639_2_of(code: &str) -> Option<&'static str> {
+    iso639_2(code).first().copied()
+}
+
 /// ISO 639-2 codes, bibliographic and terminologic, for the languages
 /// subtitles are commonly offered in.
 fn iso639_2(code: &str) -> &'static [&'static str] {
@@ -57,6 +72,38 @@ fn iso639_2(code: &str) -> &'static [&'static str] {
         "nl" => &["nld", "dut"],
         "tr" => &["tur"],
         "ar" => &["ara"],
+        "he" | "iw" => &["heb"],
+        "hi" => &["hin"],
+        "bn" => &["ben"],
+        "fa" => &["fas", "per"],
+        "ms" => &["msa", "may"],
+        "tl" | "fil" => &["tgl", "fil"],
+        "sv" => &["swe"],
+        "no" | "nb" => &["nor", "nob"],
+        "da" => &["dan"],
+        "fi" => &["fin"],
+        "is" => &["isl", "ice"],
+        "cs" => &["ces", "cze"],
+        "sk" => &["slk", "slo"],
+        "hu" => &["hun"],
+        "ro" => &["ron", "rum"],
+        "bg" => &["bul"],
+        "sr" => &["srp"],
+        "hr" => &["hrv"],
+        "el" => &["ell", "gre"],
+        "ca" => &["cat"],
+        "eu" => &["eus", "baq"],
+        "gl" => &["glg"],
+        "cy" => &["cym", "wel"],
+        "ga" => &["gle"],
+        "et" => &["est"],
+        "lv" => &["lav"],
+        "lt" => &["lit"],
+        "sl" => &["slv"],
+        "ta" => &["tam"],
+        "te" => &["tel"],
+        "ur" => &["urd"],
+        "sw" => &["swa"],
         _ => &[],
     }
 }
@@ -114,49 +161,204 @@ pub fn pick<'a>(
         .map(|(_, s)| s)
 }
 
-/// Whether a line of lyrics is sung: not blank, not only music symbols,
-/// not a bracketed cue as `[Music]`, not a credit as `作詞：…`.
-#[must_use]
-pub fn is_lyric(text: &str) -> bool {
-    const CREDITS: [&str; 18] = [
-        "lyrics",
-        "lyric",
-        "music",
-        "composer",
-        "composed",
-        "arrange",
-        "arranged",
-        "arrangement",
-        "vocal",
-        "vocals",
-        "illust",
-        "illustration",
-        "movie",
-        "mix",
-        "作詞",
-        "作曲",
-        "編曲",
-        "動画",
-    ];
-    let t = text.trim();
-    if t.chars().all(|c| !c.is_alphanumeric()) {
-        return false;
-    }
-    let pairs = [('[', ']'), ('(', ')'), ('（', '）'), ('【', '】')];
-    if pairs.iter().any(|(o, c)| {
-        t.starts_with(*o)
-            && t.ends_with(*c)
-            && t[o.len_utf8()..].find(*c) == Some(t.len() - o.len_utf8() - c.len_utf8())
-    }) {
-        return false;
-    }
-    let lower = t.to_lowercase();
-    !CREDITS.iter().any(|word| {
-        lower.strip_prefix(word).is_some_and(|rest| {
-            let rest = rest.trim_start();
-            rest.starts_with([':', '：', '/', '・']) || rest.starts_with("by ")
+/// What a line of lyrics is, read on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Sung,
+    /// Blank, only music symbols, or a bracketed cue as `[Music]`.
+    Cue,
+    /// Shaped as a credit, `作詞：…` or `Music by …`: one only where
+    /// credits sit, before the first line sung or after the last.
+    Credit,
+}
+
+/// Words that make a wholly bracketed line a cue: a section, a sound
+/// that is not sung, or a repeat. A line in brackets of other words, as
+/// `(Down by the river)`, is a backing vocal and sung.
+const CUES: [&str; 44] = [
+    "instrumental",
+    "music",
+    "applause",
+    "laughter",
+    "laughing",
+    "laughs",
+    "cheering",
+    "cheers",
+    "chorus",
+    "prechorus",
+    "verse",
+    "intro",
+    "outro",
+    "bridge",
+    "hook",
+    "refrain",
+    "solo",
+    "interlude",
+    "repeat",
+    "repeats",
+    "spoken",
+    "speaking",
+    "inaudible",
+    "unintelligible",
+    "humming",
+    "mv",
+    "音楽",
+    "間奏",
+    "前奏",
+    "後奏",
+    "拍手",
+    "笑い",
+    "歓声",
+    "サビ",
+    "繰り返し",
+    "語り",
+    "セリフ",
+    "台詞",
+    "ソロ",
+    "ギターソロ",
+    "イントロ",
+    "アウトロ",
+    "コーラス",
+    "ブリッジ",
+];
+
+/// Words a cue may hold beside its cue words, as `(Guitar solo)` or
+/// `[Music fades out]`, which alone make no cue.
+const CUE_FILLERS: [&str; 26] = [
+    "a",
+    "and",
+    "the",
+    "of",
+    "with",
+    "in",
+    "out",
+    "pre",
+    "post",
+    "part",
+    "end",
+    "x",
+    "break",
+    "fade",
+    "fades",
+    "fading",
+    "playing",
+    "plays",
+    "continues",
+    "ends",
+    "guitar",
+    "piano",
+    "drum",
+    "drums",
+    "bass",
+    "crowd",
+];
+
+/// Words that open a credit, as `Music by …` or `作曲：…`.
+const CREDITS: [&str; 18] = [
+    "lyrics",
+    "lyric",
+    "music",
+    "composer",
+    "composed",
+    "arrange",
+    "arranged",
+    "arrangement",
+    "vocal",
+    "vocals",
+    "illust",
+    "illustration",
+    "movie",
+    "mix",
+    "作詞",
+    "作曲",
+    "編曲",
+    "動画",
+];
+
+/// Whether a word is a repeat, as `x2` or `3x`.
+fn is_repeat(word: &str) -> bool {
+    let digits = word
+        .strip_prefix('x')
+        .or_else(|| word.strip_suffix('x'))
+        .unwrap_or("");
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether the words inside a pair of brackets are a cue's: every one a
+/// cue word, a filler or a number, and one at least a cue word or a
+/// repeat. What follows a colon names who sings, as `[Chorus: …]`.
+fn is_cue(inner: &str) -> bool {
+    let head = inner.split([':', '：']).next().unwrap_or(inner);
+    let lower = head.to_lowercase().replace('×', "x");
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let cue = |w: &&str| CUES.contains(w) || is_repeat(w);
+    words.iter().any(cue)
+        && words
+            .iter()
+            .all(|w| cue(w) || CUE_FILLERS.contains(w) || w.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether `text` is shaped as a credit: a credit word, then `:`, `/`,
+/// `・` or `by`, then a name, which starts with no lowercase letter;
+/// `Lyrics/music: …` chains two.
+fn is_credit(text: &str) -> bool {
+    CREDITS.iter().any(|word| {
+        let Some(rest) = text
+            .get(..word.len())
+            .filter(|head| head.eq_ignore_ascii_case(word))
+            .map(|_| text[word.len()..].trim_start())
+        else {
+            return false;
+        };
+        let name = rest
+            .strip_prefix([':', '：', '/', '・'])
+            .or_else(|| rest.strip_prefix("by "))
+            .or_else(|| rest.strip_prefix("By "));
+        name.map(str::trim_start).is_some_and(|name| {
+            is_credit(name) || name.chars().next().is_some_and(|c| !c.is_lowercase())
         })
     })
+}
+
+/// What the line `text` is, read on its own.
+fn kind(text: &str) -> Kind {
+    let t = text.trim();
+    if t.chars().all(|c| !c.is_alphanumeric()) {
+        return Kind::Cue;
+    }
+    let pairs = [('[', ']'), ('(', ')'), ('（', '）'), ('【', '】')];
+    let bracketed = pairs.iter().find_map(|(o, c)| {
+        let inner = t.strip_prefix(*o)?.strip_suffix(*c)?;
+        (!inner.contains(*c)).then_some(inner)
+    });
+    if bracketed.is_some_and(is_cue) {
+        Kind::Cue
+    } else if is_credit(t) {
+        Kind::Credit
+    } else {
+        Kind::Sung
+    }
+}
+
+/// Which of `lines`, one text's lines of words in order, are no lyric:
+/// the cues, and the credits in a block at its start or end. A credit's
+/// shape between two lines sung is a line sung, as `Music by the water`.
+fn unsung<S: AsRef<str>>(lines: &[S]) -> Vec<bool> {
+    let kinds: Vec<Kind> = lines.iter().map(|l| kind(l.as_ref())).collect();
+    let first = kinds.iter().position(|k| *k == Kind::Sung);
+    let last = kinds.iter().rposition(|k| *k == Kind::Sung);
+    kinds
+        .iter()
+        .enumerate()
+        .map(|(i, k)| match (k, first, last) {
+            (Kind::Sung, ..) => false,
+            (Kind::Credit, Some(first), Some(last)) => i < first || i > last,
+            _ => true,
+        })
+        .collect()
 }
 
 /// The value of the first ID tag `name` in the LRC `text`, read in any
@@ -234,7 +436,7 @@ fn without_word_times(line: &str) -> String {
 /// untimed line but the ID tags, without the lines that are no lyric.
 #[must_use]
 pub fn sung(text: &str) -> String {
-    let mut out = String::new();
+    let mut words = Vec::new();
     for line in text.lines() {
         let mut rest = line.trim();
         let mut timed = false;
@@ -242,10 +444,16 @@ pub fn sung(text: &str) -> String {
             timed = true;
             rest = after;
         }
-        let words = without_word_times(rest);
-        let header = !timed && words.starts_with('[') && words.ends_with(']');
-        if !header && !words.trim().is_empty() && is_lyric(&words) {
-            out.push_str(words.trim());
+        let line = without_word_times(rest);
+        let header = !timed && line.starts_with('[') && line.ends_with(']');
+        if !header && !line.trim().is_empty() {
+            words.push(line.trim().to_string());
+        }
+    }
+    let mut out = String::new();
+    for (line, unsung) in words.iter().zip(unsung(&words)) {
+        if !unsung {
+            out.push_str(line);
             out.push('\n');
         }
     }
@@ -272,8 +480,8 @@ pub fn decode(bytes: &[u8]) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// UTF-16 with no byte-order mark, told by its zero bytes: text mostly in
-/// Latin letters has one in every pair, on the side its byte order says.
+/// UTF-16 with no byte-order mark, told by its zero bytes: an ASCII
+/// character has one in its pair, on the side its byte order says.
 fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     if encoding_rs::Encoding::for_bom(bytes).is_some() || bytes.len() < 4 {
         return None;
@@ -283,9 +491,12 @@ fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     let (high, low) = pairs.iter().fold((0, 0), |(h, l), p| {
         (h + usize::from(p[1] == 0), l + usize::from(p[0] == 0))
     });
-    if high * 2 > total && low * 10 < total {
+    // UTF-8 and the legacy encodings hold no NUL; an LRC's times and
+    // brackets put one in every other byte of an eighth of its pairs at
+    // the least, whatever script its words are in.
+    if high * 8 > total && low * 10 < total {
         Some(encoding_rs::UTF_16LE)
-    } else if low * 2 > total && high * 10 < total {
+    } else if low * 8 > total && high * 10 < total {
         Some(encoding_rs::UTF_16BE)
     } else {
         None
@@ -317,27 +528,68 @@ fn is_utf8(bytes: &[u8]) -> bool {
 }
 
 /// LRC without its timed lines that are no lyric; untimed lines, the
-/// `[ar:…]` headers among them, stay.
+/// `[ar:…]` headers among them, stay, and so does a timed line of no
+/// words, which ends the line before it where the singing stops.
 #[must_use]
 pub fn clean_lrc(text: &str) -> String {
+    let lines: Vec<String> = text.lines().map(unmarked).collect();
+    let words: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let mut rest = line.as_str();
+            let mut timed = false;
+            while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+                timed = true;
+                rest = after;
+            }
+            let words = without_word_times(rest);
+            (timed && !words.trim().is_empty()).then_some((i, words))
+        })
+        .collect();
+    let texts: Vec<&str> = words.iter().map(|(_, w)| w.as_str()).collect();
+    let mut dropped = vec![false; lines.len()];
+    for ((i, _), unsung) in words.iter().zip(unsung(&texts)) {
+        dropped[*i] = unsung;
+    }
     let mut out = String::new();
-    for line in text.lines() {
-        let mut rest = line;
-        let mut timed = false;
-        while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            timed = true;
-            rest = after;
+    for (line, dropped) in lines.iter().zip(dropped) {
+        if !dropped {
+            out.push_str(line);
+            out.push('\n');
         }
-        if timed && !is_lyric(rest) {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
     }
     out
 }
 
-/// The timed lines of LRC: how many, and the first and last time.
+/// `line` without the markup subtitles carry into LRC: an HTML-like tag,
+/// as `<i>` or `</font>`, and an ASS override, as `{\an8}`. A word time,
+/// `<00:12.34>`, is no markup.
+fn unmarked(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find(['<', '{']) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let close = if tail.starts_with('<') { '>' } else { '}' };
+        let markup = match tail[1..].chars().next() {
+            Some(c) if close == '>' => c.is_ascii_alphabetic() || c == '/',
+            Some(c) => c == '\\',
+            None => false,
+        };
+        if let Some(end) = tail.find(close).filter(|_| markup) {
+            rest = &tail[end + 1..];
+        } else {
+            out.push_str(&tail[..1]);
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The timed lines of LRC that sing a word, as a line of no words only
+/// ends the one before: how many, and the first and last time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timing {
     pub lines: usize,
@@ -350,9 +602,13 @@ pub fn timing(text: &str) -> Option<Timing> {
     let mut times = Vec::new();
     for line in text.lines() {
         let mut rest = line;
+        let mut stamps = Vec::new();
         while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(ms);
+            stamps.push(ms);
             rest = after;
+        }
+        if !without_word_times(rest).trim().is_empty() {
+            times.extend(stamps);
         }
     }
     Some(Timing {
@@ -362,24 +618,110 @@ pub fn timing(text: &str) -> Option<Timing> {
     })
 }
 
-/// LRC timed for another cut of the recording: every `[mm:ss.xx]` tag
-/// moved `offset_ms` earlier, then shortened by `stretch_ppm` parts per
-/// million for a cut that plays the recording that much longer. Of the
-/// lines that would start before the track does, the one still sung as
-/// it begins starts at 0:00 and those over by then are dropped; untimed
-/// lines are kept.
-#[must_use]
-pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
-    let timed = |line: &str| {
-        let mut rest = line;
-        let mut times = Vec::new();
-        while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(unstretch(ms.saturating_sub(offset_ms), stretch_ppm));
+/// One line of LRC: the times it starts at and what follows them, its
+/// words with any word times; or a line of no time, as an ID tag.
+enum Line<'a> {
+    Timed { times: Vec<i64>, rest: &'a str },
+    Other(&'a str),
+}
+
+/// LRC read line by line, its `[offset:]` taken out and kept apart, so
+/// moving it moves every time it holds, a word's as a line's.
+struct Lrc<'a> {
+    lines: Vec<Line<'a>>,
+    /// `[offset:]`: how much earlier every time is meant, in ms.
+    offset_ms: i64,
+}
+
+impl<'a> Lrc<'a> {
+    fn parse(text: &'a str) -> Self {
+        let mut offset_ms = 0;
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            let mut rest = line;
+            let mut times = Vec::new();
+            while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+                times.push(ms);
+                rest = after;
+            }
+            if !times.is_empty() {
+                lines.push(Line::Timed { times, rest });
+            } else if let Some(offset) = id_tag(line, "offset") {
+                offset_ms = offset.parse().unwrap_or(0);
+            } else {
+                lines.push(Line::Other(line));
+            }
+        }
+        Self { lines, offset_ms }
+    }
+}
+
+/// The value of the line `line` if it is the ID tag `name`, as `[offset:+500]`.
+fn id_tag<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let inner = line.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let (k, v) = inner.split_once(':')?;
+    k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+}
+
+/// A time as LRC writes it, between `open` and `close`, rounded to the
+/// hundredth of a second it holds.
+fn stamp(out: &mut String, ms: i64, open: char, close: char) {
+    let cs = ms.max(0).saturating_add(5) / 10;
+    let _ = write!(
+        out,
+        "{open}{:02}:{:02}.{:02}{close}",
+        cs / 6000,
+        cs / 100 % 60,
+        cs % 100
+    );
+}
+
+/// `words` with each word time, as `<00:12.30>`, moved by `moved`.
+fn move_words(out: &mut String, words: &str, moved: &dyn Fn(i64) -> i64) {
+    let mut rest = words;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let bracketed = after.replacen('>', "]", 1);
+        let timed = after.find('>').zip(lrc_time(&bracketed).map(|(ms, _)| ms));
+        if let Some((close, ms)) = timed {
+            stamp(out, moved(ms), '<', '>');
+            rest = &after[close + 1..];
+        } else {
+            out.push('<');
             rest = after;
         }
-        (times, rest.to_string())
+    }
+    out.push_str(rest);
+}
+
+/// LRC timed for another cut of the recording: every time it holds, a
+/// line's `[mm:ss.xx]` and a word's `<mm:ss.xx>`, moved by its own
+/// `[offset:]`, which it then needs no more, then `offset_ms` earlier,
+/// then shortened by `stretch_ppm` parts per million for a cut that plays
+/// the recording that much longer. Of the lines that would start before
+/// the track does, the one still sung as it begins starts at 0:00 and
+/// those over by then are dropped; untimed lines are kept, but for a
+/// `[length:]`, which no more says how long the lyrics run once moved.
+#[must_use]
+pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
+    let lrc = Lrc::parse(text);
+    let moving = offset_ms != 0 || stretch_ppm != 0 || lrc.offset_ms != 0;
+    let moved = |ms: i64| {
+        unstretch(
+            ms.saturating_sub(lrc.offset_ms).saturating_sub(offset_ms),
+            stretch_ppm,
+        )
     };
-    let all: Vec<i64> = text.lines().flat_map(|l| timed(l).0).collect();
+    let all: Vec<i64> = lrc
+        .lines
+        .iter()
+        .flat_map(|l| match l {
+            Line::Timed { times, .. } => times.clone(),
+            Line::Other(_) => Vec::new(),
+        })
+        .map(moved)
+        .collect();
     let begun = all
         .iter()
         .copied()
@@ -387,28 +729,25 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
         .max()
         .filter(|_| !all.contains(&0));
     let mut out = String::new();
-    for line in text.lines() {
-        let (mut starts, rest) = timed(line);
-        let rest = rest.as_str();
-        if !starts.is_empty() {
-            starts.retain(|ms| *ms >= 0 || Some(*ms) == begun);
-            for ms in &mut starts {
-                *ms = (*ms).max(0);
+    for line in &lrc.lines {
+        match line {
+            Line::Timed { times, rest } => {
+                let starts: Vec<i64> = times
+                    .iter()
+                    .map(|ms| moved(*ms))
+                    .filter(|ms| *ms >= 0 || Some(*ms) == begun)
+                    .collect();
+                if starts.is_empty() {
+                    continue;
+                }
+                for ms in starts {
+                    stamp(&mut out, ms, '[', ']');
+                }
+                move_words(&mut out, rest, &moved);
             }
-            if starts.is_empty() {
-                continue;
-            }
-            for ms in starts {
-                let _ = write!(
-                    out,
-                    "[{:02}:{:02}.{:02}]",
-                    ms / 60_000,
-                    ms / 1000 % 60,
-                    ms / 10 % 100
-                );
-            }
+            Line::Other(text) if moving && id_tag(text, "length").is_some() => continue,
+            Line::Other(text) => out.push_str(text),
         }
-        out.push_str(rest);
         out.push('\n');
     }
     out
@@ -416,15 +755,6 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
 
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
-/// `ms` played `stretch_ppm` parts per million longer, brought back.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
-    if stretch_ppm == 0 {
-        return ms;
-    }
-    (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
-}
-
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
     let (tag, after) = s.split_once(']')?;
     let (min, sec) = tag.split_once(':')?;
@@ -446,6 +776,15 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
         .checked_add(whole.parse::<i64>().ok()?.checked_mul(1000)?)?
         .checked_add(frac_ms)?;
     Some((ms, after))
+}
+
+/// `ms` played `stretch_ppm` parts per million longer, brought back.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
+    if stretch_ppm == 0 {
+        return ms;
+    }
+    (ms as f64 / (1.0 + units::ratio_of_ppm(stretch_ppm as f64))).round() as i64
 }
 
 #[cfg(test)]
@@ -531,10 +870,26 @@ mod tests {
         assert_eq!(decode(&le), lrc);
         assert_eq!(decode(&be), lrc);
         assert!(is_text(lrc));
+        let cyrillic = "[00:07.43]Пример первой строки песни\n[00:11.00]и второй строки\n";
+        let le: Vec<u8> = cyrillic.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decode(&le), cyrillic);
         let noise: Vec<u8> = (0..4000_u32)
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
         assert!(!is_text(&decode(&noise)));
+    }
+
+    #[test]
+    fn subtitle_markup_is_no_lyric() {
+        assert_eq!(
+            clean_lrc("[00:40.00]<i>Third</i> line in <font color=\"#fff\">ink</font>\n"),
+            "[00:40.00]Third line in ink\n"
+        );
+        assert_eq!(
+            clean_lrc("[00:41.00]{\\an8}<00:41.50>Lantern <00:42.00>weather\n"),
+            "[00:41.00]<00:41.50>Lantern <00:42.00>weather\n"
+        );
+        assert_eq!(clean_lrc("[00:43.00]a < b {c}\n"), "[00:43.00]a < b {c}\n");
     }
 
     #[test]
@@ -666,17 +1021,47 @@ mod tests {
             "Music by X",
             "Lyrics: Y",
             "【MV】",
+            "[Chorus]",
+            "[Verse 2: Marlo Venn]",
+            "(Guitar solo)",
+            "(x2)",
+            "（間奏）",
+            "Lyrics/music: Marlo Venn",
         ] {
-            assert!(!is_lyric(no), "{no}");
+            assert_eq!(sung(no), "", "{no}");
         }
         for yes in [
             "Music fills the harbor",
             "(I) miss the tide (so)",
             "灯台の夢",
             "Lyrics of a song I wrote",
+            "(Down by the river, down by the shore)",
+            "Music by the water plays all night",
+            "Mix: the night and the morning light",
         ] {
-            assert!(is_lyric(yes), "{yes}");
+            assert_eq!(sung(yes), format!("{yes}\n"), "{yes}");
         }
+    }
+
+    #[test]
+    fn a_credit_is_one_only_before_the_first_line_sung_or_after_the_last() {
+        let lrc = "[00:01.00]Lyrics: Marlo Venn\n[00:02.00]作曲：ほしのきり\n\
+                   [00:05.00]The lamps along the quay\n\
+                   [00:08.00](Down by the quay, down by the lamps)\n\
+                   [00:11.00]Music by Ada Quill burns low\n\
+                   [00:14.00][Chorus]\n[00:17.00]Last of the lamps\n\
+                   [00:20.00]Mix: Tobin Ash\n";
+        assert_eq!(
+            clean_lrc(lrc),
+            "[00:05.00]The lamps along the quay\n\
+             [00:08.00](Down by the quay, down by the lamps)\n\
+             [00:11.00]Music by Ada Quill burns low\n\
+             [00:17.00]Last of the lamps\n"
+        );
+        assert_eq!(
+            sung("Arranged by Tobin Ash\n\nfirst line\nArranged by Tobin Ash\nlast line\n"),
+            "first line\nArranged by Tobin Ash\nlast line\n"
+        );
     }
 
     #[test]
@@ -726,6 +1111,46 @@ mod tests {
         assert_eq!(shift_lrc("[00:59.99]x\n", -20, 0), "[01:00.01]x\n");
         // A cut 0.1% slow plays the line at 200.2 s where the track does at 200 s.
         assert_eq!(shift_lrc("[03:20.20]x\n", 0, 1000), "[03:20.00]x\n");
+    }
+
+    #[test]
+    fn a_move_moves_word_times_folds_the_offset_and_rounds() {
+        assert_eq!(
+            shift_lrc("[00:06.00]<00:05.00>the <00:05.40>lamps go out\n", -1000, 0),
+            "[00:07.00]<00:06.00>the <00:06.40>lamps go out\n"
+        );
+        assert_eq!(
+            shift_lrc("[ar:x]\n[offset:+500]\n[00:02.00]on Kessler Row\n", 0, 0),
+            "[ar:x]\n[00:01.50]on Kessler Row\n",
+            "[offset:+500] sings each line 500 ms sooner"
+        );
+        assert_eq!(
+            shift_lrc("[00:30.005]x\n[00:05.129]y\n", 0, 0),
+            "[00:30.01]x\n[00:05.13]y\n"
+        );
+        assert_eq!(
+            shift_lrc("[length:03:00]\n[00:02.00]a\n", 1000, 0),
+            "[00:01.00]a\n",
+            "a length no more says how long the lines run"
+        );
+        assert_eq!(
+            shift_lrc("[length:03:00]\n[00:02.00]a\n", 0, 0),
+            "[length:03:00]\n[00:02.00]a\n"
+        );
+        assert_eq!(
+            shift_lrc("[00:01.00]a <tag> b\n", 0, 0),
+            "[00:01.00]a <tag> b\n"
+        );
+    }
+
+    #[test]
+    fn a_timed_line_of_no_words_ends_the_one_before_and_stays() {
+        let lrc = "[00:02.00]sung\n[00:08.00]\n[00:09.00]♪\n";
+        assert_eq!(clean_lrc(lrc), "[00:02.00]sung\n[00:08.00]\n");
+        assert_eq!(
+            timing(&clean_lrc(lrc)).map(|t| (t.lines, t.last_ms)),
+            Some((1, 2000))
+        );
     }
 
     #[test]

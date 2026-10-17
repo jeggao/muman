@@ -34,6 +34,11 @@
 //! another [`HASH_METHOD`] are hashed again by [`hash`], which decodes
 //! nothing.
 //!
+//! A media file's own lyrics tag, as `USLT` or `LYRICS`, is lyrics of
+//! that source ([`LyricsAt::Tag`]), read by `lofty` with its tags and
+//! known by the digest of its text; facts made before muman read it
+//! learn it when their tags are read again, by [`retag`].
+//!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the graymap its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
@@ -48,6 +53,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::analysis::{self, Analysis, Pass};
+use crate::chapters::Chapter;
 use crate::ffmpeg::{self, Input, Output, Piped};
 use crate::fingerprint::{self, Print};
 use crate::info::{self, VideoInfo};
@@ -71,6 +77,17 @@ pub fn method() -> String {
     )
 }
 
+/// [`method`] before excerpts that fell silent were taken again: facts it
+/// made hold, unless they found no sound.
+fn before_sound() -> String {
+    format!(
+        "{}+{}+{}",
+        quality::BEFORE_SOUND,
+        fingerprint::METHOD,
+        probe::METHOD
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Facts {
     /// The revision of the files they were measured on.
@@ -89,6 +106,9 @@ pub struct Facts {
     /// channel; read with the tags.
     #[serde(default)]
     pub release: bool,
+    /// Its chapters, read with the tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<Chapter>,
     #[serde(default, deserialize_with = "fingerprint::read_stored")]
     pub print: Option<Print>,
     /// What the source holds that a library file cannot keep.
@@ -145,7 +165,12 @@ impl Facts {
         // Facts recorded before revisions held change times hold while
         // the sizes and modification times do, as they did then.
         let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
-        same && self.method == method()
+        same && (self.method == method() || self.method == before_sound() && !self.soundless())
+    }
+
+    /// Whether its audio measured no sound to judge.
+    fn soundless(&self) -> bool {
+        self.audio.as_ref().is_some_and(|a| a.quality.is_none())
     }
 
     /// What a plan names its audio by: its digest, or, where it has
@@ -264,6 +289,7 @@ impl Facts {
             tags: Offers::new(),
             tags_method: tags::METHOD.to_string(),
             release: false,
+            chapters: Vec::new(),
             print: None,
             unkept: Vec::new(),
             served: None,
@@ -350,6 +376,9 @@ pub enum CoverAt {
     Sidecar(usize),
     /// The source is the picture.
     File,
+    /// The `index`th picture of an MP4's `covr` atom, which ffprobe does
+    /// not show ([`picture::mp4_covers`]).
+    Atom { index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -362,6 +391,10 @@ pub struct CoverFacts {
     /// How it looks, to tell it from other pictures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub look: Option<Look>,
+    /// Whether the file holding it, by its picture type or its name, says
+    /// it shows no front cover: a back, a disc or a booklet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub other: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -372,6 +405,9 @@ pub enum LyricsAt {
     Sidecar,
     /// The source is the `.lrc`.
     File,
+    /// The lyrics tag a media file holds, as `USLT` or `LYRICS`
+    /// ([`tags::lyrics_in`]).
+    Tag,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -497,6 +533,7 @@ pub fn gather<R: Runner>(
                 quality,
                 digest: digest_file(&located.path),
                 look,
+                other: named_other(&located.path),
             });
         }
         Kind::Tags => {
@@ -508,22 +545,40 @@ pub fn gather<R: Runner>(
     Ok(facts)
 }
 
-/// The tags of one located source, read again: a media file's are
-/// probed, its pictures not dumped nor anything measured.
-pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<(Offers, bool)> {
+/// What reading a source's tags again finds.
+#[derive(Debug, Default)]
+pub struct Reread {
+    pub tags: Offers,
+    pub release: bool,
+    pub chapters: Vec<Chapter>,
+    /// The lyrics its tags hold.
+    pub lyrics: Option<LyricsFacts>,
+}
+
+/// The tags of one located source, read again with its chapters and the
+/// lyrics its tags hold: a media file's are probed, its pictures not
+/// dumped nor anything measured.
+pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result<Reread> {
     match located.kind {
         Kind::Media => {}
         Kind::Tags => {
             let record = crate::musicbrainz::read(&located.path)?;
-            return Ok((tags::from_record(&record), false));
+            return Ok(Reread {
+                tags: tags::from_record(&record),
+                ..Reread::default()
+            });
         }
-        Kind::Lyrics | Kind::Image => return Ok((Offers::new(), false)),
+        Kind::Lyrics | Kind::Image => return Ok(Reread::default()),
     }
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
     let info = dump_attachments(runner, located, &probed, scratch, false);
-    let release = info.as_ref().is_some_and(VideoInfo::is_release);
-    Ok((tags_of(info.as_ref(), &probed, &located.path), release))
+    Ok(Reread {
+        tags: tags_of(info.as_ref(), &probed, &located.path),
+        release: info.as_ref().is_some_and(VideoInfo::is_release),
+        chapters: probed.chapters,
+        lyrics: tag_lyrics(located),
+    })
 }
 
 /// Whether each of `at`, lyrics of `located` measured before muman asked,
@@ -546,6 +601,12 @@ pub fn relyric<R: Runner>(
             }
             LyricsAt::Sidecar => located.lyrics.as_deref(),
             LyricsAt::File => Some(located.path.as_path()),
+            LyricsAt::Tag => {
+                if let Some(l) = tag_lyrics(located) {
+                    found.push((LyricsAt::Tag, l.sings_any()));
+                }
+                continue;
+            }
         };
         if let Some(text) = file.and_then(|f| read_text(f).ok()) {
             found.push((place.clone(), sings(&text)));
@@ -617,6 +678,19 @@ fn read_text(path: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// The lyrics a media file's own tags hold, measured as any lyrics are,
+/// in the language a `USLT` frame names, and known by their text's
+/// digest.
+#[must_use]
+pub fn tag_lyrics(located: &Located) -> Option<LyricsFacts> {
+    let (text, language) = tags::lyrics_in(&located.path)?;
+    Some(LyricsFacts {
+        language: language.map_or(Language::Unstated, Language::Tag),
+        digest: Some(digest(text.as_bytes())),
+        ..lyrics_of(LyricsAt::Tag, &text)
+    })
+}
+
 fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
     LyricsFacts {
         at,
@@ -628,7 +702,25 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
     }
 }
 
+/// Whether `a` and `b` are named alike but for their extensions, in any
+/// case, as a sidecar is matched to its song.
+fn named_as(a: &Path, b: &Path) -> bool {
+    let stem = |p: &Path| crate::relpath::folded(Path::new(p.file_stem().unwrap_or_default()));
+    stem(a) == stem(b)
+}
+
+/// Whether a picture file's name says it shows no front cover.
+fn named_other(path: &Path) -> bool {
+    path.file_stem()
+        .is_some_and(|stem| crate::picture::named_other(&stem.to_string_lossy()))
+}
+
+/// A picture file's media type by its bytes, else by its name's
+/// extension.
 fn mimetype_of(path: &Path) -> String {
+    if let Some(sniffed) = crate::picture::sniff_file(path) {
+        return sniffed.to_string();
+    }
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -663,7 +755,8 @@ fn image_file<R: Runner>(
 ) -> (Option<ImageQuality>, Option<Look>) {
     let out = scratch.join("file.pgm");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
-    let ok = ffmpeg::run_outputs(runner, &[located.path.as_path()], &outputs);
+    let input = Input::new(quality::whole_pictures(), &located.path);
+    let ok = ffmpeg::run(runner, &[input], &outputs);
     match ok.into_iter().next() {
         Some(Ok(())) => measure_image(&out),
         _ => (None, None),
@@ -672,12 +765,14 @@ fn image_file<R: Runner>(
 
 /// The outputs writing each picture `probed` holds, and those dumped
 /// from its attachments into `scratch`, as graymaps, each input it
-/// needs added to `inputs`.
+/// needs added to `inputs`; where ffprobe found no picture in `path`,
+/// those of its MP4 `covr` atom.
 fn cover_outputs(
     probed: &Probed,
+    path: &Path,
     scratch: &Path,
     inputs: &mut Vec<Input>,
-) -> Vec<(Output, CoverAt, String)> {
+) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
     for p in &probed.pictures {
         outputs.push((
@@ -687,6 +782,7 @@ fn cover_outputs(
             ),
             CoverAt::Picture { index: p.index },
             p.mimetype.clone(),
+            p.other,
         ));
     }
     for a in probed.image_attachments() {
@@ -694,14 +790,45 @@ fn cover_outputs(
         if !dumped.exists() {
             continue;
         }
-        inputs.push(Input::from(dumped.as_path()));
+        inputs.push(Input::new(quality::whole_pictures(), &dumped));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
                 &scratch.join(format!("att{}.pgm", a.ordinal)),
             ),
             CoverAt::Attachment { ordinal: a.ordinal },
-            a.mimetype.clone(),
+            crate::picture::sniff_file(&dumped).map_or_else(|| a.mimetype.clone(), str::to_string),
+            crate::picture::named_other(
+                Path::new(&a.filename)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default()
+                    .as_ref(),
+            ),
+        ));
+    }
+    let atoms = if probed.pictures.is_empty() {
+        picture::mp4_covers(path)
+    } else {
+        Vec::new()
+    };
+    for (index, bytes) in atoms.into_iter().enumerate() {
+        let Ok(name) = crate::atomic::Name::new(format!("atom{index}")) else {
+            continue;
+        };
+        if crate::atomic::write(scratch, &name, &bytes).is_err() {
+            continue;
+        }
+        let file = scratch.join(name.as_str());
+        inputs.push(Input::new(quality::whole_pictures(), &file));
+        outputs.push((
+            Output::new(
+                quality::gray_output(inputs.len() - 1, "v:0"),
+                &scratch.join(format!("atom{index}.pgm")),
+            ),
+            CoverAt::Atom { index },
+            picture::sniff(&bytes).unwrap_or("image/jpeg").to_string(),
+            false,
         ));
     }
     outputs
@@ -720,7 +847,8 @@ fn sidecar_cover<R: Runner>(
         quality::gray_output(0, "v:0"),
         &scratch.join(format!("side{n}.pgm")),
     );
-    let result = ffmpeg::run_outputs(runner, &[cover], std::slice::from_ref(&output))
+    let input = Input::new(quality::whole_pictures(), cover);
+    let result = ffmpeg::run(runner, &[input], std::slice::from_ref(&output))
         .into_iter()
         .next()
         .unwrap_or_else(|| Err(anyhow::anyhow!("no run")));
@@ -746,12 +874,12 @@ pub fn look<R: Runner>(
             let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
             dump_attachments(runner, located, &probed, scratch, true);
             let mut inputs = vec![Input::from(located.path.as_path())];
-            let covers = cover_outputs(&probed, scratch, &mut inputs);
+            let covers = cover_outputs(&probed, &located.path, scratch, &mut inputs);
             let mut looks = Vec::new();
             if !covers.is_empty() {
-                let plain: Vec<Output> = covers.iter().map(|(o, _, _)| o.clone()).collect();
+                let plain: Vec<Output> = covers.iter().map(|(o, ..)| o.clone()).collect();
                 let results = ffmpeg::run(runner, &inputs, &plain);
-                for ((output, at, _), result) in covers.into_iter().zip(results) {
+                for ((output, at, ..), result) in covers.into_iter().zip(results) {
                     looks.push((at, result.ok().and_then(|()| measure_image(&output.path).1)));
                 }
             }
@@ -782,6 +910,29 @@ fn segment_starts(duration: Option<f64>) -> Vec<f64> {
         .collect()
 }
 
+/// Where segments start that sound, by the seconds of a whole decode that
+/// do: centred on the seconds at [`quality::SEGMENTS`]' shares of them,
+/// within the audio. `None` where no second sounds.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn sounding_starts(sounding: &[bool]) -> Option<Vec<f64>> {
+    let sound: Vec<usize> = (0..sounding.len()).filter(|&s| sounding[s]).collect();
+    let last = sound.len().checked_sub(1)?;
+    let latest = (sounding.len() as f64 - quality::SEGMENT_SECONDS).max(0.0);
+    let mut starts: Vec<f64> = quality::SEGMENTS
+        .iter()
+        .map(|share| {
+            let second = sound[(last as f64 * share).round() as usize] as f64;
+            (second + 0.5 - quality::SEGMENT_SECONDS / 2.0).clamp(0.0, latest)
+        })
+        .collect();
+    starts.dedup();
+    Some(starts)
+}
+
 /// What one ffmpeg output measures, to read back once it ran.
 enum Measured {
     OpusHead,
@@ -789,7 +940,8 @@ enum Measured {
     Packets,
     Segment(PathBuf),
     Subtitle(u32, Language),
-    Cover(CoverAt, String),
+    /// A picture, its media type, and whether it shows no front cover.
+    Cover(CoverAt, String, bool),
     Hash(Part),
 }
 
@@ -894,6 +1046,9 @@ pub fn hash<R: Runner>(
         }
     }
     file_digests(located, &probed, scratch, &mut digests);
+    if let Some(d) = tag_lyrics(located).and_then(|l| l.digest) {
+        digests.lyrics.push((LyricsAt::Tag, d));
+    }
     digests.tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     Ok((digests, info.as_ref().and_then(Served::of)))
 }
@@ -911,11 +1066,12 @@ fn media<R: Runner>(
     let info = dump_attachments(runner, located, &probed, scratch, true);
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
+    facts.chapters.clone_from(&probed.chapters);
     let served = info.as_ref().and_then(Served::of);
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
-    let mut inputs = vec![Input::from(located.path.as_path())];
+    let mut inputs = vec![Input::new(quality::whole_pictures(), &located.path)];
     let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
         .into_iter()
         .map(|(o, part)| (o, Measured::Hash(part)))
@@ -955,8 +1111,9 @@ fn media<R: Runner>(
             ));
         }
     }
-    for (output, at, mimetype) in cover_outputs(&probed, scratch, &mut inputs) {
-        outputs.push((output, Measured::Cover(at, mimetype)));
+    for (output, at, mimetype, other) in cover_outputs(&probed, &located.path, scratch, &mut inputs)
+    {
+        outputs.push((output, Measured::Cover(at, mimetype, other)));
     }
 
     let mut plain: Vec<Output> = outputs.iter().map(|(o, _)| o.clone()).collect();
@@ -978,7 +1135,12 @@ fn media<R: Runner>(
         plain.push(output.clone());
         outputs.push((
             output,
-            Measured::Cover(CoverAt::Sidecar(n), mimetype_of(cover)),
+            Measured::Cover(
+                CoverAt::Sidecar(n),
+                mimetype_of(cover),
+                // Named as its song, a sidecar says nothing of its side.
+                named_other(cover) && !named_as(cover, &located.path),
+            ),
         ));
     }
     let channels = probed.audio.as_ref().map_or(1, |a| a.channels as usize);
@@ -1017,7 +1179,7 @@ fn media<R: Runner>(
                     });
                 }
             }
-            Measured::Cover(at, mimetype) => {
+            Measured::Cover(at, mimetype, other) => {
                 let (quality, look) = measure_image(&output.path);
                 facts.covers.push(CoverFacts {
                     at,
@@ -1025,6 +1187,7 @@ fn media<R: Runner>(
                     quality,
                     digest: None,
                     look,
+                    other,
                 });
             }
             Measured::Hash(part) => note_hash(&mut digests, part, &output.path),
@@ -1035,6 +1198,7 @@ fn media<R: Runner>(
         said: probed.audio.as_ref().and_then(|a| a.duration),
         timeline,
     };
+    let sounding = pass.sounding();
     let analysis = with_opus_gain(pass.finish(&found), opus_gain);
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
@@ -1042,13 +1206,26 @@ fn media<R: Runner>(
     if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
         facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
     }
+    if let Some(l) = tag_lyrics(located) {
+        digests
+            .lyrics
+            .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));
+        facts.lyrics.push(l);
+    }
     // Segments placed by a length the packets fall short of read nothing.
     if let (Some(Damage::Cut { ends, .. }), Some(a)) = (
         analysis.integrity().and_then(integrity::Measure::damage),
         &probed.audio,
     ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
     {
-        segments = measure_segments(runner, located, a, ends, scratch);
+        segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+    }
+    // Excerpts that all fell in silence are taken again where it sounds.
+    if let Some(a) = &probed.audio
+        && quality::audio(&segments, a.sample_rate, headroom).is_none()
+        && let Some(starts) = sounding_starts(&sounding)
+    {
+        segments = measure_segments(runner, located, a, &starts, scratch);
     }
     facts.unkept = unkept(&located.path);
     facts.audio = probed.audio.map(|a| AudioFacts {
@@ -1154,16 +1331,16 @@ fn cuesheet_emphasis(block: &[u8]) -> bool {
     false
 }
 
-/// The segments of a source's audio `held` seconds long, decoded again
-/// where its audio stream said it ran longer.
+/// The segments of a source's audio from `starts`, decoded again: where
+/// its audio stream said it ran longer than it holds, or where the first
+/// segments all fell in silence.
 fn measure_segments<R: Runner>(
     runner: &R,
     located: &Located,
     audio: &probe::Audio,
-    held: f64,
+    starts: &[f64],
     scratch: &Path,
 ) -> Vec<quality::Segment> {
-    let starts = segment_starts(Some(held));
     let inputs: Vec<Input> = starts
         .iter()
         .map(|start| Input::new(quality::segment_input(*start), &located.path))

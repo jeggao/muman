@@ -33,7 +33,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use lofty::file::TaggedFileExt;
 use lofty::tag::ItemKey;
 use zip::CompressionMethod;
-use zip::write::{SimpleFileOptions, ZipWriter};
+use zip::write::{FullFileOptions, ZipWriter};
 
 use crate::atomic::Lock;
 use crate::dirs::{self, Dirs};
@@ -51,9 +51,13 @@ use crate::store::{Located, Store};
 /// Where the songs go inside the zip.
 const LIBRARY: &str = "library";
 /// What a zip spends on one entry besides its name and data: a local
-/// header of 30 bytes, a central one of 46, and room for their ZIP64
-/// fields.
-const ENTRY: u64 = 30 + 46 + 64;
+/// header of 30 bytes, a central one of 46, room for their ZIP64 fields,
+/// and the extended timestamp each carries, of 9.
+const ENTRY: u64 = 30 + 46 + 64 + 2 * 9;
+
+/// The extended timestamp's extra field, which says an entry's time in
+/// UTC as Unix does, where a zip's own MS-DOS time names no zone.
+const EXTENDED_TIMESTAMP: u16 = 0x5455;
 /// What a zip spends once, at its end, ZIP64 records included.
 const END: u64 = 22 + 56 + 20;
 /// What a container adds to an encoded stream, as a share of it: Ogg's
@@ -550,8 +554,9 @@ fn encode<R: Runner>(
         .collect())
 }
 
-/// `time` as a zip stamps an entry, in UTC to the even second; none
-/// before 1980, which a zip cannot say.
+/// `time` as a zip stamps an entry in MS-DOS time, in UTC to the even
+/// second, beside the extended timestamp that says it is; none before
+/// 1980, which MS-DOS time cannot say.
 fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
     let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     let (days, of_day) = (secs / 86_400, secs % 86_400);
@@ -588,11 +593,24 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
             File::open(&entry.from).with_context(|| format!("reading {}", entry.from.display()))?;
         let meta = from.metadata().ok();
         let large = meta.as_ref().is_none_or(|m| m.len() >= u64::from(u32::MAX));
-        let mut options = SimpleFileOptions::default()
+        let mut options = FullFileOptions::default()
             .compression_method(CompressionMethod::Stored)
             .large_file(large);
-        if let Some(time) = meta.and_then(|m| m.modified().ok()).and_then(zip_time) {
+        let modified = meta.and_then(|m| m.modified().ok());
+        if let Some(time) = modified.and_then(zip_time) {
             options = options.last_modified_time(time);
+        }
+        // MS-DOS time names no zone, and an extractor reads it as its own:
+        // the UTC time, extended, is what Info-ZIP, 7-Zip and libarchive read.
+        if let Some(secs) = modified
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|d| u32::try_from(d.as_secs()).ok())
+        {
+            let mut field = vec![1];
+            field.extend(secs.to_le_bytes());
+            options
+                .add_extra_field(EXTENDED_TIMESTAMP, field, false)
+                .with_context(|| format!("stamping {}", entry.name))?;
         }
         zip.start_file(entry.name.as_str(), options)
             .with_context(|| format!("adding {} to {}", entry.name, path.display()))?;
@@ -617,6 +635,34 @@ mod tests {
         assert_eq!((stamp.year(), stamp.month(), stamp.day()), (2024, 6, 1));
         assert_eq!((stamp.hour(), stamp.minute(), stamp.second()), (12, 5, 6));
         assert!(zip_time(std::time::UNIX_EPOCH).is_none());
+    }
+
+    #[test]
+    fn an_entry_says_its_time_in_utc_beside_ms_dos_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let song = dir.path().join("song.opus");
+        fs::write(&song, b"opus").unwrap();
+        let secs = 1_717_243_506;
+        filetime::set_file_mtime(&song, filetime::FileTime::from_unix_time(secs, 0)).unwrap();
+        let zip = dir.path().join("out.zip");
+        let entry = Entry {
+            from: song,
+            name: "library/A/song.opus".into(),
+        };
+        write_zip(&zip, std::iter::once(&entry)).unwrap();
+        let mut archive = zip::ZipArchive::new(File::open(&zip).unwrap()).unwrap();
+        let read = archive.by_index(0).unwrap();
+        let stamped = read.extra_data_fields().find_map(|f| match f {
+            zip::extra_fields::ExtraField::ExtendedTimestamp(t) => t.mod_time(),
+            _ => None,
+        });
+        assert_eq!(stamped, Some(u32::try_from(secs).unwrap()));
+        drop(read);
+        let written = fs::metadata(&zip).unwrap().len();
+        assert!(
+            written <= entry_size("library/A/song.opus", 4) + END,
+            "ENTRY counts it"
+        );
     }
 
     fn rung(bytes: u64, known: bool) -> fit::Rung {

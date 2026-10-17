@@ -19,6 +19,11 @@
 //! providers and `info` all read it there, so a provider added is one
 //! entry. A key of any other scheme is a file yt-dlp fetched.
 //!
+//! A manual song file brings the `.lrc` and pictures named as it is in
+//! any case, as a folder's `COVER.JPG` covers it and as a filesystem
+//! blind to case holds them: one in its own case first, and none named
+//! exactly as another song file, which is that file's.
+//!
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
 //! a song's sidecar or a folder's cover by its name.
@@ -118,10 +123,10 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
 
-const MEDIA: [&str; 32] = [
-    "flac", "wav", "w64", "rf64", "aif", "aiff", "aifc", "caf", "m4a", "mp3", "ogg", "oga", "opus",
-    "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd", "mlp", "mka", "mkv",
-    "mp4", "webm", "mov", "alac", "dsf", "dff",
+const MEDIA: [&str; 37] = [
+    "flac", "wav", "w64", "rf64", "aif", "aiff", "aifc", "caf", "m4a", "m4b", "mp3", "mp2", "ogg",
+    "oga", "opus", "spx", "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd",
+    "mlp", "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf", "dff", "wma", "au",
 ];
 pub(crate) const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.
@@ -135,6 +140,14 @@ pub enum Kind {
     Image,
     /// A MusicBrainz record, which offers tags alone.
     Tags,
+}
+
+/// Whether two files are in one folder and named alike but for their
+/// extensions, in any case: `Song.JPG` comes with `song.flac`, as a
+/// folder's `COVER.JPG` covers it.
+pub(crate) fn named_as(a: &Path, b: &Path) -> bool {
+    let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
+    a.parent() == b.parent() && stem(a) == stem(b)
 }
 
 pub(crate) fn kind_of(path: &Path) -> Option<Kind> {
@@ -608,15 +621,26 @@ impl Store {
         self.kept.get(kind.extractor)?.get(id)
     }
 
-    /// The `.lrc` and pictures that come with a manual song file.
+    /// The `.lrc` and pictures that come with a manual song file: named
+    /// as it is in any case, those in its own case first, and none named
+    /// in its case as another song file is.
     fn sidecars(&self, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
         let stem = rel.with_extension("");
+        let another_s = |p: &Path| {
+            self.manual.iter().any(|(m, k)| {
+                *k == Kind::Media && m != rel && m.with_extension("") == p.with_extension("")
+            })
+        };
         let named = |kind: Kind| -> Vec<PathBuf> {
-            self.manual
+            let mut found: Vec<PathBuf> = self
+                .manual
                 .iter()
-                .filter(|(p, k)| **k == kind && p.with_extension("") == stem)
+                .filter(|(p, k)| **k == kind && named_as(p, rel))
+                .filter(|(p, _)| p.with_extension("") == stem || !another_s(p))
                 .map(|(p, _)| p.clone())
-                .collect()
+                .collect();
+            found.sort_by_key(|p| p.with_extension("") != stem);
+            found
         };
         let lyrics = named(Kind::Lyrics).into_iter().next();
         let mut covers = named(Kind::Image);
@@ -1014,6 +1038,33 @@ mod tests {
         let other = store.locate(&manual("Album/02 Other.flac")).unwrap();
         assert_eq!(other.lyrics, None);
         assert_eq!(other.covers, vec![folder]);
+    }
+
+    #[test]
+    fn a_sidecar_named_as_its_song_in_another_case_comes_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        touch(dir.path(), "sources/manual/Album/marlo-venn-01.flac");
+        let lrc = touch(dir.path(), "sources/manual/Album/Marlo-Venn-01.LRC");
+        let other = touch(dir.path(), "sources/manual/Album/MARLO-VENN-01.jpg");
+        let own = touch(dir.path(), "sources/manual/Album/marlo-venn-01.png");
+        let store = Store::scan(&d).unwrap();
+        let song = store.locate(&manual("Album/marlo-venn-01.flac")).unwrap();
+        assert_eq!(song.lyrics, Some(lrc));
+        assert_eq!(song.covers, vec![own, other]);
+
+        touch(dir.path(), "sources/manual/Tide/Tide.flac");
+        touch(dir.path(), "sources/manual/Tide/tide.flac");
+        let lrc = touch(dir.path(), "sources/manual/Tide/tide.lrc");
+        let store = Store::scan(&d).unwrap();
+        let folder = dir.path().join("sources").join("manual").join("Tide");
+        let folder = std::fs::read_dir(folder).unwrap();
+        // A filesystem blind to case holds one song file and one name.
+        if folder.count() == 3 {
+            let tide = |name| store.locate(&manual(name)).unwrap().lyrics;
+            assert_eq!(tide("Tide/tide.flac"), Some(lrc));
+            assert_eq!(tide("Tide/Tide.flac"), None);
+        }
     }
 
     #[test]

@@ -181,13 +181,12 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
         }
         SourceKey::Remote { .. } => store.fetched_files(key),
         SourceKey::Manual(_) => store.locate(key).map_or_else(Vec::new, |l| {
-            let stem = l.path.with_extension("");
             std::iter::once(l.path.clone())
                 .chain(l.lyrics)
                 .chain(
                     l.covers
                         .into_iter()
-                        .filter(|c| c.with_extension("") == stem),
+                        .filter(|c| crate::store::named_as(c, &l.path)),
                 )
                 .collect()
         }),

@@ -1,10 +1,19 @@
 //! Tags from MusicBrainz: a song's recording found by its title, artist
 //! and length, with the release it is best known from, and kept in the
 //! store as `<recording id>.json`. A record offers the recording's title,
-//! artists, ISRCs and MusicBrainz IDs, and the release's album, album
-//! artist, track, disc, date, track total, country and IDs, every one
-//! structured, ranked against the other sources' offers as any tag is
-//! ([`crate::tags::from_record`]).
+//! artists, ISRCs, MusicBrainz IDs and first release's date, and the
+//! release's album, album artist, track, disc, date, track total,
+//! country, IDs, status, types and medium, every one structured, ranked
+//! against the other sources' offers as any tag is
+//! ([`crate::tags::from_record`]). A search answers none of the release's
+//! labels, catalogue numbers, barcode, ASIN or script, nor its release
+//! group's first release, the original date as Picard writes it, so the
+//! release is looked up once more for them, once a run for each
+//! release, so an album's songs ask once; that lookup failing fails the
+//! record's, which is made again rather than kept without them. A record
+//! kept before has them from when it is next fetched again. A
+//! recording's credits, its performers, producer and the like, are not
+//! asked for.
 //!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
@@ -134,6 +143,9 @@ pub struct Record {
     pub length_ms: Option<u64>,
     #[serde(default)]
     pub release: Option<Release>,
+    /// The date of the recording's first release, `YYYY-MM-DD` or less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_date: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +175,110 @@ pub struct Release {
     pub track_id: Option<String>,
     #[serde(default)]
     pub disc: Option<u32>,
+    /// `Official`, `Promotion`, `Bootleg` or `Pseudo-Release`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The release group's primary type and its secondary ones, as
+    /// `Album`, `Compilation`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    /// The format of the medium holding the recording, as `CD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    #[serde(default, flatten)]
+    pub details: Details,
+}
+
+/// What only a lookup of the release itself answers: its labels and
+/// catalogue numbers, barcode, ASIN and script.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Details {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_numbers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barcode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asin: Option<String>,
+    /// ISO 15924, as `Latn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    /// The first release of its release group, as Picard's original date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_date: Option<String>,
+}
+
+/// The details of each release looked up in a run, so the songs of one
+/// album ask for its release once.
+pub type Releases = std::sync::Mutex<std::collections::BTreeMap<String, Option<Details>>>;
+
+/// A release as `/ws/2/release/<id>?inc=labels+release-groups` answers
+/// it.
+#[derive(Debug, Deserialize)]
+struct Looked {
+    #[serde(default, rename = "release-group")]
+    group: Option<FirstReleased>,
+    #[serde(default)]
+    barcode: Option<String>,
+    #[serde(default)]
+    asin: Option<String>,
+    #[serde(default, rename = "text-representation")]
+    text: Option<Representation>,
+    #[serde(default, rename = "label-info", deserialize_with = "or_default")]
+    labels: Vec<LabelInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirstReleased {
+    #[serde(default, rename = "first-release-date")]
+    date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Representation {
+    #[serde(default)]
+    script: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LabelInfo {
+    #[serde(default, rename = "catalog-number")]
+    catalog: Option<String>,
+    #[serde(default)]
+    label: Option<Named>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Named {
+    #[serde(default, deserialize_with = "or_default")]
+    name: String,
+}
+
+impl Looked {
+    fn details(self) -> Details {
+        let text = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let mut details = Details {
+            barcode: text(self.barcode),
+            asin: text(self.asin),
+            script: text(self.text.and_then(|t| t.script)),
+            original_date: text(self.group.and_then(|g| g.date)),
+            ..Details::default()
+        };
+        for info in self.labels {
+            if let Some(name) = text(info.label.map(|l| l.name))
+                && !details.labels.contains(&name)
+            {
+                details.labels.push(name);
+            }
+            if let Some(number) = text(info.catalog)
+                && !details.catalog_numbers.contains(&number)
+            {
+                details.catalog_numbers.push(number);
+            }
+        }
+        details
+    }
 }
 
 /// A JSON `null` read as the type's default.
@@ -201,6 +317,8 @@ struct Recording {
     isrcs: Vec<Isrc>,
     #[serde(default, deserialize_with = "or_default")]
     releases: Vec<Found>,
+    #[serde(default, rename = "first-release-date")]
+    first_release_date: Option<String>,
 }
 
 /// An ISRC: a search lists each as `{"id": …}`, a lookup as text.
@@ -273,6 +391,8 @@ struct Medium {
     offset: Option<u32>,
     #[serde(default, rename = "track-count")]
     count: Option<u32>,
+    #[serde(default)]
+    format: Option<String>,
     #[serde(default, alias = "tracks", deserialize_with = "or_default")]
     track: Vec<Track>,
 }
@@ -357,6 +477,16 @@ impl Found {
             tracks: medium.and_then(|m| m.count),
             track_id: text(track.and_then(|t| t.id.as_ref())),
             disc: medium.and_then(|m| m.position),
+            status: text(self.status.as_ref()),
+            types: self
+                .group
+                .iter()
+                .flat_map(|g| g.primary.iter().chain(&g.secondary))
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            media: text(medium.and_then(|m| m.format.as_ref())),
+            details: Details::default(),
         }
     }
 }
@@ -430,6 +560,11 @@ impl Recording {
             isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
             length_ms: self.length,
             release: self.best(album).map(Found::release),
+            original_date: self
+                .first_release_date
+                .as_ref()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty()),
         })
     }
 }
@@ -440,6 +575,7 @@ pub struct Client<'a> {
     pub base: &'a str,
     pub transport: &'a (dyn HttpTransport + Sync),
     pub throttle: &'a Throttle,
+    pub releases: &'a Releases,
 }
 
 impl std::fmt::Debug for Client<'_> {
@@ -477,9 +613,46 @@ impl Client<'_> {
         let Some(body) = self.get(&path)? else {
             return Ok(None);
         };
-        parse_recording(&body, album)
-            .context("reading MusicBrainz's answer")
-            .map(Some)
+        let mut record = parse_recording(&body, album).context("reading MusicBrainz's answer")?;
+        self.detail(&mut record)?;
+        Ok(Some(record))
+    }
+
+    /// `record`'s release given the details only a lookup of it answers,
+    /// once a run for each release. A release MusicBrainz no longer has
+    /// has none; a lookup that fails fails the record's, so it is made
+    /// again rather than kept without them.
+    fn detail(&self, record: &mut Record) -> Result<()> {
+        let Some(release) = record.release.as_mut() else {
+            return Ok(());
+        };
+        let held = self
+            .releases
+            .lock()
+            .ok()
+            .and_then(|r| r.get(&release.id).cloned());
+        let details = if let Some(details) = held {
+            details
+        } else {
+            let path = format!(
+                "/ws/2/release/{}?inc=labels+release-groups&fmt=json",
+                music::percent_encode(&release.id)
+            );
+            let looked = match self.get(&path)? {
+                Some(body) => Some(
+                    serde_json::from_str::<Looked>(&body)
+                        .context("reading MusicBrainz's answer for a release")?
+                        .details(),
+                ),
+                None => None,
+            };
+            if let Ok(mut known) = self.releases.lock() {
+                known.insert(release.id.clone(), looked.clone());
+            }
+            looked
+        };
+        release.details = details.unwrap_or_default();
+        Ok(())
     }
 
     /// The song's recording and the release it is best known from, or
@@ -507,7 +680,11 @@ impl Client<'_> {
             .iter()
             .filter(|r| r.fits(q))
             .min_by_key(|r| r.rank(&q.title, album, q.seconds));
-        Ok(best.and_then(|r| r.record(album)))
+        let mut record = best.and_then(|r| r.record(album));
+        if let Some(record) = record.as_mut() {
+            self.detail(record)?;
+        }
+        Ok(record)
     }
 }
 

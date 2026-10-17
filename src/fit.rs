@@ -229,7 +229,7 @@ pub fn loss(source: &Source, first: Format, format: Format) -> f64 {
 #[must_use]
 pub fn lower(first: Format, shape: &Shape<'_>, audio: &Audio) -> Vec<Format> {
     let codec = audio.lossy;
-    let (mix, shape) = audio.written(shape);
+    let (mix, shape) = audio.written_in(codec, shape);
     let channels = shape.channels;
     let adapt = codec.adapt(&shape).flatten();
     let scale = |kbps: u32| match (audio.kbps(codec, channels), audio.kbps(codec, 2)) {

@@ -871,9 +871,10 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     for (n, t) in tables(doc, "song").enumerate() {
         let what = format!("song {}", n + 1);
         let sources = owned_keys(t, &what, n, &mut owner)?;
-        if sources.is_empty() {
+        let Some(first) = sources.first() else {
             bail!("{what} lists no source: give it one, or delete it");
-        }
+        };
+        let what = format!("{what} ({first})");
         let lyrics = match t.get("lyrics") {
             None => None,
             Some(item) if item.as_bool() == Some(false) => Some(LyricsPin::None),
@@ -889,7 +890,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             cover: key_at(t, "cover", &what)?,
             lyrics,
             lyrics_offset_ms: lyrics_offset(t, &what)?,
-            tags: tags_of(t.get("tags")),
+            tags: tags_of(t.get("tags"), &what)?,
             held: crate::held::read(t, &sources, &what)?,
             sources,
         };
@@ -919,21 +920,10 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
                 .get("tracks")
                 .and_then(Item::as_integer)
                 .and_then(|i| u32::try_from(i).ok()),
-            tags: tags_of(t.get("tags")),
+            tags: tags_of(t.get("tags"), &what)?,
         });
     }
-    let mut removed = Vec::new();
-    for (n, t) in tables(doc, "removed").enumerate() {
-        removed.push(Removed {
-            sources: keys_of(t, &format!("removed song {}", n + 1))?,
-            note: t
-                .get("note")
-                .and_then(Item::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            tags: tags_of(t.get("tags")),
-        });
-    }
+    let removed = removed_of(doc)?;
     let settings = crate::settings::read(doc)?;
     refuse_unsited(&settings.sites, &songs, &albums, &removed)?;
     Ok(Parsed {
@@ -949,6 +939,24 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         renamed,
         respelled,
     })
+}
+
+/// The songs `[[removed]]` lists, each kept to be restored.
+fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
+    let mut removed = Vec::new();
+    for (n, t) in tables(doc, "removed").enumerate() {
+        let what = format!("removed song {}", n + 1);
+        removed.push(Removed {
+            sources: keys_of(t, &what)?,
+            note: t
+                .get("note")
+                .and_then(Item::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            tags: tags_of(t.get("tags"), &what)?,
+        });
+    }
+    Ok(removed)
 }
 
 /// Refuse a key whose ID its site's `[sites]` table takes in no kind.
@@ -1638,27 +1646,47 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
     changed
 }
 
-/// Strings, numbers, and lists of either; anything else is skipped, and
-/// an empty value sets nothing.
-fn tags_of(item: Option<&Item>) -> Tags {
+/// Strings, numbers, booleans (as `1` and `0`), TOML dates, and lists of
+/// them, each read as its field's kind reads it; an empty value sets
+/// nothing. A value its field cannot hold, as a date that is none, or of
+/// any other type, as a table, refuses the song list, naming the song as
+/// `what`.
+fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
     let Some(t) = item.and_then(Item::as_table_like) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let scalar = |v: &Value| match v {
-        Value::String(s) => Some(s.value().trim().to_string()).filter(|s| !s.is_empty()),
-        Value::Integer(i) => Some(i.value().to_string()),
-        Value::Float(f) => Some(f.value().to_string()),
-        _ => None,
+    let scalar = |key: &str, v: &Value| match v {
+        Value::String(s) => Ok(Some(s.value().trim().to_string()).filter(|s| !s.is_empty())),
+        Value::Integer(i) => Ok(Some(i.value().to_string())),
+        Value::Float(f) => Ok(Some(f.value().to_string())),
+        Value::Boolean(b) => Ok(Some(if *b.value() { "1" } else { "0" }.to_string())),
+        Value::Datetime(d) => Ok(Some(d.value().to_string())),
+        _ => Err(anyhow::anyhow!(
+            "{what}: tags.{key} is no text, number, yes or no, date or list of them"
+        )),
     };
-    t.iter()
-        .filter_map(|(key, item)| {
-            let values: Vec<String> = match item.as_value()? {
-                Value::Array(list) => list.iter().filter_map(scalar).collect(),
-                v => scalar(v).into_iter().collect(),
-            };
-            (!values.is_empty()).then(|| (key.to_string(), values))
-        })
-        .collect()
+    let mut tags = Vec::new();
+    for (key, item) in t.iter() {
+        let Some(value) = item.as_value() else {
+            bail!("{what}: tags.{key} is no text, number, yes or no, date or list of them");
+        };
+        let raw: Vec<String> = match value {
+            Value::Array(list) => list
+                .iter()
+                .map(|v| scalar(key, v))
+                .filter_map(Result::transpose)
+                .collect::<Result<_>>()?,
+            v => scalar(key, v)?.into_iter().collect(),
+        };
+        let values = raw
+            .iter()
+            .map(|v| tags::by_hand(key, v).map_err(|why| anyhow::anyhow!("{what}: tags.{why}")))
+            .collect::<Result<Vec<String>>>()?;
+        if !values.is_empty() {
+            tags.push((key.to_string(), values));
+        }
+    }
+    Ok(tags)
 }
 
 #[cfg(test)]

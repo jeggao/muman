@@ -300,6 +300,30 @@ fn files_are_sorted_by_what_they_hold() {
 }
 
 #[test]
+fn subtitles_reach_ffmpeg_as_the_text_they_decode_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let srt = dir.path().join("Copper Moth.srt");
+    let (gbk, _, _) = encoding_rs::GBK.encode("1\n00:00:01,000 --> 00:00:02,000\n灯笼在海边\n");
+    std::fs::write(&srt, gbk.as_ref()).unwrap();
+    let fake = crate::testing::Fake::default();
+    let scratch = dir.path().join("scratch");
+    read_item(&fake, &srt, What::Lyrics, &scratch).unwrap();
+    let call = fake.calls().pop().unwrap();
+    let input = call
+        .iter()
+        .position(|a| a == "-i")
+        .map(|i| &call[i + 1])
+        .unwrap();
+    assert_ne!(Path::new(input), srt.as_path());
+    assert!(
+        std::fs::read_to_string(input)
+            .unwrap()
+            .contains("灯笼在海边"),
+        "ffmpeg reads UTF-8"
+    );
+}
+
+#[test]
 fn the_likeliest_songs_lyrics_are_read_from_their_streams() {
     let dir = tempfile::tempdir().unwrap();
     let verse = "[00:01.00]copper moth upon the glass\n[00:05.00]wings of rust and amber light\n\

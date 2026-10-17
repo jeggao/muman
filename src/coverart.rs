@@ -91,14 +91,11 @@ impl Cover {
 /// The extension of an image by its first bytes, if it is a JPEG, PNG
 /// or WebP.
 fn image_extension(b: &[u8]) -> Option<&'static str> {
-    if b.starts_with(b"\xFF\xD8\xFF") {
-        Some("jpg")
-    } else if b.starts_with(b"\x89PNG") {
-        Some("png")
-    } else if b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP".as_slice()) {
-        Some("webp")
-    } else {
-        None
+    match crate::picture::sniff(b)? {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        _ => None,
     }
 }
 
@@ -204,10 +201,12 @@ mod tests {
 
     fn found(server: &Server, q: &Query) -> Result<Option<Cover>> {
         let throttle = Throttle::none();
+        let releases = musicbrainz::Releases::default();
         let musicbrainz = musicbrainz::Client {
             base: "http://mb.test",
             transport: server,
             throttle: &throttle,
+            releases: &releases,
         };
         Client {
             base: "http://caa.test/",

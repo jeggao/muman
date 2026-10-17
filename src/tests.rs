@@ -140,6 +140,7 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
     let s = Setup::new();
     let song = s.file("rips/Song.flac");
     s.file("rips/Song.lrc");
+    s.file("rips/song.JPG");
     let (ok, text) = s.run(&flacs(), &["add", &song]);
     assert!(ok, "{text}");
     assert!(
@@ -147,6 +148,7 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
         "the user's file stays"
     );
     assert!(s.dir.path().join("home/sources/manual/Song.lrc").exists());
+    assert!(s.dir.path().join("home/sources/manual/song.JPG").exists());
     assert_eq!(s.songs(), [vec![SourceKey::Manual("Song.flac".into())]]);
     assert!(
         s.dir.path().join("lib/Artist/Record/02 Song.flac").exists(),
@@ -168,6 +170,56 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
     )
     .unwrap_err();
     assert!(format!("{e:#}").contains("exists already"), "{e:#}");
+}
+
+#[test]
+fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    std::fs::write(&song, crate::testing::SILENCE_FLAC).unwrap();
+    let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push(TagItem::new(
+        ItemKey::TrackTitle,
+        ItemValue::Text("Song".into()),
+    ));
+    tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+    tag.save_to_path(Path::new(&song), WriteOptions::default())
+        .unwrap();
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    let written = s.dir.path().join("lib/Unknown Artist/Song/Song.lrc");
+    assert_eq!(
+        std::fs::read_to_string(&written).ok().as_deref(),
+        Some(lrc),
+        "{text}"
+    );
+
+    let home = s.dir.path().join("home");
+    let key = SourceKey::Manual("Song.flac".into());
+    let own = |state: &State| {
+        state.facts[&key]
+            .lyrics
+            .iter()
+            .any(|l| l.at == crate::facts::LyricsAt::Tag)
+    };
+    let mut state = State::load(&home).unwrap();
+    let facts = state.facts.get_mut(&key).unwrap();
+    facts.lyrics.clear();
+    facts.tags_method = String::new();
+    state.save(&home).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        ok && text.contains("Reading the tags of 1 source(s)"),
+        "{text}"
+    );
+    assert!(
+        own(&State::load(&home).unwrap()),
+        "facts made before learn them"
+    );
 }
 
 #[test]
@@ -316,6 +368,57 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
         "{text}"
     );
     assert!(text.contains("Added:"), "{text}");
+}
+
+#[test]
+fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
+    let s = Setup::new();
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    let fake = Fake {
+        on_stream: Some(Box::new(move |args: &[String]| {
+            let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
+            let path = store.join(".incoming/Youtube/aaaaaaaaaaa.mkv");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"mkv").unwrap();
+            std::fs::write(
+                done,
+                format!(
+                    "Youtube aaaaaaaaaaa {}\n",
+                    serde_json::to_string(&path).unwrap()
+                ),
+            )
+            .unwrap();
+            true
+        })),
+        ..Fake::default()
+    }
+    .info(
+        "aaaaaaaaaaa",
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song",
+            "cookies": "SID=TOKEN-0001", "http_headers": {"User-Agent": "Agent/1"}}"#,
+    );
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        ],
+    );
+    assert!(ok, "{text}");
+    let attached = fake.attached.lock().unwrap();
+    assert_eq!(attached.len(), 1, "{text}");
+    assert!(
+        !attached[0].contains("TOKEN") && !attached[0].contains("Agent/1"),
+        "{attached:?}"
+    );
+    assert!(
+        s.dir
+            .path()
+            .join("home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv")
+            .exists(),
+        "{text}"
+    );
 }
 
 #[test]
@@ -1421,6 +1524,107 @@ fn lookups_a_refusing_service_left_wait_for_the_next_run_unrecorded() {
 }
 
 #[test]
+fn lookups_on_a_network_that_is_down_wait_for_the_next_run_unrecorded() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let down = Server {
+        unreachable: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&down, &["sync"]);
+    assert!(
+        text.contains(
+            "LRCLIB cannot be reached (connection refused): 2 lookup(s) on lrclib wait for the next run"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("lookup failed"), "{text}");
+    let asked = down
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/"))
+        .count();
+    assert!(
+        asked <= 2,
+        "one request per lookup under way at most: {asked}"
+    );
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    assert!(state.lookups.is_empty(), "{:?}", state.lookups);
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics from LRCLIB"),
+        "asked again at once: {text}"
+    );
+}
+
+#[test]
+fn a_listed_record_no_longer_there_is_asked_for_again_only_when_due() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let server = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    let kept = s.dir.path().join("home/sources/lrclib/7.lrc");
+    std::fs::remove_file(&kept).unwrap();
+    let key = SourceKey::parse("lrclib:7").unwrap();
+    let failure = || {
+        State::load(&s.dir.path().join("home"))
+            .unwrap()
+            .failures
+            .get(&key)
+            .map(|f| f.count)
+    };
+    let asked_again = |server: &Server| {
+        server
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/api/get/7"))
+    };
+
+    let down = Server {
+        unreachable: true,
+        ..Server::default()
+    };
+    let (_, text) = s.run_against(&down, &["sync"]);
+    assert!(
+        text.contains("1 missing record(s) wait for the next run"),
+        "{text}"
+    );
+    assert_eq!(failure(), None, "a network that is down fails nothing");
+
+    let gone = Server::default();
+    let (_, text) = s.run_against(&gone, &["sync"]);
+    assert!(asked_again(&gone), "{text}");
+    assert!(
+        text.contains("Could not fetch lrclib:7 again: no such record"),
+        "{text}"
+    );
+    assert_eq!(failure(), Some(1));
+
+    let gone = Server::default();
+    let (_, text) = s.run_against(&gone, &["sync"]);
+    assert!(!asked_again(&gone), "it waits an hour: {text}");
+    assert!(
+        text.contains("Not fetching 1 missing record(s) that failed lately"),
+        "{text}"
+    );
+    assert_eq!(failure(), Some(1));
+
+    let back = Server::default().answer("/api/get/7", RECORD);
+    let (ok, text) = s.run_against(&back, &["sync", "--retry"]);
+    assert!(ok, "{text}");
+    assert!(asked_again(&back) && kept.exists(), "{text}");
+    assert_eq!(failure(), None, "found again, it is cleared");
+}
+
+#[test]
 fn a_song_lrclib_lacks_is_not_asked_again_for_a_week() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -2173,11 +2377,12 @@ fn a_path_that_is_not_there_is_told_from_an_address() {
 }
 
 #[test]
-fn a_file_muman_does_not_read_is_not_added() {
+fn a_file_muman_does_not_read_is_not_added_and_the_rest_is() {
     let s = Setup::new();
     let notes = s.file("rips/notes.docx");
+    let song = s.file("rips/Song.flac");
     let e = run_with(
-        &s.job(&["add", &notes]),
+        &s.job(&["add", &notes, &song]),
         &flacs(),
         &Server::default(),
         None,
@@ -2186,10 +2391,27 @@ fn a_file_muman_does_not_read_is_not_added() {
     )
     .unwrap_err();
     assert!(
-        format!("{e:#}").contains("is no song, lyrics, picture or tags"),
+        format!("{e:#}").contains("notes.docx, which is no song, lyrics, picture or tags"),
         "{e:#}"
     );
-    assert!(!s.dir.path().join("home/sources/manual/notes.docx").exists());
+    let manual = s.dir.path().join("home/sources/manual");
+    assert!(!manual.join("notes.docx").exists());
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Song.flac".into())]]);
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+
+    s.file("rips/Album/a.flac");
+    s.file("rips/Album/booklet.pdf");
+    s.file("rips/Album/Scans/rip.xyz");
+    let album = s.dir.path().join("rips").join("Album");
+    let (ok, text) = s.run(&flacs(), &["add", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Left out of") && text.contains("booklet.pdf") && text.contains("rip.xyz"),
+        "{text}"
+    );
+    assert!(manual.join("Album").join("a.flac").exists());
+    assert!(!manual.join("Album").join("booklet.pdf").exists());
+    assert!(!manual.join("Album").join("Scans").exists());
 }
 
 #[test]

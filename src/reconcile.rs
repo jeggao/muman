@@ -263,11 +263,14 @@ fn retag<R: Runner, W: Write>(
     });
     for (located, result) in due.iter().zip(read) {
         match result {
-            Ok((tags, release)) => {
+            Ok(read) => {
                 if let Some(f) = state.facts.get_mut(&located.key) {
-                    f.tags = tags;
-                    f.release = release;
+                    f.tags = read.tags;
+                    f.release = read.release;
+                    f.chapters = read.chapters;
                     f.tags_method = tags::METHOD.to_string();
+                    f.lyrics.retain(|l| l.at != facts::LyricsAt::Tag);
+                    f.lyrics.extend(read.lyrics);
                 }
             }
             Err(e) => crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?,
@@ -516,7 +519,7 @@ fn analyze_mixes<R: Runner, W: Write>(
         .filter_map(|l| {
             let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
             let audio = f.audio.as_ref()?;
-            let layout = settings.audio.written(&audio.shape()).0?;
+            let layout = crate::resolve::Format::encoded(audio, &settings.audio).mix()?;
             let rev = f.audio_rev();
             let unmixed = state
                 .mix(&l.key, &rev, layout)
@@ -723,7 +726,7 @@ fn separate(planned: &mut [(usize, Resolved)], naming: &Naming, max_name: usize)
         // A manual file's name may hold what a path must not.
         let id = naming.value(&r.plan.audio.key.short());
         for n in 1.. {
-            r.stem = naming::suffixed(&base, &id, n, max_name);
+            r.stem = naming::suffixed(&base, &id, n, max_name, naming.name_units(base.parent()));
             if taken.insert(lower(r)) {
                 break;
             }
@@ -1615,6 +1618,8 @@ fn media_equal(a: &Plan, b: &Plan) -> bool {
         && a.audio == b.audio
         && a.cover == b.cover
         && a.lyrics == b.lyrics
+        // MP4 chapters are ffmpeg's to write.
+        && a.chapters == b.chapters
 }
 
 /// What a sync does with one song, decided for every song before any is
@@ -2103,7 +2108,7 @@ pub(crate) fn plan<W: Write>(
     if let Some(max) = manifest.settings.library.max_path {
         let over = planned
             .iter()
-            .filter(|(_, r)| library.join(path_of(r)).to_string_lossy().chars().count() > max)
+            .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
         if over > 0 {
             crate::ui::warning(
@@ -2112,7 +2117,7 @@ pub(crate) fn plan<W: Write>(
                     "{over} song(s) take more than [library] max_path = {max} characters even \
                      with their names cut short: the library folder, {}, takes {} itself",
                     library.display(),
-                    library.to_string_lossy().chars().count()
+                    naming::units(&library.to_string_lossy())
                 ),
             )?;
         }

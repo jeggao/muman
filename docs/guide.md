@@ -146,12 +146,40 @@ it was served from.
 `tags.<name>` takes `title`, `artist`, `album`, `album_artist`, `genre`,
 `date` (or `year`), `track`, `disc`, `track_total`, `disc_total`, `isrc`,
 `release_country`, the MusicBrainz IDs under Picard's names
-(`musicbrainz_trackid`, `musicbrainz_albumid` and the like),
-`replaygain_track_gain` and its `_peak` and `album_` kin, or any
-other Vorbis comment name; a list sets a tag several times. `add
+(`musicbrainz_trackid`, `musicbrainz_albumid` and the like); `bpm`,
+`initialkey`, `compilation`, `composer`, `lyricist`, `conductor`,
+`remixer`, `label`, `catalognumber`, `barcode`, `asin`, `artists`,
+`artistsort`, `albumartistsort`, `titlesort`, `albumsort`,
+`composersort`, `originaldate`, `releasetype`, `releasestatus`, `media`,
+`script`, `discsubtitle`, `mood`, `grouping`, `work`, `language`,
+`copyright` and `comment`, each written where Picard writes it in each
+format; or any other Vorbis comment name; a list sets a tag several times, and `true`
+or `false` is written `1` or `0`. Each value is read as its field holds
+it: a track or disc as `3`, or `3/12`, which sets the total too unless
+the song names it; a date as `YYYY-MM-DD`, `YYYY-MM` or a year, read
+from `2019/07/04` or `20190704` too; an ISRC without the dashes it is
+shown with; a tempo as a number of up to two decimals, rounded where a
+format holds whole ones (`TBPM`, `tmpo`); a barcode as its digits; a
+language as its ISO 639-2 code, as `jpn`. A key is written as `KEY` and
+`INITIALKEY` in Vorbis comments, as Picard and DJ tools name it, and in
+`TKEY` where it is a key as that frame holds one (`Abm`, `F#`), else as
+a user text frame. Without a `language` of its own, a song's is its
+lyrics' language. A value its field cannot hold, as a date of `July 2019`
+or `2019-02-30`, a tempo that is not from 1 to 9999 once rounded, a
+ReplayGain gain or peak, which muman measures, or a table, refuses the
+song list, naming the song by its number and first source; so does a tag
+name a Vorbis comment cannot carry, of other than printable ASCII or with
+`=`. A TOML date, `date = 2019-07-04` unquoted, is read as its text. `add
 --artist`, `--album` and the other tag flags set these on every song an
 `add` lists. `muman status` shows each tag's value and the source it
 came from.
+
+A song's audio keeps the chapters of the source it is taken from, as an
+M4B audiobook or a video in parts has them: the song stays one file, and
+a player skips from chapter to chapter within it. They are written as
+MP4 chapters, as `CHAPTER000` and `CHAPTER000NAME` comments in FLAC, Ogg
+and Opus, and as `CTOC` and `CHAP` frames in MP3; WavPack holds none. A
+source of one chapter has none to keep.
 
 The file also holds the settings tables of
 [configuration](configuration.md), `[clean.*]` ([cleaning](#cleaning)),
@@ -192,7 +220,10 @@ sets the format, subtitle languages and extra arguments instead
 ([configuration](configuration.md)). Two yt-dlp plugins ship inside
 muman and are written to its cache folder on the first fetch: one keeps
 out the machine-translated captions that trip YouTube's rate limit, one
-makes a YouTube Music track's square album art its thumbnail.
+makes a YouTube Music track's square album art its thumbnail. Each file
+fetched, or given to `add` as one yt-dlp fetched, keeps the info JSON
+yt-dlp embeds without the cookies and HTTP headers its requests sent,
+so a login passed in `[ytdlp] args` stays out of the store.
 
 A listed source whose file is gone is fetched again by the next `sync`:
 a YouTube video in the format its song records first, its audio alone
@@ -200,7 +231,10 @@ next, then as `[ytdlp] format` says; a video of another site from the
 address its `[sites]` table gives, else the page its song records, as
 that site's formats are numbered by their place in its list.
 One that fails waits an hour before the next try, doubling each time;
-`sync --retry` tries at once. yt-dlp is needed only by runs that fetch.
+`sync --retry` tries at once. A record a [lookup](#lookups-and-providers)
+kept, gone from the store, is fetched again by its ID, and waits alike
+when that fails or its service no longer has it. yt-dlp is needed only
+by runs that fetch.
 
 ### Manual files and sidecars
 
@@ -213,10 +247,12 @@ song and is not copied again. A dropped file waits until ten seconds after it ar
 whatever modification time a copy kept for it, so one still being
 copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
-`.lrc` and the JPEG, PNG or WebP pictures named as it is, as
-`Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
-`folder`, `front` or `album` picture. A `.lrc` or a picture can also be
-listed as a source of its own, and one given to `add` alone goes to the
+`.lrc` and the JPEG, PNG or WebP pictures named as it is, in any case,
+as `Paper Comets.flac` brings `Paper Comets.lrc` and `paper comets.jpg`,
+and its folder's `cover`, `folder`, `front` or `album` picture. A
+folder given to `add` is copied but for what is no song, lyrics or
+picture, as a booklet `.pdf`, which is left out and named. A `.lrc` or
+a picture can also be listed as a source of its own, and one given to `add` alone goes to the
 songs it belongs to ([lyrics, pictures and tags of their
 own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
 an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
@@ -338,8 +374,8 @@ the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
 out, and `add` exits with 5 once the rest is done; a file that does not
-read, as an empty `.lrc`, a picture that does not decode, a song file
-in which ffprobe finds no audio or a cue sheet splitting one song's
+read, as a `.pdf`, an empty `.lrc`, a picture that does not decode whole,
+a song file in which ffprobe finds no audio or a cue sheet splitting one song's
 file into tracks, is not added and `add` exits
 with 4, the songs given with it written all the same. `--to` names the song
 with a query instead, quoted as one word when it has several, and
@@ -420,13 +456,25 @@ or more than eight channels in FLAC, is written in one that can, as
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
 Effective resolution is the size up to which a picture keeps its
-detail, so an upscale measures the size it was made from.
+detail, so an upscale measures the size it was made from. A picture
+whose file says it shows no front cover, by its picture type (a back, a
+disc, a booklet) or by its name (`back.jpg`, `cd.png`), is taken only
+when no other picture is. A picture is known by its bytes, never by its
+name: a PNG named `.jpg` is written as PNG, and a WebP converted.
 
 **Lyrics.** Only subtitles a person wrote count; generated captions
 never do. Lyrics from a source other than the chosen audio must be the
 same recording, and are shifted by the offset measured between the two,
-and stretched when one plays a little faster than the other.
-Cues such as `[Music]`, symbol-only lines and credits are dropped. A
+and stretched when one plays a little faster than the other; a word's
+time moves with its line's, and an `[offset:]` the file states is folded
+into every time it holds. A song file's own lyrics tag, `USLT` in an MP3,
+`LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A or
+`Lyrics` in APEv2, is lyrics of that source, timed when its text is
+LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not list
+ranks after those in a language it does.
+Cues such as `[Music]` or `(Guitar solo)`, symbol-only lines and the
+credits before the first line sung or after the last are dropped; a
+line in brackets of other words is sung, as a backing vocal is. A
 `.lrc` with no audio of its own is taken as timed for the song; one that
 states its length, as LRCLIB's do, is trusted as far as that length
 agrees with the chosen audio's. Whether lyrics go beside the song,
@@ -451,9 +499,11 @@ Opus file holds the gains as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN` and
 no peaks, as Opus players read them, and an Opus source's R128 gains are
 read as ReplayGain's. A file's own tags offer every field by its Vorbis
 name or the name Picard gives it in MP3 and MP4, and a track written
-`3/12` offers its total too. Fields with no tag of their own in MP3 or
-MP4 are written as Picard writes them there. A value over 4 KiB is
-offered by no source, and control characters and those that reorder
+`3/12` offers its total too. In MP3, MP4 and WavPack every field is
+written into the frame, atom or item Picard writes it in, and read back
+from it, so a library tagged by muman and by Picard agrees. A value its field cannot
+hold, as a date that is none, and a value over 4 KiB are offered by no
+source, and control characters and those that reorder
 text are dropped from every value.
 
 ### Cleaning
@@ -505,9 +555,9 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `youtube` | A video that is not a release | Searching YouTube for the artist and title: the first video with a person's subtitles that is the same recording, the artist's channel first |
 | `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
-| `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, date, ISRCs and IDs | Title, first artist and length, preferring the song's album |
+| `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, dates, ISRCs and IDs, the release's type, status and medium, and its label, catalogue number and barcode from one more request a release | Title, first artist and length, preferring the song's album |
 | `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is |
-| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz |
+| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz; made after the song's `acoustid` and `musicbrainz` lookups due that run, so it asks for the release they found |
 
 A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
@@ -608,6 +658,11 @@ or by a date, and asks again up to three times; one asking for more
 than two minutes is refusing at once. A
 service still refusing after that leaves its remaining lookups for the
 next run, recorded as nothing, so none waits out a failure's backoff.
+So does a service muman cannot reach, as when the network is down: its
+name not resolving, its connection refused or not open within 10 s, or
+a proxy refusing to connect to it. One lookup finds that out, rather
+than each waiting out its timeout. A service that answers with an
+error, or with what muman cannot read, fails that lookup alone.
 Each request names muman and its repository in its user agent.
 
 ## Choosing songs and changing them

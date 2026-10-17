@@ -261,6 +261,10 @@ pub struct Pass {
     /// Frames read, and samples among them that were no number.
     counted: u64,
     unfinite: u64,
+    /// Whether each whole second read holds sound, and the power and
+    /// frames of the second being read.
+    sound: Vec<bool>,
+    second: (f64, u32),
 }
 
 impl std::fmt::Debug for Pass {
@@ -283,6 +287,8 @@ impl Pass {
             broken: false,
             counted: 0,
             unfinite: 0,
+            sound: Vec::new(),
+            second: (0.0, 0),
         }
     }
 
@@ -333,9 +339,29 @@ impl Pass {
             }));
         self.unfinite += unfinite;
         self.carry.drain(..whole);
+        for frame in self.frames.chunks_exact(usize::from(stream.channels)) {
+            let power: f64 = frame.iter().map(|s| f64::from(*s).powi(2)).sum();
+            self.second.0 += power / f64::from(stream.channels);
+            self.second.1 += 1;
+            if self.second.1 == stream.rate {
+                self.sound.push(sounds(self.second));
+                self.second = (0.0, 0);
+            }
+        }
         for a in &mut self.analyzers {
             a.take(&self.frames);
         }
+    }
+
+    /// Whether each second of the stream read holds sound: louder than
+    /// [`crate::quality::SILENT_RMS`], the last second as far as it ran.
+    #[must_use]
+    pub fn sounding(&self) -> Vec<bool> {
+        let mut sound = self.sound.clone();
+        if self.second.1 > 0 {
+            sound.push(sounds(self.second));
+        }
+        sound
     }
 
     /// The stream begins again, as when its run is retried alone.
@@ -372,6 +398,11 @@ impl Pass {
     }
 }
 
+/// Whether a second's summed power over its frames is sound.
+fn sounds((power, frames): (f64, u32)) -> bool {
+    (power / f64::from(frames.max(1))).sqrt() >= crate::quality::SILENT_RMS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +430,18 @@ mod tests {
         assert_eq!(bytes.len() - body, samples.len() * 4);
         assert_eq!(parse_header(&bytes[..30]), Ok(None));
         assert!(parse_header(b"RIFF\0\0\0\0AVI LIST").is_err());
+    }
+
+    #[test]
+    fn each_second_is_told_sounding_or_silent() {
+        let mut samples = vec![0.0; 2 * 8000];
+        samples.extend(sine(8000, 1, 440.0, 0.25, 1.5));
+        let bytes = wav(8000, 1, None, &samples);
+        let mut p = Pass::new(vec![Kind::Integrity]);
+        for piece in bytes.chunks(777) {
+            p.take(piece);
+        }
+        assert_eq!(p.sounding(), [false, false, true, true]);
     }
 
     #[test]

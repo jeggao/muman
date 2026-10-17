@@ -701,6 +701,8 @@ mod tests {
             lyrics: None,
             tags: Vec::new(),
             loudness: None,
+            tagging: crate::resolve::TAGGING,
+            chapters: Vec::new(),
         };
         let key = plan_key("ffmpeg version 7", &plan(96));
         assert_eq!(key, plan_key("ffmpeg version 7", &plan(96)));

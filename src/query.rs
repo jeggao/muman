@@ -573,14 +573,20 @@ mod tests {
             "Lumo Fenn",
             "youtube.com:aaaaaaaaaaa",
         )];
-        for term in ["artst:fenn", "^artst:fenn", "gnere::x", "composer:quill"] {
+        for term in ["artst:fenn", "^artst:fenn", "gnere::x", "orchestra:quill"] {
             let e = query(&[term]).check_fields(&v).unwrap_err();
             assert!(
                 e.downcast_ref::<crate::change::Refused>().is_some(),
                 "{term}: {e:#}"
             );
         }
-        for term in ["album:x", "^date:2001", "genre:house", "format:opus"] {
+        for term in [
+            "album:x",
+            "^date:2001",
+            "genre:house",
+            "format:opus",
+            "composer:quill",
+        ] {
             query(&[term]).check_fields(&v).unwrap();
         }
         let mut composed = v[0].clone();

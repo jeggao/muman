@@ -30,6 +30,10 @@ fn an_original_s_facts_take_three_runs() {
     )
     .unwrap();
     assert_eq!(fake.calls().len(), 3, "{:#?}", fake.calls());
+    assert!(
+        fake.ran("-err_detect:v"),
+        "a picture cut short fails rather than measuring sharp"
+    );
     let audio = facts.audio.unwrap();
     assert!(
         audio.analysis.loudness().is_some(),
@@ -101,6 +105,34 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
 }
 
 #[test]
+fn a_file_s_own_lyrics_tag_is_lyrics_of_it_measured_hashed_and_read_again() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    std::fs::write(&source.path, crate::testing::SILENCE_FLAC).unwrap();
+    let lrc = "[00:01.00]first invented line\n[00:03.00][Chorus]\n[00:05.00]last line\n";
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+    tag.save_to_path(&source.path, WriteOptions::default())
+        .unwrap();
+    let fake = Fake::default().probe("Song.flac", FLAC);
+    let scratch = dir.path().join("scratch");
+    let facts = gather(&fake, &source, &scratch, &[]).unwrap();
+    let own = facts.lyrics.iter().find(|l| l.at == LyricsAt::Tag).unwrap();
+    assert_eq!(own.timing.unwrap().lines, 2, "the cue is no lyric");
+    assert_eq!(own.language, Language::Unstated);
+    assert!(own.digest.is_some());
+    let (digests, _) = hash(&fake, &source, &scratch).unwrap();
+    assert_eq!(digests.lyrics(&LyricsAt::Tag), own.digest);
+    let again = retag(&fake, &source, &scratch).unwrap().lyrics;
+    assert_eq!(again.as_ref(), Some(own));
+    let found = relyric(&fake, &source, &[LyricsAt::Tag], &scratch).unwrap();
+    assert_eq!(found, [(LyricsAt::Tag, true)]);
+}
+
+#[test]
 fn a_failed_measure_costs_only_itself() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
@@ -128,10 +160,57 @@ fn a_standalone_lrc_is_lyrics_only() {
 }
 
 #[test]
+fn a_sidecar_is_named_as_its_song_in_any_case() {
+    let song = Path::new("a/Back Home.flac");
+    assert!(named_as(Path::new("a/back home.JPG"), song));
+    assert!(!named_as(Path::new("a/back.jpg"), song));
+}
+
+#[test]
 fn segments_stay_inside_the_recording() {
     assert_eq!(segment_starts(None), [0.0]);
     assert_eq!(segment_starts(Some(10.0)), [0.0]);
     assert_eq!(segment_starts(Some(200.0)), [50.0, 100.0, 150.0]);
+}
+
+#[test]
+fn segments_that_fell_silent_are_taken_where_it_sounds() {
+    let mut sounding = vec![true; 10];
+    sounding.extend([false; 30]);
+    let starts = sounding_starts(&sounding).unwrap();
+    assert!(
+        starts
+            .iter()
+            .all(|s| s + quality::SEGMENT_SECONDS / 2.0 <= 10.0),
+        "{starts:?}"
+    );
+    assert_eq!(sounding_starts(&[false; 40]), None);
+    let late = [vec![false; 300], vec![true; 3]].concat();
+    assert_eq!(
+        sounding_starts(&late).unwrap(),
+        [303.0 - quality::SEGMENT_SECONDS],
+        "a hidden track at the end"
+    );
+}
+
+#[test]
+fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let mut f = Facts::unreadable(source.rev());
+    f.method = before_sound();
+    f.audio = Some(AudioFacts {
+        quality: Some(AudioQuality {
+            bandwidth_hz: 20_000.0,
+            incoherence: 0.5,
+            clipping: 0.0,
+            bits: 16,
+        }),
+        ..AudioFacts::default()
+    });
+    assert!(f.holds_for(&source.rev()));
+    f.audio.as_mut().unwrap().quality = None;
+    assert!(!f.holds_for(&source.rev()), "measured again");
 }
 
 #[test]

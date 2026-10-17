@@ -10,23 +10,44 @@
 //!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
-//! among them, are dropped. They are Vorbis comments in Ogg and FLAC; in
-//! MP3 and MP4 each comment `lofty` knows becomes that format's own frame
-//! or atom, and any other a `TXXX` frame or an iTunes freeform atom of its
-//! name. An MP4 comment of several values is one atom holding a `data`
-//! atom for each, as iTunes, Picard and mutagen write one: `lofty` makes
-//! a generic tag's values an atom each, and a reader that takes one atom
-//! a name, as ffmpeg's does, then sees only the last. In WavPack each
-//! comment is an APEv2 item, by the name `lofty` gives it or its own.
-//! Opus holds ReplayGain's gains as R128's and no peaks, as RFC 7845
-//! tells its players to read them. The cover is a front-cover
-//! picture written through `lofty`: a
-//! JPEG or PNG without borders as its own bytes, any other converted to
+//! among them, are dropped. They are Vorbis comments in Ogg and FLAC. In
+//! MP3, MP4 and WavPack each field muman knows is written into the frame,
+//! atom or item [`crate::tags::TABLE`] names, as Picard writes it: never
+//! through `lofty`'s generic tag, which keeps one value of a frame type in
+//! `ID3v2`, drops a track that is no bare number, and writes some names
+//! under frames that hold no text, which fails the whole write. A track or
+//! disc and its total are one `3/12`, a date `ID3v2`'s timestamp frame.
+//! A comment of no field takes the text frame or atom `lofty` names for
+//! it, if it names one that holds plain text, else a `TXXX` frame, an
+//! iTunes freeform atom or an APEv2 item of its name; a producer,
+//! arranger, engineer or mixer is a role in `TIPL`. Several values are
+//! null-separated in `ID3v2.4` and APEv2, and in MP4 one atom holds a
+//! `data` atom for each, as iTunes, Picard and mutagen write one: a reader
+//! that takes one atom a name, as ffmpeg's does, would see only the last
+//! of several atoms. `ID3v2` marks lyrics and comments with the language
+//! the song's `LANGUAGE` tag names. Opus holds ReplayGain's gains as
+//! R128's and no peaks, as RFC 7845 tells its players to read them.
+//!
+//! The cover is a front-cover picture: a JPEG or PNG without borders as
+//! its own bytes, any other converted to
 //! PNG and cropped to the content inside a video frame's bars. A FLAC
-//! metadata block holds at most 16 MiB, so a cover past it is made a JPEG
-//! at most 3000 pixels wide, and lyrics past it are not embedded. Lyrics are
-//! cleaned of cues, symbols and credits and moved by the plan's offset;
-//! lyrics from a `.lrc` file need no ffmpeg at all.
+//! metadata block holds at most 16 MiB, as does the same block in Ogg,
+//! where it is base64 and so a third larger, and ffmpeg reads no APEv2
+//! tag past that, its other items counted, so in every container a cover
+//! past what is left is made a JPEG at most 3000 pixels wide; FLAC embeds
+//! no lyrics past it. Lyrics are cleaned of cues, symbols and credits and moved by
+//! the plan's offset; lyrics from a `.lrc` file need no ffmpeg at all.
+//!
+//! The audio keeps its source's chapters, as [`crate::chapters`] writes
+//! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
+//! file, the tag writers every other's beside the tags.
+//!
+//! A song whose plan changed in its tags alone is tagged again in place,
+//! with the cover and the lyrics its file holds, read as each container
+//! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
+//! `Cover Art (Front)` is read itself. Every file written is read back as
+//! a source's tags are, and a field or a cover it does not hold as
+//! written is told as a problem of the song, never lost unseen.
 //!
 //! Starting ffmpeg can cost 100 ms or more against a few milliseconds of
 //! work, so a song is one ffmpeg run writing every output; only when that
@@ -45,13 +66,18 @@ use lofty::ape::{ApeItem, ApeTag};
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::AudioFile;
 use lofty::flac::FlacFile;
-use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+use lofty::id3::v2::{
+    AttachedPictureFrame, CommentFrame, ExtendedTextFrame, Frame, FrameId, Id3v2Tag, KeyValueFrame,
+    TextInformationFrame, TimestampFrame, UniqueFileIdentifierFrame, UnsynchronizedTextFrame,
+};
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
 use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
+use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
+use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
 use crate::ffmpeg::{self, Output};
@@ -61,7 +87,7 @@ use crate::runner::Runner;
 use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::store::Located;
-use crate::tags::Field;
+use crate::tags::{Field, Id3, Mp4};
 
 #[derive(Debug)]
 pub struct Job<'a> {
@@ -113,7 +139,13 @@ impl Inputs {
     }
 }
 
-fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
+/// The audio's output; `chapters` the input an MP4's chapters are read
+/// from, an `FFMETADATA` file. Tags are written from the plan alone, so
+/// ffmpeg carries none of the container's, nor its chapters, which it
+/// would write as comments; an MP4's chapters are its to write, and it
+/// keeps their titles only where the global and stream metadata alone
+/// are dropped.
+fn audio_output(plan: &Plan, input: usize, chapters: Option<usize>, path: &Path) -> Output {
     let format = plan.format;
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
     args.extend(match format {
@@ -125,9 +157,17 @@ fn audio_output(plan: &Plan, input: usize, path: &Path) -> Output {
             mix,
         } => codec.encoder_args(kbps, adapt, mix, plan.chain()),
     });
-    // Tags are written from the plan alone; ffmpeg would carry the
-    // container's, chapters as comments among them.
-    args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from));
+    match chapters {
+        Some(n) => args.extend([
+            "-map_metadata:g".into(),
+            "-1".into(),
+            "-map_metadata:s".into(),
+            "-1".into(),
+            "-map_chapters".into(),
+            n.to_string(),
+        ]),
+        None => args.extend(["-map_metadata", "-1", "-map_chapters", "-1"].map(String::from)),
+    }
     args.extend(format.codec().muxer_args());
     Output::new(args.into_iter().map(OsString::from).collect(), path)
 }
@@ -184,7 +224,19 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut inputs = Inputs::default();
     let source = locate(&plan.audio.key)?;
     let n = inputs.index(&source.path);
-    let mut outputs = vec![audio_output(plan, n, &audio_part)];
+    let chapters = if plan.format.codec().container() == Container::Mp4 && !plan.chapters.is_empty()
+    {
+        let name = crate::atomic::Name::new("chapters.ffmeta".to_string())?;
+        crate::atomic::write(
+            job.scratch,
+            &name,
+            crate::chapters::ffmetadata(&plan.chapters).as_bytes(),
+        )?;
+        Some(inputs.index(&job.scratch.join(name.as_str())))
+    } else {
+        None
+    };
+    let mut outputs = vec![audio_output(plan, n, chapters, &audio_part)];
     let mut problems = Vec::new();
 
     let cover = match &plan.cover {
@@ -230,21 +282,6 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             return Err(anyhow!("{e}"));
         }
         let flac = plan.format.codec().container() == Container::Flac;
-        let picture = cover.and_then(|c| {
-            let read = match failed(&c.path).filter(|_| c.by_run) {
-                Some(e) => Err(anyhow!("{e}")),
-                None => read_picture(&c.path, c.mime),
-            };
-            read.and_then(|p| {
-                if flac {
-                    fit_flac(runner, p, &c.path, job.scratch)
-                } else {
-                    Ok(p)
-                }
-            })
-            .map_err(|e| problems.push(format!("no cover: {e:#}")))
-            .ok()
-        });
         let text = match (&plan.lyrics, lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -276,15 +313,32 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 tags.push(("LYRICS".to_string(), vec![text.clone()]));
             }
         }
+        let room = cover_room(plan.format.codec().container(), &tags);
+        let picture = cover.and_then(|c| {
+            let read = match failed(&c.path).filter(|_| c.by_run) {
+                Some(e) => Err(anyhow!("{e}")),
+                None => read_picture(&c.path, c.mime),
+            };
+            read.and_then(|p| fit_cover(runner, p, room, &c.path, job.scratch))
+                .map_err(|e| problems.push(format!("no cover: {e:#}")))
+                .ok()
+        });
         // A cover the tags cannot hold costs the song only its cover.
-        if let Err(e) = write_tags(&audio_part, plan.format, &tags, picture.clone()) {
+        if let Err(e) = write_tags(
+            &audio_part,
+            plan.format,
+            &tags,
+            picture.clone(),
+            &plan.chapters,
+        ) {
             if picture.is_none() {
                 return Err(e);
             }
             problems.push(format!("no cover: {e:#}"));
-            write_tags(&audio_part, plan.format, &tags, None)?;
+            write_tags(&audio_part, plan.format, &tags, None, &plan.chapters)?;
         }
         set_opus_header(&audio_part, plan)?;
+        problems.extend(verify(&audio_part, &tags, picture.is_some()));
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
                 fs::write(&lyrics_part, text)
@@ -320,25 +374,47 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
 }
 
 /// The most a FLAC metadata block holds, as its 24-bit length allows,
-/// less room for a picture block's own fields.
+/// less room for a picture block's own fields. Ogg holds a cover as such
+/// a block too, and ffmpeg reads no APEv2 tag past 16 MiB, so a cover is
+/// held to it in every container.
 const FLAC_BLOCK: usize = (1 << 24) - 1 - 1024;
 
-/// The widest a cover too large for FLAC is made.
-const FLAC_COVER_WIDTH: u32 = 3000;
+/// The most bytes of picture `container` holds beside `tags`: a FLAC
+/// block's; in Ogg, three quarters of it, as the block is a comment in
+/// base64, four bytes for every three, and `lofty` reads no comment past
+/// 16 MiB; in WavPack, what the APEv2 tag's 16 MiB leaves beside the
+/// other items, embedded lyrics among them.
+fn cover_room(container: Container, tags: &[(String, Vec<String>)]) -> usize {
+    match container {
+        Container::Ogg => FLAC_BLOCK / 4 * 3 - 1024,
+        Container::WavPack => {
+            let items: usize = tags
+                .iter()
+                .flat_map(|(name, values)| values.iter().map(move |v| name.len() + v.len() + 16))
+                .sum();
+            FLAC_BLOCK.saturating_sub(items)
+        }
+        Container::Flac | Container::Mp3 | Container::Mp4 => FLAC_BLOCK,
+    }
+}
 
-/// `picture`, read from `path`, as a FLAC file can hold it: as it is when
-/// it fits, else made a JPEG at most [`FLAC_COVER_WIDTH`] pixels wide.
-fn fit_flac<R: Runner>(
+/// The widest a cover too large to hold is made.
+const COVER_WIDTH: u32 = 3000;
+
+/// `picture`, read from `path`, in `room` bytes ([`cover_room`]): as it
+/// is when it fits, else made a JPEG at most [`COVER_WIDTH`] pixels wide.
+fn fit_cover<R: Runner>(
     runner: &R,
     picture: Picture,
+    room: usize,
     path: &Path,
     scratch: &Path,
 ) -> Result<Picture> {
-    if picture.data().len() <= FLAC_BLOCK {
+    if picture.data().len() <= room {
         return Ok(picture);
     }
     let smaller = scratch.join("cover-fit.jpg");
-    let scale = format!("scale='min({FLAC_COVER_WIDTH},iw)':-2");
+    let scale = format!("scale='min({COVER_WIDTH},iw)':-2");
     let output = Output::of(
         &[
             "-map",
@@ -358,9 +434,9 @@ fn fit_flac<R: Runner>(
     );
     runner.run(&ffmpeg::outputs_command(&[path], &[output]))?;
     let fitted = read_picture(&smaller, MimeType::Jpeg)?;
-    if fitted.data().len() > FLAC_BLOCK {
+    if fitted.data().len() > room {
         return Err(anyhow!(
-            "{} even as a JPEG, more than a FLAC file holds",
+            "{} even as a JPEG, more than the file's tags hold",
             crate::units::Size(fitted.data().len() as u64)
         ));
     }
@@ -382,18 +458,20 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         std::io::copy(&mut fs::File::open(&path)?, &mut fs::File::create(&staged)?)
     })()
     .with_context(|| format!("copying {}", path.display()))?;
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<Vec<String>> {
         // The copy is the file byte for byte, and a `.part` names no format.
-        let held = lofty::read_from_path(&path)
+        let held = crate::tags::read_tagged(&path)
             .with_context(|| format!("reading the tags of {}", path.display()))?;
         let tag = held.primary_tag();
-        let picture = tag.and_then(|t| {
-            t.pictures()
-                .iter()
-                .find(|p| p.pic_type() == PictureType::CoverFront)
-                .or_else(|| t.pictures().first())
-                .cloned()
-        });
+        let picture = tag
+            .and_then(|t| {
+                t.pictures()
+                    .iter()
+                    .find(|p| p.pic_type() == PictureType::CoverFront)
+                    .or_else(|| t.pictures().first())
+                    .cloned()
+            })
+            .or_else(|| ape_cover(&path));
         let mut tags = plan.tags.clone();
         let embedded = plan.lyrics.as_ref().is_some_and(|l| l.placement.embedded());
         if let Some(text) = tag
@@ -405,21 +483,85 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
         {
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
-        write_tags(&staged, plan.format, &tags, picture)?;
-        set_opus_header(&staged, plan)
+        let covered = picture.is_some();
+        write_tags(&staged, plan.format, &tags, picture, &plan.chapters)?;
+        set_opus_header(&staged, plan)?;
+        Ok(verify(&staged, &tags, covered))
     })();
-    if let Err(e) = result {
-        let _ = fs::remove_file(&staged);
-        return Err(e);
-    }
+    let problems = match result {
+        Ok(problems) => problems,
+        Err(e) => {
+            let _ = fs::remove_file(&staged);
+            return Err(e);
+        }
+    };
     rename(&staged, &path)?;
     Ok(Rendered {
         audio_bytes: size_of(&path),
         lyrics_bytes: lyrics.map_or(0, |l| size_of(&library.join(l))),
         audio: audio.to_path_buf(),
         lyrics: lyrics.map(Path::to_path_buf),
-        problems: Vec::new(),
+        problems,
     })
+}
+
+/// The front cover of the WavPack file at `path`, which `lofty`'s
+/// generic tag reads not from APEv2's `Cover Art (Front)`.
+fn ape_cover(path: &Path) -> Option<Picture> {
+    let key = PictureType::CoverFront.as_ape_key()?;
+    let mut file = fs::File::open(path).ok()?;
+    let options = ParseOptions::new().read_properties(false);
+    let wv = lofty::wavpack::WavPackFile::read_from(&mut file, options).ok()?;
+    match wv.ape()?.get(key)?.value() {
+        ItemValue::Binary(bytes) => Picture::from_ape_bytes(key, bytes).ok(),
+        _ => None,
+    }
+}
+
+/// What of `tags` and the cover the file at `path` does not hold as they
+/// were written, read back as a source's tags are read: each field but
+/// the gains, which Opus holds rounded to its own steps.
+fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<String> {
+    use lofty::file::TaggedFileExt;
+
+    let as_read = |t: BTreeMap<String, Vec<String>>| crate::tags::from_container(&t);
+    let wanted = as_read(
+        tags.iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+            .collect(),
+    );
+    let held = crate::tags::read_file(path)
+        .map(as_read)
+        .unwrap_or_default();
+    // A container holding whole numbers holds a tempo rounded.
+    let alike = |f: &Field, a: &[String], b: &[String]| {
+        a == b || (f.spec().kind == crate::tags::Kind::Decimal && wholes(a) == wholes(b))
+    };
+    let differ: Vec<&str> = wanted
+        .iter()
+        .filter(|(f, offer)| {
+            !f.is_loudness()
+                && !held
+                    .get(f)
+                    .is_some_and(|o| alike(f, &o.values, &offer.values))
+        })
+        .map(|(f, _)| f.vorbis())
+        .collect();
+    let mut problems = Vec::new();
+    if !differ.is_empty() {
+        problems.push(format!("tags not held as written: {}", differ.join(", ")));
+    }
+    let pictured = || {
+        crate::tags::read_tagged(path)
+            .ok()
+            .and_then(|f| f.primary_tag().map(|t| !t.pictures().is_empty()))
+            .unwrap_or(false)
+            || ape_cover(path).is_some()
+    };
+    if covered && !pictured() {
+        problems.push("cover not held as written".to_string());
+    }
+    problems
 }
 
 /// The gain `plan` gives its Opus header, set in `path` once its tags
@@ -522,6 +664,21 @@ fn cover_plan<R: Runner>(
             .cloned()
             .ok_or_else(|| anyhow!("the picture beside {} is gone", source.path.display()))?,
         CoverAt::File => source.path.clone(),
+        CoverAt::Atom { index } => {
+            let bytes = crate::picture::mp4_covers(&source.path)
+                .into_iter()
+                .nth(*index)
+                .ok_or_else(|| anyhow!("{} holds no picture {index}", source.path.display()))?;
+            let name = crate::atomic::Name::new("atom".to_string())?;
+            crate::atomic::write(scratch, &name, &bytes)?;
+            scratch.join(name.as_str())
+        }
+    };
+    // A file's bytes say what it is, whatever its name or its container
+    // says: a PNG named `.jpg` is kept as PNG, and a WebP converted.
+    let as_is = match crate::picture::sniff_file(&file) {
+        Some(sniffed) => is_kept_as_is(sniffed).filter(|_| cover.crop.is_none()),
+        None => as_is,
     };
     if let Some(mime) = as_is {
         return Ok(CoverPlan {
@@ -555,10 +712,15 @@ fn lyrics_plan(
         outputs.push(Output::new(args, raw));
         return Ok(None);
     }
-    let file = lyrics_file(&lyrics.at, source)
-        .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
-    let text =
-        lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?);
+    let text = if lyrics.at == LyricsAt::Tag {
+        crate::tags::lyrics_in(&source.path)
+            .ok_or_else(|| anyhow!("the lyrics in {} are gone", source.path.display()))?
+            .0
+    } else {
+        let file = lyrics_file(&lyrics.at, source)
+            .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
+        lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?)
+    };
     Ok(Some(lyrics::shift_lrc(
         &lyrics::clean_lrc(&text),
         lyrics.shift_ms,
@@ -566,11 +728,11 @@ fn lyrics_plan(
     )))
 }
 
-/// The file lyrics at `at` of `source` are read from; none for a stream,
-/// or lyrics beside it that are gone.
+/// The file lyrics at `at` of `source` are read from; none for a stream
+/// or a tag, or lyrics beside it that are gone.
 pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
     match at {
-        LyricsAt::Stream { .. } => None,
+        LyricsAt::Stream { .. } | LyricsAt::Tag => None,
         LyricsAt::Sidecar => source.lyrics.clone(),
         LyricsAt::File => Some(source.path.clone()),
     }
@@ -578,20 +740,33 @@ pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
 
 fn read_picture(path: &Path, mime: MimeType) -> Result<Picture> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let mime = match crate::picture::sniff(&bytes) {
+        Some(sniffed) => is_kept_as_is(sniffed).ok_or_else(|| {
+            anyhow!(
+                "the cover {} is {sniffed}, which no file holds",
+                path.display()
+            )
+        })?,
+        None => mime,
+    };
     Ok(Picture::unchecked(bytes)
         .pic_type(PictureType::CoverFront)
         .mime_type(mime)
         .build())
 }
 
-/// Replace every comment the file carries with the plan's tags and the
-/// cover, keeping the encoder's vendor string and a FLAC's
-/// [`CHANNEL_MASK`].
+/// The vendor string ffmpeg names its Vorbis comments with, bit-exact.
+const FFMPEG_VENDOR: &str = "ffmpeg";
+
+/// Replace every comment the file carries with the plan's tags, the
+/// cover and the chapters, keeping the encoder's vendor string and a
+/// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
 fn write_tags(
     path: &Path,
     format: Format,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
+    chapters: &[Chapter],
 ) -> Result<()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -601,52 +776,15 @@ fn write_tags(
     let codec = format.codec();
     let written = match codec.container() {
         Container::Ogg | Container::Flac => {
-            let comments = vorbis_comments(&mut file, path, codec, tags, picture)?;
+            let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(&mut file, WriteOptions::default())
         }
         Container::Mp3 => {
-            let (generic, own) = generic_tag(TagType::Id3v2, tags, picture);
-            let mut id3 = Id3v2Tag::from(generic);
-            for (key, values) in own {
-                id3.insert(Frame::UserText(ExtendedTextFrame::new(
-                    TextEncoding::UTF8,
-                    key.clone(),
-                    values.join("\0"),
-                )));
-            }
-            canonical_id3(id3).save_to(&mut file, WriteOptions::default())
+            id3_tag(tags, picture, chapters).save_to(&mut file, WriteOptions::default())
         }
-        Container::Mp4 => {
-            let (generic, own) = generic_tag(TagType::Mp4Ilst, tags, picture);
-            // A generic tag converts to an atom a value; inserted again,
-            // the values of one name merge into one atom.
-            let mut ilst = Ilst::new();
-            for atom in Ilst::from(generic) {
-                ilst.insert(atom);
-            }
-            for (key, values) in own {
-                let ident = AtomIdent::Freeform {
-                    mean: "com.apple.iTunes".into(),
-                    name: key.clone().into(),
-                };
-                let data = values.iter().cloned().map(AtomData::UTF8).collect();
-                if let Some(atom) = Atom::from_collection(ident, data) {
-                    ilst.insert(atom);
-                }
-            }
-            ilst.save_to(&mut file, WriteOptions::default())
-        }
-        Container::WavPack => {
-            let (generic, own) = generic_tag(TagType::Ape, tags, picture);
-            let mut ape = ApeTag::from(generic);
-            for (key, values) in own {
-                if let Ok(item) = ApeItem::new(key.clone(), ItemValue::Text(values.join("\0"))) {
-                    ape.insert(item);
-                }
-            }
-            ape.save_to(&mut file, WriteOptions::default())
-        }
+        Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
+        Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
     };
     written.with_context(|| format!("writing tags to {}", path.display()))
 }
@@ -684,8 +822,11 @@ fn vorbis_comments(
     codec: Codec,
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
+    chapters: &[Chapter],
 ) -> Result<VorbisComments> {
-    let options = ParseOptions::new();
+    // The vendor string is all that is read: the audio's properties are
+    // not, as lofty refuses an Opus stream of mapping family 255 for them.
+    let options = ParseOptions::new().read_properties(false);
     let reading = || format!("reading {} as {codec}", path.display());
     let (vendor, mask) = match codec {
         Codec::Opus => (
@@ -708,7 +849,9 @@ fn vorbis_comments(
             let flac = FlacFile::read_from(file, options).with_context(reading)?;
             let own = flac.vorbis_comments();
             (
-                own.map(|c| c.vendor().to_string()).unwrap_or_default(),
+                // ffmpeg writes no comment block for a FLAC of no tags, and
+                // the vendor it would have named with it.
+                own.map_or_else(|| FFMPEG_VENDOR.to_string(), |c| c.vendor().to_string()),
                 own.and_then(|c| c.get(CHANNEL_MASK)).map(str::to_string),
             )
         }
@@ -726,9 +869,15 @@ fn vorbis_comments(
         tags
     };
     for (key, values) in tags {
-        for value in values {
-            comments.push(key.clone(), value.clone());
+        let also = Field::named(key).map_or(&[][..], |f| f.spec().also_vorbis);
+        for name in std::iter::once(key.as_str()).chain(also.iter().copied()) {
+            for value in values {
+                comments.push(name.to_string(), value.clone());
+            }
         }
+    }
+    for (name, value) in crate::chapters::vorbis(chapters) {
+        comments.push(name, value);
     }
     if let Some(picture) = picture {
         comments
@@ -763,43 +912,315 @@ fn opus_gains(tags: &[(String, Vec<String>)]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// The tags `lofty` can map into `kind`, as a generic tag holding the
-/// cover too, and the rest, which the format keeps under their own names.
-fn generic_tag(
-    kind: TagType,
+/// The values `tags` holds under `field`'s name.
+fn values_of(tags: &[(String, Vec<String>)], field: Field) -> &[String] {
+    tags.iter()
+        .find(|(k, _)| k == field.vorbis())
+        .map_or(&[], |(_, v)| v.as_slice())
+}
+
+/// Numbers as a format holding whole ones takes them, rounded: a tempo of
+/// 127.5 is 128 in `TBPM` and `tmpo`.
+fn wholes(values: &[String]) -> Vec<i64> {
+    values
+        .iter()
+        .filter_map(|v| v.parse::<f64>().ok())
+        .filter(|n| n.is_finite())
+        .map(|n| {
+            #[allow(clippy::cast_possible_truncation)]
+            let n = n.round() as i64;
+            n
+        })
+        .collect()
+}
+
+/// The total a place's field is counted against, and the place a total
+/// counts.
+fn paired(field: Field) -> Option<Field> {
+    match field {
+        Field::Track => Some(Field::TrackTotal),
+        Field::Disc => Some(Field::DiscTotal),
+        Field::TrackTotal => Some(Field::Track),
+        Field::DiscTotal => Some(Field::Disc),
+        _ => None,
+    }
+}
+
+/// A place and the total it is counted against as one text: `3/12`, or
+/// `3` with no total.
+fn place_text(tags: &[(String, Vec<String>)], field: Field, values: &[String]) -> String {
+    let n = values
+        .first()
+        .map_or("", |v| v.split('/').next().unwrap_or(v));
+    match paired(field).and_then(|t| values_of(tags, t).first()) {
+        Some(total) => format!("{n}/{total}"),
+        None => n.to_string(),
+    }
+}
+
+/// A total written where its place cannot hold it: no place is set.
+fn total_alone(tags: &[(String, Vec<String>)], field: Field) -> bool {
+    paired(field).is_some_and(|place| values_of(tags, place).is_empty())
+}
+
+/// The ISO 639-2 code a song's `LANGUAGE` tag names, as `ID3v2` marks the
+/// language of its lyrics and comments with.
+fn language_of(tags: &[(String, Vec<String>)]) -> Lang {
+    tags.iter()
+        .find(|(k, _)| k == "LANGUAGE")
+        .and_then(|(_, v)| v.first())
+        .and_then(|code| <Lang>::try_from(code.to_ascii_lowercase().as_bytes()).ok())
+        .filter(|code| code.iter().all(u8::is_ascii_lowercase))
+        .unwrap_or(UNKNOWN_LANGUAGE)
+}
+
+/// The role a tag names in `ID3v2`'s involved people list, `TIPL`.
+fn involved(key: &str) -> Option<&'static str> {
+    match ItemKey::from_key(TagType::VorbisComments, key)? {
+        ItemKey::Producer => Some("producer"),
+        ItemKey::Arranger => Some("arranger"),
+        ItemKey::Engineer => Some("engineer"),
+        ItemKey::MixDj => Some("DJ-mix"),
+        ItemKey::MixEngineer => Some("mix"),
+        _ => None,
+    }
+}
+
+/// A text frame of its own `lofty` names for a tag muman knows no field
+/// for, as `TCOM` for `COMPOSER`; never a frame another field writes or
+/// one holding no plain text.
+fn text_frame(key: &str) -> Option<&'static str> {
+    let id = ItemKey::from_key(TagType::VorbisComments, key)?.map_key(TagType::Id3v2)?;
+    let taken = ["TXXX", "TIPL", "TMCL", "TRCK", "TPOS"];
+    (id.len() == 4 && id.starts_with('T') && !id.starts_with("TD") && !taken.contains(&id))
+        .then_some(id)
+}
+
+/// `ID3v2` frames written as Picard writes them: each field into the
+/// frame [`crate::tags::TABLE`] names, several values null-separated as
+/// version 2.4 separates them; a tag of no field into a text frame of its
+/// own where it has one, else a user text frame of its name.
+fn id3_tag(
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
-) -> (Tag, Vec<(&String, &Vec<String>)>) {
-    // The format writes these as frames of their own kind, or folds them
-    // into another, so they map to no key of it.
-    let special = [
-        ItemKey::TrackNumber,
-        ItemKey::TrackTotal,
-        ItemKey::DiscNumber,
-        ItemKey::DiscTotal,
-        ItemKey::UnsyncLyrics,
-    ];
-    let mut generic = Tag::new(kind);
-    let mut own = Vec::new();
+    chapters: &[Chapter],
+) -> Id3v2Tag {
+    let text = |id: &'static str, value: String| {
+        FrameId::new(id)
+            .ok()
+            .map(|id| Frame::Text(TextInformationFrame::new(id, TextEncoding::UTF8, value)))
+    };
+    let user = |key: &str, value: String| {
+        Frame::UserText(ExtendedTextFrame::new(
+            TextEncoding::UTF8,
+            key.to_string(),
+            value,
+        ))
+    };
+    let language = language_of(tags);
+    let mut id3 = Id3v2Tag::new();
+    let mut roles = Vec::new();
     for (key, values) in tags {
-        let item = ItemKey::from_key(TagType::VorbisComments, key).map(|item| match item {
-            // ID3v2 keeps lyrics in an unsynchronised lyrics frame.
-            ItemKey::Lyrics if item.map_key(kind).is_none() => ItemKey::UnsyncLyrics,
-            item => item,
-        });
-        match item.filter(|item| item.map_key(kind).is_some() || special.contains(item)) {
-            Some(item) => {
-                for value in values {
-                    generic.push(TagItem::new(item, ItemValue::Text(value.clone())));
+        let joined = values.join("\0");
+        let frame = match Field::named(key).map(Field::spec) {
+            Some(spec) => match spec.id3 {
+                Id3::Text(id) => text(id, joined),
+                Id3::Time(id) => values
+                    .first()
+                    .and_then(|v| v.parse::<Timestamp>().ok())
+                    .zip(FrameId::new(id).ok())
+                    .map(|(at, id)| {
+                        Frame::Timestamp(TimestampFrame::new(id, TextEncoding::UTF8, at))
+                    }),
+                Id3::User(name) => Some(user(name, joined)),
+                Id3::Ufid => values.first().map(|id| {
+                    Frame::UniqueFileIdentifier(UniqueFileIdentifierFrame::new(
+                        crate::tags::UFID_OWNER,
+                        id.as_bytes().to_vec(),
+                    ))
+                }),
+                Id3::Place(id) => text(id, place_text(tags, spec.field, values)),
+                Id3::Within => total_alone(tags, spec.field).then(|| user(spec.vorbis, joined)),
+                Id3::Whole(id) => {
+                    let numbers: Vec<String> = wholes(values).iter().map(i64::to_string).collect();
+                    text(id, numbers.join("\0"))
                 }
+                Id3::Key if values.iter().all(|k| crate::tags::id3_key(k)) => text("TKEY", joined),
+                Id3::Key => Some(user("INITIALKEY", joined)),
+                Id3::Comment => Some(Frame::Comment(CommentFrame::new(
+                    TextEncoding::UTF8,
+                    language,
+                    String::new(),
+                    joined,
+                ))),
+            },
+            None => match key.as_str() {
+                "LYRICS" => Some(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+                    TextEncoding::UTF8,
+                    language,
+                    String::new(),
+                    joined,
+                ))),
+                _ => match (involved(key), text_frame(key)) {
+                    (Some(role), _) => {
+                        roles.extend(values.iter().map(|v| (role.into(), v.clone().into())));
+                        None
+                    }
+                    (None, Some(id)) => text(id, joined),
+                    (None, None) => Some(user(key, joined)),
+                },
+            },
+        };
+        if let Some(frame) = frame {
+            id3.insert(frame);
+        }
+    }
+    if !roles.is_empty()
+        && let Ok(id) = FrameId::new("TIPL")
+    {
+        id3.insert(Frame::KeyValue(KeyValueFrame::new(
+            id,
+            TextEncoding::UTF8,
+            roles,
+        )));
+    }
+    if let Some(picture) = picture {
+        id3.insert(Frame::Picture(AttachedPictureFrame::new(
+            TextEncoding::UTF8,
+            picture,
+        )));
+    }
+    for frame in crate::chapters::id3(chapters) {
+        id3.insert(frame);
+    }
+    canonical_id3(id3)
+}
+
+/// MP4's iTunes atoms written as Picard writes them: each field into the
+/// atom [`crate::tags::TABLE`] names, a value of several one atom of
+/// several data; a tag of no field into the text atom `lofty` names for
+/// it, else iTunes' freeform atom of its name.
+fn ilst_of(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> Ilst {
+    let free = |name: &str| AtomIdent::Freeform {
+        mean: "com.apple.iTunes".into(),
+        name: name.to_string().into(),
+    };
+    let own = |key: &str| -> AtomIdent<'static> {
+        let named = match key {
+            "LYRICS" => Some("©lyr"),
+            _ => ItemKey::from_key(TagType::VorbisComments, key)
+                .and_then(|k| k.map_key(TagType::Mp4Ilst)),
+        };
+        match named {
+            Some(n) if n.starts_with('©') && n.chars().count() == 4 => {
+                AtomIdent::Fourcc(crate::tags::fourcc(n))
             }
-            None => own.push((key, values)),
+            Some(n) if ["aART", "soar", "soaa", "soal", "sonm", "soco"].contains(&n) => {
+                AtomIdent::Fourcc(crate::tags::fourcc(n))
+            }
+            Some(n) if n.starts_with("----:com.apple.iTunes:") => {
+                free(&n["----:com.apple.iTunes:".len()..])
+            }
+            _ => free(key),
+        }
+    };
+    let mut ilst = Ilst::new();
+    let number = |v: Option<&String>| v.and_then(|v| v.split('/').next()?.parse::<u32>().ok());
+    for (key, values) in tags {
+        let ident = match Field::named(key).map(Field::spec) {
+            Some(spec) => match spec.mp4 {
+                Mp4::Text(name) => AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                Mp4::Free(name) => free(name),
+                // iTunes holds a tempo as a 16-bit integer, and a flag as a byte.
+                Mp4::Whole(name) => {
+                    if let Some(n) = wholes(values).first().and_then(|n| i16::try_from(*n).ok()) {
+                        ilst.insert(Atom::new(
+                            AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                            AtomData::Unknown {
+                                code: lofty::mp4::DataType::BeSignedInteger,
+                                data: n.to_be_bytes().to_vec(),
+                            },
+                        ));
+                    }
+                    continue;
+                }
+                Mp4::Flag(name) => {
+                    let on = values.first().is_some_and(|v| v == "1");
+                    ilst.insert(Atom::new(
+                        AtomIdent::Fourcc(crate::tags::fourcc(name)),
+                        AtomData::Bool(on),
+                    ));
+                    continue;
+                }
+                Mp4::Place(_) | Mp4::Within => {
+                    let n = number(values.first());
+                    match (spec.field, n) {
+                        (Field::Track, Some(n)) => ilst.set_track(n),
+                        (Field::Disc, Some(n)) => ilst.set_disk(n),
+                        (Field::TrackTotal, Some(n)) => ilst.set_track_total(n),
+                        (Field::DiscTotal, Some(n)) => ilst.set_disk_total(n),
+                        _ => {}
+                    }
+                    continue;
+                }
+            },
+            None => own(key),
+        };
+        let data = values.iter().cloned().map(AtomData::UTF8).collect();
+        if let Some(atom) = Atom::from_collection(ident, data) {
+            ilst.insert(atom);
         }
     }
     if let Some(picture) = picture {
-        generic.push_picture(picture);
+        ilst.insert_picture(picture);
     }
-    (generic, own)
+    ilst
+}
+
+/// APEv2 items written as Picard writes them, several values
+/// null-separated; the cover as `Cover Art (Front)`, named by a file name
+/// whose extension tells readers its format.
+fn ape_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> ApeTag {
+    let mut ape = ApeTag::new();
+    for (key, values) in tags {
+        let (name, value) = if let Some(spec) = Field::named(key).map(Field::spec) {
+            match spec.ape {
+                Some(name) if matches!(spec.id3, Id3::Place(_)) => {
+                    (name.to_string(), place_text(tags, spec.field, values))
+                }
+                Some(name) => (name.to_string(), values.join("\0")),
+                None if total_alone(tags, spec.field) => {
+                    (spec.vorbis.to_string(), values.join("\0"))
+                }
+                None => continue,
+            }
+        } else {
+            let name = match key.as_str() {
+                "LYRICS" => "Lyrics".to_string(),
+                _ => ItemKey::from_key(TagType::VorbisComments, key)
+                    .and_then(|k| k.map_key(TagType::Ape))
+                    .map_or_else(|| key.clone(), str::to_string),
+            };
+            (name, values.join("\0"))
+        };
+        if let Ok(item) = ApeItem::new(name, ItemValue::Text(value)) {
+            ape.insert(item);
+        }
+    }
+    if let Some(mut picture) = picture {
+        let extension = match picture.mime_type() {
+            Some(MimeType::Png) => "png",
+            _ => "jpg",
+        };
+        picture.set_description(Some(format!("cover.{extension}")));
+        let key = PictureType::CoverFront
+            .as_ape_key()
+            .unwrap_or("Cover Art (Front)");
+        if let Ok(item) = ApeItem::new(key.to_string(), ItemValue::Binary(picture.as_ape_bytes())) {
+            ape.insert(item);
+        }
+    }
+    ape
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {

@@ -250,6 +250,105 @@ fn songs_are_levelled_as_ffmpeg_measures_them_and_opus_by_its_header() {
     assert_eq!(tag(written, "R128_TRACK_GAIN").as_deref(), Some("-1280"));
 }
 
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn every_container_holds_the_tags_ffprobe_reads() {
+    let h = Home::new();
+    let songs = h.root.join("home").join("songs.toml");
+    let list = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        format!("{list}\n[audio]\ncodecs = [\"mp3\", \"aac\"]\nlossless = \"wavpack\"\n"),
+    )
+    .unwrap();
+    for (name, seed, title) in [
+        ("one.mp3", 5, "Lantern Weather"),
+        ("two.m4a", 6, "Low Orchard"),
+        ("three.flac", 7, "Copper Moth"),
+    ] {
+        let song = h.song(name, seed, title);
+        let added = h.muman(&["add", "-y", song.to_str().unwrap()]);
+        assert!(added.status.success(), "{}", text(&added));
+    }
+    let set = h.muman(&[
+        "set",
+        "-y",
+        "--all",
+        "artist:comets",
+        "track=5/9",
+        "date=2019/07/04",
+        "work=Harbor Suite",
+    ]);
+    assert!(set.status.success(), "{}", text(&set));
+    let synced = h.muman(&["sync"]);
+    assert!(synced.status.success(), "{}", text(&synced));
+    for (ext, track, date) in [
+        ("mp3", "track", "date"),
+        ("m4a", "track", "date"),
+        ("wv", "Track", "Year"),
+    ] {
+        let written = &h.library_files(ext)[0];
+        assert_eq!(tag(written, track).as_deref(), Some("5/9"), "{ext}");
+        assert_eq!(tag(written, date).as_deref(), Some("2019-07-04"), "{ext}");
+    }
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_source_s_chapters_are_kept_in_every_container_that_holds_them() {
+    let h = Home::new();
+    let plain = h.song("plain.m4a", 8, "Night Ferry");
+    let meta = h.root.join("in").join("chapters.ffmeta");
+    std::fs::write(
+        &meta,
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=12000\ntitle=Harbor\n\
+         [CHAPTER]\nTIMEBASE=1/1000\nSTART=12000\nEND=30000\ntitle=Open Water\n",
+    )
+    .unwrap();
+    let book = h.root.join("in").join("book.m4b");
+    ffmpeg(
+        &[
+            "-i",
+            plain.to_str().unwrap(),
+            "-i",
+            meta.to_str().unwrap(),
+            "-map",
+            "0",
+            "-map_chapters",
+            "1",
+            "-c",
+            "copy",
+        ],
+        &book,
+    );
+    let added = h.muman(&["add", "-y", book.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+    let songs = h.root.join("home").join("songs.toml");
+    let list = std::fs::read_to_string(&songs).unwrap();
+    for (codec, ext) in [("aac", "m4a"), ("opus", "opus"), ("mp3", "mp3")] {
+        let set: Vec<String> = list
+            .lines()
+            .map(|l| match l.split_once(" = ") {
+                Some(("codecs", _)) => "codecs = []".to_string(),
+                Some(("lossy", _)) => format!("lossy = \"{codec}\""),
+                _ => l.to_string(),
+            })
+            .collect();
+        std::fs::write(&songs, set.join("\n")).unwrap();
+        let synced = h.muman(&["sync"]);
+        assert!(synced.status.success(), "{}", text(&synced));
+        let written = &h.library_files(ext)[0];
+        let out = Command::new("ffprobe")
+            .args(["-v", "error", "-show_chapters", "-of", "csv=p=0"])
+            .arg(written)
+            .output()
+            .unwrap();
+        let chapters = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(chapters.lines().count(), 2, "{ext}: {chapters}");
+        assert!(chapters.contains("Open Water"), "{ext}: {chapters}");
+    }
+}
+
 /// `out` made by ffmpeg from `args`, or the test fails.
 fn ffmpeg(args: &[&str], out: &Path) {
     let ok = Command::new("ffmpeg")

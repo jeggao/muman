@@ -21,7 +21,9 @@
 //!   splits. Each field's [`tags::Scope`] says which it is. A
 //!   recording's ISRC and MusicBrainz IDs come only from a source that
 //!   titles it as the song is titled, so a record of another recording,
-//!   its names outvoted, lends the song none.
+//!   its names outvoted, lends the song none; where the release's source
+//!   is one and names its recording, its recording IDs are the song's,
+//!   so a release's IDs and its recording's never contradict.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -59,6 +61,12 @@
 //! timed lines win over untimed or missing ones. A `.lrc` that states no
 //! length is taken as timed for the song.
 //!
+//! A media file's own lyrics tag is lyrics of that source, timed when
+//! its text is LRC. One in a language no preference names, as a `USLT`
+//! frame marked `jpn` where only `en` is preferred, ranks after every
+//! preferred language rather than not at all: a subtitle is one of many a
+//! site offers, but a file's own lyrics are what someone chose to keep.
+//!
 //! The release fields, album, album artist, track, disc, date, totals,
 //! country and release IDs, come from the one source whose album ranks
 //! best, so an album's tracks never split across folders and a release's
@@ -88,7 +96,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Chain, Codec, Layout};
+use crate::codec::{Adapt, Chain, Codec, Container, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
 use crate::loudness::Gains;
@@ -178,13 +186,16 @@ impl Format {
     }
 
     /// The format `audio` is written in under `settings`: copied where its
-    /// codec may be and its layout is taken as it is.
+    /// codec may be and its layout is taken as it is. A mix only the codec
+    /// it would be encoded to asks, as MP3's two channels, keeps no audio
+    /// from being copied.
     #[must_use]
     pub fn of(audio: &AudioFacts, settings: &Audio) -> Self {
         let encoded = Self::encoded(audio, settings);
+        let (mix, _) = settings.written(&audio.shape());
         match Codec::probed(&audio.codec) {
             Some(codec)
-                if encoded.mix().is_none()
+                if mix.is_none()
                     && (codec == encoded.codec() || settings.codecs.contains(&codec)) =>
             {
                 Self::Copy { codec }
@@ -202,7 +213,9 @@ impl Format {
         match codec.adapt(&shape) {
             Some(adapt) => Self::Encode {
                 codec,
-                kbps: settings.kbps(codec, shape.channels),
+                kbps: settings
+                    .kbps(codec, shape.channels)
+                    .map(|k| codec.kbps_at(k, shape.sample_rate)),
                 adapt,
                 mix: None,
             },
@@ -211,17 +224,18 @@ impl Format {
     }
 
     /// `audio` encoded under `settings`, whatever its codec: mixed into
-    /// another layout where `[audio] layouts` takes not its own, then to
+    /// another layout where `[audio] layouts` takes not its own or the
+    /// codec holds fewer channels ([`Audio::written_in`]), then to
     /// `[audio] lossy` or `lossless`, or where a lossless codec there
     /// cannot keep every channel and sample, to FLAC or else WavPack.
     #[must_use]
     pub fn encoded(audio: &AudioFacts, settings: &Audio) -> Self {
-        let (mix, shape) = settings.written(&audio.shape());
         let wanted = if audio.is_lossless() {
             settings.lossless
         } else {
             settings.lossy
         };
+        let (mix, shape) = settings.written_in(wanted, &audio.shape());
         let fallbacks: &[Codec] = if wanted.is_lossless() {
             &[Codec::Flac, Codec::WavPack]
         } else {
@@ -233,7 +247,9 @@ impl Format {
             .unwrap_or((Codec::WavPack, None));
         Self::Encode {
             codec,
-            kbps: settings.kbps(codec, shape.channels),
+            kbps: settings
+                .kbps(codec, shape.channels)
+                .map(|k| codec.kbps_at(k, shape.sample_rate)),
             adapt,
             mix,
         }
@@ -344,7 +360,18 @@ pub struct Plan {
     /// ReplayGain tags are derived from them and the format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness: Option<Gains>,
+    /// How its tags are written into the file, [`TAGGING`] when it was.
+    #[serde(default)]
+    pub tagging: u32,
+    /// Its audio's chapters, where its container holds them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<crate::chapters::Chapter>,
 }
+
+/// How tags are written into a file, raised whenever the frames, atoms or
+/// items one plan's tags are written as change, so every song is tagged
+/// again, its audio left as it is.
+pub const TAGGING: u32 = 1;
 
 impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
@@ -356,6 +383,8 @@ impl PartialEq for Plan {
             lyrics,
             tags,
             loudness: _,
+            tagging,
+            chapters,
         } = self;
         *version == other.version
             && *format == other.format
@@ -363,6 +392,8 @@ impl PartialEq for Plan {
             && *cover == other.cover
             && *lyrics == other.lyrics
             && *tags == other.tags
+            && *tagging == other.tagging
+            && *chapters == other.chapters
             && self.held_loudness() == other.held_loudness()
     }
 }
@@ -598,7 +629,17 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     };
     let cover = pick_cover(input);
     let lyrics = pick_lyrics(input, &audio_key);
-    let (tags, tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
+    let (mut tags, mut tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
+    if let Some(code) = lyrics.as_ref().and_then(|(l, _)| lyrics_language(input, l))
+        && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
+    {
+        insert_comment(&mut tags, Field::Language, vec![code]);
+        tag_why.push(TagWhy {
+            key: Field::Language.vorbis().to_string(),
+            from: "the lyrics' language".to_string(),
+            cleaned: Vec::new(),
+        });
+    }
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -615,6 +656,9 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         date: get(Field::Date),
         track: get(Field::Track),
         disc: get(Field::Disc),
+        composer: get(Field::Composer),
+        bpm: get(Field::Bpm),
+        key: get(Field::InitialKey),
         id: &id,
     })?;
     Ok(Resolved {
@@ -630,6 +674,14 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             lyrics: lyrics.as_ref().map(|(l, _)| l.clone()),
             tags,
             loudness: None,
+            tagging: TAGGING,
+            chapters: if format.codec().container() == Container::WavPack {
+                Vec::new()
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
+                crate::chapters::within(&facts.chapters, length_ms)
+            },
         },
         stem,
         why: Why {
@@ -783,6 +835,19 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
     }
 }
 
+/// The ISO 639-2 code of the language the lyrics `lyrics` names are in,
+/// if their source says it.
+fn lyrics_language(input: &Input<'_>, lyrics: &LyricsRef) -> Option<String> {
+    let facts = input.facts.get(&lyrics.key)?;
+    let found = facts.lyrics.iter().find(|l| l.at == lyrics.at)?;
+    let code = match &found.language {
+        crate::lyrics::Language::Codes(codes) => codes.first()?.clone(),
+        crate::lyrics::Language::Tag(tag) => tag.clone(),
+        crate::lyrics::Language::Unstated => return None,
+    };
+    crate::tags::Kind::Language.read(&code).ok()
+}
+
 fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
     let mut order = 0_i64;
     let mut best: Option<(Rank, CoverRef, String)> = None;
@@ -808,7 +873,9 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
                     q.map(|q| q.blockiness_bucket(w.blockiness.step)),
                 ),
             ]);
-            let rank: Rank = vec![unknown, sum, order];
+            // A back cover, a disc or a booklet is no song's cover while
+            // any other picture is.
+            let rank: Rank = vec![i64::from(cover.other), unknown, sum, order];
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
@@ -888,7 +955,9 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         };
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
-            let Some(preference) = lyrics::preference(input.lyrics, &l.language) else {
+            let Some(preference) = lyrics::preference(input.lyrics, &l.language).or_else(|| {
+                (l.at == LyricsAt::Tag && !input.lyrics.is_empty()).then_some(input.lyrics.len())
+            }) else {
                 continue;
             };
             let confidence = match l.stated_ms {
@@ -1076,6 +1145,37 @@ pub const SINGLE: &str = "a single, named for its title";
 /// artist's own source.
 const FIRST_ARTIST: &str = "the first artist of ";
 
+/// Take the MusicBrainz recording IDs of `release`, the source the
+/// release fields came from, where it names another recording than
+/// `fields` hold: a release's IDs name one recording on it, so the IDs
+/// written never contradict. An ID of the other recording it lacks goes.
+fn recording_of_release(
+    fields: &mut BTreeMap<Field, Slot>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    release: &SourceKey,
+) {
+    let of_release = |k: &SourceKey| k == release;
+    let Some(track) = best_offer(candidates, Field::MusicBrainzTrackId, &of_release) else {
+        return;
+    };
+    if fields
+        .get(&Field::MusicBrainzTrackId)
+        .is_none_or(|s| s.values == track.offer.values)
+    {
+        return;
+    }
+    for field in [
+        Field::MusicBrainzTrackId,
+        Field::MusicBrainzArtistId,
+        Field::MusicBrainzWorkId,
+    ] {
+        match best_offer(candidates, field, &of_release) {
+            Some(c) => fields.insert(field, Slot::of(c)),
+            None => fields.remove(&field),
+        };
+    }
+}
+
 /// A tag as it will be written, and where it came from.
 #[derive(Clone)]
 struct Slot {
@@ -1114,6 +1214,18 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
             cleaned: artist.cleaned,
         };
         insert_in_order(written, Field::AlbumArtist, slot);
+    }
+    // Several artists are written joined, and listed as Picard lists them.
+    if get(written, Field::Artists).is_none()
+        && artists.len() > 1
+        && let Some(artist) = get(written, Field::Artist)
+    {
+        let slot = Slot {
+            values: artists.to_vec(),
+            from: artist.from,
+            cleaned: artist.cleaned,
+        };
+        insert_in_order(written, Field::Artists, slot);
     }
     if get(written, Field::Album).is_none()
         && let Some(title) = get(written, Field::Title)
@@ -1205,6 +1317,9 @@ fn resolve_tags(
             );
         }
     }
+    if let Some(album) = release.filter(|a| named_so(a.key)) {
+        recording_of_release(&mut fields, &candidates, album.key);
+    }
     let heard = |k: &SourceKey| !mixed && k == audio;
     let album_heard = |k: &SourceKey| heard(k) && release.is_some_and(|r| r.key == audio);
     for (scope, from) in [
@@ -1290,6 +1405,52 @@ fn set_by_hand(input: &Input<'_>, written: &mut Vec<(String, Slot)>) {
     }
     for (name, values) in &input.song.tags {
         set(tags::vorbis_key(name), values.clone(), "song.tags");
+    }
+    split_places(input, written);
+}
+
+/// A track or disc set by hand as `3/12` written as its number, its count
+/// written as the total, unless the song list names the total itself.
+fn split_places(input: &Input<'_>, written: &mut Vec<(String, Slot)>) {
+    let named = |field: Field| {
+        let hand = input
+            .song
+            .tags
+            .iter()
+            .chain(input.album.iter().flat_map(|a| &a.tags));
+        hand.into_iter()
+            .any(|(name, _)| Field::named(name) == Some(field))
+            || (field == Field::TrackTotal && input.album.is_some_and(|a| a.tracks.is_some()))
+    };
+    for (place, total) in [
+        (Field::Track, Field::TrackTotal),
+        (Field::Disc, Field::DiscTotal),
+    ] {
+        let Some(slot) = written
+            .iter_mut()
+            .find(|(k, _)| k == place.vorbis())
+            .map(|(_, s)| s)
+        else {
+            continue;
+        };
+        let Some((n, of)) = slot.values.first().and_then(|v| v.split_once('/')) else {
+            continue;
+        };
+        let (n, of) = (n.to_string(), of.to_string());
+        slot.values = vec![n];
+        let from = slot.from.clone();
+        if named(total) {
+            continue;
+        }
+        let total_slot = Slot {
+            values: vec![of],
+            from,
+            cleaned: Vec::new(),
+        };
+        match written.iter_mut().find(|(k, _)| k == total.vorbis()) {
+            Some((_, s)) => *s = total_slot,
+            None => insert_in_order(written, total, total_slot),
+        }
     }
 }
 

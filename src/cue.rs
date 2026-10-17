@@ -6,7 +6,12 @@
 //! `DISCNUMBER`, `TOTALDISCS`). A track's length is the distance from its
 //! `INDEX 01` to the next track's in the same `FILE`, in frames of 1/75
 //! s; the last track's in each file is unknown, the sheet holding no
-//! file's length. `INDEX 00`, the pregap, belongs to the track before.
+//! file's length. `INDEX 00`, the pregap, belongs to the track before,
+//! and a track is in the file its `INDEX 01` is in: EAC's sheets of one
+//! file a track put a track's pregap in the file before. A data track, as
+//! `MODE1/2352` on an enhanced CD, is no song. A sheet's paths are read
+//! with `/` or `\` between folders, as Windows rippers write them, and a
+//! name left unquoted is the rest of its line.
 
 use anyhow::{Result, bail};
 
@@ -61,73 +66,9 @@ fn frames(at: &str) -> Option<i64> {
     }
 }
 
-/// The tags the cue sheet `text` gives its album and tracks.
-pub fn read(text: &str) -> Result<Sheet> {
-    let mut sheet = Sheet::default();
-    let mut album = Tags::new();
-    let mut tracks: Vec<Track> = Vec::new();
-    let mut starts: Vec<Option<(usize, i64)>> = Vec::new();
-    let mut file: Option<String> = None;
-    let mut files = 0;
-    for line in text.trim_start_matches('\u{feff}').lines() {
-        let w = words(line);
-        let Some(command) = w.first().map(|c| c.to_ascii_uppercase()) else {
-            continue;
-        };
-        let arg = w.get(1).map_or("", String::as_str);
-        let (tags, into_track) = match tracks.last_mut() {
-            Some(t) => (&mut t.tags, true),
-            None => (&mut album, false),
-        };
-        match command.as_str() {
-            "FILE" => {
-                file = Some(arg.to_string());
-                files += 1;
-            }
-            "TRACK" => {
-                let number = arg.parse().ok().filter(|&n: &u32| n > 0);
-                let mut t = Track {
-                    number,
-                    file: file.clone(),
-                    ..Track::default()
-                };
-                if let Some(n) = number {
-                    sheet.add(&mut t.tags, "TRACKNUMBER", &n.to_string());
-                }
-                tracks.push(t);
-                starts.push(None);
-            }
-            "INDEX" if into_track && arg.parse::<u32>() == Ok(1) => {
-                let at = w.get(2).and_then(|a| frames(a));
-                if let (Some(at), Some(start)) = (at, starts.last_mut()) {
-                    *start = Some((files, at));
-                }
-            }
-            "TITLE" => sheet.set(tags, if into_track { "TITLE" } else { "ALBUM" }, arg),
-            "PERFORMER" => sheet.set(tags, if into_track { "ARTIST" } else { "ALBUMARTIST" }, arg),
-            "SONGWRITER" => sheet.set(tags, "COMPOSER", arg),
-            "ISRC" if into_track => sheet.set(tags, "ISRC", arg),
-            "CATALOG" => sheet.set(tags, "BARCODE", arg),
-            "REM" => {
-                let value = w.get(2..).map(|v| v.join(" ")).unwrap_or_default();
-                let upper = arg.to_ascii_uppercase();
-                let name = match upper.as_str() {
-                    "DATE" => "DATE",
-                    "GENRE" => "GENRE",
-                    "DISCNUMBER" => "DISCNUMBER",
-                    "TOTALDISCS" => "DISCTOTAL",
-                    "COMPOSER" => "COMPOSER",
-                    other if other.starts_with("REPLAYGAIN_") => other,
-                    _ => continue,
-                };
-                sheet.add(tags, name, &value);
-            }
-            _ => {}
-        }
-    }
-    if tracks.is_empty() {
-        bail!("names no track");
-    }
+/// Each track's length, from its start to the next track's in the same
+/// file, `starts` holding each track's file and start in frames.
+fn measure(tracks: &mut [Track], starts: &[Option<(usize, i64)>]) {
     for n in 0..tracks.len() {
         if let (Some((f, at)), Some(Some((g, next)))) = (starts[n], starts.get(n + 1))
             && f == *g
@@ -138,12 +79,117 @@ pub fn read(text: &str) -> Result<Sheet> {
                 .map(|ms| ms / FRAMES_PER_SECOND);
         }
     }
+}
+
+/// The name a `FILE` line gives, with `/` between its folders: its type is
+/// the line's last word, its name the rest.
+fn file_name(w: &[String]) -> String {
+    let name = match w.get(1..).unwrap_or_default() {
+        [name] => name.clone(),
+        [name @ .., _] => name.join(" "),
+        [] => String::new(),
+    };
+    name.replace('\\', "/")
+}
+
+/// The tag a `REM` comment rippers write sets, by its first word.
+fn rem_tag(word: &str) -> Option<String> {
+    let upper = word.to_ascii_uppercase();
+    let name = match upper.as_str() {
+        "DATE" | "GENRE" | "DISCNUMBER" | "COMPOSER" => upper.as_str(),
+        "TOTALDISCS" => "DISCTOTAL",
+        other if other.starts_with("REPLAYGAIN_") => other,
+        _ => return None,
+    };
+    Some(name.to_string())
+}
+
+/// The tags the cue sheet `text` gives its album and tracks.
+pub fn read(text: &str) -> Result<Sheet> {
+    let mut sheet = Sheet::default();
+    let mut album = Tags::new();
+    let mut tracks: Vec<Track> = Vec::new();
+    let mut starts: Vec<Option<(usize, i64)>> = Vec::new();
+    let mut file: Option<String> = None;
+    let mut files = 0;
+    let mut data: Vec<bool> = Vec::new();
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let w = words(line);
+        let Some(command) = w.first().map(|c| c.to_ascii_uppercase()) else {
+            continue;
+        };
+        let arg = w.get(1).map_or("", String::as_str);
+        let text = w.get(1..).map(|v| v.join(" ")).unwrap_or_default();
+        let (tags, into_track) = match tracks.last_mut() {
+            Some(t) => (&mut t.tags, true),
+            None => (&mut album, false),
+        };
+        match command.as_str() {
+            "FILE" => {
+                file = Some(file_name(&w));
+                files += 1;
+            }
+            "TRACK" => {
+                let number = arg.parse().ok().filter(|&n: &u32| n > 0);
+                let audio = w
+                    .get(2)
+                    .is_none_or(|kind| kind.eq_ignore_ascii_case("AUDIO"));
+                let mut t = Track {
+                    number,
+                    file: file.clone(),
+                    ..Track::default()
+                };
+                if let Some(n) = number.filter(|_| audio) {
+                    sheet.add(&mut t.tags, "TRACKNUMBER", &n.to_string());
+                }
+                tracks.push(t);
+                starts.push(None);
+                data.push(!audio);
+            }
+            "INDEX" if into_track && arg.parse::<u32>() == Ok(1) => {
+                let at = w.get(2).and_then(|a| frames(a));
+                if let (Some(at), Some(start)) = (at, starts.last_mut()) {
+                    *start = Some((files, at));
+                }
+                if let Some(t) = tracks.last_mut() {
+                    t.file.clone_from(&file);
+                }
+            }
+            "TITLE" => sheet.set(tags, if into_track { "TITLE" } else { "ALBUM" }, &text),
+            "PERFORMER" => sheet.set(
+                tags,
+                if into_track { "ARTIST" } else { "ALBUMARTIST" },
+                &text,
+            ),
+            "SONGWRITER" => sheet.set(tags, "COMPOSER", &text),
+            "ISRC" if into_track => sheet.set(tags, "ISRC", arg),
+            "CATALOG" => sheet.set(tags, "BARCODE", arg),
+            "REM" => {
+                if let Some(name) = rem_tag(arg) {
+                    let value = w.get(2..).map(|v| v.join(" ")).unwrap_or_default();
+                    sheet.add(tags, &name, &value);
+                }
+            }
+            _ => {}
+        }
+    }
+    if tracks.is_empty() {
+        bail!("names no track");
+    }
+    measure(&mut tracks, &starts);
+    let mut kept = data.iter().map(|d| !d);
+    tracks.retain(|_| kept.next().unwrap_or(true));
+    if tracks.is_empty() {
+        bail!("names no audio track");
+    }
     let performer: Vec<String> = album
         .iter()
         .find(|(k, _)| k == "ALBUMARTIST")
         .map(|(_, v)| v.clone())
         .unwrap_or_default();
-    let numbered = tracks.iter().filter(|t| t.number.is_some()).count();
+    // A disc's numbers, a data track's among them: a mixed-mode CD's
+    // audio is tracks 2 on, so its total is its last number, not a count.
+    let numbered = tracks.iter().filter_map(|t| t.number).max().unwrap_or(0);
     for t in &mut tracks {
         if !performer.is_empty() && !t.tags.iter().any(|(k, _)| k == "ARTIST") {
             t.tags.push(("ARTIST".to_string(), performer.clone()));
@@ -231,5 +277,40 @@ mod tests {
         );
         assert_eq!(sheet.tracks[0].length_ms, Some(60_000));
         assert_eq!(values(&sheet.album, "TRACKTOTAL"), ["2"]);
+    }
+
+    #[test]
+    fn a_track_is_in_the_file_its_start_is_in_and_a_data_track_is_none() {
+        let sheet = read(
+            "FILE \"CD1\\01 Lantern Weather.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE Lantern \
+             Weather\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Copper Moth\"\n    \
+             INDEX 00 03:00:00\nFILE \"CD1\\02 Copper Moth.flac\" WAVE\n    INDEX 01 00:00:00\n  \
+             TRACK 03 MODE1/2352\n    INDEX 01 04:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(sheet.tracks.len(), 2, "the data track is no song");
+        assert_eq!(
+            sheet.tracks[0].file.as_deref(),
+            Some("CD1/01 Lantern Weather.flac")
+        );
+        assert_eq!(
+            sheet.tracks[1].file.as_deref(),
+            Some("CD1/02 Copper Moth.flac")
+        );
+        assert_eq!(values(&sheet.tracks[0].tags, "TITLE"), ["Lantern Weather"]);
+        assert_eq!(values(&sheet.album, "TRACKTOTAL"), ["2"]);
+
+        let mixed = read(
+            "FILE \"01 Data.bin\" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n\
+             FILE \"02 Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n\
+             FILE \"03 Paper Comets.flac\" WAVE\n  TRACK 03 AUDIO\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        assert_eq!(mixed.tracks.len(), 2);
+        assert_eq!(
+            values(&mixed.album, "TRACKTOTAL"),
+            ["3"],
+            "no number past its total"
+        );
     }
 }

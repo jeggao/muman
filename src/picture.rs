@@ -301,9 +301,137 @@ pub fn alike(a: &Look, b: &Look) -> Alike {
     }
 }
 
+/// The media type of a picture by its first bytes, whatever its name or
+/// its container says: JPEG, PNG, WebP, GIF or BMP; `None` for any other.
+#[must_use]
+pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\xFF\xD8\xFF") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG") {
+        Some("image/png")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()) {
+        Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"BM") && bytes.len() > 26 {
+        Some("image/bmp")
+    } else {
+        None
+    }
+}
+
+/// The media type of the picture file at `path` by its first bytes.
+#[must_use]
+pub fn sniff_file(path: &std::path::Path) -> Option<&'static str> {
+    use std::io::Read;
+
+    let mut head = Vec::with_capacity(32);
+    std::fs::File::open(path)
+        .ok()?
+        .take(32)
+        .read_to_end(&mut head)
+        .ok()?;
+    sniff(&head)
+}
+
+/// The pictures of an MP4's `covr` atom, as `lofty` reads them: ffprobe
+/// shows none whose data type is implicit, 0, as some audiobook tools
+/// write it. None for a file that is no MP4.
+#[must_use]
+pub fn mp4_covers(path: &std::path::Path) -> Vec<Vec<u8>> {
+    use lofty::file::AudioFile;
+    use lofty::mp4::{AtomData, AtomIdent};
+
+    let options = lofty::config::ParseOptions::new().read_properties(false);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(mp4) = lofty::mp4::Mp4File::read_from(&mut file, options) else {
+        return Vec::new();
+    };
+    mp4.ilst()
+        .and_then(|ilst| ilst.get(&AtomIdent::Fourcc(*b"covr")))
+        .map(|atom| {
+            atom.data()
+                .filter_map(|d| match d {
+                    AtomData::Picture(p) => Some(p.data().to_vec()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a picture's `ID3v2` or FLAC picture type, as ffprobe names it
+/// (`Cover (back)`, `Media (e.g. label side of CD)`), says it shows no
+/// front cover; one of type `Other`, or of none, may be the cover, unless
+/// the file holds one typed the front cover ([`crate::probe`]).
+#[must_use]
+pub fn typed_other(kind: Option<&str>) -> bool {
+    kind.map(str::trim)
+        .is_some_and(|k| !k.is_empty() && k != "Cover (front)" && k != "Other")
+}
+
+/// Whether a picture file's name says it shows no front cover:
+/// `back.jpg`, `cd.png`, `Booklet 2.jpg`; a name saying `front` never.
+#[must_use]
+pub fn named_other(stem: &str) -> bool {
+    const WORDS: [&str; 9] = [
+        "back", "disc", "cd", "booklet", "inlay", "inside", "tray", "media", "leaflet",
+    ];
+    let lower = stem.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
+    !words.contains(&"front") && words.iter().any(|w| WORDS.contains(w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mp4_cover_of_implicit_type_is_read() {
+        use lofty::config::WriteOptions;
+        use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.m4a");
+        std::fs::write(&path, crate::testing::SILENCE_M4A).unwrap();
+        let mut ilst = Ilst::default();
+        let pixel = Picture::unchecked(crate::testing::PIXEL.to_vec())
+            .pic_type(PictureType::Other)
+            .mime_type(MimeType::Png)
+            .build();
+        ilst.insert(Atom::new(
+            AtomIdent::Fourcc(*b"covr"),
+            AtomData::Picture(pixel),
+        ));
+        ilst.save_to_path(&path, WriteOptions::default()).unwrap();
+        // The data atom's type, 14 for PNG, made 0, implicit.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let covr = bytes.windows(4).position(|w| w == b"covr").unwrap();
+        let data = covr + bytes[covr..].windows(4).position(|w| w == b"data").unwrap();
+        bytes[data + 4..data + 8].copy_from_slice(&[0, 0, 0, 0]);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(mp4_covers(&path), [crate::testing::PIXEL.to_vec()]);
+        assert_eq!(mp4_covers(dir.path()), Vec::<Vec<u8>>::new(), "no MP4");
+    }
+
+    #[test]
+    fn a_picture_is_told_by_its_bytes_and_its_side_by_its_label() {
+        assert_eq!(sniff(crate::testing::PIXEL), Some("image/png"));
+        assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some("image/jpeg"));
+        assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8X"), Some("image/webp"));
+        assert_eq!(sniff(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff(b"\x89PN"), None, "cut short");
+        assert!(!typed_other(Some("Cover (front)")) && !typed_other(Some("Other")));
+        assert!(!typed_other(None));
+        assert!(typed_other(Some("Cover (back)")));
+        assert!(typed_other(Some("Media (e.g. label side of CD)")));
+        assert!(named_other("back") && named_other("CD 1") && named_other("Booklet-2"));
+        assert!(!named_other("Front Cover") && !named_other("folder") && !named_other("abcd"));
+    }
 
     /// An invented cover: rings and a bar, on `[0, 1)²`.
     fn art(x: f64, y: f64, seed: f64) -> f64 {

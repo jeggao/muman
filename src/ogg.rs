@@ -97,6 +97,28 @@ pub fn set_output_gain(file: &mut File, gain: i16) -> Result<()> {
     Ok(())
 }
 
+/// `bytes`, an Ogg Opus file whose identification header is alone on its
+/// page, with that header written for mapping family 255, as ffmpeg
+/// writes channels with no speakers named: one stream each, none coupled.
+#[cfg(test)]
+pub(crate) fn discrete(bytes: &[u8]) -> Vec<u8> {
+    let (length, packet) = id_page(bytes).unwrap();
+    let mut head = bytes[packet..length].to_vec();
+    let channels = head[9];
+    head[18] = 255;
+    head.extend([channels, 0]);
+    head.extend(0..channels);
+    let mut page = bytes[..PAGE_HEADER].to_vec();
+    page[SEGMENTS_AT] = 1;
+    page.push(u8::try_from(head.len()).unwrap());
+    page.extend(&head);
+    page[CRC_AT..CRC_AT + 4].fill(0);
+    let sum = crc(&page);
+    page[CRC_AT..CRC_AT + 4].copy_from_slice(&sum.to_le_bytes());
+    page.extend(&bytes[length..]);
+    page
+}
+
 #[cfg(test)]
 mod tests {
     use lofty::file::AudioFile;

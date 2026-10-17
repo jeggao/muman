@@ -157,14 +157,15 @@ encoder mix speakers anew to make it fit:
 | `wavpack` | Any channels; integer samples of up to 32 bits, or 32-bit float |
 | `opus` | Any channels: Vorbis layouts as they are, side speakers named as back ones, any other with no speakers named |
 | `vorbis` | Any channels, speakers named by their count; resampled to 44.1 or 48 kHz from a rate it cannot encode at |
-| `aac` | Up to 8 channels; more are folded in |
-| `mp3` | Two channels; more are folded in |
+| `aac` | Up to 8 channels; 5.0 and 5.1 with side speakers named as back ones |
+| `mp3` | Up to 2 channels |
 
 Lossless audio that `lossless` cannot hold whole is written as FLAC if
 FLAC can hold it, and as WavPack otherwise: a 7.1 master under
 `lossless = "alac"` becomes FLAC, a 32-bit or float one WavPack, so a
 float master louder than full scale keeps its peaks. 64-bit float is
-written at 32.
+written at 32. Lossy audio with more channels than `lossy` holds is mixed
+into the first of `[audio] downmix` it holds, or else stereo, as below.
 
 `[audio] layouts` lists the speaker layouts a song is written in as it
 is, by ffmpeg's names; a name with no variant in parentheses takes its
@@ -246,9 +247,9 @@ scope = "track"
 
 `audio` encodes again every song it would have copied, so a lossy
 source loses a generation; for an Opus library, `header` levels as
-well without it. MP3 and AAC fold more channels than they hold into
-fewer without a mix muman makes, and such a song keeps its source's
-measure. The first sync after loudness is measured decodes every source
+well without it. Audio with more channels than MP3 or AAC holds is
+mixed by muman into the first `[audio] downmix` layout the codec holds,
+and measured as mixed. The first sync after loudness is measured decodes every source
 once, in full; later syncs measure only new sources.
 
 ## How sources are ranked
@@ -325,6 +326,8 @@ the extension. `/` in the template separates folders.
 | Variable | Holds |
 |---|---|
 | `album`, `album_artist` | The album and its artist, or the fallback names when missing |
+| `bpm`, `key` | The tempo and the musical key, or empty |
+| `composer` | The composer, or empty |
 | `artist`, `artists` | The first artist, and every artist as a list; empty when missing, with no fallback name, so `{{ artist or album_artist }}` gives one |
 | `date`, `year` | The date as tagged, and its first four digits |
 | `disc`, `track` | The disc and track numbers, or none |
@@ -371,7 +374,7 @@ restrict` sets how far that goes:
 
 | `restrict` | Replaces |
 |---|---|
-| `none` | Only `/` and control characters, which no filesystem allows |
+| `none` | Only `/`, `\` and control characters, which no filesystem allows or Windows reads as a folder |
 | `windows` | Also the characters Windows, FAT and most phones refuse — `\ : * ? " < > \|` — trailing dots and spaces, and reserved device names such as `CON` or `nul.txt` |
 | `ascii` | As `windows`, and transliterates everything else to ASCII |
 
@@ -382,11 +385,19 @@ applied first and over these: `{ ":" = " -" }` turns `A: B` into
 `A - B`. A reserved device name gets `_` after it: `CON_.opus`.
 
 File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
-bytes of UTF-8, which no filesystem counts more strictly, and never
-inside a character as a reader sees one, such as a flag or a letter with
-its accent, unless one character alone is longer. A name keeps room for
+bytes of UTF-8, which no filesystem counts more strictly, once they are
+in Unicode NFC, and never inside a character as a reader sees one, such
+as a flag or a letter with its accent, unless one character alone is
+longer; such a cut ends on no joiner or variation selector. A name
+keeps room for
 what tells it apart, so the least they take is 40 and 16; the most is
 255, as much as any filesystem holds. Windows
 programs and some players also stop at 260 characters for a whole path;
 `max_path` cuts each title so the full path, library folder included,
-stays within it, and a sync warns of the songs it cannot fit.
+stays within it, and a sync warns of the songs it cannot fit. Its
+characters are counted as Windows counts them, in UTF-16 units, so an
+emoji or a character past the Basic Multilingual Plane counts two.
+
+Two names a case-insensitive filesystem holds as one, as `Song` and
+`SONG`, or `ΟΔΟΣ` and `οδοσ`, are told apart by a suffix naming the
+song's source, so a library copied to Windows or macOS loses neither.

@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod atomic;
 pub mod attach;
 pub mod change;
+pub mod chapters;
 pub mod check;
 pub mod clean;
 pub mod cli;
@@ -407,7 +408,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                          --to's quotes, as --to \"artist:venn {word}\""
                     );
                 }
-                let (loose, files) = split_loose(&files)?;
+                let (loose, files) = split_loose(&files, &mut unread);
                 let mut ok = true;
                 if let Some(url) = urls.first().filter(|_| job.offline) {
                     return Err(change::Refused(format!(
@@ -727,12 +728,34 @@ fn fetch_missing<R: Runner, W: Write>(
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
     })?;
-    let records = lookup::refetch(&job.dirs, manifest, http, &job.throttles)?;
-    for (key, error) in &records {
+    let records = lookup::refetch(
+        &job.dirs,
+        manifest,
+        http,
+        &job.throttles,
+        &state.failures,
+        retry,
+    )?;
+    if records.waiting > 0 {
+        ui::warning(
+            out,
+            &format!(
+                "Not fetching {} missing record(s) that failed lately; `sync --retry` tries now",
+                records.waiting
+            ),
+        )?;
+    }
+    for (why, n) in &records.put_off {
+        ui::warning(
+            out,
+            &format!("{why}: {n} missing record(s) wait for the next run"),
+        )?;
+    }
+    for (key, error) in &records.failed {
         ok = false;
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
-    failed.extend(records);
+    failed.extend(records.failed);
     let store = Store::scan(&job.dirs)?;
     let arrived: Vec<SourceKey> = state
         .failures
@@ -976,14 +999,20 @@ fn give_tags<W: Write>(
 
 /// The files of `files` `add` gives to songs rather than lists, each with
 /// what it holds, and the rest. A loose file named as an audio file given
-/// with it, in its folder, is that file's sidecar and copied with it.
-fn split_loose<'a>(files: &[&'a String]) -> Result<(attach::Loose, Vec<&'a String>)> {
+/// with it, in its folder, is that file's sidecar and copied with it. A
+/// file muman does not read goes into `unread`, the rest added all the
+/// same.
+fn split_loose<'a>(
+    files: &[&'a String],
+    unread: &mut Vec<String>,
+) -> (attach::Loose, Vec<&'a String>) {
     let mut loose = Vec::new();
     let mut rest = Vec::new();
     for file in files {
-        match attach::sort(Path::new(file))? {
-            Some(what) => loose.push((PathBuf::from(file), what)),
-            None => rest.push(*file),
+        match attach::sort(Path::new(file)) {
+            Ok(Some(what)) => loose.push((PathBuf::from(file), what)),
+            Ok(None) => rest.push(*file),
+            Err(e) => unread.push(format!("{e:#}")),
         }
     }
     let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
@@ -998,7 +1027,7 @@ fn split_loose<'a>(files: &[&'a String]) -> Result<(attach::Loose, Vec<&'a Strin
         .map(|p| canonical(&p))
         .collect();
     loose.retain(|(path, _)| !beside.contains(&canonical(path)));
-    Ok((loose, rest))
+    (loose, rest)
 }
 
 /// Song files dropped into the manual folder that no song lists, each a
@@ -1088,8 +1117,10 @@ fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<
 
 /// Copy files and folders the user named into the sources: an original
 /// yt-dlp fetched into the store under its key, anything else into the
-/// manual folder with the lyrics and pictures named as it is. Never
-/// moves or overwrites; a name already taken is an error. Each song file
+/// manual folder with the lyrics and pictures named as it is; a folder's
+/// files that are no song, lyrics or picture are left out and named,
+/// since nothing would read them there. Never moves or overwrites; a
+/// name already taken is an error. Each song file
 /// copied is noted in `beside` with where it came from, for the loose
 /// files given with it, and every file copied in `copied`, for `undo`,
 /// those copied before an error too.
@@ -1111,10 +1142,11 @@ fn import<R: Runner, W: Write>(
         reads
     };
     let mut proposals = Vec::new();
-    let mut empty = Vec::new();
+    let mut not_read = Vec::new();
     let mut originals_in = Originals {
         held: Store::scan(dirs)?,
         brought: BTreeSet::new(),
+        runner,
     };
     for path in paths.iter().map(Path::new) {
         let name = path
@@ -1125,18 +1157,13 @@ fn import<R: Runner, W: Write>(
             continue;
         }
         let to = dirs.manual().join(name);
-        if path.is_file() && store::kind_of(path).is_none() {
-            bail!(
-                "{} is no song, lyrics, picture or tags muman reads",
-                path.display()
-            );
-        }
         if path.is_file() && name.to_string_lossy().starts_with('.') {
-            bail!(
-                "{} is hidden, its name starting with a dot, and muman reads no hidden file; \
-                 rename it without the dot",
+            not_read.push(format!(
+                "{}, which is hidden, its name starting with a dot, and muman reads no hidden \
+                 file; rename it without the dot",
                 path.display()
-            );
+            ));
+            continue;
         }
         let mut originals = Vec::new();
         if path.is_dir() {
@@ -1146,10 +1173,15 @@ fn import<R: Runner, W: Write>(
                     originals.push((file.clone(), key));
                 }
             }
-            let mut own = |file: &Path| !originals.iter().any(|(o, _)| o == file) && audio(file);
+            let mut own = |file: &Path| {
+                store::kind_of(file).is_some()
+                    && !originals.iter().any(|(o, _)| o == file)
+                    && audio(file)
+            };
             if originals.len() < files.len() {
                 copy_tree(path, &to, &mut own, copied)?;
             }
+            say_left_out(path, &files, out)?;
             for (file, key) in &originals {
                 proposals.push(originals_in.bring(dirs, file, key.clone(), (out, copied))?);
             }
@@ -1169,7 +1201,7 @@ fn import<R: Runner, W: Write>(
             continue;
         }
         if found.is_empty() && path.is_dir() {
-            empty.push(format!(
+            not_read.push(format!(
                 "{}, which holds no song muman reads",
                 path.display()
             ));
@@ -1198,21 +1230,44 @@ fn import<R: Runner, W: Write>(
             });
         }
     }
-    unread.extend(empty);
+    unread.extend(not_read);
     Ok(proposals)
+}
+
+/// Warn of the files of the folder `dir` given to `add` that are left
+/// out, as no song, lyrics or picture, each named below `dir`.
+fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<()> {
+    let other: Vec<String> = files
+        .iter()
+        .filter(|f| store::kind_of(f).is_none())
+        .map(|f| f.strip_prefix(dir).unwrap_or(f).display().to_string())
+        .collect();
+    if !other.is_empty() {
+        ui::warning(
+            out,
+            &format!(
+                "Left out of {}, as no song, lyrics or picture: {}",
+                dir.display(),
+                other.join(", ")
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 /// The originals one `add` copies into the store, and the store as it
 /// was before.
-struct Originals {
+struct Originals<'a, R> {
     held: Store,
     brought: BTreeSet<SourceKey>,
+    runner: &'a R,
 }
 
-impl Originals {
+impl<R: Runner> Originals<'_, R> {
     /// `file`, an original of `key`, copied to its key's place, whether
-    /// given or in a folder given; one of a key the store holds already
-    /// is proposed, not copied again.
+    /// given or in a folder given, its info JSON scrubbed as a fetch's
+    /// is; one of a key the store holds already is proposed, not copied
+    /// again.
     fn bring<W: Write>(
         &mut self,
         dirs: &Dirs,
@@ -1237,6 +1292,17 @@ impl Originals {
                 out,
                 &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
             )?;
+            let scrubbed =
+                atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
+            if let Err(e) = scrubbed {
+                ui::warning(
+                    out,
+                    &format!(
+                        "{} keeps the cookies and headers it was fetched with: {e:#}",
+                        to.display()
+                    ),
+                )?;
+            }
             self.brought.insert(key.clone());
         }
         Ok(Proposal {
@@ -1323,12 +1389,39 @@ fn fetched_key<R: Runner>(
     info.key(sites)
 }
 
-/// The `.lrc` and pictures named as a file is, beside it.
+/// The `.lrc` and pictures named as a file is, beside it, in any case
+/// as the store takes them, but none named exactly as another song file.
 fn sidecars(path: &Path) -> Vec<PathBuf> {
-    ["lrc", "jpg", "jpeg", "png", "webp"]
-        .iter()
-        .map(|ext| path.with_extension(ext))
+    let folder = path.parent().unwrap_or(Path::new(""));
+    let listed = if folder.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        folder
+    };
+    let mut beside: Vec<PathBuf> = std::fs::read_dir(listed)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| folder.join(e.file_name()))
         .filter(|p| p != path && p.is_file())
+        .collect();
+    beside.sort();
+    let song = |p: &PathBuf| store::kind_of(p) == Some(store::Kind::Media);
+    let another_s = |p: &PathBuf| {
+        beside
+            .iter()
+            .any(|s| s != p && song(s) && s.with_extension("") == p.with_extension(""))
+    };
+    beside
+        .iter()
+        .filter(|p| {
+            matches!(
+                store::kind_of(p),
+                Some(store::Kind::Lyrics | store::Kind::Image)
+            ) && store::named_as(p, path)
+                && (p.with_extension("") == path.with_extension("") || !another_s(p))
+        })
+        .cloned()
         .collect()
 }
 

@@ -17,17 +17,28 @@
 //! | Found a source, or declined | Never |
 //!
 //! A lookup a service refused for going too fast, after the retries
-//! [`crate::http::Service`] makes, is recorded as nothing at all: it and
-//! the provider's other lookups that run, in its later rounds too, are put
-//! off to the next run.
+//! [`crate::http::Service`] makes, or that reached no server, as when the
+//! network is down ([`crate::http::Unreachable`]), is recorded as nothing
+//! at all: it and the provider's other lookups that run, in its later
+//! rounds too, are put off to the next run, rather than each waiting out
+//! its timeout and then a failure's backoff. A service that answered with
+//! an error, or with what does not read, failed that lookup alone.
+//!
+//! A listed record the store no longer holds is fetched again by its ID
+//! ([`refetch`]); one that fails, or that its service no longer has,
+//! waits as a source yt-dlp fetches does, an hour doubling, recorded in
+//! the state's `failures`.
 //!
 //! A song makes at most one lookup per provider a run, so a release and
 //! its upload never look each other up in turn. Its MusicBrainz lookup
 //! waits while its AcoustID lookup is due, since both find a MusicBrainz
 //! record and the fingerprint names the recording surer than its names
-//! do; a round AcoustID answered is followed by another even when nothing
-//! joined, so a song AcoustID could not place is searched for by name in
-//! the same run. Each round measures what
+//! do; its Cover Art Archive lookup waits while either is due, so it asks
+//! for the release group the record names rather than searching for the
+//! album by its names. A round AcoustID or MusicBrainz answered is
+//! followed by another even when nothing joined, so a song AcoustID could
+//! not place is searched for by name, and its cover looked up, in the
+//! same run. Each round measures what
 //! the triggers read, makes its lookups and fetches what they found,
 //! without holding the run's lock; what one round adds may trigger the
 //! next. A provider's `per_run` cap lets a backlog, as the first sync of
@@ -46,9 +57,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::Path;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
-use crate::http::{HttpTransport, Refusing, Throttle};
+use crate::http::{self, HttpTransport, Throttle};
 use anyhow::{Context, Result, anyhow};
 
 use crate::acoustid;
@@ -96,7 +107,7 @@ pub fn method(p: Provider) -> &'static str {
         Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
         Provider::AcoustId => "acoustid/1",
-        Provider::CoverArt => "coverart/1",
+        Provider::CoverArt => "coverart/2",
         Provider::Manual => "manual",
     }
 }
@@ -264,6 +275,9 @@ pub fn due(
         if taken.contains(&Provider::AcoustId) {
             mine.retain(|d| d.find != Provider::MusicBrainz);
         }
+        if taken.contains(&Provider::AcoustId) || taken.contains(&Provider::MusicBrainz) {
+            mine.retain(|d| d.find != Provider::CoverArt);
+        }
         found.extend(mine);
     }
     found
@@ -292,10 +306,7 @@ enum Hit {
 fn again(hit: &Result<Hit>) -> Result<Hit> {
     match hit {
         Ok(h) => Ok(h.clone()),
-        Err(e) => match e.downcast_ref::<Refusing>() {
-            Some(r) => Err(Refusing { service: r.service }.into()),
-            None => Err(anyhow!("{e:#}")),
-        },
+        Err(e) => Err(http::put_off(e).unwrap_or_else(|| anyhow!("{e:#}"))),
     }
 }
 
@@ -308,13 +319,15 @@ fn entry_of<R: Runner>(runner: &R, sites: &crate::sites::Sites, key: &SourceKey)
 }
 
 /// The pace of a run's requests to each service, shared by every
-/// thread.
+/// thread, and the releases the run has looked up, so an album's songs
+/// ask for theirs once a run, whichever round or refetch asks.
 #[derive(Debug)]
 pub struct Throttles {
     pub lrclib: Throttle,
     pub musicbrainz: Throttle,
     pub acoustid: Throttle,
     pub coverart: Throttle,
+    pub releases: musicbrainz::Releases,
 }
 
 impl Throttles {
@@ -326,6 +339,7 @@ impl Throttles {
             musicbrainz: musicbrainz::throttle(),
             acoustid: acoustid::throttle(),
             coverart: coverart::throttle(),
+            releases: musicbrainz::Releases::default(),
         }
     }
 
@@ -337,18 +351,8 @@ impl Throttles {
             musicbrainz: Throttle::none(),
             acoustid: Throttle::none(),
             coverart: Throttle::none(),
+            releases: musicbrainz::Releases::default(),
         }
-    }
-}
-
-/// What a provider's service is called when it refuses.
-fn service_of(p: Provider) -> &'static str {
-    match p {
-        Provider::Lrclib => "LRCLIB",
-        Provider::MusicBrainz => "MusicBrainz",
-        Provider::AcoustId => "AcoustID",
-        Provider::CoverArt => "the Cover Art Archive",
-        _ => "YouTube",
     }
 }
 
@@ -469,10 +473,10 @@ fn join(
 
 /// What a run has made of its lookups across its rounds, and so what a
 /// round may still make: each provider's lookups against its `per_run`,
-/// the lookups each source has made, and the providers that refused. A
-/// round asks [`ThisRun::admit`] alone, so a song makes at most one lookup
-/// per provider a run, a refusing provider is asked nothing more, and
-/// `per_run` counts the whole run.
+/// the lookups each source has made, and the providers whose service
+/// refused or could not be reached. A round asks [`ThisRun::admit`] alone,
+/// so a song makes at most one lookup per provider a run, such a provider
+/// is asked nothing more, and `per_run` counts the whole run.
 #[derive(Debug, Default)]
 struct ThisRun {
     made: BTreeMap<Provider, usize>,
@@ -505,7 +509,8 @@ impl ThisRun {
         admitted
     }
 
-    /// `provider` refused for going too fast: nothing more is asked of it.
+    /// `provider`'s service refused for going too fast, or could not be
+    /// reached: nothing more is asked of it.
     fn refused(&mut self, provider: Provider) {
         self.refusing.insert(provider);
     }
@@ -608,6 +613,7 @@ pub fn run<R: Runner, W: Write>(
                 base: &bases.1,
                 transport: http,
                 throttle: &throttles.musicbrainz,
+                releases: &throttles.releases,
             },
             acoustid: acoustid::Client {
                 base: &bases.3,
@@ -649,14 +655,11 @@ pub fn run<R: Runner, W: Write>(
                 })
                 .collect();
             let asking: Vec<usize> = (0..group.len()).filter(|i| first[*i] == *i).collect();
-            let refusing = AtomicBool::new(false);
+            let stopped: OnceLock<anyhow::Error> = OnceLock::new();
             let asked = parallel::map(&asking, workers, |&i| {
                 let d = group[i];
-                if refusing.load(Ordering::Relaxed) {
-                    return Err(Refusing {
-                        service: service_of(p),
-                    }
-                    .into());
+                if let Some(e) = stopped.get().and_then(http::put_off) {
+                    return Err(e);
                 }
                 let _working = step.working(&reconcile::name_of(
                     &manifest.songs[d.song],
@@ -683,11 +686,8 @@ pub fn run<R: Runner, W: Write>(
                     // at once would write one file.
                     &audio.join(format!("{}-{}", d.song, d.find)),
                 );
-                if hit
-                    .as_ref()
-                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
-                {
-                    refusing.store(true, Ordering::Relaxed);
+                if let Some(e) = hit.as_ref().err().and_then(http::put_off) {
+                    let _ = stopped.set(e);
                 }
                 hit
             });
@@ -703,10 +703,8 @@ pub fn run<R: Runner, W: Write>(
         }
 
         let printed = hits.iter().any(|(d, hit)| {
-            d.find == Provider::AcoustId
-                && !hit
-                    .as_ref()
-                    .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())
+            matches!(d.find, Provider::AcoustId | Provider::MusicBrainz)
+                && !hit.as_ref().is_err_and(|e| http::put_off(e).is_some())
         });
         let mut replaced = Vec::new();
         let mut joined = 0_usize;
@@ -717,16 +715,17 @@ pub fn run<R: Runner, W: Write>(
                 resolved.get(&d.song).copied(),
                 &state.facts,
             );
+            if let Err(e) = &hit
+                && let Some(why) = http::put_off(e)
+            {
+                put_off.entry(d.find).or_insert((0, why.to_string())).0 += 1;
+                continue;
+            }
             let outcome = match hit {
                 // No yt-dlp fails every lookup alike; the run stops and
                 // says so, rather than putting each song off for a week.
                 Err(e) if e.downcast_ref::<crate::runner::MissingTool>().is_some() => {
                     return Err(e);
-                }
-                Err(e) if e.downcast_ref::<Refusing>().is_some() => {
-                    let entry = put_off.entry(d.find).or_insert((0, e.to_string()));
-                    entry.0 += 1;
-                    continue;
                 }
                 Err(e) => {
                     crate::ui::warning(
@@ -920,16 +919,30 @@ pub fn run<R: Runner, W: Write>(
     Ok(ok)
 }
 
+/// What [`refetch`] made of the records gone from the store.
+#[derive(Debug, Default)]
+pub struct Refetched {
+    /// Each record that could not be fetched again, with why.
+    pub failed: Vec<(SourceKey, String)>,
+    /// How many records wait for the next run, their service refusing or
+    /// unreachable, by why.
+    pub put_off: BTreeMap<String, usize>,
+    /// How many records were not asked for, as their fetch failed lately.
+    pub waiting: usize,
+}
+
 /// Fetch again every listed LRCLIB, MusicBrainz or Cover Art Archive
 /// record gone from the store, by its ID, asking each at the pace of
-/// `throttles`.
-/// Returns each that could not be, with why.
+/// `throttles`; one whose fetch `failures` records waits as a fetch
+/// does, unless `retry`.
 pub fn refetch(
     dirs: &Dirs,
     manifest: &Manifest,
     http: &(dyn HttpTransport + Sync),
     throttles: &Throttles,
-) -> Result<Vec<(SourceKey, String)>> {
+    failures: &BTreeMap<SourceKey, state::Failure>,
+    retry: bool,
+) -> Result<Refetched> {
     let store = Store::scan(dirs)?;
     let bases = (
         base(manifest, Provider::Lrclib),
@@ -944,6 +957,7 @@ pub fn refetch(
         base: &bases.1,
         transport: http,
         throttle: &throttles.musicbrainz,
+        releases: &throttles.releases,
     };
     let coverart_base = base(manifest, Provider::CoverArt);
     let covers = coverart::Client {
@@ -962,12 +976,20 @@ pub fn refetch(
             .and_then(|f| f.tags.get(&Field::Album))
             .and_then(|o| o.values.first().cloned())
     };
-    let mut failed = Vec::new();
+    let now = state::now_secs();
+    let mut refetched = Refetched::default();
     for key in manifest.keys() {
         let SourceKey::Remote { site, id } = &key else {
             continue;
         };
-        if store.has(&key) {
+        if store.has(&key) || ![LRCLIB, MUSICBRAINZ, COVERART].contains(&site.as_str()) {
+            continue;
+        }
+        let failed_lately = failures
+            .get(&key)
+            .is_some_and(|f| f.step == state::Step::Fetch && !f.due(None, now));
+        if failed_lately && !retry {
+            refetched.waiting += 1;
             continue;
         }
         let kept = match site.as_str() {
@@ -994,11 +1016,16 @@ pub fn refetch(
         };
         match kept {
             Ok(Some(_)) => {}
-            Ok(None) => failed.push((key.clone(), "no such record".to_string())),
-            Err(e) => failed.push((key.clone(), format!("{e:#}"))),
+            Ok(None) => refetched
+                .failed
+                .push((key.clone(), "no such record".to_string())),
+            Err(e) => match http::put_off(&e) {
+                Some(why) => *refetched.put_off.entry(why.to_string()).or_default() += 1,
+                None => refetched.failed.push((key.clone(), format!("{e:#}"))),
+            },
         }
     }
-    Ok(failed)
+    Ok(refetched)
 }
 
 #[cfg(test)]

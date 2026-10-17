@@ -14,7 +14,7 @@
 //! Each digest survives a fetch again of the same thing: audio and
 //! subtitles by their packets, which no remux changes, a picture by its
 //! bytes, and tags by the fields of the info JSON they are read from,
-//! where the rest of it holds the time and cookies of each fetch. A
+//! where the rest of it holds the time of each fetch. A
 //! source's covers, or lyrics, are one digest of all it offers. A part
 //! the record lacks is recorded rather than called a change, so a
 //! record written before muman recorded that part says nothing false.

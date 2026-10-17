@@ -148,6 +148,8 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
             .map(|(f, v)| (f.vorbis().to_string(), vec![(*v).to_string()]))
             .collect(),
         loudness: None,
+        tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let resolved = Resolved {
         plan,
@@ -195,6 +197,33 @@ fn musicbrainz_waits_for_acoustid() {
     );
     let (_d, m, s, p) = own(false, &NAMED);
     assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::MusicBrainz]);
+}
+
+#[test]
+fn the_cover_waits_for_the_record_that_names_its_release() {
+    let tags = [
+        NAMED[0],
+        NAMED[1],
+        (Field::Album, "Rooms of Salt"),
+        (Field::AlbumArtist, "Paper Comets"),
+    ];
+    let (_d, m, mut s, p) = own(true, &tags);
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::AcoustId]);
+    let nothing = |find: Provider| Looked {
+        from: SourceKey::parse("manual:a.flac").unwrap(),
+        find: find.to_string(),
+        method: method(find).into(),
+        at: NOW,
+        outcome: Outcome::Nothing,
+    };
+    s.lookups = vec![nothing(Provider::AcoustId)];
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::MusicBrainz]);
+    s.lookups.push(nothing(Provider::MusicBrainz));
+    assert_eq!(
+        found(&m, &s, &p),
+        [Provider::Lrclib, Provider::CoverArt],
+        "no record found: the album is searched for by its names"
+    );
 }
 
 #[test]

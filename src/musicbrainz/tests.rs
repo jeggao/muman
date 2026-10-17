@@ -26,6 +26,7 @@ fn client<'a>(server: &'a (dyn HttpTransport + Sync), throttle: &'a Throttle) ->
         base: "http://mb.test/",
         transport: server,
         throttle,
+        releases: Box::leak(Box::default()),
     }
 }
 
@@ -355,8 +356,68 @@ fn a_record_is_kept_and_read_back() {
         isrcs: Vec::new(),
         length_ms: Some(354_000),
         release: None,
+        original_date: Some("2001-05-03".into()),
     };
     let path = keep(dir.path(), &record).unwrap();
     assert_eq!(path, path_of(dir.path(), &record.id));
     assert_eq!(read(&path).unwrap(), record);
+}
+
+#[test]
+fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
+    let body = search(&[recording(
+        1,
+        "Lantern Weather",
+        355_000,
+        &release(1, "Rooms of Salt", "Album", r#""Compilation""#, "2003"),
+    )
+    .replace(
+        r#""score": 100"#,
+        r#""score": 100, "first-release-date": "2001-05-03""#,
+    )
+    .replace(
+        r#""track-count": 11"#,
+        r#""track-count": 11, "format": "CD""#,
+    )]);
+    let looked = r#"{"id": "x", "barcode": "0012345678905", "asin": "B000000001",
+        "release-group": {"first-release-date": "1999-02"},
+        "text-representation": {"language": "eng", "script": "Latn"},
+        "label-info": [{"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}},
+                       {"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}}]}"#;
+    let server = Server::default()
+        .answer("/ws/2/recording?", &body)
+        .answer("/ws/2/release/", looked);
+    let throttle = Throttle::none();
+    let c = client(&server, &throttle);
+    let record = c.find(&query()).unwrap().unwrap();
+    assert_eq!(record.original_date.as_deref(), Some("2001-05-03"));
+    let r = record.release.unwrap();
+    assert_eq!(r.status.as_deref(), Some("Official"));
+    assert_eq!(r.types, ["Album", "Compilation"]);
+    assert_eq!(r.media.as_deref(), Some("CD"));
+    assert_eq!(r.details.labels, ["Harbor Lights Records"]);
+    assert_eq!(r.details.catalog_numbers, ["HLR-0042"]);
+    assert_eq!(r.details.barcode.as_deref(), Some("0012345678905"));
+    assert_eq!(r.details.script.as_deref(), Some("Latn"));
+    assert_eq!(r.details.original_date.as_deref(), Some("1999-02"));
+    c.find(&query()).unwrap().unwrap();
+    let asked = server.asked.lock().unwrap();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|u| u.contains("/ws/2/release/"))
+            .count(),
+        1,
+        "{asked:?}"
+    );
+    drop(asked);
+
+    let failing = Server::default()
+        .answer("/ws/2/recording?", &body)
+        .answer("/ws/2/release/", "<html>busy</html>");
+    let c = client(&failing, &throttle);
+    assert!(
+        c.find(&query()).is_err(),
+        "a release that did not answer is asked again, not kept without its details"
+    );
 }

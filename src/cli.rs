@@ -181,10 +181,12 @@ pub struct TagArgs {
     #[arg(long, value_name = "DATE", value_parser = date)]
     pub date: Option<String>,
 
-    #[arg(long, value_name = "N", help = "The track number on its disc")]
+    #[arg(long, value_name = "N", help = "The track number on its disc",
+          value_parser = clap::value_parser!(u32).range(1..))]
     pub track: Option<u32>,
 
-    #[arg(long, value_name = "N", help = "The disc number")]
+    #[arg(long, value_name = "N", help = "The disc number",
+          value_parser = clap::value_parser!(u32).range(1..))]
     pub disc: Option<u32>,
 
     /// Any Vorbis comment; given again with one name, one more value.
@@ -236,12 +238,9 @@ fn name_value(text: &str) -> Result<(String, String), String> {
 }
 
 fn date(text: &str) -> Result<String, String> {
-    let text = text.trim();
-    if text.len() == 4 && text.bytes().all(|b| b.is_ascii_digit()) {
-        return Ok(text.to_string());
-    }
-    crate::tags::iso_date(text)
-        .ok_or_else(|| format!("`{text}` is no date: give YYYY-MM-DD or a year"))
+    crate::tags::Kind::Date
+        .read(text)
+        .map_err(|why| format!("`{}` is {why}", text.trim()))
 }
 
 const QUERY_HELP: &str = "\

@@ -38,8 +38,16 @@
 //!   no speakers named, each channel kept.
 //! - **Vorbis** names speakers by their count alone, and is resampled to
 //!   44.1 or 48 kHz from a rate its bitrate modes do not take.
-//! - **AAC** holds eight channels and **MP3** two; ffmpeg folds more into
-//!   them.
+//! - **AAC** holds eight channels, its five- and six-channel layouts with
+//!   back speakers; one with side speakers instead is relabelled to it,
+//!   as for Opus, else the file would name its speakers in a program
+//!   configuration element many decoders ignore. **MP3** holds two.
+//!
+//! A lossy codec is never left to fold more channels than it holds into
+//! the ones it has: ffmpeg would mix them unscaled, and the loudness
+//! written would be the source's, not the mix's. Such audio is mixed
+//! first, as `[audio] downmix` says, into the first of its layouts the
+//! codec holds ([`Codec::max_channels`]).
 //!
 //! Every container is written bit-exact: ffmpeg otherwise gives each Ogg
 //! stream a random serial number, so one plan rendered twice would differ
@@ -276,6 +284,10 @@ pub enum Adapt {
     Discrete,
     /// Resampled to this rate.
     Resample(u32),
+    /// Written as samples of this many bits, as the source's integers
+    /// are: WavPack is given 24-bit audio as 32-bit samples, and names it
+    /// so unless told.
+    Depth(u32),
 }
 
 /// The Vorbis layouts by channel count, the ones Opus holds.
@@ -283,6 +295,10 @@ const VORBIS_LAYOUTS: [&str; 8] = ["mono", "stereo", "3.0", "quad", "5.0", "5.1"
 
 /// Layouts that are a Vorbis one with side speakers for back ones.
 const SIDE_LAYOUTS: [&str; 3] = ["quad(side)", "5.0(side)", "5.1(side)"];
+
+/// Layouts AAC names in a program configuration element alone, which
+/// with back speakers for side ones it names by its channel count.
+const AAC_SIDE_LAYOUTS: [&str; 2] = ["5.0(side)", "5.1(side)"];
 
 /// The layouts ffmpeg's ALAC encoder holds.
 const ALAC_LAYOUTS: [&str; 8] = [
@@ -399,12 +415,54 @@ impl Codec {
                     _ => Some(Adapt::Discrete),
                 })
             }
+            Self::Aac => (shape.channels <= 8).then(|| {
+                let vorbis = VORBIS_LAYOUTS.get(shape.channels as usize - 1).copied();
+                match shape.layout {
+                    Some(l) if AAC_SIDE_LAYOUTS.contains(&l) && vorbis.is_some() => {
+                        Some(Adapt::Relabel(shape.channels))
+                    }
+                    // The encoder takes no surround it is not told the
+                    // speakers of, as an Opus of mapping family 255 holds.
+                    None if shape.channels > 2 && vorbis.is_some() => {
+                        Some(Adapt::Relabel(shape.channels))
+                    }
+                    _ => None,
+                }
+            }),
+            Self::Mp3 => (shape.channels <= 2).then_some(None),
             Self::Vorbis => Some(match shape.sample_rate {
                 16_000 | 32_000 | 44_100 | 48_000 => None,
                 r if r % 11_025 == 0 => Some(Adapt::Resample(44_100)),
                 _ => Some(Adapt::Resample(48_000)),
             }),
-            Self::WavPack | Self::Aac | Self::Mp3 => Some(None),
+            Self::WavPack => Some(
+                (!shape.float && (17..32).contains(&shape.bits))
+                    .then_some(Adapt::Depth(shape.bits)),
+            ),
+        }
+    }
+
+    /// `kbps` as this codec encodes audio at `sample_rate`: MP3 holds at
+    /// most 64 kb/s below 16 kHz and 160 below 32 kHz, the bitrates of
+    /// MPEG-2.5 and MPEG-2, and LAME writes no more whatever it is asked.
+    #[must_use]
+    pub fn kbps_at(self, kbps: u32, sample_rate: u32) -> u32 {
+        match self {
+            Self::Mp3 if sample_rate < 16_000 => kbps.min(64),
+            Self::Mp3 if sample_rate < 32_000 => kbps.min(160),
+            _ => kbps,
+        }
+    }
+
+    /// The most channels a lossy codec holds, past which audio is mixed
+    /// into fewer before it is encoded; `None` for one that holds as many
+    /// as any source has, or a lossless one, which another replaces.
+    #[must_use]
+    pub fn max_channels(self) -> Option<u32> {
+        match self {
+            Self::Mp3 => Some(2),
+            Self::Aac => Some(8),
+            Self::Opus | Self::Vorbis | Self::Flac | Self::Alac | Self::WavPack => None,
         }
     }
 
@@ -484,6 +542,9 @@ impl Codec {
             }
             Some(Adapt::Discrete) => args.extend(["-mapping_family", "255"].map(String::from)),
             Some(Adapt::Resample(rate)) => args.extend(["-ar".to_string(), rate.to_string()]),
+            Some(Adapt::Depth(bits)) => {
+                args.extend(["-bits_per_raw_sample".to_string(), bits.to_string()]);
+            }
             None => {}
         }
         if !filters.is_empty() {
@@ -559,9 +620,10 @@ mod tests {
     #[test]
     fn a_lossless_codec_takes_only_what_it_keeps_whole() {
         let stereo = shape(2, Some("stereo"), 24, false);
-        for codec in [Codec::Flac, Codec::Alac, Codec::WavPack] {
+        for codec in [Codec::Flac, Codec::Alac] {
             assert_eq!(codec.adapt(&stereo), Some(None), "{codec}");
         }
+        assert_eq!(Codec::WavPack.adapt(&stereo), Some(Some(Adapt::Depth(24))));
         let wide = shape(12, Some("7.1.4"), 24, false);
         let deep = shape(2, Some("stereo"), 32, false);
         let float = shape(2, Some("stereo"), 32, true);
@@ -573,7 +635,8 @@ mod tests {
         }
         assert_eq!(Codec::Flac.adapt(&side), Some(None));
         assert_eq!(Codec::Alac.adapt(&side), None);
-        for held in [&wide, &deep, &float, &side] {
+        assert_eq!(Codec::WavPack.adapt(&wide), Some(Some(Adapt::Depth(24))));
+        for held in [&deep, &float, &side] {
             assert_eq!(Codec::WavPack.adapt(held), Some(None));
         }
     }
@@ -591,6 +654,69 @@ mod tests {
                 [2..4],
             ["-af", "channelmap=channel_layout=5.1"]
         );
+    }
+
+    #[test]
+    fn a_lossy_codec_takes_no_more_channels_than_it_holds() {
+        let at = |codec: Codec, channels, layout| codec.adapt(&shape(channels, layout, 16, false));
+        assert_eq!(at(Codec::Mp3, 2, Some("stereo")), Some(None));
+        assert_eq!(at(Codec::Mp3, 6, Some("5.1")), None);
+        assert_eq!(at(Codec::Aac, 6, Some("5.1")), Some(None));
+        assert_eq!(
+            at(Codec::Aac, 6, Some("5.1(side)")),
+            Some(Some(Adapt::Relabel(6)))
+        );
+        assert_eq!(
+            at(Codec::Aac, 5, Some("5.0(side)")),
+            Some(Some(Adapt::Relabel(5)))
+        );
+        assert_eq!(at(Codec::Aac, 4, Some("quad(side)")), Some(None));
+        assert_eq!(
+            at(Codec::Aac, 3, None),
+            Some(Some(Adapt::Relabel(3))),
+            "an Opus of mapping family 255 names no speakers"
+        );
+        assert_eq!(at(Codec::Aac, 2, None), Some(None));
+        assert_eq!(at(Codec::Aac, 12, Some("7.1.4")), None);
+        for codec in Codec::ALL {
+            let most = codec.max_channels().unwrap_or(255);
+            let wide = shape(most, None, 16, false);
+            assert!(
+                codec.is_lossless() || codec.adapt(&wide).is_some(),
+                "{codec}"
+            );
+        }
+    }
+
+    #[test]
+    fn wavpack_is_told_the_depth_of_its_integers() {
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 24, false)),
+            Some(Some(Adapt::Depth(24)))
+        );
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 16, false)),
+            Some(None)
+        );
+        assert_eq!(
+            Codec::WavPack.adapt(&shape(2, Some("stereo"), 32, true)),
+            Some(None)
+        );
+        assert!(
+            Codec::WavPack
+                .encoder_args(None, Some(Adapt::Depth(24)), None, Chain::default())
+                .windows(2)
+                .any(|w| w == ["-bits_per_raw_sample", "24"])
+        );
+    }
+
+    #[test]
+    fn mp3_is_planned_at_the_bitrate_its_rate_holds() {
+        assert_eq!(Codec::Mp3.kbps_at(320, 11_025), 64);
+        assert_eq!(Codec::Mp3.kbps_at(320, 22_050), 160);
+        assert_eq!(Codec::Mp3.kbps_at(128, 22_050), 128);
+        assert_eq!(Codec::Mp3.kbps_at(320, 44_100), 320);
+        assert_eq!(Codec::Opus.kbps_at(320, 8_000), 320);
     }
 
     #[test]

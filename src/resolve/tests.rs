@@ -68,6 +68,7 @@ fn cover(f: &mut Facts, at: CoverAt, q: ImageQuality) {
         quality: Some(q),
         digest: None,
         look: None,
+        other: false,
     });
 }
 
@@ -251,6 +252,11 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
     };
     assert_eq!(get("TITLE").as_deref(), Some("Song (feat. Wren)"));
     assert_eq!(get("ARTIST").as_deref(), Some("Hoshi7ne, Hollis Wren"));
+    assert_eq!(
+        get("ARTISTS").as_deref(),
+        Some("Hoshi7ne|Hollis Wren"),
+        "listed as Picard lists them"
+    );
     assert_eq!(get("ALBUM").as_deref(), Some("Record"));
     assert_eq!(get("ALBUMARTIST").as_deref(), Some("Hoshi7ne"));
     assert_eq!(get("DATE").as_deref(), Some("2026-05-27"));
@@ -889,6 +895,56 @@ fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
 }
 
 #[test]
+fn the_recording_ids_are_the_release_s_where_it_names_another() {
+    let (a, mb) = (
+        manual("a.flac"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000002").unwrap(),
+    );
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Title, &["Lantern Weather"], true);
+    tag(
+        &mut fa,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000001"],
+        true,
+    );
+    tag(
+        &mut fa,
+        Field::MusicBrainzWorkId,
+        &["00000000-0000-0000-0000-0000000000c1"],
+        true,
+    );
+    let mut fmb = Facts::unreadable("mb".into());
+    tag(&mut fmb, Field::Title, &["Lantern Weather"], true);
+    tag(&mut fmb, Field::Album, &["Rooms of Salt"], true);
+    tag(&mut fmb, Field::Track, &["3"], true);
+    tag(
+        &mut fmb,
+        Field::MusicBrainzAlbumId,
+        &["00000000-0000-0000-0000-00000000000a"],
+        true,
+    );
+    tag(
+        &mut fmb,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000002"],
+        true,
+    );
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb)]);
+    let r = run(&song(&[a, mb.clone()]), &facts, &[]);
+    assert_eq!(why(&r, "MUSICBRAINZ_ALBUMID").from, mb.to_string());
+    assert_eq!(
+        why(&r, "MUSICBRAINZ_TRACKID").from,
+        mb.to_string(),
+        "the recording its release names"
+    );
+    assert!(
+        !r.plan.tags.iter().any(|(t, _)| t == "MUSICBRAINZ_WORKID"),
+        "another recording's work goes with it"
+    );
+}
+
+#[test]
 fn a_record_titled_otherwise_lends_no_recording_ids() {
     let (a, mb) = (
         manual("a.flac"),
@@ -1313,7 +1369,7 @@ fn audio_a_codec_cannot_hold_is_written_in_one_that_can() {
             24,
             false,
             &*AUDIO,
-            encoded(Codec::WavPack, None),
+            encoded(Codec::WavPack, Some(Adapt::Depth(24))),
         ),
     ];
     for (codec, channels, layout, bits, float, settings, format) in cases {
@@ -1463,6 +1519,157 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
+fn a_file_s_own_lyrics_in_a_language_not_preferred_rank_after_the_preferred() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    lyrics(&mut f, LyricsAt::Tag, "ja", 12);
+    f.lyrics[0].language = Language::Tag("jpn".into());
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert_eq!(
+        r.plan.lyrics.map(|l| l.at),
+        Some(LyricsAt::Tag),
+        "{:?}",
+        r.why
+    );
+    assert!(
+        r.plan
+            .tags
+            .contains(&("LANGUAGE".into(), vec!["jpn".into()]))
+    );
+
+    f.lyrics[0].at = LyricsAt::Stream { index: 2 };
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert!(r.plan.lyrics.is_none(), "a subtitle in another language");
+
+    f.lyrics[0].at = LyricsAt::Tag;
+    lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(r.plan.lyrics.map(|l| l.at), Some(LyricsAt::Sidecar));
+}
+
+#[test]
+fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert!(r.plan.lyrics.is_some());
+    let language = |r: &Resolved| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(k, _)| k == "LANGUAGE")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(language(&r), Some(vec!["eng".to_string()]));
+    tag(&mut f, Field::Language, &["jpn"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(
+        language(&r),
+        Some(vec!["jpn".to_string()]),
+        "the source's own"
+    );
+}
+
+#[test]
+fn a_back_cover_is_no_song_s_cover_however_sharp() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    let sharp = |side: u32| ImageQuality {
+        width: side,
+        height: side,
+        content: full(side, side),
+        effective: side,
+        blockiness: 0.0,
+    };
+    cover(&mut f, CoverAt::Picture { index: 1 }, sharp(300));
+    cover(&mut f, CoverAt::Picture { index: 2 }, sharp(1200));
+    f.covers[1].other = true;
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run(&song(&[key]), &facts, &[]);
+    assert_eq!(r.plan.cover.unwrap().at, CoverAt::Picture { index: 1 });
+}
+
+#[test]
+fn a_place_set_by_hand_with_its_count_writes_both() {
+    let key = manual("x");
+    let facts = BTreeMap::from([(key.clone(), audio("flac", 1.0))]);
+    let mut s = song(std::slice::from_ref(&key));
+    s.tags = vec![
+        ("track".into(), vec!["5/9".into()]),
+        ("disc".into(), vec!["2/3".into()]),
+        ("disc_total".into(), vec!["4".into()]),
+    ];
+    let r = run(&s, &facts, &[]);
+    let value = |k: &str| {
+        r.plan
+            .tags
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(value("TRACKNUMBER"), Some(vec!["5".to_string()]));
+    assert_eq!(value("TRACKTOTAL"), Some(vec!["9".to_string()]));
+    assert_eq!(value("DISCNUMBER"), Some(vec!["2".to_string()]));
+    assert_eq!(
+        value("DISCTOTAL"),
+        Some(vec!["4".to_string()]),
+        "named itself"
+    );
+}
+
+#[test]
+fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
+    let settings = Audio {
+        lossy: Codec::Mp3,
+        downmix: vec![Layout::named("5.1").unwrap(), Layout::STEREO],
+        ..AUDIO.clone()
+    };
+    let key = manual("x");
+    let mut f = audio("aac", 1.0);
+    let a = f.audio.as_mut().unwrap();
+    a.channels = 6;
+    a.layout = Some("5.1".into());
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_with(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &[],
+        &settings,
+        &QUALITY,
+    );
+    assert_eq!(r.plan.format.codec(), Codec::Mp3);
+    assert_eq!(r.plan.format.mix(), Some(Layout::STEREO), "MP3 holds two");
+    let copying = Audio {
+        codecs: vec![Codec::Aac],
+        ..settings.clone()
+    };
+    let r = run_with(&song(&[key]), &facts, &[], &copying, &QUALITY);
+    assert_eq!(
+        r.plan.format,
+        Format::Copy { codec: Codec::Aac },
+        "a mix only an MP3 would ask keeps no AAC from being copied"
+    );
+    let aac = Audio {
+        lossy: Codec::Aac,
+        ..settings
+    };
+    let shape = crate::codec::Shape {
+        channels: 12,
+        layout: Some("7.1.4"),
+        sample_rate: 48_000,
+        bits: 0,
+        float: false,
+    };
+    assert_eq!(aac.written_in(Codec::Aac, &shape).0, Layout::named("5.1"));
+}
+
+#[test]
 fn a_plan_stored_before_loudness_reads_as_one_with_none() {
     let plan = Plan {
         version: 3,
@@ -1476,10 +1683,19 @@ fn a_plan_stored_before_loudness_reads_as_one_with_none() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let json = serde_json::to_string(&plan).unwrap();
     assert!(!json.contains("loudness"));
     assert_eq!(serde_json::from_str::<Plan>(&json).unwrap(), plan);
+    let before = json.replace(&format!(r#","tagging":{}"#, crate::resolve::TAGGING), "");
+    let stored: Plan = serde_json::from_str(&before).unwrap();
+    assert_eq!(
+        stored.tagging, 0,
+        "a plan tagged before tagging was counted"
+    );
+    assert_ne!(stored, plan, "so its song is tagged again");
 }
 
 #[test]
@@ -1501,6 +1717,8 @@ fn a_plan_s_loudness_tags_follow_its_format() {
             ("GENRE".into(), vec!["Ambient".into()]),
         ],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let gains = Gains {
         track: Level {
@@ -1565,6 +1783,8 @@ fn a_gain_a_format_applies_none_of_compares_as_tags() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     let gains = |apply| Gains {
         track: Level {
@@ -1613,6 +1833,8 @@ fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
         lyrics: None,
         tags: vec![("TITLE".into(), vec!["Lantern Weather".into()])],
         loudness: None,
+        tagging: crate::resolve::TAGGING,
+        chapters: Vec::new(),
     };
     // A quiet song the ceiling lets be raised by nothing.
     let gains = |apply| Gains {

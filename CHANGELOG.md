@@ -7,6 +7,249 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Thirty more tags**, read from every source's own tags and from tag
+  files, set by hand, and written where Picard writes each in every
+  format: tempo (`bpm`), key, compilation, composer, lyricist,
+  conductor, remixer, label, catalogue number, barcode, ASIN, artists,
+  the sort names, original date, release type and status, media,
+  script, disc subtitle, mood, grouping, work, language, copyright,
+  comment, and the MusicBrainz work and disc IDs. A tempo is held
+  whole in MP3 and M4A, a compilation as M4A's flag, and a key in
+  `TKEY` where that frame holds it.
+- **Release details from MusicBrainz**: the release type and status
+  and the medium from the answers muman already asks for, and the
+  label, catalogue number, barcode, ASIN, script and original date,
+  its release group's first release as Picard writes it, from one
+  lookup of the release, asked once a run for every song of an album.
+  A lookup of it that fails is made again on a later run.
+- **A song's language is its lyrics'**, where no source says another,
+  and MP3 lyrics carry it.
+- **`composer`, `bpm` and `key` in the path template.**
+- **Chapters are kept.** A source's chapters, as an M4B audiobook or a
+  video in parts has them, are written into its song's file: MP4
+  chapters, `CHAPTER000` comments in FLAC, Ogg and Opus, and `CTOC` and
+  `CHAP` frames in MP3; WavPack holds none. They were dropped. A song
+  whose source has chapters is written once again.
+
+### Changed
+
+- **`[library] max_path` counts characters as Windows does**, in UTF-16
+  units, so an emoji counts two; a path of such characters is cut
+  shorter than before.
+- **`restrict = "none"` replaces `\` too**, which Windows reads as a
+  folder, so a library made on Linux copies to Windows whole.
+- **Every song is tagged once again on the first sync.** MP3, M4A and
+  WavPack files are tagged as Picard tags them; their audio is not
+  written again.
+- **A tag set by hand is read as its field holds it.** A track or disc
+  set as `3/12` writes the number and the total, a date as
+  `2019/07/04` writes `2019-07-04`, an ISRC is written without its
+  dashes, `true` is written `1`, and an unquoted TOML date is read as
+  its text. A value its field cannot hold, as a date of `July 2019` or
+  `2019-02-30`, a track of `fast`, a ReplayGain gain, which muman
+  measures, or a table, refuses the song list, naming the song and its
+  first source, where it was written as it was or skipped; so does a tag
+  name of other than printable ASCII, which FLAC and WavPack dropped.
+- **Sources offer only values their fields hold.** A source's date that
+  reads as none is no longer written as it was; its tags are read again
+  on the next sync.
+
+### Fixed
+
+- **Opus of three, four or more than eight channels is written.** A
+  source in a layout no Vorbis layout names, as 2.1, 3.1 or 7.1.4,
+  written to Opus failed on every sync: its tags could not be written
+  into the file ffmpeg made.
+- **An info JSON with one odd field is still read.** A number written
+  as text or a `null` among a video's artists made muman ignore all of
+  yt-dlp's info JSON, so the file was added as a manual source with no
+  tags; now only that field is lost.
+- **Subtitles in a legacy encoding keep every line.** An `.srt` or
+  `.vtt` given to `add` in an encoding other than UTF-8, as Windows-1252
+  or Shift-JIS, lost each cue ffmpeg could not read as UTF-8; it is
+  decoded as lyrics files are before it is converted.
+- **Surround sources are mixed, not folded, into MP3 and AAC.** Audio
+  with more channels than MP3's two or AAC's eight was left to the
+  encoder to fold in, unscaled, and its loudness tags were the
+  source's, several dB off what plays. It is mixed into the first
+  `[audio] downmix` layout the codec holds and measured as mixed; AAC
+  in 5.1 with side speakers, or of channels no speakers are named for,
+  as an Opus of mapping family 255, which failed every sync, names them
+  in the standard layout. Only such songs are encoded again.
+- **An MP3 with a date of no calendar can be tagged again.** A date
+  that is none, written into an MP3, made every later change to the
+  song's tags fail.
+- **A song file's own lyrics are its lyrics.** Lyrics a source holds in
+  its tags, `USLT` in MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis
+  comment, `©lyr` in M4A and `Lyrics` in APEv2, were never read, so a
+  song whose only lyrics were embedded was written without any. They
+  are lyrics of that source, ranked as any are, timed when they are
+  LRC, in the language a `USLT` frame names. Every source's tags are
+  read again once to find them.
+- **Sung lines in brackets or shaped as credits are kept.** Any line
+  wholly in parentheses was dropped as a cue, and any line starting
+  `Music by`, `Mix:` or the like as a credit, so backing vocals and
+  lines such as `Music by the water` were lost. A bracketed line is a
+  cue only when its words are, as `[Chorus]` or `(Guitar solo)`, and a
+  credit only before the first line sung or after the last, with a
+  name after its word.
+- **A name cut inside an emoji ends on no joiner.** With a small
+  `max_name_bytes`, a character longer than the room alone, as a family
+  emoji, was cut between its code points and could leave the name
+  ending in a lone zero-width joiner or variation selector; these are
+  dropped from the end of such a cut.
+- **A sidecar named as its song in another case comes with it.** A
+  picture or `.lrc` named as a manual song file but in another case,
+  as `Song.jpg` beside `song.flac`, was not taken, though a folder's
+  `COVER.JPG` was, nor copied by `add` with its song. Sidecars are
+  matched in any case, one in the song's own case first.
+- **`add` names the files it does not read and adds the rest.** A file
+  given that muman reads nothing from, as a `.pdf`, stopped the whole
+  `add` with nothing copied, and a folder's such files were copied into
+  `sources/manual` silently, where nothing read them. The file is named
+  and left out, the songs given with it are written all the same and
+  `add` exits with 4; a folder's are left out with a warning naming
+  them.
+- **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
+  track 0 of the old total, and FLAC the number and a stale total.
+- **`album artist` names the album artist** in a tag file, as foobar2000
+  writes it, rather than adding a tag beside it.
+- **The state file is read back exactly, and written only when it
+  changes.** A measure read from it could differ from the one written
+  in its last bit, so the first sync after an `add` wrote the file
+  again; and a sync with nothing to do wrote it anew all the same.
+- **A `work` tag no longer fails an MP3.** Set by hand or from a tag
+  file, it was written under a frame that holds no text, and every
+  write of the song failed.
+- **MP3 keeps every value of a tag.** Several ISRCs, labels or sort
+  names were cut to the first.
+- **ReplayGain in M4A is named as Picard names it**, in capitals, and
+  read from M4A files Picard tagged.
+- **A WavPack cover is named by its format**, so ffmpeg and players
+  that read the item's file name show it.
+- **MP3 lyrics carry their language** where the song's `LANGUAGE` tag
+  names it.
+- **A picture is known by its bytes, not its name.** A PNG named `.jpg`
+  was embedded as a JPEG, and a WebP named `.jpg` as a JPEG atom no
+  player reads; each is written as what it is.
+- **A WavPack song keeps its cover when its tags change.** Changing a
+  tag of a WavPack song wrote it again without its cover, and no later
+  run noticed; every file written is now read back, and a tag or a cover
+  it does not hold as written is told.
+- **A cover past what a container holds is made smaller in every
+  one**, not only in FLAC: a large PNG made ffmpeg drop every tag of a
+  WavPack file, its lyrics counted, and a cover past 12 MiB, a third
+  larger as Ogg holds it, made every later tag change of an Opus or Ogg
+  Vorbis song fail.
+- **Lyrics move whole.** Moving lyrics to another cut of the
+  recording moved each line's time but not its words', which then came
+  before their own line; an `[offset:]` was kept for players to apply
+  and ignored where a line starts before the track; times were cut to
+  the hundredth rather than rounded; a `[length:]` no longer true was
+  kept; and a timed line of no words, which ends the line before it,
+  was dropped.
+- **A name that composes longer still fits.** A name was cut to its
+  byte limit before it was composed into Unicode NFC, which can lengthen
+  it, so a Devanagari title could pass 255 bytes and fail on every
+  sync; `max_path` cut names inside a flag or an emoji.
+- **Names Windows holds as one are told apart** by case as NTFS folds
+  it: `ΟΔΟΣ` and `οδοσ` were written as two files where Windows keeps one.
+- **Cue sheets as rippers write them are read.** A sheet of one file a
+  track, its pregaps in the file before, as EAC writes it, was refused;
+  a `FILE` path with `\` matched no song outside Windows; a name left
+  unquoted was cut at its first space; and a data track counted as a
+  song. A sheet of a mixed-mode CD, its data first, gives no track a
+  number past its total.
+- **A song past an hour gets its lyrics.** LRCLIB refuses a duration
+  past 3600 s, and its refusal ended the lookup; such a song is now
+  found by search.
+- **Lyrics streams in more languages are found** where a file names
+  them by ISO 639-2, as Swedish `swe` or Hebrew `heb`.
+- **Exported files keep their time.** The zip's times were read as the
+  extracting machine's local time; each entry also carries its time in
+  UTC, as Info-ZIP, 7-Zip and libarchive read it.
+- **yt-dlp's list of every artist on an album is not its album artist**;
+  only a list of one is.
+- **A back cover is no song's cover.** A source's back cover, disc or
+  booklet could be embedded as the front cover when it was the sharper
+  picture; it is taken only when no other picture is, and a picture
+  typed only "other" is no cover beside one typed the front cover. A
+  picture named as its song is a front whatever the song's name, as
+  `Back Home.jpg` beside `Back Home.flac`.
+- **A source whose sound sits away from its middle is measured.**
+  Audio was judged on three short excerpts at a quarter, half and three
+  quarters of its length, and a track whose song ends long before a
+  hidden one, all three silent, was judged to have no sound and ranked
+  after every other source. Where all three fall silent they are taken
+  again where the whole decode found sound; sources judged soundless
+  before are measured once again.
+- **A picture cut short is no cover.** A JPEG or PNG that stops before
+  its end was measured by the size its header gives, as sharp as it
+  was made, and embedded with the rest of it gray, beating a whole
+  smaller cover. A picture that does not decode whole now ranks after
+  every one that does, and is never embedded.
+- **An M4A or M4B cover ffprobe cannot see is found.** A cover stored
+  in its `covr` atom with no type, as some audiobook tools write it,
+  was never seen, and the song was written without one; it is read
+  from the atom. Sources measured before keep what they had until they
+  are measured again.
+- **Several artists are listed in `ARTISTS`** as Picard lists them,
+  beside `ARTIST`, which holds them joined; the list was lost.
+- **An MP3 of a low sample rate is planned at the bitrate it holds**:
+  64 kb/s below 16 kHz and 160 below 32 kHz, which LAME writes whatever
+  it is asked, so `max_size` counts what is written.
+- **24-bit audio in WavPack is named 24-bit.** It was named 32-bit,
+  as ffmpeg hands it to the encoder; its samples were whole either way.
+  Only such songs are encoded again.
+- **A cover is looked up after the release it is of.** The Cover Art
+  Archive was asked in the same round as AcoustID and MusicBrainz,
+  before the song had a release's IDs, so it searched for the album by
+  its names: it often found none, then waited out `recheck`, or found
+  another release's cover. It now waits for those lookups, and a cover
+  lookup that found nothing before is made once again.
+- **A song's MusicBrainz IDs never contradict.** A file's own recording
+  ID was kept beside the release IDs of another recording a lookup
+  found; the recording IDs now come with the release's where its
+  source names one.
+- **A name told apart from another keeps within `max_path`.** The ID
+  added to a name two songs share could take the path past it.
+- **Subtitles converted to lyrics lose their markup**, as `<i>`, and an
+  `.lrc` in UTF-16 without a byte-order mark is read in any script, not
+  only one mostly in Latin letters.
+- **M4B audiobooks, MP2, Speex, WMA and Sun `.au` files are audio** to
+  `add`, which took them for files it does not read.
+- **A network that is down puts lookups off.** A lookup that reached no
+  server, its name not resolving, its connection refused or never
+  opening, or a proxy refusing to connect it, waited out its whole
+  timeout, as did every other due one after it, and each was recorded
+  failed, to wait an hour, doubling to a week. The first now puts its
+  provider's other lookups off to the next run, recorded as nothing, as
+  a refusal for going too fast does, and a connection waits at most
+  10 s to open. A service that answers with an error still fails that
+  lookup alone.
+- **A refusal holds back a request already given its turn.** A request
+  that took its turn before a service refused for going too fast still
+  went when the turn came; it now waits out the refusal too, and once a
+  service refuses or cannot be reached for the run, no request waiting
+  for its turn is sent.
+- **A listed record that is gone is asked for less often.** A song's
+  `lrclib:`, `musicbrainz:` or `coverart:` record that its service no
+  longer has was asked for on every sync; like any fetch that fails, it
+  now waits an hour, doubling, until it is found again or `sync --retry`
+  asks at once. One whose service refuses or cannot be reached waits for
+  the next run, as a lookup does, and is not counted as failed.
+- **A fetched source keeps no cookies or headers.** The info JSON yt-dlp
+  embeds in each file held the cookies and HTTP headers its requests
+  sent, a login passed with `--cookies` or `--cookies-from-browser` in
+  `[ytdlp] args` among them; each file fetched, or given to `add` as one
+  yt-dlp fetched, is now written once more without them. Sources fetched
+  before are left as they are, cookies and all: `purge` deletes only
+  sources no song uses, so to clean one, delete its file and the next
+  `sync` fetches it again without them, its song warning if the site
+  now serves other audio or tags.
+
 ## [0.4.1] - 2026-10-15
 
 ### Fixed

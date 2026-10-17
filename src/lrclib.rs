@@ -194,7 +194,13 @@ impl Client<'_> {
     pub fn find(&self, q: &Query) -> Result<Found> {
         let enc = |s: &str| music::percent_encode(s);
         let mut candidates: Vec<Record> = Vec::new();
-        if let Some(album) = &q.album {
+        // `/api/get` takes a duration of 1 to 3600 s and refuses any other;
+        // a longer song is found by search alone.
+        if let Some(album) = q
+            .album
+            .as_ref()
+            .filter(|_| (1.0..=3600.0).contains(&q.seconds))
+        {
             #[allow(clippy::cast_possible_truncation)]
             let path = format!(
                 "/api/get?track_name={}&artist_name={}&album_name={}&duration={}",
@@ -263,12 +269,14 @@ pub mod testing {
 
     /// Answers each GET from the first record whose path fragment the
     /// URL holds; 404 for any other. A `refusing` server answers every
-    /// GET with a 429.
+    /// GET with a 429, and an `unreachable` one is never reached, as on
+    /// a network that is down.
     #[derive(Debug, Default)]
     pub struct Server {
         pub answers: Vec<(String, Vec<u8>)>,
         pub asked: Mutex<Vec<String>>,
         pub refusing: bool,
+        pub unreachable: bool,
     }
 
     impl Server {
@@ -293,6 +301,9 @@ pub mod testing {
         ) -> Result<Vec<u8>, TransportError> {
             assert!(headers.iter().any(|(k, _)| *k == "User-Agent"));
             self.asked.lock().unwrap().push(url.to_string());
+            if self.unreachable {
+                return Err(TransportError::Unreachable("connection refused".into()));
+            }
             if self.refusing {
                 return Err(TransportError::Status {
                     code: 429,
@@ -362,6 +373,28 @@ mod tests {
             throttle: &Throttle::none(),
         };
         client.find(&query()).unwrap()
+    }
+
+    #[test]
+    fn a_song_past_an_hour_is_searched_for_not_got() {
+        let server = Server::default().answer("/api/search", RECORDS);
+        let client = Client {
+            base: "http://lrclib.test",
+            transport: &server,
+            throttle: &Throttle::none(),
+        };
+        let long = Query {
+            album: Some("Harbor Lights".into()),
+            seconds: 3_700.0,
+            ..query()
+        };
+        client.find(&long).unwrap();
+        let asked = server.asked.lock().unwrap();
+        assert!(
+            asked.iter().all(|path| !path.contains("/api/get")),
+            "{asked:?}"
+        );
+        assert!(asked.iter().any(|path| path.contains("/api/search")));
     }
 
     #[test]

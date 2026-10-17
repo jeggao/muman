@@ -7,6 +7,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+use crate::chapters::Chapter;
+
 /// Names which audio stream is taken and what is read of it and of the
 /// file; facts read by another are made again, so changing any means
 /// changing this. What only a versioned analysis reads, as the integrity
@@ -68,6 +70,8 @@ pub struct Picture {
     pub mimetype: String,
     pub width: u32,
     pub height: u32,
+    /// Whether its picture type says it shows no front cover.
+    pub other: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -81,6 +85,7 @@ pub struct Probed {
     /// The container's tags, then the audio stream's where the container
     /// has none by that name, as Ogg keeps them; keys lower-cased.
     pub tags: BTreeMap<String, String>,
+    pub chapters: Vec<Chapter>,
 }
 
 impl Probed {
@@ -105,6 +110,41 @@ struct Probe {
     streams: Vec<Stream>,
     #[serde(default)]
     format: Format,
+    #[serde(default)]
+    chapters: Vec<ProbedChapter>,
+}
+
+#[derive(Deserialize)]
+struct ProbedChapter {
+    #[serde(default)]
+    start_time: Option<String>,
+    #[serde(default)]
+    end_time: Option<String>,
+    #[serde(default)]
+    tags: BTreeMap<String, String>,
+}
+
+impl ProbedChapter {
+    /// The chapter, where its times read and it ends after it starts.
+    fn chapter(&self) -> Option<Chapter> {
+        let ms = |t: &Option<String>| -> Option<u64> {
+            let s: f64 = t.as_deref()?.trim().parse().ok()?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            (s.is_finite() && s >= 0.0).then(|| (s * 1000.0).round() as u64)
+        };
+        let (start_ms, end_ms) = (ms(&self.start_time)?, ms(&self.end_time)?);
+        let title = self
+            .tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("title"))
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default();
+        (end_ms > start_ms).then_some(Chapter {
+            start_ms,
+            end_ms,
+            title,
+        })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -195,22 +235,23 @@ impl Stream {
             .filter(|v| !v.is_empty())
     }
 
-    /// The image type of a picture stream, from its tag or its codec.
+    /// The image type of a picture stream: by the codec ffmpeg reads its
+    /// bytes as, over the type its tag says, which a file may get wrong.
     fn picture_type(&self) -> Option<String> {
-        if let Some(m) = self.tag("mimetype").filter(|m| m.starts_with("image/")) {
-            return Some(m);
-        }
-        if self.disposition.get("attached_pic") != Some(&1) {
+        let read = match self.codec_name.as_str() {
+            "mjpeg" => Some("image/jpeg"),
+            "png" => Some("image/png"),
+            "webp" => Some("image/webp"),
+            _ => None,
+        };
+        let said = self.tag("mimetype").filter(|m| m.starts_with("image/"));
+        if said.is_none() && self.disposition.get("attached_pic") != Some(&1) {
             return None;
         }
         Some(
-            match self.codec_name.as_str() {
-                "mjpeg" => "image/jpeg",
-                "png" => "image/png",
-                "webp" => "image/webp",
-                _ => "image/unknown",
-            }
-            .to_string(),
+            read.map(str::to_string)
+                .or(said)
+                .unwrap_or_else(|| "image/unknown".into()),
         )
     }
 }
@@ -239,6 +280,7 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
         "json",
         "-show_streams",
         "-show_format",
+        "-show_chapters",
         "--",
     ]
     .into_iter()
@@ -248,7 +290,7 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
-/// Parse `ffprobe -show_streams -show_format`. The audio stream a song is
+/// Parse `ffprobe -show_streams -show_format -show_chapters`. The audio stream a song is
 /// made from is the best: lossless before lossy, then the one with the
 /// most channels, then the highest rate, then the first.
 pub fn parse(json: &[u8]) -> Result<Probed> {
@@ -265,10 +307,16 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             .into_iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v))
             .collect(),
+        chapters: probe
+            .chapters
+            .iter()
+            .filter_map(ProbedChapter::chapter)
+            .collect(),
         ..Probed::default()
     };
     let mut unreadable = None;
     let mut audio_tags = BTreeMap::new();
+    let mut fronts = Vec::new();
     for stream in probe.streams {
         match stream.codec_type.as_str() {
             // ffprobe gives a sample rate of 0 to a stream it could not
@@ -295,11 +343,14 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
             }),
             "video" => {
                 if let Some(mimetype) = stream.picture_type() {
+                    let kind = stream.tag("comment");
+                    fronts.push(kind.as_deref().map(str::trim) == Some("Cover (front)"));
                     probed.pictures.push(Picture {
                         index: stream.index,
                         mimetype,
                         width: stream.width,
                         height: stream.height,
+                        other: crate::picture::typed_other(kind.as_deref()),
                     });
                 }
             }
@@ -312,6 +363,13 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
                 });
             }
             _ => {}
+        }
+    }
+    // A picture typed `Other` may be the cover, unless one beside it is
+    // typed the front cover.
+    if fronts.contains(&true) {
+        for (picture, front) in probed.pictures.iter_mut().zip(fronts) {
+            picture.other |= !front;
         }
     }
     for (k, v) in audio_tags {
@@ -410,6 +468,7 @@ mod tests {
                 mimetype: "image/jpeg".into(),
                 width: 1400,
                 height: 1400,
+                other: false,
             }]
         );
         assert_eq!(o.image_attachments().count(), 0);
@@ -423,6 +482,62 @@ mod tests {
              "disposition": {"attached_pic": 1}}]}"#;
         let o = parse(json.as_bytes()).unwrap();
         assert_eq!(o.pictures[0].mimetype, "image/png");
+    }
+
+    #[test]
+    fn a_picture_typed_other_is_the_cover_only_beside_no_front() {
+        let picture = |index: u32, kind: &str| {
+            format!(
+                r#"{{"index": {index}, "codec_type": "video", "codec_name": "mjpeg",
+                    "width": 600, "height": 600, "disposition": {{"attached_pic": 1}},
+                    "tags": {{"comment": "{kind}"}}}}"#
+            )
+        };
+        let probed = |kinds: &[&str]| {
+            let streams: Vec<String> = kinds
+                .iter()
+                .zip(1..)
+                .map(|(kind, index)| picture(index, kind))
+                .collect();
+            let json = format!(
+                r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+                    "channels": 2}}, {}]}}"#,
+                streams.join(",")
+            );
+            let o = parse(json.as_bytes()).unwrap();
+            o.pictures.iter().map(|p| p.other).collect::<Vec<_>>()
+        };
+        assert_eq!(probed(&["Other"]), [false]);
+        assert_eq!(probed(&["Other", "Cover (front)"]), [true, false]);
+        assert_eq!(probed(&["Cover (back)", "Other"]), [true, false]);
+    }
+
+    #[test]
+    fn chapters_are_read_with_their_titles() {
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+            "channels": 2}],
+          "chapters": [
+            {"id": 0, "time_base": "1/44100", "start": 0, "start_time": "0.000000",
+             "end": 14509414, "end_time": "329.011655", "tags": {"title": "Part One"}},
+            {"id": 1, "start_time": "329.011655", "end_time": "466.017392"},
+            {"id": 2, "start_time": "500.0", "end_time": "500.0"}]}"#;
+        let o = parse(json.as_bytes()).unwrap();
+        assert_eq!(
+            o.chapters,
+            [
+                Chapter {
+                    start_ms: 0,
+                    end_ms: 329_012,
+                    title: "Part One".into()
+                },
+                Chapter {
+                    start_ms: 329_012,
+                    end_ms: 466_017,
+                    title: String::new()
+                },
+            ],
+            "one of no length is none"
+        );
     }
 
     #[test]
