@@ -366,7 +366,7 @@ the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
 out, and `add` exits with 5 once the rest is done; a file that does not
-read, as an empty `.lrc`, a picture that does not decode, a song file
+read, as an empty `.lrc`, a picture that does not decode whole, a song file
 in which ffprobe finds no audio or a cue sheet splitting one song's
 file into tracks, is not added and `add` exits
 with 4, the songs given with it written all the same. `--to` names the song

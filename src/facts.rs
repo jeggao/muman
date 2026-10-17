@@ -371,6 +371,9 @@ pub enum CoverAt {
     Sidecar(usize),
     /// The source is the picture.
     File,
+    /// The `index`th picture of an MP4's `covr` atom, which ffprobe does
+    /// not show ([`picture::mp4_covers`]).
+    Atom { index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -714,7 +717,8 @@ fn image_file<R: Runner>(
 ) -> (Option<ImageQuality>, Option<Look>) {
     let out = scratch.join("file.pgm");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
-    let ok = ffmpeg::run_outputs(runner, &[located.path.as_path()], &outputs);
+    let input = Input::new(quality::whole_pictures(), &located.path);
+    let ok = ffmpeg::run(runner, &[input], &outputs);
     match ok.into_iter().next() {
         Some(Ok(())) => measure_image(&out),
         _ => (None, None),
@@ -723,9 +727,11 @@ fn image_file<R: Runner>(
 
 /// The outputs writing each picture `probed` holds, and those dumped
 /// from its attachments into `scratch`, as graymaps, each input it
-/// needs added to `inputs`.
+/// needs added to `inputs`; where ffprobe found no picture in `path`,
+/// those of its MP4 `covr` atom.
 fn cover_outputs(
     probed: &Probed,
+    path: &Path,
     scratch: &Path,
     inputs: &mut Vec<Input>,
 ) -> Vec<(Output, CoverAt, String, bool)> {
@@ -746,7 +752,7 @@ fn cover_outputs(
         if !dumped.exists() {
             continue;
         }
-        inputs.push(Input::from(dumped.as_path()));
+        inputs.push(Input::new(quality::whole_pictures(), &dumped));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
@@ -761,6 +767,30 @@ fn cover_outputs(
                     .unwrap_or_default()
                     .as_ref(),
             ),
+        ));
+    }
+    let atoms = if probed.pictures.is_empty() {
+        picture::mp4_covers(path)
+    } else {
+        Vec::new()
+    };
+    for (index, bytes) in atoms.into_iter().enumerate() {
+        let Ok(name) = crate::atomic::Name::new(format!("atom{index}")) else {
+            continue;
+        };
+        if crate::atomic::write(scratch, &name, &bytes).is_err() {
+            continue;
+        }
+        let file = scratch.join(name.as_str());
+        inputs.push(Input::new(quality::whole_pictures(), &file));
+        outputs.push((
+            Output::new(
+                quality::gray_output(inputs.len() - 1, "v:0"),
+                &scratch.join(format!("atom{index}.pgm")),
+            ),
+            CoverAt::Atom { index },
+            picture::sniff(&bytes).unwrap_or("image/jpeg").to_string(),
+            false,
         ));
     }
     outputs
@@ -779,7 +809,8 @@ fn sidecar_cover<R: Runner>(
         quality::gray_output(0, "v:0"),
         &scratch.join(format!("side{n}.pgm")),
     );
-    let result = ffmpeg::run_outputs(runner, &[cover], std::slice::from_ref(&output))
+    let input = Input::new(quality::whole_pictures(), cover);
+    let result = ffmpeg::run(runner, &[input], std::slice::from_ref(&output))
         .into_iter()
         .next()
         .unwrap_or_else(|| Err(anyhow::anyhow!("no run")));
@@ -805,7 +836,7 @@ pub fn look<R: Runner>(
             let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
             dump_attachments(runner, located, &probed, scratch, true);
             let mut inputs = vec![Input::from(located.path.as_path())];
-            let covers = cover_outputs(&probed, scratch, &mut inputs);
+            let covers = cover_outputs(&probed, &located.path, scratch, &mut inputs);
             let mut looks = Vec::new();
             if !covers.is_empty() {
                 let plain: Vec<Output> = covers.iter().map(|(o, ..)| o.clone()).collect();
@@ -999,7 +1030,7 @@ fn media<R: Runner>(
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
-    let mut inputs = vec![Input::from(located.path.as_path())];
+    let mut inputs = vec![Input::new(quality::whole_pictures(), &located.path)];
     let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
         .into_iter()
         .map(|(o, part)| (o, Measured::Hash(part)))
@@ -1039,7 +1070,8 @@ fn media<R: Runner>(
             ));
         }
     }
-    for (output, at, mimetype, other) in cover_outputs(&probed, scratch, &mut inputs) {
+    for (output, at, mimetype, other) in cover_outputs(&probed, &located.path, scratch, &mut inputs)
+    {
         outputs.push((output, Measured::Cover(at, mimetype, other)));
     }
 

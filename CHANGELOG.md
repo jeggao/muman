@@ -156,6 +156,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   after every other source. Where all three fall silent they are taken
   again where the whole decode found sound; sources judged soundless
   before are measured once again.
+- **A picture cut short is no cover.** A JPEG or PNG that stops before
+  its end was measured by the size its header gives, as sharp as it
+  was made, and embedded with the rest of it gray, beating a whole
+  smaller cover. A picture that does not decode whole now ranks after
+  every one that does, and is never embedded.
+- **An M4A or M4B cover ffprobe cannot see is found.** A cover stored
+  in its `covr` atom with no type, as some audiobook tools write it,
+  was never seen, and the song was written without one; it is read
+  from the atom. Sources measured before keep what they had until they
+  are measured again.
 - **A cover is looked up after the release it is of.** The Cover Art
   Archive was asked in the same round as AcoustID and MusicBrainz,
   before the song had a release's IDs, so it searched for the album by

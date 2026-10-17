@@ -310,6 +310,18 @@ pub fn segment_output(input: usize, index: u32) -> Vec<OsString> {
     .collect()
 }
 
+/// The ffmpeg input options that read its pictures whole or not at all:
+/// a picture cut short, as a JPEG that stops before its end, decodes to
+/// gray past where its bytes stop and would measure as sharp as it was
+/// made; read so, it fails, and ranks after every picture that decodes.
+#[must_use]
+pub fn whole_pictures() -> Vec<OsString> {
+    ["-err_detect:v", "explode"]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+}
+
 /// The ffmpeg output options that write one frame of the picture
 /// `input:stream` as a binary graymap, which carries its own size.
 #[must_use]

@@ -334,6 +334,34 @@ pub fn sniff_file(path: &std::path::Path) -> Option<&'static str> {
     sniff(&head)
 }
 
+/// The pictures of an MP4's `covr` atom, as `lofty` reads them: ffprobe
+/// shows none whose data type is implicit, 0, as some audiobook tools
+/// write it. None for a file that is no MP4.
+#[must_use]
+pub fn mp4_covers(path: &std::path::Path) -> Vec<Vec<u8>> {
+    use lofty::file::AudioFile;
+    use lofty::mp4::{AtomData, AtomIdent};
+
+    let options = lofty::config::ParseOptions::new().read_properties(false);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(mp4) = lofty::mp4::Mp4File::read_from(&mut file, options) else {
+        return Vec::new();
+    };
+    mp4.ilst()
+        .and_then(|ilst| ilst.get(&AtomIdent::Fourcc(*b"covr")))
+        .map(|atom| {
+            atom.data()
+                .filter_map(|d| match d {
+                    AtomData::Picture(p) => Some(p.data().to_vec()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Whether a picture's `ID3v2` or FLAC picture type, as ffprobe names it
 /// (`Cover (back)`, `Media (e.g. label side of CD)`), says it shows no
 /// front cover; one of type `Other`, or of none, may be the cover, unless
@@ -359,6 +387,36 @@ pub fn named_other(stem: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_mp4_cover_of_implicit_type_is_read() {
+        use lofty::config::WriteOptions;
+        use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.m4a");
+        std::fs::write(&path, crate::testing::SILENCE_M4A).unwrap();
+        let mut ilst = Ilst::default();
+        let pixel = Picture::unchecked(crate::testing::PIXEL.to_vec())
+            .pic_type(PictureType::Other)
+            .mime_type(MimeType::Png)
+            .build();
+        ilst.insert(Atom::new(
+            AtomIdent::Fourcc(*b"covr"),
+            AtomData::Picture(pixel),
+        ));
+        ilst.save_to_path(&path, WriteOptions::default()).unwrap();
+        // The data atom's type, 14 for PNG, made 0, implicit.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let covr = bytes.windows(4).position(|w| w == b"covr").unwrap();
+        let data = covr + bytes[covr..].windows(4).position(|w| w == b"data").unwrap();
+        bytes[data + 4..data + 8].copy_from_slice(&[0, 0, 0, 0]);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(mp4_covers(&path), [crate::testing::PIXEL.to_vec()]);
+        assert_eq!(mp4_covers(dir.path()), Vec::<Vec<u8>>::new(), "no MP4");
+    }
 
     #[test]
     fn a_picture_is_told_by_its_bytes_and_its_side_by_its_label() {

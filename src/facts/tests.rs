@@ -30,6 +30,10 @@ fn an_original_s_facts_take_three_runs() {
     )
     .unwrap();
     assert_eq!(fake.calls().len(), 3, "{:#?}", fake.calls());
+    assert!(
+        fake.ran("-err_detect:v"),
+        "a picture cut short fails rather than measuring sharp"
+    );
     let audio = facts.audio.unwrap();
     assert!(
         audio.analysis.loudness().is_some(),

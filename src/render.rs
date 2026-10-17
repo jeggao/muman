@@ -664,6 +664,15 @@ fn cover_plan<R: Runner>(
             .cloned()
             .ok_or_else(|| anyhow!("the picture beside {} is gone", source.path.display()))?,
         CoverAt::File => source.path.clone(),
+        CoverAt::Atom { index } => {
+            let bytes = crate::picture::mp4_covers(&source.path)
+                .into_iter()
+                .nth(*index)
+                .ok_or_else(|| anyhow!("{} holds no picture {index}", source.path.display()))?;
+            let name = crate::atomic::Name::new("atom".to_string())?;
+            crate::atomic::write(scratch, &name, &bytes)?;
+            scratch.join(name.as_str())
+        }
     };
     // A file's bytes say what it is, whatever its name or its container
     // says: a PNG named `.jpg` is kept as PNG, and a WebP converted.
