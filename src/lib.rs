@@ -4,6 +4,7 @@
 
 pub mod acoustid;
 pub mod acquire;
+pub mod add;
 pub mod align;
 pub mod analysis;
 pub mod atomic;
@@ -66,39 +67,36 @@ pub mod sites;
 pub mod source;
 pub mod state;
 pub mod store;
+pub mod sync;
 pub mod tagfile;
 pub mod tags;
 pub mod template;
 #[cfg(test)]
 mod testing;
+pub mod tools;
 pub mod ui;
 pub mod units;
 pub mod ytdlp_log;
 
-use std::cell::Cell;
-use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crate::http::{HttpTransport, UreqTransport};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::FromArgMatches;
 
-use crate::acquire::{Acquire, Additions, Fetcher, Proposal};
 use crate::atomic::Lock;
 use crate::cli::{Cli, Command, Matching};
 use crate::dirs::Dirs;
 use crate::history::Run;
 use crate::identify::Mode;
-use crate::manifest::{Edit, Manifest, Tags};
+use crate::manifest::Manifest;
 use crate::platform::Defaults;
 use crate::reconcile::Options;
 use crate::runner::{Runner, System, Traced};
-use crate::source::{SourceKey, id_of};
 use crate::state::State;
-use crate::store::{Kind, Store};
 use crate::ui::{InquirePrompter, Prompter};
 
 /// One run, with every path resolved.
@@ -211,7 +209,7 @@ pub fn run() -> ExitCode {
     match ran {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(4),
-        Err(e) if e.downcast_ref::<runner::MissingTool>().is_some() => {
+        Err(e) if e.downcast_ref::<tools::ToolError>().is_some() => {
             let _ = ui::error(&mut err, &format!("{e:#}"));
             ExitCode::from(2)
         }
@@ -245,7 +243,7 @@ fn taskbar_progress() -> bool {
         || matches!(var("TERM_PROGRAM").as_deref(), Some("WezTerm" | "ghostty"))
 }
 
-fn mode(m: Matching) -> Mode {
+pub(crate) fn mode(m: Matching) -> Mode {
     if m.new {
         Mode::New
     } else if m.yes {
@@ -269,13 +267,6 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     data: &mut D,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    let sync = |opts: Options, run: Option<&mut Run>, out: &mut W| {
-        let opts = Options {
-            settling: job.settling,
-            ..opts
-        };
-        reconcile::reconcile(runner, dirs, opts, run, out)
-    };
     progress::current().plan(steps_of(&job.command));
     let writes = matches!(
         job.command,
@@ -315,6 +306,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Info => {
             overview::info(dirs, job.verbose, data)?;
+            let found: Vec<tools::Status> = tools::TOOLS
+                .iter()
+                .filter_map(|t| runner.tool(t.name))
+                .collect();
+            overview::programs(&found, data)?;
             Ok(true)
         }
         Command::Duplicates { query } => {
@@ -380,7 +376,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 before: undone.changed(),
                 ..Options::default()
             };
-            let ok = sync(opts, None, out)?;
+            let ok = reconcile_now(job, runner, opts, None, out)?;
             undone.finish()?;
             Ok(ok)
         }
@@ -390,122 +386,20 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             no_match,
             matching,
             tags,
-        } => {
-            create(&dirs.home)?;
-            let mut run = Run::begin(&dirs.home)?;
-            let mut left_out = 0;
-            let mut unread = Vec::new();
-            let mut refused = None;
-            let done = (|| {
-                let (files, urls): (Vec<&String>, Vec<&String>) =
-                    inputs.iter().partition(|i| Path::new(i).exists());
-                if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
-                    bail!("`{missing}`: no such file");
-                }
-                if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
-                    bail!(
-                        "`{word}` is no file or URL; to name songs with it, put it inside \
-                         --to's quotes, as --to \"artist:venn {word}\""
-                    );
-                }
-                let (loose, files) = split_loose(&files, &mut unread);
-                let mut ok = true;
-                if let Some(url) = urls.first().filter(|_| job.offline) {
-                    return Err(change::Refused(format!(
-                        "{url} is fetched from the network, and --offline reaches none"
-                    ))
-                    .into());
-                }
-                let sites = Manifest::load(&dirs.home)?.settings.sites;
-                let mut beside = Vec::new();
-                let mut copied = Vec::new();
-                let imported = import(
-                    runner,
-                    dirs,
-                    &sites,
-                    &files,
-                    (&mut beside, &mut copied),
-                    &mut unread,
-                    out,
-                );
-                for file in &copied {
-                    run.copied(&dirs.home, file);
-                }
-                let mut proposals = imported?;
-                if !urls.is_empty() {
-                    let urls: Vec<String> = urls.into_iter().cloned().collect();
-                    let (fine, additions) =
-                        network(job, runner, out, |acquire| acquire.urls(&urls, !no_match))?;
-                    ok &= fine;
-                    proposals.extend(record(dirs, additions)?);
-                }
-                let declined: BTreeSet<SourceKey> = if *no_match {
-                    proposals.iter().flat_map(|p| p.sources.clone()).collect()
-                } else {
-                    BTreeSet::new()
-                };
-                let how = Listing {
-                    mode: mode(*matching),
-                    verbose: job.verbose,
-                    tags: tags.tags(),
-                    loose: !loose.is_empty(),
-                };
-                let mut prompter = prompter;
-                let listed = list(
-                    runner,
-                    dirs,
-                    proposals,
-                    &how,
-                    change::reborrow(&mut prompter),
-                    out,
-                )?;
-                let attaching = attach::How {
-                    yes: matching.yes,
-                    to: to.clone(),
-                    verbose: job.verbose,
-                };
-                // A loose file's refusal waits for the songs added with it
-                // to be written.
-                let attached = match attach::attach(
-                    runner, dirs, &loose, &beside, &attaching, prompter, out,
-                ) {
-                    Ok(a) => a,
-                    Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
-                        refused = Some(e);
-                        attach::Attached::default()
-                    }
-                    Err(e) => return Err(e),
-                };
-                left_out = attached.left_out;
-                unread.extend(attached.unread);
-                give_tags(dirs, &attached.songs, &how, listed, out)?;
-                ok &= look_up(job, runner, http, false, &declined, out)?;
-                ok &= sync(Options::default(), Some(&mut run), out)?;
-                Ok(ok)
-            })();
-            let ok = recorded(run, &dirs.home, done)?;
-            if let Some(e) = refused {
-                return Err(e);
-            }
-            if !unread.is_empty() {
-                bail!(
-                    "{} file(s) could not be added: {}",
-                    unread.len(),
-                    unread.join(", ")
-                );
-            }
-            if left_out > 0 {
-                let how = if matching.yes {
-                    "name their songs with --to, or run on a terminal to pick them"
-                } else {
-                    "name their songs with --to, give -y, or run on a terminal to pick them"
-                };
-                return Err(
-                    change::Refused(format!("{left_out} file(s) were not added: {how}")).into(),
-                );
-            }
-            Ok(ok)
-        }
+        } => add::run(
+            job,
+            runner,
+            http,
+            prompter,
+            out,
+            add::Request {
+                inputs,
+                to,
+                no_match: *no_match,
+                matching: *matching,
+                tags,
+            },
+        ),
         Command::Sync {
             rematch,
             force,
@@ -513,36 +407,21 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             accept,
             update_defaults,
             matching,
-        } => {
-            create(&dirs.home)?;
-            manifest::start(&dirs.home)?;
-            let mut run = Run::begin(&dirs.home)?;
-            let done = (|| {
-                if *update_defaults {
-                    update_settings(&dirs.home, out)?;
-                }
-                let proposals = dropped_in(dirs, job.settling, out)?;
-                let manifest = Manifest::load(&dirs.home)?;
-                let mut ok = fetch_missing(job, runner, http, &manifest, *retry, out)?;
-                let how = Listing {
-                    mode: mode(*matching),
-                    verbose: job.verbose,
-                    tags: Vec::new(),
-                    loose: false,
-                };
-                list(runner, dirs, proposals, &how, prompter, out)?;
-                ok &= look_up(job, runner, http, *rematch, &BTreeSet::new(), out)?;
-                let opts = Options {
-                    force: *force,
-                    retry: *retry,
-                    accept: *accept,
-                    ..Options::default()
-                };
-                ok &= sync(opts, Some(&mut run), out)?;
-                Ok(ok)
-            })();
-            recorded(run, &dirs.home, done)
-        }
+        } => sync::run(
+            job,
+            runner,
+            http,
+            prompter,
+            out,
+            sync::Request {
+                rematch: *rematch,
+                force: *force,
+                retry: *retry,
+                accept: *accept,
+                update_defaults: *update_defaults,
+                matching: *matching,
+            },
+        ),
         Command::Remove {
             query,
             purge,
@@ -553,7 +432,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 if !change::remove(dirs, query, *purge, confirm, prompter, &mut run, out)? {
                     return Ok(true);
                 }
-                sync(Options::default(), Some(&mut run), out)
+                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
             })();
             recorded(run, &dirs.home, done)
         }
@@ -564,8 +443,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                     return Ok(true);
                 }
                 let manifest = Manifest::load(&dirs.home)?;
-                let mut ok = fetch_missing(job, runner, http, &manifest, true, out)?;
-                ok &= sync(Options::default(), Some(&mut run), out)?;
+                let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
+                ok &= reconcile_now(job, runner, Options::default(), Some(&mut run), out)?;
                 Ok(ok)
             })();
             recorded(run, &dirs.home, done)
@@ -576,7 +455,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 if !change::set(dirs, terms, confirm, prompter, out)? {
                     return Ok(true);
                 }
-                sync(Options::default(), Some(&mut run), out)
+                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
             })();
             recorded(run, &dirs.home, done)
         }
@@ -603,7 +482,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             };
             let done = edited.and_then(|edited| {
                 if edited {
-                    sync(Options::default(), Some(&mut run), out)
+                    reconcile_now(job, runner, Options::default(), Some(&mut run), out)
                 } else {
                     Ok(true)
                 }
@@ -611,6 +490,22 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             recorded(run, &dirs.home, done)
         }
     }
+}
+
+/// The offline phase with the run's settling time, as every command
+/// that writes ends.
+pub(crate) fn reconcile_now<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    opts: Options,
+    run: Option<&mut Run>,
+    out: &mut W,
+) -> Result<bool> {
+    let opts = Options {
+        settling: job.settling,
+        ..opts
+    };
+    reconcile::reconcile(runner, &job.dirs, opts, run, out)
 }
 
 /// The long steps a command may take, in the order it takes them, which
@@ -640,7 +535,7 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
 
 /// Finish `run` whatever became of its command, so one that stopped on
 /// an error is recorded as far as it got; the command's own error wins.
-fn recorded(run: Run, home: &Path, done: Result<bool>) -> Result<bool> {
+pub(crate) fn recorded(run: Run, home: &Path, done: Result<bool>) -> Result<bool> {
     let finished = run.finish(home);
     let ok = done?;
     finished?;
@@ -689,99 +584,7 @@ fn list_songs<D: Write>(
     Ok(())
 }
 
-/// Make every lookup due, as `lookup::run` does.
-fn look_up<R: Runner, W: Write>(
-    job: &Job,
-    runner: &R,
-    http: &(dyn HttpTransport + Sync),
-    force: bool,
-    declined: &BTreeSet<SourceKey>,
-    out: &mut W,
-) -> Result<bool> {
-    if job.offline {
-        return Ok(true);
-    }
-    let (ok, ()) = network(job, runner, out, |acquire| {
-        Ok((
-            lookup::run(acquire, &job.dirs, http, &job.throttles, force, declined)?,
-            (),
-        ))
-    })?;
-    Ok(ok)
-}
-
-/// Fetch again every listed source gone from the store, those that
-/// failed lately left for later unless `retry`, and record each that
-/// fails. Returns whether every one fetched arrived.
-fn fetch_missing<R: Runner, W: Write>(
-    job: &Job,
-    runner: &R,
-    http: &(dyn HttpTransport + Sync),
-    manifest: &Manifest,
-    retry: bool,
-    out: &mut W,
-) -> Result<bool> {
-    if job.offline {
-        return Ok(true);
-    }
-    let mut state = State::load(&job.dirs.home)?;
-    let (mut ok, mut failed) = network(job, runner, out, |acquire| {
-        acquire.missing(manifest, &state.failures, retry)
-    })?;
-    let records = lookup::refetch(
-        &job.dirs,
-        manifest,
-        http,
-        &job.throttles,
-        &state.failures,
-        retry,
-    )?;
-    if records.waiting > 0 {
-        ui::warning(
-            out,
-            &format!(
-                "Not fetching {} missing record(s) that failed lately; `sync --retry` tries now",
-                records.waiting
-            ),
-        )?;
-    }
-    for (why, n) in &records.put_off {
-        ui::warning(
-            out,
-            &format!("{why}: {n} missing record(s) wait for the next run"),
-        )?;
-    }
-    for (key, error) in &records.failed {
-        ok = false;
-        ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
-    }
-    failed.extend(records.failed);
-    let store = Store::scan(&job.dirs)?;
-    let arrived: Vec<SourceKey> = state
-        .failures
-        .iter()
-        .filter(|(k, f)| f.step == state::Step::Fetch && store.has(k))
-        .map(|(k, _)| k.clone())
-        .collect();
-    for key in &arrived {
-        state.clear_failure(key);
-    }
-    if !failed.is_empty() || !arrived.is_empty() {
-        for (key, error) in failed {
-            // A damaged download that did not come again counts against
-            // its tries, and keeps the damaged copy's revision.
-            let (step, rev) = match state.failures.get(&key) {
-                Some(f) if f.step == state::Step::Refetch => (state::Step::Refetch, f.rev.clone()),
-                _ => (state::Step::Fetch, None),
-            };
-            state.record_failure(&key, step, rev, error);
-        }
-        State::keep_measures(&job.dirs.home, &state)?;
-    }
-    Ok(ok)
-}
-
-fn create(dir: &Path) -> Result<()> {
+pub(crate) fn create(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
 }
 
@@ -800,671 +603,6 @@ fn say_renamed<W: Write>(home: &Path, out: &mut W) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Move the song list's settings still at an earlier edition's default
-/// to the current one, saying which moved.
-fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
-    let mut manifest = Manifest::load(home)?;
-    let moved = manifest.stale_defaults.clone();
-    manifest.edit(Edit::UpdateDefaults);
-    manifest.save()?;
-    if moved.is_empty() {
-        ui::info(
-            out,
-            "No setting is at an older edition's default: each is at this muman's, or set by you",
-        )?;
-    }
-    for s in &moved {
-        ui::info(out, &format!("Updated: `{s}` to {}", s.now))?;
-    }
-    Ok(())
-}
-
-/// Run one network step with a fetcher into the store, and every key a
-/// song lists or a release replaced known.
-fn network<R: Runner, W: Write, T>(
-    job: &Job,
-    runner: &R,
-    out: &mut W,
-    step: impl FnOnce(&mut Acquire<'_, R, W>) -> Result<(bool, T)>,
-) -> Result<(bool, T)> {
-    let manifest = Manifest::load(&job.dirs.home)?;
-    let state = State::load(&job.dirs.home)?;
-    let store = Store::scan(&job.dirs)?;
-    let temp = atomic::Scratch::new()?;
-    let ytdlp = job.dirs.ytdlp();
-    let partial = job.dirs.home.join("partial");
-    clear_stale(&partial, manifest.settings.ytdlp.keep_partial);
-    let plugins = match &job.cache {
-        Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
-        _ => None,
-    };
-    let fetcher = Fetcher {
-        store: &ytdlp,
-        temp: temp.path(),
-        partial: &partial,
-        plugins: plugins.as_deref(),
-        options: &manifest.settings.ytdlp,
-        sites: &manifest.settings.sites,
-        live: job.live,
-        runs: Cell::new(0),
-    };
-    let removed = manifest.removed_keys();
-    let mut known: BTreeSet<SourceKey> = manifest.keys();
-    known.extend(removed.iter().cloned());
-    known.extend(state.replaced.keys().cloned());
-    let mut acquire = Acquire {
-        runner,
-        fetcher: &fetcher,
-        out,
-        known,
-        removed,
-        store: &store,
-    };
-    step(&mut acquire)
-}
-
-/// Remove what yt-dlp left unfinished longer than `days` ago, in any
-/// folder its template makes, and the folders that leaves empty;
-/// younger, a later run resumes it.
-fn clear_stale(partial: &Path, limit: std::time::Duration) {
-    let mut folders = Vec::new();
-    let mut left = vec![partial.to_path_buf()];
-    while let Some(dir) = left.pop() {
-        for path in std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| Some(e.ok()?.path()))
-        {
-            if path.is_dir() {
-                left.push(path.clone());
-                folders.push(path);
-                continue;
-            }
-            let old = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > limit));
-            if old {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-    }
-    // Deepest first; only a folder left empty goes.
-    folders.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
-    for dir in folders {
-        let _ = std::fs::remove_dir(dir);
-    }
-}
-
-/// Record what a network step found beyond its proposals: albums and
-/// renames in the song list, replaced uploads in the state.
-fn record(dirs: &Dirs, additions: Additions) -> Result<Vec<Proposal>> {
-    let mut manifest = Manifest::load(&dirs.home)?;
-    for (source, tracks) in additions.albums {
-        manifest.edit(Edit::AddAlbum {
-            source,
-            tracks: Some(tracks),
-        });
-    }
-    for (from, to) in additions.renames {
-        manifest.edit(Edit::Rename { from, to });
-    }
-    manifest.save()?;
-    State::keep_lookups(&dirs.home, &additions.looked_up, &additions.replaced)?;
-    Ok(additions.proposals)
-}
-
-/// How proposals are listed.
-struct Listing {
-    mode: Mode,
-    verbose: bool,
-    /// Set on every song a proposal is listed as or added to.
-    tags: Tags,
-    /// Whether loose files may yet be given to songs, and so the tags.
-    loose: bool,
-}
-
-/// List each proposal as a song, or as a source of the song it is the
-/// same recording as, and set the tags given on each: whether any song
-/// was given them.
-fn list<R: Runner, W: Write>(
-    runner: &R,
-    dirs: &Dirs,
-    proposals: Vec<Proposal>,
-    how: &Listing,
-    prompter: Option<&mut dyn Prompter>,
-    out: &mut W,
-) -> Result<bool> {
-    let edits = identify::identify(
-        runner,
-        dirs,
-        proposals,
-        how.mode,
-        how.verbose,
-        prompter,
-        out,
-    )?;
-    if edits.is_empty() && !how.tags.is_empty() && !how.loose {
-        ui::warning(out, "No song was added, so no tag was set")?;
-    }
-    let mut manifest = Manifest::load(&dirs.home)?;
-    let mut any = false;
-    for edit in edits {
-        let tagged = match &edit {
-            Edit::Add { sources, .. } if !how.tags.is_empty() => manifest::id_of(sources).cloned(),
-            _ => None,
-        };
-        manifest.edit(edit);
-        if let Some(key) = tagged {
-            any = true;
-            manifest.edit(Edit::Tag {
-                key,
-                tags: how.tags.clone(),
-            });
-        }
-    }
-    manifest.save()?;
-    Ok(any)
-}
-
-/// Set the tags given on the command line on every song a loose file was
-/// given to, after the file's own, so the command line wins.
-fn give_tags<W: Write>(
-    dirs: &Dirs,
-    songs: &[SourceKey],
-    how: &Listing,
-    listed: bool,
-    out: &mut W,
-) -> Result<()> {
-    if how.tags.is_empty() || !how.loose {
-        return Ok(());
-    }
-    if songs.is_empty() && !listed {
-        return Ok(ui::warning(
-            out,
-            "No song was given a file, so no tag was set",
-        )?);
-    }
-    let mut manifest = Manifest::load(&dirs.home)?;
-    let mut seen = BTreeSet::new();
-    for key in songs.iter().filter(|k| seen.insert(*k)) {
-        manifest.edit(Edit::Tag {
-            key: key.clone(),
-            tags: how.tags.clone(),
-        });
-    }
-    manifest.save()
-}
-
-/// The files of `files` `add` gives to songs rather than lists, each with
-/// what it holds, and the rest. A loose file named as an audio file given
-/// with it, in its folder, is that file's sidecar and copied with it. A
-/// file muman does not read goes into `unread`, the rest added all the
-/// same.
-fn split_loose<'a>(
-    files: &[&'a String],
-    unread: &mut Vec<String>,
-) -> (attach::Loose, Vec<&'a String>) {
-    let mut loose = Vec::new();
-    let mut rest = Vec::new();
-    for file in files {
-        match attach::sort(Path::new(file)) {
-            Ok(Some(what)) => loose.push((PathBuf::from(file), what)),
-            Ok(None) => rest.push(*file),
-            Err(e) => unread.push(format!("{e:#}")),
-        }
-    }
-    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let audio: Vec<PathBuf> = rest
-        .iter()
-        .map(|f| PathBuf::from(f.as_str()))
-        .filter(|p| p.is_file())
-        .collect();
-    let beside: Vec<PathBuf> = audio
-        .iter()
-        .flat_map(|a| sidecars(a))
-        .map(|p| canonical(&p))
-        .collect();
-    loose.retain(|(path, _)| !beside.contains(&canonical(path)));
-    (loose, rest)
-}
-
-/// Song files dropped into the manual folder that no song lists, each a
-/// proposal; a listed file moved within the folder is followed instead.
-fn dropped_in<W: Write>(dirs: &Dirs, wait: Duration, out: &mut W) -> Result<Vec<Proposal>> {
-    let mut manifest = Manifest::load(&dirs.home)?;
-    let state = State::load(&dirs.home)?;
-    let store = Store::scan(dirs)?;
-    let listed = manifest.keys();
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
-    for twin in store.twins() {
-        ui::warning(
-            out,
-            &format!(
-                "Not read, as another file in the manual folder has its name once \
-                 normalized: {}; rename one of them",
-                relpath::show(twin)
-            ),
-        )?;
-    }
-    let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), wait);
-    // A file listed before is no new one still copying in, however
-    // recently it was touched.
-    settling.retain(|path| {
-        let key = SourceKey::Manual(path.into());
-        let was_listed = state.listed.contains(&key);
-        if was_listed {
-            ready.push(key);
-        }
-        !was_listed
-    });
-    let unlisted: Vec<SourceKey> = ready
-        .iter()
-        .filter(|k| state.listed.contains(k))
-        .cloned()
-        .collect();
-    ready.retain(|k| !unlisted.contains(k));
-    for key in unlisted {
-        ui::info(
-            out,
-            &format!(
-                "Taken out of the song list by hand, so kept out: {key}; \
-                 `muman restore` lists it again"
-            ),
-        )?;
-        manifest.edit(Edit::Tombstone {
-            note: format!("{key}, taken out of the song list by hand"),
-            key,
-        });
-    }
-    for path in settling {
-        ui::info(
-            out,
-            &format!(
-                "Still being copied in, left for a later run: {}",
-                SourceKey::Manual(path.into())
-            ),
-        )?;
-    }
-    let renames = store::moved_manual(&listed, &state, &store, &mut ready);
-    for (gone, to) in &renames {
-        ui::info(out, &format!("Moved: {gone} is now {to}"))?;
-        manifest.edit(Edit::Rename {
-            from: gone.clone(),
-            to: to.clone(),
-        });
-    }
-    manifest.save()?;
-    // So the song's plan names its file anew and the song is not written
-    // again for a file that only moved.
-    if !renames.is_empty() {
-        let _lock = atomic::Lock::folder(&dirs.home)?;
-        let mut state = State::load(&dirs.home)?;
-        state.rekey(&renames)?;
-        state.save(&dirs.home)?;
-    }
-    Ok(ready
-        .into_iter()
-        .map(|key| Proposal {
-            label: key.short(),
-            sources: vec![key],
-            album: None,
-        })
-        .collect())
-}
-
-/// Copy files and folders the user named into the sources: an original
-/// yt-dlp fetched into the store under its key, anything else into the
-/// manual folder with the lyrics and pictures named as it is; a folder's
-/// files that are no song, lyrics or picture are left out and named,
-/// since nothing would read them there. Never moves or overwrites; a
-/// name already taken is an error. Each song file
-/// copied is noted in `beside` with where it came from, for the loose
-/// files given with it, and every file copied in `copied`, for `undo`,
-/// those copied before an error too.
-fn import<R: Runner, W: Write>(
-    runner: &R,
-    dirs: &Dirs,
-    sites: &crate::sites::Sites,
-    paths: &[&String],
-    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
-    unread: &mut Vec<String>,
-    out: &mut W,
-) -> Result<Vec<Proposal>> {
-    let mut audio = |file: &Path| {
-        let reads =
-            store::kind_of(file) != Some(store::Kind::Media) || reads_as_audio(runner, file);
-        if !reads {
-            unread.push(format!("{}, which reads as no audio", file.display()));
-        }
-        reads
-    };
-    let mut proposals = Vec::new();
-    let mut not_read = Vec::new();
-    let mut originals_in = Originals {
-        held: Store::scan(dirs)?,
-        brought: BTreeSet::new(),
-        runner,
-    };
-    for path in paths.iter().map(Path::new) {
-        let name = path
-            .file_name()
-            .with_context(|| format!("{} names no file", path.display()))?;
-        if let Some(key) = original(runner, sites, path) {
-            proposals.push(originals_in.bring(dirs, path, key, (out, copied))?);
-            continue;
-        }
-        let to = dirs.manual().join(name);
-        if path.is_file() && name.to_string_lossy().starts_with('.') {
-            not_read.push(format!(
-                "{}, which is hidden, its name starting with a dot, and muman reads no hidden \
-                 file; rename it without the dot",
-                path.display()
-            ));
-            continue;
-        }
-        let mut originals = Vec::new();
-        if path.is_dir() {
-            let files = crate::store::walk(path, usize::MAX)?;
-            for file in &files {
-                if let Some(key) = original(runner, sites, file) {
-                    originals.push((file.clone(), key));
-                }
-            }
-            let mut own = |file: &Path| {
-                store::kind_of(file).is_some()
-                    && !originals.iter().any(|(o, _)| o == file)
-                    && audio(file)
-            };
-            if originals.len() < files.len() {
-                copy_tree(path, &to, &mut own, copied)?;
-            }
-            say_left_out(path, &files, out)?;
-            for (file, key) in &originals {
-                proposals.push(originals_in.bring(dirs, file, key.clone(), (out, copied))?);
-            }
-        } else if !audio(path) {
-            continue;
-        } else {
-            copy_new(path, &to, copied)?;
-            for sidecar in sidecars(path) {
-                if let Some(n) = sidecar.file_name() {
-                    copy_new(&sidecar, &dirs.manual().join(n), copied)?;
-                }
-            }
-        }
-        let store = Store::scan(dirs)?;
-        let found = media_at(&store, dirs, &to)?;
-        if found.is_empty() && path.is_dir() && !originals.is_empty() {
-            continue;
-        }
-        if found.is_empty() && path.is_dir() {
-            not_read.push(format!(
-                "{}, which holds no song muman reads",
-                path.display()
-            ));
-            continue;
-        }
-        ui::info(
-            out,
-            &format!("Copied {} into {}", path.display(), dirs.manual().display()),
-        )?;
-        for key in found {
-            if let SourceKey::Manual(m) = &key
-                && let Some(folder) = path.parent()
-            {
-                let rel = m.path().strip_prefix(name).unwrap_or(m.path());
-                let origin = if path.is_dir() {
-                    path.join(rel)
-                } else {
-                    folder.join(m.path())
-                };
-                beside.push((origin, key.clone()));
-            }
-            proposals.push(Proposal {
-                label: key.short(),
-                sources: vec![key],
-                album: None,
-            });
-        }
-    }
-    unread.extend(not_read);
-    Ok(proposals)
-}
-
-/// Warn of the files of the folder `dir` given to `add` that are left
-/// out, as no song, lyrics or picture, each named below `dir`.
-fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<()> {
-    let other: Vec<String> = files
-        .iter()
-        .filter(|f| store::kind_of(f).is_none())
-        .map(|f| f.strip_prefix(dir).unwrap_or(f).display().to_string())
-        .collect();
-    if !other.is_empty() {
-        ui::warning(
-            out,
-            &format!(
-                "Left out of {}, as no song, lyrics or picture: {}",
-                dir.display(),
-                other.join(", ")
-            ),
-        )?;
-    }
-    Ok(())
-}
-
-/// The originals one `add` copies into the store, and the store as it
-/// was before.
-struct Originals<'a, R> {
-    held: Store,
-    brought: BTreeSet<SourceKey>,
-    runner: &'a R,
-}
-
-impl<R: Runner> Originals<'_, R> {
-    /// `file`, an original of `key`, copied to its key's place, whether
-    /// given or in a folder given, its info JSON scrubbed as a fetch's
-    /// is; one of a key the store holds already is proposed, not copied
-    /// again.
-    fn bring<W: Write>(
-        &mut self,
-        dirs: &Dirs,
-        file: &Path,
-        key: SourceKey,
-        (out, copied): (&mut W, &mut Vec<PathBuf>),
-    ) -> Result<Proposal> {
-        if self.held.has(&key) || self.brought.contains(&key) {
-            ui::info(
-                out,
-                &format!(
-                    "{} is {key}, which sources/yt-dlp holds already",
-                    file.display()
-                ),
-            )?;
-        } else {
-            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
-            let to = store::fetched_path(&dirs.ytdlp(), &key, ext)
-                .with_context(|| format!("{key} is fetched by no site"))?;
-            copy_new(file, &to, copied)?;
-            ui::info(
-                out,
-                &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
-            )?;
-            let scrubbed =
-                atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
-            if let Err(e) = scrubbed {
-                ui::warning(
-                    out,
-                    &format!(
-                        "{} keeps the cookies and headers it was fetched with: {e:#}",
-                        to.display()
-                    ),
-                )?;
-            }
-            self.brought.insert(key.clone());
-        }
-        Ok(Proposal {
-            label: key.short(),
-            sources: vec![key],
-            album: None,
-        })
-    }
-}
-
-/// The key of `file` if it is an original yt-dlp fetched: named as
-/// yt-dlp names one, `<title> [<id>]`, holding the info JSON it embeds.
-fn original<R: Runner>(runner: &R, sites: &crate::sites::Sites, file: &Path) -> Option<SourceKey> {
-    let media = store::kind_of(file) == Some(store::Kind::Media);
-    media.then(|| fetched_key(runner, sites, file)).flatten()
-}
-
-/// Whether `input`, which names nothing on disk, was meant as a path
-/// rather than an address for yt-dlp: written from a folder, or a file
-/// name muman reads, with no scheme.
-fn names_a_path(input: &str) -> bool {
-    let from_folder = ["/", "./", "../", "~"].iter().any(|p| input.starts_with(p))
-        || input.contains('\\')
-        || input.as_bytes().get(1) == Some(&b':')
-            && input
-                .as_bytes()
-                .get(2)
-                .is_some_and(|b| *b == b'/' || *b == b'\\');
-    let loose = Path::new(input)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| attach::LOOSE.contains(&e.to_ascii_lowercase().as_str()));
-    let a_file = !input.contains("://") && (store::kind_of(Path::new(input)).is_some() || loose);
-    !input.contains("://") && from_folder || a_file
-}
-
-/// Whether `input`, which names nothing on disk, is a plain word: no
-/// address, path or video ID yt-dlp could read, as a query's word given
-/// apart from `--to` is.
-fn is_a_word(input: &str) -> bool {
-    let video_id = input.len() == 11
-        && input
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-    !video_id && !input.contains(['.', '/', ':', '\\'])
-}
-
-/// The song files at or under `path` in the manual folder.
-fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
-    let files = if path.is_dir() {
-        crate::store::files_below(path, usize::MAX, |_| true)?
-    } else {
-        vec![path.to_path_buf()]
-    };
-    Ok(files
-        .into_iter()
-        .filter_map(|f| {
-            Some(SourceKey::Manual(
-                f.strip_prefix(dirs.manual()).ok()?.into(),
-            ))
-        })
-        .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
-        .collect())
-}
-
-/// The key of an original yt-dlp fetched, from the info JSON inside it.
-fn fetched_key<R: Runner>(
-    runner: &R,
-    sites: &crate::sites::Sites,
-    path: &Path,
-) -> Option<SourceKey> {
-    id_of(path)?;
-    let probed = probe::parse(&runner.output(&probe::ffprobe_command(path)).ok()?).ok()?;
-    let attachment = probed.attachment_named("info.json")?;
-    let temp = atomic::Scratch::new().ok()?;
-    let json = temp.path().join("info.json");
-    runner
-        .run(&ffmpeg::dump_command(&[(
-            path,
-            vec![(attachment.ordinal, json.clone())],
-        )]))
-        .ok()?;
-    let info = info::parse(&std::fs::read(json).ok()?).ok()?;
-    info.key(sites)
-}
-
-/// The `.lrc` and pictures named as a file is, beside it, in any case
-/// as the store takes them, but none named exactly as another song file.
-fn sidecars(path: &Path) -> Vec<PathBuf> {
-    let folder = path.parent().unwrap_or(Path::new(""));
-    let listed = if folder.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        folder
-    };
-    let mut beside: Vec<PathBuf> = std::fs::read_dir(listed)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| folder.join(e.file_name()))
-        .filter(|p| p != path && p.is_file())
-        .collect();
-    beside.sort();
-    let song = |p: &PathBuf| store::kind_of(p) == Some(store::Kind::Media);
-    let another_s = |p: &PathBuf| {
-        beside
-            .iter()
-            .any(|s| s != p && song(s) && s.with_extension("") == p.with_extension(""))
-    };
-    beside
-        .iter()
-        .filter(|p| {
-            matches!(
-                store::kind_of(p),
-                Some(store::Kind::Lyrics | store::Kind::Image)
-            ) && store::named_as(p, path)
-                && (p.with_extension("") == path.with_extension("") || !another_s(p))
-        })
-        .cloned()
-        .collect()
-}
-
-fn copy_new(from: &Path, to: &Path, copied: &mut Vec<PathBuf>) -> Result<()> {
-    if to.exists() {
-        bail!("{} exists already; rename one of them first", to.display());
-    }
-    if let Some(dir) = to.parent() {
-        create(dir)?;
-    }
-    std::fs::copy(from, to)
-        .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
-    copied.push(to.to_path_buf());
-    Ok(())
-}
-
-/// Copy the files below `from` that `keep` lets through to `to`.
-fn copy_tree(
-    from: &Path,
-    to: &Path,
-    keep: &mut impl FnMut(&Path) -> bool,
-    copied: &mut Vec<PathBuf>,
-) -> Result<()> {
-    if to.exists() {
-        bail!("{} exists already; rename one of them first", to.display());
-    }
-    for file in crate::store::walk(from, usize::MAX)? {
-        if keep(&file) {
-            let rel = file.strip_prefix(from).unwrap_or(&file);
-            copy_new(&file, &to.join(rel), copied)?;
-        }
-    }
-    Ok(())
-}
-
-/// Whether ffprobe reads an audio stream in `file`, so a file that holds
-/// none, as an empty or cut-off download, is never listed as a song.
-fn reads_as_audio<R: Runner>(runner: &R, file: &Path) -> bool {
-    runner
-        .output(&probe::ffprobe_command(file))
-        .ok()
-        .and_then(|o| probe::parse(&o).ok())
-        .is_some_and(|p| p.audio.is_some())
 }
 
 #[cfg(test)]

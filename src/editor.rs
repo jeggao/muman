@@ -418,7 +418,7 @@ pub fn launch(path: &Path) -> Result<()> {
 /// `editor` as the words a Windows program reads, so the `\` between
 /// folders in `C:\Tools\edit.exe` stays.
 fn windows_words(editor: &str) -> Result<Vec<String>> {
-    let words = crate::runner::windows_words(editor);
+    let words = crate::tools::windows_words(editor);
     if words.is_empty() {
         bail!("reading the editor `{editor}`: it names no program");
     }

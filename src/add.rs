@@ -1,0 +1,584 @@
+//! `muman add`: what URLs name fetched and files copied into the
+//! sources, each listed as a song or as a source of the song it is the
+//! same recording as, the lyrics, pictures and tag files given to their
+//! songs, then a sync.
+
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+use crate::Job;
+use crate::acquire::Proposal;
+use crate::cli::{Matching, TagArgs};
+use crate::dirs::Dirs;
+use crate::history::Run;
+use crate::http::HttpTransport;
+use crate::manifest::{Edit, Manifest};
+use crate::reconcile::Options;
+use crate::runner::Runner;
+use crate::source::{SourceKey, id_of};
+use crate::store::{Kind, Store};
+use crate::sync::{Listing, list, look_up, network, record};
+use crate::ui::Prompter;
+use crate::{atomic, attach, change, download, ffmpeg, info, probe, store, ui};
+
+/// What `add` was given.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Request<'a> {
+    pub inputs: &'a [String],
+    pub to: &'a [String],
+    pub no_match: bool,
+    pub matching: Matching,
+    pub tags: &'a TagArgs,
+}
+
+/// Run `add`; whether every step succeeded.
+pub(crate) fn run<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    http: &(dyn HttpTransport + Sync),
+    prompter: Option<&mut dyn Prompter>,
+    out: &mut W,
+    request: Request<'_>,
+) -> Result<bool> {
+    let dirs = &job.dirs;
+    crate::create(&dirs.home)?;
+    let mut run = Run::begin(&dirs.home)?;
+    let mut left_out = 0;
+    let mut unread = Vec::new();
+    let mut refused = None;
+    let done = (|| {
+        let (files, urls): (Vec<&String>, Vec<&String>) =
+            request.inputs.iter().partition(|i| Path::new(i).exists());
+        if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
+            bail!("`{missing}`: no such file");
+        }
+        if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
+            bail!(
+                "`{word}` is no file or URL; to name songs with it, put it inside \
+                 --to's quotes, as --to \"artist:venn {word}\""
+            );
+        }
+        let (loose, files) = split_loose(&files, &mut unread);
+        let mut ok = true;
+        if let Some(url) = urls.first().filter(|_| job.offline) {
+            return Err(change::Refused(format!(
+                "{url} is fetched from the network, and --offline reaches none"
+            ))
+            .into());
+        }
+        let sites = Manifest::load(&dirs.home)?.settings.sites;
+        let mut beside = Vec::new();
+        let mut copied = Vec::new();
+        let imported = import(
+            runner,
+            dirs,
+            &sites,
+            &files,
+            (&mut beside, &mut copied),
+            &mut unread,
+            out,
+        );
+        for file in &copied {
+            run.copied(&dirs.home, file);
+        }
+        let mut proposals = imported?;
+        if !urls.is_empty() {
+            let urls: Vec<String> = urls.into_iter().cloned().collect();
+            let (fine, additions) = network(job, runner, out, |acquire| {
+                acquire.urls(&urls, !request.no_match)
+            })?;
+            ok &= fine;
+            proposals.extend(record(dirs, additions)?);
+        }
+        let declined: BTreeSet<SourceKey> = if request.no_match {
+            proposals.iter().flat_map(|p| p.sources.clone()).collect()
+        } else {
+            BTreeSet::new()
+        };
+        let how = Listing {
+            mode: crate::mode(request.matching),
+            verbose: job.verbose,
+            tags: request.tags.tags(),
+            loose: !loose.is_empty(),
+        };
+        let mut prompter = prompter;
+        let listed = list(
+            runner,
+            dirs,
+            proposals,
+            &how,
+            change::reborrow(&mut prompter),
+            out,
+        )?;
+        let attaching = attach::How {
+            yes: request.matching.yes,
+            to: request.to.to_vec(),
+            verbose: job.verbose,
+        };
+        // A loose file's refusal waits for the songs added with it
+        // to be written.
+        let attached =
+            match attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out) {
+                Ok(a) => a,
+                Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
+                    refused = Some(e);
+                    attach::Attached::default()
+                }
+                Err(e) => return Err(e),
+            };
+        left_out = attached.left_out;
+        unread.extend(attached.unread);
+        give_tags(dirs, &attached.songs, &how, listed, out)?;
+        ok &= look_up(job, runner, http, false, &declined, out)?;
+        ok &= crate::reconcile_now(job, runner, Options::default(), Some(&mut run), out)?;
+        Ok(ok)
+    })();
+    let ok = crate::recorded(run, &dirs.home, done)?;
+    if let Some(e) = refused {
+        return Err(e);
+    }
+    not_added(&unread, left_out, request.matching.yes)?;
+    Ok(ok)
+}
+
+/// The error of files `add` could not read, or left out as matched to no
+/// song for sure, once the songs added with them are written.
+fn not_added(unread: &[String], left_out: usize, yes: bool) -> Result<()> {
+    if !unread.is_empty() {
+        bail!(
+            "{} file(s) could not be added: {}",
+            unread.len(),
+            unread.join(", ")
+        );
+    }
+    if left_out > 0 {
+        let how = if yes {
+            "name their songs with --to, or run on a terminal to pick them"
+        } else {
+            "name their songs with --to, give -y, or run on a terminal to pick them"
+        };
+        return Err(change::Refused(format!("{left_out} file(s) were not added: {how}")).into());
+    }
+    Ok(())
+}
+
+/// Set the tags given on the command line on every song a loose file was
+/// given to, after the file's own, so the command line wins.
+pub(crate) fn give_tags<W: Write>(
+    dirs: &Dirs,
+    songs: &[SourceKey],
+    how: &Listing,
+    listed: bool,
+    out: &mut W,
+) -> Result<()> {
+    if how.tags.is_empty() || !how.loose {
+        return Ok(());
+    }
+    if songs.is_empty() && !listed {
+        return Ok(ui::warning(
+            out,
+            "No song was given a file, so no tag was set",
+        )?);
+    }
+    let mut manifest = Manifest::load(&dirs.home)?;
+    let mut seen = BTreeSet::new();
+    for key in songs.iter().filter(|k| seen.insert(*k)) {
+        manifest.edit(Edit::Tag {
+            key: key.clone(),
+            tags: how.tags.clone(),
+        });
+    }
+    manifest.save()
+}
+
+/// The files of `files` `add` gives to songs rather than lists, each with
+/// what it holds, and the rest. A loose file named as an audio file given
+/// with it, in its folder, is that file's sidecar and copied with it. A
+/// file muman does not read goes into `unread`, the rest added all the
+/// same.
+pub(crate) fn split_loose<'a>(
+    files: &[&'a String],
+    unread: &mut Vec<String>,
+) -> (attach::Loose, Vec<&'a String>) {
+    let mut loose = Vec::new();
+    let mut rest = Vec::new();
+    for file in files {
+        match attach::sort(Path::new(file)) {
+            Ok(Some(what)) => loose.push((PathBuf::from(file), what)),
+            Ok(None) => rest.push(*file),
+            Err(e) => unread.push(format!("{e:#}")),
+        }
+    }
+    let canonical = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let audio: Vec<PathBuf> = rest
+        .iter()
+        .map(|f| PathBuf::from(f.as_str()))
+        .filter(|p| p.is_file())
+        .collect();
+    let beside: Vec<PathBuf> = audio
+        .iter()
+        .flat_map(|a| sidecars(a))
+        .map(|p| canonical(&p))
+        .collect();
+    loose.retain(|(path, _)| !beside.contains(&canonical(path)));
+    (loose, rest)
+}
+
+/// Copy files and folders the user named into the sources: an original
+/// yt-dlp fetched into the store under its key, anything else into the
+/// manual folder with the lyrics and pictures named as it is; a folder's
+/// files that are no song, lyrics or picture are left out and named,
+/// since nothing would read them there. Never moves or overwrites; a
+/// name already taken is an error. Each song file
+/// copied is noted in `beside` with where it came from, for the loose
+/// files given with it, and every file copied in `copied`, for `undo`,
+/// those copied before an error too.
+pub(crate) fn import<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    sites: &crate::sites::Sites,
+    paths: &[&String],
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
+    unread: &mut Vec<String>,
+    out: &mut W,
+) -> Result<Vec<Proposal>> {
+    let mut audio = |file: &Path| {
+        let reads =
+            store::kind_of(file) != Some(store::Kind::Media) || reads_as_audio(runner, file);
+        if !reads {
+            unread.push(format!("{}, which reads as no audio", file.display()));
+        }
+        reads
+    };
+    let mut proposals = Vec::new();
+    let mut not_read = Vec::new();
+    let mut originals_in = Originals {
+        held: Store::scan(dirs)?,
+        brought: BTreeSet::new(),
+        runner,
+    };
+    for path in paths.iter().map(Path::new) {
+        let name = path
+            .file_name()
+            .with_context(|| format!("{} names no file", path.display()))?;
+        if let Some(key) = original(runner, sites, path) {
+            proposals.push(originals_in.bring(dirs, path, key, (out, copied))?);
+            continue;
+        }
+        let to = dirs.manual().join(name);
+        if path.is_file() && name.to_string_lossy().starts_with('.') {
+            not_read.push(format!(
+                "{}, which is hidden, its name starting with a dot, and muman reads no hidden \
+                 file; rename it without the dot",
+                path.display()
+            ));
+            continue;
+        }
+        let mut originals = Vec::new();
+        if path.is_dir() {
+            let files = crate::store::walk(path, usize::MAX)?;
+            for file in &files {
+                if let Some(key) = original(runner, sites, file) {
+                    originals.push((file.clone(), key));
+                }
+            }
+            let mut own = |file: &Path| {
+                store::kind_of(file).is_some()
+                    && !originals.iter().any(|(o, _)| o == file)
+                    && audio(file)
+            };
+            if originals.len() < files.len() {
+                copy_tree(path, &to, &mut own, copied)?;
+            }
+            say_left_out(path, &files, out)?;
+            for (file, key) in &originals {
+                proposals.push(originals_in.bring(dirs, file, key.clone(), (out, copied))?);
+            }
+        } else if !audio(path) {
+            continue;
+        } else {
+            copy_new(path, &to, copied)?;
+            for sidecar in sidecars(path) {
+                if let Some(n) = sidecar.file_name() {
+                    copy_new(&sidecar, &dirs.manual().join(n), copied)?;
+                }
+            }
+        }
+        let store = Store::scan(dirs)?;
+        let found = media_at(&store, dirs, &to)?;
+        if found.is_empty() && path.is_dir() && !originals.is_empty() {
+            continue;
+        }
+        if found.is_empty() && path.is_dir() {
+            not_read.push(format!(
+                "{}, which holds no song muman reads",
+                path.display()
+            ));
+            continue;
+        }
+        ui::info(
+            out,
+            &format!("Copied {} into {}", path.display(), dirs.manual().display()),
+        )?;
+        for key in found {
+            if let SourceKey::Manual(m) = &key
+                && let Some(folder) = path.parent()
+            {
+                let rel = m.path().strip_prefix(name).unwrap_or(m.path());
+                let origin = if path.is_dir() {
+                    path.join(rel)
+                } else {
+                    folder.join(m.path())
+                };
+                beside.push((origin, key.clone()));
+            }
+            proposals.push(Proposal {
+                label: key.short(),
+                sources: vec![key],
+                album: None,
+            });
+        }
+    }
+    unread.extend(not_read);
+    Ok(proposals)
+}
+
+/// Warn of the files of the folder `dir` given to `add` that are left
+/// out, as no song, lyrics or picture, each named below `dir`.
+pub(crate) fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<()> {
+    let other: Vec<String> = files
+        .iter()
+        .filter(|f| store::kind_of(f).is_none())
+        .map(|f| f.strip_prefix(dir).unwrap_or(f).display().to_string())
+        .collect();
+    if !other.is_empty() {
+        ui::warning(
+            out,
+            &format!(
+                "Left out of {}, as no song, lyrics or picture: {}",
+                dir.display(),
+                other.join(", ")
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// The originals one `add` copies into the store, and the store as it
+/// was before.
+pub(crate) struct Originals<'a, R> {
+    held: Store,
+    brought: BTreeSet<SourceKey>,
+    runner: &'a R,
+}
+
+impl<R: Runner> Originals<'_, R> {
+    /// `file`, an original of `key`, copied to its key's place, whether
+    /// given or in a folder given, its info JSON scrubbed as a fetch's
+    /// is; one of a key the store holds already is proposed, not copied
+    /// again.
+    fn bring<W: Write>(
+        &mut self,
+        dirs: &Dirs,
+        file: &Path,
+        key: SourceKey,
+        (out, copied): (&mut W, &mut Vec<PathBuf>),
+    ) -> Result<Proposal> {
+        if self.held.has(&key) || self.brought.contains(&key) {
+            ui::info(
+                out,
+                &format!(
+                    "{} is {key}, which sources/yt-dlp holds already",
+                    file.display()
+                ),
+            )?;
+        } else {
+            let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
+            let to = store::fetched_path(&dirs.ytdlp(), &key, ext)
+                .with_context(|| format!("{key} is fetched by no site"))?;
+            copy_new(file, &to, copied)?;
+            ui::info(
+                out,
+                &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
+            )?;
+            let scrubbed =
+                atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
+            if let Err(e) = scrubbed {
+                ui::warning(
+                    out,
+                    &format!(
+                        "{} keeps the cookies and headers it was fetched with: {e:#}",
+                        to.display()
+                    ),
+                )?;
+            }
+            self.brought.insert(key.clone());
+        }
+        Ok(Proposal {
+            label: key.short(),
+            sources: vec![key],
+            album: None,
+        })
+    }
+}
+
+/// The key of `file` if it is an original yt-dlp fetched: named as
+/// yt-dlp names one, `<title> [<id>]`, holding the info JSON it embeds.
+pub(crate) fn original<R: Runner>(
+    runner: &R,
+    sites: &crate::sites::Sites,
+    file: &Path,
+) -> Option<SourceKey> {
+    let media = store::kind_of(file) == Some(store::Kind::Media);
+    media.then(|| fetched_key(runner, sites, file)).flatten()
+}
+
+/// Whether `input`, which names nothing on disk, was meant as a path
+/// rather than an address for yt-dlp: written from a folder, or a file
+/// name muman reads, with no scheme.
+pub(crate) fn names_a_path(input: &str) -> bool {
+    let from_folder = ["/", "./", "../", "~"].iter().any(|p| input.starts_with(p))
+        || input.contains('\\')
+        || input.as_bytes().get(1) == Some(&b':')
+            && input
+                .as_bytes()
+                .get(2)
+                .is_some_and(|b| *b == b'/' || *b == b'\\');
+    let loose = Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| attach::LOOSE.contains(&e.to_ascii_lowercase().as_str()));
+    let a_file = !input.contains("://") && (store::kind_of(Path::new(input)).is_some() || loose);
+    !input.contains("://") && from_folder || a_file
+}
+
+/// Whether `input`, which names nothing on disk, is a plain word: no
+/// address, path or video ID yt-dlp could read, as a query's word given
+/// apart from `--to` is.
+pub(crate) fn is_a_word(input: &str) -> bool {
+    let video_id = input.len() == 11
+        && input
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    !video_id && !input.contains(['.', '/', ':', '\\'])
+}
+
+/// The song files at or under `path` in the manual folder.
+pub(crate) fn media_at(store: &Store, dirs: &Dirs, path: &Path) -> Result<Vec<SourceKey>> {
+    let files = if path.is_dir() {
+        crate::store::files_below(path, usize::MAX, |_| true)?
+    } else {
+        vec![path.to_path_buf()]
+    };
+    Ok(files
+        .into_iter()
+        .filter_map(|f| {
+            Some(SourceKey::Manual(
+                f.strip_prefix(dirs.manual()).ok()?.into(),
+            ))
+        })
+        .filter(|k| store.locate(k).is_some_and(|l| l.kind == Kind::Media))
+        .collect())
+}
+
+/// The key of an original yt-dlp fetched, from the info JSON inside it.
+pub(crate) fn fetched_key<R: Runner>(
+    runner: &R,
+    sites: &crate::sites::Sites,
+    path: &Path,
+) -> Option<SourceKey> {
+    id_of(path)?;
+    let probed = probe::parse(&runner.output(&probe::ffprobe_command(path)).ok()?).ok()?;
+    let attachment = probed.attachment_named("info.json")?;
+    let temp = atomic::Scratch::new().ok()?;
+    let json = temp.path().join("info.json");
+    runner
+        .run(&ffmpeg::dump_command(&[(
+            path,
+            vec![(attachment.ordinal, json.clone())],
+        )]))
+        .ok()?;
+    let info = info::parse(&std::fs::read(json).ok()?).ok()?;
+    info.key(sites)
+}
+
+/// The `.lrc` and pictures named as a file is, beside it, in any case
+/// as the store takes them, but none named exactly as another song file.
+pub(crate) fn sidecars(path: &Path) -> Vec<PathBuf> {
+    let folder = path.parent().unwrap_or(Path::new(""));
+    let listed = if folder.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        folder
+    };
+    let mut beside: Vec<PathBuf> = std::fs::read_dir(listed)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| folder.join(e.file_name()))
+        .filter(|p| p != path && p.is_file())
+        .collect();
+    beside.sort();
+    let song = |p: &PathBuf| store::kind_of(p) == Some(store::Kind::Media);
+    let another_s = |p: &PathBuf| {
+        beside
+            .iter()
+            .any(|s| s != p && song(s) && s.with_extension("") == p.with_extension(""))
+    };
+    beside
+        .iter()
+        .filter(|p| {
+            matches!(
+                store::kind_of(p),
+                Some(store::Kind::Lyrics | store::Kind::Image)
+            ) && store::named_as(p, path)
+                && (p.with_extension("") == path.with_extension("") || !another_s(p))
+        })
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn copy_new(from: &Path, to: &Path, copied: &mut Vec<PathBuf>) -> Result<()> {
+    if to.exists() {
+        bail!("{} exists already; rename one of them first", to.display());
+    }
+    if let Some(dir) = to.parent() {
+        crate::create(dir)?;
+    }
+    std::fs::copy(from, to)
+        .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+    copied.push(to.to_path_buf());
+    Ok(())
+}
+
+/// Copy the files below `from` that `keep` lets through to `to`.
+pub(crate) fn copy_tree(
+    from: &Path,
+    to: &Path,
+    keep: &mut impl FnMut(&Path) -> bool,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if to.exists() {
+        bail!("{} exists already; rename one of them first", to.display());
+    }
+    for file in crate::store::walk(from, usize::MAX)? {
+        if keep(&file) {
+            let rel = file.strip_prefix(from).unwrap_or(&file);
+            copy_new(&file, &to.join(rel), copied)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether ffprobe reads an audio stream in `file`, so a file that holds
+/// none, as an empty or cut-off download, is never listed as a song.
+pub(crate) fn reads_as_audio<R: Runner>(runner: &R, file: &Path) -> bool {
+    runner
+        .output(&probe::ffprobe_command(file))
+        .ok()
+        .and_then(|o| probe::parse(&o).ok())
+        .is_some_and(|p| p.audio.is_some())
+}

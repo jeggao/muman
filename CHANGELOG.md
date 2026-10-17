@@ -9,6 +9,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **A floor for each program.** ffmpeg and ffprobe older than 5.1, or
+  yt-dlp older than 2025.03.21, the oldest releases that take every
+  option muman passes, stop a run with exit code 2 and a message naming
+  the version found and where a newer one comes from, as a missing
+  program does; so does one found that does not run, as a `yt-dlp` whose
+  Python is gone. Each was tried on every song or fetch and failed with
+  an error naming an option.
+- **`info` names each program's version and path**, or why it cannot
+  be run.
+- **A fetch a newer yt-dlp would make says so.** When yt-dlp fails with
+  a sign-in check, a failed signature extraction, a format that is not
+  available or a 403, the run says to update it, naming the version
+  that ran.
+- **A fetch survives postprocessors that do not load.** A yt-dlp that
+  refuses muman's plugin folder or does not know its postprocessors is
+  run once more without them, with a warning, where it fetched nothing.
+- **Built binaries for each release**, for Linux, macOS and Windows, on
+  the releases page.
+
+### Changed
+
+- **Servers are verified by the system's certificate store**, as the
+  platform's own programs verify them, so a proxy or an authority the
+  machine trusts is trusted by lookups too. They were verified by roots
+  built into muman alone, which a machine's own authorities never
+  reached.
+
 - **Thirty more tags**, read from every source's own tags and from tag
   files, set by hand, and written where Picard writes each in every
   format: tempo (`bpm`), key, compilation, composer, lyricist,
@@ -58,6 +85,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A home on a filesystem without extended attributes fetches.** yt-dlp
+  was asked to write each file's source URL into its extended
+  attributes, and on a filesystem with none, as some network and
+  removable drives and sandboxes have, failed the whole download after
+  fetching it. muman reads nothing from them: the URL is in the info
+  JSON each file embeds.
 - **Opus of three, four or more than eight channels is written.** A
   source in a layout no Vorbis layout names, as 2.1, 3.1 or 7.1.4,
   written to Opus failed on every sync: its tags could not be written

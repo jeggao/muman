@@ -1,2 +1,2 @@
 # Proper nouns doc comments name; `..` keeps clippy's own list.
-doc-valid-idents = ["YouTube", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", ".."]
+doc-valid-idents = ["YouTube", "FFmpeg", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", ".."]

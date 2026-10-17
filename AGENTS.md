@@ -41,6 +41,7 @@ These bind every change, by a person or an agent.
 ```text
 src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
+  add.rs, sync.rs   the add and sync commands, and the network steps they share
   cli.rs            the command line (clap derive), exit codes
   settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [history]
   migrate.rs        older song lists brought up to this edition
@@ -50,7 +51,8 @@ src/
   state.rs          state.json: files written, measures, comparisons
   platform.rs       default folders per OS, path identity, arrival times
   relpath.rs        recorded paths, written with / and in NFC
-  runner.rs         the subprocess seam and tool lookup
+  runner.rs         the subprocess seam
+  tools.rs          ffmpeg, ffprobe and yt-dlp: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
   sites.rs          the song list's [sites]: how each site names and fetches
   download.rs       yt-dlp's arguments and the files it reports
@@ -92,7 +94,8 @@ src/
   progress.rs       how far a long step has got, on stderr
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   */tests.rs        a module's tests, when they outgrow it
-tests/              the smoke test, and the architecture's rules over src/
+tests/              the smoke test, yt-dlp given muman's command line, and
+                    the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs
@@ -116,10 +119,12 @@ cargo test --test smoke -- --ignored
 
 `cargo xtask docs` regenerates [docs/cli.md](docs/cli.md) and checks
 links and the changelog; `--check` only checks, as CI does. The smoke
-test runs muman end to end against a real ffmpeg on generated audio.
+test runs muman end to end against a real ffmpeg on generated audio;
+`cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
+line muman builds, against a file served from the test itself.
 
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
-test on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
+and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
 Rust version, `cargo xtask comments` (with `--diff-base` on pull
 requests), `cargo xtask docs --check` and cargo-deny. Its clippy is the
 latest stable, which can be newer than yours.

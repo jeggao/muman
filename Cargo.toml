@@ -49,7 +49,7 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 walkdir = "2"
 which = "8"
 zip = { version = "9", default-features = false }

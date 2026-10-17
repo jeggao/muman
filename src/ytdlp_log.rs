@@ -3,6 +3,17 @@
 //! its progress goes into the run's step, counting each video it
 //! finishes; on a terminal with no status line, it is one line rewritten
 //! in place.
+//!
+//! Two kinds of line are also noted for the fetch to act on
+//! ([`Relay::flags`]). One says yt-dlp could not read a site as it is
+//! now: YouTube changes what it serves within months, and a yt-dlp
+//! behind it fails with "Sign in to confirm you're not a bot", a failed
+//! `nsig` extraction, a format that is not available or a 403, which
+//! the next yt-dlp release most often reads again, so a fetch that fails
+//! with one says to update it. The other says muman's own postprocessors
+//! did not load, as a plugin folder yt-dlp refuses or a postprocessor
+//! it does not know: the fetch is run again without them, since album
+//! art and caption filtering are worth less than the download.
 
 use std::io::Write;
 
@@ -12,6 +23,35 @@ use crate::runner::Line;
 
 /// What every progress line starts with, so it is told from the rest.
 const PROGRESS: &str = "muman-progress";
+
+/// Texts of a yt-dlp that reads a site no longer, in its errors and
+/// warnings.
+const STALE: [&str; 6] = [
+    "not a bot",
+    "nsig extraction failed",
+    "Requested format is not available",
+    "Unable to extract",
+    "Some formats may be missing",
+    "HTTP Error 403",
+];
+
+/// What a fetch learns from yt-dlp's lines beyond the files it finished.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Flags {
+    /// An error or warning that a newer yt-dlp most often clears.
+    pub stale: bool,
+    /// muman's postprocessors did not load.
+    pub plugins_failed: bool,
+}
+
+/// Whether a line says the postprocessors did not load: Python's
+/// traceback for a plugin folder refused or a postprocessor not found,
+/// as `KeyError: 'AlbumArtPP'`.
+fn plugins_failed(text: &str) -> bool {
+    text.contains("Invalid plugin directory")
+        || text.contains("yt_dlp_plugins")
+        || (text.starts_with("KeyError: '") && text.ends_with("PP'"))
+}
 
 /// The yt-dlp options that write progress as one parsable line each.
 #[must_use]
@@ -40,6 +80,7 @@ pub struct Relay<'a, W: Write> {
     step: Option<&'a crate::progress::Step>,
     /// The video downloading now; another's progress means it is done.
     title: Option<String>,
+    flags: Flags,
 }
 
 impl<'a, W: Write> Relay<'a, W> {
@@ -53,7 +94,13 @@ impl<'a, W: Write> Relay<'a, W> {
             columns,
             step: None,
             title: None,
+            flags: Flags::default(),
         }
+    }
+
+    #[must_use]
+    pub fn flags(&self) -> Flags {
+        self.flags
     }
 
     /// Count each video yt-dlp finishes towards `step`, and say what it is
@@ -71,10 +118,13 @@ impl<'a, W: Write> Relay<'a, W> {
         if text.is_empty() {
             return;
         }
+        self.flags.plugins_failed |= plugins_failed(text);
         if let Some(rest) = text.strip_prefix("ERROR:") {
+            self.flags.stale |= STALE.iter().any(|s| rest.contains(s));
             self.settle();
             let _ = crate::ui::error(self.out, &format!("yt-dlp: {}", rest.trim()));
         } else if let Some(rest) = text.strip_prefix("WARNING:") {
+            self.flags.stale |= STALE.iter().any(|s| rest.contains(s));
             self.settle();
             let _ = crate::ui::warning(self.out, &format!("yt-dlp: {}", rest.trim()));
         } else if let Some(progress) = text.strip_prefix(PROGRESS) {
@@ -182,6 +232,39 @@ mod tests {
 
     fn plain(s: &str) -> String {
         crate::ui::plain(s)
+    }
+
+    #[test]
+    fn a_site_read_no_longer_and_plugins_not_loaded_are_noted() {
+        let flags = |lines: &[Line<'_>]| {
+            let mut out = Vec::new();
+            let mut r = Relay::new(&mut out, false);
+            for l in lines {
+                r.line(*l);
+            }
+            r.flags()
+        };
+        assert_eq!(
+            flags(&[Line::Err(
+                "ERROR: [youtube] vid00000001: Sign in to confirm you’re not a bot."
+            )]),
+            Flags {
+                stale: true,
+                plugins_failed: false
+            }
+        );
+        assert!(
+            flags(&[Line::Err(
+                "WARNING: [youtube] vid00000001: nsig extraction failed"
+            )])
+            .stale
+        );
+        assert!(!flags(&[Line::Out("[youtube] vid00000001: not a bot in sight")]).stale);
+        assert!(flags(&[Line::Err("ValueError: Invalid plugin directory: /x")]).plugins_failed);
+        assert!(flags(&[Line::Err("KeyError: 'AlbumArtPP'")]).plugins_failed);
+        assert!(
+            !flags(&[Line::Err("ERROR: [youtube] vid00000001: Video unavailable")]).plugins_failed
+        );
     }
 
     #[test]

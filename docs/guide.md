@@ -220,10 +220,17 @@ sets the format, subtitle languages and extra arguments instead
 ([configuration](configuration.md)). Two yt-dlp plugins ship inside
 muman and are written to its cache folder on the first fetch: one keeps
 out the machine-translated captions that trip YouTube's rate limit, one
-makes a YouTube Music track's square album art its thumbnail. Each file
+makes a YouTube Music track's square album art its thumbnail. A yt-dlp
+that cannot load them is run once more without them, with a warning,
+rather than fetch nothing. Each file
 fetched, or given to `add` as one yt-dlp fetched, keeps the info JSON
 yt-dlp embeds without the cookies and HTTP headers its requests sent,
 so a login passed in `[ytdlp] args` stays out of the store.
+
+YouTube changes what it serves every few months, and a yt-dlp behind it
+fails with a sign-in check, a format that is not available or a 403
+where the next release reads the page again. A fetch that fails so says
+to update yt-dlp, naming the version that ran.
 
 A listed source whose file is gone is fetched again by the next `sync`:
 a YouTube video in the format its song records first, its audio alone

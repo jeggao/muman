@@ -31,16 +31,23 @@ template.
 
 ## Install
 
-muman needs [ffmpeg](https://ffmpeg.org) (with ffprobe), and
-[yt-dlp](https://github.com/yt-dlp/yt-dlp) to fetch from the web.
+muman needs [ffmpeg](https://ffmpeg.org) 5.1 or newer (with ffprobe),
+and [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2025.03.21 or newer to
+fetch from the web. A run stops with exit code 2 on an older one, naming
+it. Debian's and Ubuntu's own yt-dlp packages are older, and YouTube
+breaks a yt-dlp more than a few months old, so install it from
+[PyPI](https://pypi.org/project/yt-dlp/) with pipx and keep it updated
+with `pipx upgrade yt-dlp`.
 
 | Platform | Install the tools |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ffmpeg yt-dlp` |
-| Fedora | `sudo dnf install ffmpeg yt-dlp` |
+| Debian, Ubuntu | `sudo apt install ffmpeg pipx && pipx install yt-dlp` |
+| Fedora | `sudo dnf install yt-dlp`, and ffmpeg from [RPM Fusion](https://rpmfusion.org) |
 | Arch | `sudo pacman -S ffmpeg yt-dlp` |
 | macOS | `brew install ffmpeg yt-dlp` |
 | Windows | `winget install Gyan.FFmpeg yt-dlp.yt-dlp`, or `scoop install ffmpeg yt-dlp` |
+
+`muman info` prints the version and path of each it found.
 
 Then install muman from [crates.io](https://crates.io/crates/muman)
 with a [Rust toolchain](https://rustup.rs):
@@ -49,8 +56,11 @@ with a [Rust toolchain](https://rustup.rs):
 cargo install --locked muman
 ```
 
-The same command updates it to the latest release. To build what is on
-`main` since the last release instead:
+The same command updates it to the latest release. Each release also
+has a built `muman` for Linux, macOS and Windows on its [releases
+page](https://github.com/jeggao/muman/releases); a `ffmpeg`, `ffprobe`
+or `yt-dlp` placed beside it is used before one on `PATH`. To build what
+is on `main` since the last release instead:
 
 ```bash
 cargo install --locked --git https://github.com/jeggao/muman
@@ -132,7 +142,7 @@ Every flag is in the [command reference](docs/cli.md).
 | Exit code | Means |
 |---|---|
 | 0 | Done, or nothing needed doing, or a change was declined |
-| 2 | ffmpeg, ffprobe or yt-dlp is missing, the system names no home folder, or the command line does not parse |
+| 2 | ffmpeg, ffprobe or yt-dlp is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, a song an export left out, or a problem `check` found |
 | 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, a change or `undo` was refused, or `--offline` rules out what was asked |
 

@@ -1,5 +1,7 @@
 //! The subprocess seam: every yt-dlp, ffmpeg and ffprobe call goes
-//! through [`Runner`], so tests drive the pipeline without spawning one.
+//! through [`Runner`], so tests drive the pipeline without spawning one;
+//! [`System`] is the one that spawns, with each tool as
+//! [`crate::tools`] finds it.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -8,6 +10,8 @@ use std::process::{Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 
 use anyhow::{Context, Result, anyhow};
+
+use crate::tools::{self, Found, Status, Tool, ToolError};
 
 /// One line a streamed program wrote, without its line ending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,157 +56,107 @@ pub trait Runner: Sync {
         let _ = env;
         self.stream(cmd, on_line)
     }
-}
 
-/// A tool muman runs that could not be found; `run` exits 2 on it.
-#[derive(Debug)]
-pub struct MissingTool {
-    pub name: &'static str,
-    pub variable: &'static str,
-}
-
-impl std::fmt::Display for MissingTool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match std::env::var_os(self.variable).filter(|v| !v.is_empty()) {
-            Some(named) => write!(
-                f,
-                "{} names {}, which is no program found: give its path, or unset {} to find \
-                 {} on the PATH",
-                self.variable,
-                named.to_string_lossy(),
-                self.variable,
-                self.name
-            ),
-            None => write!(
-                f,
-                "{} not found: install it, or name it in {}",
-                self.name, self.variable
-            ),
-        }
+    /// The tool called `name` as this runner finds it, for `info`; a
+    /// runner that runs no real program names none.
+    fn tool(&self, name: &str) -> Option<Status> {
+        let _ = name;
+        None
     }
 }
 
-impl std::error::Error for MissingTool {}
-
-/// The tools commands name, each with the variable that overrides it.
-const TOOLS: [(&str, &str); 3] = [
-    ("ffmpeg", "MUMAN_FFMPEG"),
-    ("ffprobe", "MUMAN_FFPROBE"),
-    ("yt-dlp", "MUMAN_YT_DLP"),
-];
-
 /// The production runner. Commands name a tool by its bare name; each
-/// is found the first time it runs, so a run that never fetches never
-/// needs yt-dlp. A tool is looked for, in order:
-///
-/// 1. In its variable (`MUMAN_FFMPEG`, `MUMAN_FFPROBE`, `MUMAN_YT_DLP`):
-///    a path or a name, and for yt-dlp a whole command such as
-///    `python -m yt_dlp`.
-/// 1. Beside the muman executable, as a bundle ships them.
-/// 1. On `PATH`, with Windows' `PATHEXT` extensions such as `.cmd`.
+/// is found and its version read the first time it runs
+/// ([`crate::tools`]), so a run that never fetches never needs yt-dlp.
 #[derive(Debug, Default)]
 pub struct System {
-    found: [OnceLock<Option<Vec<OsString>>>; 3],
+    found: [OnceLock<Result<Found, ToolError>>; 3],
 }
 
 impl System {
-    /// Fail now, with [`MissingTool`], when `name` cannot be found, so a
-    /// run that needs it stops before its first song rather than failing
-    /// every one.
+    /// Fail now, with [`ToolError`], when `name` cannot be found or is
+    /// below its floor, so a run that needs it stops before its first
+    /// song rather than failing every one.
     pub fn require(&self, name: &str) -> Result<()> {
-        let index = TOOLS
+        let index = tools::TOOLS
             .iter()
-            .position(|(n, _)| *n == name)
+            .position(|t| t.name == name)
             .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
-        self.tool(index).map(drop)
+        self.tool(index).map(drop).map_err(Into::into)
     }
 
-    /// The command line `tool` starts with, found once.
-    fn tool(&self, index: usize) -> Result<&[OsString]> {
-        let (name, variable) = TOOLS[index];
+    /// The tool at `index` of [`tools::TOOLS`], found and checked once.
+    fn tool(&self, index: usize) -> Result<&Found, ToolError> {
+        let tool = &tools::TOOLS[index];
         self.found[index]
-            .get_or_init(|| find(name, std::env::var_os(variable)))
-            .as_deref()
-            .ok_or_else(|| MissingTool { name, variable }.into())
+            .get_or_init(|| {
+                let command = tools::find(tool, std::env::var_os(tool.variable))
+                    .ok_or(ToolError::Missing { tool })?;
+                let printed = version_of(tool, &command)?;
+                tools::accept(tool, command, &printed)
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// `cmd` with its tool resolved, ready to spawn.
     fn command(&self, cmd: &[OsString]) -> Result<Command> {
-        let program: Vec<OsString> = match TOOLS.iter().position(|(n, _)| cmd[0] == *n) {
-            Some(i) => self.tool(i)?.to_vec(),
+        let program: Vec<OsString> = match tools::TOOLS.iter().position(|t| cmd[0] == t.name) {
+            Some(i) => self.tool(i)?.command.clone(),
             None => vec![cmd[0].clone()],
         };
         let mut command = Command::new(&program[0]);
         command.args(&program[1..]);
         if cmd[0] == "yt-dlp" {
             // yt-dlp finds ffmpeg on PATH only; tell it which one muman uses.
-            if let Ok([ffmpeg, ..]) = self.tool(0) {
-                command.arg("--ffmpeg-location").arg(ffmpeg);
+            if let Ok(Found {
+                command: ffmpeg, ..
+            }) = self.tool(0)
+            {
+                command.arg("--ffmpeg-location").arg(&ffmpeg[0]);
             }
-            // Python writes a pipe in the legacy code page on Windows,
-            // which mangles any path outside it; UTF-8 everywhere.
-            command
-                .env("PYTHONUTF8", "1")
-                .env("PYTHONIOENCODING", "utf-8");
+            python_utf8(&mut command);
         }
         command.args(&cmd[1..]).stdin(Stdio::null());
         Ok(command)
     }
 }
 
-/// How `name` is started: from `variable` when set, else beside the
-/// running executable, else from `PATH`.
-fn find(name: &str, variable: Option<OsString>) -> Option<Vec<OsString>> {
-    if let Some(value) = variable.filter(|v| !v.is_empty()) {
-        // A path or name first, whatever it holds: `C:\Tools\ffmpeg.exe`
-        // and `/Applications/My Tools/ffmpeg` are one word each.
-        if let Ok(program) = which::which(&value) {
-            return Some(vec![program.into_os_string()]);
-        }
-        // Then a command with arguments, as `python -m yt_dlp`.
-        let text = value.to_string_lossy();
-        let words: Vec<String> = if cfg!(windows) {
-            windows_words(&text)
-        } else {
-            shell_words::split(&text).ok()?
-        };
-        let (first, rest) = words.split_first()?;
-        let program = which::which(first).ok()?;
-        return Some(
-            std::iter::once(program.into_os_string())
-                .chain(rest.iter().map(OsString::from))
-                .collect(),
-        );
-    }
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .and_then(|dir| which::which_in(name, Some(dir), ".").ok());
-    beside
-        .or_else(|| which::which(name).ok())
-        .map(|p| vec![p.into_os_string()])
+/// Python writes a pipe in the legacy code page on Windows, which
+/// mangles any path outside it; UTF-8 everywhere.
+fn python_utf8(command: &mut Command) {
+    command
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
 }
 
-/// `text` split into words the way Windows programs read a command line:
-/// at spaces outside double quotes, the quotes dropped, and `\` taken
-/// as it is, since it separates folders.
-pub(crate) fn windows_words(text: &str) -> Vec<String> {
-    let (mut words, mut word, mut quoted) = (Vec::new(), String::new(), false);
-    for c in text.chars() {
-        match c {
-            '"' => quoted = !quoted,
-            c if c.is_whitespace() && !quoted => {
-                if !word.is_empty() {
-                    words.push(std::mem::take(&mut word));
-                }
-            }
-            c => word.push(c),
-        }
+/// What `tool`, started by `command`, prints for its version flag.
+fn version_of(tool: &'static Tool, command: &[OsString]) -> Result<String, ToolError> {
+    let program = command[0].to_string_lossy().into_owned();
+    let unusable = |error: String| ToolError::Unusable {
+        tool,
+        program: program.clone(),
+        error,
+    };
+    let mut version = Command::new(&command[0]);
+    version
+        .args(&command[1..])
+        .arg(tool.version_flag)
+        .stdin(Stdio::null());
+    if tool.name == "yt-dlp" {
+        python_utf8(&mut version);
     }
-    if !word.is_empty() {
-        words.push(word);
+    let out = version.output().map_err(|e| unusable(e.to_string()))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let said = stderr.lines().last().unwrap_or_default().trim();
+        return Err(unusable(format!(
+            "exit {}{}{said}",
+            out.status.code().unwrap_or(-1),
+            if said.is_empty() { "" } else { ", " }
+        )));
     }
-    words
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 impl Runner for System {
@@ -290,6 +244,14 @@ impl Runner for System {
         }
         Ok(child.wait()?.success())
     }
+
+    fn tool(&self, name: &str) -> Option<Status> {
+        let index = tools::TOOLS.iter().position(|t| t.name == name)?;
+        Some(Status {
+            tool: &tools::TOOLS[index],
+            found: self.tool(index).cloned(),
+        })
+    }
 }
 
 /// The error of `cmd` exiting with `status`, naming the tail of `stderr`.
@@ -362,6 +324,10 @@ impl<R: Runner> Runner for Traced<R> {
         Self::say(cmd);
         self.0.stream_env(cmd, env, on_line)
     }
+
+    fn tool(&self, name: &str) -> Option<Status> {
+        self.0.tool(name)
+    }
 }
 
 /// `arg` as one shell word.
@@ -422,45 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn a_variable_names_a_whole_command() {
-        let exe = std::env::current_exe().unwrap();
-        let line = format!("\"{}\" -m yt_dlp", exe.display());
-        let found = find("yt-dlp", Some(line.into())).unwrap();
-        assert_eq!(found.len(), 3);
-        assert_eq!(found[1], "-m");
-    }
-
-    #[test]
-    fn a_variable_naming_a_path_with_spaces_is_one_program() {
+    fn a_tool_that_is_no_program_is_unusable() {
         let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("My Tools");
-        std::fs::create_dir(&folder).unwrap();
+        let file = dir.path().join("ffmpeg");
+        std::fs::write(&file, "not a program").unwrap();
+        let tool = tools::tool("ffmpeg").unwrap();
+        let err = version_of(tool, &[file.clone().into_os_string()]).unwrap_err();
+        assert!(matches!(err, ToolError::Unusable { .. }), "{err}");
+        assert!(err.to_string().contains("MUMAN_FFMPEG"));
+    }
+
+    #[test]
+    fn the_running_executable_prints_no_version_a_tool_would() {
         let exe = std::env::current_exe().unwrap();
-        let copy = folder.join(exe.file_name().unwrap());
-        std::fs::copy(&exe, &copy).unwrap();
-        let found = find("ffmpeg", Some(copy.clone().into())).unwrap();
-        assert_eq!(found, [copy.into_os_string()]);
-    }
-
-    #[test]
-    fn windows_words_keep_quoted_spaces_and_backslashes() {
-        assert_eq!(
-            windows_words(r#""C:\Program Files\Python\python.exe" -m yt_dlp"#),
-            [r"C:\Program Files\Python\python.exe", "-m", "yt_dlp"]
-        );
-    }
-
-    #[test]
-    fn a_tool_found_nowhere_is_none() {
-        assert!(find("muman-no-such-tool", Some("muman-no-such-tool".into())).is_none());
-    }
-
-    #[test]
-    fn a_missing_tool_says_which_variable_names_it() {
-        let missing = MissingTool {
-            name: "ffprobe",
-            variable: "MUMAN_FFPROBE",
-        };
-        assert!(missing.to_string().contains("MUMAN_FFPROBE"));
+        let tool = tools::tool("ffmpeg").unwrap();
+        let printed = version_of(tool, &[exe.into_os_string()]);
+        assert!(printed.is_err() || tools::Version::parse(&printed.unwrap()).is_none());
     }
 }
