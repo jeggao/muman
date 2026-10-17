@@ -36,10 +36,15 @@ home in the library.
 
 A program not named in its variable is looked for beside the muman
 executable, then on `PATH` (with `PATHEXT` on Windows, so a `.cmd`
-wrapper is found). ffmpeg and ffprobe are needed by every command that
-reads audio; yt-dlp only by a run that fetches, so a library made only
-from your own files never needs it. `muman info` prints the folders in
-use.
+wrapper is found). Each is run once for its version when it is first
+found, and one older than the oldest release muman runs, named in the
+[README](../README.md#install), stops the run with exit code 2 and a
+message naming it and where a newer one comes from; a version muman
+cannot read, as a git build's, is taken as new enough. ffmpeg and
+ffprobe are needed by every command that reads audio; yt-dlp only by a
+run that fetches, so a library made only from your own files never needs
+it. `muman info` prints the folders in use and each program's version
+and path.
 
 ## Settings in the song list
 

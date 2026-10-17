@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::time::SystemTime;
 
 use clap::Parser;
 
 use super::*;
 use crate::lrclib::testing::Server;
+use crate::source::SourceKey;
 use crate::testing::{FLAC, Fake, words};
 
 fn cli(args: &[&str]) -> Cli {
@@ -1935,7 +1937,7 @@ fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
         .unwrap()
         .set_modified(month_ago)
         .unwrap();
-    clear_stale(&partial, std::time::Duration::from_secs(14 * 24 * 3600));
+    sync::clear_stale(&partial, std::time::Duration::from_secs(14 * 24 * 3600));
     assert!(!stale.exists());
     assert!(
         !partial.join("Chan").exists(),
@@ -2365,14 +2367,14 @@ fn a_path_that_is_not_there_is_told_from_an_address() {
         "Tide.flac",
         "C:\\Music\\Tide.flac",
     ] {
-        assert!(names_a_path(path), "{path}");
+        assert!(add::names_a_path(path), "{path}");
     }
     for address in [
         "https://archive.org/details/item0001",
         "ytsearch:lantern weather",
         "youtube.com/watch?v=vid00000001",
     ] {
-        assert!(!names_a_path(address), "{address}");
+        assert!(!add::names_a_path(address), "{address}");
     }
 }
 

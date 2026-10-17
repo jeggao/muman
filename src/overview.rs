@@ -1,7 +1,8 @@
 //! `muman info`: what the library holds, whether it is in step with
 //! the song list, and what in it could be better. Read from the song
-//! list, the state and the folders alone: nothing is measured, run,
-//! fetched or locked, so it answers at once and changes nothing. Whether
+//! list, the state and the folders alone: nothing is measured, fetched
+//! or locked, so it answers at once and changes nothing; the programs
+//! are run for their versions alone ([`programs`]). Whether
 //! the library is in step is what a sync would do with each song, by the
 //! decisions a sync makes (`reconcile::foresee`), on the state as a
 //! sync would take it, so `info`, `status` and `sync` never disagree.
@@ -122,6 +123,29 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     sources(&c, out)?;
     status(&c, out)?;
     health(&c, out)
+}
+
+/// Each program muman runs as it was found: its version and path, or
+/// why it cannot be run, so a report of a problem names them.
+pub fn programs<W: Write>(found: &[crate::tools::Status], out: &mut W) -> Result<()> {
+    if found.is_empty() {
+        return Ok(());
+    }
+    heading(out, "Programs")?;
+    for status in found {
+        let value = match &status.found {
+            Ok(f) => {
+                let program = f.command[0].to_string_lossy();
+                match f.version {
+                    Some(v) => format!("{v} at {program}"),
+                    None => format!("{program} (version not read)"),
+                }
+            }
+            Err(e) => Style::Muted.paint(&e.to_string()).to_string(),
+        };
+        row(out, status.tool.name, &value)?;
+    }
+    Ok(())
 }
 
 /// Where the song list and the library are, as flags, variables and the

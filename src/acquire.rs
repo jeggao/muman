@@ -102,12 +102,35 @@ impl Fetcher<'_> {
             videos.then_some(urls.len() as u64).filter(|n| *n > 0),
         );
         let urls = if long { &[][..] } else { urls };
-        let cmd = download::ytdlp_command(&places, archive, urls);
-        let ok = {
-            let live = self.live && !crate::progress::drawing();
-            let mut relay = Relay::new(out, live).counting(&step);
-            runner.stream(&cmd, &mut |line| relay.line(line))?
-        };
+        let (mut ok, mut flags) = self.stream(runner, out, &step, &places, archive, urls)?;
+        if !ok && flags.plugins_failed && places.plugins.is_some() {
+            crate::ui::warning(
+                out,
+                "muman's yt-dlp postprocessors did not load; fetching without them, so a track \
+                 keeps its video's thumbnail and generated captions are not asked for",
+            )?;
+            let places = download::Places {
+                plugins: None,
+                ..places
+            };
+            (ok, flags) = self.stream(runner, out, &step, &places, archive, urls)?;
+        }
+        if !ok && flags.stale {
+            let version = runner
+                .tool("yt-dlp")
+                .and_then(|s| s.found.ok())
+                .and_then(|f| f.version)
+                .map_or_else(String::new, |v| format!(" {v}"));
+            crate::ui::warning(
+                out,
+                &format!(
+                    "yt-dlp{version} could not read what a site serves now, which a newer \
+                     yt-dlp most often can: update it (`yt-dlp -U` for the standalone \
+                     program, `pipx upgrade yt-dlp` for one pip installed, else your package \
+                     manager)"
+                ),
+            )?;
+        }
         let mut fetched = std::fs::read_to_string(&done)
             .map(|s| download::finished(&s, self.sites))
             .unwrap_or_default();
@@ -131,6 +154,26 @@ impl Fetcher<'_> {
             }
         }
         Ok((ok, arrived))
+    }
+}
+
+impl Fetcher<'_> {
+    /// One yt-dlp run, its lines relayed: whether it succeeded, and what
+    /// its lines said beyond that.
+    fn stream<R: Runner, W: Write>(
+        &self,
+        runner: &R,
+        out: &mut W,
+        step: &crate::progress::Step,
+        places: &download::Places<'_>,
+        archive: Option<&Path>,
+        urls: &[String],
+    ) -> Result<(bool, crate::ytdlp_log::Flags)> {
+        let cmd = download::ytdlp_command(places, archive, urls);
+        let live = self.live && !crate::progress::drawing();
+        let mut relay = Relay::new(out, live).counting(step);
+        let ok = runner.stream(&cmd, &mut |line| relay.line(line))?;
+        Ok((ok, relay.flags()))
     }
 }
 

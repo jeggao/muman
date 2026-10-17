@@ -1,6 +1,9 @@
 //! HTTP GETs behind a trait, so LRCLIB and MusicBrainz lookups run
-//! against a fake server in tests. Production uses `ureq` with rustls and
-//! its bundled roots, so no system TLS library is needed on any platform.
+//! against a fake server in tests. Production uses `ureq` with rustls,
+//! so no system TLS library is needed on any platform, and verifies a
+//! server as the platform's own programs do, by the system's certificate
+//! store, so an authority the machine trusts, a proxy's among them, is
+//! trusted here too.
 //!
 //! Every request names muman by [`user_agent`], in the form MusicBrainz
 //! asks of every client, `name/version ( contact )`, with the repository
@@ -165,7 +168,11 @@ impl HttpTransport for UreqTransport {
         timeout: Duration,
     ) -> Result<Vec<u8>, TransportError> {
         let connect = CONNECT.min(timeout / 2);
+        let tls = ureq::tls::TlsConfig::builder()
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
         let agent: ureq::Agent = ureq::Agent::config_builder()
+            .tls_config(tls)
             .timeout_global(Some(timeout))
             .timeout_resolve(Some(connect))
             .timeout_connect(Some(connect))

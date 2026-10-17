@@ -724,7 +724,7 @@ pub fn run<R: Runner, W: Write>(
             let outcome = match hit {
                 // No yt-dlp fails every lookup alike; the run stops and
                 // says so, rather than putting each song off for a week.
-                Err(e) if e.downcast_ref::<crate::runner::MissingTool>().is_some() => {
+                Err(e) if e.downcast_ref::<crate::tools::ToolError>().is_some() => {
                     return Err(e);
                 }
                 Err(e) => {

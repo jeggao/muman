@@ -378,3 +378,95 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
     assert_eq!(downloads.len(), 2);
     assert_eq!(failed.len(), 2, "the fake fetches no page but YouTube's");
 }
+
+/// yt-dlp as a run of it that cannot load muman's postprocessors, or
+/// that reads YouTube no longer: each run's arguments kept.
+struct Failing {
+    runs: Mutex<Vec<Vec<String>>>,
+    line: &'static str,
+    /// Whether a run without `--plugin-dirs` succeeds.
+    bare_succeeds: bool,
+}
+
+impl Runner for Failing {
+    fn run(&self, _: &[OsString]) -> Result<()> {
+        anyhow::bail!("not in tests")
+    }
+
+    fn output(&self, _: &[OsString]) -> Result<Vec<u8>> {
+        anyhow::bail!("not in tests")
+    }
+
+    fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
+        let args: Vec<String> = cmd
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let plugins = args.iter().any(|a| a == "--plugin-dirs");
+        self.runs.lock().unwrap().push(args);
+        if plugins || !self.bare_succeeds {
+            on_line(Line::Err(self.line));
+            return Ok(false);
+        }
+        Ok(true)
+    }
+}
+
+fn fetch_with(s: &Setup, runner: &Failing, plugins: Option<&Path>) -> (bool, String) {
+    let ytdlp = s.dirs.ytdlp();
+    let temp = s.dir.path().join("temp");
+    let fetcher = Fetcher {
+        store: &ytdlp,
+        temp: &temp,
+        partial: &temp,
+        plugins,
+        sites: &crate::sites::Sites::default(),
+        options: &crate::settings::Ytdlp::default(),
+        live: false,
+        runs: Cell::new(0),
+    };
+    let mut out = Vec::new();
+    let (ok, _) = fetcher
+        .fetch(runner, &mut out, None, &["https://v".to_string()])
+        .unwrap();
+    (ok, crate::ui::plain(&String::from_utf8(out).unwrap()))
+}
+
+#[test]
+fn postprocessors_that_do_not_load_are_left_out_of_a_second_run() {
+    let s = setup();
+    let runner = Failing {
+        runs: Mutex::new(Vec::new()),
+        line: "ValueError: Invalid plugin directory: /plugins",
+        bare_succeeds: true,
+    };
+    let (ok, text) = fetch_with(&s, &runner, Some(Path::new("/plugins")));
+    assert!(ok, "{text}");
+    assert!(text.contains("postprocessors did not load"), "{text}");
+    let runs = runner.runs.lock().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(runs[0].iter().any(|a| a == "--plugin-dirs"));
+    assert!(
+        !runs[1]
+            .iter()
+            .any(|a| a == "--plugin-dirs" || a == "--use-postprocessor")
+    );
+}
+
+#[test]
+fn a_fetch_a_newer_yt_dlp_would_make_says_to_update_it() {
+    let s = setup();
+    let runner = Failing {
+        runs: Mutex::new(Vec::new()),
+        line: "ERROR: [youtube] vid00000009: Sign in to confirm you’re not a bot.",
+        bare_succeeds: false,
+    };
+    let (ok, text) = fetch_with(&s, &runner, None);
+    assert!(!ok);
+    assert!(text.contains("update it (`yt-dlp -U`"), "{text}");
+    assert_eq!(
+        runner.runs.lock().unwrap().len(),
+        1,
+        "no second run without plugins"
+    );
+}

@@ -46,7 +46,11 @@ jobs:
         uses: FedericoCarboni/setup-ffmpeg@v3
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - run: cargo test --test smoke --locked -- --ignored
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install yt-dlp
+      - run: cargo test --test smoke --test ytdlp --locked -- --ignored
 
   fmt:
     runs-on: ubuntu-latest

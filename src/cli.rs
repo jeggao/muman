@@ -37,8 +37,9 @@ pub const EXIT_CODES_HELP: &str = "\
 Exit codes:
   0  Every song was written, or nothing needed to be; or a change was
      declined
-  2  yt-dlp, ffmpeg or ffprobe is missing, the system names no home
-     folder, or the command line does not parse
+  2  yt-dlp, ffmpeg or ffprobe is missing, does not run or is older than
+     muman runs, the system names no home folder, or the command line
+     does not parse
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
