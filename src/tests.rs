@@ -140,6 +140,7 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
     let s = Setup::new();
     let song = s.file("rips/Song.flac");
     s.file("rips/Song.lrc");
+    s.file("rips/song.JPG");
     let (ok, text) = s.run(&flacs(), &["add", &song]);
     assert!(ok, "{text}");
     assert!(
@@ -147,6 +148,7 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
         "the user's file stays"
     );
     assert!(s.dir.path().join("home/sources/manual/Song.lrc").exists());
+    assert!(s.dir.path().join("home/sources/manual/song.JPG").exists());
     assert_eq!(s.songs(), [vec![SourceKey::Manual("Song.flac".into())]]);
     assert!(
         s.dir.path().join("lib/Artist/Record/02 Song.flac").exists(),

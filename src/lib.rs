@@ -1324,12 +1324,39 @@ fn fetched_key<R: Runner>(
     info.key(sites)
 }
 
-/// The `.lrc` and pictures named as a file is, beside it.
+/// The `.lrc` and pictures named as a file is, beside it, in any case
+/// as the store takes them, but none named exactly as another song file.
 fn sidecars(path: &Path) -> Vec<PathBuf> {
-    ["lrc", "jpg", "jpeg", "png", "webp"]
-        .iter()
-        .map(|ext| path.with_extension(ext))
+    let folder = path.parent().unwrap_or(Path::new(""));
+    let listed = if folder.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        folder
+    };
+    let mut beside: Vec<PathBuf> = std::fs::read_dir(listed)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| folder.join(e.file_name()))
         .filter(|p| p != path && p.is_file())
+        .collect();
+    beside.sort();
+    let song = |p: &PathBuf| store::kind_of(p) == Some(store::Kind::Media);
+    let another_s = |p: &PathBuf| {
+        beside
+            .iter()
+            .any(|s| s != p && song(s) && s.with_extension("") == p.with_extension(""))
+    };
+    beside
+        .iter()
+        .filter(|p| {
+            matches!(
+                store::kind_of(p),
+                Some(store::Kind::Lyrics | store::Kind::Image)
+            ) && store::named_as(p, path)
+                && (p.with_extension("") == path.with_extension("") || !another_s(p))
+        })
+        .cloned()
         .collect()
 }
 

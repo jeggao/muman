@@ -93,6 +93,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   emoji, was cut between its code points and could leave the name
   ending in a lone zero-width joiner or variation selector; these are
   dropped from the end of such a cut.
+- **A sidecar named as its song in another case comes with it.** A
+  picture or `.lrc` named as a manual song file but in another case,
+  as `Song.jpg` beside `song.flac`, was not taken, though a folder's
+  `COVER.JPG` was, nor copied by `add` with its song. Sidecars are
+  matched in any case, one in the song's own case first.
 - **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000

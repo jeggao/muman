@@ -241,9 +241,9 @@ song and is not copied again. A dropped file waits until ten seconds after it ar
 whatever modification time a copy kept for it, so one still being
 copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
-`.lrc` and the JPEG, PNG or WebP pictures named as it is, as
-`Paper Comets.flac` brings `Paper Comets.lrc`, and its folder's `cover`,
-`folder`, `front` or `album` picture. A `.lrc` or a picture can also be
+`.lrc` and the JPEG, PNG or WebP pictures named as it is, in any case,
+as `Paper Comets.flac` brings `Paper Comets.lrc` and `paper comets.jpg`,
+and its folder's `cover`, `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
 listed as a source of its own, and one given to `add` alone goes to the
 songs it belongs to ([lyrics, pictures and tags of their
 own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
