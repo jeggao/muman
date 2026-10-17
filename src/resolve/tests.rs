@@ -890,6 +890,56 @@ fn release_ids_come_with_the_album_and_recording_ids_on_their_own() {
 }
 
 #[test]
+fn the_recording_ids_are_the_release_s_where_it_names_another() {
+    let (a, mb) = (
+        manual("a.flac"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000002").unwrap(),
+    );
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Title, &["Lantern Weather"], true);
+    tag(
+        &mut fa,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000001"],
+        true,
+    );
+    tag(
+        &mut fa,
+        Field::MusicBrainzWorkId,
+        &["00000000-0000-0000-0000-0000000000c1"],
+        true,
+    );
+    let mut fmb = Facts::unreadable("mb".into());
+    tag(&mut fmb, Field::Title, &["Lantern Weather"], true);
+    tag(&mut fmb, Field::Album, &["Rooms of Salt"], true);
+    tag(&mut fmb, Field::Track, &["3"], true);
+    tag(
+        &mut fmb,
+        Field::MusicBrainzAlbumId,
+        &["00000000-0000-0000-0000-00000000000a"],
+        true,
+    );
+    tag(
+        &mut fmb,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000002"],
+        true,
+    );
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb)]);
+    let r = run(&song(&[a, mb.clone()]), &facts, &[]);
+    assert_eq!(why(&r, "MUSICBRAINZ_ALBUMID").from, mb.to_string());
+    assert_eq!(
+        why(&r, "MUSICBRAINZ_TRACKID").from,
+        mb.to_string(),
+        "the recording its release names"
+    );
+    assert!(
+        !r.plan.tags.iter().any(|(t, _)| t == "MUSICBRAINZ_WORKID"),
+        "another recording's work goes with it"
+    );
+}
+
+#[test]
 fn a_record_titled_otherwise_lends_no_recording_ids() {
     let (a, mb) = (
         manual("a.flac"),

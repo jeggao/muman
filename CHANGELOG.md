@@ -143,6 +143,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   typed only "other" is no cover beside one typed the front cover. A
   picture named as its song is a front whatever the song's name, as
   `Back Home.jpg` beside `Back Home.flac`.
+- **A cover is looked up after the release it is of.** The Cover Art
+  Archive was asked in the same round as AcoustID and MusicBrainz,
+  before the song had a release's IDs, so it searched for the album by
+  its names: it often found none, then waited out `recheck`, or found
+  another release's cover. It now waits for those lookups, and a cover
+  lookup that found nothing before is made once again.
+- **A song's MusicBrainz IDs never contradict.** A file's own recording
+  ID was kept beside the release IDs of another recording a lookup
+  found; the recording IDs now come with the release's where its
+  source names one.
 - **A name told apart from another keeps within `max_path`.** The ID
   added to a name two songs share could take the path past it.
 - **Subtitles converted to lyrics lose their markup**, as `<i>`, and an

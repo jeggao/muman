@@ -25,9 +25,12 @@
 //! its upload never look each other up in turn. Its MusicBrainz lookup
 //! waits while its AcoustID lookup is due, since both find a MusicBrainz
 //! record and the fingerprint names the recording surer than its names
-//! do; a round AcoustID answered is followed by another even when nothing
-//! joined, so a song AcoustID could not place is searched for by name in
-//! the same run. Each round measures what
+//! do; its Cover Art Archive lookup waits while either is due, so it asks
+//! for the release group the record names rather than searching for the
+//! album by its names. A round AcoustID or MusicBrainz answered is
+//! followed by another even when nothing joined, so a song AcoustID could
+//! not place is searched for by name, and its cover looked up, in the
+//! same run. Each round measures what
 //! the triggers read, makes its lookups and fetches what they found,
 //! without holding the run's lock; what one round adds may trigger the
 //! next. A provider's `per_run` cap lets a backlog, as the first sync of
@@ -96,7 +99,7 @@ pub fn method(p: Provider) -> &'static str {
         Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
         Provider::AcoustId => "acoustid/1",
-        Provider::CoverArt => "coverart/1",
+        Provider::CoverArt => "coverart/2",
         Provider::Manual => "manual",
     }
 }
@@ -263,6 +266,9 @@ pub fn due(
         }
         if taken.contains(&Provider::AcoustId) {
             mine.retain(|d| d.find != Provider::MusicBrainz);
+        }
+        if taken.contains(&Provider::AcoustId) || taken.contains(&Provider::MusicBrainz) {
+            mine.retain(|d| d.find != Provider::CoverArt);
         }
         found.extend(mine);
     }
@@ -708,7 +714,7 @@ pub fn run<R: Runner, W: Write>(
         }
 
         let printed = hits.iter().any(|(d, hit)| {
-            d.find == Provider::AcoustId
+            matches!(d.find, Provider::AcoustId | Provider::MusicBrainz)
                 && !hit
                     .as_ref()
                     .is_err_and(|e| e.downcast_ref::<Refusing>().is_some())

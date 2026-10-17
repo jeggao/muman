@@ -21,7 +21,9 @@
 //!   splits. Each field's [`tags::Scope`] says which it is. A
 //!   recording's ISRC and MusicBrainz IDs come only from a source that
 //!   titles it as the song is titled, so a record of another recording,
-//!   its names outvoted, lends the song none.
+//!   its names outvoted, lends the song none; where the release's source
+//!   is one and names its recording, its recording IDs are the song's,
+//!   so a release's IDs and its recording's never contradict.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -1116,6 +1118,37 @@ pub const SINGLE: &str = "a single, named for its title";
 /// artist's own source.
 const FIRST_ARTIST: &str = "the first artist of ";
 
+/// Take the MusicBrainz recording IDs of `release`, the source the
+/// release fields came from, where it names another recording than
+/// `fields` hold: a release's IDs name one recording on it, so the IDs
+/// written never contradict. An ID of the other recording it lacks goes.
+fn recording_of_release(
+    fields: &mut BTreeMap<Field, Slot>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    release: &SourceKey,
+) {
+    let of_release = |k: &SourceKey| k == release;
+    let Some(track) = best_offer(candidates, Field::MusicBrainzTrackId, &of_release) else {
+        return;
+    };
+    if fields
+        .get(&Field::MusicBrainzTrackId)
+        .is_none_or(|s| s.values == track.offer.values)
+    {
+        return;
+    }
+    for field in [
+        Field::MusicBrainzTrackId,
+        Field::MusicBrainzArtistId,
+        Field::MusicBrainzWorkId,
+    ] {
+        match best_offer(candidates, field, &of_release) {
+            Some(c) => fields.insert(field, Slot::of(c)),
+            None => fields.remove(&field),
+        };
+    }
+}
+
 /// A tag as it will be written, and where it came from.
 #[derive(Clone)]
 struct Slot {
@@ -1244,6 +1277,9 @@ fn resolve_tags(
                 },
             );
         }
+    }
+    if let Some(album) = release.filter(|a| named_so(a.key)) {
+        recording_of_release(&mut fields, &candidates, album.key);
     }
     let heard = |k: &SourceKey| !mixed && k == audio;
     let album_heard = |k: &SourceKey| heard(k) && release.is_some_and(|r| r.key == audio);
