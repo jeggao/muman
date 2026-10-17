@@ -384,7 +384,7 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
     .with_context(|| format!("copying {}", path.display()))?;
     let result = (|| -> Result<()> {
         // The copy is the file byte for byte, and a `.part` names no format.
-        let held = lofty::read_from_path(&path)
+        let held = crate::tags::read_tagged(&path)
             .with_context(|| format!("reading the tags of {}", path.display()))?;
         let tag = held.primary_tag();
         let picture = tag.and_then(|t| {
@@ -685,7 +685,9 @@ fn vorbis_comments(
     tags: &[(String, Vec<String>)],
     picture: Option<Picture>,
 ) -> Result<VorbisComments> {
-    let options = ParseOptions::new();
+    // The vendor string is all that is read: the audio's properties are
+    // not, as lofty refuses an Opus stream of mapping family 255 for them.
+    let options = ParseOptions::new().read_properties(false);
     let reading = || format!("reading {} as {codec}", path.display());
     let (vendor, mask) = match codec {
         Codec::Opus => (

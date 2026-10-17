@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **Opus of three, four or more than eight channels is written.** A
+  source in a layout no Vorbis layout names, as 2.1, 3.1 or 7.1.4,
+  written to Opus failed on every sync: its tags could not be written
+  into the file ffmpeg made.
+
 ## [0.4.1] - 2026-10-15
 
 ### Fixed

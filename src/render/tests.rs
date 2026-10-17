@@ -205,6 +205,25 @@ fn tagged(format: Format) -> Plan {
 }
 
 #[test]
+fn an_opus_file_with_no_speakers_named_is_tagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("song.opus");
+    fs::write(&path, crate::ogg::discrete(crate::testing::SILENCE_OPUS)).unwrap();
+    let mut file = fs::File::open(&path).unwrap();
+    assert!(
+        OpusFile::read_from(&mut file, ParseOptions::new()).is_err(),
+        "lofty refuses mapping family 255 for its properties"
+    );
+    let tags = vec![("TITLE".to_string(), vec!["Song".to_string()])];
+    write_tags(&path, Format::Copy { codec: Codec::Opus }, &tags, None).unwrap();
+
+    let read = crate::tags::read_file(&path).unwrap();
+    assert_eq!(read.get("title"), Some(&vec!["Song".to_string()]));
+    let bytes = fs::read(&path).unwrap();
+    assert_eq!(bytes[28 + 18], 255, "the header keeps its mapping family");
+}
+
+#[test]
 fn an_mp3_song_is_tagged_with_id3v2() {
     let f = fixture();
     let fake = Fake::default();

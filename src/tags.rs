@@ -493,7 +493,7 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
     use lofty::file::TaggedFileExt;
     use lofty::tag::{ItemValue, TagType};
 
-    let file = lofty::read_from_path(path).ok()?;
+    let file = read_tagged(path).ok()?;
     let mut tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let primary = file.primary_tag().map(lofty::tag::Tag::tag_type);
     let mut ordered: Vec<&lofty::tag::Tag> = file.tags().iter().collect();
@@ -515,6 +515,17 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
         }
     }
     Some(tags)
+}
+
+/// The file at `path` read by `lofty` for its tags alone. Its audio's
+/// properties are not read: `lofty` refuses some a file may hold, as an
+/// Opus stream of mapping family 255, and a file's tags never need them.
+pub(crate) fn read_tagged(
+    path: &std::path::Path,
+) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
+    lofty::probe::Probe::open(path)?
+        .options(lofty::config::ParseOptions::new().read_properties(false))
+        .read()
 }
 
 /// A track or disc written `3/12` offers its total too, unless the file
