@@ -98,6 +98,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   as `Song.jpg` beside `song.flac`, was not taken, though a folder's
   `COVER.JPG` was, nor copied by `add` with its song. Sidecars are
   matched in any case, one in the song's own case first.
+- **`add` names the files it does not read and adds the rest.** A file
+  given that muman reads nothing from, as a `.pdf`, stopped the whole
+  `add` with nothing copied, and a folder's such files were copied into
+  `sources/manual` silently, where nothing read them. The file is named
+  and left out, the songs given with it are written all the same and
+  `add` exits with 4; a folder's are left out with a warning naming
+  them.
 - **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000

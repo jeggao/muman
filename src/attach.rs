@@ -190,7 +190,7 @@ pub fn sort(path: &Path) -> Result<Option<What>> {
         }
     }
     bail!(
-        "{} is no song, lyrics, picture or tags muman reads",
+        "{}, which is no song, lyrics, picture or tags muman reads",
         path.display()
     )
 }

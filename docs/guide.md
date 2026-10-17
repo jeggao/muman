@@ -243,8 +243,10 @@ copied is not read half written, and a listed file moved within
 the folder is followed rather than listed again. A song file brings the
 `.lrc` and the JPEG, PNG or WebP pictures named as it is, in any case,
 as `Paper Comets.flac` brings `Paper Comets.lrc` and `paper comets.jpg`,
-and its folder's `cover`, `folder`, `front` or `album` picture. A `.lrc` or a picture can also be
-listed as a source of its own, and one given to `add` alone goes to the
+and its folder's `cover`, `folder`, `front` or `album` picture. A
+folder given to `add` is copied but for what is no song, lyrics or
+picture, as a booklet `.pdf`, which is left out and named. A `.lrc` or
+a picture can also be listed as a source of its own, and one given to `add` alone goes to the
 songs it belongs to ([lyrics, pictures and tags of their
 own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
 an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
@@ -366,8 +368,8 @@ the song list with a query as `muman list` reads one, or leave the file
 out, which copies nothing. `-y` takes the likeliest when it is clearly
 the nearest. Without a terminal, a file not surely a song's is left
 out, and `add` exits with 5 once the rest is done; a file that does not
-read, as an empty `.lrc`, a picture that does not decode whole, a song file
-in which ffprobe finds no audio or a cue sheet splitting one song's
+read, as a `.pdf`, an empty `.lrc`, a picture that does not decode whole,
+a song file in which ffprobe finds no audio or a cue sheet splitting one song's
 file into tracks, is not added and `add` exits
 with 4, the songs given with it written all the same. `--to` names the song
 with a query instead, quoted as one word when it has several, and

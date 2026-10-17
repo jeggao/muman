@@ -2175,11 +2175,12 @@ fn a_path_that_is_not_there_is_told_from_an_address() {
 }
 
 #[test]
-fn a_file_muman_does_not_read_is_not_added() {
+fn a_file_muman_does_not_read_is_not_added_and_the_rest_is() {
     let s = Setup::new();
     let notes = s.file("rips/notes.docx");
+    let song = s.file("rips/Song.flac");
     let e = run_with(
-        &s.job(&["add", &notes]),
+        &s.job(&["add", &notes, &song]),
         &flacs(),
         &Server::default(),
         None,
@@ -2188,10 +2189,27 @@ fn a_file_muman_does_not_read_is_not_added() {
     )
     .unwrap_err();
     assert!(
-        format!("{e:#}").contains("is no song, lyrics, picture or tags"),
+        format!("{e:#}").contains("notes.docx, which is no song, lyrics, picture or tags"),
         "{e:#}"
     );
-    assert!(!s.dir.path().join("home/sources/manual/notes.docx").exists());
+    let manual = s.dir.path().join("home/sources/manual");
+    assert!(!manual.join("notes.docx").exists());
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Song.flac".into())]]);
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+
+    s.file("rips/Album/a.flac");
+    s.file("rips/Album/booklet.pdf");
+    s.file("rips/Album/Scans/rip.xyz");
+    let album = s.dir.path().join("rips").join("Album");
+    let (ok, text) = s.run(&flacs(), &["add", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Left out of") && text.contains("booklet.pdf") && text.contains("rip.xyz"),
+        "{text}"
+    );
+    assert!(manual.join("Album").join("a.flac").exists());
+    assert!(!manual.join("Album").join("booklet.pdf").exists());
+    assert!(!manual.join("Album").join("Scans").exists());
 }
 
 #[test]
