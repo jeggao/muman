@@ -84,9 +84,10 @@ pub struct Library {
     /// every filesystem: no character takes more UTF-16 units than bytes.
     pub max_name_bytes: usize,
     pub max_folder_bytes: usize,
-    /// The longest whole path, library folder included, in characters;
-    /// the title is cut to fit. Windows programs and players without
-    /// long-path support stop at 260.
+    /// The longest whole path, library folder included, in characters as
+    /// Windows counts them, UTF-16 units, an emoji two; the title is cut
+    /// to fit. Windows programs and players without long-path support
+    /// stop at 260.
     pub max_path: Option<usize>,
     pub unknown_artist: String,
     pub unknown_album: String,

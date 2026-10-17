@@ -17,14 +17,15 @@ edition = 2
 # docs/configuration.md for the variables and filters.
 template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
 # What is replaced in tag values before they make a path; set "none" to
-# replace only "/", or "ascii" to transliterate everything to ASCII.
+# replace only "/" and "\", or "ascii" to transliterate everything to ASCII.
 restrict = "windows"
 # Replacements merged over the defaults, such as { ":" = " -" }.
 replace = {}
 max_name_bytes = 200
 max_folder_bytes = 120
-# The longest whole path in characters, library folder included; unset,
-# there is no limit. 250 keeps a library usable on Windows.
+# The longest whole path in characters as Windows counts them, an emoji
+# two, library folder included; unset, there is no limit. 250 keeps a
+# library usable on Windows.
 # max_path = 250
 unknown_artist = "Unknown Artist"
 unknown_album = "Unknown Album"

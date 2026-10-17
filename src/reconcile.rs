@@ -2103,7 +2103,7 @@ pub(crate) fn plan<W: Write>(
     if let Some(max) = manifest.settings.library.max_path {
         let over = planned
             .iter()
-            .filter(|(_, r)| library.join(path_of(r)).to_string_lossy().chars().count() > max)
+            .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
         if over > 0 {
             crate::ui::warning(
@@ -2112,7 +2112,7 @@ pub(crate) fn plan<W: Write>(
                     "{over} song(s) take more than [library] max_path = {max} characters even \
                      with their names cut short: the library folder, {}, takes {} itself",
                     library.display(),
-                    library.to_string_lossy().chars().count()
+                    naming::units(&library.to_string_lossy())
                 ),
             )?;
         }

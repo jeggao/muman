@@ -9,6 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **`[library] max_path` counts characters as Windows does**, in UTF-16
+  units, so an emoji counts two; a path of such characters is cut
+  shorter than before.
+- **`restrict = "none"` replaces `\` too**, which Windows reads as a
+  folder, so a library made on Linux copies to Windows whole.
 - **Every song is tagged once again on the first sync.** MP3, M4A and
   WavPack files are tagged as Picard tags them; their audio is not
   written again.
@@ -73,6 +78,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   it does not hold as written is told.
 - **A cover past 16 MiB is made smaller in every container**, not only
   in FLAC: a large PNG made ffmpeg drop every tag of a WavPack file.
+- **A name that composes longer still fits.** A name was cut to its
+  byte limit before it was composed into Unicode NFC, which can lengthen
+  it, so a Devanagari title could pass 255 bytes and fail on every
+  sync; `max_path` cut names inside a flag or an emoji.
+- **Names Windows holds as one are told apart** by case as NTFS folds
+  it: `ΟΔΟΣ` and `οδοσ` were written as two files where Windows keeps one.
 - **A back cover is no song's cover.** A source's back cover, disc or
   booklet could be embedded as the front cover when it was the sharper
   picture; it is taken only when no other picture is.

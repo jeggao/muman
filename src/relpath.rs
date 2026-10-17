@@ -56,11 +56,12 @@ pub fn normalized(path: &Path) -> PathBuf {
 }
 
 /// How a case-insensitive, normalization-insensitive filesystem (NTFS,
-/// APFS, HFS+) tells two names apart: if two paths fold alike, they may
-/// be one file.
+/// exFAT, APFS, HFS+) tells two names apart: if two paths fold alike, they
+/// may be one file. They fold to upper case, as NTFS's and exFAT's tables
+/// do: lower case would tell a final sigma, `ς`, from `σ`, both `Σ` there.
 #[must_use]
 pub fn folded(path: &Path) -> String {
-    to_portable(path).to_lowercase()
+    to_portable(path).to_uppercase()
 }
 
 /// For a path.
@@ -197,5 +198,14 @@ mod tests {
             r#"{"outputs":{"A/b.opus":1},"kept":["A/c.flac"],"lyrics":"A/b.lrc"}"#
         );
         assert_eq!(serde_json::from_str::<Record>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn names_a_case_insensitive_filesystem_holds_as_one_fold_alike() {
+        let fold = |s: &str| folded(Path::new(s));
+        assert_eq!(fold("ΟΔΟΣ"), fold("οδοσ"));
+        assert_eq!(fold("Song"), fold("SONG"));
+        assert_eq!(fold("e\u{301}"), fold("é"));
+        assert_ne!(fold("Song"), fold("Songs"));
     }
 }

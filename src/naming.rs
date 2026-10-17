@@ -19,6 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::settings::{Library, Restrict};
@@ -84,7 +85,7 @@ impl Naming {
     /// `max_path`.
     pub fn new(settings: &Library, library: &Path) -> Result<Self> {
         let mut replace: Vec<(String, String)> = match settings.restrict {
-            Restrict::None => vec![("/".into(), "⧸".into())],
+            Restrict::None => vec![("/".into(), "⧸".into()), ("\\".into(), "⧹".into())],
             Restrict::Windows | Restrict::Ascii => LOOKALIKES
                 .iter()
                 .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
@@ -104,7 +105,7 @@ impl Naming {
             max_folder: settings.max_folder_bytes,
             room: settings
                 .max_path
-                .map(|max| max.saturating_sub(library.to_string_lossy().chars().count() + 1)),
+                .map(|max| max.saturating_sub(units(&library.to_string_lossy()) + 1)),
             unknown_artist: settings.unknown_artist.clone(),
             unknown_album: settings.unknown_album.clone(),
             untitled: settings.untitled.clone(),
@@ -172,18 +173,15 @@ impl Naming {
         // Folders get an even share of what the path may take when
         // together they would leave the name too little.
         let share = (room.saturating_sub(SUFFIX_ROOM) / (parts.len() + 1)).max(8);
-        let length =
-            |parts: &[String]| -> usize { parts.iter().map(|p| p.chars().count() + 1).sum() };
+        let length = |parts: &[String]| -> usize { parts.iter().map(|p| units(p) + 1).sum() };
         if length(&parts) + share + SUFFIX_ROOM > room {
             parts = parts
                 .iter()
-                .map(|p| {
-                    self.component(&p.chars().take(share).collect::<String>(), self.max_folder)
-                })
+                .map(|p| self.component(&cut_units(p, share), self.max_folder))
                 .collect();
         }
-        let chars = room.saturating_sub(length(&parts) + SUFFIX_ROOM).max(8);
-        let name: String = name.chars().take(chars).collect();
+        let left = room.saturating_sub(length(&parts) + SUFFIX_ROOM).max(8);
+        let name = cut_units(&self.component(name, self.max_name), left);
         Ok(self.finish(&parts, &name, self.max_name))
     }
 
@@ -208,13 +206,14 @@ impl Naming {
     /// always, since there they are separators, streams or wildcards.
     fn forbidden(&self, c: char) -> bool {
         c == '/'
+            || c == '\\'
             || c.is_control()
             || ((self.restrict != Restrict::None || cfg!(windows)) && FORBIDDEN.contains(&c))
     }
 
     /// One tag value made safe for a path.
     pub(crate) fn value(&self, text: &str) -> String {
-        let mut out = text.to_string();
+        let mut out: String = text.nfc().collect();
         for (from, to) in &self.replace {
             if !from.is_empty() {
                 out = out.replace(from.as_str(), to);
@@ -229,11 +228,13 @@ impl Naming {
             .collect()
     }
 
-    /// A display name as one path component within `limit` bytes.
+    /// A display name as one path component within `limit` bytes, in NFC
+    /// before it is cut: composing a name can lengthen it, as a nukta
+    /// letter NFC keeps apart grows from 3 bytes to 6.
     fn component(&self, name: &str, limit: usize) -> String {
         // What the template itself spells, values aside, is made safe too.
         let safe: String = name
-            .chars()
+            .nfc()
             .filter(|c| !c.is_control() && !reorders(*c))
             .map(
                 |c| match LOOKALIKES.iter().find(|(f, _)| f.starts_with(c)) {
@@ -310,6 +311,38 @@ pub fn suffixed(stem: &Path, id: &str, n: u32, max_name: usize) -> PathBuf {
     let name = cut(&name, room.saturating_sub(suffix.len()));
     let named = format!("{}{suffix}", name.trim_end());
     stem.with_file_name(named.trim_start())
+}
+
+/// A text's length as Windows counts a path's: in UTF-16 code units, two
+/// for a character past the Basic Multilingual Plane, as an emoji.
+#[must_use]
+pub fn units(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// `text` cut within `limit` UTF-16 units between characters as a reader
+/// counts them, as [`cut`] cuts within bytes.
+fn cut_units(text: &str, limit: usize) -> String {
+    let mut taken = 0;
+    let mut end = 0;
+    for g in text.graphemes(true) {
+        taken += units(g);
+        if taken > limit {
+            break;
+        }
+        end += g.len();
+    }
+    if end == 0 {
+        let mut taken = 0;
+        for c in text.chars() {
+            taken += c.len_utf16();
+            if taken > limit {
+                break;
+            }
+            end += c.len_utf8();
+        }
+    }
+    text[..end].to_string()
 }
 
 /// The least of a name a suffix telling it apart leaves.
@@ -596,5 +629,70 @@ mod tests {
         let stem = n.stem(&tags(&long, &long, &long)).unwrap();
         let chars = 4 + stem.to_string_lossy().chars().count();
         assert!(chars + SUFFIX_ROOM <= 60, "{chars}");
+    }
+
+    #[test]
+    fn a_name_composed_longer_still_fits_its_bytes() {
+        let n = naming(&Library::default());
+        // U+0958 composes from its parts' 6 bytes to none, NFC keeping them
+        // apart: a cut before composing let the name grow past its limit.
+        let title = "\u{0958}".repeat(100);
+        let stem = n
+            .stem(&tags("Marlo Venn", &"\u{0958}".repeat(60), &title))
+            .unwrap();
+        for part in &stem {
+            let part = part.to_string_lossy();
+            assert_eq!(part.nfc().collect::<String>(), part);
+            assert!(
+                part.len() <= Library::default().max_name_bytes,
+                "{}",
+                part.len()
+            );
+        }
+        let album = stem
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert!(
+            album.len() <= Library::default().max_folder_bytes,
+            "{}",
+            album.len()
+        );
+    }
+
+    #[test]
+    fn a_path_limit_counts_as_windows_does_and_keeps_characters_whole() {
+        let limited = Library {
+            max_path: Some(100),
+            ..Library::default()
+        };
+        let n = Naming::new(&limited, &PathBuf::from("l".repeat(10))).unwrap();
+        let clef = "\u{1D11E}".repeat(40);
+        let stem = n.stem(&tags(&clef, &clef, &clef)).unwrap();
+        let whole = 11 + units(&stem.to_string_lossy());
+        assert!(whole + SUFFIX_ROOM <= 100, "{whole} units");
+        let family = "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}".repeat(20);
+        let flags = "\u{1F1EF}\u{1F1F5}".repeat(40);
+        for title in [family.as_str(), flags.as_str()] {
+            let stem = n.stem(&tags("A", "B", title)).unwrap();
+            let name = stem.file_name().unwrap().to_string_lossy().into_owned();
+            let one = title.graphemes(true).next().unwrap();
+            assert!(
+                !name.is_empty() && name.graphemes(true).all(|g| g == one),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_backslash_never_names_a_folder_on_another_system() {
+        let none = Library {
+            restrict: Restrict::None,
+            ..Library::default()
+        };
+        let stem = naming(&none).stem(&tags("A", "B", "a\\b")).unwrap();
+        assert_eq!(stem.file_name().unwrap(), "a⧹b");
     }
 }

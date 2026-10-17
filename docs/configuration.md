@@ -372,7 +372,7 @@ restrict` sets how far that goes:
 
 | `restrict` | Replaces |
 |---|---|
-| `none` | Only `/` and control characters, which no filesystem allows |
+| `none` | Only `/`, `\` and control characters, which no filesystem allows or Windows reads as a folder |
 | `windows` | Also the characters Windows, FAT and most phones refuse — `\ : * ? " < > \|` — trailing dots and spaces, and reserved device names such as `CON` or `nul.txt` |
 | `ascii` | As `windows`, and transliterates everything else to ASCII |
 
@@ -383,11 +383,18 @@ applied first and over these: `{ ":" = " -" }` turns `A: B` into
 `A - B`. A reserved device name gets `_` after it: `CON_.opus`.
 
 File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
-bytes of UTF-8, which no filesystem counts more strictly, and never
-inside a character as a reader sees one, such as a flag or a letter with
-its accent, unless one character alone is longer. A name keeps room for
+bytes of UTF-8, which no filesystem counts more strictly, once they are
+in Unicode NFC, and never inside a character as a reader sees one, such
+as a flag or a letter with its accent, unless one character alone is
+longer. A name keeps room for
 what tells it apart, so the least they take is 40 and 16; the most is
 255, as much as any filesystem holds. Windows
 programs and some players also stop at 260 characters for a whole path;
 `max_path` cuts each title so the full path, library folder included,
-stays within it, and a sync warns of the songs it cannot fit.
+stays within it, and a sync warns of the songs it cannot fit. Its
+characters are counted as Windows counts them, in UTF-16 units, so an
+emoji or a character past the Basic Multilingual Plane counts two.
+
+Two names a case-insensitive filesystem holds as one, as `Song` and
+`SONG`, or `ΟΔΟΣ` and `οδοσ`, are told apart by a suffix naming the
+song's source, so a library copied to Windows or macOS loses neither.
