@@ -13,7 +13,9 @@
 //! `_`. Limits are counted in UTF-8 bytes, which no filesystem's own
 //! count exceeds, and a name is cut between graphemes, the characters a
 //! reader sees, so a cut keeps a flag or an accented letter whole or
-//! drops it. A cut that shifts, as a newer Unicode joins characters
+//! drops it; a grapheme longer than the room alone is cut between code
+//! points, and no joiner or variation selector is left dangling at its
+//! end. A cut that shifts, as a newer Unicode joins characters
 //! anew, moves the song's file to its new name.
 
 use std::path::{Path, PathBuf};
@@ -370,6 +372,7 @@ fn cut_units(text: &str, limit: usize) -> String {
             }
             end += c.len_utf8();
         }
+        return split(&text[..end]);
     }
     text[..end].to_string()
 }
@@ -387,8 +390,20 @@ fn cut(text: &str, limit: usize) -> String {
     let mut end = fitting(&mut text.grapheme_indices(true).map(|(i, g)| i + g.len()));
     if end == 0 {
         end = fitting(&mut text.char_indices().map(|(i, c)| i + c.len_utf8()));
+        return split(&text[..end]);
     }
     text[..end].to_string()
+}
+
+/// The start of a grapheme cut from the rest, without the joiners and
+/// variation selectors at its end, which join or style a character the
+/// cut took away.
+fn split(start: &str) -> String {
+    start
+        .trim_end_matches(
+            |c| matches!(c, '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'),
+        )
+        .to_string()
 }
 
 #[cfg(test)]
@@ -554,6 +569,21 @@ mod tests {
         assert_eq!(cut(accented, 5), "Caf");
         let marked = format!("Z{}", "\u{301}".repeat(20));
         assert_eq!(cut(&marked, 5), "Z\u{301}\u{301}");
+    }
+
+    #[test]
+    fn a_grapheme_cut_apart_ends_on_no_joiner() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} Family";
+        assert_eq!(cut(family, 16), "\u{1F468}\u{200D}\u{1F469}");
+        assert_eq!(cut_units(family, 6), "\u{1F468}\u{200D}\u{1F469}");
+        assert_eq!(cut("\u{2764}\u{FE0F}\u{200D}\u{1F525}", 8), "\u{2764}");
+        let short = Library {
+            max_name_bytes: MIN_NAME_BYTES,
+            ..Library::default()
+        };
+        let stem = naming(&short).stem(&tags("A", "B", family)).unwrap();
+        let name = stem.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(name, "\u{1F468}\u{200D}\u{1F469}");
     }
 
     #[test]

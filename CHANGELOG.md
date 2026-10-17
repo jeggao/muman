@@ -88,6 +88,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   cue only when its words are, as `[Chorus]` or `(Guitar solo)`, and a
   credit only before the first line sung or after the last, with a
   name after its word.
+- **A name cut inside an emoji ends on no joiner.** With a small
+  `max_name_bytes`, a character longer than the room alone, as a family
+  emoji, was cut between its code points and could leave the name
+  ending in a lone zero-width joiner or variation selector; these are
+  dropped from the end of such a cut.
 - **A track set as `5/9` keeps its number.** MP3, M4A and WavPack wrote
   track 0 of the old total, and FLAC the number and a stale total.
 - **`album artist` names the album artist** in a tag file, as foobar2000

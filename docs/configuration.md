@@ -388,7 +388,8 @@ File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
 bytes of UTF-8, which no filesystem counts more strictly, once they are
 in Unicode NFC, and never inside a character as a reader sees one, such
 as a flag or a letter with its accent, unless one character alone is
-longer. A name keeps room for
+longer; such a cut ends on no joiner or variation selector. A name
+keeps room for
 what tells it apart, so the least they take is 40 and 16; the most is
 255, as much as any filesystem holds. Windows
 programs and some players also stop at 260 characters for a whole path;
