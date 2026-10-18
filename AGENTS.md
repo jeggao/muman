@@ -129,7 +129,10 @@ cargo test --test smoke -- --ignored
 links and the changelog; `--check` only checks, as CI does. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
-line muman builds, against a file served from the test itself.
+line muman builds, against a file served from the test itself. Runs
+against real recordings and sites are made by hand, as
+[tests/stress.md](tests/stress.md) records; a run's findings go there
+and into the pull request that fixes them.
 
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
 and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum

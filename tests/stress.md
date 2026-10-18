@@ -1,0 +1,50 @@
+# Stress runs
+
+The tests in this repository run offline against fakes. What they
+cannot find, muman's behaviour on real recordings, real sites and real
+file managers, has been found by stress runs made by hand, and their
+findings are the fixes in the changelog. This file records how each
+run was made, as its pull request described it, so the next one repeats
+it rather than starting over, and names what no run has covered yet.
+Nothing here is scripted: a run is a session against a scratch home, and
+its findings go into the pull request that fixes them and into this file.
+
+## Runs made
+
+| Before | Against | Found |
+|---|---|---|
+| 0.3.0 | A first stress run, later runs of killed runs and locks, and an audio run over every codec and layout | File names and moved files; encoders handed audio they cannot hold, Opus ending 312 samples late, measures mixing channels into stereo before measuring (#17) |
+| 0.4.0 | Two rounds of black-box and source stress runs | From undo safety to excerpt choice (#18) |
+| 0.4.0 | A real library of about 2,000 songs, 2,213 sources, on 0.3.0 | The damage rules: three sources damaged, where the old rule flagged 41; a moved library forgotten; fetched sources named by a title a site may change (#20) |
+| 0.5.0 | Six audits, of audio, tags, lyrics, covers, names and exports against their standards; then 48 public-domain recordings and 27 sidecar files from archive.org, five areas, every scenario twice from scratch | Ten defects that fail a song or lose data silently, eight of them from six design choices since replaced (#25) |
+
+The run before 0.5.0 also checked determinism: two fresh homes, four `add`
+orders, all seven encoders, different time zones, locales and CPU
+counts, interrupted syncs and repeated exports gave byte-identical
+libraries, but for the padding lofty leaves in an M4A whose tag shrank.
+
+## How a run is made
+
+1. Build the branch under test and make a scratch home with
+   `MUMAN_HOME`, never a home in use.
+1. Choose public-domain recordings and sidecar files, as the archive.org
+   items the run before 0.5.0 used; the fixtures are not in the repository, so
+   list the items used in the pull request.
+1. Take one area at a time, as the audits did: audio, tags, lyrics,
+   covers, names, exports. For each, write the scenarios first, run
+   every one twice from scratch, and compare the libraries byte for
+   byte.
+1. Reproduce each finding before its fix, and give each fix a test that
+   fails without it, over the fakes; then run the finding's scenario
+   against the real files once more.
+1. Record the fixtures, the scenarios and the findings in the pull
+   request, and add the run to the table above.
+
+## Not covered yet
+
+- archive.org sources make no lookups, which needs a provider type of
+  their own.
+- A PNG drawn only in its alpha channel measures as having no detail.
+- A retagged M4A keeps the padding lofty adds when a tag shrinks, so its
+  bytes depend on its edit history.
+- An interrupted sync encodes every song again.
