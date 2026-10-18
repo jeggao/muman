@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Each release lists its archives' checksums** in `SHA256SUMS`, and
+  attests that this repository's release workflow built them, which
+  `gh attestation verify` checks.
+
+### Changed
+
+- **The Linux binaries run on glibc 2.28 or newer**: Debian 10, Ubuntu
+  20.04 and RHEL 8 or later. They needed glibc 2.39, which Debian 12 and
+  Ubuntu 22.04 lack.
+- **The Windows binary carries its C runtime**, so it runs on a Windows
+  without the Visual C++ Redistributable.
+
 ## [0.5.0] - 2026-10-18
 
 ### Added

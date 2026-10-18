@@ -59,8 +59,10 @@ cargo install --locked muman
 The same command updates it to the latest release. Each release also
 has a built `muman` for Linux, macOS and Windows on its [releases
 page](https://github.com/jeggao/muman/releases); a `ffmpeg`, `ffprobe`
-or `yt-dlp` placed beside it is used before one on `PATH`. To build what
-is on `main` since the last release instead:
+or `yt-dlp` placed beside it is used before one on `PATH`. The
+release's `SHA256SUMS` lists each archive's checksum, and `gh attestation verify
+<archive> --repo jeggao/muman` checks that the release workflow built
+it. To build what is on `main` since the last release instead:
 
 ```bash
 cargo install --locked --git https://github.com/jeggao/muman
