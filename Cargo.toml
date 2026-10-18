@@ -30,7 +30,7 @@ icu_segmenter = "2.3"
 indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 lofty = "0.25"
-minijinja = "3"
+minijinja = { version = "3", features = ["serde"] }
 percent-encoding = "2"
 regex = "1"
 rusty-chromaprint = "0.3"
