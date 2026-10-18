@@ -13,7 +13,7 @@
 //! songs' bins summed: BS.1770's gating over every block of the album,
 //! not a mean of its songs' loudness. A one-song album is its song.
 //! Peaks are the highest over the channels. True peaks are oversampled
-//! by [`TruePeak`], the crate's 48-tap polyphase filter to the bit: four
+//! by `TruePeak`, the crate's 48-tap polyphase filter to the bit: four
 //! times below 96 kHz, twice below 192 kHz, and at 192 kHz and above the
 //! sample peak stands for it, as in the crate. The crate filters every
 //! sample, and on a decode it cost more than the loudness itself; the

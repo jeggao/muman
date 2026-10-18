@@ -16,6 +16,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   recordings, 2.9 hours of FLAC, on four cores, `add` took 35 to 39 s
   where it took 38 to 43 s, its measuring step 23 or 24 s where it took
   27 or 28 s, and recorded the same measures to the byte.
+- **Adding thousands of files is faster.** `add` read the library once
+  for each file it copied in and listed a file's folder once for each
+  sidecar it looked for; it reads the library once after the copies and
+  lists each folder once, and asks ffprobe about the files in parallel.
+  Copying 2,038 files in took 7 s where it took 165 s.
+- **A FLAC's tags and cover go into padding.** ffmpeg leaves room for
+  them in the file it encodes, 16 KiB and the cover's size, and they are
+  written into it; a FLAC was written whole a second time to tag it.
+  One that does not fit is still rewritten.
+
+### Fixed
+
+- **A long `add` or `sync` no longer fills the disk.** The excerpts and
+  prints ffmpeg wrote while measuring a source, 15 MB of them, stayed in
+  the temporary folder until the run ended: 299 sources in, they took
+  2.9 GB, and 2,038 sources ran the disk out. Each source's are removed
+  when it is measured.
 
 ## [0.5.0] - 2026-10-18
 

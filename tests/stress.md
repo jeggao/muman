@@ -39,6 +39,27 @@ recorded were the same to the byte before and after them. What stayed:
 the packet hash and the resampling are ffmpeg's, and changing either
 changes what every library holds, so neither was.
 
+A second run after 0.5.0 timed a library of thousands: the 38 recordings
+and 2,000 songs of 30 s made by a script, a two-voice melody drawn from
+a seeded random sequence over faint pink noise so that no two measured
+as one recording, 500 each as FLAC, Opus, MP3 and M4A, tagged as ten
+tracks to an album by 60 invented artists with a cover embedded where
+ffmpeg embeds one, 2.9 GB in all. `add` of the 2,038 into a fresh home
+on four cores took 1,010 s: 165 s copying the files in, 10 min 5 s
+measuring, 3 min 31 s writing. The copying read the library once per
+file and listed a folder once per sidecar looked for; the measuring kept
+each source's 15 MB of scratch until the run ended, 2.9 GB by the 299th
+source, and ran the disk out until a sweeper removed them; the writing
+wrote each FLAC whole twice, once encoding and once tagging. After the
+changes in the changelog, the same `add` took 824 s: 7 s copying, 9 min
+8 s measuring, 3 min 29 s writing, and the scratch held only the sources
+being measured. The home ended at 13 MB of `state.json`, 528 KB of
+`songs.toml`, 4.0 GB of sources, 11 MB of history and a 4.1 GB library.
+What stayed: every command plans the whole library before it answers,
+so `list` took 4 s and a `sync` with nothing to do 6 to 7 s, before and
+after, and `add` of one more song 8 s, `remove` and `undo` of it 3.9 to
+4.5 s.
+
 ## How a run is made
 
 1. Build the branch under test and make a scratch home with
