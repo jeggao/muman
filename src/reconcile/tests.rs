@@ -343,7 +343,6 @@ fn pcm(levels: &[f64]) -> Vec<u8> {
     levels
         .iter()
         .flat_map(|l| {
-            #[allow(clippy::cast_possible_truncation)]
             let s = (l * 20000.0) as i16;
             (0..80).flat_map(move |i| if i % 2 == 0 { s } else { -s }.to_le_bytes())
         })
@@ -2219,7 +2218,6 @@ fn an_excerpt_that_fades_out_never_beats_the_whole_song() {
     // The first half, faded out over its last second as a preview is.
     let mut excerpt = whole[..3000].to_vec();
     for (i, level) in excerpt[2900..].iter_mut().enumerate() {
-        #[allow(clippy::cast_precision_loss)]
         let fade = 1.0 - (i as f64 + 1.0) / 100.0;
         *level *= fade;
     }

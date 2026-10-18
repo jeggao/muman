@@ -205,7 +205,8 @@ fn png_output(input: usize, stream: &str, cover: &CoverRef, path: &Path) -> Outp
     Output::new(args.into_iter().map(OsString::from).collect(), path)
 }
 
-#[allow(clippy::too_many_lines)]
+// The steps read in the order they run; split up, the order would be in the call sites.
+#[expect(clippy::too_many_lines)]
 pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let plan = job.plan;
     let locate = |key: &SourceKey| {
@@ -894,7 +895,6 @@ fn opus_gains(tags: &[(String, Vec<String>)]) -> Vec<(String, Vec<String>)> {
     let r128 = |value: &String| {
         let db: f64 = value.trim_end_matches(" dB").parse().ok()?;
         let steps = ((db - crate::tags::R128_BELOW_REPLAYGAIN_DB) * 256.0).round();
-        #[allow(clippy::cast_possible_truncation)]
         let steps = steps.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
         Some(steps.to_string())
     };
@@ -926,11 +926,7 @@ fn wholes(values: &[String]) -> Vec<i64> {
         .iter()
         .filter_map(|v| v.parse::<f64>().ok())
         .filter(|n| n.is_finite())
-        .map(|n| {
-            #[allow(clippy::cast_possible_truncation)]
-            let n = n.round() as i64;
-            n
-        })
+        .map(|n| n.round() as i64)
         .collect()
 }
 

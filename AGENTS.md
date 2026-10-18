@@ -166,7 +166,10 @@ minor and patch bumps as one pull request and each major alone;
 - **Formats:** `songs.toml` and `state.json` carry a `version`; changing
   what an existing key means is a new version, adding a key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the
-  workspace; allow one narrowly, with the reason beside it.
+  workspace, the three cast lints off, as `Cargo.toml` says why.
+  `#[expect]` one lint narrowly, with the reason in a `//` comment
+  above it; `#[allow]` only where the lint fires on some platforms
+  alone.
 
 ## Versioning
 

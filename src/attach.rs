@@ -315,12 +315,10 @@ fn minutes(ms: i64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-#[allow(clippy::cast_possible_truncation)]
 fn thousandths(d: f64) -> i64 {
     (d * 1000.0).round() as i64
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn ms_f(ms: i64) -> f64 {
     ms as f64
 }
@@ -399,7 +397,6 @@ fn candidates(
         );
         let albums = names(values(tags, "ALBUM").chain(offered(Field::Album)));
         let audio = resolved.as_ref().map(|r| r.plan.audio.key.clone());
-        #[allow(clippy::cast_possible_truncation)]
         let length_ms = audio
             .as_ref()
             .and_then(|k| state.facts.get(k))
@@ -564,7 +561,8 @@ fn order(judged: &mut [Judged]) {
     });
 }
 
-#[allow(clippy::too_many_lines)]
+// Each kind of evidence weighed in turn, as the guide's table lists them.
+#[expect(clippy::too_many_lines)]
 fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
     let mut reasons = Vec::new();
     let mut verdict = Verdict::Different;
@@ -1235,7 +1233,8 @@ impl std::error::Error for LeftOut {}
 /// where needed, copy what is accepted and record the edits. `beside` are
 /// the song files the same command added, by where they came from, for a
 /// folder's cover.
-#[allow(clippy::too_many_lines)]
+// The steps read in the order they run; split up, the order would be in the call sites.
+#[expect(clippy::too_many_lines)]
 pub fn attach<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
@@ -1444,7 +1443,8 @@ fn ownable(c: &Candidate) -> bool {
     !manifest::shareable(&c.id)
 }
 
-#[allow(clippy::too_many_lines)]
+// The asking reads in one place, prompt by prompt.
+#[expect(clippy::too_many_lines)]
 fn decide<W: Write>(
     ask: &mut Asking<'_, '_, W>,
     item: &Item,
@@ -1639,7 +1639,8 @@ fn decide<W: Write>(
 }
 
 /// A sheet of several tracks, each matched to a song of its own.
-#[allow(clippy::too_many_lines)]
+// The asking reads in one place, prompt by prompt.
+#[expect(clippy::too_many_lines)]
 fn decide_sheet<W: Write>(
     ask: &mut Asking<'_, '_, W>,
     item: &Item,

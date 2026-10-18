@@ -121,7 +121,6 @@ impl Record {
     pub fn lrc(&self) -> String {
         let mut text = String::new();
         if let Some(d) = self.duration {
-            #[allow(clippy::cast_possible_truncation)]
             let cs = (d * 100.0).round() as i64;
             let _ = writeln!(
                 text,
@@ -201,7 +200,6 @@ impl Client<'_> {
             .as_ref()
             .filter(|_| (1.0..=3600.0).contains(&q.seconds))
         {
-            #[allow(clippy::cast_possible_truncation)]
             let path = format!(
                 "/api/get?track_name={}&artist_name={}&album_name={}&duration={}",
                 enc(&q.title),

@@ -506,7 +506,6 @@ fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) 
 impl Recording {
     /// The gap to the song's length in seconds, when the recording has one.
     fn gap(&self, seconds: f64) -> Option<f64> {
-        #[allow(clippy::cast_precision_loss)]
         self.length
             .map(|ms| (units::seconds_of_ms(ms as f64) - seconds).abs())
     }
@@ -747,7 +746,6 @@ impl Client<'_> {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)]
 fn whole_seconds(s: f64) -> i64 {
     s.round() as i64
 }

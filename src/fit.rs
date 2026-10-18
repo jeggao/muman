@@ -302,7 +302,6 @@ impl Sum {
     }
 
     /// The bytes, with the margin `sigmas` standard deviations make.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn projected(self, sigmas: f64) -> u64 {
         self.bytes + (sigmas * self.variance.sqrt()).ceil() as u64
     }
@@ -319,7 +318,6 @@ struct Point {
 /// The rungs worth lowering an item through from its first, in order:
 /// the lower convex hull of what each saves against the loss and churn it
 /// adds, the first rung included.
-#[allow(clippy::cast_precision_loss)]
 fn hull(item: &Item) -> Vec<Point> {
     let first = item.rungs[0].bytes;
     let mut points: Vec<Point> = item
@@ -627,7 +625,6 @@ mod tests {
             let Format::Encode { kbps: Some(k), .. } = format else {
                 unreachable!()
             };
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let bytes = (f64::from(k) * 125.0 * seconds) as u64;
             if bytes * 10 <= first_bytes * 9 {
                 rungs.push(Rung {
@@ -687,7 +684,6 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(n, seconds)| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let bytes = (seconds * 125_000.0) as u64;
                 song(&format!("s{n}"), flac, bytes, true, seconds)
             })
@@ -722,7 +718,6 @@ mod tests {
         let mut items: Vec<Item> = (0..12)
             .map(|n| {
                 let seconds = 120.0 + 15.0 * f64::from(n);
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let bytes = (seconds * 20_000.0) as u64;
                 song(&format!("s{n:02}"), opus(160), bytes, n % 3 == 0, seconds)
             })
@@ -819,7 +814,6 @@ mod tests {
         let mut items = library();
         for item in &mut items {
             for rung in &mut item.rungs[1..] {
-                #[allow(clippy::cast_precision_loss)]
                 let sigma = rung.bytes as f64 / 10.0;
                 rung.sigma = sigma;
             }
@@ -848,8 +842,6 @@ mod tests {
                     continue;
                 }
                 let rung = &mut items[i].rungs[c];
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                #[allow(clippy::cast_precision_loss)]
                 let real = (rung.bytes as f64 * miss) as u64;
                 rung.bytes = real;
                 rung.sigma = 0.0;

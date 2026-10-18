@@ -165,7 +165,6 @@ const SHARES: &[(&str, &str, f64)] = &[("", "", 1.0)];
 /// `value` rounded into `T`'s range, if it is a finite number there.
 fn whole<T: TryFrom<i128>>(value: f64) -> Option<T> {
     let rounded = value.round();
-    #[allow(clippy::cast_possible_truncation)]
     (rounded.is_finite() && rounded.abs() < 1e30)
         .then(|| T::try_from(rounded as i128).ok())
         .flatten()
@@ -325,7 +324,6 @@ impl TryFrom<Written> for Share {
 
     fn try_from(w: Written) -> Result<Self, String> {
         match w {
-            #[allow(clippy::cast_precision_loss)]
             Written::Whole(n) => Ok(Self(n as f64)),
             Written::Real(n) => Ok(Self(n)),
             Written::Text(t) => t.parse(),
@@ -490,7 +488,6 @@ impl Size {
 
 impl fmt::Display for Size {
     /// In the largest binary unit that keeps it at least one, to a tenth.
-    #[allow(clippy::cast_precision_loss)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let units = ["B", "KiB", "MiB", "GiB", "TiB"];
         let mut value = self.0 as f64;

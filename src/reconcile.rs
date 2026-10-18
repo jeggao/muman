@@ -35,7 +35,7 @@ use crate::store::{self, Kind, Located, Store};
 use crate::tags::{self, Field};
 
 // Each is a flag of its own on the command line.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     /// Render every song, changed or not.
@@ -779,7 +779,8 @@ impl std::fmt::Debug for Report<'_> {
 
 /// [`reconcile`], a dry run's report written to `report` when given, apart
 /// from what it does on the way; without one, every song to `out`.
-#[allow(clippy::too_many_lines)]
+// The offline phase's steps, in the order the guide numbers them.
+#[expect(clippy::too_many_lines)]
 pub fn reconcile_into<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
@@ -2622,7 +2623,8 @@ fn tally<W: Write>(
 /// `showing` shows, its file and where each aspect comes from, then how
 /// many songs it does each thing with. Without a query, then also what
 /// it would remove and the files no song lists.
-#[allow(clippy::too_many_lines)]
+// The steps read in the order they run; split up, the order would be in the call sites.
+#[expect(clippy::too_many_lines)]
 fn status<W: Write>(
     shown: &Shown<'_>,
     showing: &Showing,

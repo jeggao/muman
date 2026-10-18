@@ -135,7 +135,6 @@ impl Alignment {
 
     /// How many times as long the upload plays the recording.
     #[must_use]
-    #[allow(clippy::cast_precision_loss)]
     pub fn stretch(&self) -> f64 {
         1.0 + crate::units::ratio_of_ppm(self.stretch_ppm as f64)
     }
@@ -196,7 +195,6 @@ pub fn audio_command(url: &str, id: &str, dir: &Path) -> Vec<OsString> {
 const FRAME_MS: i64 = 10;
 
 /// A count as a float. Frame and sample counts stay far below 2^52.
-#[allow(clippy::cast_precision_loss)]
 fn real(count: usize) -> f64 {
     count as f64
 }
@@ -337,7 +335,6 @@ impl<'a> Levels<'a> {
 /// other's sound past a cut is the song, which the cut one lacks; past any
 /// other edge it is beyond the song.
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn outside(upload: &[f64], track: &[f64], at: &Alignment) -> Outside {
     let lag = at.offset_ms / FRAME_MS;
     let stretch = at.stretch();
@@ -527,7 +524,6 @@ fn line(windows: &[Window]) -> Option<(f64, f64)> {
     let mut slopes = Vec::new();
     for (i, a) in sure.iter().enumerate() {
         for b in &sure[i + 1..] {
-            #[allow(clippy::cast_precision_loss)]
             let slope = (b.lag - a.lag) as f64 / (b.at - a.at);
             if slope.abs() <= MAX_STRETCH {
                 slopes.push(slope);
@@ -535,14 +531,12 @@ fn line(windows: &[Window]) -> Option<(f64, f64)> {
         }
     }
     let slope = median(slopes)?;
-    #[allow(clippy::cast_precision_loss)]
     let intercept = median(sure.iter().map(|w| w.lag as f64 - slope * w.at).collect())?;
     Some((intercept, slope))
 }
 
 /// The share of `windows` within [`WINDOW_TOLERANCE`] of `shift` and
 /// correlating at [`WINDOW_SCORE`].
-#[allow(clippy::cast_precision_loss)]
 fn agreeing(windows: &[Window], shift: impl Fn(f64) -> f64) -> f64 {
     if windows.is_empty() {
         return 0.0;
@@ -558,7 +552,6 @@ fn agreeing(windows: &[Window], shift: impl Fn(f64) -> f64) -> f64 {
 
 /// The correlation of `upload` against `track` played `stretch` times as
 /// long and starting `start` frames into the upload, over their overlap.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn stretched_score(upload: &[f64], track: &[f64], start: f64, stretch: f64) -> Option<f64> {
     let (mut u, mut t) = (Vec::new(), Vec::new());
     for (i, level) in upload.iter().enumerate() {
@@ -579,7 +572,6 @@ fn stretched_score(upload: &[f64], track: &[f64], start: f64, stretch: f64) -> O
 #[must_use]
 pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     let (lag, score) = shift(upload, track, COARSE_BUDGET)?;
-    #[allow(clippy::cast_precision_loss)]
     let one_shift = |_: f64| lag as f64;
     let flat = windows(upload, track, |_| lag);
     let steady = Alignment {
@@ -594,7 +586,6 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     };
     // Searched again along the line, windows near the ends stay in reach
     // however far the shift has drifted from its value over the whole.
-    #[allow(clippy::cast_possible_truncation)]
     let followed = windows(upload, track, |at| {
         (intercept + slope * at).round() as isize
     });
@@ -609,7 +600,6 @@ pub fn align(upload: &[f64], track: &[f64]) -> Option<Alignment> {
     let Some(score) = stretched_score(upload, track, start, stretch) else {
         return Some(steady);
     };
-    #[allow(clippy::cast_possible_truncation)]
     let drifting = Alignment {
         offset_ms: (start.round() as i64) * FRAME_MS,
         stretch_ppm: crate::units::ppm_of_ratio(stretch - 1.0).round() as i64,
@@ -658,7 +648,6 @@ mod tests {
     }
 
     /// `envelope` played `stretch` times as long, by linear interpolation.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn stretched(envelope: &[f64], stretch: f64) -> Vec<f64> {
         let frames = (real(envelope.len() - 1) * stretch) as usize;
         (0..frames)
@@ -819,7 +808,6 @@ mod tests {
         levels
             .iter()
             .flat_map(|l| {
-                #[allow(clippy::cast_possible_truncation)]
                 let a = (l * 6000.0) as i16;
                 [offset + a, offset - a].repeat(HOP / 2)
             })

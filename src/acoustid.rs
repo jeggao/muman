@@ -155,7 +155,6 @@ impl Recording {
 }
 
 /// A score, which AcoustID gives from 0 to 1, as a whole number to order.
-#[allow(clippy::cast_possible_truncation)]
 fn thousandths(score: f64) -> i64 {
     (score * 1000.0).round() as i64
 }
@@ -187,7 +186,6 @@ impl Client<'_> {
     /// The MBID of the song's recording, or `None` when no result fits.
     pub fn find(&self, q: &Query) -> Result<Option<Mbid>> {
         // Clamped to 0 first, so no sign is lost.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seconds = q.seconds.round().max(0.0) as u64;
         let url = format!(
             "{}/v2/lookup?client={}&format=json&meta=recordings+releasegroups+sources&duration={seconds}&fingerprint={}",

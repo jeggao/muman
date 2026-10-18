@@ -297,7 +297,8 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
+// The steps read in the order they run; split up, the order would be in the call sites.
+#[expect(clippy::too_many_lines)]
 fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     let listed = c.manifest.keys();
     heading(out, "Status")?;
@@ -599,7 +600,6 @@ fn folder_size(dir: &Path) -> u64 {
 }
 
 /// Seconds as days, hours and minutes, the two largest that apply.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn duration(seconds: f64) -> String {
     let minutes = (seconds / 60.0).round() as u64;
     let (d, h, m) = (minutes / 1440, minutes / 60 % 24, minutes % 60);

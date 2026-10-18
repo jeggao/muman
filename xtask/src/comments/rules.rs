@@ -46,6 +46,7 @@ pub fn check(file: &ParsedFile, opts: &Options) -> Vec<Diagnostic> {
     out.extend(commented_out_code(file));
     out.extend(comment_density(file));
     out.extend(section_header_count(file));
+    out.extend(lint_reason(file));
     if opts.needs_module_doc {
         out.extend(module_doc(file));
     }
@@ -251,11 +252,6 @@ fn commented_out_code(file: &ParsedFile) -> Vec<Diagnostic> {
         .collect()
 }
 
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
 fn comment_density(file: &ParsedFile) -> Vec<Diagnostic> {
     let non_blank = file.non_blank_count();
     if non_blank < MIN_NON_BLANK_FOR_DENSITY {
@@ -291,6 +287,27 @@ fn section_header_count(file: &ParsedFile) -> Vec<Diagnostic> {
         1,
         format!("{count} section headers; the cap is {MAX_SECTION_HEADERS}, so split the module"),
     )]
+}
+
+fn lint_reason(file: &ParsedFile) -> Vec<Diagnostic> {
+    static EXEMPTION: LazyLock<Regex> = LazyLock::new(|| regex(r"^\s*#!?\[(allow|expect)\("));
+    file.lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.kind == LineKind::Code && EXEMPTION.is_match(&l.raw))
+        .filter(|(idx, _)| {
+            !idx.checked_sub(1)
+                .is_some_and(|i| file.lines[i].kind == LineKind::Comment)
+        })
+        .map(|(idx, _)| {
+            diag(
+                "lint-reason",
+                idx + 1,
+                1,
+                "a lint exemption carries its reason in a `//` comment on or above its line",
+            )
+        })
+        .collect()
 }
 
 fn module_doc(file: &ParsedFile) -> Vec<Diagnostic> {
@@ -372,7 +389,6 @@ fn neighbor_changed(
     found.is_some_and(|j| changed.contains(&(j + 1)))
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn density_delta(file: &ParsedFile, diff: &DiffInfo) -> Vec<Diagnostic> {
     let Some(base_file) = diff.base_file.as_ref() else {
         return Vec::new();
@@ -424,6 +440,27 @@ mod tests {
             fired("//! m\n// TODO: Fix the thing.\n", "todo-format"),
             [] as [usize; 0]
         );
+    }
+
+    #[test]
+    fn a_lint_exemption_needs_a_reason_on_or_above_its_line() {
+        assert_eq!(fired("//! m\n#[allow(x)]\nfn f() {}\n", "lint-reason"), [2]);
+        assert_eq!(
+            fired("//! m\n#[expect(x)]\nfn f() {}\n", "lint-reason"),
+            [2]
+        );
+        assert_eq!(
+            fired("//! m\n/// doc\n#[expect(x)]\nfn f() {}\n", "lint-reason"),
+            [3],
+            "rustdoc is for callers, not the lint"
+        );
+        for ok in [
+            "//! m\n// why\n#[expect(x)]\nfn f() {}\n",
+            "//! m\n#[expect(x)] // why\nfn f() {}\n",
+            "//! m\nlet s = \"#[allow(x)]\";\n",
+        ] {
+            assert_eq!(fired(ok, "lint-reason"), [] as [usize; 0], "{ok}");
+        }
     }
 
     #[test]

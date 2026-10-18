@@ -393,7 +393,6 @@ fn edit_distance(a: &str, b: &str) -> f64 {
     ratio(edits(&a, &b), longest)
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn ratio(part: usize, whole: usize) -> f64 {
     part as f64 / whole as f64
 }

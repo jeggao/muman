@@ -80,7 +80,6 @@ pub mod portable {
 pub mod portable_opt {
     use super::{Deserialize, Deserializer, PathBuf, Serializer, from_portable, to_portable};
 
-    #[allow(clippy::ref_option)]
     pub fn serialize<S: Serializer>(path: &Option<PathBuf>, s: S) -> Result<S::Ok, S::Error> {
         match path {
             Some(p) => s.serialize_some(&to_portable(p)),

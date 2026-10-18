@@ -215,11 +215,7 @@ fn whole<'de, D: Deserializer<'de>, T: TryFrom<u64>>(d: D) -> Result<Option<T>, 
         serde_json::Value::Number(n) => n.as_u64().or_else(|| {
             n.as_f64()
                 .filter(|f| f.is_finite() && *f >= 0.0 && f.fract() == 0.0)
-                .map(|f| {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let n = f as u64;
-                    n
-                })
+                .map(|f| f as u64)
         }),
         serde_json::Value::String(s) => s.trim().parse().ok(),
         _ => None,

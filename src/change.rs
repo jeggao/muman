@@ -308,6 +308,7 @@ pub fn remove<W: Write>(
 /// asks the file manager API directly rather than scripting Finder,
 /// which prompts for permission and fails over SSH.
 pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
+    // Only macOS sets the delete method; elsewhere nothing writes to it.
     #[allow(unused_mut)]
     let mut trash = trash::TrashContext::default();
     #[cfg(target_os = "macos")]

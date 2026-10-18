@@ -245,7 +245,6 @@ fn spread(img: &[f64]) -> f64 {
     (img.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt()
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn real(n: usize) -> f64 {
     n as f64
 }
@@ -449,7 +448,6 @@ mod tests {
         let mut out = Vec::new();
         for y in 0..h {
             for x in 0..w {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 out.push(f(x, y).round().clamp(0.0, 255.0) as u8);
             }
         }

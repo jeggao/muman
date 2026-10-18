@@ -25,7 +25,6 @@ const CRC_TABLE: [u32; 256] = {
     let mut table = [0; 256];
     let mut i = 0;
     while i < 256 {
-        #[allow(clippy::cast_possible_truncation)]
         let mut r = (i as u32) << 24;
         let mut bit = 0;
         while bit < 8 {

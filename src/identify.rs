@@ -63,7 +63,8 @@ fn name_from(facts: Option<&Facts>, fallback: &str) -> String {
 /// The edits that list each proposal: under the song it is the same
 /// recording as, or as a song of its own. Measures what it compares, and
 /// keeps the measures for the reconcile that follows.
-#[allow(clippy::too_many_lines)]
+// The verdicts read in one place, as the guide's table lists them.
+#[expect(clippy::too_many_lines)]
 pub fn identify<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,

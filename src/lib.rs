@@ -257,7 +257,8 @@ pub(crate) fn mode(m: Matching) -> Mode {
 /// what it lists or reports, as `list`, `status`, `info` and `check` do,
 /// to `data`, and every other message to `out`. Returns whether every
 /// step succeeded.
-#[allow(clippy::too_many_lines)]
+// One match over every command; its arms read as the command list does.
+#[expect(clippy::too_many_lines)]
 pub fn run_with<R: Runner, W: Write, D: Write>(
     job: &Job,
     runner: &R,

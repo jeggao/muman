@@ -283,8 +283,9 @@ pub fn due(
     found
 }
 
-/// What one lookup found; short-lived, so its size matters little.
-#[allow(clippy::large_enum_variant)]
+/// What one lookup found.
+// Short-lived, so its size matters little.
+#[expect(clippy::large_enum_variant)]
 #[derive(Clone)]
 enum Hit {
     /// The release of an upload: the upload's entry, the release's, and
@@ -520,7 +521,8 @@ impl ThisRun {
 /// [`ROUNDS`] rounds. `force` makes the first round's lookups whatever
 /// was found before; a YouTube Music lookup from a key in `declined` is
 /// recorded declined instead. Returns whether every fetch succeeded.
-#[allow(clippy::too_many_lines)]
+// The rounds and each round's steps, in the order they run.
+#[expect(clippy::too_many_lines)]
 pub fn run<R: Runner, W: Write>(
     acquire: &mut Acquire<'_, R, W>,
     dirs: &Dirs,

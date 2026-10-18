@@ -678,7 +678,6 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             chapters: if format.codec().container() == Container::WavPack {
                 Vec::new()
             } else {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
                 crate::chapters::within(&facts.chapters, length_ms)
             },
@@ -775,7 +774,6 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             i64::try_from(*n).unwrap_or(UNKNOWN),
         ];
         // A song's milliseconds are far below 2^52, held exactly.
-        #[allow(clippy::cast_precision_loss)]
         let tenths = |ms: i64| (units::seconds_of_ms(ms as f64) * 10.0).floor() / 10.0;
         let why = match (beyond, q) {
             (u, Some(q)) => format!(
@@ -921,7 +919,6 @@ const STATED_MAX: f64 = 0.9;
 
 /// The confidence lyrics stating a length are the chosen audio's.
 fn stated_confidence(stated_ms: i64, audio_ms: f64) -> f64 {
-    #[allow(clippy::cast_precision_loss)]
     let gap = (stated_ms as f64 - audio_ms).abs();
     STATED_MAX * (1.0 - gap / STATED_SPAN_MS).max(0.0)
 }
@@ -970,7 +967,6 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                 }
                 _ => confidence,
             };
-            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
             let coverage = l.timing.map_or(0, |t| {
                 if duration_ms > 0.0 {
                     ((t.last_ms - t.first_ms) as f64 / duration_ms * 10.0).floor() as i64
@@ -978,7 +974,6 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     0
                 }
             });
-            #[allow(clippy::cast_possible_truncation)]
             let rank: Rank = vec![
                 i64::from(l.timing.is_none()),
                 i64::try_from(preference).unwrap_or(UNKNOWN),

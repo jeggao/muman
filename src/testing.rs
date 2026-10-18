@@ -77,7 +77,8 @@ pub struct Fake {
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
     pub lines: Vec<String>,
-    #[allow(clippy::type_complexity)]
+    // A hook one test installs; a named type would be used once.
+    #[expect(clippy::type_complexity)]
     pub on_stream: Option<Box<dyn Fn(&[String]) -> bool + Sync>>,
     pub calls: Mutex<Vec<Vec<String>>>,
     /// The first file each run that attaches one attached, as text; the
@@ -97,9 +98,7 @@ fn find<'a, T>(table: &'a [(String, T)], path: &str) -> Option<&'a T> {
 /// `seconds` of a sine at `hz` and `amplitude` of full scale, the same in
 /// each of `channels`, interleaved.
 pub fn sine(rate: u32, channels: u16, hz: f64, amplitude: f32, seconds: f64) -> Vec<f32> {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let frames = (f64::from(rate) * seconds).round() as usize;
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     (0..frames)
         .flat_map(|n| {
             let x =
@@ -166,7 +165,6 @@ fn seed_of(path: &str) -> u64 {
 }
 
 /// Stereo noise, full band, as f32 bytes.
-#[allow(clippy::cast_precision_loss)]
 fn noise_bytes(seed: u64) -> Vec<u8> {
     words(8192 * 2, seed)
         .into_iter()
@@ -279,9 +277,7 @@ impl Fake {
                     let ticks = find(&self.held, &input).map_or_else(
                         || {
                             let wav = find(&self.wavs, &input).cloned().unwrap_or_else(quiet_wav);
-                            #[allow(clippy::cast_possible_truncation)]
-                            let ticks = (wav_seconds(&wav) * 48_000.0).round() as i64;
-                            ticks
+                            (wav_seconds(&wav) * 48_000.0).round() as i64
                         },
                         |s| i64::from(*s) * 48_000,
                     );
@@ -318,7 +314,6 @@ pub fn wav_seconds(bytes: &[u8]) -> f64 {
     match crate::analysis::parse_header(bytes) {
         Ok(Some((stream, body))) => {
             let frame = usize::from(stream.channels) * 4;
-            #[allow(clippy::cast_precision_loss)]
             let frames = (bytes.len() - body) as f64 / frame as f64;
             frames / f64::from(stream.rate)
         }
