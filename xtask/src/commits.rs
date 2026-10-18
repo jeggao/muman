@@ -275,6 +275,6 @@ mod tests {
             author: "dependabot[bot]".into(),
             message: "build(deps): bump x\n".into(),
         };
-        assert!(check(&bot).is_empty());
+        assert_eq!(check(&bot), [] as [Problem; 0]);
     }
 }
