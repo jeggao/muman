@@ -22,7 +22,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: nix flake update
       - run: nix flake check -L
-      - uses: peter-evans/create-pull-request@v7
+      - uses: peter-evans/create-pull-request@v8
         with:
           branch: deps/flake-lock
           title: "deps: update flake.lock"
