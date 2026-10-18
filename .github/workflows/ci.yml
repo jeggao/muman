@@ -12,6 +12,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # The toolchain every gating job runs; toolchain-preview.yml tries the
+  # newest stable each week, and raising this is a pull request that
+  # also fixes what its lints say.
+  RUST_TOOLCHAIN: "1.99"
 
 jobs:
   test:
@@ -23,8 +27,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked
@@ -39,10 +44,17 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
-      # setup-ffmpeg has x64 builds only; macOS runners are arm64.
+      # setup-ffmpeg has x64 builds only; macOS runners are arm64. Its
+      # download fails now and then, and once left main red for two days.
       - if: runner.os != 'macOS'
+        id: ffmpeg
+        continue-on-error: true
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - if: runner.os != 'macOS' && steps.ffmpeg.outcome == 'failure'
         uses: FedericoCarboni/setup-ffmpeg@v3
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
@@ -56,8 +68,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -65,7 +78,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --no-deps --document-private-items --locked
         env:
@@ -90,7 +105,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask comments --github-annotations
       - if: github.event_name == 'pull_request'

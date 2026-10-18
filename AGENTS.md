@@ -135,8 +135,10 @@ CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
 and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
 Rust version, `cargo xtask comments` (with `--diff-base` on pull
 requests), `cargo xtask commits`, `cargo xtask docs --check` and
-cargo-deny. Its clippy is the
-latest stable, which can be newer than yours.
+cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
+week `toolchain-preview.yml` runs the same checks on the newest stable;
+when it fails, one pull request raises the pin, in `ci.yml` and
+`release.yml`, and meets the new lints.
 
 ## Conventions
 

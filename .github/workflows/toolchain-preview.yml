@@ -1,0 +1,31 @@
+name: Toolchain preview
+
+# The checks CI gates on, run on the newest stable Rust once a week.
+# Nothing waits on it: a failure here is a new lint or a changed rustdoc
+# rule to meet in a pull request that also raises RUST_TOOLCHAIN in
+# ci.yml and release.yml.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  stable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo --version
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - run: cargo doc --no-deps --document-private-items --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
