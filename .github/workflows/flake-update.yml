@@ -1,0 +1,40 @@
+name: Flake update
+
+# Dependabot does not read flake.lock. Each week this moves it to the
+# newest nixpkgs, runs the flake's checks on the result and opens a pull
+# request. GITHUB_TOKEN's pushes start no CI run, so the check here is
+# the one that vouches for the lock; a push to the branch, or closing
+# and reopening the pull request, runs CI on it.
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake update
+      - run: nix flake check -L
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: deps/flake-lock
+          title: "deps: update flake.lock"
+          commit-message: |
+            deps: update flake.lock
+
+            nixpkgs moved on; `nix flake check` passed on this lock in the
+            workflow that opened this pull request.
+
+            - flake.lock: the newest nixpkgs
+          body: |
+            nixpkgs moved on; `nix flake check` passed on this lock in the
+            workflow that opened this pull request.
+
+            - flake.lock: the newest nixpkgs

@@ -138,7 +138,9 @@ requests), `cargo xtask commits`, `cargo xtask docs --check` and
 cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
-`release.yml`, and meets the new lints.
+`release.yml`, and meets the new lints. Dependabot opens the week's
+minor and patch bumps as one pull request and each major alone;
+`flake-update.yml` moves `flake.lock` the same way.
 
 ## Conventions
 
