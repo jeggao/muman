@@ -113,6 +113,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo xtask comments
+cargo xtask commits --diff-base origin/main
 cargo xtask docs
 cargo test --test smoke -- --ignored
 ```
@@ -126,7 +127,8 @@ line muman builds, against a file served from the test itself.
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
 and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
 Rust version, `cargo xtask comments` (with `--diff-base` on pull
-requests), `cargo xtask docs --check` and cargo-deny. Its clippy is the
+requests), `cargo xtask commits`, `cargo xtask docs --check` and
+cargo-deny. Its clippy is the
 latest stable, which can be newer than yours.
 
 ## Conventions
@@ -192,8 +194,18 @@ until Trusted Publishing is set up there and the repository variable
 
 - **Subject:** `<scope>: <imperative summary>`, lowercase, no period,
   at most 72 characters; the scope is the module or area (`naming`,
-  `ci`, `docs`).
+  `ci`, `docs`). The ` (#123)` a squash merge appends is not counted.
 - **Body:** why before what, wrapped at 72; then `-` bullets led by the
-  file or area changed. Do not narrate how the change was made.
-- **Pull requests:** the title is the subject; open them ready for
-  review, not as drafts.
+  file or area changed. Do not narrate how the change was made, and do
+  not paste a branch's commit subjects as the body.
+- **Pull requests:** the title is the subject and the description the
+  body; a squash merge writes them to `main` as they are, so both follow
+  the rules above. Open them ready for review, not as drafts. One pull
+  request is one change, the one a changelog bullet or a few describe;
+  one over about a thousand changed lines is split before review, a
+  release pull request apart.
+- **Merging:** squash and merge, every time. A rebase merge puts a
+  branch's authors and half-made commits on `main`.
+- `cargo xtask commits` checks the subject and body rules; CI runs it
+  on a pull request's commits and on its title and description, and on
+  each push to `main`.

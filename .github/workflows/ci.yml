@@ -95,6 +95,18 @@ jobs:
       - run: cargo xtask comments --github-annotations
       - if: github.event_name == 'pull_request'
         run: cargo xtask comments --github-annotations --diff-base origin/${{ github.base_ref }}
+      - if: github.event_name == 'push'
+        run: cargo xtask commits --github-annotations
+      - if: github.event_name == 'pull_request'
+        run: cargo xtask commits --github-annotations --diff-base origin/${{ github.base_ref }}
+      # The title and description are what a squash merge writes to main.
+      - if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n\n%s\n' "$TITLE" "$BODY" > "$RUNNER_TEMP/pull-request.txt"
+          cargo xtask commits --github-annotations --message-file "$RUNNER_TEMP/pull-request.txt"
       - run: cargo xtask docs --check
 
   deny:
