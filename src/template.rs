@@ -19,6 +19,7 @@
 //! a title never makes a folder; only the template's own `/` does.
 
 use anyhow::{Context, Result};
+use minijinja::value::Serde;
 use minijinja::{Environment, UndefinedBehavior, Value};
 use serde::Serialize;
 
@@ -54,7 +55,6 @@ impl Template {
     pub fn new(source: &str) -> Result<Self> {
         let mut env = Environment::new();
         env.set_undefined_behavior(UndefinedBehavior::Strict);
-        env.set_keep_trailing_newline(false);
         // A missing track or disc writes nothing, not `none`.
         env.set_formatter(|out, state, value| {
             if value.is_none() {
@@ -84,7 +84,7 @@ impl Template {
     pub fn render(&self, fields: &Fields) -> Result<String> {
         self.env
             .get_template(NAME)?
-            .render(fields)
+            .render(Serde(fields))
             .context("rendering the library template")
     }
 }
