@@ -6,12 +6,19 @@ name: Release
 # CHANGELOG.md section as the notes. A tag pushed by hand releases the
 # same way, and `workflow_dispatch` builds a tag made before this
 # workflow existed. The tag the workflow pushes starts no second run:
-# GITHUB_TOKEN's pushes never do.
+# GITHUB_TOKEN's pushes never do. Each package manager set up for it
+# then gets the release, from the templates in packaging/; AGENTS.md
+# says how to set each up. A pull request that changes this file or
+# packaging/ builds every archive and installs the Homebrew and AUR
+# packages from them, publishing nothing, so a broken build is found
+# before the release that needs it.
 on:
   push:
     branches: [main]
     paths: [Cargo.toml]
     tags: ["v*"]
+  pull_request:
+    paths: [.github/workflows/release.yml, "packaging/**"]
   workflow_dispatch:
     inputs:
       tag:
@@ -20,7 +27,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,8 +37,12 @@ env:
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.decide.outputs.tag }}
+      ref: ${{ steps.decide.outputs.ref }}
+      build: ${{ steps.decide.outputs.build }}
       release: ${{ steps.decide.outputs.release }}
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +53,10 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           release=true
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            tag="v$version"
+            release=false
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             tag="$INPUT_TAG"
             git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null \
               || { echo "::error::no tag $tag"; exit 1; }
@@ -62,39 +76,82 @@ jobs:
               git push origin "$tag"
             fi
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
+          build=$release
+          [ "$GITHUB_EVENT_NAME" = pull_request ] && build=true
+          # A pull request builds its own head; a release builds its tag.
+          [ "$release" = true ] && ref="$tag" || ref=""
+          printf 'tag=%s\nref=%s\nbuild=%s\nrelease=%s\n' "$tag" "$ref" "$build" "$release" \
+            >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.target }})
     needs: version
-    if: needs.version.outputs.release == 'true'
+    if: needs.version.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linked against glibc 2.28 by zig, so the binary runs on Debian
+          # 10, Ubuntu 20.04 and RHEL 8 or newer; one built with the
+          # runner's own glibc needs that glibc. A musl build runs anywhere
+          # but took 13 to 14 % longer to add 24 songs.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            glibc: "2.28"
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            glibc: "2.28"
           - os: macos-latest
             target: aarch64-apple-darwin
           # Cross-built on the Apple silicon runner.
           - os: macos-latest
             target: x86_64-apple-darwin
+          # The C runtime linked in, so a Windows without the Visual C++
+          # Redistributable runs it.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.ref }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked --package muman --target ${{ matrix.target }}
+      - if: matrix.glibc
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - if: matrix.glibc
+        run: pip install ziglang==0.17.0 cargo-zigbuild==0.23.4
+      - if: matrix.glibc
+        run: cargo zigbuild --release --locked --package muman --target ${{ matrix.target }}.${{ matrix.glibc }}
+      - if: ${{ !matrix.glibc }}
+        run: cargo build --release --locked --package muman --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+      - name: Check the binary stands alone
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/muman"
+          case "${{ matrix.target }}" in
+            *-linux-gnu)
+              newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+              if [ "$(printf '%s\nGLIBC_${{ matrix.glibc }}\n' "$newest" | sort -V | tail -1)" \
+                != "GLIBC_${{ matrix.glibc }}" ]; then
+                echo "::error::$bin needs $newest"; exit 1
+              fi ;;
+            *-windows-msvc)
+              if grep -aqi 'vcruntime140' "$bin.exe"; then
+                echo "::error::$bin.exe needs the Visual C++ runtime"; exit 1
+              fi ;;
+          esac
+          if [ "${{ matrix.target }}" != x86_64-apple-darwin ]; then
+            "$bin" --version
+          fi
       - name: Package
         shell: bash
         env:
@@ -121,10 +178,15 @@ jobs:
   publish:
     needs: [version, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.ref }}
       - name: Release notes
         shell: bash
         env:
@@ -138,13 +200,172 @@ jobs:
         with:
           path: archives
           merge-multiple: true
-      - uses: softprops/action-gh-release@v3
+      - name: Checksums
+        working-directory: archives
+        run: |
+          sha256sum muman-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Package manager entries
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: packaging/render.sh "${TAG#v}" archives/SHA256SUMS packages
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: packages
+          if-no-files-found: error
+      - if: needs.version.outputs.release == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-checksums: archives/SHA256SUMS
+      - if: needs.version.outputs.release == 'true'
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: muman ${{ needs.version.outputs.tag }}
           body_path: notes.md
           files: archives/*
           generate_release_notes: false
+
+  # The formula is installed and tested from the archive just built, as
+  # if downloaded, then pushed to the tap the variable HOMEBREW_TAP names.
+  homebrew:
+    needs: [version, publish]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+      - uses: actions/download-artifact@v8
+        with:
+          name: aarch64-apple-darwin
+          path: archives
+      - name: Install and test
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          brew tap-new --no-git local/muman
+          cp packages/homebrew/muman.rb "$(brew --repository local/muman)/Formula/"
+          cache=$(brew --cache --formula local/muman/muman)
+          mkdir -p "$(dirname "$cache")"
+          cp archives/*.tar.gz "$cache"
+          brew install --formula local/muman/muman
+          brew test local/muman/muman
+      - if: needs.version.outputs.release == 'true' && vars.HOMEBREW_TAP != ''
+        env:
+          REPO: ${{ vars.HOMEBREW_TAP }}
+          TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: packaging/push.sh "$REPO" packages/homebrew/muman.rb Formula/muman.rb "muman ${TAG#v}"
+
+  # Scoop needs a Windows install to test, and its downloads cannot be
+  # given a local file; the manifest is checked against the archive, then
+  # pushed to the bucket the variable SCOOP_BUCKET names.
+  scoop:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+      - uses: actions/download-artifact@v8
+        with:
+          name: x86_64-pc-windows-msvc
+          path: archives
+      - name: Check the manifest
+        run: |
+          manifest=packages/scoop/muman.json
+          dir=$(jq -er '.architecture."64bit".extract_dir' "$manifest")
+          bin=$(jq -er '.bin' "$manifest")
+          unzip -l archives/*.zip | grep -q " $dir/$bin\$" \
+            || { echo "::error::the archive has no $dir/$bin"; exit 1; }
+          [ "$(jq -er '.architecture."64bit".hash' "$manifest")" = "$(sha256sum archives/*.zip | cut -d' ' -f1)" ] \
+            || { echo "::error::the manifest's hash is not the archive's"; exit 1; }
+      - if: needs.version.outputs.release == 'true' && vars.SCOOP_BUCKET != ''
+        env:
+          REPO: ${{ vars.SCOOP_BUCKET }}
+          TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: packaging/push.sh "$REPO" packages/scoop/muman.json bucket/muman.json "muman ${TAG#v}"
+
+  # The package is built and installed on Arch from the archive just
+  # built, then pushed to the AUR as muman-bin when PUBLISH_AUR is `true`.
+  aur:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+      - uses: actions/download-artifact@v8
+        with:
+          name: x86_64-unknown-linux-gnu
+          path: archives
+      - name: Build, install and run the package
+        run: |
+          useradd --create-home builder
+          cp packages/aur/PKGBUILD archives/*.tar.gz /home/builder/
+          chown -R builder /home/builder
+          su builder -c 'cd && makepkg --nodeps && makepkg --printsrcinfo > .SRCINFO'
+          pacman -U --noconfirm --nodeps --nodeps /home/builder/muman-bin-*.pkg.tar.zst
+          muman --version
+      - if: needs.version.outputs.release == 'true' && vars.PUBLISH_AUR == 'true'
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          pacman -Syu --noconfirm --needed git openssh
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org > ~/.ssh/known_hosts
+          # The fingerprint aur.archlinux.org publishes on its front page.
+          ssh-keygen -lf ~/.ssh/known_hosts | grep -q 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4' \
+            || { echo "::error::aur.archlinux.org's host key is not the one it publishes"; exit 1; }
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+          git clone ssh://aur@aur.archlinux.org/muman-bin.git aur
+          cp /home/builder/PKGBUILD /home/builder/.SRCINFO aur/
+          git -C aur add PKGBUILD .SRCINFO
+          if git -C aur diff --cached --quiet; then
+            echo "muman-bin already has this version"; exit 0
+          fi
+          git -C aur -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "muman ${TAG#v}"
+          git -C aur push origin HEAD:master
+
+  # winget takes a new version as a pull request to microsoft/winget-pkgs,
+  # made by Komac from the package's last version there, so the first is
+  # submitted by hand. Komac is built from crates.io at a pinned version:
+  # the token it holds may write to every public repository of its owner.
+  winget:
+    needs: [version, publish]
+    if: needs.version.outputs.release == 'true' && vars.WINGET_PACKAGE != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - run: cargo install --locked komac@2.16.0
+      - env:
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          KOMAC_FORK_OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ vars.WINGET_PACKAGE }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          komac sync-fork
+          komac update "$PACKAGE" --version "${TAG#v}" --submit \
+            --urls "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/muman-$TAG-x86_64-pc-windows-msvc.zip"
 
   # Publishing to crates.io needs Trusted Publishing set up for this
   # repository and workflow on the crate's crates.io settings page, then

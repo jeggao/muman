@@ -1,0 +1,18 @@
+{
+    "version": "@VERSION@",
+    "description": "Keep a music library in step with a song list, each song made from the best of its sources.",
+    "homepage": "https://github.com/jeggao/muman",
+    "license": "AGPL-3.0-only",
+    "depends": [
+        "ffmpeg",
+        "yt-dlp"
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/jeggao/muman/releases/download/v@VERSION@/muman-v@VERSION@-x86_64-pc-windows-msvc.zip",
+            "hash": "@SHA256:x86_64-pc-windows-msvc@",
+            "extract_dir": "muman-v@VERSION@-x86_64-pc-windows-msvc"
+        }
+    },
+    "bin": "muman.exe"
+}

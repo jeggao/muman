@@ -1,0 +1,21 @@
+# The AUR package each release publishes as muman-bin, filled in by
+# packaging/render.sh.
+pkgname=muman-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Keep a music library in step with a song list'
+arch=('x86_64' 'aarch64')
+url='https://github.com/jeggao/muman'
+license=('AGPL-3.0-only')
+depends=('ffmpeg' 'yt-dlp')
+provides=('muman')
+conflicts=('muman')
+options=('!debug' '!strip')
+source_x86_64=("https://github.com/jeggao/muman/releases/download/v$pkgver/muman-v$pkgver-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("https://github.com/jeggao/muman/releases/download/v$pkgver/muman-v$pkgver-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('@SHA256:x86_64-unknown-linux-gnu@')
+sha256sums_aarch64=('@SHA256:aarch64-unknown-linux-gnu@')
+
+package() {
+  install -Dm755 "muman-v$pkgver-$CARCH-unknown-linux-gnu/muman" "$pkgdir/usr/bin/muman"
+}

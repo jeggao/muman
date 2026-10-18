@@ -106,6 +106,7 @@ tests/              the smoke test, yt-dlp given muman's command line, and
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs
+packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, configuration.md, cli.md (generated)
 ```
 
@@ -194,6 +195,17 @@ notes (`.github/workflows/release.yml`); run that workflow by hand to
 build a tag made before it existed. The crate goes to crates.io by hand
 until Trusted Publishing is set up there and the repository variable
 `PUBLISH_CRATE` is `true`.
+
+The release also reaches each package manager set up for it below,
+through the repository variable and secret its row names. Until then
+that package manager is skipped.
+
+| Package manager | Set up once | Variable | Secret |
+|---|---|---|---|
+| Homebrew | A tap repository, such as `jeggao/homebrew-tap` | `HOMEBREW_TAP`, its `owner/name` | `PACKAGES_TOKEN`, a fine-grained token that may write the tap's and the bucket's contents |
+| Scoop | A bucket repository, which may be the tap | `SCOOP_BUCKET`, its `owner/name` | `PACKAGES_TOKEN` |
+| AUR | An AUR account with an SSH key | `PUBLISH_AUR`, `true` | `AUR_SSH_KEY`, the key's private half |
+| winget | A fork of `microsoft/winget-pkgs`, and the first version submitted by hand with `komac new` | `WINGET_PACKAGE`, the package identifier | `WINGET_TOKEN`, a classic token with `public_repo` |
 
 ## Keeping docs in step
 
