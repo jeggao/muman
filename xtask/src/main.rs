@@ -43,6 +43,15 @@ enum Task {
         #[arg(long, value_name = "FILE")]
         message_file: Option<PathBuf>,
 
+        /// Who wrote the message in the file; a bot's is not checked.
+        #[arg(
+            long,
+            value_name = "NAME",
+            default_value = "",
+            requires = "message_file"
+        )]
+        author: String,
+
         /// Print GitHub Actions annotations instead of plain lines.
         #[arg(long)]
         github_annotations: bool,
@@ -70,11 +79,13 @@ fn main() -> ExitCode {
         Task::Commits {
             diff_base,
             message_file,
+            author,
             github_annotations,
         } => commits::run(
             &root,
             diff_base.as_deref(),
             message_file.as_deref(),
+            &author,
             github_annotations,
         ),
         Task::Docs { check } => docs::run(&root, check).map(|problems| {

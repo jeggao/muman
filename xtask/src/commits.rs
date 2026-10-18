@@ -39,18 +39,19 @@ pub struct Commit {
 }
 
 /// Check the commits `diff_base..HEAD` adds, HEAD alone without a base,
-/// or the message in `message_file`. Returns how many problems were
-/// printed.
+/// or the message in `message_file` as written by `author`. Returns how
+/// many problems were printed.
 pub fn run(
     root: &Path,
     diff_base: Option<&str>,
     message_file: Option<&Path>,
+    author: &str,
     annotations: bool,
 ) -> Result<usize> {
     let commits = match message_file {
         Some(file) => vec![Commit {
             name: "pull request".into(),
-            author: String::new(),
+            author: author.to_string(),
             message: std::fs::read_to_string(file)
                 .with_context(|| format!("reading {}", file.display()))?,
         }],
