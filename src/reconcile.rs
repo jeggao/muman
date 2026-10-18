@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 
 use crate::align;
 use crate::atomic::Lock;
@@ -67,26 +67,22 @@ const CHECKPOINT: Duration = Duration::from_secs(30);
 /// One source's folder under the run's scratch, gone when its step is:
 /// the excerpts and prints ffmpeg writes for a source come to 15 MB, and
 /// kept until the run ended, thousands of sources filled the temporary
-/// folder's disk before they were measured. A folder that cannot be made
-/// is handed on as the scratch itself, so the step fails as the write
-/// into it does.
-struct Sub(Result<tempfile::TempDir, PathBuf>);
+/// folder's disk before they were measured. Its parent is made first,
+/// as the sources of a step are measured at once and the first to run
+/// has not made it yet; a folder that cannot be made fails its source,
+/// never shares another's, whose files it would overwrite.
+struct Sub(tempfile::TempDir);
 
 impl Sub {
-    fn new(scratch: &Path, name: &str) -> Self {
-        Self(
-            tempfile::Builder::new()
-                .prefix(name)
-                .tempdir_in(scratch)
-                .map_err(|_| scratch.to_path_buf()),
-        )
+    fn new(scratch: &Path, name: &str) -> Result<Self> {
+        std::fs::create_dir_all(scratch)
+            .and_then(|()| tempfile::Builder::new().prefix(name).tempdir_in(scratch))
+            .map(Self)
+            .with_context(|| format!("creating a scratch folder in {}", scratch.display()))
     }
 
     fn path(&self) -> &Path {
-        match &self.0 {
-            Ok(dir) => dir.path(),
-            Err(scratch) => scratch,
-        }
+        self.0.path()
     }
 }
 
@@ -171,7 +167,12 @@ pub fn measure<R: Runner, W: Write>(
         parallel::builds(),
         |l| {
             let _working = (l.kind == Kind::Media).then(|| step.working(&progress::label(&l.path)));
-            facts::gather(runner, l, Sub::new(scratch, "facts-").path(), &how.analyses)
+            facts::gather(
+                runner,
+                l,
+                Sub::new(scratch, "facts-")?.path(),
+                &how.analyses,
+            )
         },
         |chunk, measured| {
             for (located, result) in chunk.iter().zip(measured) {
@@ -278,7 +279,7 @@ fn retag<R: Runner, W: Write>(
     }
     crate::ui::info(out, &format!("Reading the tags of {} source(s)", due.len()))?;
     let read = parallel::map(&due, parallel::builds(), |l| {
-        facts::retag(runner, l, Sub::new(scratch, "tags-").path())
+        facts::retag(runner, l, Sub::new(scratch, "tags-")?.path())
     });
     for (located, result) in due.iter().zip(read) {
         match result {
@@ -331,7 +332,7 @@ fn relyric<R: Runner, W: Write>(
         &format!("Reading the lyrics of {} source(s)", due.len()),
     )?;
     let read = parallel::map(&due, parallel::builds(), |(l, at)| {
-        facts::relyric(runner, l, at, Sub::new(scratch, "lyrics-").path())
+        facts::relyric(runner, l, at, Sub::new(scratch, "lyrics-")?.path())
     });
     for ((located, asked), result) in due.iter().zip(read) {
         match result {
@@ -379,7 +380,7 @@ fn hash<R: Runner, W: Write>(
     let step = progress::step("Hashing", Some(due.len() as u64));
     let read = parallel::map(&due, parallel::builds(), |l| {
         let _working = step.working(&progress::label(&l.path));
-        facts::hash(runner, l, Sub::new(scratch, "hash-").path())
+        facts::hash(runner, l, Sub::new(scratch, "hash-")?.path())
     });
     for (located, result) in due.iter().zip(read) {
         let Some(old) = state.facts.get(&located.key).cloned() else {
@@ -430,7 +431,7 @@ pub fn look<R: Runner, W: Write>(
     let step = progress::step("Hashing covers", Some(due.len() as u64));
     let read = parallel::map(&due, parallel::builds(), |l| {
         let _working = step.working(&progress::label(&l.path));
-        facts::look(runner, l, Sub::new(scratch, "look-").path())
+        facts::look(runner, l, Sub::new(scratch, "look-")?.path())
     });
     for (located, result) in due.iter().zip(read) {
         let Some(f) = state.facts.get_mut(&located.key) else {
@@ -480,7 +481,10 @@ fn analyze<R: Runner, W: Write>(
     let read = parallel::map(&due, parallel::builds(), |(l, kinds)| {
         let _working = step.working(&progress::label(&l.path));
         let audio = facts.get(&l.key).and_then(|f| f.audio.as_ref())?;
-        let scratch = Sub::new(scratch, "analyze-");
+        let scratch = match Sub::new(scratch, "analyze-") {
+            Ok(s) => s,
+            Err(e) => return Some(Err(e)),
+        };
         Some(facts::analyze(runner, l, audio, kinds, scratch.path()))
     });
     for ((located, kinds), result) in due.iter().zip(read) {
@@ -1220,7 +1224,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 stem: &r.stem,
                 library: &dirs.library,
                 sources: &located,
-                scratch: Sub::new(temp.path(), "render-").path(),
+                scratch: Sub::new(temp.path(), "render-")?.path(),
             },
         )
     };
@@ -1425,7 +1429,13 @@ fn sizes<R: Runner, W: Write>(
     )?;
     let due: Vec<(SourceKey, Sizing)> = due.into_iter().collect();
     let measured = parallel::map(&due, parallel::builds(), |(_, Sizing(index, located))| {
-        facts::audio_bytes(runner, located, *index, Sub::new(scratch, "size-").path()).ok()
+        facts::audio_bytes(
+            runner,
+            located,
+            *index,
+            Sub::new(scratch, "size-").ok()?.path(),
+        )
+        .ok()
     });
     for ((key, _), bytes) in due.iter().zip(measured) {
         if let Some(audio) = state.facts.get_mut(key).and_then(|f| f.audio.as_mut()) {
