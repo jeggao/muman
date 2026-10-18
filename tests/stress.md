@@ -23,6 +23,22 @@ orders, all seven encoders, different time zones, locales and CPU
 counts, interrupted syncs and repeated exports gave byte-identical
 libraries, but for the padding lofty leaves in an M4A whose tag shrank.
 
+A run after 0.5.0 timed `add` instead of testing it: 38 recordings of the
+archive.org item `MusopenCollectionAsFlac`, the 32 Goldberg Variations
+and six orchestral and chamber movements, 2.9 hours and 959 MB of FLAC,
+into a fresh home on four cores, three times. It took 38 to 43 s: 27 or
+28 s measuring, 3 to 5 s writing, the rest copying the files in,
+disk-bound. Of the measuring
+step's processor time, ffmpeg's run took two thirds, its decode half of
+that and the packet hash and the fingerprint's resampling most of the
+rest; of muman's own, the true-peak scan took the most, then the
+K-weighting filter, then the stereo and bandwidth measures, which cost
+the same on a one-minute variation as on a seventeen-minute movement.
+The changes it led to are in the changelog; the facts the home
+recorded were the same to the byte before and after them. What stayed:
+the packet hash and the resampling are ffmpeg's, and changing either
+changes what every library holds, so neither was.
+
 ## How a run is made
 
 1. Build the branch under test and make a scratch home with

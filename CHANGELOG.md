@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **Measuring is faster.** The true peak is scanned only where a run of
+  samples could lift it, through the same filter as before, bit for
+  bit, where every sample was filtered; and the stereo and bandwidth
+  measures sum as they did in a third less time. Over 38 public-domain
+  recordings, 2.9 hours of FLAC, on four cores, `add` took 35 to 39 s
+  where it took 38 to 43 s, its measuring step 23 or 24 s where it took
+  27 or 28 s, and recorded the same measures to the byte.
+
 ## [0.5.0] - 2026-10-18
 
 ### Added

@@ -12,8 +12,15 @@
 //! is kept in about a kilobyte, and an album's loudness is that of its
 //! songs' bins summed: BS.1770's gating over every block of the album,
 //! not a mean of its songs' loudness. A one-song album is its song.
-//! Peaks are the highest over the channels, true peaks oversampled by
-//! the crate: four times below 96 kHz, twice below 192 kHz.
+//! Peaks are the highest over the channels. True peaks are oversampled
+//! by [`TruePeak`], the crate's 48-tap polyphase filter to the bit: four
+//! times below 96 kHz, twice below 192 kHz, and at 192 kHz and above the
+//! sample peak stands for it, as in the crate. The crate filters every
+//! sample, and on a decode it cost more than the loudness itself; the
+//! filter's output can be at most the loudest sample in its window times
+//! the sum of a phase's absolute coefficients, so a run of frames that
+//! loud or quieter than the peak so far is skipped, and music is nearly
+//! always that far under its peak.
 //!
 //! Channels are weighed by the speakers the decoder names: the LFE not
 //! at all, side, back and rear-top channels by 1.41 as BS.1770 weighs
@@ -266,9 +273,114 @@ fn channel_map(stream: &Stream) -> Vec<Channel> {
         .collect()
 }
 
+/// The taps of libebur128's true-peak filter, over every phase.
+const TAPS: usize = 48;
+
+/// Frames judged together for whether their samples could lift the peak.
+const PEAK_RUN: usize = 64;
+
+/// How much an f32 sum of a window's products may overshoot its bound.
+const PEAK_MARGIN: f64 = 1.0 + 1e-4;
+
+/// The true peak of each channel, as `ebur128` measures it in f32.
+///
+/// A phase's output for a frame is its coefficients times the window
+/// ending at that frame, newest sample first, summed in that order from
+/// zero; the coefficients are the crate's windowed sinc, cast to f32. Any
+/// frame whose window could not lift the peak is skipped; the rest are
+/// filtered exactly as the crate filters them, so the peak is the same.
+struct TruePeak {
+    /// Each phase's coefficients, by tap from the newest sample.
+    phases: Vec<Vec<f32>>,
+    /// The most any phase lifts the loudest sample of a window, in f64.
+    bound: f64,
+    /// Each channel's last `TAPS / factor - 1` samples, oldest first.
+    history: Vec<Vec<f32>>,
+    peaks: Vec<f32>,
+    scratch: Vec<f32>,
+}
+
+impl TruePeak {
+    fn new(rate: u32, channels: usize) -> Option<Self> {
+        let factor = match rate {
+            ..96_000 => 4,
+            96_000..192_000 => 2,
+            _ => return None,
+        };
+        let active = TAPS / factor;
+        let mut phases = vec![vec![0f32; active]; factor];
+        let window = TAPS as f64;
+        for (j, phase) in (0..TAPS).zip((0..factor).cycle()) {
+            let x = j as f64;
+            let w = 0.5 * (1.0 - f64::cos(2.0 * std::f64::consts::PI * x / window));
+            let m = x - window / 2.0;
+            let sinc = m * std::f64::consts::PI / factor as f64;
+            phases[phase][j / factor] = if m.abs() > 0.000_001 {
+                w * sinc.sin() / sinc
+            } else {
+                w
+            } as f32;
+        }
+        let bound = phases
+            .iter()
+            .map(|p| p.iter().map(|c| f64::from(c.abs())).sum::<f64>())
+            .fold(0.0, f64::max)
+            * PEAK_MARGIN;
+        Some(Self {
+            phases,
+            bound,
+            history: vec![vec![0.0; active - 1]; channels],
+            peaks: vec![0.0; channels],
+            scratch: Vec::new(),
+        })
+    }
+
+    /// Whole frames, interleaved over `self.peaks.len()` channels.
+    fn scan(&mut self, frames: &[f32]) {
+        let channels = self.peaks.len();
+        let held = self.history[0].len();
+        for channel in 0..channels {
+            self.scratch.clear();
+            self.scratch.extend_from_slice(&self.history[channel]);
+            self.scratch
+                .extend(frames.chunks_exact(channels).map(|f| f[channel]));
+            let mut peak = self.peaks[channel];
+            let mut at = held;
+            while at < self.scratch.len() {
+                let end = (at + PEAK_RUN).min(self.scratch.len());
+                let loudest = self.scratch[at - held..end]
+                    .iter()
+                    .fold(0f32, |m, x| m.max(x.abs()));
+                if f64::from(loudest) * self.bound > f64::from(peak) {
+                    for n in at..end {
+                        let window = &self.scratch[n - held..=n];
+                        for phase in &self.phases {
+                            let mut out = 0f32;
+                            for (tap, c) in phase.iter().enumerate() {
+                                out += window[window.len() - 1 - tap] * c;
+                            }
+                            peak = peak.max(out.abs());
+                        }
+                    }
+                }
+                at = end;
+            }
+            self.peaks[channel] = peak;
+            let kept = self.scratch.len() - held;
+            self.history[channel].clear();
+            self.history[channel].extend_from_slice(&self.scratch[kept..]);
+        }
+    }
+
+    fn peak(&self, channel: usize) -> f64 {
+        f64::from(self.peaks[channel])
+    }
+}
+
 /// The loudness of one stream as it is decoded.
 pub struct Meter {
     ebu: EbuR128,
+    true_peak: Option<TruePeak>,
     channels: usize,
     hop: usize,
     hops: u64,
@@ -289,11 +401,12 @@ impl Meter {
     /// A meter for `stream`; none for a stream the crate cannot measure.
     #[must_use]
     pub fn new(stream: &Stream) -> Option<Self> {
-        let mode = Mode::M | Mode::S | Mode::SAMPLE_PEAK | Mode::TRUE_PEAK;
+        let mode = Mode::M | Mode::S | Mode::SAMPLE_PEAK;
         let mut ebu = EbuR128::new(u32::from(stream.channels), stream.rate, mode).ok()?;
         ebu.set_channel_map(&channel_map(stream)).ok()?;
         Some(Self {
             ebu,
+            true_peak: TruePeak::new(stream.rate, usize::from(stream.channels)),
             channels: usize::from(stream.channels),
             hop: (stream.rate as usize + 5) / 10,
             hops: 0,
@@ -306,6 +419,9 @@ impl Meter {
 
 impl Analyzer for Meter {
     fn take(&mut self, frames: &[f32]) {
+        if let Some(tp) = &mut self.true_peak {
+            tp.scan(frames);
+        }
         self.pending.extend_from_slice(frames);
         let hop = self.hop * self.channels;
         let mut at = 0;
@@ -343,8 +459,16 @@ impl Analyzer for Meter {
                 .filter_map(peak)
                 .fold(0.0, f64::max)
         };
-        let true_peak = highest(&|c| self.ebu.true_peak(c).ok());
         let sample_peak = highest(&|c| self.ebu.sample_peak(c).ok());
+        // As the crate's `true_peak`: a channel's is its sample peak when that is higher.
+        let true_peak = highest(&|c| {
+            let sample = self.ebu.sample_peak(c).ok()?;
+            let tp = self
+                .true_peak
+                .as_ref()
+                .map_or(0.0, |tp| tp.peak(c as usize));
+            Some(sample.max(tp))
+        });
         let value = (!self.momentary.is_empty()).then(|| Measure {
             momentary: std::mem::take(&mut self.momentary),
             short_term: std::mem::take(&mut self.short_term),
@@ -792,6 +916,53 @@ mod tests {
 
     fn near(a: f64, b: f64, within: f64) -> bool {
         (a - b).abs() <= within
+    }
+
+    /// Seeded noise in `channels`, swelling and falling every half
+    /// second, so the peak so far is passed again and again.
+    fn swells(rate: u32, channels: u16, seconds: f64) -> Vec<f32> {
+        let mut state: u32 = 7;
+        (0..(f64::from(rate) * seconds) as usize)
+            .flat_map(|n| {
+                let swell = (f64::from(n as u32) / f64::from(rate) * 4.0).sin().abs();
+                (0..channels).map(move |c| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let noise = f64::from(state >> 8) / f64::from(1u32 << 24) - 0.5;
+                    (noise * swell * (1.0 + f64::from(c) / 4.0)) as f32
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_true_peak_is_the_crates_to_the_bit() {
+        for (rate, channels) in [
+            (44_100, 2),
+            (48_000, 1),
+            (96_000, 2),
+            (44_100, 3),
+            (22_050, 6),
+        ] {
+            let s = swells(rate, channels, 2.5);
+            let mut ebu = EbuR128::new(u32::from(channels), rate, Mode::TRUE_PEAK).unwrap();
+            for hop in s.chunks(usize::from(channels) * 1234) {
+                ebu.add_frames_f32(hop).unwrap();
+            }
+            let mut tp = TruePeak::new(rate, usize::from(channels)).unwrap();
+            for piece in s.chunks(usize::from(channels) * 777) {
+                tp.scan(piece);
+            }
+            for c in 0..u32::from(channels) {
+                let ours = tp.peak(c as usize).max(ebu.sample_peak(c).unwrap());
+                assert_eq!(
+                    ours.to_bits(),
+                    ebu.true_peak(c).unwrap().to_bits(),
+                    "{rate} Hz, channel {c}/{channels}: {ours}"
+                );
+                assert!(ours > 0.1, "{ours}");
+            }
+        }
+        assert!(TruePeak::new(192_000, 2).is_none());
     }
 
     #[test]
