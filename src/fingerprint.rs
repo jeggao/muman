@@ -137,7 +137,6 @@ impl Print {
     /// compressed and in URL-safe base64.
     #[must_use]
     pub fn encoded(&self) -> String {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let words = (SENT_S / SECONDS_PER_WORD) as usize;
         let config = rusty_chromaprint::Configuration::preset_test2();
         let compressed = rusty_chromaprint::FingerprintCompressor::from(&config)
@@ -271,7 +270,6 @@ impl Match {
 }
 
 /// A count as a float. Print lengths stay far below 2^52.
-#[allow(clippy::cast_precision_loss)]
 fn real(n: usize) -> f64 {
     n as f64
 }
@@ -572,12 +570,9 @@ mod tests {
                 state = state
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(1);
-                #[allow(clippy::cast_precision_loss)]
                 let t = i as f64 / f64::from(SAMPLE_RATE);
                 let tone = (t * (220.0 + 40.0 * (t * 0.7).sin()) * std::f64::consts::TAU).sin();
-                #[allow(clippy::cast_possible_truncation)]
                 let noise = f64::from((state >> 48) as u16) / 65_536.0 - 0.5;
-                #[allow(clippy::cast_possible_truncation)]
                 let sample = ((tone * 0.6 + noise * 0.2) * 20_000.0) as i16;
                 sample.to_le_bytes()
             })

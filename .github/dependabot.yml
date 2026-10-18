@@ -4,10 +4,19 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: deps
     groups:
-      cargo:
-        patterns: ["*"]
+      # Minor and patch bumps come as one pull request. A major may not
+      # compile, so it comes alone and holds up no other update.
+      cargo-minor:
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

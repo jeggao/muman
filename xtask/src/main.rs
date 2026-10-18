@@ -1,7 +1,8 @@
 //! Repository checks run by CI and before a commit: `cargo xtask
-//! comments` and `cargo xtask docs`.
+//! comments`, `cargo xtask commits` and `cargo xtask docs`.
 
 mod comments;
+mod commits;
 mod docs;
 
 use std::path::PathBuf;
@@ -29,6 +30,23 @@ enum Task {
         #[arg(long)]
         github_annotations: bool,
     },
+    /// Check commit messages against the rules of AGENTS.md: HEAD's, or
+    /// every commit since a ref, or one message in a file.
+    Commits {
+        /// Check every commit this branch adds over this git ref, such as
+        /// `origin/main`.
+        #[arg(long, value_name = "REF", conflicts_with = "message_file")]
+        diff_base: Option<String>,
+
+        /// Check this file as a commit message: a pull request's title, a
+        /// blank line and its description.
+        #[arg(long, value_name = "FILE")]
+        message_file: Option<PathBuf>,
+
+        /// Print GitHub Actions annotations instead of plain lines.
+        #[arg(long)]
+        github_annotations: bool,
+    },
     /// Regenerate docs/cli.md, then check Markdown links and the changelog.
     Docs {
         /// Change nothing; fail when docs/cli.md is out of date.
@@ -49,6 +67,16 @@ fn main() -> ExitCode {
             diff_base,
             github_annotations,
         } => comments::run(&root, diff_base.as_deref(), github_annotations),
+        Task::Commits {
+            diff_base,
+            message_file,
+            github_annotations,
+        } => commits::run(
+            &root,
+            diff_base.as_deref(),
+            message_file.as_deref(),
+            github_annotations,
+        ),
         Task::Docs { check } => docs::run(&root, check).map(|problems| {
             for p in &problems {
                 eprintln!("docs: {p}");

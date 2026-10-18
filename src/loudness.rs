@@ -79,7 +79,6 @@ impl Histogram {
         if lufs.is_nan() || lufs < ABSOLUTE_GATE {
             return;
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let bin = (((lufs - ABSOLUTE_GATE) * 10.0).floor() as u16).min(BINS - 1);
         *self.0.entry(bin).or_default() += 1;
     }
@@ -130,11 +129,9 @@ impl Histogram {
 
 fn varint(out: &mut Vec<u8>, mut n: u32) {
     while n >= 0x80 {
-        #[allow(clippy::cast_possible_truncation)]
         out.push((n as u8 & 0x7f) | 0x80);
         n >>= 7;
     }
-    #[allow(clippy::cast_possible_truncation)]
     out.push(n as u8);
 }
 
@@ -218,7 +215,8 @@ pub struct Measure {
     pub opus_gain: i16,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
+// serde's skip_serializing_if hands a reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(n: &i16) -> bool {
     *n == 0
 }
@@ -423,7 +421,8 @@ pub struct Gains {
     pub bits: u32,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
+// serde's skip_serializing_if hands a reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
 fn is_nought(n: &u32) -> bool {
     *n == 0
 }
@@ -512,9 +511,7 @@ pub fn capped(wanted: i32, peak: Option<u32>, ceiling: i32) -> i32 {
 #[must_use]
 pub fn hundredths_to_q78(cdb: i32) -> i16 {
     let steps = (f64::from(cdb) * 256.0 / 100.0).round();
-    #[allow(clippy::cast_possible_truncation)]
-    let steps = steps.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
-    steps
+    steps.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
 }
 
 /// 1/256 dB as hundredths of a dB, rounded.
@@ -525,13 +522,11 @@ pub fn q78_to_hundredths(q: i16) -> i32 {
 
 fn hundredths(db: f64) -> Option<i32> {
     let n = (db * 100.0).round();
-    #[allow(clippy::cast_possible_truncation)]
     (n.is_finite() && n.abs() < 1e6).then_some(n as i32)
 }
 
 fn millionths(fraction: f64) -> Option<u32> {
     let n = (fraction * 1e6).round();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     (n.is_finite() && n >= 0.0 && n < f64::from(u32::MAX)).then_some(n as u32)
 }
 
@@ -786,7 +781,6 @@ mod tests {
 
     /// A 1 kHz sine at `dbfs` peak in every one of `channels`.
     fn tone(rate: u32, channels: u16, dbfs: f64, seconds: f64) -> Vec<f32> {
-        #[allow(clippy::cast_possible_truncation)]
         sine(
             rate,
             channels,
@@ -862,7 +856,6 @@ mod tests {
     fn a_true_peak_lies_between_samples() {
         // A quarter of the rate at 45°: every sample sits at 0.707 of the peak.
         let rate = 48_000;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let s: Vec<f32> = (0..rate * 2)
             .flat_map(|n| {
                 let x = (0.5

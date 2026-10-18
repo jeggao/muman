@@ -340,7 +340,8 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
 /// estimate, and corrects the estimates not measured yet.
-#[allow(clippy::too_many_arguments)]
+// Each argument borrows a different part of the run; one struct would borrow it all at once.
+#[expect(clippy::too_many_arguments)]
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
     manifest: &Manifest,
@@ -392,7 +393,6 @@ fn fit_into<R: Runner, W: Write>(
             match result {
                 Ok(entries) => {
                     let real = entries_size(&entries);
-                    #[allow(clippy::cast_precision_loss)]
                     let ratio = real as f64 / estimates[n][c].max(1) as f64;
                     ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
                     let rung = &mut items[n].rungs[c];
@@ -448,14 +448,11 @@ fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
     if seen.is_empty() {
         return;
     }
-    #[allow(clippy::cast_precision_loss)]
     let mean = (seen.iter().sum::<f64>() / seen.len() as f64).exp();
     for (n, item) in items.iter_mut().enumerate() {
         let ratio = ratios[n].unwrap_or(mean);
         for (c, rung) in item.rungs.iter_mut().enumerate().skip(1) {
             if !rung.known {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-                #[allow(clippy::cast_sign_loss)]
                 let scaled = (estimates[n][c] as f64 * ratio) as u64;
                 rung.bytes = scaled;
             }
@@ -505,7 +502,6 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
         else {
             continue;
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let stream = (units::stream_bytes(f64::from(kbps), seconds) * (1.0 + CONTAINER)) as u64;
         let bytes = stream + besides;
         if bytes.saturating_mul(10) <= first.saturating_mul(9) {

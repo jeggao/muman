@@ -35,7 +35,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   machine trusts is trusted by lookups too. They were verified by roots
   built into muman alone, which a machine's own authorities never
   reached.
-
 - **Thirty more tags**, read from every source's own tags and from tag
   files, set by hand, and written where Picard writes each in every
   format: tempo (`bpm`), key, compilation, composer, lyricist,
@@ -59,9 +58,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   chapters, `CHAPTER000` comments in FLAC, Ogg and Opus, and `CTOC` and
   `CHAP` frames in MP3; WavPack holds none. They were dropped. A song
   whose source has chapters is written once again.
-
-### Changed
-
 - **`[library] max_path` counts characters as Windows does**, in UTF-16
   units, so an emoji counts two; a path of such characters is cut
   shorter than before.

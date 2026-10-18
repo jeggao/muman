@@ -551,7 +551,6 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
             sheet.skip(format!("{name:?}, which has no Vorbis name muman knows"));
         }
     }
-    #[allow(clippy::cast_possible_truncation)]
     let length_ms = map
         .get("length")
         .and_then(|v| match v {
@@ -582,7 +581,6 @@ fn whole(v: &Value) -> Option<u64> {
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }?;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     (f.is_finite() && f >= 1.0 && f.fract() == 0.0 && f < 1e15).then_some(f as u64)
 }
 

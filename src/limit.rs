@@ -232,7 +232,6 @@ fn by_audio(state: &State) -> ByAudio<'_> {
 
 /// A rung's estimated audio bytes and their standard deviation, from
 /// the facts alone.
-#[allow(clippy::cast_precision_loss)]
 fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
     let audio = facts.audio.as_ref();
     let measured = audio.and_then(|a| a.bytes).map(|b| b as f64);
@@ -286,7 +285,6 @@ fn besides_audio(plan: &Plan) -> (u64, u64) {
     (tags as u64 + cover + embedded + HEADERS, sidecar)
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn ladder(
     manifest: &Manifest,
     state: &State,
@@ -374,7 +372,8 @@ impl Learnt {
     /// Learn the real sizes of the `unknown` rungs, by ladder and rung:
     /// from `state.sizes` where kept, else by rendering them; one that
     /// does not render stays unknown.
-    #[allow(clippy::too_many_arguments)]
+    // Each argument borrows a different part of the run; one struct would borrow it all at once.
+    #[expect(clippy::too_many_arguments)]
     fn measure<R: Runner, W: Write>(
         &mut self,
         runner: &R,

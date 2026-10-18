@@ -166,7 +166,6 @@ fn summary<D: Write>(report: &mut D, (alone, across): (usize, usize), found: usi
 }
 
 /// The shorter of two lengths over the longer.
-#[allow(clippy::cast_precision_loss)]
 fn ratio(a: usize, b: usize) -> f64 {
     a.min(b) as f64 / a.max(b).max(1) as f64
 }

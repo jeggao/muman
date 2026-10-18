@@ -33,8 +33,10 @@ These bind every change, by a person or an agent.
    environment or the clock.
 1. **No pushes to `main`.** Changes go through a pull request, and CI
    must pass on all three platforms.
-1. **This file and the style guides change only when asked.** Propose a
-   rule change in the pull request instead.
+1. **The rules here and the style guides change only when asked.**
+   Propose a rule change in the pull request instead. The layout and
+   the checklist below describe the code and change with it, in the
+   same commit; `cargo xtask docs` fails on a module the layout lacks.
 
 ## Layout
 
@@ -50,12 +52,14 @@ src/
   manifest/new.toml a new home's song list, the reference for every setting
   state.rs          state.json: files written, measures, comparisons
   platform.rs       default folders per OS, path identity, arrival times
+  dirs.rs           the home and the library folders, neither inside the other
   relpath.rs        recorded paths, written with / and in NFC
   runner.rs         the subprocess seam
   tools.rs          ffmpeg, ffprobe and yt-dlp: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
   sites.rs          the song list's [sites]: how each site names and fetches
   download.rs       yt-dlp's arguments and the files it reports
+  ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
   music.rs          YouTube Music search and name matching
   plugins.rs        yt-dlp postprocessors shipped in the binary
   identify.rs       new sources to songs, by fingerprint
@@ -92,14 +96,17 @@ src/
   duplicates.rs     songs listed apart that are one recording
   purge.rs          fetched sources and records no song uses, deleted
   progress.rs       how far a long step has got, on stderr
+  parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
+  testing.rs        the fake runner and the fixtures every test shares
+  tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   */tests.rs        a module's tests, when they outgrow it
 tests/              the smoke test, yt-dlp given muman's command line, and
                     the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs
-docs/               guide.md, configuration.md, cli.md (generated)
+docs/               guide.md, library.md, configuration.md, cli.md (generated)
 ```
 
 Start from a module's `//!` docs: they hold its design and the reasons
@@ -113,6 +120,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo xtask comments
+cargo xtask commits --diff-base origin/main
 cargo xtask docs
 cargo test --test smoke -- --ignored
 ```
@@ -121,13 +129,21 @@ cargo test --test smoke -- --ignored
 links and the changelog; `--check` only checks, as CI does. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
-line muman builds, against a file served from the test itself.
+line muman builds, against a file served from the test itself. Runs
+against real recordings and sites are made by hand, as
+[tests/stress.md](tests/stress.md) records; a run's findings go there
+and into the pull request that fixes them.
 
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
 and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
 Rust version, `cargo xtask comments` (with `--diff-base` on pull
-requests), `cargo xtask docs --check` and cargo-deny. Its clippy is the
-latest stable, which can be newer than yours.
+requests), `cargo xtask commits`, `cargo xtask docs --check` and
+cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
+week `toolchain-preview.yml` runs the same checks on the newest stable;
+when it fails, one pull request raises the pin, in `ci.yml` and
+`release.yml`, and meets the new lints. Dependabot opens the week's
+minor and patch bumps as one pull request and each major alone;
+`flake-update.yml` moves `flake.lock` the same way.
 
 ## Conventions
 
@@ -153,7 +169,10 @@ latest stable, which can be newer than yours.
 - **Formats:** `songs.toml` and `state.json` carry a `version`; changing
   what an existing key means is a new version, adding a key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the
-  workspace; allow one narrowly, with the reason beside it.
+  workspace, the three cast lints off, as `Cargo.toml` says why.
+  `#[expect]` one lint narrowly, with the reason in a `//` comment
+  above it; `#[allow]` only where the lint fires on some platforms
+  alone.
 
 ## Versioning
 
@@ -167,6 +186,15 @@ Each release adds a section to [CHANGELOG.md](CHANGELOG.md), in Keep a
 Changelog form, user-facing bullets with a bold lead phrase; changes
 since the last release collect under `[Unreleased]`.
 
+A release is a pull request of its own, `release: muman <version>`,
+changing the version in `Cargo.toml` and `Cargo.lock` and dating the
+changelog section. Merging it tags `main` as `v<version>`, builds the
+binaries for each platform and publishes them with that section as the
+notes (`.github/workflows/release.yml`); run that workflow by hand to
+build a tag made before it existed. The crate goes to crates.io by hand
+until Trusted Publishing is set up there and the repository variable
+`PUBLISH_CRATE` is `true`.
+
 ## Keeping docs in step
 
 | Change | Update in the same commit |
@@ -174,17 +202,28 @@ since the last release collect under `[Unreleased]`.
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
 | A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md); a rename or a changed default, an edition in `migrate.rs` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
-| How sources, picking, lookups, editing or hooks behave for a user | [docs/guide.md](docs/guide.md) |
+| How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
+| How picking, lookups, editing, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
 | A module added, removed or renamed | The layout above |
-| A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md) |
+| A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md), in a pull request of their own; the merge tags and publishes it |
 
 ## Commits and pull requests
 
 - **Subject:** `<scope>: <imperative summary>`, lowercase, no period,
   at most 72 characters; the scope is the module or area (`naming`,
-  `ci`, `docs`).
+  `ci`, `docs`). The ` (#123)` a squash merge appends is not counted.
 - **Body:** why before what, wrapped at 72; then `-` bullets led by the
-  file or area changed. Do not narrate how the change was made.
-- **Pull requests:** the title is the subject; open them ready for
-  review, not as drafts.
+  file or area changed. Do not narrate how the change was made, and do
+  not paste a branch's commit subjects as the body.
+- **Pull requests:** the title is the subject and the description the
+  body; a squash merge writes them to `main` as they are, so both follow
+  the rules above. Open them ready for review, not as drafts. One pull
+  request is one change, the one a changelog bullet or a few describe;
+  one over about a thousand changed lines is split before review, a
+  release pull request apart.
+- **Merging:** squash and merge, every time. A rebase merge puts a
+  branch's authors and half-made commits on `main`.
+- `cargo xtask commits` checks the subject and body rules; CI runs it
+  on a pull request's commits and on its title and description, and on
+  each push to `main`.

@@ -69,6 +69,14 @@ pedantic = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+# Audio code casts at every turn: sample and frame counts, seconds to
+# samples, bytes to f64 for a ratio. Each cast was exempted where it
+# stood, close to a hundred times and almost never with a reason, so the
+# exemptions told a reader nothing. A cast's bounds are checked where
+# they matter, as `units::whole` does, and these three lints are off.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
 
 # The loudness meter decodes whole songs; unoptimized, its tests take seconds each.
 [profile.dev.package.ebur128]

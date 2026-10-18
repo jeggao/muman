@@ -913,11 +913,6 @@ fn segment_starts(duration: Option<f64>) -> Vec<f64> {
 /// Where segments start that sound, by the seconds of a whole decode that
 /// do: centred on the seconds at [`quality::SEGMENTS`]' shares of them,
 /// within the audio. `None` where no second sounds.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
 fn sounding_starts(sounding: &[bool]) -> Option<Vec<f64>> {
     let sound: Vec<usize> = (0..sounding.len()).filter(|&s| sounding[s]).collect();
     let last = sound.len().checked_sub(1)?;
@@ -1053,7 +1048,8 @@ pub fn hash<R: Runner>(
     Ok((digests, info.as_ref().and_then(Served::of)))
 }
 
-#[allow(clippy::too_many_lines)]
+// The steps read in the order they run; split up, the order would be in the call sites.
+#[expect(clippy::too_many_lines)]
 fn media<R: Runner>(
     runner: &R,
     located: &Located,

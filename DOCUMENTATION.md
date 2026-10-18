@@ -20,12 +20,14 @@ what is not about one module.
 | Content | Lives in |
 |---|---|
 | What muman is, installing it, a first run | [README.md](README.md) |
-| Using it: the song list, sources, picking, editing, hooks | [docs/guide.md](docs/guide.md) |
+| Using it: the home, the song list and its sources | [docs/guide.md](docs/guide.md) |
+| Picking, lookups, changing songs, status, export, hooks | [docs/library.md](docs/library.md) |
 | Folders, programs, settings, templates, safe names | [docs/configuration.md](docs/configuration.md) |
 | Every command and flag | [docs/cli.md](docs/cli.md), generated from `src/cli.rs` |
 | Each setting's default | [src/manifest/new.toml](src/manifest/new.toml) |
 | Why a module works as it does | That module's `//!` docs |
 | How to work in this repository | [AGENTS.md](AGENTS.md) |
+| How the stress runs against real files are made, and what each found | [tests/stress.md](tests/stress.md) |
 | What changed in each release | [CHANGELOG.md](CHANGELOG.md) |
 
 Do not create other Markdown files unless asked.
@@ -52,8 +54,9 @@ Do not create other Markdown files unless asked.
 - Style guides (`COMMENTS.md`, this file) open with a
   `> **Maintenance**:` line naming exactly what change requires an
   update, and separate `##` sections with `---`. Other files do not.
-- Length caps, roughly: `AGENTS.md` and style guides 250 non-blank
-  lines, the README 150, each file under `docs/` 400.
+- Length caps: `AGENTS.md` and style guides 250 non-blank lines, the
+  README 150, each file under `docs/` 400; `cargo xtask docs` counts.
+  A file at its cap is split by what a reader comes for, not padded.
 
 ---
 

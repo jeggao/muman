@@ -129,7 +129,6 @@ impl ProbedChapter {
     fn chapter(&self) -> Option<Chapter> {
         let ms = |t: &Option<String>| -> Option<u64> {
             let s: f64 = t.as_deref()?.trim().parse().ok()?;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             (s.is_finite() && s >= 0.0).then(|| (s * 1000.0).round() as u64)
         };
         let (start_ms, end_ms) = (ms(&self.start_time)?, ms(&self.end_time)?);

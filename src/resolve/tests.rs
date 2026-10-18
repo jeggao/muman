@@ -98,7 +98,6 @@ fn tag(f: &mut Facts, field: Field, values: &[&str], structured: bool) {
 }
 
 /// Whole milliseconds of a test's durations, which are whole seconds.
-#[allow(clippy::cast_possible_truncation)]
 fn ms(seconds: Option<f64>) -> i64 {
     seconds.map_or(0, |d| d.round() as i64 * 1000)
 }

@@ -81,6 +81,9 @@ Starts with `// TODO:` and one complete, actionable sentence.
 1. **Invented names only.** An example artist, title, album or video ID
    in a comment or a test is made up; see the privacy rule in
    [AGENTS.md](AGENTS.md#rules).
+1. **A lint exemption says why.** `#[expect(...)]`, or `#[allow(...)]`
+   where the lint fires on some platforms only, carries its reason in a
+   `//` comment on or above its line.
 
 ---
 
@@ -133,6 +136,7 @@ cargo xtask comments --diff-base origin/main
 | `consecutive-comments` | More than 3 plain `//` lines in a row |
 | `density-delta` | `//` density rising more than 5 points (`--diff-base` only) |
 | `line-length` | A comment-bearing line over 100 characters |
+| `lint-reason` | An `#[allow]` or `#[expect]` with no `//` comment on or above its line |
 | `module-doc` | A module under `src/` without a `//!` summary first |
 | `no-comments-on-unchanged-code` | A comment added beside code the change leaves alone (`--diff-base` only) |
 | `section-header-count` | More than 8 section headers |

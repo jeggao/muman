@@ -24,7 +24,8 @@ use crate::store::{self, Kind, Store};
 
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
-#[allow(clippy::too_many_lines)]
+// Each check in the order the report lists its problems.
+#[expect(clippy::too_many_lines)]
 pub fn check<R: Runner, W: Write, D: Write>(
     runner: &R,
     dirs: &Dirs,

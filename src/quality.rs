@@ -265,13 +265,11 @@ impl ImageQuality {
 
 /// `x` rounded down to a whole step. The measures stay far inside an
 /// `i64`.
-#[allow(clippy::cast_possible_truncation)]
 fn bucket(x: f64) -> i64 {
     if x.is_finite() { x.floor() as i64 } else { 0 }
 }
 
 /// A count as a float. Sample and pixel counts stay far below 2^52.
-#[allow(clippy::cast_precision_loss)]
 fn real(n: usize) -> f64 {
     n as f64
 }
@@ -425,7 +423,6 @@ pub fn audio(segments: &[Segment], sample_rate: u32, headroom: bool) -> Option<A
     if peak == 0.0 {
         return None;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let reach = (f64::from(sample_rate) * STEREO_LAG).round() as usize;
     let incoherence = if segments.iter().all(|s| s.channels == 1) {
         0.0
@@ -454,7 +451,6 @@ fn bits_used(segments: &[Segment]) -> u32 {
         .filter(|x| *x != 0.0)
         .map(|x| {
             if x.fract() == 0.0 && x.abs() < 2.0 * scale {
-                #[allow(clippy::cast_possible_truncation)]
                 (x as i64).trailing_zeros()
             } else {
                 0
@@ -508,7 +504,6 @@ fn incoherence(segments: &[Vec<[f32; 2]>], reach: usize) -> f64 {
 
 /// The share of samples from the valley under a pile-up up, as
 /// [`PILE_FROM`] describes; zero when there is none.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn pile_up(segments: &[Segment], peak: f32, total: usize) -> f64 {
     let lowest = PILE_FROM - PILE_REACH;
     let peak = f64::from(peak);
@@ -795,7 +790,6 @@ fn box_weights(len: usize, n: usize) -> Vec<Vec<(usize, f64)>> {
     (0..n)
         .map(|i| {
             let (lo, hi) = (real(i) * step, real(i + 1) * step);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let (first, last) = (lo.floor() as usize, (hi.ceil() as usize).min(len));
             (first..last)
                 .map(|j| (j, ((real(j + 1)).min(hi) - real(j).max(lo)) / step))
@@ -834,7 +828,6 @@ fn columns<T: AsRef<[(usize, f64)]>>(img: &[f64], w: usize, weights: &[T]) -> Ve
 /// `img` averaged down to `short` pixels across its shorter side.
 fn shrink(img: &[f64], w: usize, h: usize, short: usize) -> (Vec<f64>, usize, usize) {
     let scale = real(short) / real(w.min(h));
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (tw, th) = (
         ((real(w) * scale).round() as usize).max(3),
         ((real(h) * scale).round() as usize).max(3),
@@ -888,7 +881,6 @@ fn effective_side(img: &[f64], w: usize, h: usize) -> usize {
     let mut sizes = Vec::new();
     let mut size = real(2 * REFERENCE_SIDE);
     while size < real(short) {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         sizes.push(size.round() as usize);
         size *= std::f64::consts::SQRT_2;
     }
@@ -1005,7 +997,6 @@ mod tests {
         out
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn stereo(left: &[f64], right: &[f64]) -> Segment {
         let samples = left
             .iter()
@@ -1172,7 +1163,6 @@ mod tests {
         );
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     fn channels(signals: &[Vec<f64>]) -> Segment {
         let frames = signals[0].len();
         let samples = (0..frames)
@@ -1259,7 +1249,6 @@ mod tests {
         img
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn gray(img: &[f64]) -> Vec<u8> {
         let peak = img.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
         img.iter()

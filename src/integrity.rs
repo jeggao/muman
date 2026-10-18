@@ -115,7 +115,6 @@ impl Damage {
     pub fn missing_ms(&self) -> i64 {
         match *self {
             Self::Cut { .. } => 0,
-            #[allow(clippy::cast_possible_truncation)]
             Self::Missing { seconds, .. } => (seconds * 1000.0).round() as i64,
         }
     }
@@ -153,7 +152,6 @@ impl Timeline {
             })
             .collect();
         packets.sort_unstable();
-        #[allow(clippy::cast_precision_loss)]
         let seconds = |ticks: i64| ticks as f64 * num / den;
         let start = packets.first()?.0;
         let mut end = start;
@@ -187,7 +185,6 @@ pub struct Found {
 #[must_use]
 pub fn measure(rate: Option<u32>, frames: u64, unfinite: u64, found: &Found) -> Option<Measure> {
     let rate = rate.filter(|r| *r > 0)?;
-    #[allow(clippy::cast_precision_loss)]
     let decoded = frames as f64 / f64::from(rate);
     Some(Measure {
         said: found.said,
@@ -247,7 +244,6 @@ mod tests {
             said,
             timeline: Timeline::parse(&list(packets)),
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let frames = (decoded * 48_000.0).round() as u64;
         measure(Some(48_000), frames, 0, &found).unwrap()
     }

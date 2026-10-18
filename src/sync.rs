@@ -28,7 +28,8 @@ use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, store, 
 
 /// What `sync` was given: its flags, each on its own.
 #[derive(Debug, Clone, Copy)]
-#[allow(clippy::struct_excessive_bools)]
+// Each is a flag of its own on the command line.
+#[expect(clippy::struct_excessive_bools)]
 pub(crate) struct Request {
     pub rematch: bool,
     pub force: bool,

@@ -1065,7 +1065,8 @@ fn listed_keys(t: &Table) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[allow(clippy::too_many_lines)]
+// One match over every kind of edit.
+#[expect(clippy::too_many_lines)]
 fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
     match edit {
         Edit::Add { sources, album } => {
