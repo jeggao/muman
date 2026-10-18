@@ -46,6 +46,7 @@
 //! by [`look`], which decodes the pictures alone, and only when a picture
 //! is added.
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -492,8 +493,17 @@ fn read_hash(path: &Path) -> Option<String> {
 
 /// [`digest`] of a file's bytes, read a block at a time.
 pub(crate) fn digest_file(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut std::fs::File::open(path).ok()?, &mut hasher).ok()?;
+    let mut block = [0; 8 * 1024];
+    loop {
+        match file.read(&mut block) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&block[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
     Some(hex(&hasher.finalize()[..16]))
 }
 
