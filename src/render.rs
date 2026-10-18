@@ -8,6 +8,12 @@
 //! another song rendered at the same time may be writing into one; the
 //! sync clears the folders failures leave once every song is written.
 //!
+//! A FLAC's tags and cover are written into padding ffmpeg reserves for
+//! them (`write_flac_blocks`), so the file is written once: `lofty`
+//! writes a tag of another length by moving every byte of audio after it,
+//! a second copy of the song. A cover past the room goes through `lofty`
+//! all the same. Ogg, MP3, MP4 and WavPack are `lofty`'s to write.
+//!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
 //! among them, are dropped. They are Vorbis comments in Ogg and FLAC. In
@@ -145,9 +151,18 @@ impl Inputs {
 /// would write as comments; an MP4's chapters are its to write, and it
 /// keeps their titles only where the global and stream metadata alone
 /// are dropped.
-fn audio_output(plan: &Plan, input: usize, chapters: Option<usize>, path: &Path) -> Output {
+fn audio_output(
+    plan: &Plan,
+    input: usize,
+    chapters: Option<usize>,
+    reserve: Option<u64>,
+    path: &Path,
+) -> Output {
     let format = plan.format;
     let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
+    if let Some(reserve) = reserve {
+        args.extend(["-metadata_header_padding".into(), reserve.to_string()]);
+    }
     args.extend(match format {
         Format::Copy { .. } => vec!["-c:a".into(), "copy".into()],
         Format::Encode {
@@ -237,9 +252,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     } else {
         None
     };
-    let mut outputs = vec![audio_output(plan, n, chapters, &audio_part)];
     let mut problems = Vec::new();
-
+    let mut cover_outputs = Vec::new();
     let cover = match &plan.cover {
         Some(c) => match cover_plan(
             runner,
@@ -247,7 +261,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             locate(&c.key)?,
             job.scratch,
             &mut inputs,
-            &mut outputs,
+            &mut cover_outputs,
         ) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -257,6 +271,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         },
         None => None,
     };
+    let reserve = flac_reserve(plan, cover.as_ref());
+    let mut outputs = vec![audio_output(plan, n, chapters, reserve, &audio_part)];
+    outputs.append(&mut cover_outputs);
     let lyrics_raw = job.scratch.join("lyrics.lrc");
     let lyrics_text = match &plan.lyrics {
         Some(l) => match lyrics_plan(l, locate(&l.key)?, &lyrics_raw, &mut inputs, &mut outputs) {
@@ -776,7 +793,17 @@ fn write_tags(
         .with_context(|| format!("opening {}", path.display()))?;
     let codec = format.codec();
     let written = match codec.container() {
-        Container::Ogg | Container::Flac => {
+        Container::Flac => {
+            let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
+            if write_flac_blocks(&mut file, &comments)
+                .with_context(|| format!("writing tags to {}", path.display()))?
+            {
+                return Ok(());
+            }
+            file.seek(SeekFrom::Start(0))?;
+            comments.save_to(&mut file, WriteOptions::default())
+        }
+        Container::Ogg => {
             let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
             comments.save_to(&mut file, WriteOptions::default())
@@ -788,6 +815,118 @@ fn write_tags(
         Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
     };
     written.with_context(|| format!("writing tags to {}", path.display()))
+}
+
+/// Bytes ffmpeg leaves as padding in a FLAC's metadata beyond its cover,
+/// for the comments [`write_flac_blocks`] writes in their place.
+const FLAC_RESERVE: u64 = 16 * 1024;
+
+/// Padding reserved for a cover the run makes, whose size is not known
+/// before it: most covers, as JPEGs, are under it.
+const FLAC_COVER_RESERVE: u64 = 256 * 1024;
+
+/// FLAC's block types.
+const FLAC_PADDING: u8 = 1;
+const FLAC_COMMENT: u8 = 4;
+const FLAC_PICTURE: u8 = 6;
+
+/// The padding a FLAC output is written with, so its tags and cover are
+/// written into it in place; none for another container.
+fn flac_reserve(plan: &Plan, cover: Option<&CoverPlan>) -> Option<u64> {
+    (plan.format.codec().container() == Container::Flac).then(|| {
+        let cover = cover.map_or(0, |c| {
+            if c.by_run {
+                FLAC_COVER_RESERVE
+            } else {
+                fs::metadata(&c.path).map_or(FLAC_COVER_RESERVE, |m| m.len())
+            }
+        });
+        FLAC_RESERVE + cover
+    })
+}
+
+/// Write `comments` into the FLAC `file`'s metadata where it stands: its
+/// other blocks stay, the comments and pictures follow them as `lofty`
+/// orders them, and what is left of the room is padding. `Ok(false)`,
+/// the file untouched, when they do not fit, and `lofty` rewrites the
+/// whole file: it moves every byte of audio for a tag of another length,
+/// which costs a copy of the file for each song written.
+fn write_flac_blocks(file: &mut fs::File, comments: &VorbisComments) -> std::io::Result<bool> {
+    use std::io::{Read, Write};
+    const MAX_BLOCK: usize = 0xFF_FFFF;
+    file.seek(SeekFrom::Start(0))?;
+    let mut marker = [0; 4];
+    file.read_exact(&mut marker)?;
+    if &marker != b"fLaC" {
+        return Ok(false);
+    }
+    let mut blocks = Vec::new();
+    let end = loop {
+        let mut header = [0; 4];
+        file.read_exact(&mut header)?;
+        let (ty, len) = (
+            header[0] & 0x7f,
+            u32::from_be_bytes([0, header[1], header[2], header[3]]),
+        );
+        if matches!(ty, FLAC_PADDING | FLAC_COMMENT | FLAC_PICTURE) {
+            file.seek(SeekFrom::Current(i64::from(len)))?;
+        } else {
+            let mut content = vec![0; len as usize];
+            file.read_exact(&mut content)?;
+            blocks.push((ty, content));
+        }
+        if header[0] & 0x80 != 0 {
+            break file.stream_position()?;
+        }
+    };
+    // As lofty: a file of no comments gets no block, and its vendor goes.
+    if comments.items().len() > 0 {
+        blocks.push((FLAC_COMMENT, comment_block(comments)));
+    }
+    for (picture, info) in comments.pictures() {
+        blocks.push((FLAC_PICTURE, picture.as_flac_bytes(*info, false)));
+    }
+    let room = usize::try_from(end - u64::from(marker.len() as u32)).unwrap_or(usize::MAX);
+    let used: usize = blocks.iter().map(|(_, c)| 4 + c.len()).sum();
+    let Some(padding) = room.checked_sub(used + 4) else {
+        return Ok(false);
+    };
+    if padding > MAX_BLOCK || blocks.iter().any(|(_, c)| c.len() > MAX_BLOCK) {
+        return Ok(false);
+    }
+    let mut bytes = Vec::with_capacity(room);
+    for (ty, content) in &blocks {
+        bytes.push(*ty);
+        bytes.extend_from_slice(&(content.len() as u32).to_be_bytes()[1..]);
+        bytes.extend_from_slice(content);
+    }
+    bytes.push(FLAC_PADDING | 0x80);
+    bytes.extend_from_slice(&(padding as u32).to_be_bytes()[1..]);
+    bytes.resize(room, 0);
+    file.seek(SeekFrom::Start(marker.len() as u64))?;
+    file.write_all(&bytes)?;
+    Ok(true)
+}
+
+/// A `VORBIS_COMMENT` block's content, as `lofty` encodes one: the
+/// vendor, then each comment with a value as `NAME=value`, each behind
+/// its length.
+fn comment_block(comments: &VorbisComments) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let vendor = comments.vendor().as_bytes();
+    bytes.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(vendor);
+    let items: Vec<String> = comments
+        .items()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    bytes.extend_from_slice(&(items.len() as u32).to_le_bytes());
+    for item in &items {
+        bytes.extend_from_slice(&(item.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(item.as_bytes());
+    }
+    bytes
 }
 
 /// `tag` with its frames in one order, by ID and a user frame's

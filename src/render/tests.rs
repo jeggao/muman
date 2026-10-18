@@ -176,6 +176,69 @@ fn a_flac_song_keeps_its_tags_and_cover_as_flac() {
     assert_eq!(flac.pictures().len(), 1);
 }
 
+/// A FLAC of `padding` bytes of padding after an empty stream info.
+fn padded_flac(padding: u32) -> Vec<u8> {
+    let mut bytes = b"fLaC".to_vec();
+    bytes.extend_from_slice(&[0, 0, 0, 34]);
+    bytes.extend_from_slice(&[0; 34]);
+    bytes.push(FLAC_PADDING | 0x80);
+    bytes.extend_from_slice(&padding.to_be_bytes()[1..]);
+    bytes.resize(bytes.len() + padding as usize, 0);
+    bytes
+}
+
+#[test]
+fn flac_tags_and_a_cover_go_into_the_padding_or_the_file_is_rewritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut comments = VorbisComments::default();
+    comments.set_vendor("Lavf".to_string());
+    comments.push("TITLE".to_string(), "Lantern Weather".to_string());
+    comments.push("EMPTY".to_string(), String::new());
+    let picture = Picture::from_reader(&mut &crate::testing::PIXEL[..]).unwrap();
+    comments.insert_picture(picture, None).unwrap();
+    let read = |path: &Path| {
+        let mut file = fs::File::open(path).unwrap();
+        FlacFile::read_from(&mut file, ParseOptions::new().read_properties(false)).unwrap()
+    };
+
+    let roomy = dir.path().join("roomy.flac");
+    fs::write(&roomy, padded_flac(4096)).unwrap();
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&roomy)
+        .unwrap();
+    assert!(write_flac_blocks(&mut file, &comments).unwrap());
+    drop(file);
+    assert_eq!(fs::metadata(&roomy).unwrap().len(), 4 + 4 + 34 + 4 + 4096);
+    let flac = read(&roomy);
+    let own = flac.vorbis_comments().unwrap();
+    assert_eq!(own.vendor(), "Lavf");
+    assert_eq!(own.get("TITLE"), Some("Lantern Weather"));
+    assert_eq!(own.get("EMPTY"), None);
+    assert_eq!(flac.pictures().len(), 1);
+    let bytes = fs::read(&roomy).unwrap();
+    assert_eq!(bytes.get(4), Some(&0), "stream info first, not last");
+    assert!(
+        bytes[..bytes.len() - 32]
+            .windows(1)
+            .rposition(|b| b[0] == (FLAC_PADDING | 0x80))
+            .is_some(),
+        "padding stays, and last"
+    );
+
+    let tight = dir.path().join("tight.flac");
+    let before = padded_flac(8);
+    fs::write(&tight, &before).unwrap();
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&tight)
+        .unwrap();
+    assert!(!write_flac_blocks(&mut file, &comments).unwrap());
+    assert_eq!(fs::read(&tight).unwrap(), before, "left as it was");
+}
+
 #[test]
 fn another_lossy_codec_is_encoded_to_opus() {
     let f = fixture();

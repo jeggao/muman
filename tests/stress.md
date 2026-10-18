@@ -23,6 +23,43 @@ orders, all seven encoders, different time zones, locales and CPU
 counts, interrupted syncs and repeated exports gave byte-identical
 libraries, but for the padding lofty leaves in an M4A whose tag shrank.
 
+A run after 0.5.0 timed `add` instead of testing it: 38 recordings of the
+archive.org item `MusopenCollectionAsFlac`, the 32 Goldberg Variations
+and six orchestral and chamber movements, 2.9 hours and 959 MB of FLAC,
+into a fresh home on four cores, three times. It took 38 to 43 s: 27 or
+28 s measuring, 3 to 5 s writing, the rest copying the files in,
+disk-bound. Of the measuring
+step's processor time, ffmpeg's run took two thirds, its decode half of
+that and the packet hash and the fingerprint's resampling most of the
+rest; of muman's own, the true-peak scan took the most, then the
+K-weighting filter, then the stereo and bandwidth measures, which cost
+the same on a one-minute variation as on a seventeen-minute movement.
+The changes it led to are in the changelog; the facts the home
+recorded were the same to the byte before and after them. What stayed:
+the packet hash and the resampling are ffmpeg's, and changing either
+changes what every library holds, so neither was.
+
+A second run after 0.5.0 timed a library of thousands: the 38 recordings
+and 2,000 songs of 30 s made by a script, a two-voice melody drawn from
+a seeded random sequence over faint pink noise so that no two measured
+as one recording, 500 each as FLAC, Opus, MP3 and M4A, tagged as ten
+tracks to an album by 60 invented artists with a cover embedded where
+ffmpeg embeds one, 2.9 GB in all. `add` of the 2,038 into a fresh home
+on four cores took 1,010 s: 165 s copying the files in, 10 min 5 s
+measuring, 3 min 31 s writing. The copying read the library once per
+file and listed a folder once per sidecar looked for; the measuring kept
+each source's 15 MB of scratch until the run ended, 2.9 GB by the 299th
+source, and ran the disk out until a sweeper removed them; the writing
+wrote each FLAC whole twice, once encoding and once tagging. After the
+changes in the changelog, the same `add` took 824 s: 7 s copying, 9 min
+8 s measuring, 3 min 29 s writing, and the scratch held only the sources
+being measured. The home ended at 13 MB of `state.json`, 528 KB of
+`songs.toml`, 4.0 GB of sources, 11 MB of history and a 4.1 GB library.
+What stayed: every command plans the whole library before it answers,
+so `list` took 4 s and a `sync` with nothing to do 6 to 7 s, before and
+after, and `add` of one more song 8 s, `remove` and `undo` of it 3.9 to
+4.5 s.
+
 ## How a run is made
 
 1. Build the branch under test and make a scratch home with

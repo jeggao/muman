@@ -468,20 +468,18 @@ fn incoherence(segments: &[Vec<[f32; 2]>], reach: usize) -> f64 {
     let (mut cross, mut right, mut left) = (vec![0.0; lags], vec![0.0; lags], 0.0);
     for samples in segments.iter().filter(|s| s.len() > 2 * reach) {
         let n = samples.len();
+        let l: Vec<f64> = samples.iter().map(|s| f64::from(s[0])).collect();
+        let r: Vec<f64> = samples.iter().map(|s| f64::from(s[1])).collect();
         let mut energy = vec![0.0; n + 1];
-        for (i, s) in samples.iter().enumerate() {
-            energy[i + 1] = energy[i] + f64::from(s[1]).powi(2);
+        for (i, x) in r.iter().enumerate() {
+            energy[i + 1] = energy[i] + x.powi(2);
         }
-        let middle = &samples[reach..n - reach];
-        left += middle.iter().map(|s| f64::from(s[0]).powi(2)).sum::<f64>();
+        let middle = &l[reach..n - reach];
+        left += middle.iter().map(|x| x.powi(2)).sum::<f64>();
         for k in 0..lags {
             right[k] += energy[n - 2 * reach + k] - energy[k];
-            cross[k] += middle
-                .iter()
-                .zip(&samples[k..])
-                .map(|(l, r)| f64::from(l[0]) * f64::from(r[1]))
-                .sum::<f64>();
         }
+        correlate(middle, &r, &mut cross);
     }
     if left == 0.0 || right.contains(&0.0) {
         return 1.0;
@@ -500,6 +498,30 @@ fn incoherence(segments: &[Vec<[f32; 2]>], reach: usize) -> f64 {
         }
     }
     (1.0 - peak.min(1.0).powi(2)).max(0.0)
+}
+
+/// Lags of the cross-correlation summed at once, each its own chain of
+/// additions, so the chains overlap in the pipeline where one would wait
+/// on itself.
+const LAG_LANES: usize = 8;
+
+/// `cross[k] += Σ a[i]·b[i + k]` for every `k`, each sum in order of
+/// `i`, so a lag's sum has the bits of the products added one by one.
+fn correlate(a: &[f64], b: &[f64], cross: &mut [f64]) {
+    let mut k = 0;
+    while k < cross.len() {
+        let width = LAG_LANES.min(cross.len() - k);
+        let mut sums = [0.0; LAG_LANES];
+        for (i, x) in a.iter().enumerate() {
+            for (sum, y) in sums.iter_mut().zip(&b[i + k..i + k + width]) {
+                *sum += x * y;
+            }
+        }
+        for (c, sum) in cross[k..k + width].iter_mut().zip(&sums) {
+            *c += sum;
+        }
+        k += width;
+    }
 }
 
 /// The share of samples from the valley under a pile-up up, as
@@ -560,21 +582,25 @@ fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
     let mut sum = vec![0.0; FFT / 2];
     let mut frames = 0_usize;
     let width = FFT * segment.channels;
+    let twiddles = Twiddles::new(FFT);
+    let (mut re, mut im) = (Vec::with_capacity(FFT), vec![0.0; FFT]);
     for frame in segment.samples.chunks_exact(width) {
         let energy: f64 = frame.iter().map(|x| f64::from(*x).powi(2)).sum();
         if (energy / real(width)).sqrt() < SILENT_RMS {
             continue;
         }
         for channel in 0..segment.channels {
-            let mut re: Vec<f64> = frame
-                .iter()
-                .skip(channel)
-                .step_by(segment.channels)
-                .zip(window)
-                .map(|(x, w)| f64::from(*x) * w)
-                .collect();
-            let mut im = vec![0.0; FFT];
-            fft(&mut re, &mut im);
+            re.clear();
+            re.extend(
+                frame
+                    .iter()
+                    .skip(channel)
+                    .step_by(segment.channels)
+                    .zip(window)
+                    .map(|(x, w)| f64::from(*x) * w),
+            );
+            im.fill(0.0);
+            fft(&mut re, &mut im, &twiddles);
             for (k, power) in sum.iter_mut().enumerate() {
                 *power += re[k] * re[k] + im[k] * im[k];
             }
@@ -628,8 +654,38 @@ fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
         .map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
 }
 
-/// An in-place radix-2 FFT; `re.len()` must be a power of two.
-fn fft(re: &mut [f64], im: &mut [f64]) {
+/// The twiddle factors of each stage of [`fft`], as `(cos, sin)`, each
+/// stage's by the recurrence from 1 that walks them, computed once for
+/// every transform of a size rather than once per butterfly.
+struct Twiddles(Vec<Vec<(f64, f64)>>);
+
+impl Twiddles {
+    fn new(n: usize) -> Self {
+        let mut stages = Vec::new();
+        let mut len = 2;
+        while len <= n {
+            let angle = -std::f64::consts::TAU / real(len);
+            let (wr, wi) = (angle.cos(), angle.sin());
+            let (mut cr, mut ci) = (1.0, 0.0);
+            let stage: Vec<(f64, f64)> = (0..len / 2)
+                .map(|_| {
+                    let w = (cr, ci);
+                    let next = cr * wr - ci * wi;
+                    ci = cr * wi + ci * wr;
+                    cr = next;
+                    w
+                })
+                .collect();
+            stages.push(stage);
+            len <<= 1;
+        }
+        Self(stages)
+    }
+}
+
+/// An in-place radix-2 FFT; `re.len()` must be a power of two, and
+/// `twiddles` made for it.
+fn fft(re: &mut [f64], im: &mut [f64], twiddles: &Twiddles) {
     let n = re.len();
     let mut j = 0;
     for i in 1..n {
@@ -644,26 +700,19 @@ fn fft(re: &mut [f64], im: &mut [f64]) {
             im.swap(i, j);
         }
     }
-    let mut len = 2;
-    while len <= n {
-        let angle = -std::f64::consts::TAU / real(len);
-        let (wr, wi) = (angle.cos(), angle.sin());
-        for start in (0..n).step_by(len) {
-            let (mut cr, mut ci) = (1.0, 0.0);
-            for k in 0..len / 2 {
-                let (a, b) = (start + k, start + k + len / 2);
+    for stage in &twiddles.0 {
+        let half = stage.len();
+        for start in (0..n).step_by(2 * half) {
+            for (k, &(cr, ci)) in stage.iter().enumerate() {
+                let (a, b) = (start + k, start + k + half);
                 let tr = re[b] * cr - im[b] * ci;
                 let ti = re[b] * ci + im[b] * cr;
                 re[b] = re[a] - tr;
                 im[b] = im[a] - ti;
                 re[a] += tr;
                 im[a] += ti;
-                let next = cr * wr - ci * wi;
-                ci = cr * wi + ci * wr;
-                cr = next;
             }
         }
-        len <<= 1;
     }
 }
 
@@ -979,7 +1028,7 @@ mod tests {
             let mut re = chunk.to_vec();
             re.resize(FFT, 0.0);
             let mut im = vec![0.0; FFT];
-            fft(&mut re, &mut im);
+            fft(&mut re, &mut im, &Twiddles::new(FFT));
             for k in 0..FFT {
                 let g = gain(real(k.min(FFT - k)) * rate / real(FFT));
                 re[k] *= g;
@@ -989,7 +1038,7 @@ mod tests {
             for v in &mut im {
                 *v = -*v;
             }
-            fft(&mut re, &mut im);
+            fft(&mut re, &mut im, &Twiddles::new(FFT));
             out.extend(re.iter().map(|v| v / real(FFT)));
             let _ = i;
         }

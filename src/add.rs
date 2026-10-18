@@ -2,8 +2,15 @@
 //! sources, each listed as a song or as a source of the song it is the
 //! same recording as, the lyrics, pictures and tag files given to their
 //! songs, then a sync.
+//!
+//! Thousands of files may be given at once, and each step over them is
+//! taken once: every song file is probed before any is copied, as many
+//! at a time as songs are built, each folder given is listed once for the
+//! sidecars of all its files, and the store is read once after every
+//! file is in it. Read after each file, the store's walk took longer than
+//! measuring the files did.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -245,9 +252,16 @@ pub(crate) fn import<R: Runner, W: Write>(
     unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
+    let Probed {
+        mut walked,
+        reads: probed,
+    } = probe_songs(runner, paths)?;
     let mut audio = |file: &Path| {
-        let reads =
-            store::kind_of(file) != Some(store::Kind::Media) || reads_as_audio(runner, file);
+        let reads = store::kind_of(file) != Some(store::Kind::Media)
+            || probed
+                .get(file)
+                .copied()
+                .unwrap_or_else(|| reads_as_audio(runner, file));
         if !reads {
             unread.push(format!("{}, which reads as no audio", file.display()));
         }
@@ -260,16 +274,18 @@ pub(crate) fn import<R: Runner, W: Write>(
         brought: BTreeSet::new(),
         runner,
     };
+    let mut brought = Vec::new();
+    let mut folders: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     for path in paths.iter().map(Path::new) {
         let name = path
             .file_name()
             .with_context(|| format!("{} names no file", path.display()))?;
         if let Some(key) = original(runner, sites, path) {
-            proposals.push(originals_in.bring(dirs, path, key, (out, copied))?);
+            originals_in.bring_into(dirs, path, key, (out, copied), &mut brought)?;
             continue;
         }
         let to = dirs.manual().join(name);
-        if path.is_file() && name.to_string_lossy().starts_with('.') {
+        if hidden(path) {
             not_read.push(format!(
                 "{}, which is hidden, its name starting with a dot, and muman reads no hidden \
                  file; rename it without the dot",
@@ -279,7 +295,10 @@ pub(crate) fn import<R: Runner, W: Write>(
         }
         let mut originals = Vec::new();
         if path.is_dir() {
-            let files = crate::store::walk(path, usize::MAX)?;
+            let files = match walked.remove(path) {
+                Some(files) => files,
+                None => crate::store::walk(path, usize::MAX)?,
+            };
             for file in &files {
                 if let Some(key) = original(runner, sites, file) {
                     originals.push((file.clone(), key));
@@ -295,35 +314,153 @@ pub(crate) fn import<R: Runner, W: Write>(
             }
             say_left_out(path, &files, out)?;
             for (file, key) in &originals {
-                proposals.push(originals_in.bring(dirs, file, key.clone(), (out, copied))?);
+                originals_in.bring_into(dirs, file, key.clone(), (out, copied), &mut brought)?;
             }
         } else if !audio(path) {
             continue;
         } else {
-            copy_new(path, &to, copied)?;
-            for sidecar in sidecars(path) {
-                if let Some(n) = sidecar.file_name() {
-                    copy_new(&sidecar, &dirs.manual().join(n), copied)?;
-                }
+            copy_with_sidecars(path, &to, dirs, &mut folders, copied)?;
+        }
+        brought.push(Brought::Manual(Manual {
+            path: path.to_path_buf(),
+            to,
+            originals: !originals.is_empty(),
+        }));
+    }
+    // The store is read once for every path, after all are copied: read
+    // after each, thousands of files walked thousands of times took
+    // longer than measuring them.
+    let store = Store::scan(dirs)?;
+    for b in brought {
+        match b {
+            Brought::Ready(proposal) => proposals.push(proposal),
+            Brought::Manual(manual) => {
+                proposals.extend(manual.propose(dirs, &store, (beside, &mut not_read), out)?);
             }
         }
-        let store = Store::scan(dirs)?;
-        let found = media_at(&store, dirs, &to)?;
-        if found.is_empty() && path.is_dir() && !originals.is_empty() {
-            continue;
+    }
+    unread.extend(not_read);
+    Ok(proposals)
+}
+
+/// Copy the song file `path` to `to` with the sidecars beside it, its
+/// folder listed once in `folders` for every file added from it.
+fn copy_with_sidecars(
+    path: &Path,
+    to: &Path,
+    dirs: &Dirs,
+    folders: &mut HashMap<PathBuf, Vec<PathBuf>>,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
+    copy_new(path, to, copied)?;
+    let folder = path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let listed = folders
+        .entry(folder.clone())
+        .or_insert_with(|| files_in(&folder));
+    for sidecar in sidecars_among(path, listed) {
+        if let Some(n) = sidecar.file_name() {
+            copy_new(&sidecar, &dirs.manual().join(n), copied)?;
         }
-        if found.is_empty() && path.is_dir() {
-            not_read.push(format!(
-                "{}, which holds no song muman reads",
-                path.display()
-            ));
-            continue;
+    }
+    Ok(())
+}
+
+/// Whether `path` is a file muman reads no song from, its name starting
+/// with a dot.
+fn hidden(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+}
+
+/// Every song file among `paths`, and in the folders among them, probed
+/// before any is copied, as many at a time as songs are built: a probe
+/// costs as much as a copy, and thousands made one after another cost
+/// minutes. The folders' files, as walked, and whether each song file
+/// reads as audio.
+fn probe_songs<R: Runner>(runner: &R, paths: &[&String]) -> Result<Probed> {
+    let mut walked: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut media: Vec<PathBuf> = Vec::new();
+    for path in paths.iter().map(Path::new) {
+        if path.is_dir() {
+            let files = crate::store::walk(path, usize::MAX)?;
+            media.extend(files.iter().filter(|f| id_of(f).is_none()).cloned());
+            walked.insert(path.to_path_buf(), files);
+        } else if !hidden(path) && id_of(path).is_none() {
+            media.push(path.to_path_buf());
+        }
+    }
+    media.retain(|f| store::kind_of(f) == Some(store::Kind::Media));
+    let reads = crate::parallel::map(&media, crate::parallel::builds(), |f| {
+        reads_as_audio(runner, f)
+    });
+    Ok(Probed {
+        walked,
+        reads: media.into_iter().zip(reads).collect(),
+    })
+}
+
+/// What [`probe_songs`] found: each folder's files, as walked, and
+/// whether each song file reads as audio.
+struct Probed {
+    walked: HashMap<PathBuf, Vec<PathBuf>>,
+    reads: HashMap<PathBuf, bool>,
+}
+
+/// A file or folder copied into the manual folder, at `to`, to be found
+/// there once the store is read; `originals` when the folder held
+/// originals, which are proposed on their own.
+struct Manual {
+    path: PathBuf,
+    to: PathBuf,
+    originals: bool,
+}
+
+impl Manual {
+    /// The song files found at `to`, each a proposal and noted in
+    /// `beside` with where it came from; a folder holding none is noted
+    /// in `not_read`, unless its originals were all it held.
+    fn propose<W: Write>(
+        self,
+        dirs: &Dirs,
+        store: &Store,
+        (beside, not_read): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<String>),
+        out: &mut W,
+    ) -> Result<Vec<Proposal>> {
+        let found = media_at(store, dirs, &self.to)?;
+        if found.is_empty() && self.path.is_dir() {
+            if !self.originals {
+                not_read.push(format!(
+                    "{}, which holds no song muman reads",
+                    self.path.display()
+                ));
+            }
+            return Ok(Vec::new());
         }
         ui::info(
             out,
-            &format!("Copied {} into {}", path.display(), dirs.manual().display()),
+            &format!(
+                "Copied {} into {}",
+                self.path.display(),
+                dirs.manual().display()
+            ),
         )?;
-        for key in found {
+        Ok(propose(&self.path, found, beside))
+    }
+}
+
+/// The song files `found` under `path` as it was copied in, each a
+/// proposal, and noted in `beside` with where it came from.
+fn propose(
+    path: &Path,
+    found: Vec<SourceKey>,
+    beside: &mut Vec<(PathBuf, SourceKey)>,
+) -> Vec<Proposal> {
+    let name = path.file_name().unwrap_or_default();
+    found
+        .into_iter()
+        .map(|key| {
             if let SourceKey::Manual(m) = &key
                 && let Some(folder) = path.parent()
             {
@@ -335,15 +472,13 @@ pub(crate) fn import<R: Runner, W: Write>(
                 };
                 beside.push((origin, key.clone()));
             }
-            proposals.push(Proposal {
+            Proposal {
                 label: key.short(),
                 sources: vec![key],
                 album: None,
-            });
-        }
-    }
-    unread.extend(not_read);
-    Ok(proposals)
+            }
+        })
+        .collect()
 }
 
 /// Warn of the files of the folder `dir` given to `add` that are left
@@ -376,6 +511,24 @@ pub(crate) struct Originals<'a, R> {
 }
 
 impl<R: Runner> Originals<'_, R> {
+    /// [`Self::bring`], its proposal kept among `brought`.
+    fn bring_into<W: Write>(
+        &mut self,
+        dirs: &Dirs,
+        file: &Path,
+        key: SourceKey,
+        (out, copied): (&mut W, &mut Vec<PathBuf>),
+        brought: &mut Vec<Brought>,
+    ) -> Result<()> {
+        brought.push(Brought::Ready(self.bring(
+            dirs,
+            file,
+            key,
+            (out, copied),
+        )?));
+        Ok(())
+    }
+
     /// `file`, an original of `key`, copied to its key's place, whether
     /// given or in a folder given, its info JSON scrubbed as a fetch's
     /// is; one of a key the store holds already is proposed, not copied
@@ -505,23 +658,46 @@ pub(crate) fn fetched_key<R: Runner>(
     info.key(sites)
 }
 
-/// The `.lrc` and pictures named as a file is, beside it, in any case
-/// as the store takes them, but none named exactly as another song file.
-pub(crate) fn sidecars(path: &Path) -> Vec<PathBuf> {
-    let folder = path.parent().unwrap_or(Path::new(""));
+/// What one path given to `add` brought into the store.
+enum Brought {
+    /// An original fetched before, proposed as it was copied.
+    Ready(Proposal),
+    /// Copied into the manual folder, to be found there.
+    Manual(Manual),
+}
+
+/// The files in `folder`, in path order.
+fn files_in(folder: &Path) -> Vec<PathBuf> {
     let listed = if folder.as_os_str().is_empty() {
         Path::new(".")
     } else {
         folder
     };
-    let mut beside: Vec<PathBuf> = std::fs::read_dir(listed)
+    let mut files: Vec<PathBuf> = std::fs::read_dir(listed)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| folder.join(e.file_name()))
-        .filter(|p| p != path && p.is_file())
+        .filter(|p| p.is_file())
         .collect();
-    beside.sort();
+    files.sort();
+    files
+}
+
+/// The `.lrc` and pictures named as a file is, beside it, in any case
+/// as the store takes them, but none named exactly as another song file.
+pub(crate) fn sidecars(path: &Path) -> Vec<PathBuf> {
+    sidecars_among(path, &files_in(path.parent().unwrap_or(Path::new(""))))
+}
+
+/// [`sidecars`], among `files`, those of the file's folder listed once
+/// for every file added from it.
+fn sidecars_among(path: &Path, files: &[PathBuf]) -> Vec<PathBuf> {
+    let beside: Vec<PathBuf> = files
+        .iter()
+        .filter(|p| p.as_path() != path)
+        .cloned()
+        .collect();
     let song = |p: &PathBuf| store::kind_of(p) == Some(store::Kind::Media);
     let another_s = |p: &PathBuf| {
         beside
