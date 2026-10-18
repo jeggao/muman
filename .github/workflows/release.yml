@@ -6,12 +6,16 @@ name: Release
 # CHANGELOG.md section as the notes. A tag pushed by hand releases the
 # same way, and `workflow_dispatch` builds a tag made before this
 # workflow existed. The tag the workflow pushes starts no second run:
-# GITHUB_TOKEN's pushes never do.
+# GITHUB_TOKEN's pushes never do. A pull request that changes this file
+# builds every archive and publishes nothing, so a broken build is found
+# before the release that needs it.
 on:
   push:
     branches: [main]
     paths: [Cargo.toml]
     tags: ["v*"]
+  pull_request:
+    paths: [.github/workflows/release.yml]
   workflow_dispatch:
     inputs:
       tag:
@@ -20,7 +24,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,8 +34,12 @@ env:
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.decide.outputs.tag }}
+      ref: ${{ steps.decide.outputs.ref }}
+      build: ${{ steps.decide.outputs.build }}
       release: ${{ steps.decide.outputs.release }}
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +50,10 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           release=true
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            tag="v$version"
+            release=false
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             tag="$INPUT_TAG"
             git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null \
               || { echo "::error::no tag $tag"; exit 1; }
@@ -62,39 +73,82 @@ jobs:
               git push origin "$tag"
             fi
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "release=$release" >> "$GITHUB_OUTPUT"
+          build=$release
+          [ "$GITHUB_EVENT_NAME" = pull_request ] && build=true
+          # A pull request builds its own head; a release builds its tag.
+          [ "$release" = true ] && ref="$tag" || ref=""
+          printf 'tag=%s\nref=%s\nbuild=%s\nrelease=%s\n' "$tag" "$ref" "$build" "$release" \
+            >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.target }})
     needs: version
-    if: needs.version.outputs.release == 'true'
+    if: needs.version.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Linked against glibc 2.28 by zig, so the binary runs on Debian
+          # 10, Ubuntu 20.04 and RHEL 8 or newer; one built with the
+          # runner's own glibc needs that glibc. A musl build runs anywhere
+          # but took 13 to 14 % longer to add 24 songs.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            glibc: "2.28"
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            glibc: "2.28"
           - os: macos-latest
             target: aarch64-apple-darwin
           # Cross-built on the Apple silicon runner.
           - os: macos-latest
             target: x86_64-apple-darwin
+          # The C runtime linked in, so a Windows without the Visual C++
+          # Redistributable runs it.
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            rustflags: -C target-feature=+crt-static
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.ref }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked --package muman --target ${{ matrix.target }}
+      - if: matrix.glibc
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - if: matrix.glibc
+        run: pip install ziglang==0.17.0 cargo-zigbuild==0.23.4
+      - if: matrix.glibc
+        run: cargo zigbuild --release --locked --package muman --target ${{ matrix.target }}.${{ matrix.glibc }}
+      - if: ${{ !matrix.glibc }}
+        run: cargo build --release --locked --package muman --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+      - name: Check the binary stands alone
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/muman"
+          case "${{ matrix.target }}" in
+            *-linux-gnu)
+              newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+              if [ "$(printf '%s\nGLIBC_${{ matrix.glibc }}\n' "$newest" | sort -V | tail -1)" \
+                != "GLIBC_${{ matrix.glibc }}" ]; then
+                echo "::error::$bin needs $newest"; exit 1
+              fi ;;
+            *-windows-msvc)
+              if grep -aqi 'vcruntime140' "$bin.exe"; then
+                echo "::error::$bin.exe needs the Visual C++ runtime"; exit 1
+              fi ;;
+          esac
+          if [ "${{ matrix.target }}" != x86_64-apple-darwin ]; then
+            "$bin" --version
+          fi
       - name: Package
         shell: bash
         env:
@@ -121,10 +175,15 @@ jobs:
   publish:
     needs: [version, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.ref }}
       - name: Release notes
         shell: bash
         env:
@@ -138,7 +197,17 @@ jobs:
         with:
           path: archives
           merge-multiple: true
-      - uses: softprops/action-gh-release@v3
+      - name: Checksums
+        working-directory: archives
+        run: |
+          sha256sum muman-* > SHA256SUMS
+          cat SHA256SUMS
+      - if: needs.version.outputs.release == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-checksums: archives/SHA256SUMS
+      - if: needs.version.outputs.release == 'true'
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: muman ${{ needs.version.outputs.tag }}
