@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-18
+
 ### Added
 
 - **Each release lists its archives' checksums** in `SHA256SUMS`, and
@@ -1370,7 +1372,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jeggao/muman/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jeggao/muman/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/jeggao/muman/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jeggao/muman/compare/v0.3.0...v0.4.0
