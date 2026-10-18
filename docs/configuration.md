@@ -120,7 +120,8 @@ pages are its own, since a source it fetched before is named by its page.
 
 The song list's own tables — `[defaults]` (lyrics languages),
 `[clean.*]` (tag cleaning), `[providers.*]`, `[[trigger]]` and
-`[[hook]]` — are described in the [guide](guide.md).
+`[[hook]]` — are described in the [guide](guide.md) and in [making the
+library](library.md).
 
 A setting that changes what a song file holds, such as a bitrate, a
 codec, a measure's weight or where lyrics go, makes the next `sync`
@@ -259,7 +260,7 @@ once, in full; later syncs measure only new sources.
 
 ## How sources are ranked
 
-Each measure of [how the best of each is picked](guide.md#how-the-best-of-each-is-picked)
+Each measure of [how the best of each is picked](library.md#how-the-best-of-each-is-picked)
 has a table under `[quality]`: `[quality.purity]`, `bandwidth`, `stereo`
 and `clipping` rank audio, `[quality.square]`, `resolution` and
 `blockiness` rank covers. In each, `enabled` and `weight` say whether and

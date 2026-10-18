@@ -101,7 +101,7 @@ sources, lists each as a song, and syncs. It also looks songs up on
 YouTube, YouTube Music, LRCLIB, MusicBrainz, AcoustID and the Cover Art
 Archive, sending AcoustID your files' fingerprints; `--offline` makes no request, and
 `enabled = false` under a `[providers.<name>]` turns one off for good
-(the [guide](docs/guide.md#lookups-and-providers) has the names).
+([making the library](docs/library.md#lookups-and-providers) has the names).
 `muman sync` on a new home writes the song list, every setting in it,
 to edit before the first `add`. `status` says what a sync
 would write and why each song's audio, cover and lyrics come from where
@@ -148,8 +148,9 @@ Every flag is in the [command reference](docs/cli.md).
 
 ## Documentation
 
-- [Guide](docs/guide.md): the song list, sources, how the best of each is
-  picked, lookups, queries and editing, export, hooks.
+- [Guide](docs/guide.md): the home, the song list and its sources.
+- [Making the library](docs/library.md): how the best of each is picked,
+  lookups, queries and editing, status, export, hooks.
 - [Configuration](docs/configuration.md): folders, programs, the
   settings in `songs.toml`, the path template and safe names.
 - [Command reference](docs/cli.md): every command and flag.

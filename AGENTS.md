@@ -33,8 +33,10 @@ These bind every change, by a person or an agent.
    environment or the clock.
 1. **No pushes to `main`.** Changes go through a pull request, and CI
    must pass on all three platforms.
-1. **This file and the style guides change only when asked.** Propose a
-   rule change in the pull request instead.
+1. **The rules here and the style guides change only when asked.**
+   Propose a rule change in the pull request instead. The layout and
+   the checklist below describe the code and change with it, in the
+   same commit; `cargo xtask docs` fails on a module the layout lacks.
 
 ## Layout
 
@@ -50,12 +52,14 @@ src/
   manifest/new.toml a new home's song list, the reference for every setting
   state.rs          state.json: files written, measures, comparisons
   platform.rs       default folders per OS, path identity, arrival times
+  dirs.rs           the home and the library folders, neither inside the other
   relpath.rs        recorded paths, written with / and in NFC
   runner.rs         the subprocess seam
   tools.rs          ffmpeg, ffprobe and yt-dlp: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
   sites.rs          the song list's [sites]: how each site names and fetches
   download.rs       yt-dlp's arguments and the files it reports
+  ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
   music.rs          YouTube Music search and name matching
   plugins.rs        yt-dlp postprocessors shipped in the binary
   identify.rs       new sources to songs, by fingerprint
@@ -92,14 +96,17 @@ src/
   duplicates.rs     songs listed apart that are one recording
   purge.rs          fetched sources and records no song uses, deleted
   progress.rs       how far a long step has got, on stderr
+  parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
+  testing.rs        the fake runner and the fixtures every test shares
+  tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   */tests.rs        a module's tests, when they outgrow it
 tests/              the smoke test, yt-dlp given muman's command line, and
                     the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs
-docs/               guide.md, configuration.md, cli.md (generated)
+docs/               guide.md, library.md, configuration.md, cli.md (generated)
 ```
 
 Start from a module's `//!` docs: they hold its design and the reasons
@@ -185,7 +192,8 @@ until Trusted Publishing is set up there and the repository variable
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
 | A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md); a rename or a changed default, an edition in `migrate.rs` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
-| How sources, picking, lookups, editing or hooks behave for a user | [docs/guide.md](docs/guide.md) |
+| How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
+| How picking, lookups, editing, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
 | A module added, removed or renamed | The layout above |
 | A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md), in a pull request of their own; the merge tags and publishes it |
