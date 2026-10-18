@@ -110,7 +110,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/muman" "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: |
@@ -134,11 +134,11 @@ jobs:
           awk -v want="[$version]" '/^## \[/ { keep = ($2 == want); next } keep' CHANGELOG.md \
             | sed -e '1{/^$/d}' -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
           [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section $version"; exit 1; }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: archives
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: muman ${{ needs.version.outputs.tag }}

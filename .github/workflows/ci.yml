@@ -58,7 +58,7 @@ jobs:
         uses: FedericoCarboni/setup-ffmpeg@v3
       - if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
       - run: pip install yt-dlp
