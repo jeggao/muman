@@ -117,9 +117,10 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "export.rs",
-        3,
-        "the zip, written in scratch and renamed into place; each song \
-         encoded for it, deleted from scratch once it is in",
+        6,
+        "the zip or the folder, made in scratch and renamed into place, an \
+         empty folder there replaced; each song encoded for it moved or \
+         deleted from scratch once it is in, any other copied in",
     ),
 ];
 

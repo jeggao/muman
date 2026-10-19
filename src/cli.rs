@@ -493,20 +493,28 @@ pub enum Command {
         all: bool,
     },
     /// Write the song list and the library, as the last run left them,
-    /// into one zip: songs.toml at its root, the songs under library/.
+    /// into one zip, or with --folder into a new folder: songs.toml at its
+    /// root, the songs under library/.
     /// The library's settings may be changed for the export alone: each
     /// song the change touches is made again from its sources, as a
     /// library under those settings would hold it. With --max-size, songs
     /// are encoded again at lower bitrates, the least audible loss first,
-    /// until the zip fits. The library and the song list are left as they
+    /// until the export fits. The library and the song list are left as they
     /// are.
     #[command(after_help = EXPORT_HELP)]
     Export {
-        /// The zip to write, or a folder to write muman.zip in.
-        #[arg(short, long, value_name = "PATH", default_value = "muman.zip")]
-        output: PathBuf,
+        /// The zip to write, or a folder to write muman.zip in; with
+        /// --folder, the folder to make, new or empty [default: muman.zip,
+        /// or muman with --folder].
+        #[arg(short, long, value_name = "PATH")]
+        output: Option<PathBuf>,
 
-        /// The most the zip may take, such as 4GiB or 700MB.
+        /// Write a folder holding what the zip would, rather than the zip.
+        #[arg(long)]
+        folder: bool,
+
+        /// The most the export may take, such as 4GiB or 700MB; in a
+        /// folder, each file counts whole blocks of `[library] block_size`.
         #[arg(long, value_name = "SIZE", value_parser = crate::units::parse_size)]
         max_size: Option<u64>,
 
@@ -903,7 +911,7 @@ Shelves hold `songs` alone."
         else {
             panic!("not export");
         };
-        assert_eq!(output, PathBuf::from("out.zip"));
+        assert_eq!(output, Some(PathBuf::from("out.zip")));
         assert_eq!(max_size, Some(4 << 30));
         assert!(parse(&["export", "--max-size", "lots"]).is_err());
         assert!(parse(&["export", "--set", "library.path=/x"]).is_err());

@@ -1,6 +1,6 @@
-//! `muman export`: the song list and the library, once, in one zip:
-//! `songs.toml` at its root and every song muman wrote under `library/`,
-//! at its path in the library, with its lyrics.
+//! `muman export`: the song list and the library, once, in one zip or
+//! one new folder: `songs.toml` at its root and every song muman wrote
+//! under `library/`, at its path in the library, with its lyrics.
 //!
 //! The library is exported as the last run left it, from what the state
 //! records, so a song not written yet is not in it; `sync` first brings it
@@ -26,10 +26,10 @@
 //! A song changed since muman wrote it is copied as the library holds it:
 //! the file is the user's. So is one whose sources are gone, or that the
 //! export's settings resolve to no plan, as its file is the only one there
-//! is; each is said, and the export fails. A
-//! song made anew runs no `written` hook. The settings that place or count
-//! the library folder, `path`, `touch_root`, `max_size` and `block_size`,
-//! are no export's. Nor is `[quality]`: the measures a sync takes follow
+//! is; each is said, and the export fails. A song made anew runs no
+//! `written` hook. The settings that place or cap the library folder,
+//! `path`, `touch_root` and `max_size`, are no export's, and `block_size`
+//! is a folder's alone. Nor is `[quality]`: the measures a sync takes follow
 //! its weights, so an export could rank by measures never taken. Loudness
 //! is refused for the same reason when the song list's mode measures none.
 //!
@@ -53,6 +53,15 @@
 //! Each file encoded for the zip is deleted from the scratch folder once it
 //! is in, so an export made anew needs about its own size free beside it,
 //! not twice that.
+//!
+//! **A folder.** `--folder` writes what the zip would hold as files, for
+//! a card or a player. It is made whole in the scratch folder beside it,
+//! the files encoded for it moved in and the library's copied with their
+//! times, each flushed to the disk, then renamed into place: a run killed
+//! partway leaves no folder half written. A folder there already is taken
+//! only when empty, so no file of another's is written over or mixed in.
+//! Each file counts whole blocks of `[library] block_size`, as the
+//! library does, since a card's filesystem spends them.
 
 use crate::units;
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,27 +120,29 @@ const MISS: f64 = 3.0;
 /// The tables `--set` reaches.
 const TABLES: [&str; 3] = ["library", "audio", "loudness"];
 /// The settings of those tables no export takes, and why.
-const NOT_EXPORTS: [(&str, &str, &str); 4] = [
+const NOT_EXPORTS: [(&str, &str, &str); 3] = [
     (
         "library",
         "path",
-        "the export writes a zip, not a library folder",
+        "the export is written where -o names, not into a library folder",
     ),
     (
         "library",
         "touch_root",
         "the export touches no library folder",
     ),
-    ("library", "max_size", "--max-size caps the zip"),
-    ("library", "block_size", "a zip counts no blocks"),
+    ("library", "max_size", "--max-size caps the export"),
 ];
 
 /// What `export` writes, and how.
 #[derive(Debug, Clone, Copy)]
 pub struct Options<'a> {
-    /// The zip, or a folder to write `muman.zip` in.
-    pub output: &'a Path,
-    /// The most the zip may take, in bytes.
+    /// The zip, or a folder to write `muman.zip` in; with `folder`, the
+    /// folder to make. Unset, `muman.zip` or `muman` here.
+    pub output: Option<&'a Path>,
+    /// Write a folder rather than a zip.
+    pub folder: bool,
+    /// The most the export may take, in bytes.
     pub max_size: Option<u64>,
     /// Settings set over the song list's for the export alone, in order.
     pub settings: &'a [Override],
@@ -243,6 +254,34 @@ fn entry_size(name: &str, bytes: u64) -> u64 {
     bytes + ENTRY + 2 * name.len() as u64
 }
 
+/// What the export is written as, by what each file takes in it.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Zip,
+    /// A folder, each file in whole blocks of `[library] block_size`.
+    Folder {
+        block: u64,
+    },
+}
+
+impl Target {
+    /// What a file of `bytes` named `name` takes.
+    fn takes(self, name: &str, bytes: u64) -> u64 {
+        match self {
+            Self::Zip => entry_size(name, bytes),
+            Self::Folder { block } => limit::blocks(bytes, block),
+        }
+    }
+
+    /// What it takes once, besides its files.
+    fn end(self) -> u64 {
+        match self {
+            Self::Zip => END,
+            Self::Folder { .. } => 0,
+        }
+    }
+}
+
 fn name_in_zip(path: &Path) -> String {
     format!("{LIBRARY}/{}", relpath::to_portable(path))
 }
@@ -261,12 +300,11 @@ fn size_of(path: &Path) -> u64 {
     fs::metadata(path).map_or(0, |m| m.len())
 }
 
-/// What a song's entries take: its audio and lyrics, each as `files` holds
-/// them, named by `path`.
-fn entries_size(files: &[Entry]) -> u64 {
+/// What `files` take in `target`, each as big as its file.
+fn entries_size(target: Target, files: &[Entry]) -> u64 {
     files
         .iter()
-        .map(|e| entry_size(&e.name, size_of(&e.from)))
+        .map(|e| target.takes(&e.name, size_of(&e.from)))
         .sum()
 }
 
@@ -294,7 +332,7 @@ fn extras(path: &Path) -> u64 {
     held as u64 + HEADERS
 }
 
-/// Export the song list and the library in `dirs` into the zip
+/// Export the song list and the library in `dirs` into the zip or folder
 /// `options` names, under the settings it changes, fitting it into its
 /// size when given. Returns whether every song went in as chosen.
 pub fn export<R: Runner, W: Write>(
@@ -326,8 +364,8 @@ pub fn export<R: Runner, W: Write>(
     };
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let output = zip_at(options.output)?;
-    let folder = output
+    let (output, target) = target_of(options, settings.as_ref().unwrap_or(&manifest.settings))?;
+    let beside = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
@@ -345,15 +383,15 @@ pub fn export<R: Runner, W: Write>(
         name: dirs::MANIFEST.to_string(),
         made: false,
     };
-    let scratch = crate::atomic::Scratch::within(folder)?;
+    let scratch = crate::atomic::Scratch::within(beside)?;
     let (choice, mut made) = if let Some(max) = options.max_size {
-        let fixed = entries_size(std::slice::from_ref(&list_entry)) + END;
+        let fixed = entries_size(target, std::slice::from_ref(&list_entry)) + target.end();
         let budget = max
             .checked_sub(fixed)
             .ok_or_else(|| anyhow!("{} cannot hold even the song list", crate::ui::bytes(max)))?;
         let fitted = fit_into(
             runner,
-            audio,
+            (audio, target),
             &state,
             (&songs, &held),
             (max, budget),
@@ -371,17 +409,12 @@ pub fn export<R: Runner, W: Write>(
     ok &= chosen.ok;
     let (entries, exported, lowered) = (chosen.entries, chosen.songs, chosen.lowered);
 
-    // In the scratch folder, so a run killed partway leaves it where the
-    // next clears it.
-    let part = scratch.path().join("export.zip.part");
-    let written = write_zip(&part, std::iter::once(&list_entry).chain(&entries));
-    if let Err(e) = written {
-        let _ = fs::remove_file(&part);
-        return Err(e);
-    }
-    crate::atomic::rename(&part, &output)
-        .with_context(|| format!("renaming {} to {}", part.display(), output.display()))?;
-    let size = size_of(&output);
+    let size = write(
+        target,
+        scratch.path(),
+        &output,
+        std::iter::once(&list_entry).chain(&entries),
+    )?;
     crate::ui::success(
         out,
         &format!(
@@ -403,12 +436,65 @@ pub fn export<R: Runner, W: Write>(
         if size > max {
             crate::ui::error(
                 out,
-                &format!("The zip came out over {}", crate::ui::bytes(max)),
+                &format!("The export came out over {}", crate::ui::bytes(max)),
             )?;
             ok = false;
         }
     }
     Ok(ok)
+}
+
+/// Where the export goes and what it is written as, under `settings`.
+fn target_of(options: &Options<'_>, settings: &Settings) -> Result<(PathBuf, Target)> {
+    if !options.folder {
+        let block = options
+            .settings
+            .iter()
+            .any(|o| o.table == "library" && o.key == "block_size");
+        if block {
+            return Err(crate::cli::Invalid(
+                "library.block_size counts only in a folder, and a zip has no blocks; give \
+                 --folder, or leave it out"
+                    .into(),
+            )
+            .into());
+        }
+        return Ok((
+            zip_at(options.output.unwrap_or(Path::new("muman.zip")))?,
+            Target::Zip,
+        ));
+    }
+    Ok((
+        folder_at(options.output.unwrap_or(Path::new("muman")))?,
+        Target::Folder {
+            block: settings.library.block_size.0,
+        },
+    ))
+}
+
+/// Write `entries` as `target` at `output`, made in `scratch` so a run
+/// killed partway leaves it where the next clears it. Returns what it
+/// takes.
+fn write<'a>(
+    target: Target,
+    scratch: &Path,
+    output: &Path,
+    entries: impl Iterator<Item = &'a Entry>,
+) -> Result<u64> {
+    if let Target::Folder { .. } = target {
+        let entries: Vec<&Entry> = entries.collect();
+        let size = entries
+            .iter()
+            .map(|e| target.takes(&e.name, size_of(&e.from)))
+            .sum();
+        write_folder(&scratch.join("export"), output, entries.into_iter())?;
+        return Ok(size);
+    }
+    let part = scratch.join("export.zip.part");
+    write_zip(&part, entries)?;
+    crate::atomic::rename(&part, output)
+        .with_context(|| format!("renaming {} to {}", part.display(), output.display()))?;
+    Ok(size_of(output))
 }
 
 /// The entries the zip holds of its songs, in name order.
@@ -662,12 +748,42 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
     Ok(zip)
 }
 
+/// The folder `output` names, to be made: one not there, in a folder
+/// that is, or one empty. A folder holding anything is refused, so no
+/// file of another's is written over or mixed in with the export.
+fn folder_at(output: &Path) -> Result<PathBuf> {
+    let parent = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    if !parent.is_dir() {
+        bail!(
+            "{} is no folder; make it first, or write the export into one that is",
+            parent.display()
+        );
+    }
+    if output.exists() {
+        let empty = fs::read_dir(output)
+            .with_context(|| format!("reading {}", output.display()))?
+            .next()
+            .is_none();
+        if !empty {
+            bail!(
+                "{} is not empty; name a folder to make, such as {}",
+                output.display(),
+                output.join("muman").display()
+            );
+        }
+    }
+    Ok(output.to_path_buf())
+}
+
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
 /// estimate, and corrects the estimates not measured yet.
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
-    audio: &Audio,
+    (audio, target): (&Audio, Target),
     state: &State,
     (songs, held): (&[Song], &[Vec<Entry>]),
     (max, budget): (u64, u64),
@@ -677,7 +793,7 @@ fn fit_into<R: Runner, W: Write>(
     let mut items: Vec<Item> = songs
         .iter()
         .zip(held)
-        .map(|(song, entries)| item(audio, state, song, entries))
+        .map(|(song, entries)| item((audio, target), state, song, entries))
         .collect();
     let estimates: Vec<Vec<u64>> = items
         .iter()
@@ -698,7 +814,7 @@ fn fit_into<R: Runner, W: Write>(
         for ((n, c, _), result) in due.into_iter().zip(results) {
             let rung = &mut items[n].rungs[c];
             if let Some(entries) = result {
-                let real = entries_size(&entries);
+                let real = entries_size(target, &entries);
                 let ratio = real as f64 / estimates[n][c].max(1) as f64;
                 ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
                 rung.bytes = real;
@@ -709,7 +825,7 @@ fn fit_into<R: Runner, W: Write>(
                 ok = false;
                 // A first rung not made is the library file, copied.
                 if c == 0 {
-                    rung.bytes = entries_size(&held[n]);
+                    rung.bytes = entries_size(target, &held[n]);
                     rung.sigma = 0.0;
                     rung.known = true;
                 }
@@ -849,31 +965,33 @@ fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
 
 /// One song's ladder: its first rung, the library file as it is or its
 /// plan made anew, then each lower rung it may be encoded at, estimated.
-fn item(audio: &Audio, state: &State, song: &Song, held: &[Entry]) -> Item {
+fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[Entry]) -> Item {
     let facts = state.facts.get(&song.plan.audio.key);
     let seconds = facts.and_then(Facts::length).filter(|s| *s > 0.0);
-    let (first, besides) = if song.anew {
+    // The audio file's name and what it holds besides its stream, and what
+    // its lyrics beside it take.
+    let (name, extras, lyrics) = if song.anew {
         let (extras, sidecar) = limit::besides_audio(&song.plan);
         let name = |ext: &str| name_in_zip(&named(&song.stem, Path::new(&format!("_.{ext}"))));
         let lyrics = if sidecar > 0 {
-            entry_size(&name("lrc"), sidecar)
+            target.takes(&name("lrc"), sidecar)
         } else {
             0
         };
-        let besides = extras + lyrics + entry_size(&name(song.plan.format.extension()), 0);
+        (name(song.plan.format.extension()), extras, lyrics)
+    } else {
+        let lyrics = entries_size(target, &held[1..]);
+        (held[0].name.clone(), extras(&held[0].from), lyrics)
+    };
+    let takes = |stream: u64| target.takes(&name, stream + extras) + lyrics;
+    let first = if song.anew {
         let stream = match (facts, seconds) {
             (Some(f), Some(s)) => limit::estimate(song.plan.format, f, s).0 as u64,
             _ => 0,
         };
-        (stream + besides, besides)
+        takes(stream)
     } else {
-        let besides = extras(&held[0].from)
-            + held[1..]
-                .iter()
-                .map(|e| entry_size(&e.name, size_of(&e.from)))
-                .sum::<u64>()
-            + entry_size(&held[0].name, 0);
-        (entries_size(held), besides)
+        entries_size(target, held)
     };
     let mut item = Item {
         key: relpath::to_portable(&song.stem),
@@ -901,8 +1019,7 @@ fn item(audio: &Audio, state: &State, song: &Song, held: &[Entry]) -> Item {
     };
     item.churn = CHURN_PER_MINUTE * units::minutes_of_seconds(seconds);
     for format in fit::lower(song.plan.format, &shape.shape(), audio) {
-        let stream = limit::estimate(format, facts, seconds).0 as u64;
-        let bytes = stream + besides;
+        let bytes = takes(limit::estimate(format, facts, seconds).0 as u64);
         if bytes.saturating_mul(10) <= first.saturating_mul(9) {
             item.rungs.push(Rung {
                 format,
@@ -980,6 +1097,53 @@ fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
         u8::try_from(of_day % 60).ok()?,
     )
     .ok()
+}
+
+/// Write `entries` into a new folder `staging`, then rename it to `to`:
+/// each at its name, a file encoded for the export moved there and any
+/// other copied with its time, every one on the disk before the folder
+/// takes its place.
+fn write_folder<'a>(
+    staging: &Path,
+    to: &Path,
+    entries: impl Iterator<Item = &'a Entry>,
+) -> Result<()> {
+    let entries: Vec<&Entry> = entries.collect();
+    let step = crate::progress::step("Writing the folder", Some(entries.len() as u64));
+    for entry in entries {
+        let _working = step.working(&entry.name);
+        let file = entry
+            .name
+            .split('/')
+            .fold(staging.to_path_buf(), |path, part| path.join(part));
+        let made = |e: io::Error| {
+            anyhow::Error::from(e).context(format!("writing {} to {}", entry.name, to.display()))
+        };
+        if let Some(folder) = file.parent() {
+            fs::create_dir_all(folder).map_err(made)?;
+        }
+        if entry.made {
+            crate::atomic::rename(&entry.from, &file).map_err(made)?;
+        } else {
+            fs::copy(&entry.from, &file).map_err(made)?;
+            if let Ok(meta) = fs::metadata(&entry.from) {
+                let time = filetime::FileTime::from_last_modification_time(&meta);
+                filetime::set_file_mtime(&file, time).map_err(made)?;
+            }
+        }
+        // Opened to write: Windows flushes no file opened only to read.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.sync_all())
+            .map_err(made)?;
+    }
+    // Windows renames no folder onto another, even an empty one.
+    if to.is_dir() {
+        fs::remove_dir(to).with_context(|| format!("replacing {}", to.display()))?;
+    }
+    crate::atomic::rename(staging, to)
+        .with_context(|| format!("renaming {} to {}", staging.display(), to.display()))
 }
 
 /// Write `entries` into a new zip at `path`, each stored as it is.

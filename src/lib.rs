@@ -362,6 +362,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Export {
             output,
+            folder,
             max_size,
             codec,
             template,
@@ -375,7 +376,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 set,
             );
             let options = export::Options {
-                output,
+                output: output.as_deref(),
+                folder: *folder,
                 max_size: *max_size,
                 settings: &settings,
             };
@@ -563,6 +565,7 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         | Command::Undo { .. } => &["Measuring", "Comparing", "Writing"],
         Command::Status { .. } => &["Measuring", "Comparing"],
         Command::Check { .. } => &["Decoding"],
+        Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
         Command::Duplicates { .. } => &["Comparing prints"],
         Command::List { .. } | Command::Info | Command::Purge { .. } => &[],

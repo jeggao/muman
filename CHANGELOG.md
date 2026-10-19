@@ -16,6 +16,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   MP3. A song the change leaves alone is copied from the library; every
   other is made again from its sources, as a sync under those settings
   would write it.
+- **`export --folder`** writes what the zip would hold into a new or
+  empty folder, for a card or a player. It is made beside the folder and
+  renamed into place, and `--max-size` counts each file in whole blocks
+  of `[library] block_size`.
 
 ### Changed
 

@@ -394,30 +394,34 @@ refuses the save.
 last run left them, into one zip: `songs.toml` at its root and every
 song with its lyrics under `library/`, at its path in the library. A
 song not written yet is not in it, so `sync` first. `-o` may name a
-folder, which gets `muman.zip`.
+folder, which gets `muman.zip`. With `--folder`, `-o` names a folder to
+make, or an empty one, and what the zip would hold is written into it,
+for a card or a player to read as it is; a folder holding anything is
+refused, so nothing in it is written over.
 
 The library's settings may be changed for the export alone: any setting
 of `[library]`, `[audio]` and `[loudness]` with `--set table.key=value`,
-and the commonest with `--codec`, `--template` and `--lyrics`. The zip
-then holds the library a sync under those settings would write: each
-song the change leaves alone is copied, and every other is made again
-from its sources. A song changed since muman wrote it, or whose sources
-are gone, goes in as the library holds it, and the export says so and
-exits with 4. Where the library lives, `max_size` and `block_size` are
-not the export's to change, nor `[quality]`, nor loudness when the song
+and the commonest with `--codec`, `--template` and `--lyrics`. The
+export then holds the library a sync under those settings would write:
+each song the change leaves alone is copied, and every other is made
+again from its sources. A song changed since muman wrote it, or whose
+sources are gone, goes in as the library holds it, and the export says
+so and exits with 4. Where the library lives and its `max_size` are not
+the export's to change, nor `[quality]`, nor loudness when the song
 list's `[loudness] mode` measures none.
 
-`--max-size` caps the zip, such as `--max-size 32GiB` for a card, as
-`[library] max_size` caps the library.
-Songs that do not fit are encoded again from their sources at lower
-bitrates of `[audio] lossy`, the least audible loss for each byte saved
-first: lossless songs before lossy ones, which would lose a generation,
-and a few songs lowered far before many a little; once they fit, each
-song lowered is raised back as far as the room left allows, as the
-library is. Each song is measured once encoded and the rest fitted
-again on what it really took, so the zip lands under the cap. When even the lowest bitrates cannot fit,
-nothing is written and the size needed is said. The library itself is
-never changed.
+`--max-size` caps the export, such as `--max-size 32GiB` for a card, as
+`[library] max_size` caps the library; in a folder each file counts in
+whole blocks of `[library] block_size`, which `--set` may change. Songs
+that do not fit are encoded again from their sources at lower bitrates
+of `[audio] lossy`, the least audible loss for each byte saved first:
+lossless songs before lossy ones, which would lose a generation, and a
+few songs lowered far before many a little; once they fit, each song
+lowered is raised back as far as the room left allows, as the library
+is. Each song is measured once encoded and the rest fitted again on what
+it really took, so the export lands under the cap. When even the lowest
+bitrates cannot fit, nothing is written and the size needed is said. The
+library itself is never changed.
 
 ## Hooks
 
