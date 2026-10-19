@@ -311,12 +311,15 @@ fn again(hit: &Result<Hit>) -> Result<Hit> {
     }
 }
 
-fn entry_of<R: Runner>(runner: &R, sites: &crate::sites::Sites, key: &SourceKey) -> Result<Entry> {
+fn entry_of<R: Runner>(runner: &R, clients: &Clients<'_>, key: &SourceKey) -> Result<Entry> {
     let id = key.id().context("not a video")?;
-    music::entries(&runner.output(&music::video_command(id))?, sites)
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("yt-dlp listed nothing for {key}"))
+    music::entries(
+        &runner.output(&music::video_command(id, clients.ytdlp))?,
+        clients.sites,
+    )
+    .into_iter()
+    .next()
+    .ok_or_else(|| anyhow!("yt-dlp listed nothing for {key}"))
 }
 
 /// The pace of a run's requests to each service, shared by every
@@ -366,6 +369,7 @@ struct Clients<'a> {
     transport: &'a (dyn HttpTransport + Sync),
     throttle: &'a Throttle,
     sites: &'a crate::sites::Sites,
+    ytdlp: &'a crate::settings::Ytdlp,
 }
 
 impl Clients<'_> {
@@ -413,17 +417,24 @@ fn look<R: Runner>(
     };
     Ok(match d.find {
         Provider::YouTubeMusic => {
-            let entry = entry_of(runner, clients.sites, &d.from)?;
-            match acquire::lookup(runner, clients.sites, &entry, audio)? {
+            let entry = entry_of(runner, clients, &d.from)?;
+            match acquire::lookup(runner, clients.sites, clients.ytdlp, &entry, audio)? {
                 Some((track, a)) => Hit::Track(entry, track, a),
                 None => Hit::Nothing,
             }
         }
         Provider::YouTube => {
-            let entry = entry_of(runner, clients.sites, &d.from)?;
+            let entry = entry_of(runner, clients, &d.from)?;
             let path = &located.context("its file is not in the store")?.path;
             let own = acquire::local_envelope(runner, path)?;
-            match acquire::reverse_lookup(runner, clients.sites, &entry, &own, audio)? {
+            match acquire::reverse_lookup(
+                runner,
+                clients.sites,
+                clients.ytdlp,
+                &entry,
+                &own,
+                audio,
+            )? {
                 Some((upload, a)) => Hit::Upload(upload, a),
                 None => Hit::Nothing,
             }
@@ -627,6 +638,7 @@ pub fn run<R: Runner, W: Write>(
             transport: http,
             throttle: &throttles.coverart,
             sites: &manifest.settings.sites,
+            ytdlp: &manifest.settings.ytdlp,
         };
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();

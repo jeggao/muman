@@ -74,6 +74,8 @@
 use std::ffi::OsString;
 use std::path::Path;
 
+use crate::settings::Ytdlp;
+
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
 pub const METHOD: &str = "envelope-xcorr/7";
@@ -169,7 +171,7 @@ pub fn pcm_command(path: &Path) -> Vec<OsString> {
 /// One video's audio alone, the smallest download that serves a
 /// comparison, into `dir` as `<id>.<ext>`; prints the path.
 #[must_use]
-pub fn audio_command(url: &str, id: &str, dir: &Path) -> Vec<OsString> {
+pub fn audio_command(url: &str, id: &str, dir: &Path, options: &Ytdlp) -> Vec<OsString> {
     let mut cmd: Vec<OsString> = [
         "yt-dlp",
         "--ignore-config",
@@ -186,9 +188,7 @@ pub fn audio_command(url: &str, id: &str, dir: &Path) -> Vec<OsString> {
     .map(OsString::from)
     .collect();
     cmd.push(dir.join(format!("{id}.%(ext)s")).into_os_string());
-    cmd.push("--".into());
-    cmd.push(url.into());
-    cmd
+    crate::download::ending(cmd, options, url)
 }
 
 /// Milliseconds per envelope frame.

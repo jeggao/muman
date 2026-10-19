@@ -205,9 +205,14 @@ pub(crate) fn local_envelope<R: Runner>(runner: &R, path: &Path) -> Result<Vec<f
 }
 
 /// The envelope of a video's audio, downloaded alone into `dir`.
-fn remote_envelope<R: Runner>(runner: &R, id: &str, dir: &Path) -> Result<Vec<f64>> {
+fn remote_envelope<R: Runner>(
+    runner: &R,
+    options: &Ytdlp,
+    id: &str,
+    dir: &Path,
+) -> Result<Vec<f64>> {
     std::fs::create_dir_all(dir)?;
-    let printed = runner.output(&align::audio_command(&watch_url(id), id, dir))?;
+    let printed = runner.output(&align::audio_command(&watch_url(id), id, dir, options))?;
     let path = String::from_utf8_lossy(&printed)
         .lines()
         .map(str::trim)
@@ -225,10 +230,11 @@ fn remote_envelope<R: Runner>(runner: &R, id: &str, dir: &Path) -> Result<Vec<f6
 pub(crate) fn lookup<R: Runner>(
     runner: &R,
     sites: &Sites,
+    options: &Ytdlp,
     video: &Entry,
     audio: &Path,
 ) -> Result<Option<(Entry, Option<Alignment>)>> {
-    let Some(search) = music::search_command(video) else {
+    let Some(search) = music::search_command(video, options) else {
         return Ok(None);
     };
     let mut ids = music::ids(&runner.output(&search)?, sites);
@@ -236,7 +242,7 @@ pub(crate) fn lookup<R: Runner>(
     ids.retain(|id| *id != video.id);
     let candidates: Vec<Entry> = parallel::map(&ids, ids.len(), |id| {
         runner
-            .output(&music::video_command(id))
+            .output(&music::video_command(id, options))
             .map(|json| music::entries(&json, sites))
             .unwrap_or_default()
     })
@@ -247,10 +253,10 @@ pub(crate) fn lookup<R: Runner>(
     if named.is_empty() {
         return Ok(None);
     }
-    let upload = remote_envelope(runner, &video.id, audio).ok();
+    let upload = remote_envelope(runner, options, &video.id, audio).ok();
     for track in named {
         let compared = upload.as_ref().and_then(|u| {
-            let t = remote_envelope(runner, &track.id, audio).ok()?;
+            let t = remote_envelope(runner, options, &track.id, audio).ok()?;
             align::align(u, &t)
         });
         match compared {
@@ -271,11 +277,12 @@ pub(crate) fn lookup<R: Runner>(
 pub(crate) fn reverse_lookup<R: Runner>(
     runner: &R,
     sites: &Sites,
+    options: &Ytdlp,
     track: &Entry,
     track_audio: &[f64],
     audio: &Path,
 ) -> Result<Option<(Entry, Alignment)>> {
-    let Some(search) = music::video_search_command(track) else {
+    let Some(search) = music::video_search_command(track, options) else {
         return Ok(None);
     };
     let found = music::entries(&runner.output(&search)?, sites);
@@ -284,7 +291,7 @@ pub(crate) fn reverse_lookup<R: Runner>(
         .map(|e| e.id.clone())
         .collect();
     let whole: Vec<Entry> = parallel::map(&named, named.len(), |id| {
-        let json = runner.output(&music::video_command(id)).ok()?;
+        let json = runner.output(&music::video_command(id, options)).ok()?;
         music::entries(&json, sites).into_iter().next()
     })
     .into_iter()
@@ -292,7 +299,7 @@ pub(crate) fn reverse_lookup<R: Runner>(
     .filter(|e| e.has_subtitles() == Some(true))
     .collect();
     for upload in whole {
-        let Ok(up) = remote_envelope(runner, &upload.id, audio) else {
+        let Ok(up) = remote_envelope(runner, options, &upload.id, audio) else {
             continue;
         };
         if let Some(a) = align::align(&up, track_audio).filter(Alignment::fits) {
@@ -323,15 +330,16 @@ pub struct Listed {
 pub fn list<R: Runner, W: Write>(
     urls: &[String],
     sites: &Sites,
+    options: &Ytdlp,
     runner: &R,
     out: &mut W,
 ) -> Result<Listed> {
     let found = parallel::map(urls, parallel::LOOKUPS, |url| {
-        let listing = music::listing(&runner.output(&music::list_command(url))?, sites)
+        let listing = music::listing(&runner.output(&music::list_command(url, options))?, sites)
             .ok_or_else(|| anyhow!("yt-dlp listed nothing"))?;
         let mix_video = match listing {
             Listing::Mix { .. } => runner
-                .output(&music::one_video_command(url))
+                .output(&music::one_video_command(url, options))
                 .ok()
                 .and_then(|json| music::entries(&json, sites).into_iter().next()),
             _ => None,
@@ -427,7 +435,13 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
     /// Fetch what the URLs name, each upload's YouTube Music track first
     /// when `music_match`. Returns whether every download succeeded.
     pub fn urls(&mut self, urls: &[String], music_match: bool) -> Result<(bool, Additions)> {
-        let listed = list(urls, self.fetcher.sites, self.runner, self.out)?;
+        let listed = list(
+            urls,
+            self.fetcher.sites,
+            self.fetcher.options,
+            self.runner,
+            self.out,
+        )?;
         for id in &listed.named {
             let key = SourceKey::youtube(id);
             if self.removed.contains(&key) {
@@ -521,11 +535,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         )?;
         let audio = self.temp().join("audio");
         let runner = self.runner;
-        let sites = self.fetcher.sites;
+        let (sites, options) = (self.fetcher.sites, self.fetcher.options);
         // A folder each: two lookups downloading one candidate at once
         // would write one file.
         let found = parallel::map(&videos, parallel::LOOKUPS, |v| {
-            lookup(runner, sites, v, &audio.join(&v.id))
+            lookup(runner, sites, options, v, &audio.join(&v.id))
         });
         let mut ok = true;
         for (video, found) in videos.iter().zip(found) {

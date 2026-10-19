@@ -3,7 +3,13 @@
 //!
 //! yt-dlp runs with `--ignore-config`, so a personal config cannot change
 //! what a source holds; the song list's `[ytdlp]` is how options reach
-//! it. Unfinished downloads wait in `partial/` under the state root,
+//! it. `[ytdlp] args` go to every yt-dlp run muman makes ([`ending`]),
+//! the listing and the YouTube Music lookups as well as the fetch, since
+//! what one needs to reach a site, as a login or a JavaScript runtime,
+//! each needs; `extractor_args` go to a fetch and the check of what a
+//! source offers upstream, the runs that choose among its formats.
+//!
+//! Unfinished downloads wait in `partial/` under the state root,
 //! beside the store, named by the extractor and ID alone, so an
 //! interrupted one resumes at the same path on the next run whatever
 //! its uploader is called by then; a finished one is renamed into the
@@ -124,7 +130,6 @@ pub fn ytdlp_command(
         cmd.push(value.into());
     }
     let plugins = places.plugins.filter(|_| options.plugins);
-    let extractor = extractor_args(plugins.is_some());
     // skip=translated_subs leaves the translations of the speech
     // recognition track, one per language; OriginalSubs drops them before
     // any is fetched. Without it, generated captions are not asked for.
@@ -136,8 +141,7 @@ pub fn ytdlp_command(
             cmd.push(format!("{pp}:when=pre_process").into());
         }
     }
-    cmd.push("--extractor-args".into());
-    cmd.push(extractor.into());
+    cmd.extend(extractor_args(options));
     cmd.push("--paths".into());
     cmd.push(places.store.as_os_str().to_os_string());
     cmd.push("--paths".into());
@@ -163,17 +167,25 @@ pub fn ytdlp_command(
     cmd
 }
 
-/// The `--extractor-args` a fetch passes, the clients it asks with
-/// `plugins` loaded.
-fn extractor_args(plugins: bool) -> String {
-    // Machine-translated captions run to hundreds per video and trip the
-    // rate limit, where one failed track aborts the download.
-    let mut extractor = String::from("youtube:skip=translated_subs");
-    if plugins {
-        // Only the web_music client lists a track's square album art.
-        extractor.push_str(";player_client=default,web_music");
-    }
-    extractor
+/// `[ytdlp] extractor_args` as yt-dlp's options, one per extractor.
+fn extractor_args(options: &Ytdlp) -> impl Iterator<Item = OsString> + '_ {
+    options.extractor_args.iter().flat_map(|(extractor, args)| {
+        [
+            "--extractor-args".into(),
+            format!("{extractor}:{args}").into(),
+        ]
+    })
+}
+
+/// `cmd`, a yt-dlp run of muman's, with `[ytdlp] args` after its own
+/// options and `target` after the `--` that ends them, as a video ID may
+/// begin with a dash.
+#[must_use]
+pub fn ending(mut cmd: Vec<OsString>, options: &Ytdlp, target: &str) -> Vec<OsString> {
+    cmd.extend(options.args.iter().map(OsString::from));
+    cmd.push("--".into());
+    cmd.push(target.into());
+    cmd
 }
 
 /// yt-dlp's argv that prints, one JSON object a line, what each of
@@ -190,12 +202,11 @@ pub fn upstream_command(options: &Ytdlp, urls: &[String]) -> Vec<OsString> {
         "--ignore-errors",
         "--retry-sleep",
         "extractor:exp=1:30",
-        "--extractor-args",
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
-    cmd.push(extractor_args(options.plugins).into());
+    cmd.extend(extractor_args(options));
     cmd.extend(options.args.iter().map(OsString::from));
     cmd.push("--".into());
     cmd.extend(urls.iter().map(OsString::from));
@@ -472,6 +483,32 @@ mod tests {
         );
         let args = value_after(&cmd, "--extractor-args");
         assert!(args[0].to_string_lossy().contains("web_music"));
+    }
+
+    #[test]
+    fn extractor_args_are_one_option_each_and_none_when_empty() {
+        let mut options = Ytdlp::default();
+        options
+            .extractor_args
+            .insert("vimeo".into(), "client=web".into());
+        let mut places = places(None);
+        places.options = &options;
+        let cmd = ytdlp_command(&places, None, &[]);
+        let args = value_after(&cmd, "--extractor-args");
+        assert_eq!(args.len(), 2);
+        assert!(
+            args.contains(&&OsString::from("vimeo:client=web")),
+            "{args:?}"
+        );
+        let upstream = upstream_command(&options, &[]);
+        assert_eq!(value_after(&upstream, "--extractor-args"), args);
+        let none = Ytdlp {
+            extractor_args: BTreeMap::new(),
+            ..Ytdlp::default()
+        };
+        places.options = &none;
+        let cmd = ytdlp_command(&places, None, &[]);
+        assert!(!cmd.iter().any(|a| a == "--extractor-args"));
     }
 
     #[test]

@@ -1,15 +1,16 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
 //! and named, which codecs are kept and what the rest is encoded to, how
-//! loud songs are made, how sources are ranked, how yt-dlp fetches, and how much history `undo`
-//! keeps.
+//! loud songs are made, how sources are ranked, how yt-dlp fetches, which
+//! programs muman runs, and how much history `undo` keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
 //! are `[library]`, `[audio]`, `[loudness]` ([`crate::loudness`]),
-//! `[quality]`, `[ytdlp]`, `[history]` and `[sites]` ([`crate::sites`]).
-//! A key these tables do not know is an error naming it, so a misspelled
-//! setting is never silently ignored. Which machine runs what is no
-//! setting: tools and folders come from flags and `MUMAN_*` variables.
+//! `[quality]`, `[ytdlp]`, `[tools]` ([`crate::tools`]), `[history]` and
+//! `[sites]` ([`crate::sites`]). A key these tables do not know is an
+//! error naming it, so a misspelled setting is never silently ignored.
+//! A flag or a `MUMAN_*` variable says what is where on one machine,
+//! and overrides the folder or the program the song list names.
 //!
 //! Every setting is written out, so the file shows what each is set to.
 //! `new.toml`, the file a new home starts from, holds each at its
@@ -50,8 +51,8 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 7] = [
-    "library", "audio", "loudness", "quality", "ytdlp", "history", "sites",
+pub const TABLES: [&str; 8] = [
+    "library", "audio", "loudness", "quality", "ytdlp", "tools", "history", "sites",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -62,6 +63,7 @@ pub struct Settings {
     pub loudness: Loudness,
     pub quality: Quality,
     pub ytdlp: Ytdlp,
+    pub tools: Tools,
     pub history: History,
     pub sites: crate::sites::Sites,
 }
@@ -133,21 +135,26 @@ impl Library {
     /// The folder `path` names, relative to `home` when relative.
     #[must_use]
     pub fn folder(&self, home: &Path) -> Option<PathBuf> {
-        let path = self.path.as_deref()?.trim();
-        let expanded = match path.strip_prefix('~') {
-            Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
-                directories::UserDirs::new()?
-                    .home_dir()
-                    .join(rest.trim_start_matches(['/', '\\']))
-            }
-            _ => PathBuf::from(path),
-        };
-        Some(if expanded.is_absolute() {
-            expanded
-        } else {
-            home.join(expanded)
-        })
+        whole(self.path.as_deref()?.trim(), home)
     }
+}
+
+/// The path `path` names: `~/…` in the user's home, else relative to
+/// `home` when relative.
+fn whole(path: &str, home: &Path) -> Option<PathBuf> {
+    let expanded = match path.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            directories::UserDirs::new()?
+                .home_dir()
+                .join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(path),
+    };
+    Some(if expanded.is_absolute() {
+        expanded
+    } else {
+        home.join(expanded)
+    })
 }
 
 /// How strictly names are made safe, beyond replacing `/` and control
@@ -676,8 +683,12 @@ pub struct Ytdlp {
     /// Load muman's two postprocessors, which keep generated captions
     /// out and take a YouTube Music track's square album art.
     pub plugins: bool,
-    /// More arguments, such as `["--cookies-from-browser", "firefox"]`.
+    /// More arguments for every yt-dlp run: listing, searching, the
+    /// audio a comparison downloads, and fetching.
     pub args: Vec<String>,
+    /// yt-dlp's `--extractor-args`, by extractor, for a fetch and the
+    /// check of what a source offers upstream.
+    pub extractor_args: BTreeMap<String, String>,
     /// How long an unfinished download is kept to resume.
     #[serde(deserialize_with = "serde_as::duration")]
     pub keep_partial: std::time::Duration,
@@ -691,7 +702,121 @@ impl Default for Ytdlp {
             concurrent_fragments: 4,
             plugins: true,
             args: Vec::new(),
+            extractor_args: BTreeMap::from([(
+                "youtube".into(),
+                "skip=translated_subs;player_client=default,web_music".into(),
+            )]),
             keep_partial: crate::units::Time::days(14).duration(),
+        }
+    }
+}
+
+/// The programs muman runs: `[tools.ffmpeg]`, `[tools.ffprobe]` and
+/// `[tools."yt-dlp"]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "WrittenTools")]
+pub struct Tools {
+    pub ffmpeg: Program,
+    pub ffprobe: Program,
+    pub yt_dlp: Program,
+}
+
+/// One program muman runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Program {
+    /// A name, looked for beside muman and then on `PATH`, or a path:
+    /// absolute, `~/…` or relative to the home. Then its arguments.
+    pub command: Vec<String>,
+    /// Refuse a release older than the oldest muman runs.
+    pub version_check: bool,
+}
+
+impl Program {
+    fn called(name: &str) -> Self {
+        Self {
+            command: vec![name.into()],
+            version_check: true,
+        }
+    }
+
+    /// The program as [`crate::tools::find`] looks for it, a path in it
+    /// made whole against `home`.
+    #[must_use]
+    pub fn named(&self, home: &Path) -> crate::tools::Named {
+        let mut command: Vec<std::ffi::OsString> =
+            self.command.iter().map(std::ffi::OsString::from).collect();
+        if let Some(first) = self.command.first()
+            && !crate::tools::is_name(first.as_ref())
+            && let Some(path) = whole(first, home)
+        {
+            command[0] = path.into_os_string();
+        }
+        crate::tools::Named {
+            command,
+            version_check: self.version_check,
+        }
+    }
+}
+
+impl Default for Tools {
+    fn default() -> Self {
+        Self {
+            ffmpeg: Program::called("ffmpeg"),
+            ffprobe: Program::called("ffprobe"),
+            yt_dlp: Program::called("yt-dlp"),
+        }
+    }
+}
+
+impl Tools {
+    /// Each of [`crate::tools::TOOLS`] as named here, in that order.
+    #[must_use]
+    pub fn named(&self, home: &Path) -> [crate::tools::Named; 3] {
+        crate::tools::TOOLS.each_ref().map(|tool| {
+            match tool.name {
+                "ffmpeg" => &self.ffmpeg,
+                "ffprobe" => &self.ffprobe,
+                _ => &self.yt_dlp,
+            }
+            .named(home)
+        })
+    }
+}
+
+/// `[tools]` as written, where a program or a key left out takes its
+/// default.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WrittenTools {
+    ffmpeg: WrittenProgram,
+    ffprobe: WrittenProgram,
+    #[serde(rename = "yt-dlp")]
+    yt_dlp: WrittenProgram,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WrittenProgram {
+    command: Option<Vec<String>>,
+    version_check: Option<bool>,
+}
+
+impl WrittenProgram {
+    fn or(self, default: Program) -> Program {
+        Program {
+            command: self.command.unwrap_or(default.command),
+            version_check: self.version_check.unwrap_or(default.version_check),
+        }
+    }
+}
+
+impl From<WrittenTools> for Tools {
+    fn from(w: WrittenTools) -> Self {
+        let d = Self::default();
+        Self {
+            ffmpeg: w.ffmpeg.or(d.ffmpeg),
+            ffprobe: w.ffprobe.or(d.ffprobe),
+            yt_dlp: w.yt_dlp.or(d.yt_dlp),
         }
     }
 }
@@ -850,8 +975,8 @@ fn ahead(table: &mut Table) {
 /// How far before the file's own tables [`ahead`] places the defaults'.
 const AHEAD: isize = 1 << 20;
 
-/// The library folder the song list in `home` names, if it names one.
-pub fn library_folder(home: &Path) -> Result<Option<PathBuf>> {
+/// The settings of the song list in `home`, if it has one.
+pub fn of_home(home: &Path) -> Result<Option<Settings>> {
     let file = home.join(crate::dirs::MANIFEST);
     let text = match std::fs::read_to_string(&file) {
         Ok(text) => text,
@@ -861,7 +986,7 @@ pub fn library_folder(home: &Path) -> Result<Option<PathBuf>> {
     let doc: DocumentMut = text
         .parse()
         .with_context(|| format!("{} is not valid TOML", file.display()))?;
-    Ok(read(&doc)?.library.folder(home))
+    read(&doc).map(Some)
 }
 
 /// The settings `doc` sets, the defaults where it sets none.
@@ -906,6 +1031,15 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         .is_some_and(|e| e.as_integer().is_none_or(|e| e < FIRST))
     {
         bail!("`edition` must be a whole number of {FIRST} or more");
+    }
+    for (name, program) in [
+        ("ffmpeg", &settings.tools.ffmpeg),
+        ("ffprobe", &settings.tools.ffprobe),
+        ("yt-dlp", &settings.tools.yt_dlp),
+    ] {
+        if program.command.first().is_none_or(|p| p.trim().is_empty()) {
+            bail!("[tools.{name}] command names no program");
+        }
     }
     let library = &settings.library;
     if library.block_size.0 == 0 {
@@ -1247,6 +1381,48 @@ mod tests {
         let home = Path::new("home");
         assert_eq!(library.folder(home), Some(home.join("music")));
         assert_eq!(Library::default().folder(home), None);
+    }
+
+    #[test]
+    fn a_tools_table_names_only_what_it_sets() {
+        let s = settings(
+            "[tools.yt-dlp]\ncommand = [\"python3\", \"-m\", \"yt_dlp\"]\n\
+             [tools.ffprobe]\nversion_check = false\n",
+        )
+        .unwrap();
+        assert_eq!(s.tools.yt_dlp.command, ["python3", "-m", "yt_dlp"]);
+        assert!(s.tools.yt_dlp.version_check);
+        assert_eq!(s.tools.ffprobe.command, ["ffprobe"]);
+        assert!(!s.tools.ffprobe.version_check);
+        assert_eq!(s.tools.ffmpeg, Tools::default().ffmpeg);
+        let e = settings("[tools.ffmpeg]\ncommand = []\n").unwrap_err();
+        assert!(format!("{e:#}").contains("[tools.ffmpeg] command"), "{e:#}");
+        let e = settings("[tools.youtube-dl]\ncommand = [\"x\"]\n").unwrap_err();
+        assert!(format!("{e:#}").contains("youtube-dl"), "{e:#}");
+        let e = settings("[tools.ffmpeg]\npath = \"x\"\n").unwrap_err();
+        assert!(format!("{e:#}").contains("path"), "{e:#}");
+    }
+
+    #[test]
+    fn a_program_named_by_a_relative_path_is_under_the_home() {
+        let home = Path::new("home");
+        let program = |command: &[&str]| Program {
+            command: command.iter().map(|w| (*w).to_string()).collect(),
+            version_check: true,
+        };
+        let relative = Path::new("bin").join("yt-dlp");
+        let named = program(&[relative.to_str().unwrap(), "-v"]).named(home);
+        assert_eq!(
+            named.command,
+            [home.join(&relative).into_os_string(), "-v".into()]
+        );
+        let named = program(&["yt-dlp"]).named(home);
+        assert_eq!(named.command, ["yt-dlp"]);
+        let programs: Vec<_> = Tools::default()
+            .named(home)
+            .map(|n| n.command[0].clone())
+            .into();
+        assert_eq!(programs, ["ffmpeg", "ffprobe", "yt-dlp"]);
     }
 
     #[test]

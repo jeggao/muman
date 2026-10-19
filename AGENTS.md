@@ -45,7 +45,7 @@ src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   add.rs, sync.rs   the add and sync commands, and the network steps they share
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [history]
+  settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [tools], [history]
   migrate.rs        older song lists brought up to this edition
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits

@@ -35,7 +35,7 @@
 //! A track's own thumbnails are 16:9 frames with the art pillarboxed in
 //! the middle. Only the `web_music` player client lists the square art,
 //! on `googleusercontent.com`, ranked last and sized to 544 pixels, so
-//! yt-dlp is asked to use that client too, and the `AlbumArt`
+//! `[ytdlp] extractor_args` asks yt-dlp to use that client too, and the `AlbumArt`
 //! postprocessor appends the art at its uploaded size, as JPEG (`=s0-rj`),
 //! as the last thumbnail, the one yt-dlp writes and embeds. Without it
 //! the frame's bars are cropped off when the song is written (`quality`).
@@ -51,6 +51,8 @@ use std::ffi::OsString;
 use serde::Deserialize;
 
 use crate::clean;
+use crate::download;
+use crate::settings::Ytdlp;
 use crate::sites::Sites;
 use crate::source::SourceKey;
 
@@ -154,34 +156,21 @@ impl Entry {
 /// What a URL names, listed flat in one JSON object: a video whole, a
 /// playlist or channel with its videos as entries.
 #[must_use]
-pub fn list_command(url: &str) -> Vec<OsString> {
-    [
+pub fn list_command(url: &str, options: &Ytdlp) -> Vec<OsString> {
+    let own = [
         "yt-dlp",
         "--ignore-config",
         "--flat-playlist",
         "--dump-single-json",
-        "--",
-        url,
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+    ];
+    download::ending(own.map(OsString::from).into(), options, url)
 }
 
 /// The one video a URL names, whole, though it names a playlist too.
 #[must_use]
-pub fn one_video_command(url: &str) -> Vec<OsString> {
-    [
-        "yt-dlp",
-        "--ignore-config",
-        "--no-playlist",
-        "--dump-json",
-        "--",
-        url,
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+pub fn one_video_command(url: &str, options: &Ytdlp) -> Vec<OsString> {
+    let own = ["yt-dlp", "--ignore-config", "--no-playlist", "--dump-json"];
+    download::ending(own.map(OsString::from).into(), options, url)
 }
 
 /// What [`list_command`] found a URL to name.
@@ -290,7 +279,7 @@ pub fn listing(json: &[u8], sites: &Sites) -> Option<Listing> {
 /// YouTube Music's top songs for the video's channel and title, listed
 /// flat: their IDs, to extract each whole in parallel with [`video_command`].
 #[must_use]
-pub fn search_command(video: &Entry) -> Option<Vec<OsString>> {
+pub fn search_command(video: &Entry, options: &Ytdlp) -> Option<Vec<OsString>> {
     let title = video.title.as_deref()?.trim();
     if title.is_empty() {
         return None;
@@ -303,22 +292,20 @@ pub fn search_command(video: &Entry) -> Option<Vec<OsString>> {
         "https://music.youtube.com/search?q={}#songs",
         percent_encode(&query)
     );
-    Some(
-        [
-            "yt-dlp",
-            "--ignore-config",
-            "--flat-playlist",
-            "--playlist-items",
-            CANDIDATES,
-            "--print",
-            "id",
-            "--",
-            &url,
-        ]
-        .into_iter()
-        .map(OsString::from)
-        .collect(),
-    )
+    let own = [
+        "yt-dlp",
+        "--ignore-config",
+        "--flat-playlist",
+        "--playlist-items",
+        CANDIDATES,
+        "--print",
+        "id",
+    ];
+    Some(download::ending(
+        own.map(OsString::from).into(),
+        options,
+        &url,
+    ))
 }
 
 /// One JSON object per line; a line that does not parse, or names no
@@ -345,8 +332,8 @@ pub fn ids(printed: &[u8], sites: &Sites) -> Vec<String> {
 
 /// The command extracting one video whole.
 #[must_use]
-pub fn video_command(id: &str) -> Vec<OsString> {
-    one_video_command(&watch_url(id))
+pub fn video_command(id: &str, options: &Ytdlp) -> Vec<OsString> {
+    one_video_command(&watch_url(id), options)
 }
 
 /// Whether a track runs exactly as long as the upload, to the second
@@ -387,7 +374,7 @@ fn within(a: &Entry, b: &Entry, slack: f64) -> bool {
 /// with their titles, channels and lengths: where its music video, and
 /// with it the subtitles a track never has, may be.
 #[must_use]
-pub fn video_search_command(track: &Entry) -> Option<Vec<OsString>> {
+pub fn video_search_command(track: &Entry, options: &Ytdlp) -> Option<Vec<OsString>> {
     let name = track.track.as_deref()?.trim();
     if name.is_empty() {
         return None;
@@ -409,19 +396,17 @@ pub fn video_search_command(track: &Entry) -> Option<Vec<OsString>> {
         Some(by) => format!("ytsearch{UPLOAD_CANDIDATES}:{by} {name}"),
         None => format!("ytsearch{UPLOAD_CANDIDATES}:{name}"),
     };
-    Some(
-        [
-            "yt-dlp",
-            "--ignore-config",
-            "--flat-playlist",
-            "--dump-json",
-            "--",
-            &query,
-        ]
-        .into_iter()
-        .map(OsString::from)
-        .collect(),
-    )
+    let own = [
+        "yt-dlp",
+        "--ignore-config",
+        "--flat-playlist",
+        "--dump-json",
+    ];
+    Some(download::ending(
+        own.map(OsString::from).into(),
+        options,
+        &query,
+    ))
 }
 
 /// The videos found that may be uploads of `track`, named as
@@ -666,7 +651,7 @@ mod tests {
             .map(|e| e.id.as_str())
             .collect();
         assert_eq!(ids, vec!["vid00000006", "vid00000005"]);
-        let cmd = video_search_command(&t).unwrap();
+        let cmd = video_search_command(&t, &Ytdlp::default()).unwrap();
         assert_eq!(cmd.last().unwrap(), "ytsearch5:MOTHlamp PAPER ORRERY");
     }
 
@@ -715,8 +700,33 @@ mod tests {
     }
 
     #[test]
+    fn every_lookup_takes_the_song_list_s_arguments() {
+        let options = Ytdlp {
+            args: vec!["--js-runtimes".into(), "node".into()],
+            ..Ytdlp::default()
+        };
+        let track = Entry {
+            track: Some("Paper Lanterns".into()),
+            ..video()
+        };
+        let audio =
+            crate::align::audio_command("u", "vid00000001", std::path::Path::new("a"), &options);
+        for cmd in [
+            list_command("u", &options),
+            video_command("vid00000001", &options),
+            search_command(&video(), &options).unwrap(),
+            video_search_command(&track, &options).unwrap(),
+            audio,
+        ] {
+            let end = cmd.iter().position(|a| a == "--").unwrap();
+            assert_eq!(cmd[end - 2..end], ["--js-runtimes", "node"], "{cmd:?}");
+            assert_eq!(end, cmd.len() - 2, "{cmd:?}");
+        }
+    }
+
+    #[test]
     fn the_search_names_channel_and_title_encoded() {
-        let cmd = search_command(&video()).unwrap();
+        let cmd = search_command(&video(), &Ytdlp::default()).unwrap();
         let url = cmd.last().unwrap().to_string_lossy();
         assert!(url.starts_with("https://music.youtube.com/search?q=Marlo%20Venn%20%E3%82%AC"));
         assert!(url.ends_with("#songs"));

@@ -160,11 +160,13 @@ pub fn run() -> ExitCode {
     };
     let home = cli.home.clone().unwrap_or_else(|| defaults.home.clone());
     // A song list that does not read is reported by the command itself,
-    // which names the problem; the default folder stands meanwhile.
+    // which names the problem; the default folder and programs stand
+    // meanwhile.
+    let listed = settings::of_home(&home).ok().flatten().unwrap_or_default();
     let library = if cli.library.is_some() {
         None
     } else {
-        settings::library_folder(&home).ok().flatten()
+        listed.library.folder(&home)
     };
     let defaults = Defaults {
         library: library.unwrap_or(defaults.library),
@@ -183,7 +185,7 @@ pub fn run() -> ExitCode {
     let mut inquire = InquirePrompter;
     let prompter: Option<&mut dyn Prompter> =
         (std::io::stdin().is_terminal() && job.live).then_some(&mut inquire);
-    let system = System::default();
+    let system = System::new(listed.tools.named(&job.dirs.home));
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
     let needs_ffmpeg = match &job.command {

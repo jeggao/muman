@@ -97,6 +97,7 @@ fn listed(urls: &[&str]) -> Listed {
     list(
         &urls,
         &crate::sites::Sites::default(),
+        &Ytdlp::default(),
         &Net::default(),
         &mut Vec::new(),
     )

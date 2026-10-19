@@ -3,12 +3,12 @@
 muman is configured in two places, split by what a setting is about:
 
 - **How the library is made** — its layout and file names, encoding,
-  how yt-dlp fetches, how much `undo` keeps — is set in the song list,
-  `songs.toml`, so one song list renders the same library on every
-  machine that runs it.
+  how yt-dlp fetches, which programs muman runs, how much `undo` keeps —
+  is set in the song list, `songs.toml`, so one song list renders the
+  same library on every machine that runs it.
 - **Where things are on this machine** — the home folder, the library
-  folder, and the programs muman runs — comes from command-line flags
-  and environment variables.
+  folder, and a program in a place of its own — comes from command-line
+  flags and environment variables, which override the song list.
 
 ## Folders and programs
 
@@ -18,9 +18,9 @@ muman is configured in two places, split by what a setting is about:
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path`. Named anew, each file found at its place there as muman wrote it, the library moved or copied, stays muman's, and the rest is written there; the files in the folder before are left alone, muman's again only as far as they are as written when you go back to it |
 | `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookups, no fetching, URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
-| | `MUMAN_FFMPEG` | The ffmpeg to run |
-| | `MUMAN_FFPROBE` | The ffprobe to run |
-| | `MUMAN_YT_DLP` | The yt-dlp to run; may be a whole command, such as `python -m yt_dlp` |
+| | `MUMAN_FFMPEG` | The ffmpeg to run, over `[tools.ffmpeg] command` |
+| | `MUMAN_FFPROBE` | The ffprobe to run, over `[tools.ffprobe] command` |
+| | `MUMAN_YT_DLP` | The yt-dlp to run, over `[tools.yt-dlp] command`; may be a whole command, such as `python -m yt_dlp` |
 
 Without them, each folder is the platform's own:
 
@@ -34,13 +34,19 @@ Neither folder may hold the other, but for a library beside `sources/`
 in the home: a command that writes refuses a library in `sources/` or a
 home in the library.
 
-A program not named in its variable is looked for beside the muman
+A program not named in its variable is run as the song list's
+`[tools.*] command` names it: a name is looked for beside the muman
 executable, then on `PATH` (with `PATHEXT` on Windows, so a `.cmd`
-wrapper is found). Each is run once for its version when it is first
-found, and one older than the oldest release muman runs, named in the
+wrapper is found), and a path is taken as it is, `~/` in your home and
+a relative one under the home folder. A fork, or a wrapper that takes
+the same options, runs in a tool's place when named there. Each program
+is run once for its version when it is first found, and one older than
+the oldest release muman runs, named in the
 [README](../README.md#install), stops the run with exit code 2 and a
 message naming it and where a newer one comes from; a version muman
-cannot read, as a git build's, is taken as new enough. ffmpeg and
+cannot read, as a git build's, is taken as new enough. With `[tools.*]
+version_check = false`, as for a fork numbered its own way, neither an
+old version nor one that does not print stops a run. ffmpeg and
 ffprobe are needed by every command that reads audio; yt-dlp only by a
 run that fetches, so a library made only from your own files never needs
 it. `muman info` prints the folders in use and each program's version
@@ -101,7 +107,8 @@ know.
 | `[audio]` | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | `[loudness]` | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
-| `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, extra arguments, muman's postprocessors, how long partial downloads are kept |
+| `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, muman's postprocessors, the arguments every run takes, each extractor's arguments, how long partial downloads are kept |
+| `[tools.*]` | The ffmpeg, ffprobe and yt-dlp muman runs, and whether each one's version is checked |
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
 | `[sites.*]` | The sites yt-dlp fetches from: which extractors each names its sources by, the IDs each kind of source takes, and where one is fetched again from |
 
