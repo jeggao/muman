@@ -192,7 +192,20 @@ pub fn run() -> ExitCode {
         | Command::Duplicates { .. }
         | Command::Purge { .. } => false,
         Command::Check { decode, .. } => *decode,
-        Command::Export { max_size, .. } => max_size.is_some(),
+        Command::Export {
+            max_size,
+            codec,
+            template,
+            lyrics,
+            set,
+            ..
+        } => {
+            max_size.is_some()
+                || codec.is_some()
+                || template.is_some()
+                || lyrics.is_some()
+                || !set.is_empty()
+        }
         _ => true,
     };
     if needs_ffmpeg && let Err(e) = system.require("ffmpeg").and(system.require("ffprobe")) {
@@ -221,6 +234,10 @@ pub fn run() -> ExitCode {
             }) =>
         {
             ExitCode::from(4)
+        }
+        Err(e) if e.downcast_ref::<cli::Invalid>().is_some() => {
+            let _ = ui::error(&mut err, &format!("{e:#}"));
+            ExitCode::from(2)
         }
         Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
             let _ = ui::error(&mut err, &format!("{e:#}"));
@@ -343,8 +360,26 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         Command::Check { decode, upstream } => {
             check::check(runner, dirs, (*decode, *upstream), out, data)
         }
-        Command::Export { output, max_size } => {
-            export::export(runner, dirs, output, *max_size, out)
+        Command::Export {
+            output,
+            max_size,
+            codec,
+            template,
+            lyrics,
+            set,
+        } => {
+            let settings = export::overrides(
+                codec.as_deref(),
+                template.as_deref(),
+                lyrics.as_deref(),
+                set,
+            );
+            let options = export::Options {
+                output,
+                max_size: *max_size,
+                settings: &settings,
+            };
+            export::export(runner, dirs, &options, out)
         }
         Command::Undo { yes, dry_run } => {
             let planned = history::plan(dirs)?;

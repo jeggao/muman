@@ -1596,7 +1596,7 @@ pub(crate) fn edited_since_written(
 /// that file; a song no file was made from has none. Ties go to the song
 /// listed first, then to the path that sorts first.
 pub(crate) fn files_of(
-    planned: &[PlannedSong],
+    songs: impl IntoIterator<Item = usize>,
     manifest: &Manifest,
     old: &BTreeMap<PathBuf, Written>,
 ) -> BTreeMap<usize, PathBuf> {
@@ -1607,12 +1607,12 @@ pub(crate) fn files_of(
             .collect()
     };
     let mut scored: Vec<(usize, usize, &PathBuf)> = Vec::new();
-    for (n, _) in planned {
-        let mine = own(&manifest.songs[*n].sources);
+    for n in songs {
+        let mine = own(&manifest.songs[n].sources);
         for (path, written) in old {
             let shared = own(&written.sources).intersection(&mine).count();
             if shared > 0 {
-                scored.push((shared, *n, path));
+                scored.push((shared, n, path));
             }
         }
     }
@@ -1690,7 +1690,7 @@ pub(crate) fn foresee(
     library: &Path,
     (force, accept): (bool, bool),
 ) -> Foreseen {
-    let files = files_of(planned, manifest, &state.outputs);
+    let files = files_of(planned.iter().map(|(n, _)| *n), manifest, &state.outputs);
     let drifts = crate::held::drifts(manifest, &state.facts);
     let damaged = if force {
         BTreeSet::new()
@@ -2082,9 +2082,6 @@ pub(crate) fn plan<W: Write>(
     on_disk: Option<&BTreeSet<SourceKey>>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
-    let naming = Naming::new(&manifest.settings.library, library)?;
-    let mut failed = BTreeSet::new();
-    let mut planned = Vec::new();
     for key in &manifest.clean.unknown {
         crate::ui::warning(
             out,
@@ -2100,6 +2097,22 @@ pub(crate) fn plan<W: Write>(
     {
         crate::ui::warning(out, &line)?;
     }
+    plan_with(manifest, &manifest.settings, state, library, on_disk, out)
+}
+
+/// [`plan`] under `settings` rather than the song list's, saying only
+/// which songs could not be resolved and which paths are too long.
+pub(crate) fn plan_with<W: Write>(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+    out: &mut W,
+) -> Result<(Planned, BTreeSet<SourceKey>)> {
+    let naming = Naming::new(&settings.library, library)?;
+    let mut failed = BTreeSet::new();
+    let mut planned = Vec::new();
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));
     for (n, song) in manifest.songs.iter().enumerate() {
         let input = Input {
@@ -2112,9 +2125,9 @@ pub(crate) fn plan<W: Write>(
             clean: &manifest.clean,
             albums: &albums,
             naming: &naming,
-            audio: &manifest.settings.audio,
-            quality: &manifest.settings.quality,
-            placement: manifest.settings.library.lyrics,
+            audio: &settings.audio,
+            quality: &settings.quality,
+            placement: settings.library.lyrics,
         };
         match resolve::resolve(&input) {
             Ok(r) => planned.push((n, r)),
@@ -2125,7 +2138,7 @@ pub(crate) fn plan<W: Write>(
             }
         }
     }
-    if let Some(max) = manifest.settings.library.max_path {
+    if let Some(max) = settings.library.max_path {
         let over = planned
             .iter()
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
@@ -2142,12 +2155,8 @@ pub(crate) fn plan<W: Write>(
             )?;
         }
     }
-    crate::loudness::settle(&mut planned, state, &manifest.settings);
-    separate(
-        &mut planned,
-        &naming,
-        manifest.settings.library.max_name_bytes,
-    );
+    crate::loudness::settle(&mut planned, state, settings);
+    separate(&mut planned, &naming, settings.library.max_name_bytes);
     Ok((planned, failed))
 }
 

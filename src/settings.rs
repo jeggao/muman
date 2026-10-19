@@ -866,6 +866,21 @@ pub fn library_folder(home: &Path) -> Result<Option<PathBuf>> {
 
 /// The settings `doc` sets, the defaults where it sets none.
 pub fn read(doc: &DocumentMut) -> Result<Settings> {
+    read_with(doc, &[])
+}
+
+/// One setting given apart from the song list, as `table.key = value`.
+#[derive(Debug, Clone)]
+pub struct Override {
+    pub table: String,
+    pub key: String,
+    pub value: toml_edit::Value,
+}
+
+/// The settings `doc` sets with `overrides` set over them, checked as
+/// the song list's own are. They are set by today's names, after the
+/// file's older names are renamed, so one never collides with another.
+pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     let mut only = DocumentMut::new();
     for table in TABLES {
         if let Some(item) = doc.get(table) {
@@ -873,6 +888,14 @@ pub fn read(doc: &DocumentMut) -> Result<Settings> {
         }
     }
     crate::migrate::rename_all(&mut only, &EDITIONS)?;
+    for o in overrides {
+        let table = only
+            .entry(&o.table)
+            .or_insert(toml_edit::table())
+            .as_table_like_mut()
+            .with_context(|| format!("`{}` in the song list is no table", o.table))?;
+        table.insert(&o.key, value(o.value.clone()));
+    }
     let text = only.to_string();
     let settings: Settings = toml::from_str(&text)
         .map_err(|e| at_line(&e, &text, &doc.to_string()))
@@ -996,6 +1019,22 @@ mod tests {
     #[test]
     fn nothing_set_is_every_default() {
         assert_eq!(settings("version = 1\n").unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn a_setting_given_apart_is_set_over_the_file_s_and_checked_as_it_is() {
+        let doc: DocumentMut = "version = 1\n[audio]\nlossy = \"aac\"\n".parse().unwrap();
+        let given = |key: &str, value: &str| Override {
+            table: "audio".into(),
+            key: key.into(),
+            value: value.into(),
+        };
+        let read = read_with(&doc, &[given("lossy", "mp3")]).unwrap();
+        assert_eq!(read.audio.lossy, Codec::Mp3);
+        let e = read_with(&doc, &[given("lossy", "flac")]).unwrap_err();
+        assert!(format!("{e:#}").contains("is lossless"), "{e:#}");
+        let e = read_with(&doc, &[given("lossey", "mp3")]).unwrap_err();
+        assert!(format!("{e:#}").contains("lossey"), "{e:#}");
     }
 
     #[test]

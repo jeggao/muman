@@ -39,12 +39,25 @@ Exit codes:
      declined
   2  yt-dlp, ffmpeg or ffprobe is missing, does not run or is older than
      muman runs, the system names no home folder, or the command line
-     does not parse
+     does not parse or gives a setting that does not read
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
      and was left out, or a change or undo was refused";
+
+/// A command line that parses but gives what does not read, as a setting
+/// `export --set` gives; it exits as one that does not parse.
+#[derive(Debug)]
+pub struct Invalid(pub String);
+
+impl std::fmt::Display for Invalid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Invalid {}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -255,6 +268,17 @@ Query:
   youtube.com:<id>      The song listing that source
 Fields are any tag, and key, path, format (the extension: opus, ogg,
 flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
+
+const EXPORT_HELP: &str = "\
+Examples:
+  --codec mp3 --set audio.mp3_bitrate=192kb/s
+                     Every song in MP3 at 192 kb/s
+  --template '{{ artist }} - {{ title }}' --set library.restrict=ascii
+                     One folder of songs, named in ASCII
+  --set loudness.mode=audio
+                     Each song's gain applied to its samples
+A song changed since muman wrote it, or whose sources are gone, is
+written as the library holds it, and said.";
 
 const SET_HELP: &str = "\
 Assignments:
@@ -470,9 +494,13 @@ pub enum Command {
     },
     /// Write the song list and the library, as the last run left them,
     /// into one zip: songs.toml at its root, the songs under library/.
-    /// With --max-size, songs are encoded again at lower bitrates, the
-    /// least audible loss first, until the zip fits; the library itself
-    /// is left as it is.
+    /// The library's settings may be changed for the export alone: each
+    /// song the change touches is made again from its sources, as a
+    /// library under those settings would hold it. With --max-size, songs
+    /// are encoded again at lower bitrates, the least audible loss first,
+    /// until the zip fits. The library and the song list are left as they
+    /// are.
+    #[command(after_help = EXPORT_HELP)]
     Export {
         /// The zip to write, or a folder to write muman.zip in.
         #[arg(short, long, value_name = "PATH", default_value = "muman.zip")]
@@ -481,6 +509,25 @@ pub enum Command {
         /// The most the zip may take, such as 4GiB or 700MB.
         #[arg(long, value_name = "SIZE", value_parser = crate::units::parse_size)]
         max_size: Option<u64>,
+
+        /// Write every song in this lossy codec, lossless songs too: sets
+        /// `[audio] codecs`, `lossy` and `lossless` to it.
+        #[arg(long, value_name = "CODEC", value_parser = ["opus", "vorbis", "aac", "mp3"])]
+        codec: Option<String>,
+
+        /// Each song's path without its extension, as `[library] template`.
+        #[arg(long, value_name = "TEMPLATE")]
+        template: Option<String>,
+
+        /// Where lyrics go, as `[library] lyrics`.
+        #[arg(long, value_name = "WHERE", value_parser = ["sidecar", "embedded", "both"])]
+        lyrics: Option<String>,
+
+        /// A setting of `[library]`, `[audio]` or `[loudness]` for the export
+        /// alone, such as `audio.mp3_bitrate=192kb/s`; repeatable, and set
+        /// after the flags above. VALUE is TOML, or else text.
+        #[arg(long = "set", value_name = "KEY=VALUE", value_parser = crate::export::setting)]
+        set: Vec<crate::settings::Override>,
     },
     /// List the songs listed apart that are one recording, by their audio
     /// fingerprints: a file of an album there twice, or a track and its
@@ -848,16 +895,19 @@ Shelves hold `songs` alone."
 
     #[test]
     fn export_reads_a_size_with_its_unit() {
-        let Command::Export { output, max_size } =
-            parse(&["export", "-o", "out.zip", "--max-size", "4GiB"])
-                .unwrap()
-                .command
+        let Command::Export {
+            output, max_size, ..
+        } = parse(&["export", "-o", "out.zip", "--max-size", "4GiB"])
+            .unwrap()
+            .command
         else {
             panic!("not export");
         };
         assert_eq!(output, PathBuf::from("out.zip"));
         assert_eq!(max_size, Some(4 << 30));
         assert!(parse(&["export", "--max-size", "lots"]).is_err());
+        assert!(parse(&["export", "--set", "library.path=/x"]).is_err());
+        assert!(parse(&["export", "--codec", "flac"]).is_err());
     }
 
     #[test]

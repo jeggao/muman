@@ -1923,6 +1923,178 @@ fn export_into_too_little_room_says_what_it_needs() {
 }
 
 #[test]
+fn export_writes_songs_in_the_codec_and_shape_given_and_leaves_the_library_alone() {
+    let (s, fake) = exported_home("0.05");
+    let state = std::fs::read(s.dir.path().join("home/state.json")).unwrap();
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--codec",
+            "opus",
+            "--template",
+            "{{ album }}/{{ title }}",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(fake.ran("libopus"), "{text}");
+    assert_eq!(
+        unzip(&zip).keys().collect::<Vec<_>>(),
+        [
+            "library/Record/Song.lrc",
+            "library/Record/Song.opus",
+            "songs.toml"
+        ]
+    );
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert_eq!(
+        std::fs::read(s.dir.path().join("home/state.json")).unwrap(),
+        state
+    );
+}
+
+#[test]
+fn export_copies_each_song_whose_plan_the_settings_given_leave_alone() {
+    let (s, _) = exported_home("200.0");
+    let fake = Fake::default().probe(".flac", FLAC);
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--template",
+            "{{ title }}",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    let entries = unzip(&zip);
+    assert_eq!(
+        entries["library/Song.flac"],
+        std::fs::read(s.dir.path().join("lib/Artist/Record/02 Song.flac")).unwrap()
+    );
+    assert!(entries.contains_key("library/Song.lrc"));
+}
+
+#[test]
+fn export_embeds_lyrics_when_asked() {
+    let (s, fake) = exported_home("0.05");
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--lyrics",
+            "embedded",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert_eq!(
+        unzip(&zip).keys().collect::<Vec<_>>(),
+        ["library/Artist/Record/02 Song.flac", "songs.toml"]
+    );
+}
+
+#[test]
+fn export_keeps_a_song_changed_by_hand_as_the_library_holds_it() {
+    let (s, fake) = exported_home("0.05");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let mut edited = std::fs::read(&file).unwrap();
+    edited.extend(b"edited");
+    std::fs::write(&file, &edited).unwrap();
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "-o", &zip.to_string_lossy(), "--codec", "opus"],
+    );
+    assert!(
+        !ok && text.contains("changed since muman wrote them"),
+        "{text}"
+    );
+    assert_eq!(unzip(&zip)["library/Artist/Record/02 Song.flac"], edited);
+}
+
+#[test]
+fn export_keeps_a_song_whose_sources_are_gone_as_the_library_holds_it() {
+    let (s, fake) = exported_home("0.05");
+    std::fs::remove_dir_all(s.dir.path().join("home/sources/manual")).unwrap();
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "-o", &zip.to_string_lossy(), "--codec", "opus"],
+    );
+    assert!(!ok && text.contains("whose sources are gone"), "{text}");
+    assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.flac"));
+}
+
+#[test]
+fn export_fits_songs_made_anew_into_its_size() {
+    let (s, fake) = exported_home("0.05");
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--codec",
+            "opus",
+            "--max-size",
+            "1GiB",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.opus"));
+}
+
+#[test]
+fn an_export_given_a_setting_that_does_not_read_writes_nothing() {
+    let (s, fake) = exported_home("0.05");
+    let zip = s.dir.path().join("out.zip");
+    let zip = zip.to_string_lossy();
+    for given in [["--set", "audio.lossy=flac"], ["--template", "{{ nope("]] {
+        let e = run_with(
+            &s.job(&["export", "-o", &zip, given[0], given[1]]),
+            &fake,
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(e.downcast_ref::<crate::cli::Invalid>().is_some(), "{e:#}");
+    }
+    assert!(!s.dir.path().join("out.zip").exists());
+}
+
+#[test]
+fn an_export_that_levels_songs_the_song_list_does_not_measure_is_refused() {
+    let (s, fake) = exported_home("0.05");
+    let songs = s.dir.path().join("home/songs.toml");
+    let text = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(&songs, text.replace("mode = \"tags\"", "mode = \"off\"")).unwrap();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let zip = s.dir.path().join("out.zip");
+    let said = s.refused(&[
+        "export",
+        "-o",
+        zip.to_str().unwrap(),
+        "--set",
+        "loudness.mode=tags",
+    ]);
+    assert!(said.contains("measures none"), "{said}");
+    assert!(!zip.exists());
+}
+
+#[test]
 fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
     let dir = tempfile::tempdir().unwrap();
     let partial = dir.path().join("partial");
