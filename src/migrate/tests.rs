@@ -136,13 +136,14 @@ fn a_setting_named_both_ways_or_given_an_old_value_it_never_took_is_refused() {
     );
 }
 
-/// A third edition that raised `opus_bitrate` to today's default.
+/// A fourth edition that raised `opus_bitrate` to today's default.
 const RAISED: Editions = Editions {
-    current: 3,
+    current: 4,
     history: &[
         HISTORY[0],
+        HISTORY[1],
         Edition {
-            number: 3,
+            number: 4,
             steps: &[Step::Default(Change {
                 key: "audio.opus_bitrate",
                 was: "\"128 kb/s\"",
@@ -173,7 +174,7 @@ fn a_setting_at_its_editions_old_default_is_stale_until_updated() {
             .contains("opus_bitrate = \"160 kb/s\" # as written"),
         "{d}"
     );
-    assert_eq!(edition_of(&d), 3);
+    assert_eq!(edition_of(&d), 4);
     assert_eq!(stale(&d, &RAISED), []);
 }
 
@@ -197,12 +198,34 @@ fn a_setting_changed_by_hand_stays_and_the_edition_rises() {
     assert_eq!(edition_of(&d), FIRST);
     assert_eq!(stale(&d, &RAISED), []);
     assert!(crate::settings::fill(&mut d, &RAISED));
-    assert_eq!(edition_of(&d), 3);
+    assert_eq!(edition_of(&d), 4);
     assert_eq!(read(&d).unwrap().audio.opus_kbps, 170);
-    let chosen = doc("version = 1\nedition = 3\n[audio]\nopus_bitrate = \"128 kb/s\"\n");
-    assert_eq!(stale(&chosen, &RAISED), [], "set after edition 3");
+    let chosen = doc("version = 1\nedition = 4\n[audio]\nopus_bitrate = \"128 kb/s\"\n");
+    assert_eq!(stale(&chosen, &RAISED), [], "set after edition 4");
     assert!(read(&doc("edition = 0\n")).is_err());
     assert!(read(&doc("edition = \"one\"\n")).is_err());
+}
+
+#[test]
+fn the_third_editions_old_defaults_move_and_a_choice_stays() {
+    let mut d = doc("version = 1
+edition = 2
+[audio]
+codecs = [\"opus\", \"flac\"] # as written
+[quality.stereo]
+weight = 5
+[ytdlp]
+format = \"bestaudio\"
+");
+    let keys: Vec<String> = stale(&d, &EDITIONS).into_iter().map(|s| s.key).collect();
+    assert_eq!(keys, ["audio.codecs", "quality.stereo.weight"]);
+    update(&mut d, &EDITIONS);
+    let read = read(&d).unwrap();
+    assert_eq!(read.audio.codecs, Settings::default().audio.codecs);
+    assert_eq!(read.quality.stereo.weight, 5000);
+    assert_eq!(read.ytdlp.format, "bestaudio", "set by hand");
+    assert!(d.to_string().contains("\"flac\"] # as written"), "{d}");
+    assert_eq!(edition_of(&d), 3);
 }
 
 #[test]

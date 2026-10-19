@@ -821,7 +821,10 @@ fn sync_fills_in_every_setting_and_updates_none_already_current() {
         "{text}"
     );
     let listed = std::fs::read_to_string(&songs).unwrap();
-    assert!(listed.contains("\nedition = 2\n"), "{listed}");
+    assert!(
+        listed.contains(&format!("\nedition = {}\n", crate::migrate::EDITION)),
+        "{listed}"
+    );
     assert!(listed.contains("opus_bitrate = \"192 kb/s\""), "{listed}");
     assert!(!listed.contains("opus_kbps"), "{listed}");
     assert!(listed.contains("[ytdlp]"), "{listed}");
@@ -2798,7 +2801,10 @@ fn a_sync_killed_after_a_hand_edit_is_undone_with_the_edit() {
     let songs = |s: &Setup| s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(songs(&synced)).unwrap();
     let edited = listed
-        .replace("codecs = [\"opus\", \"flac\"]", "codecs = [\"opus\"]")
+        .replace(
+            "codecs = [\"opus\", \"vorbis\", \"aac\", \"mp3\", \"flac\"]",
+            "codecs = [\"opus\"]",
+        )
         .replace("lossless = \"flac\"", "lossless = \"opus\"");
     assert_ne!(edited, listed);
     let prepare = |s: &Setup| {

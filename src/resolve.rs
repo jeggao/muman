@@ -9,7 +9,7 @@
 //!
 //! - Audio: least that is not the song (a video's intro or skit) or
 //!   is missing from it (past an excerpt's cut), then
-//!   the widest bandwidth, real stereo, least clipping; scored alike,
+//!   real stereo, the widest bandwidth, least clipping; scored alike,
 //!   lossless, then the most bits used, then the lowest rate.
 //! - Cover: square content, then effective resolution, then fewest
 //!   block artifacts; borders a video frame adds are cropped off.
@@ -27,9 +27,13 @@
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
-//! purity outweighs any bandwidth up to 500 kHz, a step of bandwidth all
-//! of stereo and clipping. Lowering a weight lets the measures after it
-//! trade against it.
+//! purity outweighs mono and any bandwidth up to 240 kHz together, mono
+//! any such bandwidth, and a step of bandwidth all of clipping. Mono
+//! comes before bandwidth because it is the larger loss to a listener:
+//! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
+//! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
+//! bandwidth first a mono copy in Opus would beat the stereo MP3. Lowering
+//! a weight lets the measures after it trade against it.
 //!
 //! Purity is a source's sound beyond the song plus the song it lacks, as
 //! [`crate::align`] measures them against each other source of the same

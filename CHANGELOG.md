@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **yt-dlp fetches a video's audio alone.** `[ytdlp] format` is
+  `"ba/b"`: muman never read the video itself, which only took room in
+  the store. A source fetched again still asks for the format it was
+  fetched in.
+- **Vorbis, AAC and MP3 are copied as they are**, beside Opus and FLAC,
+  in `[audio] codecs`. Encoding them to Opus lost a generation, and made
+  a 128 kb/s MP3 a larger file at 160 kb/s.
+- **Real stereo ranks before bandwidth.** `[quality.stereo] weight` is
+  5000, so a mono copy no longer beats a stereo one for a few kHz more
+  treble.
+- **These three are settings edition 3.** A song list still at an old
+  default keeps it; `sync`, `status` and `check` name it, and `muman
+  sync --update-defaults` moves it. A value you set stays.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

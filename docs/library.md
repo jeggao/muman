@@ -30,7 +30,7 @@ measures after it can make up for it. See
 
 | Aspect | Criteria, by default in order |
 |---|---|
-| Audio | Least sound beyond the song or missing from it; widest real bandwidth; real stereo; least clipping |
+| Audio | Least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Timed; in a preferred language; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |

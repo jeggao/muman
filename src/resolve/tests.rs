@@ -378,15 +378,7 @@ fn real_stereo_beats_mono_in_two_channels() {
     let alignments = both(&facts, &mono, &stereo, 0, 0.99).to_vec();
     let r = run(&song(&[mono, stereo.clone()]), &facts, &alignments);
     assert_eq!(r.plan.audio.key, stereo);
-    assert_eq!(
-        r.plan.format,
-        Format::Encode {
-            codec: Codec::Opus,
-            kbps: Some(160),
-            adapt: None,
-            mix: None,
-        }
-    );
+    assert_eq!(r.plan.format, Format::Copy { codec: Codec::Aac });
 }
 
 #[test]
@@ -990,6 +982,10 @@ fn formats_follow_the_winning_codec() {
         adapt: None,
         mix: None,
     };
+    let settings = Audio {
+        codecs: vec![Codec::Opus, Codec::Flac],
+        ..AUDIO.clone()
+    };
     for (codec, channels, format) in [
         ("alac", 2, flac),
         ("pcm_s16le", 2, flac),
@@ -1003,7 +999,9 @@ fn formats_follow_the_winning_codec() {
         a.layout = Some(if channels == 6 { "5.1" } else { "stereo" }.into());
         let facts = BTreeMap::from([(key.clone(), f)]);
         assert_eq!(
-            run(&song(&[key]), &facts, &[]).plan.format,
+            run_with(&song(&[key]), &facts, &[], &settings, &QUALITY)
+                .plan
+                .format,
             format,
             "{codec}"
         );
@@ -1129,13 +1127,17 @@ fn a_measure_switched_off_or_outweighed_no_longer_decides() {
             .audio
             .key
     };
-    assert_eq!(pick(&QUALITY), wide, "8 steps of bandwidth outweigh mono");
+    assert_eq!(
+        pick(&QUALITY),
+        narrow,
+        "mono outweighs 8 steps of bandwidth"
+    );
     let mut off = Quality::default();
-    off.bandwidth.enabled = false;
-    assert_eq!(pick(&off), narrow, "without bandwidth, stereo decides");
-    let mut heavy = Quality::default();
-    heavy.stereo.weight = 100;
-    assert_eq!(pick(&heavy), narrow, "stereo outweighs 8 steps");
+    off.stereo.enabled = false;
+    assert_eq!(pick(&off), wide, "without stereo, bandwidth decides");
+    let mut light = Quality::default();
+    light.stereo.weight = 50;
+    assert_eq!(pick(&light), wide, "8 steps outweigh a lighter stereo");
 }
 
 #[test]
@@ -1625,6 +1627,7 @@ fn a_place_set_by_hand_with_its_count_writes_both() {
 #[test]
 fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
     let settings = Audio {
+        codecs: vec![Codec::Opus, Codec::Flac],
         lossy: Codec::Mp3,
         downmix: vec![Layout::named("5.1").unwrap(), Layout::STEREO],
         ..AUDIO.clone()
