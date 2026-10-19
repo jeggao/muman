@@ -129,7 +129,7 @@ muman undo
 | `check` | Compare the library and the sources with what muman recorded |
 | `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
-| `export` | Write the song list and the library into a zip, fitted to a size if given |
+| `export` | Write the song list and the library into a zip, under other settings or fitted to a size if given |
 | `info` | Count what the library holds and what could be better, from what earlier runs measured |
 | `list` | List the songs a query matches |
 | `purge` | Delete fetched sources and lookup records no song uses |
@@ -144,7 +144,7 @@ Every flag is in the [command reference](docs/cli.md).
 | Exit code | Means |
 |---|---|
 | 0 | Done, or nothing needed doing, or a change was declined |
-| 2 | ffmpeg, ffprobe or yt-dlp is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse |
+| 2 | ffmpeg, ffprobe or yt-dlp is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse or gives a setting that does not read |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, a song an export left out, or a problem `check` found |
 | 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, a change or `undo` was refused, or `--offline` rules out what was asked |
 

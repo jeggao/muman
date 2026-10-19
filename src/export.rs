@@ -5,26 +5,57 @@
 //! The library is exported as the last run left it, from what the state
 //! records, so a song not written yet is not in it; `sync` first brings it
 //! in step. Entries are stored, not compressed: audio does not compress.
-//! The library and the state are only read, under the home's lock.
+//! The library, the song list and the state are only read, under the
+//! home's lock.
 //!
-//! With a size, songs are fitted by [`crate::fit`]. Each starts as its
-//! library file, whose size is known, and may be encoded again from its
-//! sources at the lower bitrates of `[audio] lossy`. A lower rung is
-//! estimated as its bitrate times the song's length, plus what the
-//! library file holds besides audio, its cover and embedded lyrics, and
-//! `CONTAINER` for the container. The songs chosen are encoded into a
-//! scratch folder beside the zip, and their real sizes replace the
-//! estimates. A song's real size corrects its other estimates by as much
-//! as it missed, and the songs not encoded yet by how much all missed on
-//! average: a VBR encoder spends more on some music than its bitrate, a
-//! pure tone half again. [`fit::settle`] fits again until every song
-//! lowered is one encoded, `PASSES` times at most before it settles on
-//! sizes encoded alone. A song changed since muman wrote it, or whose
-//! sources are gone, can only be copied. Every entry is counted with what
-//! the zip spends on it, `ENTRY` bytes and its name twice.
+//! **Settings.** An export may change any setting of `[library]`,
+//! `[audio]` and `[loudness]` for itself alone, and its library is then the
+//! one a sync under those settings would write from the same song list.
+//! Every song is resolved again by `reconcile::plan_with`, under the
+//! song list's settings and under the export's, so naming, paths kept
+//! apart and loudness are the sync's own and no setting is read in two
+//! ways. Both take every source measured as there, so both pick what the
+//! last run picked, and their plans differ only where the settings do. A
+//! song whose plan the change leaves as it was is its library file, copied
+//! as the last run left it, one lowered for `[library] max_size` too, at
+//! the path the export's settings give it; any other is rendered from its
+//! sources into a scratch folder beside the zip, as a sync would write it.
+//! So the library is a cache of the export. A song's file is the one
+//! `reconcile::files_of` gives it, as a sync decides.
+//!
+//! A song changed since muman wrote it is copied as the library holds it:
+//! the file is the user's. So is one whose sources are gone, or that the
+//! export's settings resolve to no plan, as its file is the only one there
+//! is; each is said, and the export fails. A
+//! song made anew runs no `written` hook. The settings that place or count
+//! the library folder, `path`, `touch_root`, `max_size` and `block_size`,
+//! are no export's. Nor is `[quality]`: the measures a sync takes follow
+//! its weights, so an export could rank by measures never taken. Loudness
+//! is refused for the same reason when the song list's mode measures none.
+//!
+//! With a size, songs are fitted by [`crate::fit`]. Each starts as the file
+//! the export writes: its library file, whose size is known, or its plan
+//! made anew, estimated from its facts as [`crate::limit`] estimates a
+//! plan. Each may be encoded again from its sources at the lower bitrates
+//! of the export's `[audio] lossy`, estimated as its bitrate times the
+//! song's length, plus what the first holds besides audio: the cover and
+//! embedded lyrics its library file holds, else `limit`'s guess at them.
+//! The songs chosen are encoded into the scratch folder, and their real
+//! sizes replace the estimates. A song's real size corrects its other
+//! estimates by as much as it missed, and the songs not encoded yet by how
+//! much all missed on average: a VBR encoder spends more on some music than
+//! its bitrate, a pure tone half again. [`fit::settle`] fits again until
+//! every song chosen is one measured, `PASSES` times at most before it
+//! settles on sizes encoded alone. A song that can only be copied stays
+//! its library file. Every entry is counted with what the zip spends on
+//! it, `ENTRY` bytes and its name twice.
+//!
+//! Each file encoded for the zip is deleted from the scratch folder once it
+//! is in, so an export made anew needs about its own size free beside it,
+//! not twice that.
 
 use crate::units;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -32,18 +63,23 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use lofty::file::TaggedFileExt;
 use lofty::tag::ItemKey;
+use toml_edit::DocumentMut;
 use zip::CompressionMethod;
 use zip::write::{FullFileOptions, ZipWriter};
 
 use crate::atomic::Lock;
 use crate::dirs::{self, Dirs};
+use crate::facts::Facts;
 use crate::fit::{self, Item, Rung, Source};
+use crate::limit;
 use crate::manifest::Manifest;
 use crate::parallel;
+use crate::reconcile;
 use crate::relpath;
 use crate::render;
-use crate::resolve::{Format, Plan};
+use crate::resolve::{Format, Plan, Resolved};
 use crate::runner::Runner;
+use crate::settings::{Audio, Override, Settings};
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{Located, Store};
@@ -60,9 +96,6 @@ const ENTRY: u64 = 30 + 46 + 64 + 2 * 9;
 const EXTENDED_TIMESTAMP: u16 = 0x5455;
 /// What a zip spends once, at its end, ZIP64 records included.
 const END: u64 = 22 + 56 + 20;
-/// What a container adds to an encoded stream, as a share of it: Ogg's
-/// page headers take about 1%, MP4's index less.
-const CONTAINER: f64 = 0.015;
 /// Bytes a file holds besides its stream, its cover and lyrics: headers
 /// and tags.
 const HEADERS: u64 = 4 * 1024;
@@ -75,22 +108,134 @@ const PASSES: usize = 4;
 /// either way, when the song's other estimates are corrected by it.
 const MISS: f64 = 3.0;
 
-/// One song the library holds, as it is exported.
+/// The tables `--set` reaches.
+const TABLES: [&str; 3] = ["library", "audio", "loudness"];
+/// The settings of those tables no export takes, and why.
+const NOT_EXPORTS: [(&str, &str, &str); 4] = [
+    (
+        "library",
+        "path",
+        "the export writes a zip, not a library folder",
+    ),
+    (
+        "library",
+        "touch_root",
+        "the export touches no library folder",
+    ),
+    ("library", "max_size", "--max-size caps the zip"),
+    ("library", "block_size", "a zip counts no blocks"),
+];
+
+/// What `export` writes, and how.
+#[derive(Debug, Clone, Copy)]
+pub struct Options<'a> {
+    /// The zip, or a folder to write `muman.zip` in.
+    pub output: &'a Path,
+    /// The most the zip may take, in bytes.
+    pub max_size: Option<u64>,
+    /// Settings set over the song list's for the export alone, in order.
+    pub settings: &'a [Override],
+}
+
+/// `KEY=VALUE` as `--set` reads it: a setting of `TABLES`, its value
+/// TOML, or else text, so `audio.lossy=mp3` needs no quotes.
+///
+/// # Errors
+///
+/// When it is not `table.key=value`, or names a table or a setting no
+/// export takes.
+pub fn setting(arg: &str) -> std::result::Result<Override, String> {
+    let (name, raw) = arg
+        .split_once('=')
+        .ok_or_else(|| format!("`{arg}` sets nothing; write KEY=VALUE, as audio.lossy=mp3"))?;
+    let name = name.trim();
+    let (table, key) = name.split_once('.').unwrap_or(("", name));
+    if !table.is_empty() && !TABLES.contains(&table) {
+        return Err(format!(
+            "an export sets [library], [audio] and [loudness], not [{table}]"
+        ));
+    }
+    if table.is_empty() || key.is_empty() || key.contains('.') {
+        return Err(format!(
+            "`{name}` names no setting; write its table and key, as audio.lossy"
+        ));
+    }
+    if let Some((_, _, why)) = NOT_EXPORTS
+        .iter()
+        .find(|(t, k, _)| *t == table && *k == key)
+    {
+        return Err(format!("{name} is no export's setting: {why}"));
+    }
+    let value = raw
+        .trim()
+        .parse::<toml_edit::Value>()
+        .unwrap_or_else(|_| raw.into());
+    Ok(Override {
+        table: table.into(),
+        key: key.into(),
+        value,
+    })
+}
+
+/// The settings `export`'s flags stand for, then those of `set`, which
+/// are set after them.
+#[must_use]
+pub fn overrides(
+    codec: Option<&str>,
+    template: Option<&str>,
+    lyrics: Option<&str>,
+    set: &[Override],
+) -> Vec<Override> {
+    let one = |table: &str, key: &str, value: toml_edit::Value| Override {
+        table: table.into(),
+        key: key.into(),
+        value,
+    };
+    let mut all = Vec::new();
+    if let Some(codec) = codec {
+        let only: toml_edit::Array = std::iter::once(codec).collect();
+        all.push(one("audio", "codecs", only.into()));
+        all.push(one("audio", "lossy", codec.into()));
+        all.push(one("audio", "lossless", codec.into()));
+    }
+    if let Some(template) = template {
+        all.push(one("library", "template", template.into()));
+    }
+    if let Some(lyrics) = lyrics {
+        all.push(one("library", "lyrics", lyrics.into()));
+    }
+    all.extend(set.iter().cloned());
+    all
+}
+
+/// One song as it is exported.
 #[derive(Debug)]
 struct Song {
-    /// Its path in the library.
+    /// Its path in the zip's library, without its extension.
+    stem: PathBuf,
+    /// Its file in the library, by its path there.
     path: PathBuf,
     lyrics: Option<PathBuf>,
+    /// What its first rung is made from: its library file's plan, or
+    /// the one the export's settings resolve it to.
     plan: Plan,
-    /// What it may be encoded again from; none when it can only be copied.
+    /// Whether its first rung is `plan` made anew, not its library file.
+    anew: bool,
+    /// What it may be encoded from; none when it can only be copied.
     sources: Option<BTreeMap<SourceKey, Located>>,
 }
+
+/// The songs encoded for the zip, by their place and rung, with their
+/// entries.
+type Made = BTreeMap<(usize, usize), Vec<Entry>>;
 
 /// A file to put in the zip: where it is read from and its name there.
 #[derive(Debug, Clone)]
 struct Entry {
     from: PathBuf,
     name: String,
+    /// Whether `from` was encoded for the zip, and goes once it is in.
+    made: bool,
 }
 
 /// What the zip spends on an entry of `bytes` named `name`.
@@ -100,6 +245,16 @@ fn entry_size(name: &str, bytes: u64) -> u64 {
 
 fn name_in_zip(path: &Path) -> String {
     format!("{LIBRARY}/{}", relpath::to_portable(path))
+}
+
+/// `stem` with the extension of `like`.
+fn named(stem: &Path, like: &Path) -> PathBuf {
+    let mut name = stem.as_os_str().to_os_string();
+    if let Some(ext) = like.extension() {
+        name.push(".");
+        name.push(ext);
+    }
+    PathBuf::from(name)
 }
 
 fn size_of(path: &Path) -> u64 {
@@ -139,15 +294,13 @@ fn extras(path: &Path) -> u64 {
     held as u64 + HEADERS
 }
 
-/// Export the song list and the library in `dirs` into the zip at
-/// `output`, or `muman.zip` in it when it is a folder, fitting it into
-/// `max_size` bytes when given. Returns whether every song went in as
-/// chosen.
+/// Export the song list and the library in `dirs` into the zip
+/// `options` names, under the settings it changes, fitting it into its
+/// size when given. Returns whether every song went in as chosen.
 pub fn export<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
-    output: &Path,
-    max_size: Option<u64>,
+    options: &Options<'_>,
     out: &mut W,
 ) -> Result<bool> {
     let _lock = Lock::folder(&dirs.home)?;
@@ -166,56 +319,62 @@ pub fn export<R: Runner, W: Write>(
         .into());
     }
     let manifest = Manifest::load(&dirs.home)?;
+    let settings = if options.settings.is_empty() {
+        None
+    } else {
+        Some(settings_of(&manifest, options.settings)?)
+    };
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let output = zip_at(output)?;
+    let output = zip_at(options.output)?;
     let folder = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
 
-    let (songs, missing) = songs(dirs, &state, &store, out)?;
-    let mut files: Vec<Vec<Entry>> = songs
+    let (songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
+    let audio = settings
+        .as_ref()
+        .map_or(&manifest.settings.audio, |s| &s.audio);
+    let held: Vec<Vec<Entry>> = songs
         .iter()
-        .map(|s| library_entries(&dirs.library, s))
+        .map(|s| held_entries(&dirs.library, s))
         .collect();
     let list_entry = Entry {
         from: list,
         name: dirs::MANIFEST.to_string(),
+        made: false,
     };
-    // A song left out leaves the export short of the library.
-    let mut ok = missing == 0;
-    let mut encoded = 0_usize;
     let scratch = crate::atomic::Scratch::within(folder)?;
-    if let Some(max) = max_size {
+    let (choice, mut made) = if let Some(max) = options.max_size {
         let fixed = entries_size(std::slice::from_ref(&list_entry)) + END;
         let budget = max
             .checked_sub(fixed)
             .ok_or_else(|| anyhow!("{} cannot hold even the song list", crate::ui::bytes(max)))?;
         let fitted = fit_into(
             runner,
-            &manifest,
+            audio,
             &state,
-            &songs,
-            &files,
+            (&songs, &held),
             (max, budget),
             scratch.path(),
             out,
         )?;
         ok &= fitted.ok;
-        for (n, chosen) in fitted.entries {
-            files[n] = chosen;
-            encoded += 1;
-        }
-    }
+        (fitted.choice, fitted.made)
+    } else {
+        let (made, all) = anew(runner, &songs, scratch.path(), out)?;
+        ok &= all;
+        (vec![0; songs.len()], made)
+    };
+    let chosen = chosen(&songs, &held, &choice, &mut made, out)?;
+    ok &= chosen.ok;
+    let (entries, exported, lowered) = (chosen.entries, chosen.songs, chosen.lowered);
 
     // In the scratch folder, so a run killed partway leaves it where the
     // next clears it.
     let part = scratch.path().join("export.zip.part");
-    let written = write_zip(
-        &part,
-        std::iter::once(&list_entry).chain(files.iter().flatten()),
-    );
+    let written = write_zip(&part, std::iter::once(&list_entry).chain(&entries));
     if let Err(e) = written {
         let _ = fs::remove_file(&part);
         return Err(e);
@@ -226,18 +385,17 @@ pub fn export<R: Runner, W: Write>(
     crate::ui::success(
         out,
         &format!(
-            "Exported the song list and {} song(s), {}, to {}",
-            songs.len(),
+            "Exported the song list and {exported} song(s), {}, to {}",
             crate::ui::bytes(size),
             output.display()
         ),
     )?;
-    if let Some(max) = max_size {
-        if encoded > 0 {
+    if let Some(max) = options.max_size {
+        if lowered > 0 {
             crate::ui::info(
                 out,
                 &format!(
-                    "{encoded} song(s) encoded at a lower bitrate to fit {}",
+                    "{lowered} song(s) encoded at a lower bitrate to fit {}",
                     crate::ui::bytes(max)
                 ),
             )?;
@@ -253,16 +411,142 @@ pub fn export<R: Runner, W: Write>(
     Ok(ok)
 }
 
-/// The songs the library holds as the state records them, in path order,
-/// each with its sources when it may be encoded again.
+/// The entries the zip holds of its songs, in name order.
+struct Chosen {
+    entries: Vec<Entry>,
+    /// The songs they are.
+    songs: usize,
+    /// The songs lowered to fit.
+    lowered: usize,
+    /// Whether no song was left out.
+    ok: bool,
+}
+
+/// Each song's entries at the rung `choice` gives it: what was encoded
+/// for it, else its first rung made anew, else its library file. A song
+/// whose name in the zip another took, as files of one name in two
+/// cases would, is left out and said.
+fn chosen<W: Write>(
+    songs: &[Song],
+    held: &[Vec<Entry>],
+    choice: &[usize],
+    made: &mut Made,
+    out: &mut W,
+) -> Result<Chosen> {
+    let mut chosen = Chosen {
+        entries: Vec::new(),
+        songs: 0,
+        lowered: 0,
+        ok: true,
+    };
+    let mut taken = BTreeSet::new();
+    for (n, song) in songs.iter().enumerate() {
+        let c = choice[n];
+        let entries = if let Some(entries) = made.remove(&(n, c)) {
+            chosen.lowered += usize::from(c > 0);
+            entries
+        } else {
+            made.remove(&(n, 0)).unwrap_or_else(|| held[n].clone())
+        };
+        let names: Vec<String> = entries.iter().map(|e| e.name.to_lowercase()).collect();
+        if names.iter().any(|name| taken.contains(name)) {
+            crate::ui::warning(
+                out,
+                &format!(
+                    "{} is left out: another song takes its name in the zip",
+                    relpath::show(&song.path)
+                ),
+            )?;
+            chosen.ok = false;
+            continue;
+        }
+        taken.extend(names);
+        chosen.entries.extend(entries);
+        chosen.songs += 1;
+    }
+    chosen.entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(chosen)
+}
+
+/// The settings the export writes under: the song list's, with
+/// `overrides` set over them and checked as the song list's own are.
+fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> {
+    let doc: DocumentMut = manifest
+        .text()
+        .unwrap_or_default()
+        .parse()
+        .context("reading the song list")?;
+    let invalid = |e: anyhow::Error| {
+        crate::cli::Invalid(format!(
+            "{:#}",
+            e.context("reading the settings given for the export")
+        ))
+    };
+    let settings = crate::settings::read_with(&doc, overrides).map_err(invalid)?;
+    crate::naming::Naming::new(&settings.library, Path::new("")).map_err(invalid)?;
+    if settings.loudness.measured() && !manifest.settings.loudness.measured() {
+        return Err(crate::change::Refused(
+            "The export levels songs, and the song list's [loudness] mode = \"off\" measures \
+             none; set its mode and `muman sync` first"
+                .into(),
+        )
+        .into());
+    }
+    Ok(settings)
+}
+
+/// The sources a plan is made from, where the store holds every one.
+fn located(store: &Store, plan: &Plan) -> Option<BTreeMap<SourceKey, Located>> {
+    std::iter::once(&plan.audio.key)
+        .chain(plan.cover.as_ref().map(|c| &c.key))
+        .chain(plan.lyrics.as_ref().map(|l| &l.key))
+        .map(|k| Some((k.clone(), store.locate(k)?)))
+        .collect()
+}
+
+/// Songs the export's settings ask for and the library can only give as
+/// it holds them, by why.
+#[derive(Debug, Default)]
+struct Kept {
+    changed: usize,
+    gone: usize,
+    unresolved: usize,
+}
+
+/// The songs the library holds as the state records them, in its path
+/// order, each as the export writes it: under `settings`, when given,
+/// and else as the library holds it. Returns them with whether every song
+/// the library should hold is there, as asked.
 fn songs<W: Write>(
     dirs: &Dirs,
+    manifest: &Manifest,
+    settings: Option<&Settings>,
     state: &State,
     store: &Store,
     out: &mut W,
-) -> Result<(Vec<Song>, usize)> {
+) -> Result<(Vec<Song>, bool)> {
+    let owners: BTreeMap<PathBuf, usize> =
+        reconcile::files_of(0..manifest.songs.len(), manifest, &state.outputs)
+            .into_iter()
+            .map(|(n, path)| (path, n))
+            .collect();
+    let mut planned: Option<(BTreeMap<usize, Resolved>, BTreeMap<usize, Resolved>)> = None;
+    if let Some(settings) = settings {
+        let (library, _) = reconcile::plan_with(
+            manifest,
+            &manifest.settings,
+            state,
+            &dirs.library,
+            None,
+            &mut io::sink(),
+        )?;
+        let (export, _) =
+            reconcile::plan_with(manifest, settings, state, &dirs.library, None, out)?;
+        planned = Some((library.into_iter().collect(), export.into_iter().collect()));
+    }
     let mut songs = Vec::new();
     let mut missing = 0_usize;
+    let mut kept = Kept::default();
     for (path, written) in &state.outputs {
         let Some(plan) = &written.plan else {
             continue;
@@ -271,21 +555,39 @@ fn songs<W: Write>(
             missing += 1;
             continue;
         }
-        let changed = crate::reconcile::changed_since_written(&dirs.library, &state.outputs, path);
-        let keys = std::iter::once(&plan.audio.key)
-            .chain(plan.cover.as_ref().map(|c| &c.key))
-            .chain(plan.lyrics.as_ref().map(|l| &l.key));
-        let located: Option<BTreeMap<SourceKey, Located>> =
-            keys.map(|k| Some((k.clone(), store.locate(k)?))).collect();
-        songs.push(Song {
+        let changed = reconcile::changed_since_written(&dirs.library, &state.outputs, path);
+        let mut song = Song {
+            stem: path.with_extension(""),
             path: path.clone(),
             lyrics: written
                 .lyrics
                 .clone()
                 .filter(|l| dirs.library.join(l).is_file()),
             plan: plan.clone(),
-            sources: located.filter(|_| !changed),
-        });
+            anew: false,
+            sources: located(store, plan).filter(|_| !changed),
+        };
+        if let (Some((library, export)), Some(n)) = (&planned, owners.get(path)) {
+            match (library.get(n), export.get(n)) {
+                (Some(was), Some(now)) => {
+                    song.stem.clone_from(&now.stem);
+                    if now.plan != was.plan {
+                        match located(store, &now.plan) {
+                            _ if changed => kept.changed += 1,
+                            None => kept.gone += 1,
+                            Some(sources) => {
+                                song.plan = now.plan.clone();
+                                song.anew = true;
+                                song.sources = Some(sources);
+                            }
+                        }
+                    }
+                }
+                (None, Some(now)) => song.stem.clone_from(&now.stem),
+                (_, None) => kept.unresolved += 1,
+            }
+        }
+        songs.push(song);
     }
     if missing > 0 {
         crate::ui::warning(
@@ -295,23 +597,46 @@ fn songs<W: Write>(
             ),
         )?;
     }
-    Ok((songs, missing))
+    let reasons = [
+        (kept.changed, "changed since muman wrote them"),
+        (kept.gone, "whose sources are gone"),
+        (
+            kept.unresolved,
+            "that do not resolve under the settings given",
+        ),
+    ];
+    for (count, why) in reasons.into_iter().filter(|(count, _)| *count > 0) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{count} song(s) {why} are exported as the library holds them, not as the \
+                 settings given ask"
+            ),
+        )?;
+    }
+    Ok((
+        songs,
+        missing == 0 && reasons.iter().all(|(count, _)| *count == 0),
+    ))
 }
 
-fn library_entries(library: &Path, song: &Song) -> Vec<Entry> {
+/// A song's library file and lyrics, named in the zip by its stem.
+fn held_entries(library: &Path, song: &Song) -> Vec<Entry> {
     std::iter::once(&song.path)
         .chain(&song.lyrics)
         .map(|p| Entry {
             from: library.join(p),
-            name: name_in_zip(p),
+            name: name_in_zip(&named(&song.stem, p)),
+            made: false,
         })
         .collect()
 }
 
-/// The songs fitting chose to encode again, by their place, with their
-/// entries, and whether every encoding asked for succeeded.
+/// The rung fitting chose for each song, by its place, what was encoded,
+/// by song and rung, and whether every encoding asked for succeeded.
 struct Fitted {
-    entries: Vec<(usize, Vec<Entry>)>,
+    choice: Vec<usize>,
+    made: Made,
     ok: bool,
 }
 
@@ -340,76 +665,53 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
 /// estimate, and corrects the estimates not measured yet.
-// Each argument borrows a different part of the run; one struct would borrow it all at once.
-#[expect(clippy::too_many_arguments)]
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
-    manifest: &Manifest,
+    audio: &Audio,
     state: &State,
-    songs: &[Song],
-    files: &[Vec<Entry>],
+    (songs, held): (&[Song], &[Vec<Entry>]),
     (max, budget): (u64, u64),
     scratch: &Path,
     out: &mut W,
 ) -> Result<Fitted> {
     let mut items: Vec<Item> = songs
         .iter()
-        .zip(files)
-        .map(|(song, entries)| item(manifest, state, song, entries))
+        .zip(held)
+        .map(|(song, entries)| item(audio, state, song, entries))
         .collect();
     let estimates: Vec<Vec<u64>> = items
         .iter()
         .map(|i| i.rungs.iter().map(|r| r.bytes).collect())
         .collect();
     let mut ratios: Vec<Option<f64>> = vec![None; items.len()];
-    let mut made: BTreeMap<(usize, usize), Vec<Entry>> = BTreeMap::new();
+    let mut made = Made::new();
     let mut ok = true;
-    let mut passes = 0_usize;
+    let mut again = false;
     let mut measure = |items: &mut [Item], wanted: &fit::Wanted| -> Result<()> {
-        let due: Vec<(usize, usize)> = wanted.iter().copied().filter(|(_, c)| *c > 0).collect();
-        if due.is_empty() {
-            return Ok(());
-        }
-        crate::ui::info(
-            out,
-            &format!(
-                "Encoding {} song(s) at a lower bitrate to fit{}",
-                due.len(),
-                if passes > 0 { ", again" } else { "" }
-            ),
-        )?;
-        passes += 1;
-        let step = crate::progress::step("Encoding", Some(due.len() as u64));
-        let rendered = parallel::map(&due, parallel::builds(), |(n, c)| {
-            let _working = step.working(&crate::progress::label(&songs[*n].path));
-            encode(
-                runner,
-                &songs[*n],
-                items[*n].rungs[*c].format,
-                &scratch.join(format!("{n}-{c}")),
-            )
-        });
-        for ((n, c), result) in due.into_iter().zip(rendered) {
-            match result {
-                Ok(entries) => {
-                    let real = entries_size(&entries);
-                    let ratio = real as f64 / estimates[n][c].max(1) as f64;
-                    ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
-                    let rung = &mut items[n].rungs[c];
-                    rung.bytes = real;
+        let due: Vec<(usize, usize, Format)> = wanted
+            .iter()
+            .filter(|(n, c)| !items[*n].rungs[*c].known)
+            .map(|&(n, c)| (n, c, items[n].rungs[c].format))
+            .collect();
+        let results = make(runner, songs, &due, again, scratch, out)?;
+        again |= due.iter().any(|(_, c, _)| *c > 0);
+        for ((n, c, _), result) in due.into_iter().zip(results) {
+            let rung = &mut items[n].rungs[c];
+            if let Some(entries) = result {
+                let real = entries_size(&entries);
+                let ratio = real as f64 / estimates[n][c].max(1) as f64;
+                ratios[n] = Some(ratio.clamp(1.0 / MISS, MISS));
+                rung.bytes = real;
+                rung.sigma = 0.0;
+                rung.known = true;
+                made.insert((n, c), entries);
+            } else {
+                ok = false;
+                // A first rung not made is the library file, copied.
+                if c == 0 {
+                    rung.bytes = entries_size(&held[n]);
                     rung.sigma = 0.0;
                     rung.known = true;
-                    made.insert((n, c), entries);
-                }
-                Err(e) => {
-                    ok = false;
-                    crate::ui::warning(
-                        out,
-                        &format!(
-                            "Could not encode {}: {e:#}; it is copied as it is",
-                            relpath::show(&songs[n].path)
-                        ),
-                    )?;
                 }
             }
         }
@@ -430,14 +732,99 @@ fn fit_into<R: Runner, W: Write>(
             crate::ui::bytes(floor + (max - budget))
         ),
     };
-    let entries = fit
-        .choice
+    Ok(Fitted {
+        choice: fit.choice,
+        made,
+        ok,
+    })
+}
+
+/// Make each song the export's settings ask for anew into `scratch`, by
+/// its place and its first rung, with whether every one was made.
+fn anew<R: Runner, W: Write>(
+    runner: &R,
+    songs: &[Song],
+    scratch: &Path,
+    out: &mut W,
+) -> Result<(Made, bool)> {
+    let due: Vec<(usize, usize, Format)> = songs
         .iter()
         .enumerate()
-        .filter(|(_, c)| **c > 0)
-        .filter_map(|(n, c)| Some((n, made.remove(&(n, *c))?)))
+        .filter(|(_, s)| s.anew)
+        .map(|(n, s)| (n, 0, s.plan.format))
         .collect();
-    Ok(Fitted { entries, ok })
+    let results = make(runner, songs, &due, false, scratch, out)?;
+    let all = results.iter().all(Option::is_some);
+    let made = due
+        .into_iter()
+        .zip(results)
+        .filter_map(|((n, c, _), made)| Some(((n, c), made?)))
+        .collect();
+    Ok((made, all))
+}
+
+/// Encode each song of `due` at its rung's format into `scratch`: what
+/// each made, none where it could not be, which is said.
+fn make<R: Runner, W: Write>(
+    runner: &R,
+    songs: &[Song],
+    due: &[(usize, usize, Format)],
+    again: bool,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<Vec<Option<Vec<Entry>>>> {
+    if due.is_empty() {
+        return Ok(Vec::new());
+    }
+    let anew = due.iter().filter(|(_, c, _)| *c == 0).count();
+    if anew > 0 {
+        crate::ui::info(
+            out,
+            &format!("Encoding {anew} song(s) as the settings given ask"),
+        )?;
+    }
+    if due.len() > anew {
+        crate::ui::info(
+            out,
+            &format!(
+                "Encoding {} song(s) at a lower bitrate to fit{}",
+                due.len() - anew,
+                if again { ", again" } else { "" }
+            ),
+        )?;
+    }
+    let step = crate::progress::step("Encoding", Some(due.len() as u64));
+    let rendered = parallel::map(due, parallel::builds(), |(n, c, format)| {
+        let _working = step.working(&crate::progress::label(&songs[*n].path));
+        encode(
+            runner,
+            &songs[*n],
+            *format,
+            &scratch.join(format!("{n}-{c}")),
+        )
+    });
+    let mut made = Vec::with_capacity(due.len());
+    for ((n, c, _), result) in due.iter().zip(rendered) {
+        let shown = relpath::show(&songs[*n].path);
+        match result {
+            Ok((entries, problems)) => {
+                for problem in problems {
+                    crate::ui::warning(out, &format!("{shown}: {problem}"))?;
+                }
+                made.push(Some(entries));
+            }
+            Err(e) => {
+                let then = if *c == 0 {
+                    "it is exported as the library holds it"
+                } else {
+                    "it is not lowered"
+                };
+                crate::ui::warning(out, &format!("Could not encode {shown}: {e:#}; {then}"))?;
+                made.push(None);
+            }
+        }
+    }
+    Ok(made)
 }
 
 /// Scale each estimate not yet replaced by a real size by how far the
@@ -451,7 +838,7 @@ fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
     let mean = (seen.iter().sum::<f64>() / seen.len() as f64).exp();
     for (n, item) in items.iter_mut().enumerate() {
         let ratio = ratios[n].unwrap_or(mean);
-        for (c, rung) in item.rungs.iter_mut().enumerate().skip(1) {
+        for (c, rung) in item.rungs.iter_mut().enumerate() {
             if !rung.known {
                 let scaled = (estimates[n][c] as f64 * ratio) as u64;
                 rung.bytes = scaled;
@@ -460,49 +847,61 @@ fn correct(items: &mut [Item], estimates: &[Vec<u64>], ratios: &[Option<f64>]) {
     }
 }
 
-/// One song's ladder: its library file as it is, then each lower rung it
-/// may be encoded at, estimated.
-fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> Item {
-    let first = entries_size(entries);
+/// One song's ladder: its first rung, the library file as it is or its
+/// plan made anew, then each lower rung it may be encoded at, estimated.
+fn item(audio: &Audio, state: &State, song: &Song, held: &[Entry]) -> Item {
+    let facts = state.facts.get(&song.plan.audio.key);
+    let seconds = facts.and_then(Facts::length).filter(|s| *s > 0.0);
+    let (first, besides) = if song.anew {
+        let (extras, sidecar) = limit::besides_audio(&song.plan);
+        let name = |ext: &str| name_in_zip(&named(&song.stem, Path::new(&format!("_.{ext}"))));
+        let lyrics = if sidecar > 0 {
+            entry_size(&name("lrc"), sidecar)
+        } else {
+            0
+        };
+        let besides = extras + lyrics + entry_size(&name(song.plan.format.extension()), 0);
+        let stream = match (facts, seconds) {
+            (Some(f), Some(s)) => limit::estimate(song.plan.format, f, s).0 as u64,
+            _ => 0,
+        };
+        (stream + besides, besides)
+    } else {
+        let besides = extras(&held[0].from)
+            + held[1..]
+                .iter()
+                .map(|e| entry_size(&e.name, size_of(&e.from)))
+                .sum::<u64>()
+            + entry_size(&held[0].name, 0);
+        (entries_size(held), besides)
+    };
     let mut item = Item {
-        key: relpath::to_portable(&song.path),
+        key: relpath::to_portable(&song.stem),
         rungs: vec![Rung {
             format: song.plan.format,
             bytes: first,
             loss: 0.0,
             sigma: 0.0,
-            known: true,
+            known: !song.anew,
         }],
         churn: 0.0,
     };
-    let facts = state.facts.get(&song.plan.audio.key);
-    let (Some(_), Some(seconds), Some(audio)) = (
+    let (Some(_), Some(facts), Some(seconds), Some(shape)) = (
         &song.sources,
-        facts.and_then(crate::facts::Facts::length),
+        facts,
+        seconds,
         facts.and_then(|f| f.audio.as_ref()),
     ) else {
         return item;
     };
     let source = Source {
-        lossless: audio.is_lossless(),
-        bandwidth_hz: audio.quality.map(|q| q.bandwidth_hz),
+        lossless: shape.is_lossless(),
+        bandwidth_hz: shape.quality.map(|q| q.bandwidth_hz),
         seconds,
     };
     item.churn = CHURN_PER_MINUTE * units::minutes_of_seconds(seconds);
-    let besides = extras(&entries[0].from)
-        + entries[1..]
-            .iter()
-            .map(|e| entry_size(&e.name, size_of(&e.from)))
-            .sum::<u64>()
-        + entry_size(&entries[0].name, 0);
-    for format in fit::lower(song.plan.format, &audio.shape(), &manifest.settings.audio) {
-        let Format::Encode {
-            kbps: Some(kbps), ..
-        } = format
-        else {
-            continue;
-        };
-        let stream = (units::stream_bytes(f64::from(kbps), seconds) * (1.0 + CONTAINER)) as u64;
+    for format in fit::lower(song.plan.format, &shape.shape(), audio) {
+        let stream = limit::estimate(format, facts, seconds).0 as u64;
         let bytes = stream + besides;
         if bytes.saturating_mul(10) <= first.saturating_mul(9) {
             item.rungs.push(Rung {
@@ -517,37 +916,43 @@ fn item(manifest: &Manifest, state: &State, song: &Song, entries: &[Entry]) -> I
     item
 }
 
-/// Encode one song as `format` into `scratch`, returning its entries.
+/// Encode one song as `format` into `scratch`, returning its entries and
+/// what could not be added to it.
 fn encode<R: Runner>(
     runner: &R,
     song: &Song,
     format: Format,
     scratch: &Path,
-) -> Result<Vec<Entry>> {
+) -> Result<(Vec<Entry>, Vec<String>)> {
     let sources = song
         .sources
         .as_ref()
         .ok_or_else(|| anyhow!("its sources are gone"))?;
-    let plan = song.plan.with_format(format);
+    let plan = if format == song.plan.format {
+        song.plan.clone()
+    } else {
+        song.plan.with_format(format)
+    };
     let library = scratch.join("library");
-    let stem = song.path.with_extension("");
     let rendered = render::render(
         runner,
         &render::Job {
             plan: &plan,
-            stem: &stem,
+            stem: &song.stem,
             library: &library,
             sources,
             scratch: &scratch.join("work"),
         },
     )?;
-    Ok(std::iter::once(&rendered.audio)
+    let entries = std::iter::once(&rendered.audio)
         .chain(&rendered.lyrics)
         .map(|p| Entry {
             from: library.join(p),
             name: name_in_zip(p),
+            made: true,
         })
-        .collect())
+        .collect();
+    Ok((entries, rendered.problems))
 }
 
 /// `time` as a zip stamps an entry in MS-DOS time, in UTC to the even
@@ -612,6 +1017,11 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
             .with_context(|| format!("adding {} to {}", entry.name, path.display()))?;
         io::copy(&mut from, &mut zip)
             .with_context(|| format!("adding {} to {}", entry.name, path.display()))?;
+        // Closed first: Windows deletes no file held open.
+        drop(from);
+        if entry.made {
+            let _ = fs::remove_file(&entry.from);
+        }
     }
     zip.finish()
         .with_context(|| format!("finishing {}", path.display()))?
@@ -623,6 +1033,53 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
 mod tests {
     use super::*;
     use crate::codec::Codec;
+
+    #[test]
+    fn a_setting_is_a_table_s_key_and_its_value_toml_or_else_text() {
+        let set = setting("audio.lossy=mp3").unwrap();
+        assert_eq!((set.table.as_str(), set.key.as_str()), ("audio", "lossy"));
+        assert_eq!(set.value.as_str(), Some("mp3"));
+        let set = setting("library.template={{ title }}").unwrap();
+        assert_eq!(set.value.as_str(), Some("{{ title }}"));
+        assert_eq!(
+            setting("library.max_name_bytes=100")
+                .unwrap()
+                .value
+                .as_integer(),
+            Some(100)
+        );
+        assert!(setting("audio.codecs=[\"mp3\"]").unwrap().value.is_array());
+        for refused in [
+            "audio.lossy",
+            "lossy=mp3",
+            "quality.purity.weight=1",
+            "ytdlp.format=ba",
+            "library.path=/x",
+            "library.max_size=1GiB",
+        ] {
+            assert!(setting(refused).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_codec_given_writes_every_song_in_it_and_set_comes_last() {
+        let later = setting("audio.lossless=flac").unwrap();
+        let all = overrides(Some("mp3"), None, Some("embedded"), &[later]);
+        let named: Vec<String> = all
+            .iter()
+            .map(|o| format!("{}.{}={}", o.table, o.key, o.value.to_string().trim()))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                "audio.codecs=[\"mp3\"]",
+                "audio.lossy=\"mp3\"",
+                "audio.lossless=\"mp3\"",
+                "library.lyrics=\"embedded\"",
+                "audio.lossless=\"flac\"",
+            ]
+        );
+    }
 
     #[test]
     fn an_entry_is_stamped_with_its_file_s_time() {
@@ -644,6 +1101,7 @@ mod tests {
         let entry = Entry {
             from: song,
             name: "library/A/song.opus".into(),
+            made: false,
         };
         write_zip(&zip, std::iter::once(&entry)).unwrap();
         let mut archive = zip::ZipArchive::new(File::open(&zip).unwrap()).unwrap();

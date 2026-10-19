@@ -396,6 +396,17 @@ song with its lyrics under `library/`, at its path in the library. A
 song not written yet is not in it, so `sync` first. `-o` may name a
 folder, which gets `muman.zip`.
 
+The library's settings may be changed for the export alone: any setting
+of `[library]`, `[audio]` and `[loudness]` with `--set table.key=value`,
+and the commonest with `--codec`, `--template` and `--lyrics`. The zip
+then holds the library a sync under those settings would write: each
+song the change leaves alone is copied, and every other is made again
+from its sources. A song changed since muman wrote it, or whose sources
+are gone, goes in as the library holds it, and the export says so and
+exits with 4. Where the library lives, `max_size` and `block_size` are
+not the export's to change, nor `[quality]`, nor loudness when the song
+list's `[loudness] mode` measures none.
+
 `--max-size` caps the zip, such as `--max-size 32GiB` for a card, as
 `[library] max_size` caps the library.
 Songs that do not fit are encoded again from their sources at lower

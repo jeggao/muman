@@ -7,7 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`export` writes the library under other settings.** `--set
+  table.key=value` changes any setting of `[library]`, `[audio]` or
+  `[loudness]` for the export alone, and `--codec`, `--template` and
+  `--lyrics` change the commonest: `--codec mp3` writes every song in
+  MP3. A song the change leaves alone is copied from the library; every
+  other is made again from its sources, as a sync under those settings
+  would write it.
+
 ### Changed
+
+- **`export` takes less room while it writes.** Each song encoded for
+  the zip is deleted from the scratch folder once it is in.
 
 - **yt-dlp fetches a video's audio alone.** `[ytdlp] format` is
   `"ba/b"`: muman never read the video itself, which only took room in
