@@ -48,15 +48,19 @@ impl DiffInfo {
     }
 }
 
-/// Build per-file diff info by shelling out to `git`.
+/// Build per-file diff info by shelling out to `git`: the file as the
+/// working copy holds it, which is what the rules read, against the
+/// commit the branch left `base` at. Diffing a commit instead would number
+/// lines the working copy has since moved.
 pub fn for_file(repo_root: &Path, base: &str, path: &Path) -> Result<DiffInfo> {
     let rel = path
         .strip_prefix(repo_root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/");
-    let hunks = hunks(repo_root, base, &rel)?;
-    let base_file = base_blob(repo_root, base, &rel)?;
+    let from = merge_base(repo_root, base)?;
+    let hunks = hunks(repo_root, &from, &rel)?;
+    let base_file = base_blob(repo_root, &from, &rel)?;
     Ok(DiffInfo {
         changed_lines: Some(changed_of(&hunks)),
         base_file,
@@ -64,18 +68,37 @@ pub fn for_file(repo_root: &Path, base: &str, path: &Path) -> Result<DiffInfo> {
     })
 }
 
-fn hunks(repo_root: &Path, base: &str, rel: &str) -> Result<Vec<Hunk>> {
+/// The commit `HEAD` branched from `base` at, or `base` itself when git
+/// finds none.
+fn merge_base(repo_root: &Path, base: &str) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .arg("merge-base")
+        .arg(base)
+        .arg("HEAD")
+        .output()
+        .with_context(|| format!("git merge-base {base} HEAD"))?;
+    Ok(if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        base.to_string()
+    })
+}
+
+/// The hunks that make the working copy's `rel` of the one at `from`.
+fn hunks(repo_root: &Path, from: &str, rel: &str) -> Result<Vec<Hunk>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .arg("diff")
         .arg("--no-color")
         .arg("--unified=0")
-        .arg(format!("{base}...HEAD"))
+        .arg(from)
         .arg("--")
         .arg(rel)
         .output()
-        .with_context(|| format!("git diff {base} -- {rel}"))?;
+        .with_context(|| format!("git diff {from} -- {rel}"))?;
     // If the file is untracked or git fails, fall back to all-changed (empty
     // set); we treat the file as fully new in the worktree below.
     if !output.status.success() {
@@ -126,29 +149,14 @@ pub fn parse_hunks(diff: &str) -> Vec<Hunk> {
         .collect()
 }
 
-fn base_blob(repo_root: &Path, base: &str, rel: &str) -> Result<Option<String>> {
-    let merge_base = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("merge-base")
-        .arg(base)
-        .arg("HEAD")
-        .output()
-        .with_context(|| format!("git merge-base {base} HEAD"))?;
-    let revision = if merge_base.status.success() {
-        String::from_utf8_lossy(&merge_base.stdout)
-            .trim()
-            .to_string()
-    } else {
-        base.to_string()
-    };
+fn base_blob(repo_root: &Path, from: &str, rel: &str) -> Result<Option<String>> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .arg("show")
-        .arg(format!("{revision}:{rel}"))
+        .arg(format!("{from}:{rel}"))
         .output()
-        .with_context(|| format!("git show {revision}:{rel}"))?;
+        .with_context(|| format!("git show {from}:{rel}"))?;
     if !output.status.success() {
         return Ok(None);
     }
@@ -201,6 +209,50 @@ mod tests {
             (16, 16),
             "five added, one more taken out"
         );
+    }
+
+    /// Run git in `dir` with an identity of its own, on any platform's
+    /// line endings alike.
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=Marlo Venn",
+                "-c",
+                "user.email=marlo@example.invalid",
+                "-c",
+                "core.autocrlf=false",
+            ])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn lines_are_numbered_as_the_working_copy_holds_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("a.rs");
+        git(root, &["init", "-q"]);
+        std::fs::write(&file, "fn a() {}\n// why\nfn b() {}\n").unwrap();
+        git(root, &["add", "a.rs"]);
+        git(root, &["commit", "-q", "-m", "base"]);
+        git(root, &["tag", "base"]);
+        std::fs::write(&file, "fn a() {}\n// why\nfn b() {}\nfn c() {}\n").unwrap();
+        git(root, &["commit", "-q", "-am", "head"]);
+        std::fs::write(
+            &file,
+            "fn x() {}\nfn y() {}\nfn a() {}\n// why\nfn b() {}\nfn c() {}\n",
+        )
+        .unwrap();
+        let info = for_file(root, "base", Path::new("a.rs")).unwrap();
+        let mut changed: Vec<usize> = info.changed_lines.clone().unwrap().into_iter().collect();
+        changed.sort_unstable();
+        assert_eq!(changed, [1, 2, 6], "the comment, moved down, is not one");
+        assert_eq!(info.base_span(4), (2, 2));
     }
 
     #[test]
