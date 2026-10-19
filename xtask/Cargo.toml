@@ -13,5 +13,8 @@ clap-markdown = "=0.1.5"
 muman = { path = ".." }
 regex = "1"
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true
