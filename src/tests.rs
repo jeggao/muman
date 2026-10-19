@@ -2054,6 +2054,117 @@ fn export_fits_songs_made_anew_into_its_size() {
     assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.opus"));
 }
 
+/// Every file under `dir`, by its path there with `/`, with its bytes.
+fn files_under(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                let rel = path.strip_prefix(dir).unwrap();
+                files.insert(
+                    crate::relpath::to_portable(rel),
+                    std::fs::read(&path).unwrap(),
+                );
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn export_writes_into_a_folder_what_the_zip_holds() {
+    let (s, fake) = exported_home("200.0");
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(&fake, &["export", "-o", &zip.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let folder = s.dir.path().join("out");
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "--folder", "-o", &folder.to_string_lossy()],
+    );
+    assert!(ok, "{text}");
+    assert_eq!(files_under(&folder), unzip(&zip));
+    let time = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+    assert_eq!(
+        time(&folder.join("library/Artist/Record/02 Song.flac")),
+        time(&s.dir.path().join("lib/Artist/Record/02 Song.flac"))
+    );
+    let beside: Vec<_> = std::fs::read_dir(s.dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".muman-scratch-"))
+        .collect();
+    assert!(beside.is_empty(), "{beside:?}");
+}
+
+#[test]
+fn export_fills_an_empty_folder_and_refuses_one_holding_anything() {
+    let (s, fake) = exported_home("0.05");
+    let folder = s.dir.path().join("card");
+    std::fs::create_dir_all(&folder).unwrap();
+    let args = ["export", "--folder", "--codec", "opus", "-o"];
+    let (ok, text) = s.run(&fake, &[&args[..], &[&*folder.to_string_lossy()]].concat());
+    assert!(ok, "{text}");
+    assert!(folder.join("library/Artist/Record/02 Song.opus").is_file());
+    let before = files_under(&folder);
+    let e = run_with(
+        &s.job(&[&args[..], &[&*folder.to_string_lossy()]].concat()),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("is not empty"), "{e:#}");
+    assert_eq!(files_under(&folder), before);
+}
+
+#[test]
+fn a_folder_s_files_count_in_whole_blocks_and_a_zip_s_in_none() {
+    let (s, fake) = exported_home("0.05");
+    let folder = s.dir.path().join("card");
+    let block = ["--set", "library.block_size=1MiB"];
+    let e = run_with(
+        &s.job(
+            &[
+                &["export", "--folder", "--max-size", "2MiB", "-o"],
+                &[&*folder.to_string_lossy()][..],
+                &block[..],
+            ]
+            .concat(),
+        ),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("cannot hold"), "{e:#}");
+    assert!(!folder.exists());
+    let zip = s.dir.path().join("out.zip");
+    let e = run_with(
+        &s.job(&[&["export", "-o", &*zip.to_string_lossy()][..], &block[..]].concat()),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(e.downcast_ref::<crate::cli::Invalid>().is_some(), "{e:#}");
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "--max-size", "2MiB", "-o", &zip.to_string_lossy()],
+    );
+    assert!(ok, "{text}");
+}
+
 #[test]
 fn an_export_given_a_setting_that_does_not_read_writes_nothing() {
     let (s, fake) = exported_home("0.05");

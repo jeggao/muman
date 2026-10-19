@@ -39,7 +39,7 @@ Exit codes:
 * `purge` — Delete fetched sources and lookup records no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing, unreadable or damaged
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
-* `export` — Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits. The library and the song list are left as they are
+* `export` — Write the song list and the library, as the last run left them, into one zip, or with --folder into a new folder: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the export fits. The library and the song list are left as they are
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
@@ -334,7 +334,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 ### `muman export`
 
-Write the song list and the library, as the last run left them, into one zip: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the zip fits. The library and the song list are left as they are
+Write the song list and the library, as the last run left them, into one zip, or with --folder into a new folder: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the export fits. The library and the song list are left as they are
 
 **Usage:** `muman export [OPTIONS]`
 
@@ -352,10 +352,9 @@ written as the library holds it, and said.
 
 **Options:**
 
-* `-o`, `--output <PATH>` — The zip to write, or a folder to write muman.zip in
-
-  Default value: `muman.zip`
-* `--max-size <SIZE>` — The most the zip may take, such as 4GiB or 700MB
+* `-o`, `--output <PATH>` — The zip to write, or a folder to write muman.zip in; with --folder, the folder to make, new or empty [default: muman.zip, or muman with --folder]
+* `--folder` — Write a folder holding what the zip would, rather than the zip
+* `--max-size <SIZE>` — The most the export may take, such as 4GiB or 700MB; in a folder, each file counts whole blocks of `[library] block_size`
 * `--codec <CODEC>` — Write every song in this lossy codec, lossless songs too: sets `[audio] codecs`, `lossy` and `lossless` to it
 
   Possible values: `opus`, `vorbis`, `aac`, `mp3`

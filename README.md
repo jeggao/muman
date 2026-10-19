@@ -129,7 +129,7 @@ muman undo
 | `check` | Compare the library and the sources with what muman recorded |
 | `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
-| `export` | Write the song list and the library into a zip, under other settings or fitted to a size if given |
+| `export` | Write the song list and the library into a zip or a folder, under other settings or fitted to a size if given |
 | `info` | Count what the library holds and what could be better, from what earlier runs measured |
 | `list` | List the songs a query matches |
 | `purge` | Delete fetched sources and lookup records no song uses |
