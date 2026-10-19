@@ -1,7 +1,7 @@
 //! The subprocess seam: every yt-dlp, ffmpeg and ffprobe call goes
 //! through [`Runner`], so tests drive the pipeline without spawning one;
 //! [`System`] is the one that spawns, with each tool as
-//! [`crate::tools`] finds it.
+//! [`crate::tools`] finds it from the song list's `[tools.*]`.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -11,7 +11,7 @@ use std::sync::{OnceLock, mpsc};
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::tools::{self, Found, Status, Tool, ToolError};
+use crate::tools::{self, Found, Named, Status, Tool, ToolError};
 
 /// One line a streamed program wrote, without its line ending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,12 +68,29 @@ pub trait Runner: Sync {
 /// The production runner. Commands name a tool by its bare name; each
 /// is found and its version read the first time it runs
 /// ([`crate::tools`]), so a run that never fetches never needs yt-dlp.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct System {
+    /// Each of [`tools::TOOLS`] as the song list names it.
+    named: [Named; 3],
     found: [OnceLock<Result<Found, ToolError>>; 3],
 }
 
+impl Default for System {
+    fn default() -> Self {
+        Self::new(tools::TOOLS.each_ref().map(Named::default_for))
+    }
+}
+
 impl System {
+    /// Each of [`tools::TOOLS`] run as `named` names it, in that order.
+    #[must_use]
+    pub fn new(named: [Named; 3]) -> Self {
+        Self {
+            named,
+            found: Default::default(),
+        }
+    }
+
     /// Fail now, with [`ToolError`], when `name` cannot be found or is
     /// below its floor, so a run that needs it stops before its first
     /// song rather than failing every one.
@@ -89,12 +106,7 @@ impl System {
     fn tool(&self, index: usize) -> Result<&Found, ToolError> {
         let tool = &tools::TOOLS[index];
         self.found[index]
-            .get_or_init(|| {
-                let command = tools::find(tool, std::env::var_os(tool.variable))
-                    .ok_or(ToolError::Missing { tool })?;
-                let printed = version_of(tool, &command)?;
-                tools::accept(tool, command, &printed)
-            })
+            .get_or_init(|| locate(tool, std::env::var_os(tool.variable), &self.named[index]))
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -128,6 +140,29 @@ fn python_utf8(command: &mut Command) {
     command
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
+}
+
+/// `tool` as `variable`, this machine's, names it, else as `named` does,
+/// with its version read and, where `named` asks, checked.
+fn locate(
+    tool: &'static Tool,
+    variable: Option<OsString>,
+    named: &Named,
+) -> Result<Found, ToolError> {
+    let variable = variable.filter(|v| !v.is_empty());
+    let missing = ToolError::Missing {
+        tool,
+        named: named.other_than(tool).filter(|_| variable.is_none()),
+    };
+    let command = tools::find(variable, named).ok_or(missing)?;
+    match version_of(tool, &command) {
+        Ok(printed) => tools::accept(tool, command, &printed, named.version_check),
+        Err(_) if !named.version_check => Ok(Found {
+            command,
+            version: None,
+        }),
+        Err(e) => Err(e),
+    }
 }
 
 /// What `tool`, started by `command`, prints for its version flag.
@@ -396,6 +431,47 @@ mod tests {
         let err = version_of(tool, &[file.clone().into_os_string()]).unwrap_err();
         assert!(matches!(err, ToolError::Unusable { .. }), "{err}");
         assert!(err.to_string().contains("MUMAN_FFMPEG"));
+    }
+
+    #[test]
+    fn a_program_whose_version_is_not_checked_runs_though_it_prints_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir
+            .path()
+            .join(format!("ffmpeg-fork{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&file, "not a program").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let tool = tools::tool("ffmpeg").unwrap();
+        let mut named = Named {
+            command: vec![file.clone().into_os_string()],
+            version_check: false,
+        };
+        let found = locate(tool, None, &named).unwrap();
+        assert_eq!(
+            (found.command, found.version),
+            (vec![file.into_os_string()], None)
+        );
+        named.version_check = true;
+        let err = locate(tool, None, &named).unwrap_err();
+        assert!(matches!(err, ToolError::Unusable { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_program_the_song_list_names_and_no_machine_has_is_named_in_the_error() {
+        let tool = tools::tool("yt-dlp").unwrap();
+        let named = Named {
+            command: vec!["muman-no-such-fork".into()],
+            version_check: true,
+        };
+        let err = locate(tool, None, &named).unwrap_err().to_string();
+        assert!(
+            err.contains("[tools.yt-dlp] command names muman-no-such-fork"),
+            "{err}"
+        );
     }
 
     #[test]

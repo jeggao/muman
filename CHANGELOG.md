@@ -20,6 +20,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   empty folder, for a card or a player. It is made beside the folder and
   renamed into place, and `--max-size` counts each file in whole blocks
   of `[library] block_size`.
+- **The song list names the programs muman runs.** `[tools.ffmpeg]`,
+  `[tools.ffprobe]` and `[tools.yt-dlp]` each take a `command`, a name,
+  a path or a program with its arguments, so a fork that takes the same
+  options runs in a tool's place on every machine; `MUMAN_FFMPEG`,
+  `MUMAN_FFPROBE` and `MUMAN_YT_DLP` still override it on one.
+  `version_check = false` runs a release older than muman asks for, or
+  one numbered its own way.
+- **`[ytdlp] extractor_args`** sets yt-dlp's `--extractor-args` for each
+  fetch, by extractor, in place of the ones muman passed YouTube as
+  fixed.
 
 ### Changed
 
@@ -39,6 +49,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **These three are settings edition 3.** A song list still at an old
   default keeps it; `sync`, `status` and `check` name it, and `muman
   sync --update-defaults` moves it. A value you set stays.
+- **`[ytdlp] args` reach every yt-dlp run**: the listing of a URL, the
+  YouTube Music lookups and the audio a comparison downloads, as well as
+  the fetch, so a login or a JavaScript runtime given there serves them
+  all.
+- **With `[ytdlp] plugins = false`, YouTube is asked with its
+  `web_music` client too**, as `extractor_args` says; remove it there
+  to ask without.
 
 ## [0.5.1] - 2026-10-18
 

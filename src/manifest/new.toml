@@ -139,10 +139,33 @@ sub_langs = "all,-live_chat"
 concurrent_fragments = 4
 # muman's postprocessors: no generated captions, square album art.
 plugins = true
-# More arguments, such as ["--cookies-from-browser", "firefox"].
+# More arguments for every yt-dlp run, listing and searching as well as
+# fetching, such as ["--cookies-from-browser", "firefox"] or
+# ["--js-runtimes", "node"].
 args = []
+# yt-dlp's --extractor-args for each fetch, by extractor. YouTube's
+# machine-translated captions run to hundreds a video and trip its rate
+# limit; only its web_music client lists a track's square album art.
+extractor_args = { youtube = "skip=translated_subs;player_client=default,web_music" }
 # How long an unfinished download is kept to resume.
 keep_partial = "14 days"
+
+# The programs muman runs. `command` is a name, looked for beside muman
+# and then on PATH, or a path: absolute, ~/... or relative to this file's
+# folder; then any arguments, as ["python3", "-m", "yt_dlp"]. A fork that
+# takes the same options runs in its place. MUMAN_FFMPEG, MUMAN_FFPROBE
+# and MUMAN_YT_DLP override `command` on one machine. `version_check =
+# false` runs a release older than muman asks for, or one numbered its
+# own way.
+[tools.ffmpeg]
+command = ["ffmpeg"]
+version_check = true
+[tools.ffprobe]
+command = ["ffprobe"]
+version_check = true
+[tools.yt-dlp]
+command = ["yt-dlp"]
+version_check = true
 
 [history]
 # Changing runs `undo` can put back, and the most their replaced files

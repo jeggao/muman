@@ -2,13 +2,17 @@
 //! found, how its version is read, and the oldest release of each that
 //! takes every option muman passes.
 //!
-//! A tool is looked for, in order:
+//! Which program fills each role is the song list's `[tools.*]`
+//! ([`Named`]), so a fork, or a wrapper that speaks a tool's options, is
+//! named once for every machine the list is used on. A tool is looked
+//! for, in order:
 //!
 //! 1. In its variable (`MUMAN_FFMPEG`, `MUMAN_FFPROBE`, `MUMAN_YT_DLP`):
-//!    a path or a name, and for yt-dlp a whole command such as
-//!    `python -m yt_dlp`.
-//! 1. Beside the muman executable, as a bundle ships them.
-//! 1. On `PATH`, with Windows' `PATHEXT` extensions such as `.cmd`.
+//!    a path or a name, or a whole command such as `python -m yt_dlp`.
+//!    The variable is this machine's, so it overrides the song list.
+//! 1. As the song list's `command` names it: a name beside the muman
+//!    executable, as a bundle ships them, then on `PATH`, with Windows'
+//!    `PATHEXT` extensions such as `.cmd`; a path as it is.
 //!
 //! # Floors
 //!
@@ -24,8 +28,13 @@
 //! `N-118000-g1a2b3c4`, is taken as new enough: it is newer than any
 //! release. Reading yt-dlp's version is a Python start, up to a second,
 //! once in each run that fetches.
+//!
+//! A fork may number its releases its own way, and one dated as yt-dlp
+//! is may still lack an option; `version_check = false` runs it whatever
+//! it prints for its version, or if it prints none, and each option it
+//! lacks fails where it is passed.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::Path;
 
@@ -126,6 +135,38 @@ impl fmt::Display for Version {
     }
 }
 
+/// A tool as the song list's `[tools.*]` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    /// The program, a name or a whole path, then its arguments.
+    pub command: Vec<OsString>,
+    /// Refuse a release below the tool's floor.
+    pub version_check: bool,
+}
+
+impl Named {
+    /// `tool` as a song list that sets nothing for it names it.
+    #[must_use]
+    pub fn default_for(tool: &Tool) -> Self {
+        Self {
+            command: vec![tool.name.into()],
+            version_check: true,
+        }
+    }
+
+    /// The command as the song list writes it, when it is not the tool's
+    /// own name.
+    pub(crate) fn other_than(&self, tool: &Tool) -> Option<String> {
+        (self.command != [tool.name]).then(|| {
+            self.command
+                .iter()
+                .map(|w| w.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    }
+}
+
 /// A tool as it was found: how it is started, and its version where it
 /// read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,8 +178,12 @@ pub struct Found {
 /// Why a tool cannot be run; `run` exits 2 on any of these.
 #[derive(Debug, Clone)]
 pub enum ToolError {
-    /// Not found in its variable, beside muman or on `PATH`.
-    Missing { tool: &'static Tool },
+    /// Not found in its variable, beside muman or on `PATH`; `named` is
+    /// the song list's command where it is not the tool's own name.
+    Missing {
+        tool: &'static Tool,
+        named: Option<String>,
+    },
     /// Found, but its version run failed: a shim whose Python is gone, a
     /// file that is no program.
     Unusable {
@@ -165,21 +210,30 @@ impl ToolError {
 impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Missing { tool } => {
-                match std::env::var_os(tool.variable).filter(|v| !v.is_empty()) {
-                    Some(named) => write!(
+            Self::Missing { tool, named } => {
+                match (
+                    std::env::var_os(tool.variable).filter(|v| !v.is_empty()),
+                    named,
+                ) {
+                    (Some(value), _) => write!(
                         f,
                         "{} names {}, which is no program found: give its path, or unset {} \
-                         to find {} on the PATH",
+                         to find {} as the song list names it",
                         tool.variable,
-                        named.to_string_lossy(),
+                        value.to_string_lossy(),
                         tool.variable,
                         tool.name
                     ),
-                    None => write!(
+                    (None, Some(named)) => write!(
                         f,
-                        "{} not found: install it, or name it in {}",
+                        "[tools.{}] command names {named}, which is no program found: install \
+                         it, or name another there or in {}",
                         tool.name, tool.variable
+                    ),
+                    (None, None) => write!(
+                        f,
+                        "{} not found: install it, or name it in [tools.{}] command or {}",
+                        tool.name, tool.name, tool.variable
                     ),
                 }
             }
@@ -192,15 +246,25 @@ impl fmt::Display for ToolError {
                 "{program} ({}) does not run: {error}; install it again, or name another in {}",
                 tool.name, tool.variable
             ),
-            Self::Old { tool, found } => write!(
-                f,
-                "{} {found} is older than {}, the oldest muman runs: {}; or name a newer one \
-                 in {}",
-                tool.name,
-                tool.floor,
-                Self::newer(tool),
-                tool.variable
-            ),
+            Self::Old { tool, found } => {
+                write!(
+                    f,
+                    "{} {found} is older than {}, the oldest muman runs: {}; or name a newer \
+                     one in {}",
+                    tool.name,
+                    tool.floor,
+                    Self::newer(tool),
+                    tool.variable
+                )?;
+                if found.is_date() != tool.floor.is_date() {
+                    write!(
+                        f,
+                        "; a fork numbered its own way runs with [tools.{}] version_check = false",
+                        tool.name
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -214,23 +278,25 @@ pub struct Status {
     pub found: Result<Found, ToolError>,
 }
 
-/// `tool` with the version its version run printed, or [`ToolError::Old`].
+/// `tool` with the version its version run printed, or
+/// [`ToolError::Old`] when `check` and below its floor.
 pub fn accept(
     tool: &'static Tool,
     command: Vec<OsString>,
     printed: &str,
+    check: bool,
 ) -> Result<Found, ToolError> {
     let version = Version::parse(printed);
     match version {
-        Some(found) if found < tool.floor => Err(ToolError::Old { tool, found }),
+        Some(found) if check && found < tool.floor => Err(ToolError::Old { tool, found }),
         _ => Ok(Found { command, version }),
     }
 }
 
-/// How `tool` is started: from `variable`'s value when set, else beside
-/// the running executable, else from `PATH`.
+/// How a tool is started: from `variable`'s value when set, else as
+/// `named` names it.
 #[must_use]
-pub fn find(tool: &Tool, variable: Option<OsString>) -> Option<Vec<OsString>> {
+pub fn find(variable: Option<OsString>, named: &Named) -> Option<Vec<OsString>> {
     if let Some(value) = variable.filter(|v| !v.is_empty()) {
         // A path or name first, whatever it holds: `C:\Tools\ffmpeg.exe`
         // and `/Applications/My Tools/ffmpeg` are one word each.
@@ -252,13 +318,28 @@ pub fn find(tool: &Tool, variable: Option<OsString>) -> Option<Vec<OsString>> {
                 .collect(),
         );
     }
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .and_then(|dir| which::which_in(tool.name, Some(dir), ".").ok());
-    beside
-        .or_else(|| which::which(tool.name).ok())
-        .map(|p| vec![p.into_os_string()])
+    let (first, rest) = named.command.split_first()?;
+    let program = if is_name(first) {
+        let beside = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            .and_then(|dir| which::which_in(first, Some(dir), ".").ok());
+        beside.or_else(|| which::which(first).ok())?
+    } else {
+        which::which(first).ok()?
+    };
+    Some(
+        std::iter::once(program.into_os_string())
+            .chain(rest.iter().cloned())
+            .collect(),
+    )
+}
+
+/// Whether `word` is a program's bare name, to look for, rather than a
+/// path to it.
+pub(crate) fn is_name(word: &OsStr) -> bool {
+    let mut parts = Path::new(word).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
 }
 
 /// `text` split into words the way Windows programs read a command line:
@@ -326,15 +407,22 @@ mod tests {
             ffmpeg(),
             vec!["ffmpeg".into()],
             "ffmpeg version 4.4.2-0ubuntu0.22.04.1",
+            true,
         );
         assert!(matches!(old, Err(ToolError::Old { found, .. }) if found.to_string() == "4.4.2"));
         let text = old.unwrap_err().to_string();
         assert!(text.contains("4.4.2") && text.contains("5.1") && text.contains("MUMAN_FFMPEG"));
-        let old = accept(ytdlp(), vec!["yt-dlp".into()], "2025.02.19");
+        let old = accept(ytdlp(), vec!["yt-dlp".into()], "2025.02.19", true);
         assert!(old.unwrap_err().to_string().contains("yt-dlp -U"));
-        let fine = accept(ytdlp(), vec!["yt-dlp".into()], "2025.03.21").unwrap();
+        let fine = accept(ytdlp(), vec!["yt-dlp".into()], "2025.03.21", true).unwrap();
         assert_eq!(fine.version.unwrap().to_string(), "2025.03.21");
-        let unread = accept(ffmpeg(), vec!["ffmpeg".into()], "ffmpeg version N-1-gabc").unwrap();
+        let unread = accept(
+            ffmpeg(),
+            vec!["ffmpeg".into()],
+            "ffmpeg version N-1-gabc",
+            true,
+        )
+        .unwrap();
         assert_eq!(unread.version, None);
     }
 
@@ -342,7 +430,7 @@ mod tests {
     fn a_variable_names_a_whole_command() {
         let exe = std::env::current_exe().unwrap();
         let line = format!("\"{}\" -m yt_dlp", exe.display());
-        let found = find(ytdlp(), Some(line.into())).unwrap();
+        let found = find(Some(line.into()), &Named::default_for(ytdlp())).unwrap();
         assert_eq!(found.len(), 3);
         assert_eq!(found[1], "-m");
     }
@@ -355,7 +443,7 @@ mod tests {
         let exe = std::env::current_exe().unwrap();
         let copy = folder.join(exe.file_name().unwrap());
         std::fs::copy(&exe, &copy).unwrap();
-        let found = find(ffmpeg(), Some(copy.clone().into())).unwrap();
+        let found = find(Some(copy.clone().into()), &Named::default_for(ffmpeg())).unwrap();
         assert_eq!(found, [copy.into_os_string()]);
     }
 
@@ -369,12 +457,58 @@ mod tests {
 
     #[test]
     fn a_tool_found_nowhere_is_none() {
-        assert!(find(ffmpeg(), Some("muman-no-such-tool".into())).is_none());
+        let named = Named::default_for(ffmpeg());
+        assert!(find(Some("muman-no-such-tool".into()), &named).is_none());
+        let named = Named {
+            command: vec!["muman-no-such-tool".into()],
+            version_check: true,
+        };
+        assert!(find(None, &named).is_none());
     }
 
     #[test]
     fn a_missing_tool_says_which_variable_names_it() {
-        let missing = ToolError::Missing { tool: ffmpeg() };
-        assert!(missing.to_string().contains("MUMAN_FFMPEG"));
+        let missing = ToolError::Missing {
+            tool: ffmpeg(),
+            named: None,
+        };
+        let text = missing.to_string();
+        assert!(text.contains("MUMAN_FFMPEG") && text.contains("[tools.ffmpeg]"));
+    }
+
+    #[test]
+    fn the_song_list_names_a_program_by_path_with_its_arguments() {
+        let exe = std::env::current_exe().unwrap();
+        let named = Named {
+            command: vec![exe.clone().into(), "-m".into(), "yt_dlp".into()],
+            version_check: true,
+        };
+        let found = find(None, &named).unwrap();
+        assert_eq!(found, [exe.into_os_string(), "-m".into(), "yt_dlp".into()]);
+        assert_eq!(
+            named.other_than(ytdlp()).map(|c| c.ends_with("-m yt_dlp")),
+            Some(true)
+        );
+        assert_eq!(Named::default_for(ytdlp()).other_than(ytdlp()), None);
+    }
+
+    #[test]
+    fn a_bare_name_is_looked_for_and_a_path_is_not() {
+        assert!(is_name(OsStr::new("yt-dlp")));
+        assert!(!is_name(OsStr::new("./yt-dlp")));
+        assert!(!is_name(Path::new("tools").join("yt-dlp").as_os_str()));
+    }
+
+    #[test]
+    fn a_tool_whose_version_is_not_checked_runs_below_the_floor() {
+        let fork = accept(ytdlp(), vec!["yt-dlp".into()], "1.4.0", false).unwrap();
+        assert_eq!(fork.version.unwrap().to_string(), "1.4");
+        let refused = accept(ytdlp(), vec!["yt-dlp".into()], "1.4.0", true).unwrap_err();
+        assert!(
+            refused.to_string().contains("version_check = false"),
+            "{refused}"
+        );
+        let old = accept(ytdlp(), vec!["yt-dlp".into()], "2025.02.19", true).unwrap_err();
+        assert!(!old.to_string().contains("version_check"));
     }
 }
