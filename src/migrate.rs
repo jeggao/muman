@@ -53,30 +53,40 @@ use crate::settings::{TABLES, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 2;
+pub const EDITION: i64 = 3;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
 pub const FIRST: i64 = 1;
 
 /// Every edition since the first, oldest first.
-pub const HISTORY: &[Edition] = &[Edition {
-    number: 2,
-    steps: &[
-        rename("audio", "opus_kbps", "opus_bitrate", kbps),
-        rename("audio", "opus_surround_kbps", "opus_surround_bitrate", kbps),
-        rename("audio", "vorbis_kbps", "vorbis_bitrate", kbps),
-        rename("audio", "aac_kbps", "aac_bitrate", kbps),
-        rename("audio", "mp3_kbps", "mp3_bitrate", kbps),
-        rename("audio", "min_kbps", "min_bitrate", kbps),
-        rename("quality.purity", "step_ms", "step", ms),
-        rename("quality.bandwidth", "step_hz", "step", hz),
-        rename("ytdlp", "partial_days", "keep_partial", days),
-        rename("history", "max_mib", "max_size", mib),
-        rename("providers.*", "recheck_days", "recheck", days),
-        rename("song", "lyrics_offset_ms", "lyrics_offset", ms),
-    ],
-}];
+pub const HISTORY: &[Edition] = &[
+    Edition {
+        number: 2,
+        steps: &[
+            rename("audio", "opus_kbps", "opus_bitrate", kbps),
+            rename("audio", "opus_surround_kbps", "opus_surround_bitrate", kbps),
+            rename("audio", "vorbis_kbps", "vorbis_bitrate", kbps),
+            rename("audio", "aac_kbps", "aac_bitrate", kbps),
+            rename("audio", "mp3_kbps", "mp3_bitrate", kbps),
+            rename("audio", "min_kbps", "min_bitrate", kbps),
+            rename("quality.purity", "step_ms", "step", ms),
+            rename("quality.bandwidth", "step_hz", "step", hz),
+            rename("ytdlp", "partial_days", "keep_partial", days),
+            rename("history", "max_mib", "max_size", mib),
+            rename("providers.*", "recheck_days", "recheck", days),
+            rename("song", "lyrics_offset_ms", "lyrics_offset", ms),
+        ],
+    },
+    Edition {
+        number: 3,
+        steps: &[
+            changed("audio.codecs", r#"["opus", "flac"]"#),
+            changed("quality.stereo.weight", "5"),
+            changed("ytdlp.format", r#""bv*+ba/b""#),
+        ],
+    },
+];
 
 /// The editions this muman knows.
 pub const EDITIONS: Editions = Editions {
@@ -138,6 +148,10 @@ const fn rename(
         new,
         convert,
     })
+}
+
+const fn changed(key: &'static str, was: &'static str) -> Step {
+    Step::Default(Change { key, was })
 }
 
 /// A whole number of `unit`, written as the new name takes it.

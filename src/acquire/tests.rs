@@ -361,18 +361,18 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
     };
     assert_eq!(
         format_of("vid00000009").as_deref(),
-        Some("399+251/bv*+251/251/bv*+ba/b"),
+        Some("399+251/bv*+251/251/ba/b"),
         "YouTube's own IDs first"
     );
-    assert_eq!(format_of("vid00000010").as_deref(), Some("bv*+ba/b"));
+    assert_eq!(format_of("vid00000010").as_deref(), Some("ba/b"));
     assert_eq!(
         format_of("tunes.example/t/item0001").as_deref(),
-        Some("bv*+ba/b"),
+        Some("ba/b"),
         "fetched again from its page, in whatever format the site lists now"
     );
     assert_eq!(
         format_of("https://archive.org/details/item0002").as_deref(),
-        Some("bv*+ba/b"),
+        Some("ba/b"),
         "fetched again from the address `[sites]` gives"
     );
     assert_eq!(downloads.len(), 2);

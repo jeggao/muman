@@ -1,5 +1,5 @@
 version = 1
-edition = 2
+edition = 3
 
 # Settings, each written at its default; change any. A size, bitrate,
 # time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
@@ -47,7 +47,7 @@ block_size = "4 KiB"
 # alac and wavpack. Audio in any other is encoded: lossy audio to `lossy`,
 # lossless audio to `lossless`, or FLAC or WavPack where that cannot keep
 # it whole; audio already in that codec is copied.
-codecs = ["opus", "flac"]
+codecs = ["opus", "vorbis", "aac", "mp3", "flac"]
 lossy = "opus"
 lossless = "flac"
 # Bitrates for audio that is encoded rather than copied. Vorbis and AAC
@@ -98,17 +98,17 @@ ceiling = "-1 dB"
 enabled = true
 weight = 10000
 step = "2 s"
+[quality.stereo]
+# One step for mono: the channels' energy no gain or lag between them
+# explains is at most `incoherence`.
+enabled = true
+weight = 5000
+incoherence = "1 %"
 [quality.bandwidth]
 # Where a lowpass cuts the audio off, a step per `step` lower.
 enabled = true
 weight = 10
 step = "500 Hz"
-[quality.stereo]
-# One step for mono: the channels' energy no gain or lag between them
-# explains is at most `incoherence`.
-enabled = true
-weight = 5
-incoherence = "1 %"
 [quality.clipping]
 # A step for each share of clipped samples reached.
 enabled = true
@@ -132,7 +132,9 @@ weight = 1
 step = 0.1
 
 [ytdlp]
-format = "bv*+ba/b"
+# What is kept of a video, as yt-dlp's --format; muman reads its
+# audio, subtitles and thumbnail, never the video itself.
+format = "ba/b"
 sub_langs = "all,-live_chat"
 concurrent_fragments = 4
 # muman's postprocessors: no generated captions, square album art.

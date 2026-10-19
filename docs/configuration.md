@@ -261,7 +261,7 @@ once, in full; later syncs measure only new sources.
 ## How sources are ranked
 
 Each measure of [how the best of each is picked](library.md#how-the-best-of-each-is-picked)
-has a table under `[quality]`: `[quality.purity]`, `bandwidth`, `stereo`
+has a table under `[quality]`: `[quality.purity]`, `stereo`, `bandwidth`
 and `clipping` rank audio, `[quality.square]`, `resolution` and
 `blockiness` rank covers. In each, `enabled` and `weight` say whether and
 how much it counts, and the other keys how it is cut into steps. A

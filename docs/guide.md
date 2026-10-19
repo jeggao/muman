@@ -213,10 +213,11 @@ which songs on no album look up.
 ### yt-dlp
 
 `muman add <URL>` asks yt-dlp what the URL names, a video, a playlist,
-an album or a channel, and fetches each video whole into
-`sources/yt-dlp`, with the subtitles people wrote and the
-original-language captions. A Mix, the radio YouTube plays on from a
-video, is fetched as its one video. yt-dlp runs with `--ignore-config`,
+an album or a channel, and fetches the audio of each video into
+`sources/yt-dlp`, with its thumbnail, the subtitles people wrote and the
+original-language captions; muman never reads the video itself, and the
+default `[ytdlp] format` keeps none. A Mix, the radio YouTube plays on
+from a video, is fetched as its one video. yt-dlp runs with `--ignore-config`,
 so your own yt-dlp config never changes what a source holds; `[ytdlp]`
 sets the format, subtitle languages and extra arguments instead
 ([configuration](configuration.md)). Two yt-dlp plugins ship inside

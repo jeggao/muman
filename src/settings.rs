@@ -232,7 +232,13 @@ pub struct Audio {
 impl Default for Audio {
     fn default() -> Self {
         Self {
-            codecs: vec![Codec::Opus, Codec::Flac],
+            codecs: vec![
+                Codec::Opus,
+                Codec::Vorbis,
+                Codec::Aac,
+                Codec::Mp3,
+                Codec::Flac,
+            ],
             lossy: Codec::Opus,
             lossless: Codec::Flac,
             opus_kbps: 160,
@@ -550,7 +556,7 @@ impl Default for Stereo {
     fn default() -> Self {
         Self {
             enabled: true,
-            weight: 5,
+            weight: 5000,
             incoherence: quality::STEREO_INCOHERENCE,
         }
     }
@@ -660,7 +666,9 @@ weighed!(
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Ytdlp {
-    /// yt-dlp's `--format`: what is kept of a video.
+    /// yt-dlp's `--format`: what is kept of a video. muman reads a
+    /// source's audio, subtitles and thumbnail, never the video itself, so
+    /// a format with video in it only takes room in the store.
     pub format: String,
     /// yt-dlp's `--sub-langs`: the subtitles kept for lyrics.
     pub sub_langs: String,
@@ -678,7 +686,7 @@ pub struct Ytdlp {
 impl Default for Ytdlp {
     fn default() -> Self {
         Self {
-            format: "bv*+ba/b".into(),
+            format: "ba/b".into(),
             sub_langs: "all,-live_chat".into(),
             concurrent_fragments: 4,
             plugins: true,
@@ -1130,7 +1138,10 @@ mod tests {
         let mut again = doc(&text);
         assert!(!fill(&mut again, &EDITIONS), "{text}");
         assert_eq!(again.to_string(), text);
-        assert!(text.starts_with("version = 1\nedition = 2\n"), "{text}");
+        assert!(
+            text.starts_with(&format!("version = 1\nedition = {EDITION}\n")),
+            "{text}"
+        );
         assert!(text.find("[library]") < text.find("[defaults]"), "{text}");
         assert!(
             text.contains("# Mine.\nopus_bitrate = \"192 kb/s\"\n"),
