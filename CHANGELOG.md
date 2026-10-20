@@ -101,6 +101,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   that asks for them, stayed in the store's hidden staging folder, which
   no `purge` or `check` saw; each fetch now stages its files in a
   scratch folder of its own, which goes when the fetch ends.
+- **A source damaged on disk is fetched again by the sync that finds
+  it.** A sync measured after its fetches, so a file damaged since it
+  was measured failed its song in that sync and came again only in the
+  next; it is measured before them now.
 - **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song

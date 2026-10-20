@@ -2651,6 +2651,49 @@ impl Fate {
     }
 }
 
+/// Measure each fetched source whose facts are not current and note
+/// which are damaged, so a sync's network step fetches them again in the
+/// run that finds them rather than the next: a file damaged on disk
+/// since it was measured is found by measuring, which the offline phase
+/// does after the fetches.
+pub(crate) fn note_damaged<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    retry: bool,
+    out: &mut W,
+) -> Result<()> {
+    let lock = Lock::folder(&dirs.home)?;
+    let manifest = Manifest::load(&dirs.home)?;
+    let mut state = State::load(&dirs.home)?;
+    let store = Store::scan(dirs)?;
+    let fetched: BTreeSet<SourceKey> = manifest
+        .keys()
+        .into_iter()
+        .filter(|k| {
+            matches!(k, SourceKey::Remote { .. } | SourceKey::Torrent(_))
+                && !crate::provider::is_kept(k)
+        })
+        .collect();
+    let temp = crate::atomic::Scratch::new()?;
+    let mut how = Measuring {
+        retry,
+        say_unread: false,
+        checkpoint: &mut |s: &State| persist(&dirs.home, s, false, &lock),
+        analyses: crate::analysis::wanted(&manifest.settings.loudness),
+    };
+    measure(
+        runner,
+        &store,
+        &fetched,
+        &mut state,
+        temp.path(),
+        &mut how,
+        out,
+    )?;
+    note_damage(&manifest, &store, &mut state);
+    persist(&dirs.home, &state, false, &lock)
+}
+
 /// Each listed source an extractor's name keys, as keys were once
 /// named, by the key a fetch now names it: by the site `[sites]` lists
 /// its extractor under, else by the site of the page its facts or its

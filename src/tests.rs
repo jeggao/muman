@@ -1303,6 +1303,38 @@ fn a_torrent_file_holding_other_bytes_is_damaged() {
 }
 
 #[test]
+fn the_sync_that_finds_a_torrent_file_damaged_fetches_it_again() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::default());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let stored = s
+        .dir
+        .path()
+        .join("home/sources/torrent")
+        .join(&hash)
+        .join("Paper Comets.flac");
+    std::fs::write(&stored, b"y").unwrap();
+
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 1 damaged torrent file(s) again"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&stored).unwrap(), b"x", "{text}");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert!(state.failures.is_empty(), "{text}");
+}
+
+#[test]
 fn a_damaged_torrent_file_is_repaired_from_its_peers_and_taken() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);

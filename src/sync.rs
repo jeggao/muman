@@ -65,6 +65,9 @@ pub(crate) fn run<R: Runner, W: Write>(
             update_settings(&dirs.home, out)?;
         }
         let proposals = dropped_in(dirs, job.settling, out)?;
+        if !job.offline {
+            crate::reconcile::note_damaged(runner, dirs, request.retry, out)?;
+        }
         let manifest = Manifest::load(&dirs.home)?;
         let mut ok = fetch_missing(job, runner, http, &manifest, request.retry, out)?;
         let how = Listing {
