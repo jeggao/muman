@@ -58,6 +58,7 @@ src/
   tools.rs          ffmpeg, ffprobe and yt-dlp: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
   sites.rs          the song list's [sites]: how each site names and fetches
+  torrent.rs        torrent metainfo and magnet links: what a torrent: key names
   download.rs       yt-dlp's arguments and the files it reports
   ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
   music.rs          YouTube Music search and name matching
