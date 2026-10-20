@@ -678,7 +678,10 @@ pub struct Ytdlp {
     /// source's audio, subtitles and thumbnail, never the video itself, so
     /// a format with video in it only takes room in the store.
     pub format: String,
-    /// yt-dlp's `--sub-langs`: the subtitles kept for lyrics.
+    /// yt-dlp's `--sub-langs`: the subtitles kept for lyrics. YouTube's
+    /// live chat, Niconico's comments and Bilibili's danmaku are listed
+    /// as subtitles too, though they are viewers' comments, and none goes
+    /// into the Matroska file a source is kept in.
     pub sub_langs: String,
     pub concurrent_fragments: u32,
     /// Load muman's two postprocessors, which keep generated captions
@@ -699,7 +702,7 @@ impl Default for Ytdlp {
     fn default() -> Self {
         Self {
             format: "ba/b".into(),
-            sub_langs: "all,-live_chat".into(),
+            sub_langs: "all,-live_chat,-comments,-danmaku".into(),
             concurrent_fragments: 4,
             plugins: true,
             args: Vec::new(),

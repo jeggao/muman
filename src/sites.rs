@@ -14,9 +14,15 @@
 //! ID begins with; a key of a site that lists kinds, whose ID none of
 //! them takes, is refused where the song list is read. A kind with a
 //! `fetch` address is fetched again from it, `{id}` its ID without the
-//! prefix; one without is fetched again from the page its song records.
+//! prefix, percent-encoded but for `/` and the characters RFC 3986
+//! leaves unreserved: archive.org reads its path as a form does, so a
+//! `+` in a file's name left as it is reads as a space and names no
+//! file. One without is fetched again from the page its song records.
 //! A key of a kind without a prefix is archived for yt-dlp's
-//! `--download-archive` by its site's extractor of no prefix.
+//! `--download-archive` once by each of its site's extractors of no
+//! prefix, as a playlist's entries may be another extractor's than a
+//! page of one: an Audius playlist lists its tracks by `AudiusTrack`,
+//! where a track's own page is read by `Audius`.
 //!
 //! Extractors listed for a site name what they fetch by that site from
 //! then on, where what they fetched before is named by each page's: list
@@ -27,6 +33,7 @@
 //! rest.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
@@ -225,7 +232,8 @@ impl Sites {
     #[must_use]
     pub fn fetch_url(&self, key: &SourceKey) -> Option<String> {
         let (_, kind, rest) = self.kind_of(key)?;
-        Some(kind?.fetch.as_deref()?.replace("{id}", &rest))
+        let id: Vec<String> = rest.split('/').map(crate::music::percent_encode).collect();
+        Some(kind?.fetch.as_deref()?.replace("{id}", &id.join("/")))
     }
 
     /// Every domain the table describes and every extractor it lists.
@@ -235,9 +243,9 @@ impl Sites {
         })
     }
 
-    /// yt-dlp's `--download-archive` line for a key, `<extractor> <id>`:
-    /// a key of a kind without a prefix, by its site's extractor of no
-    /// prefix, or one an earlier muman named by its extractor, as is.
+    /// yt-dlp's `--download-archive` lines for a key, `<extractor> <id>`:
+    /// a key of a kind without a prefix, by each of its site's extractors
+    /// of no prefix, or one an earlier muman named by its extractor, as is.
     #[must_use]
     pub fn archive_line(&self, key: &SourceKey) -> Option<String> {
         let SourceKey::Remote { site, id } = key else {
@@ -251,8 +259,15 @@ impl Sites {
         if kind.is_some_and(|k| !k.prefix.is_empty()) {
             return None;
         }
-        let extractor = described.extractors.iter().find(|(_, p)| p.is_empty())?.0;
-        Some(format!("{extractor} {id}\n"))
+        let lines = described
+            .extractors
+            .iter()
+            .filter(|(_, p)| p.is_empty())
+            .fold(String::new(), |mut lines, (extractor, _)| {
+                let _ = writeln!(lines, "{extractor} {id}");
+                lines
+            });
+        (!lines.is_empty()).then_some(lines)
     }
 }
 
@@ -310,6 +325,19 @@ mod tests {
         );
         assert_eq!(at("Funkwhale", None, "b"), "funkwhale:b");
         assert!(sites.fetched("Youtube", None, "short").is_none());
+        assert_eq!(
+            at(
+                "Jamendo",
+                Some("https://licensing.jamendo.com/en/track/1000001/a"),
+                "1000001"
+            ),
+            "jamendo.com:1000001"
+        );
+        assert_eq!(
+            at("AudiusTrack", Some("audius:Abc12"), "Abc12"),
+            "audius.co:Abc12"
+        );
+        assert!(sites.fetched("Niconico", None, "watch").is_none());
     }
 
     #[test]
@@ -328,6 +356,19 @@ mod tests {
             url("archive.org:item-1/Part_1.mp3").as_deref(),
             Some("https://archive.org/details/item-1/Part_1.mp3")
         );
+        assert_eq!(
+            url("archive.org:item-1/Marlo+Venn_-_Lantern(1).mp3").as_deref(),
+            Some("https://archive.org/details/item-1/Marlo%2BVenn_-_Lantern%281%29.mp3")
+        );
+        assert_eq!(
+            url("nicovideo.jp:sm00000001").as_deref(),
+            Some("https://www.nicovideo.jp/watch/sm00000001")
+        );
+        assert_eq!(
+            url("jamendo.com:1000001").as_deref(),
+            Some("https://www.jamendo.com/track/1000001")
+        );
+        assert_eq!(url("audius.co:Abc12").as_deref(), Some("audius:Abc12"));
         assert_eq!(url("soundcloud.com:1"), None);
         assert_eq!(url("files.example:a"), None);
     }
@@ -341,6 +382,10 @@ mod tests {
             Some("youtube vid00000001\n")
         );
         assert_eq!(line("soundcloud.com:1").as_deref(), Some("soundcloud 1\n"));
+        assert_eq!(
+            line("audius.co:Abc12").as_deref(),
+            Some("audius Abc12\naudiustrack Abc12\n")
+        );
         assert_eq!(line("funkwhale:b").as_deref(), Some("funkwhale b\n"));
         assert_eq!(line("files.example:a"), None);
         assert_eq!(line("youtube.com:playlist/OLAK5uy_x"), None);

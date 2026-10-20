@@ -17,6 +17,7 @@ its findings go into the pull request that fixes them and into this file.
 | 0.4.0 | Two rounds of black-box and source stress runs | From undo safety to excerpt choice (#18) |
 | 0.4.0 | A real library of about 2,000 songs, 2,213 sources, on 0.3.0 | The damage rules: three sources damaged, where the old rule flagged 41; a moved library forgotten; fetched sources named by a title a site may change (#20) |
 | 0.5.0 | Six audits, of audio, tags, lyrics, covers, names and exports against their standards; then 48 public-domain recordings and 27 sidecar files from archive.org, five areas, every scenario twice from scratch | Ten defects that fail a song or lose data silently, eight of them from six design choices since replaced (#25) |
+| 0.6.1 | Each built-in `[sites]` table against yt-dlp 2026.08.19: its extractors' keys, IDs and pages, and whether each fetch address names the source again; then Jamendo, Audius, Niconico and Dailymotion end to end, fetched, deleted and fetched again | archive.org's fetch address losing a `+`, Niconico's comments and Bilibili's danmaku fetched as subtitles, Jamendo named by two domains, Audius playlists never skipped |
 
 The run before 0.5.0 also checked determinism: two fresh homes, four `add`
 orders, all seven encoders, different time zones, locales and CPU
@@ -85,3 +86,9 @@ after, and `add` of one more song 8 s, `remove` and `undo` of it 3.9 to
 - A retagged M4A keeps the padding lofty adds when a tag shrinks, so its
   bytes depend on its edit history.
 - An interrupted sync encodes every song again.
+- An archive.org file whose name holds a space, `#`, `?`, `%` or a
+  letter outside ASCII cannot be a source, as a key's ID holds none of
+  them: about half the multi-file items among archive.org's most fetched
+  community audio hold one.
+- Vimeo asked for a login, TikTok refused the address and Audiomack's
+  extractor failed, so the run tested none of the three.

@@ -53,7 +53,7 @@ use crate::settings::{TABLES, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 3;
+pub const EDITION: i64 = 4;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
@@ -85,6 +85,10 @@ pub const HISTORY: &[Edition] = &[
             changed("quality.stereo.weight", "5"),
             changed("ytdlp.format", r#""bv*+ba/b""#),
         ],
+    },
+    Edition {
+        number: 4,
+        steps: &[changed("ytdlp.sub_langs", r#""all,-live_chat""#)],
     },
 ];
 
