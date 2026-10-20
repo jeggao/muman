@@ -88,9 +88,11 @@ impl Fetcher<'_> {
             std::fs::write(&batch, urls.join("\n"))
                 .with_context(|| format!("writing {}", batch.display()))?;
         }
-        let staging = self.store.join(crate::store::STAGING);
+        std::fs::create_dir_all(self.store)
+            .with_context(|| format!("creating {}", self.store.display()))?;
+        let staging = crate::atomic::Scratch::within(self.store)?;
         let places = download::Places {
-            store: &staging,
+            store: staging.path(),
             temp: self.partial,
             done: &done,
             plugins: self.plugins,
@@ -156,7 +158,6 @@ impl Fetcher<'_> {
                 Err(e) => {
                     ok = false;
                     crate::ui::error(out, &format!("{}: not kept: {e:#}", f.key))?;
-                    let _ = std::fs::remove_file(&f.path);
                 }
             }
         }

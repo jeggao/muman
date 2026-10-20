@@ -87,6 +87,8 @@ impl Runner for Net {
             let path = store.join(format!("chan/Song {id} [{id}].mkv"));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, b"mkv").unwrap();
+            // A subtitle yt-dlp could not embed, left beside it.
+            std::fs::write(path.with_extension("comments.json"), b"[]").unwrap();
             let _ = writeln!(
                 lines,
                 "Youtube \"{id}\" {}",
@@ -365,8 +367,39 @@ fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
     assert!(add.proposals.is_empty(), "{text}");
     assert!(text.contains("youtube.com:vid00000009: not kept"), "{text}");
     assert!(!text.contains("Nothing new"), "{text}");
-    let staged = crate::store::files_below(&ytdlp.join(crate::store::STAGING), 9, |_| true);
-    assert!(staged.unwrap_or_default().is_empty());
+    let left = crate::store::files_below(&ytdlp, 9, |_| true).unwrap();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[test]
+fn nothing_a_fetch_left_beside_what_it_placed_outlives_it() {
+    let s = setup();
+    let ytdlp = s.dirs.ytdlp();
+    let store = Store::scan(&s.dirs).unwrap();
+    let temp = s.dir.path().join("temp");
+    let fetcher = Fetcher {
+        store: &ytdlp,
+        temp: &temp,
+        partial: &temp,
+        plugins: None,
+        sites: &crate::sites::Sites::default(),
+        options: &crate::settings::Ytdlp::default(),
+        live: false,
+        runs: Cell::new(0),
+    };
+    let (ok, _) = Acquire {
+        runner: &Net::default(),
+        fetcher: &fetcher,
+        out: &mut Vec::new(),
+        known: BTreeSet::new(),
+        removed: BTreeSet::new(),
+        store: &store,
+    }
+    .urls(&["https://v".to_string()], false)
+    .unwrap();
+    assert!(ok);
+    let left = crate::store::files_below(&ytdlp, 9, |_| true).unwrap();
+    assert_eq!(left, [ytdlp.join("youtube.com").join("vid00000009.mkv")]);
 }
 
 #[test]

@@ -1130,11 +1130,11 @@ fn a_torrent_no_peer_seeds_fails_and_lists_nothing() {
 #[test]
 fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
     let s = Setup::new();
-    let store = s.dir.path().join("home/sources/yt-dlp");
     let fake = Fake {
         on_stream: Some(Box::new(move |args: &[String]| {
             let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
-            let path = store.join(".incoming/Youtube/aaaaaaaaaaa.mkv");
+            let staging = &args[args.iter().position(|a| a == "--paths").unwrap() + 1];
+            let path = Path::new(staging).join("Youtube/aaaaaaaaaaa.mkv");
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, b"mkv").unwrap();
             std::fs::write(
@@ -1192,7 +1192,6 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
          [providers.coverart]\nenabled = false\n\
          [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
-    let store = s.dir.path().join("home/sources/yt-dlp");
     s.written(
         "home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv",
         "a copy with holes",
@@ -1223,13 +1222,12 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
     assert!(state.damaged.contains_key(&key));
 
     // Fetched again, whole: taken without `--accept`.
-    let staged = store
-        .join(crate::store::STAGING)
-        .join("Youtube/aaaaaaaaaaa.mkv");
     let whole = Fake {
         hashes: vec![("aaaaaaaaaaa".into(), 2)],
         on_stream: Some(Box::new(move |args: &[String]| {
             let done = &args[args.iter().position(|a| a == "--print-to-file").unwrap() + 2];
+            let staging = &args[args.iter().position(|a| a == "--paths").unwrap() + 1];
+            let staged = Path::new(staging).join("Youtube/aaaaaaaaaaa.mkv");
             std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
             std::fs::write(&staged, b"a whole copy").unwrap();
             let line = format!(

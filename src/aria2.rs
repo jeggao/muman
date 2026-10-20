@@ -294,8 +294,9 @@ pub fn fetch_command(places: &Places<'_>, downloads: usize, input: &Path) -> Vec
     cmd
 }
 
-/// Run `cmd` over `entries`, written to an input file in the partial
-/// folder, `labels` naming each on `step`: how each ended, and the
+/// Run `cmd` over `entries`, written to an input file in a scratch
+/// folder of the run's, which a run stopped partway leaves for the next
+/// to clear, `labels` naming each on `step`: how each ended, and the
 /// errors aria2c reported.
 fn run<R: Runner>(
     runner: &R,
@@ -308,18 +309,9 @@ fn run<R: Runner>(
     let text = input_file(entries)?;
     std::fs::create_dir_all(places.partial)
         .with_context(|| format!("creating {}", places.partial.display()))?;
-    sweep_inputs(places.partial);
-    let mut input = tempfile::Builder::new()
-        .prefix("input-")
-        .suffix(".txt")
-        .tempfile_in(places.partial)
-        .with_context(|| format!("writing in {}", places.partial.display()))?;
-    input
-        .write_all(&text)
-        .and_then(|()| input.flush())
-        .with_context(|| format!("writing {}", input.path().display()))?;
-    // Closed, as Windows may refuse another program a file held open.
-    let input = input.into_temp_path();
+    let scratch = crate::atomic::Scratch::new()?;
+    let input = scratch.path().join("input.txt");
+    std::fs::write(&input, &text).with_context(|| format!("writing {}", input.display()))?;
     let (ok, said) = stream(runner, &cmd(&input), step, labels)?;
     let ended = (0..entries.len())
         .map(|n| match said.ended.get(&short_gid(n)) {
@@ -329,25 +321,6 @@ fn run<R: Runner>(
         })
         .collect();
     Ok((ended, said.errors))
-}
-
-/// Delete each input file in `partial` a run left that was stopped before
-/// it could: the home's lock on runs keeps any other run from using one.
-fn sweep_inputs(partial: &Path) {
-    let inputs = std::fs::read_dir(partial)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| Some(e.ok()?.path()))
-        .filter(|p| {
-            p.is_file()
-                && p.extension().is_some_and(|e| e == "txt")
-                && p.file_stem()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("input-"))
-        });
-    for input in inputs {
-        let _ = std::fs::remove_file(input);
-    }
 }
 
 /// Run `cmd`, its progress noted on `step`, each download named by its
@@ -1024,24 +997,6 @@ mod tests {
             index,
             offset: 3 * (index as u64 - 1),
         }
-    }
-
-    #[test]
-    fn an_input_file_a_stopped_run_left_is_deleted_and_nothing_else() {
-        let dir = tempfile::tempdir().unwrap();
-        let left = dir.path().join("input-0qk8oe.txt");
-        let kept = [
-            dir.path().join("notes.txt"),
-            dir.path().join("input-x.torrent"),
-        ];
-        for f in kept.iter().chain([&left]) {
-            std::fs::write(f, b"x").unwrap();
-        }
-        std::fs::create_dir(dir.path().join("input-dir.txt")).unwrap();
-        sweep_inputs(dir.path());
-        assert!(!left.exists());
-        assert!(kept.iter().all(|f| f.exists()));
-        assert!(dir.path().join("input-dir.txt").is_dir());
     }
 
     #[test]

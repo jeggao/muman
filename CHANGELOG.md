@@ -92,12 +92,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   name runs past what the filesystem takes, as an archive.org file named
   in percent-escapes does once its `%`s are escaped, was left in the
   store's staging folder and its song dropped, the run exiting 0 and a
-  later `add` saying "Nothing new"; it is said as an error, deleted, and
-  the run exits 4.
+  later `add` saying "Nothing new"; it is said as an error and the run
+  exits 4.
 - **What yt-dlp fetched but could not embed is not left behind.** A
   subtitle in JSON, as Niconico's comments under a `[ytdlp] sub_langs`
   that asks for them, stayed in the store's hidden staging folder, which
-  no `purge` or `check` saw; it goes once its source is placed.
+  no `purge` or `check` saw; each fetch now stages its files in a
+  scratch folder of its own, which goes when the fetch ends.
 - **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song
