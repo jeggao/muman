@@ -30,6 +30,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   waits with nothing arriving, how long a fetched torrent is seeded and
   how long an unfinished one is kept. Only a run that fetches a torrent
   needs it.
+- **Jamendo and Audius are sites of their own.** A Jamendo track is
+  `jamendo.com:<id>` whether it was found on `jamendo.com` or
+  `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`. Each
+  is fetched again by its ID, an Audius track though its page's address
+  changed with its title, and a track of an album or playlist already
+  kept is skipped without being fetched.
+- **Dailymotion and Niconico videos are fetched again from their own
+  pages,** `dailymotion.com/video/<id>` and `nicovideo.jp/watch/<id>`,
+  rather than from a player embedded on another site, and a key written
+  into the song list by hand can be fetched.
+
+### Changed
+
+- **Niconico's comments and Bilibili's danmaku are not fetched.**
+  `[ytdlp] sub_langs` leaves them out with YouTube's live chat: they
+  are viewers' comments listed as subtitles, and each was left behind as
+  a file of its own. `sync --update-defaults` moves a song list still at
+  the old default.
+
+### Fixed
+
+- **An archive.org file whose name holds a `+` is fetched again.** The
+  address a missing source is fetched from percent-encodes its ID, as
+  archive.org read a `+` in it as a space and found no such file.
 
 ## [0.6.0] - 2026-10-20
 

@@ -225,7 +225,21 @@ format = \"bestaudio\"
     assert_eq!(read.quality.stereo.weight, 5000);
     assert_eq!(read.ytdlp.format, "bestaudio", "set by hand");
     assert!(d.to_string().contains("\"flac\"] # as written"), "{d}");
-    assert_eq!(edition_of(&d), 3);
+    assert_eq!(edition_of(&d), EDITION);
+}
+
+#[test]
+fn the_fourth_edition_leaves_comment_streams_out_of_the_subtitles() {
+    let mut d = doc("version = 1\nedition = 3\n[ytdlp]\nsub_langs = \"all,-live_chat\"\n");
+    let keys: Vec<String> = stale(&d, &EDITIONS).into_iter().map(|s| s.key).collect();
+    assert_eq!(keys, ["ytdlp.sub_langs"]);
+    update(&mut d, &EDITIONS);
+    assert_eq!(
+        read(&d).unwrap().ytdlp.sub_langs,
+        "all,-live_chat,-comments,-danmaku"
+    );
+    let chosen = doc("version = 1\nedition = 3\n[ytdlp]\nsub_langs = \"en.*\"\n");
+    assert_eq!(stale(&chosen, &EDITIONS), []);
 }
 
 #[test]

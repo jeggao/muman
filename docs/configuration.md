@@ -119,8 +119,9 @@ each of yt-dlp's extractors, lower-cased, to the prefix its IDs take in
 a key, so a playlist YouTube's tab extractor fetched is
 `youtube.com:playlist/<id>`. Each entry of `kinds` is a kind of source
 the site holds: its `prefix`, an `id` regular expression the rest of an
-ID matches, and a `fetch` address with `{id}` where it goes, which a
-missing source is fetched again from. A song list naming a key whose ID
+ID matches, and a `fetch` address with `{id}` where it goes,
+percent-encoded but for `/`, which a missing source is fetched again
+from. A song list naming a key whose ID
 no kind of its site takes is refused when read. A source of a site with
 no table is named by its page's domain and fetched again from the page
 its song records. Adding a site to `new.toml` adds it to every song list
