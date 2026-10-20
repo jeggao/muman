@@ -93,6 +93,7 @@ impl Provider {
                 Self::YouTube
             }),
             SourceKey::Remote { site, .. } => crate::store::kept(site).map(|k| k.provider),
+            SourceKey::Torrent(_) => None,
         }
     }
 

@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **A song may list a file of a torrent.** `torrent:<hash>/<path>` names
+  a file by its torrent's hash and its path inside the torrent; the
+  torrent's metainfo and files are kept under `sources/torrent`, and
+  `purge` deletes what no song lists. A song list that lists one is
+  format version 4, which an older muman refuses.
+
 ## [0.6.0] - 2026-10-20
 
 ### Added

@@ -257,13 +257,22 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         .iter()
         .filter(|k| matches!(k, SourceKey::Manual(_)))
         .count();
+    let torrent = listed
+        .iter()
+        .filter(|k| matches!(k, SourceKey::Torrent(_)))
+        .count();
+    let torrents = if torrent > 0 {
+        format!(", {torrent} from torrents")
+    } else {
+        String::new()
+    };
     row(
         out,
         "Listed",
         &format!(
-            "{} ({} fetched by yt-dlp, {kept} kept from lookups, {manual} manual)",
+            "{} ({} fetched by yt-dlp{torrents}, {kept} kept from lookups, {manual} manual)",
             listed.len(),
-            listed.len() - kept - manual
+            listed.len() - kept - manual - torrent
         ),
     )?;
     let lookups: u64 = crate::store::KEPT
@@ -274,8 +283,16 @@ fn sources<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         out,
         "Stored",
         &format!(
-            "{} fetched by yt-dlp, {} from lookups, {} manual",
+            "{} fetched by yt-dlp{}, {} from lookups, {} manual",
             crate::ui::bytes(folder_size(&c.dirs.ytdlp())),
+            if torrent > 0 {
+                format!(
+                    ", {} from torrents",
+                    crate::ui::bytes(folder_size(&c.dirs.torrent()))
+                )
+            } else {
+                String::new()
+            },
             crate::ui::bytes(lookups),
             crate::ui::bytes(folder_size(&c.dirs.manual()))
         ),

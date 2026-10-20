@@ -27,6 +27,14 @@
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
 //! a song's sidecar or a folder's cover by its name.
+//!
+//! A torrent's files are kept in a folder of its hash beside its
+//! metainfo, `sources/torrent/<hash>.torrent`, each at the path
+//! [`crate::torrent::stored`] gives it. The metainfo says which files a
+//! torrent has, so a file is read as a source only while its torrent's
+//! metainfo is there, and anything else in the folder is a leftover. A
+//! torrent's song file brings its lyrics and pictures by the manual
+//! folder's rules, from among its own torrent's files alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -36,7 +44,8 @@ use anyhow::{Context, Result};
 
 use crate::dirs::Dirs;
 use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
-use crate::source::{SourceKey, id_of};
+use crate::source::{SourceKey, TorrentKey, id_of};
+use crate::torrent::Metainfo;
 
 /// The folder in the store yt-dlp writes a run's finished files into,
 /// each moved to its key's place as the run ends: hidden, so no scan
@@ -60,6 +69,19 @@ pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> 
         root.join(site)
             .join(format!("{}.{ext}", id.replace('/', "⧸"))),
     )
+}
+
+/// Where a torrent's metainfo is kept in `root`, the torrents' folder.
+#[must_use]
+pub fn metainfo_path(root: &Path, hash: &str) -> PathBuf {
+    root.join(format!("{hash}.torrent"))
+}
+
+/// Where the torrent's file `key` is kept in `root`, the torrents' folder.
+#[must_use]
+pub fn torrent_path(root: &Path, key: &TorrentKey) -> PathBuf {
+    root.join(key.hash())
+        .join(crate::torrent::stored(key.path()))
 }
 
 /// The key of a file at its key's place in `root`, as [`fetched_path`]
@@ -351,6 +373,10 @@ pub struct Store {
     /// Manual files passed over for another's name: the same once
     /// normalized, as `café` written composed and decomposed.
     twins: Vec<PathBuf>,
+    torrent_root: PathBuf,
+    /// Each torrent whose metainfo is kept, by hash: the paths in it of
+    /// its files on disk that are sources, lyrics or pictures.
+    torrents: BTreeMap<String, BTreeMap<PathBuf, Kind>>,
 }
 
 impl Store {
@@ -359,6 +385,7 @@ impl Store {
         let mut store = Self {
             manual_root: dirs.manual(),
             fetched_root: dirs.ytdlp(),
+            torrent_root: dirs.torrent(),
             ..Self::default()
         };
         let root = dirs.ytdlp();
@@ -418,6 +445,7 @@ impl Store {
             }
             store.kept.insert(kind.extractor, found);
         }
+        store.scan_torrents()?;
         let root = dirs.manual();
         // A folder linked in from the library would bring muman's own songs
         // back as new ones, run after run.
@@ -447,6 +475,50 @@ impl Store {
         Ok(store)
     }
 
+    /// Read each torrent's metainfo and find which of its files are on
+    /// disk; every other file in the torrents' folder is a leftover.
+    fn scan_torrents(&mut self) -> Result<()> {
+        let root = self.torrent_root.clone();
+        let mut sources: BTreeSet<PathBuf> = BTreeSet::new();
+        for file in walk(&root, 1)? {
+            let hash = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let is_metainfo =
+                file.extension().is_some_and(|e| e == "torrent") && crate::torrent::is_hash(&hash);
+            let meta = is_metainfo
+                .then(|| std::fs::read(&file).ok())
+                .flatten()
+                .and_then(|bytes| Metainfo::read(&bytes).ok())
+                .filter(|m| m.hash() == hash);
+            let Some(meta) = meta else {
+                self.leftovers.push(file);
+                continue;
+            };
+            sources.insert(file);
+            let mut found = BTreeMap::new();
+            for f in &meta.files {
+                let key = TorrentKey::new(&hash, &f.path);
+                let at = torrent_path(&root, &key);
+                if let Some(kind) = kind_of(&f.path).filter(|_| at.is_file()) {
+                    sources.insert(at);
+                    found.insert(key.path().to_path_buf(), kind);
+                }
+            }
+            self.torrents.insert(hash, found);
+        }
+        for file in walk(&root, usize::MAX)? {
+            if !sources.contains(&file) {
+                self.leftovers.push(file);
+            }
+        }
+        self.leftovers.sort();
+        self.leftovers.dedup();
+        Ok(())
+    }
+
     /// Manual files not read, for another's name, as [`Store`] keeps them.
     #[must_use]
     pub fn twins(&self) -> &[PathBuf] {
@@ -467,7 +539,17 @@ impl Store {
                 None => self.fetched_file(key).is_some(),
             },
             SourceKey::Manual(rel) => self.manual.contains_key(rel.path()),
+            SourceKey::Torrent(t) => self
+                .torrents
+                .get(t.hash())
+                .is_some_and(|files| files.contains_key(t.path())),
         }
+    }
+
+    /// Whether the metainfo of the torrent of `hash` is kept.
+    #[must_use]
+    pub fn has_metainfo(&self, hash: &str) -> bool {
+        self.torrents.contains_key(hash)
     }
 
     /// The file of the fetched source `key`: at its place, else in the
@@ -503,11 +585,28 @@ impl Store {
                 lyrics: None,
                 covers: Vec::new(),
             }),
+            SourceKey::Torrent(t) => {
+                let files = self.torrents.get(t.hash())?;
+                let kind = *files.get(t.path())?;
+                let (lyrics, covers) = if kind == Kind::Media {
+                    sidecars(files, t.path())
+                } else {
+                    (None, Vec::new())
+                };
+                let at = |p: &Path| torrent_path(&self.torrent_root, &TorrentKey::new(t.hash(), p));
+                Some(Located {
+                    key: key.clone(),
+                    path: at(t.path()),
+                    kind,
+                    lyrics: lyrics.as_deref().map(at),
+                    covers: covers.iter().map(|c| at(c)).collect(),
+                })
+            }
             SourceKey::Manual(manual) => {
                 let rel = manual.path();
                 let kind = *self.manual.get(rel)?;
                 let (lyrics, covers) = if kind == Kind::Media {
-                    self.sidecars(rel)
+                    sidecars(&self.manual, rel)
                 } else {
                     (None, Vec::new())
                 };
@@ -621,45 +720,6 @@ impl Store {
         self.kept.get(kind.extractor)?.get(id)
     }
 
-    /// The `.lrc` and pictures that come with a manual song file: named
-    /// as it is in any case, those in its own case first, and none named
-    /// in its case as another song file is.
-    fn sidecars(&self, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
-        let stem = rel.with_extension("");
-        let another_s = |p: &Path| {
-            self.manual.iter().any(|(m, k)| {
-                *k == Kind::Media && m != rel && m.with_extension("") == p.with_extension("")
-            })
-        };
-        let named = |kind: Kind| -> Vec<PathBuf> {
-            let mut found: Vec<PathBuf> = self
-                .manual
-                .iter()
-                .filter(|(p, k)| **k == kind && named_as(p, rel))
-                .filter(|(p, _)| p.with_extension("") == stem || !another_s(p))
-                .map(|(p, _)| p.clone())
-                .collect();
-            found.sort_by_key(|p| p.with_extension("") != stem);
-            found
-        };
-        let lyrics = named(Kind::Lyrics).into_iter().next();
-        let mut covers = named(Kind::Image);
-        let folder = rel.parent().unwrap_or(Path::new(""));
-        covers.extend(
-            self.manual
-                .iter()
-                .filter(|(p, k)| {
-                    **k == Kind::Image
-                        && p.parent().unwrap_or(Path::new("")) == folder
-                        && p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| {
-                            FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str())
-                        })
-                })
-                .map(|(p, _)| p.clone()),
-        );
-        (lyrics, covers)
-    }
-
     /// Manual song files no song lists, in path order, and those
     /// still settling, which wait for a later run.
     #[must_use]
@@ -694,21 +754,37 @@ impl Store {
         (ready, settling)
     }
 
-    /// Every file in either folder no song lists and nothing listed
-    /// brings with it: clutter a status run names, never deletes.
+    /// Every file in the store no song lists and nothing listed brings
+    /// with it, and each torrent's metainfo no listed file is of: clutter
+    /// a status run names, never deletes.
     #[must_use]
     pub fn unused(&self, listed: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
         let mut used: BTreeSet<PathBuf> = BTreeSet::new();
         for key in listed {
+            if let SourceKey::Torrent(t) = key {
+                used.insert(metainfo_path(&self.torrent_root, t.hash()));
+            }
             if let Some(l) = self.locate(key) {
                 used.insert(l.path);
                 used.extend(l.lyrics);
                 used.extend(l.covers);
             }
         }
+        let torrents: Vec<PathBuf> = self
+            .torrents
+            .iter()
+            .flat_map(|(hash, files)| {
+                std::iter::once(metainfo_path(&self.torrent_root, hash)).chain(
+                    files
+                        .keys()
+                        .map(|p| torrent_path(&self.torrent_root, &TorrentKey::new(hash, p))),
+                )
+            })
+            .collect();
         let mut unused: Vec<PathBuf> = self
             .fetched
             .values()
+            .chain(&torrents)
             .chain(self.legacy.values().flatten())
             .chain(&self.leftovers)
             .chain(self.kept.values().flat_map(HashMap::values))
@@ -725,6 +801,45 @@ impl Store {
         unused.sort();
         unused
     }
+}
+
+/// The `.lrc` and pictures that come with the song file `rel` among
+/// `files`, a folder's or a torrent's: named as it is in any case, those
+/// in its own case first, and none named in its case as another song
+/// file is; then its folder's cover.
+fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
+    let stem = rel.with_extension("");
+    let another_s = |p: &Path| {
+        files.iter().any(|(m, k)| {
+            *k == Kind::Media && m != rel && m.with_extension("") == p.with_extension("")
+        })
+    };
+    let named = |kind: Kind| -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = files
+            .iter()
+            .filter(|(p, k)| **k == kind && named_as(p, rel))
+            .filter(|(p, _)| p.with_extension("") == stem || !another_s(p))
+            .map(|(p, _)| p.clone())
+            .collect();
+        found.sort_by_key(|p| p.with_extension("") != stem);
+        found
+    };
+    let lyrics = named(Kind::Lyrics).into_iter().next();
+    let mut covers = named(Kind::Image);
+    let folder = rel.parent().unwrap_or(Path::new(""));
+    covers.extend(
+        files
+            .iter()
+            .filter(|(p, k)| {
+                **k == Kind::Image
+                    && p.parent().unwrap_or(Path::new("")) == folder
+                    && p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|s| FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()))
+            })
+            .map(|(p, _)| p.clone()),
+    );
+    (lyrics, covers)
 }
 
 /// Each listed manual file gone from its path that is one of `ready`,
@@ -847,6 +962,68 @@ mod tests {
         #[cfg(not(any(unix, windows)))]
         let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
         made.is_ok()
+    }
+
+    #[test]
+    fn a_torrents_files_are_read_by_its_metainfo_with_their_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let files = [
+            "CD1/01 Paper Comets.flac",
+            "CD1/01 paper comets.lrc",
+            "CD1/Cover.jpg",
+            "CD1/02 Rooms of Salt?.flac",
+            "Scans/front.jpg",
+            "notes.nfo",
+        ];
+        let bytes = crate::testing::metainfo("Lantern Weather", &files);
+        let hash = Metainfo::read(&bytes).unwrap().hash().to_string();
+        let root = d.torrent();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(metainfo_path(&root, &hash), &bytes).unwrap();
+        let key =
+            |p: &str| SourceKey::Torrent(TorrentKey::new(&hash, &crate::relpath::from_portable(p)));
+        let place = |p: &str| {
+            let SourceKey::Torrent(t) = key(p) else {
+                unreachable!()
+            };
+            let at = torrent_path(&root, &t);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(&at, b"x").unwrap();
+            at
+        };
+        let song = place("CD1/01 Paper Comets.flac");
+        let lyrics = place("CD1/01 paper comets.lrc");
+        let cover = place("CD1/Cover.jpg");
+        let salt = place("CD1/02 Rooms of Salt?.flac");
+        assert!(salt.ends_with(Path::new("CD1").join("02 Rooms of Salt？.flac")));
+        place("notes.nfo");
+        let stray = touch(&root, &format!("{hash}/stray.flac"));
+        let orphan = touch(&root, &format!("{}/x.flac", "2".repeat(40)));
+
+        let store = Store::scan(&d).unwrap();
+        assert!(store.has(&key("CD1/01 Paper Comets.flac")));
+        assert!(store.has_metainfo(&hash));
+        assert!(!store.has(&key("Scans/front.jpg")), "not on disk");
+        assert!(!store.has(&key("notes.nfo")), "no song, lyrics or picture");
+        let located = store.locate(&key("CD1/01 Paper Comets.flac")).unwrap();
+        assert_eq!(located.path, song);
+        assert_eq!(located.kind, Kind::Media);
+        assert_eq!(located.lyrics, Some(lyrics));
+        assert_eq!(located.covers, std::slice::from_ref(&cover));
+        assert!(store.leftovers().contains(&stray));
+        assert!(store.leftovers().contains(&orphan));
+
+        let listed = BTreeSet::from([key("CD1/01 Paper Comets.flac")]);
+        let unused = store.unused(&listed);
+        assert!(unused.contains(&salt));
+        assert!(!unused.contains(&cover));
+        assert!(!unused.contains(&metainfo_path(&root, &hash)));
+        assert!(
+            store
+                .unused(&BTreeSet::new())
+                .contains(&metainfo_path(&root, &hash))
+        );
     }
 
     #[test]

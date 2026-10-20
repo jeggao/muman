@@ -1,6 +1,7 @@
 //! A source's key, as the song list names it: `<domain>:<id>` for what
-//! yt-dlp fetched, `manual:<path>` for a file in the manual folder, and
-//! `<provider>:<id>` for a record a lookup keeps.
+//! yt-dlp fetched, `manual:<path>` for a file in the manual folder,
+//! `torrent:<hash>/<path>` for a file of a torrent ([`crate::torrent`]),
+//! and `<provider>:<id>` for a record a lookup keeps.
 //!
 //! A fetched source is named by the site it came from and the ID yt-dlp
 //! gives it there, so `archive.org:<id>` reads as the address it is: a
@@ -52,6 +53,9 @@ pub const LEGACY: [(&str, &str); 13] = [
     ("tiktok", "tiktok.com"),
 ];
 
+/// The scheme of a torrent's files.
+pub const TORRENT: &str = "torrent";
+
 /// The schemes that are no site: a manual file, and the records lookups
 /// keep.
 const NOT_SITES: [&str; 4] = [
@@ -69,6 +73,38 @@ pub enum SourceKey {
     Remote { site: String, id: String },
     /// A file under the manual folder, by its path there.
     Manual(ManualKey),
+    /// A file of a torrent, by the torrent's hash and its path there.
+    Torrent(TorrentKey),
+}
+
+/// A torrent's file: the torrent's hash, v1 where it has one, and the
+/// file's path inside it, part by part in NFC.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TorrentKey {
+    hash: String,
+    path: PathBuf,
+}
+
+impl TorrentKey {
+    #[must_use]
+    pub fn new(hash: &str, path: &Path) -> Self {
+        Self {
+            hash: hash.to_ascii_lowercase(),
+            path: crate::relpath::normalized(path),
+        }
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> &str {
+        &self.hash
+    }
+
+    /// The file's path inside its torrent, to compare and to show; where
+    /// it is kept is [`crate::torrent::stored`].
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// A manual file's path in the manual folder, part by part in NFC: the
@@ -139,6 +175,17 @@ impl SourceKey {
             }
             return Ok(Self::Manual(rest.into()));
         }
+        if scheme.eq_ignore_ascii_case(TORRENT) {
+            let (hash, path) = rest.split_once('/').unwrap_or((rest, ""));
+            let hash = hash.to_ascii_lowercase();
+            if !crate::torrent::is_hash(&hash) || !is_plain_relative(Path::new(path)) {
+                bail!("`{text}`: a torrent's file is `torrent:<hash>/<path in the torrent>`");
+            }
+            return Ok(Self::Torrent(TorrentKey::new(
+                &hash,
+                &crate::relpath::from_portable(path),
+            )));
+        }
         let scheme = scheme.to_ascii_lowercase();
         let (site, id) = match scheme.as_str() {
             "youtubetab" => (YOUTUBE.to_string(), format!("{PLAYLIST}{rest}")),
@@ -163,7 +210,18 @@ impl SourceKey {
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::Remote { id, .. } => Some(id),
-            Self::Manual(_) => None,
+            Self::Manual(_) | Self::Torrent(_) => None,
+        }
+    }
+
+    /// The path a manual file or a torrent's file is named by, in its
+    /// folder or its torrent.
+    #[must_use]
+    pub fn file(&self) -> Option<&Path> {
+        match self {
+            Self::Manual(key) => Some(key.path()),
+            Self::Torrent(key) => Some(key.path()),
+            Self::Remote { .. } => None,
         }
     }
 
@@ -211,9 +269,9 @@ impl SourceKey {
     pub fn short(&self) -> String {
         match self {
             Self::Remote { id, .. } => id.strip_prefix(PLAYLIST).unwrap_or(id).to_string(),
-            Self::Manual(key) => key
-                .path()
-                .file_stem()
+            Self::Manual(_) | Self::Torrent(_) => self
+                .file()
+                .and_then(Path::file_stem)
                 .map_or_else(String::new, |s| s.to_string_lossy().into_owned()),
         }
     }
@@ -279,6 +337,12 @@ impl fmt::Display for SourceKey {
         match self {
             Self::Remote { site, id } => write!(f, "{site}:{id}"),
             Self::Manual(key) => write!(f, "manual:{}", crate::relpath::to_portable(key.path())),
+            Self::Torrent(key) => write!(
+                f,
+                "{TORRENT}:{}/{}",
+                key.hash,
+                crate::relpath::to_portable(&key.path)
+            ),
         }
     }
 }
@@ -431,6 +495,33 @@ mod tests {
         let item = Path::new("/o/unknown/Part 1.mp3 [item-1⧸Part_1.mp3].mp3");
         assert_eq!(id_of(item).as_deref(), Some("item-1/Part_1.mp3"));
         assert_eq!(id_of(Path::new("/o/c/A [x⧸..].mkv")), None);
+    }
+
+    #[test]
+    fn a_torrents_file_is_named_by_its_hash_and_path() {
+        let hash = "1111111111111111111111111111111111111111";
+        let text = format!("torrent:{hash}/CD1/01 Paper Comets [Live].flac");
+        let key = SourceKey::parse(&text).unwrap();
+        assert_eq!(key.to_string(), text);
+        assert_eq!(key.short(), "01 Paper Comets [Live]");
+        assert_eq!(key.site(), None);
+        assert_eq!(key.id(), None);
+        let upper = format!("TORRENT:{}/a.flac", hash.replace('1', "A"));
+        assert_eq!(
+            SourceKey::parse(&upper).unwrap().to_string(),
+            format!("torrent:{}/a.flac", hash.replace('1', "a"))
+        );
+        let v2 = format!("torrent:{}/a.flac", "b".repeat(64));
+        assert!(SourceKey::parse(&v2).is_ok());
+        for bad in [
+            format!("torrent:{hash}"),
+            format!("torrent:{hash}/"),
+            format!("torrent:{hash}/../a.flac"),
+            format!("torrent:{}/a.flac", &hash[1..]),
+            "torrent:zz11111111111111111111111111111111111111/a.flac".to_string(),
+        ] {
+            assert!(SourceKey::parse(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

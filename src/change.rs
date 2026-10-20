@@ -173,23 +173,25 @@ impl Read {
 }
 
 /// Every file in the store a key brings: what yt-dlp fetched under its
-/// ID, or a manual file with its own lyrics and pictures.
+/// ID, or a manual or torrent's file with its own lyrics and pictures.
 fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
     match key {
         SourceKey::Remote { site, id } if crate::store::kept(site).is_some() => {
             crate::store::kept(site).map_or_else(Vec::new, |k| k.files(dirs, id))
         }
         SourceKey::Remote { .. } => store.fetched_files(key),
-        SourceKey::Manual(_) => store.locate(key).map_or_else(Vec::new, |l| {
-            std::iter::once(l.path.clone())
-                .chain(l.lyrics)
-                .chain(
-                    l.covers
-                        .into_iter()
-                        .filter(|c| crate::store::named_as(c, &l.path)),
-                )
-                .collect()
-        }),
+        SourceKey::Manual(_) | SourceKey::Torrent(_) => {
+            store.locate(key).map_or_else(Vec::new, |l| {
+                std::iter::once(l.path.clone())
+                    .chain(l.lyrics)
+                    .chain(
+                        l.covers
+                            .into_iter()
+                            .filter(|c| crate::store::named_as(c, &l.path)),
+                    )
+                    .collect()
+            })
+        }
     }
 }
 

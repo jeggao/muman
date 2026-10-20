@@ -1,7 +1,8 @@
 //! Fetched sources and lookup records no song uses, deleted: an upload a
 //! release took the place of, a source taken out of its song by hand, a
-//! record no song lists any more. `status` and `info` name them; `purge`
-//! is what deletes them.
+//! record no song lists any more, a torrent's file no song lists and its
+//! metainfo once no song lists any of its files. `status` and `info` name
+//! them; `purge` is what deletes them.
 //!
 //! A removed song's sources stay, since `restore` lists it again with
 //! them, and a file in the manual folder is never touched: one no song
@@ -81,6 +82,10 @@ fn unused_files(
             doomed.extend(store.fetched_files_at(&path));
             continue;
         }
+        if path.starts_with(dirs.torrent()) {
+            doomed.insert(path);
+            continue;
+        }
         let kind = store::KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
         let id = path.file_stem().and_then(|s| s.to_str());
         if let (Some(kind), Some(id)) = (kind, id) {
@@ -108,21 +113,43 @@ mod tests {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
         };
+        let listed = crate::testing::metainfo("Lantern Weather", &["a.flac", "b.flac"]);
+        let listed_hash = crate::torrent::Metainfo::read(&listed)
+            .unwrap()
+            .hash()
+            .to_string();
+        let other = crate::testing::metainfo("The Glass Orchards", &["c.flac"]);
+        let other_hash = crate::torrent::Metainfo::read(&other)
+            .unwrap()
+            .hash()
+            .to_string();
+        let torrents = dirs.torrent();
+        std::fs::create_dir_all(&torrents).unwrap();
+        std::fs::write(store::metainfo_path(&torrents, &listed_hash), &listed).unwrap();
+        std::fs::write(store::metainfo_path(&torrents, &other_hash), &other).unwrap();
         let gone = [
             touch(&dirs, "sources/yt-dlp/c/Old [ooooooooooo].mkv"),
             touch(&dirs, "sources/lrclib/8.lrc"),
             touch(&dirs, "sources/lrclib/8.json"),
+            touch(&dirs, &format!("sources/torrent/{listed_hash}/b.flac")),
+            touch(&dirs, &format!("sources/torrent/{other_hash}/c.flac")),
+            store::metainfo_path(&torrents, &other_hash),
         ];
         let kept = [
             touch(&dirs, "sources/yt-dlp/c/Song [aaaaaaaaaaa].mkv"),
             touch(&dirs, "sources/yt-dlp/c/Gone [rrrrrrrrrrr].mkv"),
             touch(&dirs, "sources/lrclib/7.lrc"),
             touch(&dirs, "sources/manual/mine.flac"),
+            touch(&dirs, &format!("sources/torrent/{listed_hash}/a.flac")),
+            store::metainfo_path(&torrents, &listed_hash),
         ];
         std::fs::write(
             dirs.manifest(),
-            "version = 1\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"lrclib:7\"]\n\
-             [[removed]]\nnote = \"Gone\"\nsources = [\"youtube.com:rrrrrrrrrrr\"]\n",
+            format!(
+                "version = 4\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"lrclib:7\"]\n\
+                 [[song]]\nsources = [\"torrent:{listed_hash}/a.flac\"]\n\
+                 [[removed]]\nnote = \"Gone\"\nsources = [\"youtube.com:rrrrrrrrrrr\"]\n"
+            ),
         )
         .unwrap();
         let confirm = Confirm {
@@ -134,7 +161,7 @@ mod tests {
         assert!(!purge(&dirs, &confirm, None, &mut out).unwrap());
         assert!(gone.iter().all(|p| p.exists()), "a dry run deletes nothing");
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Deleting 3 unused file(s)"), "{text}");
+        assert!(text.contains("Deleting 6 unused file(s)"), "{text}");
 
         let confirm = Confirm {
             yes: true,
