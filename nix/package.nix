@@ -37,11 +37,13 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ makeBinaryWrapper ];
 
-  # The smoke test generates its audio with the ffmpeg on PATH, and the
-  # yt-dlp test hands yt-dlp muman's command line.
+  # The smoke test generates its audio with the ffmpeg on PATH, the
+  # yt-dlp test hands yt-dlp muman's command line, and the torrent test
+  # aria2c its own, against a swarm on the loopback.
   nativeCheckInputs = [
     ffmpeg-headless
     yt-dlp
+    aria2
   ];
 
   cargoBuildFlags = [

@@ -103,8 +103,8 @@ src/
   testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   */tests.rs        a module's tests, when they outgrow it
-tests/              the smoke test, yt-dlp given muman's command line, and
-                    the architecture's rules over src/
+tests/              the smoke test, yt-dlp and aria2c given muman's command
+                    lines, and the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the postprocessors plugins.rs embeds
 xtask/              cargo xtask comments | docs
@@ -132,14 +132,16 @@ cargo test --test smoke -- --ignored
 links and the changelog; `--check` only checks, as CI does. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
-line muman builds, against a file served from the test itself. Runs
+line muman builds, against a file served from the test itself, and
+`cargo test --test torrent -- --ignored` a real aria2c its own, against
+a tracker and a seeder of the test's. Runs
 against real recordings and sites are made by hand, as
 [tests/stress.md](tests/stress.md) records; a run's findings go there
 and into the pull request that fixes them.
 
-CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke
-and yt-dlp tests on Linux, macOS and Windows, plus rustfmt, rustdoc, the minimum
-Rust version, `cargo xtask comments` (with `--diff-base` on pull
+CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke,
+yt-dlp and torrent tests on Linux, macOS and Windows, plus rustfmt,
+rustdoc, the minimum Rust version, `cargo xtask comments` (with `--diff-base` on pull
 requests), `cargo xtask commits`, `cargo xtask docs --check` and
 cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;

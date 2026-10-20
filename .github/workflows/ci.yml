@@ -67,7 +67,13 @@ jobs:
         with:
           python-version: "3.x"
       - run: pip install yt-dlp
-      - run: cargo test --test smoke --test ytdlp --locked -- --ignored
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y aria2
+      - if: runner.os == 'macOS'
+        run: brew install aria2
+      - if: runner.os == 'Windows'
+        run: choco install aria2 -y --no-progress
+      - run: cargo test --test smoke --test ytdlp --test torrent --locked -- --ignored
 
   fmt:
     runs-on: ubuntu-latest
