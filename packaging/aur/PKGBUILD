@@ -8,6 +8,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/jeggao/muman'
 license=('AGPL-3.0-only')
 depends=('ffmpeg' 'yt-dlp')
+optdepends=('aria2: fetching torrents')
 provides=('muman')
 conflicts=('muman')
 options=('!debug' '!strip')

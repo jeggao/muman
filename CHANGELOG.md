@@ -14,6 +14,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   torrent's metainfo and files are kept under `sources/torrent`, and
   `purge` deletes what no song lists. A song list that lists one is
   format version 4, which an older muman refuses.
+- **aria2c is one of the programs muman runs**, to fetch torrents:
+  `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
+  and `[torrent]` sets the arguments every run takes, how long a fetch
+  waits with nothing arriving, how long a fetched torrent is seeded and
+  how long an unfinished one is kept. Only a run that fetches a torrent
+  needs it.
 
 ## [0.6.0] - 2026-10-20
 

@@ -33,6 +33,7 @@
             cargo-deny
             ffmpeg-headless
             yt-dlp
+            aria2
           ];
         };
       });

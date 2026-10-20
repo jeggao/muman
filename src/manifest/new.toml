@@ -150,13 +150,25 @@ extractor_args = { youtube = "skip=translated_subs;player_client=default,web_mus
 # How long an unfinished download is kept to resume.
 keep_partial = "14 days"
 
+[torrent]
+# More arguments for every aria2c run, such as ["--listen-port=51413"]
+# or ["--max-overall-upload-limit=1M"].
+args = []
+# How long a fetch waits with nothing arriving before it fails; a later
+# sync tries again.
+stall = "10 min"
+# How long a fetched torrent is seeded before the run goes on.
+seed_time = "0 s"
+# How long an unfinished fetch is kept to resume.
+keep_partial = "30 days"
+
 # The programs muman runs. `command` is a name, looked for beside muman
 # and then on PATH, or a path: absolute, ~/... or relative to this file's
 # folder; then any arguments, as ["python3", "-m", "yt_dlp"]. A fork that
-# takes the same options runs in its place. MUMAN_FFMPEG, MUMAN_FFPROBE
-# and MUMAN_YT_DLP override `command` on one machine. `version_check =
-# false` runs a release older than muman asks for, or one numbered its
-# own way.
+# takes the same options runs in its place. MUMAN_FFMPEG, MUMAN_FFPROBE,
+# MUMAN_YT_DLP and MUMAN_ARIA2C override `command` on one machine.
+# `version_check = false` runs a release older than muman asks for, or
+# one numbered its own way.
 [tools.ffmpeg]
 command = ["ffmpeg"]
 version_check = true
@@ -165,6 +177,9 @@ command = ["ffprobe"]
 version_check = true
 [tools.yt-dlp]
 command = ["yt-dlp"]
+version_check = true
+[tools.aria2c]
+command = ["aria2c"]
 version_check = true
 
 [history]
