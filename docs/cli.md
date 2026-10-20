@@ -80,6 +80,7 @@ Add songs: fetch what URLs name, or copy files into the manual folder, list each
 
 * `--to <QUERY>` — Give every lyrics, picture and tag file to the songs this query names instead of matching them by what they hold: one song, or for a picture every one, or for a cue sheet those its tracks go among. The query is split into terms as a shell splits words, so quote it whole: --to "artist:venn lantern" is two terms, --to 'album:="The Glass Orchards"' one
 * `--no-match` — Keep each video as uploaded, never looking for its YouTube Music track; other lookups are still made
+* `--from <FOLDER>` — Take up each torrent given from this folder, where another client downloaded it: its files are copied in and checked piece by piece, and only what is missing or wrong is fetched
 * `-y`, `--yes` — Decide without asking: a new source joins the listed song it may be the same recording as, and a lyrics, picture or tag file goes to the song it is clearly nearest
 * `--new` — Make every new source a song of its own, without comparing it
 * `--title <TEXT>` — The song's title

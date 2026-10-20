@@ -465,6 +465,56 @@ fn a_torrents_song_files_are_fetched_and_listed_and_the_rest_left() {
 }
 
 #[test]
+fn a_torrent_downloaded_already_is_taken_up_from_its_folder() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac", "scan.png"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let downloads = s.dir.path().join("downloads");
+    s.written("downloads/Lantern Weather/Paper Comets.flac", "x");
+    s.written("downloads/Lantern Weather/scan.png", "y");
+    let partial = s.dir.path().join("home/partial/torrent").join(&hash);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let saw = seen.clone();
+    let fake = Fake {
+        on_stream: Some(Box::new(move |_: &[String]| {
+            saw.lock().unwrap().extend([
+                std::fs::read(partial.join("files").join("1.flac")).ok(),
+                std::fs::read(partial.join("files").join("2.png")).ok(),
+            ]);
+            true
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            "--from",
+            downloads.to_str().unwrap(),
+            file.to_str().unwrap(),
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Taking up 2 file(s) of Lantern Weather"),
+        "{text}"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [Some(b"x".to_vec()), Some(b"y".to_vec())],
+        "the song, and the scan sharing its piece, copied in before aria2c checks them"
+    );
+    assert_eq!(s.songs().len(), 1, "{text}");
+}
+
+#[test]
 fn a_magnet_links_metainfo_comes_from_its_peers() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("The Glass Orchards", &["Rooms of Salt.flac"]);

@@ -44,6 +44,8 @@ pub(crate) struct Request<'a> {
     pub inputs: &'a [String],
     pub to: &'a [String],
     pub no_match: bool,
+    /// A folder each torrent given is taken up from.
+    pub from: Option<&'a Path>,
     pub matching: Matching,
     pub tags: &'a TagArgs,
 }
@@ -94,7 +96,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         }
         let mut proposals = imported?;
         if !torrents.is_empty() {
-            let (fine, found) = add_torrents(job, runner, &torrents, out)?;
+            let (fine, found) = add_torrents(job, runner, &torrents, request.from, out)?;
             ok &= fine;
             proposals.extend(found);
         }
@@ -651,6 +653,7 @@ fn add_torrents<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     inputs: &[&String],
+    from: Option<&Path>,
     out: &mut W,
 ) -> Result<(bool, Vec<Proposal>)> {
     let dirs = &job.dirs;
@@ -669,7 +672,7 @@ fn add_torrents<R: Runner, W: Write>(
     let mut ok = true;
     let mut proposals = Vec::new();
     for input in inputs {
-        match add_torrent(runner, out, &places, &mut manifest, input) {
+        match add_torrent(runner, out, &places, &mut manifest, input, from) {
             Ok(songs) => proposals.extend(
                 songs
                     .into_iter()
@@ -697,6 +700,7 @@ fn add_torrent<R: Runner, W: Write>(
     places: &crate::aria2::Places<'_>,
     manifest: &mut Manifest,
     input: &str,
+    from: Option<&Path>,
 ) -> Result<Vec<(SourceKey, String)>> {
     let (bytes, trackers) = if is_magnet(input) {
         let magnet = crate::torrent::Magnet::parse(input)?;
@@ -721,6 +725,17 @@ fn add_torrent<R: Runner, W: Write>(
     };
     let missing: Vec<&crate::torrent::File> =
         selected.iter().copied().filter(|f| !on_disk(f)).collect();
+    if let Some(from) = from.filter(|_| !missing.is_empty()) {
+        let copied = crate::aria2::take_up(places, &meta, &missing, from)?;
+        ui::info(
+            out,
+            &format!(
+                "Taking up {copied} file(s) of {} from {}, checked piece by piece",
+                meta.name,
+                from.display()
+            ),
+        )?;
+    }
     if !missing.is_empty() {
         let size =
             |files: &[&crate::torrent::File]| ui::bytes(files.iter().map(|f| f.length).sum());

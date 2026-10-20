@@ -426,6 +426,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             inputs,
             to,
             no_match,
+            from,
             matching,
             tags,
         } => add::run(
@@ -438,6 +439,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 inputs,
                 to,
                 no_match: *no_match,
+                from: from.as_deref(),
                 matching: *matching,
                 tags,
             },
