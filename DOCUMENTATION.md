@@ -27,7 +27,6 @@ what is not about one module.
 | Each setting's default | [src/manifest/new.toml](src/manifest/new.toml) |
 | Why a module works as it does | That module's `//!` docs |
 | How to work in this repository | [AGENTS.md](AGENTS.md) |
-| How the stress runs against real files are made, and what each found | [tests/stress.md](tests/stress.md) |
 | What changed in each release | [CHANGELOG.md](CHANGELOG.md) |
 
 Do not create other Markdown files unless asked.

@@ -136,9 +136,7 @@ test runs muman end to end against a real ffmpeg on generated audio;
 line muman builds, against a file served from the test itself, and
 `cargo test --test torrent -- --ignored` a real aria2c its own, against
 a tracker and a seeder of the test's. Runs
-against real recordings and sites are made by hand, as
-[tests/stress.md](tests/stress.md) records; a run's findings go there
-and into the pull request that fixes them.
+against real recordings and sites are made by hand.
 
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke,
 yt-dlp and torrent tests on Linux, macOS and Windows, plus rustfmt,
