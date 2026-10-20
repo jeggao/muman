@@ -18,7 +18,9 @@
 //! inside another, as a fetch of what a round of lookups found, takes the
 //! line once it has shown for `SHOW_AFTER`, and gives it back to the
 //! step around it when it ends; two bars drawn to one line would take
-//! turns on it with each tick. The line keeps to the terminal's width,
+//! turns on it with each tick. A step begun beneath the others
+//! ([`step_beneath`]), as torrents fetched beside yt-dlp, takes the line
+//! only once no other holds it. The line keeps to the terminal's width,
 //! which is read again at each update: as it narrows, the line drops its
 //! bar's percentage, then the bar, then the time left, so the names of
 //! what is under way keep room and the line never wraps.
@@ -167,6 +169,18 @@ impl Progress {
     /// ends when dropped. A step of no items shows nothing.
     #[must_use]
     pub fn step(&self, name: &str, total: Option<u64>) -> Step {
+        self.begin(name, total, false)
+    }
+
+    /// Begin a step as [`Self::step`] does, but beneath every step under
+    /// way: it takes the line only once no other holds it, as work run
+    /// beside another step's does.
+    #[must_use]
+    pub fn step_beneath(&self, name: &str, total: Option<u64>) -> Step {
+        self.begin(name, total, true)
+    }
+
+    fn begin(&self, name: &str, total: Option<u64>, beneath: bool) -> Step {
         if total == Some(0) && self.inner.kind != Kind::Hidden {
             return Self::hidden().step(name, total);
         }
@@ -188,7 +202,12 @@ impl Progress {
             reported: Mutex::new(Reported::default()),
         });
         if matches!(self.inner.kind, Kind::Bar { .. }) {
-            lock(&self.inner.line).steps.push(Arc::clone(&state));
+            let mut line = lock(&self.inner.line);
+            if beneath {
+                line.steps.insert(0, Arc::clone(&state));
+            } else {
+                line.steps.push(Arc::clone(&state));
+            }
         }
         let step = Step {
             progress: self.clone(),
@@ -698,6 +717,12 @@ pub fn step(name: &str, total: Option<u64>) -> Step {
     current().step(name, total)
 }
 
+/// Begin a step of the run's progress beneath every step under way.
+#[must_use]
+pub fn step_beneath(name: &str, total: Option<u64>) -> Step {
+    current().step_beneath(name, total)
+}
+
 /// Run `f` with the run's status line lifted out of the way.
 pub fn suspend<R>(f: impl FnOnce() -> R) -> R {
     current().suspend(f)
@@ -946,6 +971,31 @@ mod tests {
         drop(outer);
         assert_eq!(showing(), None);
         assert!(sink.text().ends_with("\x1b]9;4;0\x07"), "{:?}", sink.text());
+    }
+
+    #[test]
+    fn a_step_begun_beneath_takes_the_line_once_no_other_holds_it() {
+        let progress = Progress::new(Kind::Bar { taskbar: false }, Box::new(io::sink()));
+        let showing = || {
+            lock(&progress.inner.line)
+                .bar
+                .as_ref()
+                .map(|s| s.step.name.clone())
+        };
+        let fetching = progress.step("Fetching", None);
+        fetching.note("Paper Comets");
+        let torrents = progress.step_beneath("Fetching torrents", None);
+        torrents.note("Lantern Weather 3%");
+        assert_eq!(showing().as_deref(), Some("Fetching"));
+        drop(fetching);
+        assert_eq!(showing().as_deref(), Some("Fetching torrents"));
+        let looking = progress.step("Looking up", None);
+        looking.note("Rooms of Salt");
+        assert_eq!(
+            showing().as_deref(),
+            Some("Looking up"),
+            "a step begun later"
+        );
     }
 
     #[test]

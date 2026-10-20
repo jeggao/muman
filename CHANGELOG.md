@@ -26,7 +26,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   a damaged download is, only its pieces that do not check fetched.
   The torrents a `sync` fetches again are fetched by one aria2c run,
   up to eight at a time, so one no peer seeds stalls beside the others
-  rather than before them.
+  rather than before them, and beside yt-dlp's fetches rather than
+  after them.
 - **aria2c is one of the programs muman runs**, to fetch torrents:
   `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
   and `[torrent]` sets the arguments every run takes, how long a fetch

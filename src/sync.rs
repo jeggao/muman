@@ -1,9 +1,17 @@
 //! `muman sync`, and the network steps `add` shares with it: one
 //! fetcher into the store for a run, what a step found recorded, each
 //! proposal listed as a song, and every lookup due made.
+//!
+//! A sync fetches the torrent files it lacks beside yt-dlp's fetches, on
+//! a thread of their own: the two share no program and no folder, and a
+//! torrent no peer seeds would otherwise hold yt-dlp up for its whole
+//! stall. What that thread says waits until both end, as two writers
+//! would tear each other's lines, and its progress takes the status line
+//! only once yt-dlp's gives it up ([`crate::progress::step_beneath`]).
+//! Each side's failures are recorded whatever the other's end.
 
 use std::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -115,12 +123,50 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         return Ok(true);
     }
     let mut state = State::load(&job.dirs.home)?;
-    let (mut ok, mut failed) = network(job, runner, out, |acquire| {
-        acquire.missing(manifest, &state.failures, retry)
-    })?;
-    let torrents = missing_torrents(job, runner, manifest, &state.failures, retry, out)?;
-    ok &= torrents.is_empty();
-    failed.extend(torrents);
+    let root = job.dirs.torrent();
+    let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
+    let places = crate::aria2::Places {
+        store: &root,
+        partial: &partial,
+        options: &manifest.settings.torrent,
+    };
+    let due = torrents_due(job, &places, manifest, &state.failures, retry, out)?;
+    let (fetched, (torrents, said)) = std::thread::scope(|scope| {
+        let beside = scope.spawn(|| {
+            let mut said = Vec::new();
+            let fetched = crate::aria2::fetch_due(runner, &mut said, &places, manifest, &due);
+            (fetched, said)
+        });
+        let fetched = network(job, runner, out, |acquire| {
+            acquire.missing(manifest, &state.failures, retry)
+        });
+        let beside = beside
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        (fetched, beside)
+    });
+    out.write_all(&said)?;
+    let mut ok = true;
+    let mut failed = Vec::new();
+    let mut error = None;
+    match fetched {
+        Ok((fine, f)) => {
+            ok &= fine;
+            failed.extend(f);
+        }
+        Err(e) => error = Some(e),
+    }
+    match torrents {
+        Ok(f) => {
+            ok &= f.is_empty();
+            failed.extend(f);
+        }
+        Err(e) => error = error.or(Some(e)),
+    }
+    if let Some(e) = error {
+        record_fetches(job, &mut state, failed)?;
+        return Err(e);
+    }
     let records = lookup::refetch(
         &job.dirs,
         manifest,
@@ -149,6 +195,13 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
     failed.extend(records.failed);
+    record_fetches(job, &mut state, failed)?;
+    Ok(ok)
+}
+
+/// Record each of `failed` that did not arrive, and clear the failure of
+/// each that the store now holds.
+fn record_fetches(job: &Job, state: &mut State, failed: Vec<(SourceKey, String)>) -> Result<()> {
     let store = Store::scan(&job.dirs)?;
     let arrived: Vec<SourceKey> = state
         .failures
@@ -169,21 +222,22 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
             };
             state.record_failure(&key, step, rev, error);
         }
-        State::keep_measures(&job.dirs.home, &state)?;
+        State::keep_measures(&job.dirs.home, state)?;
     }
-    Ok(ok)
+    Ok(())
 }
 
-/// Fetch again every listed torrent's file the store lacks, as
-/// [`crate::aria2::missing`] says: each that did not arrive, with why.
-fn missing_torrents<R: Runner, W: Write>(
+/// The listed torrent files due to be fetched again, by torrent, as
+/// [`crate::aria2::due`] says and says them; what waits in `places`'
+/// partial folder too long is cleared first.
+fn torrents_due<W: Write>(
     job: &Job,
-    runner: &R,
+    places: &crate::aria2::Places<'_>,
     manifest: &Manifest,
-    failures: &std::collections::BTreeMap<SourceKey, state::Failure>,
+    failures: &BTreeMap<SourceKey, state::Failure>,
     retry: bool,
     out: &mut W,
-) -> Result<Vec<(SourceKey, String)>> {
+) -> Result<BTreeMap<String, Vec<SourceKey>>> {
     let store = Store::scan(&job.dirs)?;
     let damaged = |k: &SourceKey| {
         failures
@@ -195,18 +249,10 @@ fn missing_torrents<R: Runner, W: Write>(
         .iter()
         .any(|k| matches!(k, SourceKey::Torrent(_)) && (!store.has(k) || damaged(k)));
     if !wanted {
-        return Ok(Vec::new());
+        return Ok(BTreeMap::new());
     }
-    let options = &manifest.settings.torrent;
-    let root = job.dirs.torrent();
-    let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
-    clear_stale(&partial, options.keep_partial, None);
-    let places = crate::aria2::Places {
-        store: &root,
-        partial: &partial,
-        options,
-    };
-    crate::aria2::missing(runner, out, &places, &store, manifest, failures, retry)
+    clear_stale(places.partial, places.options.keep_partial, None);
+    crate::aria2::due(out, &store, manifest, failures, retry)
 }
 
 /// Move the song list's settings still at an earlier edition's default

@@ -782,6 +782,66 @@ fn a_sync_with_no_aria2c_fails_each_torrent_file_and_goes_on() {
 }
 
 #[test]
+fn a_sync_fetches_torrents_beside_yt_dlp() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fetch = aria2c(bytes, hash.clone(), Arc::default());
+    let (ok, text) = s.run(&fetch, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let song = s
+        .dir
+        .path()
+        .join("home/sources/torrent")
+        .join(&hash)
+        .join("a.flac");
+    std::fs::remove_file(&song).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let mut text = std::fs::read_to_string(&list).unwrap();
+    text.push_str("\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    std::fs::write(&list, text).unwrap();
+
+    // Each run waits for the other to start; one after the other, the
+    // first would wait in vain.
+    let started = Arc::new((Mutex::new([false; 2]), std::sync::Condvar::new()));
+    let overlapped = Arc::new(Mutex::new(Vec::new()));
+    let saw = overlapped.clone();
+    let fake = Fake {
+        on_stream: Some(Box::new(move |args: &[String]| {
+            let me = usize::from(args[0] == "yt-dlp");
+            let (lock, arrived) = &*started;
+            let mut seen = lock.lock().unwrap();
+            seen[me] = true;
+            arrived.notify_all();
+            let (seen, wait) = arrived
+                .wait_timeout_while(seen, std::time::Duration::from_secs(10), |s| !s[1 - me])
+                .unwrap();
+            drop(seen);
+            saw.lock()
+                .unwrap()
+                .push((args[0].clone(), !wait.timed_out()));
+            me == 0 && (fetch.on_stream.as_ref().unwrap())(args)
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (_, text) = s.run(&fake, &["sync"]);
+    let mut overlapped = overlapped.lock().unwrap().clone();
+    overlapped.sort();
+    assert_eq!(
+        overlapped,
+        [("aria2c".to_string(), true), ("yt-dlp".to_string(), true)],
+        "{text}"
+    );
+    assert!(song.is_file(), "{text}");
+}
+
+#[test]
 fn a_torrents_file_that_failed_to_come_again_waits() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac"]);
