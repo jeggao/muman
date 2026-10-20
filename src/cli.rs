@@ -322,6 +322,12 @@ pub enum Command {
         #[arg(long)]
         no_match: bool,
 
+        /// Take up each torrent given from this folder, where another
+        /// client downloaded it: its files are copied in and checked
+        /// piece by piece, and only what is missing or wrong is fetched.
+        #[arg(long, value_name = "FOLDER")]
+        from: Option<PathBuf>,
+
         #[command(flatten)]
         matching: Matching,
 
@@ -819,6 +825,7 @@ Shelves hold `songs` alone."
             inputs,
             to,
             no_match,
+            from,
             matching,
             tags,
         } = parse(&["add", "a", "b.flac"]).unwrap().command
@@ -827,6 +834,7 @@ Shelves hold `songs` alone."
         };
         assert_eq!(inputs, ["a", "b.flac"]);
         assert!(!no_match && !matching.yes && !matching.new && to.is_empty());
+        assert_eq!(from, None);
         assert_eq!(tags.tags(), []);
         let Command::Add { to, .. } = parse(&[
             "add",

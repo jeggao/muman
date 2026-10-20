@@ -22,6 +22,13 @@
 //! placed: a file aria2c has not finished may have holes where pieces
 //! came out of order, whatever its size.
 //!
+//! A torrent already downloaded, as another client leaves it, is taken
+//! up from its folder ([`take_up`]): each file muman selects, and each
+//! file sharing a piece with one, which aria2c needs to check that piece
+//! whole, is copied to the path the fetch writes it at, and aria2c checks
+//! every piece and fetches only those missing or wrong. One complete and
+//! right needs no peer.
+//!
 //! A listed file gone from the store is fetched again by `sync`
 //! ([`missing`]), with the lyrics and pictures it brings: from the
 //! torrent's metainfo where the store keeps it, else from a magnet link
@@ -113,7 +120,8 @@ pub fn metainfo_command(places: &Places<'_>, link: &str) -> Vec<OsString> {
 }
 
 /// Where a selected file is written while it is fetched, in `dir`.
-fn index_path(file: &File) -> PathBuf {
+#[must_use]
+pub fn index_path(file: &File) -> PathBuf {
     let name = match file.path.extension() {
         Some(ext) => format!("{}.{}", file.index, ext.to_string_lossy()),
         None => file.index.to_string(),
@@ -122,13 +130,15 @@ fn index_path(file: &File) -> PathBuf {
 }
 
 /// The run that fetches `files` of the torrent `metainfo` describes into
-/// `dir`.
+/// `dir`, the files of `beside` written where [`take_up`] copies them, so
+/// the pieces they share with `files` check whole.
 #[must_use]
 pub fn fetch_command(
     places: &Places<'_>,
     metainfo: &Path,
     dir: &Path,
     files: &[&File],
+    beside: &[&File],
 ) -> Vec<OsString> {
     let mut cmd = common(places, dir);
     cmd.extend([
@@ -138,7 +148,7 @@ pub fn fetch_command(
     ]);
     let select: Vec<String> = files.iter().map(|f| f.index.to_string()).collect();
     cmd.push(format!("--select-file={}", select.join(",")).into());
-    for file in files {
+    for file in files.iter().chain(beside) {
         let mut arg = OsString::from(format!("--index-out={}=", file.index));
         arg.push(index_path(file));
         cmd.push(arg);
@@ -271,11 +281,9 @@ pub fn fetch<R: Runner, W: Write>(
     let dir = places.partial.join(hash);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let step = crate::progress::step("Fetching", None);
-    let (ok, said) = stream(
-        runner,
-        &fetch_command(places, &metainfo, &dir, files),
-        &step,
-    )?;
+    let beside = crate::torrent::sharing(meta, files);
+    let cmd = fetch_command(places, &metainfo, &dir, files, &beside);
+    let (ok, said) = stream(runner, &cmd, &step)?;
     if !ok {
         for e in &said.errors {
             crate::ui::warning(out, &format!("aria2c: {e}"))?;
@@ -308,6 +316,47 @@ pub fn fetch<R: Runner, W: Write>(
         arrived,
         failure: None,
     })
+}
+
+/// Copy what `from`, a folder another client downloaded `meta` into,
+/// holds of `files` and the files sharing a piece with them to where a
+/// fetch writes each, for aria2c to check and finish: how many were
+/// copied. `from` may be the torrent's own folder or the one holding it,
+/// or the one file of a torrent of one.
+pub fn take_up(
+    places: &Places<'_>,
+    meta: &Metainfo,
+    files: &[&File],
+    from: &Path,
+) -> Result<usize> {
+    let root = if from.join(&meta.name).is_dir() && meta.files.len() > 1 {
+        from.join(&meta.name)
+    } else {
+        from.to_path_buf()
+    };
+    let dir = places.partial.join(meta.hash());
+    let mut copied = 0;
+    for file in files
+        .iter()
+        .copied()
+        .chain(crate::torrent::sharing(meta, files))
+    {
+        let at = if root.is_file() {
+            root.clone()
+        } else {
+            file.path.iter().fold(root.clone(), |p, part| p.join(part))
+        };
+        if std::fs::metadata(&at).map(|m| m.len()).ok() != Some(file.length) {
+            continue;
+        }
+        let to = dir.join(index_path(file));
+        std::fs::create_dir_all(to.parent().unwrap_or(&dir))
+            .with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::copy(&at, &to)
+            .with_context(|| format!("copying {} to {}", at.display(), to.display()))?;
+        copied += 1;
+    }
+    Ok(copied)
 }
 
 /// Keep the metainfo `bytes` of the torrent of `hash` in the store's
@@ -492,12 +541,14 @@ mod tests {
                 length: 3,
                 root: None,
                 index: 1,
+                offset: 0,
             },
             File {
                 path: ["CD 2", "cover"].iter().collect(),
                 length: 3,
                 root: None,
                 index: 4,
+                offset: 3,
             },
         ];
         let cmd = text(&fetch_command(
@@ -505,6 +556,7 @@ mod tests {
             Path::new("store/h.torrent"),
             Path::new("partial/h"),
             &files.iter().collect::<Vec<_>>(),
+            &[],
         ));
         assert_eq!(cmd[0], "aria2c");
         assert!(cmd.contains(&"--no-conf=true".to_string()));

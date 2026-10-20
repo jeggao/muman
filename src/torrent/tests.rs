@@ -113,6 +113,37 @@ fn a_v1_torrent_is_named_by_the_sha1_of_its_info() {
 }
 
 #[test]
+fn a_file_shares_its_end_pieces_with_its_neighbours_alone() {
+    let file =
+        |name: &str, length: i64| B::D(vec![("length", B::I(length)), ("path", path(&[name]))]);
+    let info = B::D(vec![
+        ("name", s("Lantern Weather")),
+        ("piece length", B::I(100)),
+        ("pieces", B::S(vec![0; 20])),
+        (
+            "files",
+            B::L(vec![
+                file("a.nfo", 150),
+                file("b.flac", 200),
+                file("c.jpg", 50),
+                file("d.log", 10),
+            ]),
+        ),
+    ]);
+    let (bytes, _) = torrent(info, &[]);
+    let meta = Metainfo::read(&bytes).unwrap();
+    assert_eq!(meta.piece_length, 100);
+    let offsets: Vec<u64> = meta.files.iter().map(|f| f.offset).collect();
+    assert_eq!(offsets, [0, 150, 350, 400]);
+    let song = [&meta.files[1]];
+    let names: Vec<String> = sharing(&meta, &song)
+        .iter()
+        .map(|f| f.path.display().to_string())
+        .collect();
+    assert_eq!(names, ["a.nfo", "c.jpg"], "d.log starts a piece of its own");
+}
+
+#[test]
 fn a_torrent_of_one_file_names_it_by_its_name() {
     let info = B::D(vec![
         ("name", s("Rooms of Salt.flac")),

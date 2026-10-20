@@ -14,7 +14,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use muman::aria2::{Places, fetch, metainfo_of};
+use muman::aria2::{Places, fetch, metainfo_of, take_up};
 use muman::runner::System;
 use muman::settings::Torrent;
 use muman::source::SourceKey;
@@ -219,4 +219,59 @@ fn aria2c_fetches_the_files_muman_selects_from_a_swarm() {
         !store.join(meta.hash()).join("notes.nfo").exists(),
         "a file not selected stays on its peers"
     );
+}
+
+#[test]
+#[ignore = "needs aria2c"]
+fn a_download_already_made_is_taken_up_with_no_peer() {
+    let runner = System::default();
+    runner
+        .require("aria2c")
+        .expect("found, at or above its floor");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let nobody = format!("http://127.0.0.1:{}/announce", free_port());
+    let name = "The Glass Orchards";
+    let files: Vec<(&[&str], Vec<u8>, bool)> = vec![
+        (&["scan.png"], vec![7; 5000], false),
+        (&["Rooms of Salt.flac"], SONG.to_vec(), false),
+        (&["log.txt"], vec![9; 3000], false),
+    ];
+    let bytes = metainfo(name, &files, &nobody);
+    let meta = Metainfo::read(&bytes).unwrap();
+    let downloads = root.join("downloads");
+    for (path, content, _) in &files {
+        let at = path
+            .iter()
+            .fold(downloads.join(name), |p, part| p.join(part));
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, content).unwrap();
+    }
+    let (store, partial) = (root.join("store"), root.join("partial"));
+    let options = Torrent {
+        args: ALONE
+            .iter()
+            .map(ToString::to_string)
+            .chain([format!("--listen-port={}", free_port())])
+            .collect(),
+        stall: Duration::from_secs(60),
+        ..Torrent::default()
+    };
+    let places = Places {
+        store: &store,
+        partial: &partial,
+        options: &options,
+    };
+    muman::aria2::keep_metainfo(&store, meta.hash(), &bytes).unwrap();
+    let wanted = selected(&meta);
+    let copied = take_up(&places, &meta, &wanted, &downloads).unwrap();
+    assert_eq!(copied, 3, "the song and the two files its pieces share");
+    let mut out = Vec::new();
+    let fetched = fetch(&runner, &mut out, &places, &meta, &wanted).unwrap();
+    assert_eq!(fetched.failure, None, "{}", String::from_utf8_lossy(&out));
+    let [SourceKey::Torrent(key)] = fetched.arrived.as_slice() else {
+        panic!("{:?}", fetched.arrived);
+    };
+    let song = muman::store::torrent_path(&store, key);
+    assert_eq!(std::fs::read(&song).unwrap(), SONG, "the song, whole");
 }

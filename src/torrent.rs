@@ -71,6 +71,8 @@ pub struct Metainfo {
     /// addresses may hold a personal key.
     pub private: bool,
     pub trackers: Vec<String>,
+    /// The bytes each piece holds, the last but one.
+    pub piece_length: u64,
 }
 
 /// One file a torrent holds.
@@ -84,6 +86,8 @@ pub struct File {
     /// Its place among the files a fetch counts, from 1, as aria2's
     /// `--select-file` takes it.
     pub index: usize,
+    /// Where its bytes start among the torrent's, padding counted.
+    pub offset: u64,
 }
 
 impl Metainfo {
@@ -122,17 +126,27 @@ impl Metainfo {
             }
             _ => Vec::new(),
         };
+        let piece_length = match get(info, "piece length") {
+            Some(Value::Int(n)) => u64::try_from(*n).unwrap_or(0),
+            _ => 0,
+        };
         let files = if v1.is_some() {
             v1_list(info, &name, &roots)?
         } else {
+            let mut offset = 0;
             roots
                 .into_iter()
                 .enumerate()
-                .map(|(i, (path, length, root))| File {
-                    path,
-                    length,
-                    root,
-                    index: i + 1,
+                .map(|(i, (path, length, root))| {
+                    let file = File {
+                        path,
+                        length,
+                        root,
+                        index: i + 1,
+                        offset,
+                    };
+                    offset += length.div_ceil(piece_length.max(1)) * piece_length;
+                    file
                 })
                 .collect()
         };
@@ -156,6 +170,7 @@ impl Metainfo {
             files,
             private,
             trackers,
+            piece_length,
         })
     }
 
@@ -212,6 +227,30 @@ pub fn selected(meta: &Metainfo) -> Vec<&File> {
         .collect()
 }
 
+/// The files of `meta` besides `files` that share a piece with one of
+/// them: a piece is checked whole, so taking up a file already on disk
+/// takes these up too.
+#[must_use]
+pub fn sharing<'m>(meta: &'m Metainfo, files: &[&File]) -> Vec<&'m File> {
+    let piece = meta.piece_length.max(1);
+    let pieces = |f: &File| {
+        let first = f.offset / piece;
+        let last = (f.offset + f.length.max(1) - 1) / piece;
+        first..=last
+    };
+    meta.files
+        .iter()
+        .filter(|f| f.length > 0 && !files.iter().any(|s| s.index == f.index))
+        .filter(|f| {
+            let mine = pieces(f);
+            files.iter().any(|s| {
+                let theirs = pieces(s);
+                mine.start() <= theirs.end() && theirs.start() <= mine.end()
+            })
+        })
+        .collect()
+}
+
 /// The files of a v1 or hybrid torrent's `files` or `length`, a hybrid's
 /// with the `pieces root` its file tree gives each. Both name a file by
 /// its path below the torrent's folder, or a torrent of one file by its
@@ -237,9 +276,11 @@ fn v1_list(
             path: PathBuf::from(name),
             length,
             index: 1,
+            offset: 0,
         }]);
     };
     let mut files = Vec::new();
+    let mut offset = 0;
     for (i, entry) in list.iter().enumerate() {
         let Value::Dict(entry, _) = entry else {
             bail!("not a torrent: a file entry is no dictionary");
@@ -249,6 +290,12 @@ fn v1_list(
         else {
             bail!("not a torrent: a file with no `path`");
         };
+        let Some(Value::Int(length)) = get(entry, "length") else {
+            bail!("not a torrent: a file with no `length`");
+        };
+        let length = u64::try_from(*length).context("a file of negative length")?;
+        let start = offset;
+        offset += length;
         if padding {
             continue;
         }
@@ -263,14 +310,12 @@ fn v1_list(
             path.components().next().is_some(),
             "not a torrent: a file with an empty path"
         );
-        let Some(Value::Int(length)) = get(entry, "length") else {
-            bail!("not a torrent: a file with no `length`");
-        };
         files.push(File {
             root: root_of(&path),
             path,
-            length: u64::try_from(*length).context("a file of negative length")?,
+            length,
             index: i + 1,
+            offset: start,
         });
     }
     Ok(files)
