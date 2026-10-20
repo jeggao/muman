@@ -7,6 +7,7 @@ pub mod acquire;
 pub mod add;
 pub mod align;
 pub mod analysis;
+pub mod aria2;
 pub mod atomic;
 pub mod attach;
 pub mod change;

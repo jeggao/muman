@@ -299,12 +299,13 @@ pub enum Command {
     /// and asked about when that is not sure.
     Add {
         /// Video, playlist, album or channel URLs, as yt-dlp reads them;
-        /// or audio files and folders of them, copied into the manual
+        /// magnet links and .torrent files, whose song files aria2c
+        /// fetches; or audio files and folders of them, copied into the manual
         /// folder, an original yt-dlp fetched among them into
         /// sources/yt-dlp under its key; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
-        #[arg(required = true, value_name = "URL|FILE")]
+        #[arg(required = true, value_name = "URL|MAGNET|FILE")]
         inputs: Vec<String>,
 
         /// Give every lyrics, picture and tag file to the songs this

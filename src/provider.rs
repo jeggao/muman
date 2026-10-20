@@ -28,7 +28,8 @@ use crate::source::{SourceKey, YOUTUBE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Provider {
-    /// Files of the user's own; never fetched, never looked up.
+    /// Files of the user's own, and torrents' files: what their own tags
+    /// say; never looked up.
     Manual,
     /// A YouTube video that is not a release.
     YouTube,
@@ -80,20 +81,20 @@ impl Provider {
             })
     }
 
-    /// The provider a source is from: a YouTube video is a release when
+    /// The provider a source is from, a torrent's file read as a file of
+    /// the user's is: a YouTube video is a release when
     /// its facts say so. `None` for a source of another extractor, or a
     /// video not measured yet.
     #[must_use]
     pub fn of(key: &SourceKey, facts: Option<&Facts>) -> Option<Self> {
         match key {
-            SourceKey::Manual(_) => Some(Self::Manual),
+            SourceKey::Manual(_) | SourceKey::Torrent(_) => Some(Self::Manual),
             SourceKey::Remote { site, .. } if site == YOUTUBE => Some(if facts?.release {
                 Self::YouTubeMusic
             } else {
                 Self::YouTube
             }),
             SourceKey::Remote { site, .. } => crate::store::kept(site).map(|k| k.provider),
-            SourceKey::Torrent(_) => None,
         }
     }
 

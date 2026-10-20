@@ -87,9 +87,16 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "store.rs",
-        3,
+        4,
         "an upload its release replaced, deleted from the sources; a file \
-         fetched moved to its key's place, replacing the key's other",
+         fetched moved to its key's place, replacing the key's other; a \
+         torrent's file aria2c finished moved to its key's place",
+    ),
+    (
+        "aria2.rs",
+        2,
+        "the metainfo a magnet link's peers sent, dropped once read; a \
+         torrent's unfinished folder, once its files are placed",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (

@@ -70,11 +70,11 @@ Exit codes:
 
 Add songs: fetch what URLs name, or copy files into the manual folder, list each as a song or as a source of the song it is the same recording as, set any tags given on each, then sync. Lyrics, pictures and tag files are matched to the songs they belong to, and asked about when that is not sure
 
-**Usage:** `muman add [OPTIONS] <URL|FILE>...`
+**Usage:** `muman add [OPTIONS] <URL|MAGNET|FILE>...`
 
 **Arguments:**
 
-* `<URL|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
+* `<URL|MAGNET|FILE>` — Video, playlist, album or channel URLs, as yt-dlp reads them; magnet links and .torrent files, whose song files aria2c fetches; or audio files and folders of them, copied into the manual folder, an original yt-dlp fetched among them into sources/yt-dlp under its key; or lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value .txt, .ffmeta, .json) and cue sheets, each given to its songs
 
 **Options:**
 

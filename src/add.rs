@@ -3,6 +3,13 @@
 //! same recording as, the lyrics, pictures and tag files given to their
 //! songs, then a sync.
 //!
+//! A magnet link or a `.torrent` file names a torrent, whose song files
+//! and what they bring are fetched by aria2c ([`crate::aria2`]) and each
+//! song file listed as a song is. Its metainfo is kept in the store, and
+//! what fetches it again, its name, trackers and v2 hash, in the song
+//! list's `[torrents]`; a private torrent's trackers are left out, since
+//! their addresses hold a personal key.
+//!
 //! Thousands of files may be given at once, and each step over them is
 //! taken once: every song file is probed before any is copied, as many
 //! at a time as songs are built, each folder given is listed once for the
@@ -57,20 +64,14 @@ pub(crate) fn run<R: Runner, W: Write>(
     let mut unread = Vec::new();
     let mut refused = None;
     let done = (|| {
-        let (files, urls): (Vec<&String>, Vec<&String>) =
-            request.inputs.iter().partition(|i| Path::new(i).exists());
-        if let Some(missing) = urls.iter().find(|u| names_a_path(u)) {
-            bail!("`{missing}`: no such file");
-        }
-        if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
-            bail!(
-                "`{word}` is no file or URL; to name songs with it, put it inside \
-                 --to's quotes, as --to \"artist:venn {word}\""
-            );
-        }
+        let Inputs {
+            torrents,
+            files,
+            urls,
+        } = sort_inputs(request.inputs)?;
         let (loose, files) = split_loose(&files, &mut unread);
         let mut ok = true;
-        if let Some(url) = urls.first().filter(|_| job.offline) {
+        if let Some(url) = urls.first().or(torrents.first()).filter(|_| job.offline) {
             return Err(change::Refused(format!(
                 "{url} is fetched from the network, and --offline reaches none"
             ))
@@ -92,6 +93,11 @@ pub(crate) fn run<R: Runner, W: Write>(
             run.copied(&dirs.home, file);
         }
         let mut proposals = imported?;
+        if !torrents.is_empty() {
+            let (fine, found) = add_torrents(job, runner, &torrents, out)?;
+            ok &= fine;
+            proposals.extend(found);
+        }
         if !urls.is_empty() {
             let urls: Vec<String> = urls.into_iter().cloned().collect();
             let (fine, additions) = network(job, runner, out, |acquire| {
@@ -149,6 +155,40 @@ pub(crate) fn run<R: Runner, W: Write>(
     }
     not_added(&unread, left_out, request.matching.yes)?;
     Ok(ok)
+}
+
+/// What `add` was given, by how each is added.
+struct Inputs<'a> {
+    torrents: Vec<&'a String>,
+    files: Vec<&'a String>,
+    urls: Vec<&'a String>,
+}
+
+/// `inputs` sorted into torrents, files on disk and URLs, refused where a
+/// file named is not there or a word was meant for `--to`.
+fn sort_inputs(inputs: &[String]) -> Result<Inputs<'_>> {
+    let (torrents, inputs): (Vec<&String>, Vec<&String>) =
+        inputs.iter().partition(|i| names_a_torrent(i));
+    let (files, urls): (Vec<&String>, Vec<&String>) =
+        inputs.into_iter().partition(|i| Path::new(i).exists());
+    let missing = torrents
+        .iter()
+        .find(|t| !is_magnet(t) && !Path::new(t).exists())
+        .or_else(|| urls.iter().find(|u| names_a_path(u)));
+    if let Some(missing) = missing {
+        bail!("`{missing}`: no such file");
+    }
+    if let Some(word) = urls.iter().find(|u| is_a_word(u)) {
+        bail!(
+            "`{word}` is no file or URL; to name songs with it, put it inside \
+             --to's quotes, as --to \"artist:venn {word}\""
+        );
+    }
+    Ok(Inputs {
+        torrents,
+        files,
+        urls,
+    })
 }
 
 /// The error of files `add` could not read, or left out as matched to no
@@ -587,6 +627,157 @@ pub(crate) fn original<R: Runner>(
 ) -> Option<SourceKey> {
     let media = store::kind_of(file) == Some(store::Kind::Media);
     media.then(|| fetched_key(runner, sites, file)).flatten()
+}
+
+/// Whether `input` is a magnet link.
+fn is_magnet(input: &str) -> bool {
+    input
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("magnet:"))
+}
+
+/// Whether `input` names a torrent: a magnet link, or a `.torrent` file.
+fn names_a_torrent(input: &str) -> bool {
+    is_magnet(input)
+        || Path::new(input)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("torrent"))
+}
+
+/// Fetch each torrent `inputs` names, its metainfo kept and recorded, and
+/// propose each of its song files no song lists: whether every one was
+/// fetched, and the proposals.
+fn add_torrents<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    inputs: &[&String],
+    out: &mut W,
+) -> Result<(bool, Vec<Proposal>)> {
+    let dirs = &job.dirs;
+    let mut manifest = Manifest::load(&dirs.home)?;
+    let options = manifest.settings.torrent.clone();
+    let store_root = dirs.torrent();
+    let partial = dirs.home.join("partial").join(crate::source::TORRENT);
+    crate::sync::clear_stale(&partial, options.keep_partial, None);
+    let places = crate::aria2::Places {
+        store: &store_root,
+        partial: &partial,
+        options: &options,
+    };
+    let mut known = manifest.keys();
+    known.extend(manifest.removed_keys());
+    let mut ok = true;
+    let mut proposals = Vec::new();
+    for input in inputs {
+        match add_torrent(runner, out, &places, &mut manifest, input) {
+            Ok(songs) => proposals.extend(
+                songs
+                    .into_iter()
+                    .filter(|(key, _)| !known.contains(key))
+                    .map(|(key, label)| Proposal {
+                        sources: vec![key],
+                        album: None,
+                        label,
+                    }),
+            ),
+            Err(e) => {
+                ui::error(out, &format!("{e:#}"))?;
+                ok = false;
+            }
+        }
+    }
+    Ok((ok, proposals))
+}
+
+/// Read the torrent `input` names, keep and record it, and fetch what of
+/// it the store lacks: the key of each of its song files, with a label.
+fn add_torrent<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &crate::aria2::Places<'_>,
+    manifest: &mut Manifest,
+    input: &str,
+) -> Result<Vec<(SourceKey, String)>> {
+    let (bytes, trackers) = if is_magnet(input) {
+        let magnet = crate::torrent::Magnet::parse(input)?;
+        let bytes = crate::aria2::metainfo_of(runner, out, places, &magnet)?;
+        (bytes, magnet.trackers)
+    } else {
+        let bytes = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+        (bytes, Vec::new())
+    };
+    let meta = crate::torrent::Metainfo::read(&bytes).with_context(|| input.to_owned())?;
+    if !meta.fetchable() {
+        bail!(
+            "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
+            meta.name
+        );
+    }
+    keep_torrent(places.store, manifest, &meta, &bytes, trackers)?;
+    let selected = crate::torrent::selected(&meta);
+    let on_disk = |f: &crate::torrent::File| match meta.key(f) {
+        SourceKey::Torrent(k) => store::torrent_path(places.store, &k).is_file(),
+        _ => false,
+    };
+    let missing: Vec<&crate::torrent::File> =
+        selected.iter().copied().filter(|f| !on_disk(f)).collect();
+    if !missing.is_empty() {
+        let size =
+            |files: &[&crate::torrent::File]| ui::bytes(files.iter().map(|f| f.length).sum());
+        ui::info(
+            out,
+            &format!(
+                "Fetching {} of {} file(s), {} of {}, from {}",
+                missing.len(),
+                meta.files.len(),
+                size(&missing),
+                size(&meta.files.iter().collect::<Vec<_>>()),
+                meta.name
+            ),
+        )?;
+        let fetched = crate::aria2::fetch(runner, out, places, &meta, &missing)?;
+        if let Some(failure) = fetched.failure {
+            bail!("{}: {failure}", meta.name);
+        }
+    }
+    let songs: Vec<(SourceKey, String)> = selected
+        .into_iter()
+        .filter(|f| store::kind_of(&f.path) == Some(Kind::Media) && on_disk(f))
+        .map(|f| (meta.key(f), f.path.display().to_string()))
+        .collect();
+    if songs.is_empty() {
+        ui::warning(out, &format!("{} holds no song file", meta.name))?;
+    }
+    Ok(songs)
+}
+
+/// Keep a torrent's metainfo in the store, `root`, and record it in the
+/// song list with its trackers, those of the magnet link it came by too,
+/// where it is not private.
+fn keep_torrent(
+    root: &Path,
+    manifest: &mut Manifest,
+    meta: &crate::torrent::Metainfo,
+    bytes: &[u8],
+    mut trackers: Vec<String>,
+) -> Result<()> {
+    let hash = meta.hash();
+    std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
+    if !store::metainfo_path(root, hash).exists() {
+        atomic::write(root, &atomic::Name::new(format!("{hash}.torrent"))?, bytes)?;
+    }
+    trackers.extend(meta.trackers.iter().cloned());
+    let mut seen = BTreeSet::new();
+    trackers.retain(|t| seen.insert(t.clone()));
+    manifest.edit(Edit::AddTorrent {
+        hash: hash.to_string(),
+        torrent: crate::manifest::Torrent {
+            name: Some(meta.name.clone()),
+            trackers: if meta.private { Vec::new() } else { trackers },
+            v2: meta.v2.clone(),
+        },
+    });
+    manifest.save()
 }
 
 /// Whether `input`, which names nothing on disk, was meant as a path

@@ -84,6 +84,31 @@ pub fn torrent_path(root: &Path, key: &TorrentKey) -> PathBuf {
         .join(crate::torrent::stored(key.path()))
 }
 
+/// Move `from`, a torrent's file aria2c finished, to its key's place in
+/// `root`, the torrents' folder. Refused where a filesystem that ignores
+/// case holds another file there, of a path differing only in case.
+pub fn place_torrent(root: &Path, key: &TorrentKey, from: &Path) -> Result<PathBuf> {
+    let to = torrent_path(root, key);
+    let folder = to.parent().unwrap_or(root);
+    std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
+    let name = to.file_name().unwrap_or_default();
+    let named = std::fs::read_dir(folder)
+        .with_context(|| format!("reading {}", folder.display()))?
+        .filter_map(|e| Some(e.ok()?.file_name()))
+        .any(|n| n == name);
+    if to.exists() && !named {
+        anyhow::bail!(
+            "{} holds another file of the torrent, its path differing from {}'s only in case, \
+             which this filesystem does not tell apart",
+            to.display(),
+            key.path().display()
+        );
+    }
+    crate::atomic::rename(from, &to)
+        .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+    Ok(to)
+}
+
 /// The key of a file at its key's place in `root`, as [`fetched_path`]
 /// names it.
 fn key_at(root: &Path, file: &Path) -> Option<SourceKey> {

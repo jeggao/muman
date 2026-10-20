@@ -17,6 +17,11 @@
 //! separator, refuses the torrent: its keys would not read back as its
 //! files. Padding files (BEP 47) hold nothing and are no file of it.
 //!
+//! Of a torrent's files, muman fetches its songs and what they bring
+//! ([`selected`]): each `.lrc` and picture named as a song file is, and
+//! the cover of a song's folder, by the manual folder's rules. Scans,
+//! logs and anything else a torrent holds are left on its peers.
+//!
 //! Where a file is kept is a function of its key alone ([`stored`]):
 //! each part with what Windows, FAT or a phone refuses replaced by its
 //! full-width lookalike, as yt-dlp and the library's safe names do, the
@@ -174,6 +179,37 @@ impl Metainfo {
     pub fn fetchable(&self) -> bool {
         self.v1.is_some()
     }
+}
+
+/// The files of `meta` muman fetches: its songs, and the lyrics and
+/// pictures a song file brings, named as it is or its folder's cover.
+#[must_use]
+pub fn selected(meta: &Metainfo) -> Vec<&File> {
+    use crate::store::{FOLDER_COVERS, Kind, kind_of, named_as};
+    let songs: Vec<&Path> = meta
+        .files
+        .iter()
+        .filter(|f| kind_of(&f.path) == Some(Kind::Media))
+        .map(|f| f.path.as_path())
+        .collect();
+    meta.files
+        .iter()
+        .filter(|f| match kind_of(&f.path) {
+            Some(Kind::Media) => true,
+            Some(Kind::Lyrics) => songs.iter().any(|s| named_as(&f.path, s)),
+            Some(Kind::Image) => songs.iter().any(|s| {
+                named_as(&f.path, s)
+                    || (f.path.parent() == s.parent()
+                        && f.path
+                            .file_stem()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| {
+                                FOLDER_COVERS.contains(&n.to_ascii_lowercase().as_str())
+                            }))
+            }),
+            _ => false,
+        })
+        .collect()
 }
 
 /// The files of a v1 or hybrid torrent's `files` or `length`, a hybrid's

@@ -60,6 +60,7 @@ src/
   sites.rs          the song list's [sites]: how each site names and fetches
   torrent.rs        torrent metainfo and magnet links: what a torrent: key names
   download.rs       yt-dlp's arguments and the files it reports
+  aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
   ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
   music.rs          YouTube Music search and name matching
   plugins.rs        yt-dlp postprocessors shipped in the binary

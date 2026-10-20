@@ -227,6 +227,19 @@ pub struct Removed {
     pub tags: Tags,
 }
 
+/// A torrent songs list files of, as `[torrents."<hash>"]` records it:
+/// what fetches it again where the store has lost its metainfo.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Torrent {
+    /// Its own name, to show.
+    pub name: Option<String>,
+    /// Its trackers, where it is not private: a private tracker's address
+    /// holds a personal key, which the song list never does.
+    pub trackers: Vec<String>,
+    /// Its v2 hash, where its keys name it by its v1 one.
+    pub v2: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Album {
     pub source: SourceKey,
@@ -244,6 +257,8 @@ pub enum Edit {
         sources: Vec<SourceKey>,
         album: Option<(SourceKey, u32)>,
     },
+    /// A torrent recorded, unless it is.
+    AddTorrent { hash: String, torrent: Torrent },
     /// A new album, unless listed.
     AddAlbum {
         source: SourceKey,
@@ -309,6 +324,8 @@ pub struct Manifest {
     dir: PathBuf,
     pub songs: Vec<Song>,
     pub albums: Vec<Album>,
+    /// `[torrents]`, by hash.
+    pub torrents: BTreeMap<String, Torrent>,
     /// Subtitle languages lyrics are taken in, most preferred first.
     pub lyrics: Vec<String>,
     /// Which cleaning rules are switched off.
@@ -394,11 +411,12 @@ fn near_miss(key: &str) -> Option<&'static str> {
     (strsim::osa_distance(near, key) <= most).then_some(near)
 }
 
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "version",
     "edition",
     "song",
     "album",
+    "torrents",
     "removed",
     "providers",
     "trigger",
@@ -491,6 +509,7 @@ impl Manifest {
             dir: home.to_path_buf(),
             songs: parsed.songs,
             albums: parsed.albums,
+            torrents: parsed.torrents,
             lyrics: parsed.lyrics,
             removed: parsed.removed,
             providers: parsed.providers,
@@ -638,6 +657,7 @@ impl Manifest {
             (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
+        self.torrents = parsed.torrents;
         (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
         self.stale = false;
         Ok(Vec::new())
@@ -764,6 +784,7 @@ fn key_at(t: &Table, name: &str, what: &str) -> Result<Option<SourceKey>> {
 struct Parsed {
     songs: Vec<Song>,
     albums: Vec<Album>,
+    torrents: BTreeMap<String, Torrent>,
     lyrics: Vec<String>,
     removed: Vec<Removed>,
     providers: provider::Config,
@@ -942,6 +963,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     Ok(Parsed {
         songs,
         albums,
+        torrents: torrents_of(doc)?,
         lyrics,
         removed,
         providers: provider::read(doc)?,
@@ -952,6 +974,64 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         renamed,
         respelled,
     })
+}
+
+/// The torrents `[torrents]` records, by hash.
+fn torrents_of(doc: &DocumentMut) -> Result<BTreeMap<String, Torrent>> {
+    let mut torrents = BTreeMap::new();
+    let Some(item) = doc.get("torrents") else {
+        return Ok(torrents);
+    };
+    let table = item
+        .as_table_like()
+        .context("`torrents` must be a table of torrents by hash")?;
+    for (hash, item) in table.iter() {
+        let what = format!("[torrents.\"{hash}\"]");
+        if !crate::torrent::is_hash(hash) {
+            bail!("{what}: a torrent is named by its hash, in lower-case hex");
+        }
+        let t = item
+            .as_table_like()
+            .with_context(|| format!("{what} must be a table"))?;
+        let text = |key: &str| -> Result<Option<String>> {
+            t.get(key)
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .with_context(|| format!("{what} {key} must be text"))
+                })
+                .transpose()
+        };
+        let trackers = match t.get("trackers") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .with_context(|| format!("{what} trackers must be a list"))?
+                .iter()
+                .map(|u| {
+                    u.as_str()
+                        .map(str::to_string)
+                        .with_context(|| format!("{what} trackers must be addresses"))
+                })
+                .collect::<Result<_>>()?,
+        };
+        let v2 = text("v2")?;
+        if v2
+            .as_deref()
+            .is_some_and(|h| h.len() != crate::torrent::V2_HEX || !crate::torrent::is_hash(h))
+        {
+            bail!("{what} v2 must be a v2 hash, 64 lower-case hex digits");
+        }
+        torrents.insert(
+            hash.to_string(),
+            Torrent {
+                name: text("name")?,
+                trackers,
+                v2,
+            },
+        );
+    }
+    Ok(torrents)
 }
 
 /// The songs `[[removed]]` lists, each kept to be restored.
@@ -1126,6 +1206,39 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             {
                 song.insert("album", value(key.to_string()));
                 song.insert("track", value(i64::from(*track)));
+            }
+        }
+        Edit::AddTorrent { hash, torrent } => {
+            let all = doc
+                .entry("torrents")
+                .or_insert_with(|| {
+                    let mut t = Table::new();
+                    t.set_implicit(true);
+                    Item::Table(t)
+                })
+                .as_table_mut()
+                .context("`torrents` is not a table")?;
+            if !all.contains_key(hash) {
+                let mut t = Table::new();
+                if let Some(name) = &torrent.name {
+                    t.insert("name", value(name.as_str()));
+                }
+                if !torrent.trackers.is_empty() {
+                    t.insert(
+                        "trackers",
+                        value(
+                            torrent
+                                .trackers
+                                .iter()
+                                .map(String::as_str)
+                                .collect::<Array>(),
+                        ),
+                    );
+                }
+                if let Some(v2) = &torrent.v2 {
+                    t.insert("v2", value(v2.as_str()));
+                }
+                all.insert(hash, Item::Table(t));
             }
         }
         Edit::AddAlbum { source, tracks } => {
