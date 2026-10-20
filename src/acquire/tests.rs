@@ -471,3 +471,109 @@ fn a_fetch_a_newer_yt_dlp_would_make_says_to_update_it() {
         "no second run without plugins"
     );
 }
+
+/// YouTube Music as `lookup` asks it, trimmed from what yt-dlp answers:
+/// the songs search, each track extracted whole, and each video's audio.
+struct Music;
+
+/// The upload: a label's `Artist - Song` audio, six seconds longer than
+/// the release for its intro and outro.
+const UPLOAD: &str = r#"{"id": "vid00000020", "title": "Marlo Venn - Lantern Weather (Official Audio)",
+    "uploader": "Marlo Venn", "channel": "Marlo Venn", "duration": 66, "extractor_key": "Youtube"}"#;
+
+/// The release names its version, which the upload's title does not.
+const RELEASE: &str = r#"{"id": "vid00000021", "title": "Lantern Weather (Original Version)",
+    "track": "Lantern Weather (Original Version)", "artists": ["Marlo Venn"],
+    "artist": "Marlo Venn", "album": "The Glass Orchards", "uploader": "Marlo Venn",
+    "channel": "Marlo Venn", "duration": 60, "extractor_key": "Youtube"}"#;
+
+const LIVE: &str = r#"{"id": "vid00000022", "title": "Lantern Weather (Live)",
+    "track": "Lantern Weather (Live)", "artists": ["Marlo Venn"], "uploader": "Marlo Venn",
+    "channel": "Marlo Venn", "duration": 64, "extractor_key": "Youtube"}"#;
+
+/// `seconds` of 8 kHz noise whose loudness changes every 50 ms, as
+/// 16-bit little-endian samples.
+fn noise(seconds: usize, seed: u64) -> Vec<u8> {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        i32::try_from(state >> 49).unwrap()
+    };
+    let mut pcm = Vec::new();
+    for _ in 0..seconds * 20 {
+        let level = next() % 12_000;
+        for _ in 0..400 {
+            let sample = i16::try_from(level * (next() % 3 - 1)).unwrap();
+            pcm.extend(sample.to_le_bytes());
+        }
+    }
+    pcm
+}
+
+impl Runner for Music {
+    fn run(&self, _: &[OsString]) -> Result<()> {
+        anyhow::bail!("not in tests")
+    }
+
+    fn output(&self, cmd: &[OsString]) -> Result<Vec<u8>> {
+        let args: Vec<String> = cmd
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let last = args.last().map(String::as_str).unwrap_or_default();
+        let id = last.rsplit("v=").next().unwrap_or_default();
+        let out: String = if last.starts_with("https://music.youtube.com/search?q=") {
+            assert!(
+                last.contains("Marlo%20Venn%20Marlo%20Venn%20-%20Lantern"),
+                "{last}"
+            );
+            "vid00000022\nvid00000021\nvid00000020\n".into()
+        } else if args.iter().any(|a| a == "after_move:filepath") {
+            format!("/audio/{id}.opus\n")
+        } else if args[0] == "ffmpeg" {
+            let input = &args[args.iter().position(|a| a == "-i").unwrap() + 1];
+            let track = noise(60, 7);
+            return Ok(
+                match Path::new(input).file_stem().and_then(|s| s.to_str()) {
+                    Some("vid00000020") => [noise(1, 1), track, noise(5, 2)].concat(),
+                    Some("vid00000021") => track,
+                    _ => noise(64, 3),
+                },
+            );
+        } else {
+            let json = match id {
+                "vid00000021" => RELEASE,
+                "vid00000022" => LIVE,
+                _ => anyhow::bail!("offline"),
+            };
+            // yt-dlp prints each object on one line.
+            serde_json::from_str::<serde_json::Value>(json)?.to_string()
+        };
+        Ok(out.into_bytes())
+    }
+
+    fn stream(&self, _: &[OsString], _: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
+        anyhow::bail!("not in tests")
+    }
+}
+
+#[test]
+fn a_release_naming_its_version_is_found_by_its_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let upload: Entry = serde_json::from_str(UPLOAD).unwrap();
+    let found = lookup(
+        &Music,
+        &crate::sites::Sites::default(),
+        &crate::settings::Ytdlp::default(),
+        &upload,
+        dir.path(),
+    )
+    .unwrap();
+    let (track, aligned) = found.expect("the release is found");
+    assert_eq!(track.id, "vid00000021", "the live take is passed over");
+    let aligned = aligned.expect("compared by its audio");
+    assert!(aligned.fits(), "{aligned:?}");
+    assert_eq!(aligned.offset_ms, 1000);
+}
