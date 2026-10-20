@@ -51,6 +51,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A file of an archive.org item has its item's artist and date
+  however it was added.** yt-dlp gave the item's creator, dates,
+  licence and description to a file added by its own address but not to
+  one added with the whole item, which came in as "Unknown Artist" with
+  no date, and whose tags changed when a sync fetched it again by its
+  own address.
 - **An archive.org file whose name holds a space, `#`, `?`, `%` or a
   letter outside ASCII is a source.** `add` said "yt-dlp listed nothing"
   for one and dropped what it fetched. Its key holds the name as it is,
