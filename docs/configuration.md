@@ -114,10 +114,9 @@ know.
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
 | `[sites.*]` | The sites yt-dlp fetches from: which extractors each names its sources by, the IDs each kind of source takes, and where one is fetched again from |
 
-The torrents a `sync` fetches again are fetched by one aria2c run,
-eight at a time unless `[torrent] args` sets
-`--max-concurrent-downloads`, so one no peer seeds stalls beside the
-others rather than before them.
+A step's torrents are fetched by one aria2c run, eight at a time unless
+`[torrent] args` sets `--max-concurrent-downloads`, so one no peer
+seeds stalls beside the others rather than before them.
 
 Each `[sites."<domain>"]` table describes one site. `extractors` maps
 each of yt-dlp's extractors, lower-cased, to the prefix its IDs take in

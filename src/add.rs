@@ -8,7 +8,9 @@
 //! song file listed as a song is. Its metainfo is kept in the store, and
 //! what fetches it again, its name, trackers and v2 hash, in the song
 //! list's `[torrents]`; a private torrent's trackers are left out, since
-//! their addresses hold a personal key.
+//! their addresses hold a personal key. The torrents given are fetched
+//! by one aria2c run, after one that asks the peers of every magnet link
+//! given for its metainfo, so a torrent no peer seeds holds up no other.
 //!
 //! Thousands of files may be given at once, and each step over them is
 //! taken once: every song file is probed before any is copied, as many
@@ -648,7 +650,8 @@ fn names_a_torrent(input: &str) -> bool {
 
 /// Fetch each torrent `inputs` names, its metainfo kept and recorded, and
 /// propose each of its song files no song lists: whether every one was
-/// fetched, and the proposals.
+/// fetched, and the proposals. Every magnet link's metainfo is asked for
+/// in one aria2c run, and every torrent's files fetched in one more.
 fn add_torrents<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
@@ -669,74 +672,28 @@ fn add_torrents<R: Runner, W: Write>(
     };
     let mut known = manifest.keys();
     known.extend(manifest.removed_keys());
-    let mut ok = true;
-    let mut proposals = Vec::new();
-    for input in inputs {
-        match add_torrent(runner, out, &places, &mut manifest, input, from) {
-            Ok(songs) => proposals.extend(
-                songs
-                    .into_iter()
-                    .filter(|(key, _)| !known.contains(key))
-                    .map(|(key, label)| Proposal {
-                        sources: vec![key],
-                        album: None,
-                        label,
-                    }),
-            ),
-            Err(e) => {
-                ui::error(out, &format!("{e:#}"))?;
-                ok = false;
-            }
+    let (mut ok, metas) = read_all(runner, out, &places, &mut manifest, inputs)?;
+    let on_disk = |meta, f| on_disk(places.store, meta, f);
+    let mut wanted = Vec::new();
+    for meta in &metas {
+        let missing: Vec<&crate::torrent::File> = crate::torrent::selected(meta)
+            .into_iter()
+            .filter(|f| !on_disk(meta, f))
+            .collect();
+        if missing.is_empty() {
+            continue;
         }
-    }
-    Ok((ok, proposals))
-}
-
-/// Read the torrent `input` names, keep and record it, and fetch what of
-/// it the store lacks: the key of each of its song files, with a label.
-fn add_torrent<R: Runner, W: Write>(
-    runner: &R,
-    out: &mut W,
-    places: &crate::aria2::Places<'_>,
-    manifest: &mut Manifest,
-    input: &str,
-    from: Option<&Path>,
-) -> Result<Vec<(SourceKey, String)>> {
-    let (bytes, trackers) = if is_magnet(input) {
-        let magnet = crate::torrent::Magnet::parse(input)?;
-        let bytes = crate::aria2::metainfo_of(runner, out, places, &magnet)?;
-        (bytes, magnet.trackers)
-    } else {
-        let bytes = std::fs::read(input).with_context(|| format!("reading {input}"))?;
-        (bytes, Vec::new())
-    };
-    let meta = crate::torrent::Metainfo::read(&bytes).with_context(|| input.to_owned())?;
-    if !meta.fetchable() {
-        bail!(
-            "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
-            meta.name
-        );
-    }
-    keep_torrent(places.store, manifest, &meta, &bytes, trackers)?;
-    let selected = crate::torrent::selected(&meta);
-    let on_disk = |f: &crate::torrent::File| match meta.key(f) {
-        SourceKey::Torrent(k) => store::torrent_path(places.store, &k).is_file(),
-        _ => false,
-    };
-    let missing: Vec<&crate::torrent::File> =
-        selected.iter().copied().filter(|f| !on_disk(f)).collect();
-    if let Some(from) = from.filter(|_| !missing.is_empty()) {
-        let copied = crate::aria2::take_up(places, &meta, &missing, from)?;
-        ui::info(
-            out,
-            &format!(
-                "Taking up {copied} file(s) of {} from {}, checked piece by piece",
-                meta.name,
-                from.display()
-            ),
-        )?;
-    }
-    if !missing.is_empty() {
+        if let Some(from) = from {
+            let copied = crate::aria2::take_up(&places, meta, &missing, from)?;
+            ui::info(
+                out,
+                &format!(
+                    "Taking up {copied} file(s) of {} from {}, checked piece by piece",
+                    meta.name,
+                    from.display()
+                ),
+            )?;
+        }
         let size =
             |files: &[&crate::torrent::File]| ui::bytes(files.iter().map(|f| f.length).sum());
         ui::info(
@@ -750,20 +707,170 @@ fn add_torrent<R: Runner, W: Write>(
                 meta.name
             ),
         )?;
-        let fetched = crate::aria2::fetch(runner, out, places, &meta, &missing)?;
+        wanted.push(crate::aria2::Wanted {
+            meta,
+            files: missing,
+        });
+    }
+    let fetched = crate::aria2::fetch_all(runner, out, &places, &wanted).unwrap_or_else(|e| {
+        let why = format!("{e:#}");
+        wanted
+            .iter()
+            .map(|_| crate::aria2::Fetched {
+                arrived: Vec::new(),
+                failure: Some(why.clone()),
+            })
+            .collect()
+    });
+    let mut failed = BTreeSet::new();
+    for (w, fetched) in wanted.iter().zip(fetched) {
         if let Some(failure) = fetched.failure {
-            bail!("{}: {failure}", meta.name);
+            ui::error(out, &format!("{}: {failure}", w.meta.name))?;
+            failed.insert(w.meta.hash());
+            ok = false;
         }
     }
-    let songs: Vec<(SourceKey, String)> = selected
-        .into_iter()
-        .filter(|f| store::kind_of(&f.path) == Some(Kind::Media) && on_disk(f))
-        .map(|f| (meta.key(f), f.path.display().to_string()))
+    let fetched: Vec<&crate::torrent::Metainfo> = metas
+        .iter()
+        .filter(|m| !failed.contains(m.hash()))
         .collect();
-    if songs.is_empty() {
-        ui::warning(out, &format!("{} holds no song file", meta.name))?;
+    let proposals = propose_torrents(out, places.store, &fetched, &known)?;
+    Ok((ok, proposals))
+}
+
+/// Propose each song file of `metas` that is in the store, `root`, and
+/// no song lists or removed, `known`.
+fn propose_torrents<W: Write>(
+    out: &mut W,
+    root: &Path,
+    metas: &[&crate::torrent::Metainfo],
+    known: &BTreeSet<SourceKey>,
+) -> Result<Vec<Proposal>> {
+    let mut proposals = Vec::new();
+    for meta in metas {
+        let songs: Vec<(SourceKey, String)> = crate::torrent::selected(meta)
+            .into_iter()
+            .filter(|f| store::kind_of(&f.path) == Some(Kind::Media) && on_disk(root, meta, f))
+            .map(|f| (meta.key(f), f.path.display().to_string()))
+            .collect();
+        if songs.is_empty() {
+            ui::warning(out, &format!("{} holds no song file", meta.name))?;
+        }
+        proposals.extend(
+            songs
+                .into_iter()
+                .filter(|(key, _)| !known.contains(key))
+                .map(|(key, label)| Proposal {
+                    sources: vec![key],
+                    album: None,
+                    label,
+                }),
+        );
     }
-    Ok(songs)
+    Ok(proposals)
+}
+
+/// Whether the store, `root`, holds the file `f` of `meta`.
+fn on_disk(root: &Path, meta: &crate::torrent::Metainfo, f: &crate::torrent::File) -> bool {
+    match meta.key(f) {
+        SourceKey::Torrent(k) => store::torrent_path(root, &k).is_file(),
+        _ => false,
+    }
+}
+
+/// Read each torrent `inputs` names, every magnet link's metainfo asked
+/// of its peers in one run, and keep and record each, a torrent given
+/// twice once: whether every one was read, and their metainfo.
+fn read_all<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &crate::aria2::Places<'_>,
+    manifest: &mut Manifest,
+    inputs: &[&String],
+) -> Result<(bool, Vec<crate::torrent::Metainfo>)> {
+    let mut ok = true;
+    let mut read = Vec::new();
+    for input in inputs {
+        match read_torrent(input) {
+            Ok(given) => read.push((input.as_str(), given)),
+            Err(e) => {
+                ui::error(out, &format!("{e:#}"))?;
+                ok = false;
+            }
+        }
+    }
+    let magnets: Vec<&crate::torrent::Magnet> = read
+        .iter()
+        .filter_map(|(_, g)| match g {
+            Given::Magnet(m) => Some(m),
+            Given::File(_) => None,
+        })
+        .collect();
+    let mut asked = crate::aria2::metainfos(runner, out, places, &magnets)
+        .unwrap_or_else(|e| magnets.iter().map(|_| Err(format!("{e:#}"))).collect())
+        .into_iter();
+    let mut metas = Vec::new();
+    for (input, given) in read {
+        let (bytes, trackers) = match given {
+            Given::File(bytes) => (Ok(bytes), Vec::new()),
+            Given::Magnet(m) => (
+                asked.next().unwrap_or_else(|| Err("aria2c failed".into())),
+                m.trackers,
+            ),
+        };
+        let kept = bytes
+            .map_err(anyhow::Error::msg)
+            .and_then(|b| keep_given(places, manifest, input, &b, trackers));
+        match kept {
+            Ok(meta)
+                if metas
+                    .iter()
+                    .any(|m: &crate::torrent::Metainfo| m.hash() == meta.hash()) => {}
+            Ok(meta) => metas.push(meta),
+            Err(e) => {
+                ui::error(out, &format!("{e:#}"))?;
+                ok = false;
+            }
+        }
+    }
+    Ok((ok, metas))
+}
+
+/// A torrent as `add` was given it.
+enum Given {
+    /// A magnet link, whose metainfo its peers send.
+    Magnet(crate::torrent::Magnet),
+    /// The bytes of a `.torrent` file.
+    File(Vec<u8>),
+}
+
+/// The torrent `input` names, read as far as it is without asking a peer.
+fn read_torrent(input: &str) -> Result<Given> {
+    if is_magnet(input) {
+        return Ok(Given::Magnet(crate::torrent::Magnet::parse(input)?));
+    }
+    let bytes = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+    Ok(Given::File(bytes))
+}
+
+/// Read the metainfo `bytes` of the torrent `input` names, then keep and
+/// record it.
+fn keep_given(
+    places: &crate::aria2::Places<'_>,
+    manifest: &mut Manifest,
+    input: &str,
+    bytes: &[u8],
+    trackers: Vec<String>,
+) -> Result<crate::torrent::Metainfo> {
+    let meta = crate::torrent::Metainfo::read(bytes).with_context(|| input.to_owned())?;
+    if !meta.fetchable() {
+        bail!(
+            "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
+            meta.name
+        );
+    }
+    keep_torrent(places.store, manifest, &meta, bytes, trackers)?;
+    Ok(meta)
 }
 
 /// Keep a torrent's metainfo in the store, `root`, and record it in the
