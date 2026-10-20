@@ -370,3 +370,25 @@ fn a_runs_own_files_are_made_in_its_scratch_folder() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Where whether a failed fetch is due again is judged: what a sync
+/// fetches is decided once, so the fetches, `status` and `info` agree.
+const FETCH_DUE: &[(&str, &str)] = &[
+    ("sync.rs", "what a sync fetches of the listed sources"),
+    ("lookup.rs", "a lookup's record fetched again"),
+    ("state.rs", "how long a failure waits"),
+];
+
+#[test]
+fn what_a_sync_fetches_is_decided_once() {
+    let allowed: Vec<&str> = FETCH_DUE.iter().map(|(f, _)| *f).collect();
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &[".due(None"]) {
+            if !allowed.contains(&file.as_str()) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

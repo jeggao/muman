@@ -91,14 +91,13 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     reconcile::vouch_for_copies(&dirs.library, &mut state);
     let store = Store::scan(dirs)?;
     let mut failures = Vec::new();
-    // A source a sync fetches is there by the time it plans; a file of
-    // the user's own or a lookup's record missing is not.
+    // A source a sync fetches is there by the time it plans; one it does
+    // not, as a file of the user's own or one whose fetch failed lately, is not.
+    let due = crate::sync::due(&manifest, &store, &state.failures, false, state::now_secs());
     let on_disk: BTreeSet<SourceKey> = manifest
         .keys()
         .into_iter()
-        .filter(|k| {
-            store.has(k) || !matches!(k, SourceKey::Manual(_)) && !crate::provider::is_kept(k)
-        })
+        .filter(|k| store.has(k) || due.now.contains_key(k))
         .collect();
     let (mut planned, _) = reconcile::plan_with(
         &manifest,

@@ -905,31 +905,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
 
     // A dry run fetches nothing: what a sync would fetch counts as there,
     // and a song waiting on a source never measured is fetched, not failed.
-    let fetchable = |k: &SourceKey| match k {
-        SourceKey::Torrent(_) => true,
-        SourceKey::Manual(_) => false,
-        SourceKey::Remote { .. } => {
-            !crate::provider::is_kept(k)
-                && (manifest.settings.sites.fetch_url(k).is_some()
-                    || manifest
-                        .song_with(k)
-                        .and_then(|s| s.held.get(k)?.url.as_ref())
-                        .is_some())
-        }
+    let to_fetch: BTreeSet<SourceKey> = if opts.dry_run {
+        let due = crate::sync::due(
+            &manifest,
+            &store,
+            &state.failures,
+            opts.retry,
+            crate::state::now_secs(),
+        );
+        (due.now.into_iter())
+            .filter(|(_, f)| *f == crate::sync::Fetch::Missing)
+            .map(|(k, _)| k)
+            .collect()
+    } else {
+        BTreeSet::new()
     };
-    let now = crate::state::now_secs();
-    let due = |k: &SourceKey| {
-        state
-            .failures
-            .get(k)
-            .filter(|f| f.step == Step::Fetch)
-            .is_none_or(|f| opts.retry || f.due(None, now))
-    };
-    let to_fetch: BTreeSet<SourceKey> = listed
-        .iter()
-        .filter(|k| opts.dry_run && !store.has(k) && fetchable(k) && due(k))
-        .cloned()
-        .collect();
     let on_disk: BTreeSet<SourceKey> = listed
         .iter()
         .filter(|k| store.has(k) || to_fetch.contains(k))

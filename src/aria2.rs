@@ -88,8 +88,6 @@ use crate::manifest::Manifest;
 use crate::runner::{Line, Runner};
 use crate::settings::Torrent;
 use crate::source::SourceKey;
-use crate::state::{Failure, Step};
-use crate::store::Store;
 use crate::torrent::{File, Magnet, Metainfo};
 
 /// Where aria2c runs and how.
@@ -723,50 +721,35 @@ pub fn keep_metainfo(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
 /// The listed torrent files the store lacks or holds damaged, by their
 /// torrent's hash, each said; those that failed lately wait unless
 /// `retry`, and are said as waiting.
-pub fn due<W: Write>(
+pub(crate) fn due<W: Write>(
     out: &mut W,
-    store: &Store,
-    manifest: &Manifest,
-    failures: &BTreeMap<SourceKey, Failure>,
-    retry: bool,
+    due: &crate::sync::Due,
 ) -> Result<BTreeMap<String, Vec<SourceKey>>> {
-    let now = crate::state::now_secs();
-    let damaged = |k: &SourceKey| {
-        failures
-            .get(k)
-            .is_some_and(|f| f.step == Step::Refetch && (retry || f.due(None, now)))
-    };
-    let gone: Vec<SourceKey> = manifest
-        .keys()
-        .into_iter()
-        .filter(|k| matches!(k, SourceKey::Torrent(_)) && (!store.has(k) || damaged(k)))
-        .collect();
-    let (gone, waiting): (Vec<SourceKey>, Vec<SourceKey>) = gone.into_iter().partition(|k| {
-        retry
-            || damaged(k)
-            || failures
-                .get(k)
-                .filter(|f| f.step == Step::Fetch)
-                .is_none_or(|f| f.due(None, now))
-    });
-    if !waiting.is_empty() {
+    let torrent = |k: &&SourceKey| matches!(k, SourceKey::Torrent(_));
+    let waiting = due.waiting.iter().filter(torrent).count();
+    if waiting > 0 {
         crate::ui::warning(
             out,
             &format!(
-                "Not fetching {} missing torrent file(s) that failed lately; `sync --retry` \
-                 tries now",
-                waiting.len()
+                "Not fetching {waiting} missing torrent file(s) that failed lately; `sync --retry` \
+                 tries now"
             ),
         )?;
     }
     let mut by_hash: BTreeMap<String, Vec<SourceKey>> = BTreeMap::new();
-    for key in gone {
-        if let SourceKey::Torrent(t) = &key {
-            by_hash.entry(t.hash().to_string()).or_default().push(key);
+    let (mut repaired, mut gone) = (0, 0);
+    for (key, fetch) in &due.now {
+        if let SourceKey::Torrent(t) = key {
+            by_hash
+                .entry(t.hash().to_string())
+                .or_default()
+                .push(key.clone());
+            match fetch {
+                crate::sync::Fetch::Damaged => repaired += 1,
+                crate::sync::Fetch::Missing => gone += 1,
+            }
         }
     }
-    let repaired = by_hash.values().flatten().filter(|k| store.has(k)).count();
-    let gone = by_hash.values().map(Vec::len).sum::<usize>() - repaired;
     if repaired > 0 {
         crate::ui::info(
             out,

@@ -9,6 +9,10 @@
 //! would tear each other's lines, and its progress takes the status line
 //! only once yt-dlp's gives it up ([`crate::progress::step_beneath`]).
 //! Each side's failures are recorded whatever the other's end.
+//!
+//! What a sync fetches is decided once, by [`due`]: the fetches, `status`
+//! and `info` all read it, so none says a song is made from a source a
+//! sync would not fetch.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -230,6 +234,69 @@ fn record_fetches(job: &Job, state: &mut State, failed: Vec<(SourceKey, String)>
     Ok(())
 }
 
+/// Why a sync fetches a listed source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fetch {
+    /// The store holds no file of it.
+    Missing,
+    /// The store's copy is damaged, and a whole one takes its place.
+    Damaged,
+}
+
+/// What a sync fetches of the listed sources, and what it would but holds
+/// off, as its fetch failed lately.
+#[derive(Debug, Default)]
+pub(crate) struct Due {
+    pub now: BTreeMap<SourceKey, Fetch>,
+    pub waiting: BTreeSet<SourceKey>,
+}
+
+/// What a sync fetches of what `manifest` lists, the store holding
+/// `store`, `failures` recorded, at `now`: a source yt-dlp fetched with an
+/// address to fetch it again from, or a torrent's file, missing from the
+/// store or damaged there; one whose fetch failed lately waits, as one
+/// fetched again too often no longer comes, unless `retry`.
+pub(crate) fn due(
+    manifest: &Manifest,
+    store: &Store,
+    failures: &BTreeMap<SourceKey, state::Failure>,
+    retry: bool,
+    now: u64,
+) -> Due {
+    let fetchable = |k: &SourceKey| match k {
+        SourceKey::Torrent(_) => true,
+        SourceKey::Manual(_) => false,
+        SourceKey::Remote { .. } => {
+            !crate::provider::is_kept(k)
+                && (manifest.settings.sites.fetch_url(k).is_some()
+                    || manifest
+                        .song_with(k)
+                        .and_then(|s| s.held.get(k)?.url.as_ref())
+                        .is_some())
+        }
+    };
+    let mut due = Due::default();
+    for key in manifest.keys().into_iter().filter(fetchable) {
+        let failure = failures.get(&key);
+        let damaged =
+            failure.is_some_and(|f| f.step == state::Step::Refetch && (retry || f.due(None, now)));
+        let fetch = match (store.has(&key), damaged) {
+            (_, true) => Fetch::Damaged,
+            (false, false) => Fetch::Missing,
+            (true, false) => continue,
+        };
+        let waits = fetch == Fetch::Missing
+            && !retry
+            && failure.is_some_and(|f| f.step == state::Step::Fetch && !f.due(None, now));
+        if waits {
+            due.waiting.insert(key);
+        } else {
+            due.now.insert(key, fetch);
+        }
+    }
+    due
+}
+
 /// The listed torrent files due to be fetched again, by torrent, as
 /// [`crate::aria2::due`] says and says them; what waits in `places`'
 /// partial folder too long is cleared first.
@@ -242,20 +309,13 @@ fn torrents_due<W: Write>(
     out: &mut W,
 ) -> Result<BTreeMap<String, Vec<SourceKey>>> {
     let store = Store::scan(&job.dirs)?;
-    let damaged = |k: &SourceKey| {
-        failures
-            .get(k)
-            .is_some_and(|f| f.step == state::Step::Refetch)
-    };
-    let wanted = manifest
-        .keys()
-        .iter()
-        .any(|k| matches!(k, SourceKey::Torrent(_)) && (!store.has(k) || damaged(k)));
-    if !wanted {
+    let due = due(manifest, &store, failures, retry, state::now_secs());
+    let torrent = |k: &SourceKey| matches!(k, SourceKey::Torrent(_));
+    if !due.now.keys().chain(&due.waiting).any(torrent) {
         return Ok(BTreeMap::new());
     }
     clear_stale(places.partial, places.options.keep_partial, None);
-    crate::aria2::due(out, &store, manifest, failures, retry)
+    crate::aria2::due(out, &due)
 }
 
 /// Move the song list's settings still at an earlier edition's default

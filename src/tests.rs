@@ -1793,6 +1793,62 @@ fn status_of_a_song_a_sync_would_fetch_says_so_and_fails_nothing() {
 }
 
 #[test]
+fn a_sync_fetches_what_is_missing_or_damaged_and_waits_on_what_failed_lately() {
+    let s = Setup::new();
+    let hash = "0123456789abcdef0123456789abcdef01234567";
+    s.file("home/sources/manual/gone.flac");
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/gone.flac")).unwrap();
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 4\n\
+             [[song]]\nsources = [\"jamendo.com:1234567\"]\n\
+             [[song]]\nsources = [\"jamendo.com:7654321\"]\n\
+             [[song]]\nsources = [\"torrent:{hash}/a.flac\"]\n\
+             [[song]]\nsources = [\"manual:gone.flac\"]\n\
+             [[song]]\nsources = [\"tunes.example:item0001\"]\n"
+        ),
+    );
+    let home = s.dir.path().join("home");
+    let manifest = Manifest::load(&home).unwrap();
+    let store = crate::store::Store::scan(&s.job(&["sync"]).dirs).unwrap();
+    let key = |k: &str| SourceKey::parse(k).unwrap();
+    let mut state = crate::state::State::default();
+    state.record_failure(
+        &key("jamendo.com:7654321"),
+        crate::state::Step::Fetch,
+        None,
+        "gone".into(),
+    );
+    state.record_failure(
+        &key("jamendo.com:7654321"),
+        crate::state::Step::Fetch,
+        None,
+        "gone".into(),
+    );
+    let torrent = key(&format!("torrent:{hash}/a.flac"));
+    state.record_failure(&torrent, crate::state::Step::Refetch, None, "cut".into());
+    let now = crate::state::now_secs();
+    let due = crate::sync::due(&manifest, &store, &state.failures, false, now);
+    let missing = crate::sync::Fetch::Missing;
+    assert_eq!(
+        due.now,
+        BTreeMap::from([
+            (key("jamendo.com:1234567"), missing),
+            (torrent.clone(), crate::sync::Fetch::Damaged),
+        ]),
+        "a manual file and a key of no address to fetch from are no fetch"
+    );
+    assert_eq!(
+        due.waiting,
+        std::collections::BTreeSet::from([key("jamendo.com:7654321")])
+    );
+    let retried = crate::sync::due(&manifest, &store, &state.failures, true, now);
+    assert!(retried.now.contains_key(&key("jamendo.com:7654321")));
+    assert!(retried.waiting.is_empty());
+}
+
+#[test]
 fn status_names_each_old_setting_and_changes_nothing() {
     let s = Setup::new();
     let songs = s.dir.path().join("home/songs.toml");
