@@ -153,7 +153,11 @@ impl Fetcher<'_> {
                     f.path = path;
                     arrived.push(f);
                 }
-                Err(e) => crate::ui::warning(out, &format!("{e:#}"))?,
+                Err(e) => {
+                    ok = false;
+                    crate::ui::error(out, &format!("{}: not kept: {e:#}", f.key))?;
+                    let _ = std::fs::remove_file(&f.path);
+                }
             }
         }
         Ok((ok, arrived))

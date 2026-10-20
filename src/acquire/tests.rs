@@ -333,6 +333,43 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
 }
 
 #[test]
+fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
+    let s = setup();
+    let ytdlp = s.dirs.ytdlp();
+    std::fs::create_dir_all(ytdlp.join("youtube.com").join("vid00000009.mkv")).unwrap();
+    let store = Store::scan(&s.dirs).unwrap();
+    let temp = s.dir.path().join("temp");
+    let fetcher = Fetcher {
+        store: &ytdlp,
+        temp: &temp,
+        partial: &temp,
+        plugins: None,
+        sites: &crate::sites::Sites::default(),
+        options: &crate::settings::Ytdlp::default(),
+        live: false,
+        runs: Cell::new(0),
+    };
+    let mut out = Vec::new();
+    let (ok, add) = Acquire {
+        runner: &Net::default(),
+        fetcher: &fetcher,
+        out: &mut out,
+        known: BTreeSet::new(),
+        removed: BTreeSet::new(),
+        store: &store,
+    }
+    .urls(&["https://v".to_string()], false)
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok, "{text}");
+    assert!(add.proposals.is_empty(), "{text}");
+    assert!(text.contains("youtube.com:vid00000009: not kept"), "{text}");
+    assert!(!text.contains("Nothing new"), "{text}");
+    let staged = crate::store::files_below(&ytdlp.join(crate::store::STAGING), 9, |_| true);
+    assert!(staged.unwrap_or_default().is_empty());
+}
+
+#[test]
 fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
     let s = setup();
     std::fs::create_dir_all(&s.dirs.home).unwrap();

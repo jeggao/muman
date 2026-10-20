@@ -293,6 +293,22 @@ fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
 }
 
 #[test]
+fn an_original_whose_id_holds_a_space_goes_into_the_store_under_its_key() {
+    let s = Setup::new();
+    let original = s.file("Downloads/01 Lantern #2.mp3 [item-1⧸01 Lantern #2.mp3].mkv");
+    let fake = Fake::default().info(
+        "Lantern",
+        r#"{"id": "item-1/01 Lantern #2.mp3", "extractor_key": "ArchiveOrg",
+            "title": "Lantern", "uploader": "Marlo Venn"}"#,
+    );
+    let (ok, text) = s.run(&fake, &["add", &original]);
+    assert!(ok, "{text}");
+    let key = SourceKey::parse("archive.org:item-1/01 Lantern #2.mp3").unwrap();
+    assert_eq!(s.songs(), [vec![key]], "{text}");
+    assert!(!s.dir.path().join("home/sources/manual").exists(), "{text}");
+}
+
+#[test]
 fn an_original_in_a_folder_goes_to_its_key_once_and_undo_takes_it_out() {
     let s = Setup::new();
     let original = s.file("Downloads/batch/chan/Song [aaaaaaaaaaa].mkv");
@@ -496,6 +512,34 @@ fn a_torrents_song_files_are_fetched_and_listed_and_the_rest_left() {
         std::fs::read_to_string(s.dir.path().join("home/songs.toml"))
             .unwrap()
             .contains("version = 4")
+    );
+}
+
+#[test]
+fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo(
+        "Lantern Weather",
+        &["01 Paper Comets?.flac", "01 Paper Comets？.flac"],
+    );
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("01 Paper Comets？.flac is not fetched: some systems keep it at the place of 01 Paper Comets?.flac"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/01 Paper Comets?.flac")).unwrap();
+    assert_eq!(s.songs(), [vec![key]]);
+    assert!(
+        runs.lock().unwrap()[0].contains(&"--select-file=1".to_string()),
+        "{:?}",
+        runs.lock().unwrap()
     );
 }
 
@@ -770,10 +814,54 @@ fn a_torrent_no_peer_seeds_fails_alone_and_the_one_beside_it_arrives() {
     );
     assert!(!ok, "{text}");
     assert!(
-        text.contains("Lantern Weather: no peer sent anything for 10 min"),
+        text.contains("Lantern Weather: no peer sent anything for 10 min; what arrived waits to be resumed; giving it to `add` again goes on"),
         "{text}"
     );
     let key = SourceKey::parse(&format!("torrent:{}/a.flac", b.0)).unwrap();
+    assert_eq!(s.songs(), [vec![key]], "{text}");
+}
+
+#[test]
+fn a_torrent_unfinished_keeps_each_file_whose_pieces_check() {
+    use sha1::Digest as _;
+    let s = Setup::new();
+    let pieces: Vec<u8> = [b"x", b"y"]
+        .iter()
+        .flat_map(|p| sha1::Sha1::digest(p).to_vec())
+        .collect();
+    let file = |name: &str| format!("d6:lengthi1e4:pathl{}:{name}ee", name.len());
+    let mut bytes = format!(
+        "d4:infod5:filesl{}{}e4:name15:Lantern Weather12:piece lengthi1e6:pieces40:",
+        file("a.flac"),
+        file("b.flac")
+    )
+    .into_bytes();
+    bytes.extend(pieces);
+    bytes.extend(b"ee");
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let path = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&path, &bytes).unwrap();
+    let fetched = aria2c(bytes, hash.clone(), Arc::default());
+    let fake = Fake {
+        lines: vec![
+            "Download Results:".into(),
+            "000001|INPR|       0B/s| 50|partial/files/1.flac".into(),
+        ],
+        on_stream: Some(Box::new(move |args: &[String]| {
+            (fetched.on_stream.as_ref().unwrap())(args);
+            false
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(&fake, &["add", "--no-match", path.to_str().unwrap()]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Lantern Weather: taking the 1 file(s) that arrived whole"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/a.flac")).unwrap();
     assert_eq!(s.songs(), [vec![key]], "{text}");
 }
 
@@ -806,9 +894,37 @@ impl crate::runner::Runner for NoAria2c {
         cmd: &[std::ffi::OsString],
         on_line: &mut dyn FnMut(crate::runner::Line<'_>),
     ) -> anyhow::Result<bool> {
-        anyhow::ensure!(cmd[0] != "aria2c", "aria2c is not installed");
+        if cmd[0] == "aria2c" {
+            return Err(crate::tools::ToolError::Missing {
+                tool: &crate::tools::TOOLS[3],
+                named: None,
+            }
+            .into());
+        }
         self.0.stream(cmd, on_line)
     }
+}
+
+#[test]
+fn an_add_of_a_torrent_with_no_aria2c_stops_as_a_missing_tool() {
+    let s = Setup::new();
+    let [a, _] = two_torrents(&s);
+    let fake = NoAria2c(aria2c_of(vec![(a.0.clone(), a.1.clone())], Arc::default()));
+    let mut out = Vec::new();
+    let ran = run_with(
+        &s.job(&["add", "--no-match", a.2.to_str().unwrap()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let e = ran.unwrap_err();
+    assert!(
+        e.downcast_ref::<crate::tools::ToolError>().is_some(),
+        "{e:#}"
+    );
+    assert!(s.songs().is_empty());
 }
 
 #[test]
@@ -845,7 +961,7 @@ fn a_sync_with_no_aria2c_fails_each_torrent_file_and_goes_on() {
             "{text}"
         );
     }
-    assert_eq!(text.matches("aria2c is not installed").count(), 2, "{text}");
+    assert_eq!(text.matches("aria2c not found").count(), 2, "{text}");
     let (_, text) = s.run(&fake, &["sync"]);
     assert!(
         text.contains("Not fetching 2 missing torrent file(s) that failed lately"),

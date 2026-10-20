@@ -403,6 +403,17 @@ pub fn id_of(file: &Path) -> Option<String> {
     is_named_id(&id).then_some(id)
 }
 
+/// The ID in a name as yt-dlp writes one, `<title> [<id>].<ext>`, a `/`
+/// written `⧸`, whatever it holds, as an archive.org file's name may hold a
+/// space: only the info JSON yt-dlp embeds tells such a file from a song
+/// named with a bracket.
+#[must_use]
+pub fn bracketed_id(file: &Path) -> Option<String> {
+    let stem = file.file_stem()?.to_str()?.strip_suffix(']')?;
+    let id = stem[stem.rfind('[')? + 1..].replace('⧸', "/");
+    is_remote_id(&id).then_some(id)
+}
+
 /// A path that stays inside the folder it is joined to.
 #[must_use]
 pub fn is_plain_relative(path: &Path) -> bool {
@@ -518,6 +529,13 @@ mod tests {
         let item = Path::new("/o/unknown/Part 1.mp3 [item-1⧸Part_1.mp3].mp3");
         assert_eq!(id_of(item).as_deref(), Some("item-1/Part_1.mp3"));
         assert_eq!(id_of(Path::new("/o/c/A [x⧸..].mkv")), None);
+        let spaced = Path::new("/o/c/A [item-1⧸01 Lantern #2.mp3].mkv");
+        assert_eq!(id_of(spaced), None);
+        assert_eq!(
+            bracketed_id(spaced).as_deref(),
+            Some("item-1/01 Lantern #2.mp3")
+        );
+        assert_eq!(bracketed_id(Path::new("/o/c/A [x⧸..].mkv")), None);
     }
 
     #[test]

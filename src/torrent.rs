@@ -25,7 +25,11 @@
 //! Where a file is kept is a function of its key alone ([`stored`]):
 //! each part with what Windows, FAT or a phone refuses replaced by its
 //! full-width lookalike, as yt-dlp and the library's safe names do, the
-//! same on every system so a home copies between them.
+//! same on every system so a home copies between them. Two files of a
+//! torrent can then be kept at one place, as `song?.mp3` beside
+//! `song？.mp3`, or `Song.mp3` beside `song.mp3` on a system blind to
+//! case; the first the torrent lists is taken and the other left on its
+//! peers ([`shadowed`]), as one would be written over the other.
 
 use std::path::{Path, PathBuf};
 
@@ -73,6 +77,8 @@ pub struct Metainfo {
     pub trackers: Vec<String>,
     /// The bytes each piece holds, the last but one.
     pub piece_length: u64,
+    /// The SHA-1 of each v1 piece, in order.
+    pub pieces: Vec<[u8; 20]>,
 }
 
 /// One file a torrent holds.
@@ -150,6 +156,13 @@ impl Metainfo {
                 })
                 .collect()
         };
+        let pieces = match get(info, "pieces") {
+            Some(Value::Bytes(b)) => b
+                .chunks_exact(20)
+                .filter_map(|c| c.try_into().ok())
+                .collect(),
+            _ => Vec::new(),
+        };
         let private = matches!(get(info, "private"), Some(Value::Int(1)));
         let mut trackers = Vec::new();
         if let Some(Value::List(tiers)) = get(&top, "announce-list") {
@@ -171,6 +184,7 @@ impl Metainfo {
             private,
             trackers,
             piece_length,
+            pieces,
         })
     }
 
@@ -197,9 +211,44 @@ impl Metainfo {
 }
 
 /// The files of `meta` muman fetches: its songs, and the lyrics and
-/// pictures a song file brings, named as it is or its folder's cover.
+/// pictures a song file brings, named as it is or its folder's cover;
+/// of two kept at one place, the first alone ([`shadowed`]).
 #[must_use]
 pub fn selected(meta: &Metainfo) -> Vec<&File> {
+    let mut places = std::collections::HashSet::new();
+    wanted(meta)
+        .into_iter()
+        .filter(|f| places.insert(place_of(&f.path)))
+        .collect()
+}
+
+/// Each file of `meta` muman would fetch but keeps no place for, as
+/// another listed before it is kept at its path on some system, with
+/// that other file's path.
+#[must_use]
+pub fn shadowed(meta: &Metainfo) -> Vec<(&Path, &Path)> {
+    let mut places = std::collections::HashMap::new();
+    let mut lost = Vec::new();
+    for f in wanted(meta) {
+        match places.entry(place_of(&f.path)) {
+            std::collections::hash_map::Entry::Occupied(first) => {
+                lost.push((f.path.as_path(), *first.get()));
+            }
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(f.path.as_path());
+            }
+        }
+    }
+    lost
+}
+
+/// Where a file is kept as a system blind to case and composition sees
+/// it: two lookalikes, or names apart only so, are one place there.
+fn place_of(path: &Path) -> String {
+    crate::relpath::folded(&stored(&crate::relpath::normalized(path)))
+}
+
+fn wanted(meta: &Metainfo) -> Vec<&File> {
     use crate::store::{FOLDER_COVERS, Kind, kind_of, named_as};
     let songs: Vec<&Path> = meta
         .files
@@ -225,6 +274,48 @@ pub fn selected(meta: &Metainfo) -> Vec<&File> {
             _ => false,
         })
         .collect()
+}
+
+/// Whether every v1 piece `file` of `meta` spans checks, its bytes read
+/// from the files of `meta` at the paths `at` gives them: none missing or
+/// short, and the hash of each the one the metainfo holds. Padding
+/// between files reads as the zeros it holds.
+#[must_use]
+pub fn checks(meta: &Metainfo, file: &File, at: impl Fn(&File) -> PathBuf) -> bool {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let piece = meta.piece_length;
+    if piece == 0 || file.length == 0 {
+        return piece > 0;
+    }
+    let total = meta
+        .files
+        .iter()
+        .map(|f| f.offset + f.length)
+        .max()
+        .unwrap_or(0);
+    let (first, last) = (file.offset / piece, (file.offset + file.length - 1) / piece);
+    (first..=last).all(|n| {
+        let Some(want) = usize::try_from(n).ok().and_then(|n| meta.pieces.get(n)) else {
+            return false;
+        };
+        let start = n * piece;
+        let mut bytes = vec![0; usize::try_from((start + piece).min(total) - start).unwrap_or(0)];
+        let read = meta.files.iter().filter(|f| f.length > 0).all(|f| {
+            let (from, to) = (
+                start.max(f.offset),
+                (start + piece).min(f.offset + f.length),
+            );
+            if from >= to {
+                return true;
+            }
+            let Ok(mut opened) = std::fs::File::open(at(f)) else {
+                return false;
+            };
+            let into = &mut bytes[(from - start) as usize..(to - start) as usize];
+            opened.seek(SeekFrom::Start(from - f.offset)).is_ok() && opened.read_exact(into).is_ok()
+        });
+        read && Sha1::digest(&bytes).as_slice() == want
+    })
 }
 
 /// The files of `meta` besides `files` that share a piece with one of

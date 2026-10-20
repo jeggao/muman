@@ -309,3 +309,72 @@ fn a_file_is_kept_at_a_path_every_system_takes() {
     );
     assert_eq!(kept("con.flac"), Path::new("con_.flac"));
 }
+
+#[test]
+fn of_two_files_kept_at_one_place_the_first_is_taken() {
+    let meta = Metainfo::read(&crate::testing::metainfo(
+        "Marlo Venn - Paper Comets",
+        &[
+            "01 Lantern?.mp3",
+            "01 Lantern？.mp3",
+            "02 Wren.flac",
+            "02 WREN.flac",
+            "03 Ash.mp3",
+        ],
+    ))
+    .unwrap();
+    let taken: Vec<&Path> = selected(&meta).iter().map(|f| f.path.as_path()).collect();
+    assert_eq!(
+        taken,
+        ["01 Lantern?.mp3", "02 Wren.flac", "03 Ash.mp3"].map(Path::new)
+    );
+    assert_eq!(
+        shadowed(&meta),
+        [
+            (Path::new("01 Lantern？.mp3"), Path::new("01 Lantern?.mp3")),
+            (Path::new("02 WREN.flac"), Path::new("02 Wren.flac")),
+        ]
+    );
+}
+
+#[test]
+fn a_file_checks_when_every_piece_it_spans_does() {
+    let pieces: Vec<u8> = [&b"aaaabb"[..], b"bbcc"]
+        .iter()
+        .flat_map(|p| Sha1::digest(p).to_vec())
+        .collect();
+    let info = B::D(vec![
+        ("name", s("Marlo Venn - Lantern Weather")),
+        ("piece length", B::I(6)),
+        ("pieces", B::S(pieces)),
+        (
+            "files",
+            B::L(vec![
+                B::D(vec![("length", B::I(4)), ("path", path(&["a.flac"]))]),
+                B::D(vec![("length", B::I(4)), ("path", path(&["b.flac"]))]),
+                B::D(vec![("length", B::I(2)), ("path", path(&["c.flac"]))]),
+            ]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let at = |f: &File| dir.path().join(f.index.to_string());
+    let write = |n: usize, bytes: &[u8]| std::fs::write(dir.path().join(n.to_string()), bytes);
+    let checked = || {
+        meta.files
+            .iter()
+            .map(|f| checks(&meta, f, at))
+            .collect::<Vec<_>>()
+    };
+    write(1, b"aaaa").unwrap();
+    assert_eq!(
+        checked(),
+        [false, false, false],
+        "b.flac's start is missing"
+    );
+    write(2, b"bbbb").unwrap();
+    write(3, b"cX").unwrap();
+    assert_eq!(checked(), [true, false, false]);
+    write(3, b"cc").unwrap();
+    assert_eq!(checked(), [true, true, true]);
+}

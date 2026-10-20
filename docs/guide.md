@@ -27,7 +27,7 @@ holds only what muman renders from it.
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
 | `sources/coverart/<id>.jpg` | Album covers found on the Cover Art Archive, shared by every song of the album |
 | `sources/torrent/<hash>.torrent` | A torrent's metainfo, which names its files |
-| `sources/torrent/<hash>/` | A torrent's files, each at its path in the torrent with what Windows refuses in a name replaced by a lookalike; a file the metainfo does not name is no source, and `purge` deletes it |
+| `sources/torrent/<hash>/` | A torrent's files, each at its path in the torrent with what Windows refuses in a name replaced by a lookalike; of two files kept at one place so, or apart only by case, the first the torrent lists, the other left with a warning; a file the metainfo does not name is no source, and `purge` deletes it |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -273,9 +273,9 @@ for one. The torrent's metainfo is kept in the store, and its name,
 trackers and v2 hash in the song list's `[torrents."<hash>"]`; a private
 torrent's trackers are left out, since their addresses hold a key of
 your own. Peers see your IP address while it fetches. A fetch with
-nothing arriving for `[torrent] stall` fails; what it fetched waits in
-`partial/torrent` to be resumed ([configuration](configuration.md)). A
-torrent of BitTorrent v2 alone, which aria2c cannot fetch, is refused.
+nothing arriving for `[torrent] stall` fails, keeping each file whose
+pieces check; the rest waits in `partial/torrent` ([configuration](configuration.md)). A torrent of BitTorrent v2 alone,
+which aria2c cannot fetch, is refused.
 `--from <FOLDER>` takes up a torrent another client downloaded there:
 its files are copied in and checked piece by piece, and only what is
 missing or wrong is fetched, so a complete download needs no peer.

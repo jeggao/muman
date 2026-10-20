@@ -16,7 +16,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   format version 4, which an older muman refuses.
 - **`add` fetches a torrent's songs.** Given a magnet link or a
   `.torrent` file, it fetches the song files with aria2c, with the lyrics
-  and pictures they bring, and lists each as a song; the song list's
+  and pictures they bring, and lists each as a song; of two files kept
+  at one place, as `song?.mp3` and `song？.mp3`, the first; the song list's
   `[torrents]` records what fetches the torrent again, without a private
   torrent's trackers. `sync` fetches a listed torrent's file gone from
   the store again, from its kept metainfo or from its hash and recorded
@@ -27,13 +28,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   Torrents given together, and those a `sync` fetches again, are
   fetched by one aria2c run, up to eight at a time, so one no peer
   seeds stalls beside the others rather than before them; a `sync`
-  fetches them beside yt-dlp's fetches rather than after them.
+  fetches them beside yt-dlp's fetches rather than after them. A fetch
+  that does not finish keeps each file whose pieces all check, so one
+  piece no peer holds right does not keep the rest of a torrent out.
 - **aria2c is one of the programs muman runs**, to fetch torrents:
   `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
   and `[torrent]` sets the arguments every run takes, how long a fetch
-  waits with nothing arriving, how long a fetched torrent is seeded and
-  how long an unfinished one is kept. Only a run that fetches a torrent
-  needs it.
+  waits with nothing arriving, 1 s or more, how long a fetched torrent
+  is seeded and how long an unfinished one is kept. Only a run that
+  fetches a torrent needs it.
 - **Jamendo and Audius are sites of their own.** A Jamendo track is
   `jamendo.com:<id>` whether it was found on `jamendo.com` or
   `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`. Each
@@ -60,16 +63,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   licence and description to a file added by its own address but not to
   one added with the whole item, which came in as "Unknown Artist" with
   no date, and whose tags changed when a sync fetched it again by its
-  own address.
+  own address. A file added by its download address,
+  `archive.org/download/<item>/<file>`, is that file of the item: yt-dlp
+  read it as a plain file of a mirror, with no artist, keyed by its name
+  alone, and a sync could not fetch it again.
 - **An archive.org file whose name holds a space, `#`, `?`, `%` or a
   letter outside ASCII is a source.** `add` said "yt-dlp listed nothing"
   for one and dropped what it fetched. Its key holds the name as it is,
   as `archive.org:<item>/01 Lantern #2.mp3`, as a torrent's file's key
   holds its path, and its file in `sources/yt-dlp` writes in hex what a
-  file's name may not hold on every system.
+  file's name may not hold on every system. Such a file yt-dlp fetched
+  elsewhere and given to `add` goes into `sources/yt-dlp` under its key,
+  where it went into `sources/manual`.
 - **An archive.org file whose name holds a `+` is fetched again.** The
   address a missing source is fetched from percent-encodes its ID, as
   archive.org read a `+` in it as a space and found no such file.
+- **A fetched file the store cannot keep fails the run.** One whose
+  name runs past what the filesystem takes, as an archive.org file named
+  in percent-escapes does once its `%`s are escaped, was left in the
+  store's staging folder and its song dropped, the run exiting 0 and a
+  later `add` saying "Nothing new"; it is said as an error, deleted, and
+  the run exits 4.
 - **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song

@@ -1117,6 +1117,10 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     settings.audio.check()?;
     settings.loudness.check()?;
     settings.quality.check()?;
+    // aria2c counts its stop in whole seconds, and 0 as never stopping.
+    if settings.torrent.stall < std::time::Duration::from_secs(1) {
+        bail!("[torrent] stall must be at least 1 s; under it, a fetch would wait for ever");
+    }
     Ok(settings)
 }
 
@@ -1254,6 +1258,18 @@ mod tests {
             format!("{e:#}").contains("line 8, `block_size = \"1e3 KiB\"`"),
             "{e:#}"
         );
+    }
+
+    #[test]
+    fn a_stall_under_a_second_is_refused() {
+        for short in ["0 s", "1 ms"] {
+            let e = settings(&format!("[torrent]\nstall = \"{short}\"\n")).unwrap_err();
+            assert!(
+                format!("{e:#}").contains("stall must be at least 1 s"),
+                "{e:#}"
+            );
+        }
+        assert!(settings("[torrent]\nstall = \"1 s\"\n").is_ok());
     }
 
     #[test]

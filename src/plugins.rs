@@ -13,7 +13,12 @@
 //!   item, but not to the files of an item of several, so a file's tags
 //!   would depend on how it was reached, and change when a sync fetched
 //!   it again by its own address. The extractor's key stays `ArchiveOrg`,
-//!   so keys do not change.
+//!   so keys do not change. Beside it, `ArchiveDownload` hands a file's
+//!   download address, `/download/<item>/<file>`, to that extractor as
+//!   its details address: yt-dlp read it as a plain file of the mirror it
+//!   redirects to, keyed by the file's name alone, with none of the item's
+//!   details, and fetched again from a details address of that name, which
+//!   names no item.
 //!
 //! They go to `<cache>/yt-dlp-plugins/<hash>/muman/yt_dlp_plugins/`, each
 //! in the folder of its kind, named by a hash of their text, so two runs
