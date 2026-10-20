@@ -45,7 +45,8 @@ src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   add.rs, sync.rs   the add and sync commands, and the network steps they share
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [tools], [history]
+  settings.rs       [library], [audio], [loudness], [quality], [ytdlp], [torrent],
+                    [tools], [history], [sites]
   migrate.rs        older song lists brought up to this edition
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
@@ -55,7 +56,7 @@ src/
   dirs.rs           the home and the library folders, neither inside the other
   relpath.rs        recorded paths, written with / and in NFC
   runner.rs         the subprocess seam
-  tools.rs          ffmpeg, ffprobe and yt-dlp: where found, version, floor
+  tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching
   sites.rs          the song list's [sites]: how each site names and fetches
   torrent.rs        torrent metainfo and magnet links: what a torrent: key names
