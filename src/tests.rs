@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use clap::Parser;
@@ -370,6 +371,155 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
         "{text}"
     );
     assert!(text.contains("Added:"), "{text}");
+}
+
+/// A fake aria2c: a metainfo run saves `metainfo` as its peers would
+/// send it, and a fetch writes each file it is told to write, `args` its
+/// command line recorded.
+fn aria2c(metainfo: Vec<u8>, hash: String, runs: Arc<Mutex<Vec<Vec<String>>>>) -> Fake {
+    Fake {
+        on_stream: Some(Box::new(move |args: &[String]| {
+            runs.lock().unwrap().push(args.to_vec());
+            let dir = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--dir="))
+                .map(PathBuf::from)
+                .unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            if args.iter().any(|a| a == "--bt-metadata-only=true") {
+                std::fs::write(dir.join(format!("{hash}.torrent")), &metainfo).unwrap();
+                return true;
+            }
+            for out in args.iter().filter_map(|a| a.strip_prefix("--index-out=")) {
+                let (_, path) = out.split_once('=').unwrap();
+                let path = dir.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"x").unwrap();
+            }
+            true
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC)
+}
+
+#[test]
+fn a_torrents_song_files_are_fetched_and_listed_and_the_rest_left() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo(
+        "Lantern Weather",
+        &[
+            "01 Paper Comets.flac",
+            "02 Rooms of Salt.flac",
+            "cover.jpg",
+            "notes.nfo",
+        ],
+    );
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Fetching 3 of 4 file(s)"), "{text}");
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{hash}/{p}")).unwrap();
+    let mut songs = s.songs();
+    songs.sort();
+    assert_eq!(
+        songs,
+        [
+            vec![key("01 Paper Comets.flac")],
+            vec![key("02 Rooms of Salt.flac")]
+        ]
+    );
+    let runs = runs.lock().unwrap();
+    assert_eq!(runs.len(), 1);
+    assert!(
+        runs[0].contains(&"--select-file=1,2,3".to_string()),
+        "{:?}",
+        runs[0]
+    );
+    let torrents = s.dir.path().join("home/sources/torrent");
+    assert!(torrents.join(format!("{hash}.torrent")).is_file());
+    assert!(torrents.join(&hash).join("cover.jpg").is_file());
+    assert!(!torrents.join(&hash).join("notes.nfo").exists());
+    assert!(
+        !s.dir
+            .path()
+            .join("home/partial/torrent")
+            .join(&hash)
+            .exists()
+    );
+    let manifest = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        manifest.torrents[&hash].name.as_deref(),
+        Some("Lantern Weather")
+    );
+    assert!(
+        std::fs::read_to_string(s.dir.path().join("home/songs.toml"))
+            .unwrap()
+            .contains("version = 4")
+    );
+}
+
+#[test]
+fn a_magnet_links_metainfo_comes_from_its_peers() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("The Glass Orchards", &["Rooms of Salt.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let link = format!("magnet:?xt=urn:btih:{hash}&tr=udp%3A%2F%2Ftracker.example%3A1337");
+    let (ok, text) = s.run(&fake, &["add", "--no-match", &link]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        runs.lock().unwrap().len(),
+        2,
+        "the metainfo, then the files"
+    );
+    assert_eq!(s.songs().len(), 1, "{text}");
+    let manifest = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        manifest.torrents[&hash].trackers,
+        ["udp://tracker.example:1337"]
+    );
+
+    let e = run_with(
+        &s.job(&["add", "--offline", &link]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e}").contains("--offline"), "{e:#}");
+    assert_eq!(runs.lock().unwrap().len(), 2, "nothing run offline");
+}
+
+#[test]
+fn a_torrent_no_peer_seeds_fails_and_lists_nothing() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac"]);
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = Fake {
+        lines: vec![
+            "Download Results:".into(),
+            "6fcf70|INPR|       0B/s|  -|partial/files/1.flac".into(),
+        ],
+        on_stream: Some(Box::new(|_: &[String]| false)),
+        ..Fake::default()
+    };
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("no peer sent anything for 10 min"), "{text}");
+    assert!(s.songs().is_empty(), "{text}");
 }
 
 #[test]
@@ -2223,7 +2373,11 @@ fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
         .unwrap()
         .set_modified(month_ago)
         .unwrap();
-    sync::clear_stale(&partial, std::time::Duration::from_secs(14 * 24 * 3600));
+    sync::clear_stale(
+        &partial,
+        std::time::Duration::from_secs(14 * 24 * 3600),
+        None,
+    );
     assert!(!stale.exists());
     assert!(
         !partial.join("Chan").exists(),

@@ -118,6 +118,7 @@ tags.genre = ""
 | `tags.<name>` | Tags set over what the sources offer; an empty value sets nothing |
 | `held."<key>"` | What a source held when the song was built, written by muman: [a source that changes](#a-source-that-changes) |
 | `[[album]]` | A YouTube Music album added whole, with its `tags.<name>` over what its tracks offer |
+| `[torrents."<hash>"]` | A torrent songs list files of: its `name`, `trackers` and `v2` hash, which fetch it again ([torrents](#torrents)) |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it |
 
 A song has no ID of its own: it is its sources, and any of its keys
@@ -215,7 +216,8 @@ so first.
 
 ## Sources
 
-A source is a video yt-dlp fetched, a file of your own, lyrics from
+A source is a video yt-dlp fetched, a file of your own, a file of a
+torrent, lyrics from
 [LRCLIB](https://lrclib.net), a free lyrics database that songs without
 timed lyrics [look up](library.md#lookups-and-providers), or tags from
 [MusicBrainz](https://musicbrainz.org), the open music encyclopedia,
@@ -256,6 +258,22 @@ One that fails waits an hour before the next try, doubling each time;
 kept, gone from the store, is fetched again by its ID, and waits alike
 when that fails or its service no longer has it. yt-dlp is needed only
 by runs that fetch.
+
+### Torrents
+
+`muman add <magnet link|FILE.torrent>` fetches a torrent's song files
+with aria2c, each with the `.lrc` and pictures named as it is and its
+folder's cover, by the same rules as [manual files](#manual-files-and-sidecars);
+scans, logs and the rest stay on its peers. Each song file is listed as
+a song or joins the song it is the same recording as, its tags read
+from the file as a file of your own is, and lookups are made for it as
+for one. The torrent's metainfo is kept in the store, and its name,
+trackers and v2 hash in the song list's `[torrents."<hash>"]`; a private
+torrent's trackers are left out, since their addresses hold a key of
+your own. Peers see your IP address while it fetches. A fetch with
+nothing arriving for `[torrent] stall` fails; what it fetched waits in
+`partial/torrent` to be resumed ([configuration](configuration.md)). A
+torrent of BitTorrent v2 alone, which aria2c cannot fetch, is refused.
 
 ### Manual files and sidecars
 

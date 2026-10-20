@@ -204,7 +204,11 @@ pub(crate) fn network<R: Runner, W: Write, T>(
     let temp = atomic::Scratch::new()?;
     let ytdlp = job.dirs.ytdlp();
     let partial = job.dirs.home.join("partial");
-    clear_stale(&partial, manifest.settings.ytdlp.keep_partial);
+    clear_stale(
+        &partial,
+        manifest.settings.ytdlp.keep_partial,
+        Some(&partial.join(crate::source::TORRENT)),
+    );
     let plugins = match &job.cache {
         Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
         _ => None,
@@ -234,13 +238,16 @@ pub(crate) fn network<R: Runner, W: Write, T>(
     step(&mut acquire)
 }
 
-/// Remove what yt-dlp left unfinished longer than `days` ago, in any
-/// folder its template makes, and the folders that leaves empty;
-/// younger, a later run resumes it.
-pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration) {
+/// Remove what a fetch left unfinished longer than `limit` ago, in any
+/// folder below `partial` but `apart`, which keeps its own time, and the
+/// folders that leaves empty; younger, a later run resumes it.
+pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Option<&Path>) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];
     while let Some(dir) = left.pop() {
+        if Some(dir.as_path()) == apart {
+            continue;
+        }
         for path in std::fs::read_dir(&dir)
             .into_iter()
             .flatten()
