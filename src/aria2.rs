@@ -49,13 +49,13 @@
 //! every piece and fetches only those missing or wrong. One complete and
 //! right needs no peer.
 //!
-//! A listed file gone from the store is fetched again by `sync`
-//! ([`missing`]), with the lyrics and pictures it brings: from the
-//! torrent's metainfo where the store keeps it, else from a magnet link
-//! of its hash and the trackers the song list records, its metainfo
-//! asked of its peers and kept again. Files of the torrent no song lists
-//! are not fetched again, so what `purge` deleted stays deleted. One that
-//! failed lately waits, as a missing video does.
+//! A listed file gone from the store is fetched again by `sync` ([`due`],
+//! [`fetch_due`]), beside yt-dlp's fetches, with the lyrics and pictures
+//! it brings: from the torrent's metainfo where the store keeps it, else
+//! from a magnet link of its hash and the trackers the song list records,
+//! its metainfo asked of its peers and kept again. Files of the torrent
+//! no song lists are not fetched again, so what `purge` deleted stays
+//! deleted. One that failed lately waits, as a missing video does.
 //!
 //! A listed file found damaged, cut off or missing audio as a disk or a
 //! copy leaves it, is fetched again as a damaged download is, at once and
@@ -452,7 +452,7 @@ pub fn metainfos<R: Runner, W: Write>(
             })
             .collect();
         let labels: Vec<String> = asked.iter().map(|m| label(m)).collect();
-        let step = crate::progress::step("Fetching metainfo", None);
+        let step = crate::progress::step_beneath("Fetching metainfo", None);
         (ended, errors) = run(
             runner,
             places,
@@ -563,7 +563,7 @@ pub fn fetch_all<R: Runner, W: Write>(
         entries.push(fetch_entry(&metainfo, &dir, &wanted[n].files, &beside));
     }
     let labels: Vec<String> = asked.iter().map(|&n| wanted[n].meta.name.clone()).collect();
-    let step = crate::progress::step("Fetching", None);
+    let step = crate::progress::step_beneath("Fetching torrents", None);
     let (ended, errors) = run(
         runner,
         places,
@@ -689,22 +689,6 @@ pub fn keep_metainfo(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
         )?;
     }
     Ok(())
-}
-
-/// Fetch again every listed torrent's file the store lacks, one that
-/// failed lately waiting unless `retry`: each that did not arrive, with
-/// why.
-pub fn missing<R: Runner, W: Write>(
-    runner: &R,
-    out: &mut W,
-    places: &Places<'_>,
-    store: &Store,
-    manifest: &Manifest,
-    failures: &BTreeMap<SourceKey, Failure>,
-    retry: bool,
-) -> Result<Vec<(SourceKey, String)>> {
-    let by_hash = due(out, store, manifest, failures, retry)?;
-    fetch_due(runner, out, places, manifest, &by_hash)
 }
 
 /// The listed torrent files the store lacks or holds damaged, by their
