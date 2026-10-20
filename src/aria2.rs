@@ -37,6 +37,13 @@
 //! are not fetched again, so what `purge` deleted stays deleted. One that
 //! failed lately waits, as a missing video does.
 //!
+//! A listed file found damaged, cut off or missing audio as a disk or a
+//! copy leaves it, is fetched again as a damaged download is, at once and
+//! then less often ([`crate::state::Failure::due`]). Its damaged copy, and
+//! the files sharing a piece with it, are copied in as a download taken
+//! up is, so aria2c fetches only the pieces that do not check; the whole
+//! copy then takes the damaged one's place.
+//!
 //! A fetch with no byte arriving for `[torrent] stall` stops, aria2c
 //! reporting it unfinished, as a torrent no peer seeds leaves it; it is
 //! a failure a later sync tries again. aria2c reports each tracker it
@@ -329,7 +336,7 @@ pub fn take_up(
     files: &[&File],
     from: &Path,
 ) -> Result<usize> {
-    let root = if from.join(&meta.name).is_dir() && meta.files.len() > 1 {
+    let root = if from.join(&meta.name).is_dir() {
         from.join(&meta.name)
     } else {
         from.to_path_buf()
@@ -386,13 +393,19 @@ pub fn missing<R: Runner, W: Write>(
     retry: bool,
 ) -> Result<Vec<(SourceKey, String)>> {
     let now = crate::state::now_secs();
+    let damaged = |k: &SourceKey| {
+        failures
+            .get(k)
+            .is_some_and(|f| f.step == Step::Refetch && (retry || f.due(None, now)))
+    };
     let gone: Vec<SourceKey> = manifest
         .keys()
         .into_iter()
-        .filter(|k| matches!(k, SourceKey::Torrent(_)) && !store.has(k))
+        .filter(|k| matches!(k, SourceKey::Torrent(_)) && (!store.has(k) || damaged(k)))
         .collect();
     let (gone, waiting): (Vec<SourceKey>, Vec<SourceKey>) = gone.into_iter().partition(|k| {
         retry
+            || damaged(k)
             || failures
                 .get(k)
                 .filter(|f| f.step == Step::Fetch)
@@ -417,10 +430,22 @@ pub fn missing<R: Runner, W: Write>(
     }
     let mut failed = Vec::new();
     for (hash, keys) in by_hash {
-        crate::ui::info(
-            out,
-            &format!("Fetching {} missing torrent file(s) again", keys.len()),
-        )?;
+        let repaired = keys.iter().filter(|k| store.has(k)).count();
+        if repaired > 0 {
+            crate::ui::info(
+                out,
+                &format!("Fetching {repaired} damaged torrent file(s) again"),
+            )?;
+        }
+        if keys.len() > repaired {
+            crate::ui::info(
+                out,
+                &format!(
+                    "Fetching {} missing torrent file(s) again",
+                    keys.len() - repaired
+                ),
+            )?;
+        }
         let why = match again(runner, out, places, manifest, hash, &keys) {
             Ok(arrived) => {
                 for key in keys.iter().filter(|k| !arrived.contains(k)) {
@@ -503,11 +528,38 @@ fn again<R: Runner, W: Write>(
                 && !crate::store::torrent_path(places.store, t).is_file()
         })
         .collect();
+    repair_from_store(places, &meta, &wanted)?;
     let fetched = fetch(runner, out, places, &meta, &wanted)?;
     if let Some(failure) = fetched.failure {
         bail!(failure);
     }
     Ok(fetched.arrived)
+}
+
+/// Copy what the store holds of `files`, a damaged copy among them, and
+/// of the files sharing a piece with them, to where a fetch writes each,
+/// so aria2c fetches only the pieces that do not check.
+fn repair_from_store(places: &Places<'_>, meta: &Metainfo, files: &[&File]) -> Result<()> {
+    let dir = places.partial.join(meta.hash());
+    for file in files
+        .iter()
+        .copied()
+        .chain(crate::torrent::sharing(meta, files))
+    {
+        let SourceKey::Torrent(key) = meta.key(file) else {
+            continue;
+        };
+        let at = crate::store::torrent_path(places.store, &key);
+        let to = dir.join(index_path(file));
+        if !at.is_file() || to.exists() {
+            continue;
+        }
+        std::fs::create_dir_all(to.parent().unwrap_or(&dir))
+            .with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::copy(&at, &to)
+            .with_context(|| format!("copying {} to {}", at.display(), to.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

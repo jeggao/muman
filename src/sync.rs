@@ -185,10 +185,15 @@ fn missing_torrents<R: Runner, W: Write>(
     out: &mut W,
 ) -> Result<Vec<(SourceKey, String)>> {
     let store = Store::scan(&job.dirs)?;
+    let damaged = |k: &SourceKey| {
+        failures
+            .get(k)
+            .is_some_and(|f| f.step == state::Step::Refetch)
+    };
     let wanted = manifest
         .keys()
         .iter()
-        .any(|k| matches!(k, SourceKey::Torrent(_)) && !store.has(k));
+        .any(|k| matches!(k, SourceKey::Torrent(_)) && (!store.has(k) || damaged(k)));
     if !wanted {
         return Ok(Vec::new());
     }

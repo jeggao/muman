@@ -280,7 +280,9 @@ missing or wrong is fetched, so a complete download needs no peer.
 A listed file gone from the store is fetched again by the next `sync`,
 with what it brings, from the kept metainfo, else from the torrent's
 hash and recorded trackers; a file no song lists is not, and one that
-fails waits as a video does.
+fails waits as a video does. A file found [damaged](#a-source-that-changes)
+is fetched again as a damaged download is, only its pieces that do not
+check fetched.
 
 ### Manual files and sidecars
 
