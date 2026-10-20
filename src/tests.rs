@@ -544,6 +544,41 @@ fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
 }
 
 #[test]
+fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["01 Paper Comets.flac", "cover.jpg"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::default());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::remove_file(torrents.join(format!("{hash}.torrent"))).unwrap();
+
+    let (ok, text) = s.run(&fake, &["status"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&fake, &["check"]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains(&format!("The metainfo of torrent {hash} is gone")),
+        "{report}"
+    );
+    assert!(!report.contains("Missing from sources"), "{report}");
+    let (_, text) = s.run(&fake, &["purge", "-y"]);
+    assert!(
+        torrents.join(&hash).join("01 Paper Comets.flac").is_file(),
+        "{text}"
+    );
+    assert!(torrents.join(&hash).join("cover.jpg").is_file(), "{text}");
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn a_torrent_downloaded_already_is_taken_up_from_its_folder() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac", "scan.png"]);
@@ -1225,6 +1260,51 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
 }
 
 #[test]
+fn a_torrent_file_holding_other_bytes_is_damaged() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let key = SourceKey::parse(&format!("torrent:{hash}/Paper Comets.flac")).unwrap();
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 4\n\
+             [providers.lrclib]\nenabled = false\n\
+             [providers.acoustid]\nenabled = false\n\
+             [providers.musicbrainz]\nenabled = false\n\
+             [providers.coverart]\nenabled = false\n\
+             [[song]]\nsources = [\"{key}\"]\n"
+        ),
+    );
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::create_dir_all(&torrents).unwrap();
+    std::fs::write(torrents.join(format!("{hash}.torrent")), &bytes).unwrap();
+    let at = format!("home/sources/torrent/{hash}/Paper Comets.flac");
+    s.written(&at, "as fetched");
+    let hashed = |n| {
+        Fake {
+            hashes: vec![("Paper Comets".into(), n)],
+            ..Fake::default()
+        }
+        .probe(".flac", FLAC)
+    };
+    let (ok, text) = s.run(&hashed(1), &["sync", "--offline"]);
+    assert!(ok, "{text}");
+    s.written(&at, "eight bytes overwritten");
+    let (_, text) = s.run(&hashed(3), &["sync", "--offline"]);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+    assert!(!text.contains("Updated"), "{text}");
+}
+
+#[test]
 fn a_damaged_torrent_file_is_repaired_from_its_peers_and_taken() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);
@@ -1671,6 +1751,15 @@ fn status_of_a_song_a_sync_would_fetch_says_so_and_fails_nothing() {
     assert!(text.contains("Made once a sync fetches it"), "{text}");
     let (_, report) = s.report(&flacs(), &["status"]);
     assert!(report.contains("Songs: 1 made once fetched"), "{report}");
+
+    let home = s.dir.path().join("home");
+    let mut state = crate::state::State::load(&home).unwrap();
+    let key = SourceKey::parse("jamendo.com:1234567").unwrap();
+    state.record_failure(&key, crate::state::Step::Fetch, None, "Not found".into());
+    state.save(&home).unwrap();
+    let (ok, text) = s.run(&flacs(), &["status"]);
+    assert!(!ok, "a source that failed lately is not fetched: {text}");
+    assert!(text.contains("Failed"), "{text}");
 }
 
 #[test]

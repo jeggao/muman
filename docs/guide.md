@@ -27,7 +27,7 @@ holds only what muman renders from it.
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
 | `sources/coverart/<id>.jpg` | Album covers found on the Cover Art Archive, shared by every song of the album |
 | `sources/torrent/<hash>.torrent` | A torrent's metainfo, which names its files |
-| `sources/torrent/<hash>/` | A torrent's files, each at its path in the torrent with what Windows refuses in a name replaced by a lookalike; of two files kept at one place so, or apart only by case, the first the torrent lists, the other left with a warning; a file the metainfo does not name is no source, and `purge` deletes it |
+| `sources/torrent/<hash>/` | A torrent's files, each at its path in the torrent with what Windows refuses in a name replaced by a lookalike; of two files kept at one place so, or apart only by case, the first the torrent lists, the other left with a warning; a file the metainfo does not name is no source, and `purge` deletes it, but while a listed torrent's metainfo is gone its folder is kept and its song files read without what they bring |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -282,9 +282,9 @@ missing or wrong is fetched, so a complete download needs no peer.
 A listed file gone from the store is fetched again by the next `sync`,
 with what it brings, from the kept metainfo, else from the torrent's
 hash and recorded trackers; a file no song lists is not, and one that
-fails waits as a video does. A file found [damaged](#a-source-that-changes)
-is fetched again as a damaged download is, only its pieces that do not
-check fetched.
+fails waits as a video does. A file found [damaged](#a-source-that-changes),
+or holding other audio than its song was built from, is fetched again
+as a damaged download is, only its pieces that do not check fetched.
 
 ### Manual files and sidecars
 

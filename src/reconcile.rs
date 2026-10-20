@@ -917,9 +917,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
                         .is_some())
         }
     };
+    let now = crate::state::now_secs();
+    let due = |k: &SourceKey| {
+        state
+            .failures
+            .get(k)
+            .filter(|f| f.step == Step::Fetch)
+            .is_none_or(|f| opts.retry || f.due(None, now))
+    };
     let to_fetch: BTreeSet<SourceKey> = listed
         .iter()
-        .filter(|k| opts.dry_run && !store.has(k) && fetchable(k))
+        .filter(|k| opts.dry_run && !store.has(k) && fetchable(k) && due(k))
         .cloned()
         .collect();
     let on_disk: BTreeSet<SourceKey> = listed
@@ -1808,10 +1816,24 @@ fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
             }
             Some(_) => {}
             None => {
+                let recorded = held.and_then(|h| h.audio.as_ref());
+                // A torrent's hash names every byte of its files: one that
+                // holds other audio than its song was built from is damaged.
+                let now = crate::held::Held::now(&key, facts, sites).and_then(|h| h.audio);
+                if matches!(key, SourceKey::Torrent(_))
+                    && let (Some(was), Some(now)) = (recorded, now)
+                    && *was != now
+                {
+                    if refetching.is_none_or(|r| r.as_deref() != Some(rev.as_str())) {
+                        state.damaged.entry(key.clone()).or_insert(now);
+                        let said = format!("{key} holds other bytes than its torrent's");
+                        state.record_failure(&key, Step::Refetch, Some(rev), said);
+                    }
+                    continue;
+                }
                 if refetching.is_some() {
                     state.clear_failure(&key);
                 }
-                let recorded = held.and_then(|h| h.audio.as_ref());
                 if state.damaged.get(&key).is_some_and(|d| Some(d) != recorded) {
                     state.damaged.remove(&key);
                 }

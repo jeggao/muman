@@ -501,7 +501,14 @@ impl Step {
         if !due {
             return;
         }
-        let mut line = format!("{}: {done}", self.title());
+        let note = lock(&self.state.note)
+            .clone()
+            .filter(|_| total.is_none() && !end);
+        let mut line = match note {
+            // A step that counts nothing, as aria2c's, says only its note.
+            Some(note) if done == 0 => format!("{}: {note}", self.title()),
+            _ => format!("{}: {done}", self.title()),
+        };
         if let Some(t) = total {
             let _ = write!(line, "/{t}");
         }
@@ -908,6 +915,23 @@ mod tests {
         assert!(lines[0].starts_with("Writing: 2/20"), "{text}");
         assert_eq!(lines.len(), 10, "nine tenths, then the end: {text}");
         assert!(lines[9].starts_with("Writing: 20/20, done in"), "{text}");
+    }
+
+    #[test]
+    fn a_plain_line_of_a_step_counting_nothing_says_its_note() {
+        let sink = Shared::default();
+        let progress = Progress::new(Kind::Plain, Box::new(sink.clone()));
+        {
+            let step = progress.step("Fetching torrents", None);
+            step.state.reported.lock().unwrap().at = Instant::now().checked_sub(PLAIN_EVERY);
+            step.note("aria2c: 3.0MiB/10MiB(28%)");
+        }
+        assert!(
+            sink.text()
+                .starts_with("Fetching torrents: aria2c: 3.0MiB/10MiB(28%)\n"),
+            "{}",
+            sink.text()
+        );
     }
 
     #[test]

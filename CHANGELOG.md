@@ -23,14 +23,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   the store again, from its kept metainfo or from its hash and recorded
   trackers. `add --from <FOLDER>` takes up a torrent another client
   downloaded, checking it piece by piece and fetching only what is
-  missing or wrong. A torrent's file found damaged is fetched again as
-  a damaged download is, only its pieces that do not check fetched.
+  missing or wrong. A torrent's file found damaged, or holding other
+  audio than its song was built from, is fetched again as a damaged
+  download is, only its pieces that do not check fetched.
   Torrents given together, and those a `sync` fetches again, are
   fetched by one aria2c run, up to eight at a time, so one no peer
   seeds stalls beside the others rather than before them; a `sync`
   fetches them beside yt-dlp's fetches rather than after them. A fetch
   that does not finish keeps each file whose pieces all check, so one
   piece no peer holds right does not keep the rest of a torrent out.
+  While a listed torrent's metainfo is gone from the store, its song
+  files stay sources, `purge` keeps its folder and `check` says so.
 - **aria2c is one of the programs muman runs**, to fetch torrents:
   `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
   and `[torrent]` sets the arguments every run takes, how long a fetch

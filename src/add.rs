@@ -832,9 +832,12 @@ fn read_all<R: Runner, W: Write>(
         match read_torrent(input) {
             Ok(Given::Magnet(m)) => {
                 let hash = m.v1.as_deref().or(m.v2.as_deref()).unwrap_or_default();
-                let given = match std::fs::read(crate::store::metainfo_path(places.store, hash)) {
-                    Ok(bytes) => Given::Kept(bytes, m.trackers),
-                    Err(_) => Given::Magnet(m),
+                let kept = std::fs::read(crate::store::metainfo_path(places.store, hash))
+                    .ok()
+                    .filter(|b| crate::torrent::Metainfo::read(b).is_ok_and(|t| t.hash() == hash));
+                let given = match kept {
+                    Some(bytes) => Given::Kept(bytes, m.trackers),
+                    None => Given::Magnet(m),
                 };
                 read.push((input.as_str(), given));
             }

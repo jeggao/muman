@@ -63,7 +63,8 @@
 //! deleted. One that failed lately waits, as a missing video does.
 //!
 //! A listed file found damaged, cut off or missing audio as a disk or a
-//! copy leaves it, is fetched again as a damaged download is, at once and
+//! copy leaves it, or holding other audio than its song was built from,
+//! which a torrent's file never may, is fetched again as a damaged download is, at once and
 //! then less often ([`crate::state::Failure::due`]). Its damaged copy, and
 //! the files sharing a piece with it, are copied in as a download taken
 //! up is, so aria2c fetches only the pieces that do not check; the whole
@@ -620,6 +621,7 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
     let meta = wanted.meta;
     let dir = places.partial.join(meta.hash());
     let mut arrived = Vec::new();
+    let mut unplaced = Vec::new();
     for file in &wanted.files {
         let from = dir.join(index_path(file));
         let SourceKey::Torrent(key) = meta.key(file) else {
@@ -634,13 +636,16 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
         }
         match crate::store::place_torrent(places.store, &key, &from) {
             Ok(_) => arrived.push(SourceKey::Torrent(key)),
-            Err(e) => crate::ui::warning(out, &format!("{e:#}"))?,
+            Err(e) => unplaced.push(format!("{e:#}")),
         }
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    // A file the store could not take stays to be placed by a later run.
+    if unplaced.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     Ok(Fetched {
         arrived,
-        failure: None,
+        failure: (!unplaced.is_empty()).then(|| unplaced.join("; ")),
     })
 }
 

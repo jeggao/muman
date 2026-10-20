@@ -34,7 +34,10 @@
 //! torrent has, so a file is read as a source only while its torrent's
 //! metainfo is there, and anything else in the folder is a leftover. A
 //! torrent's song file brings its lyrics and pictures by the manual
-//! folder's rules, from among its own torrent's files alone.
+//! folder's rules, from among its own torrent's files alone. A listed
+//! song file whose torrent's metainfo is gone is read where its key puts
+//! it, without what it brings, and nothing in its torrent's folder is
+//! unused until the metainfo is back.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
@@ -205,7 +208,7 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
     crate::atomic::rename(from, &to)
         .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
     // What yt-dlp could not embed beside it, as a JSON subtitle, is no
-    // source; every source is an `.mkv`, and an ID may be another's and more.
+    // source; an ID may be another's and more, so no song file goes.
     let staged = from
         .file_stem()
         .map(|s| format!("{}.", s.to_string_lossy()));
@@ -214,7 +217,7 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
         .flatten()
         .filter_map(|e| Some(e.ok()?.path()))
         .filter(|p| {
-            p.extension().is_none_or(|e| e != "mkv")
+            kind_of(p) != Some(Kind::Media)
                 && staged.as_deref().is_some_and(|s| {
                     p.file_name()
                         .is_some_and(|n| n.to_string_lossy().starts_with(s))
@@ -641,11 +644,19 @@ impl Store {
                 None => self.fetched_file(key).is_some(),
             },
             SourceKey::Manual(rel) => self.manual.contains_key(rel.path()),
-            SourceKey::Torrent(t) => self
-                .torrents
-                .get(t.hash())
-                .is_some_and(|files| files.contains_key(t.path())),
+            SourceKey::Torrent(t) => match self.torrents.get(t.hash()) {
+                Some(files) => files.contains_key(t.path()),
+                None => self.unread_torrent_file(t).is_some(),
+            },
         }
+    }
+
+    /// The file of `key` at its place, of a torrent whose metainfo is
+    /// gone: a song file, read as one without what it brings, which only
+    /// the metainfo tells.
+    fn unread_torrent_file(&self, key: &TorrentKey) -> Option<PathBuf> {
+        let at = torrent_path(&self.torrent_root, key);
+        (kind_of(key.path()) == Some(Kind::Media) && at.is_file()).then_some(at)
     }
 
     /// Whether the metainfo of the torrent of `hash` is kept.
@@ -683,6 +694,13 @@ impl Store {
             SourceKey::Remote { .. } => Some(Located {
                 key: key.clone(),
                 path: self.fetched_file(key)?.clone(),
+                kind: Kind::Media,
+                lyrics: None,
+                covers: Vec::new(),
+            }),
+            SourceKey::Torrent(t) if !self.torrents.contains_key(t.hash()) => Some(Located {
+                key: key.clone(),
+                path: self.unread_torrent_file(t)?,
                 kind: Kind::Media,
                 lyrics: None,
                 covers: Vec::new(),
@@ -858,13 +876,19 @@ impl Store {
 
     /// Every file in the store no song lists and nothing listed brings
     /// with it, and each torrent's metainfo no listed file is of: clutter
-    /// a status run names, never deletes.
+    /// a status run names, never deletes. A listed torrent whose metainfo
+    /// is gone keeps its folder whole: without it, which of its files a
+    /// song lists or brings cannot be told.
     #[must_use]
     pub fn unused(&self, listed: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
         let mut used: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut unread: BTreeSet<PathBuf> = BTreeSet::new();
         for key in listed {
             if let SourceKey::Torrent(t) = key {
                 used.insert(metainfo_path(&self.torrent_root, t.hash()));
+                if !self.torrents.contains_key(t.hash()) {
+                    unread.insert(self.torrent_root.join(t.hash()));
+                }
             }
             if let Some(l) = self.locate(key) {
                 used.insert(l.path);
@@ -897,7 +921,7 @@ impl Store {
                     .collect::<Vec<_>>()
                     .iter(),
             )
-            .filter(|p| !used.contains(*p))
+            .filter(|p| !used.contains(*p) && !unread.iter().any(|d| p.starts_with(d)))
             .cloned()
             .collect();
         unused.sort();
