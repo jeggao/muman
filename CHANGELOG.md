@@ -18,7 +18,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `.torrent` file, it fetches the song files with aria2c, with the lyrics
   and pictures they bring, and lists each as a song; the song list's
   `[torrents]` records what fetches the torrent again, without a private
-  torrent's trackers.
+  torrent's trackers. `sync` fetches a listed torrent's file gone from
+  the store again, from its kept metainfo or from its hash and recorded
+  trackers.
 - **aria2c is one of the programs muman runs**, to fetch torrents:
   `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
   and `[torrent]` sets the arguments every run takes, how long a fetch

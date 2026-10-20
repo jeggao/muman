@@ -398,9 +398,12 @@ impl Magnet {
     /// The link again, to hand a fetcher: its hashes, name and trackers.
     #[must_use]
     pub fn link(&self) -> String {
-        let encode = |s: &str| {
-            percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
-        };
+        const KEPT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+            .remove(b'-')
+            .remove(b'.')
+            .remove(b'_')
+            .remove(b'~');
+        let encode = |s: &str| percent_encoding::utf8_percent_encode(s, KEPT).to_string();
         let mut parts = Vec::new();
         parts.extend(self.v1.iter().map(|h| format!("xt=urn:btih:{h}")));
         parts.extend(self.v2.iter().map(|h| format!("xt=urn:btmh:1220{h}")));

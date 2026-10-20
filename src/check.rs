@@ -164,7 +164,8 @@ pub fn check<R: Runner, W: Write, D: Write>(
                 .is_some_and(|h| h.url.is_some());
             let fetchable = manifest.settings.sites.fetch_url(key).is_some()
                 || page
-                || crate::provider::is_kept(key);
+                || crate::provider::is_kept(key)
+                || matches!(key, SourceKey::Torrent(_));
             let others = manifest
                 .song_with(key)
                 .is_some_and(|s| s.sources.iter().any(|k| k != key && store.has(k)));

@@ -762,10 +762,7 @@ fn keep_torrent(
     mut trackers: Vec<String>,
 ) -> Result<()> {
     let hash = meta.hash();
-    std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
-    if !store::metainfo_path(root, hash).exists() {
-        atomic::write(root, &atomic::Name::new(format!("{hash}.torrent"))?, bytes)?;
-    }
+    crate::aria2::keep_metainfo(root, hash, bytes)?;
     trackers.extend(meta.trackers.iter().cloned());
     let mut seen = BTreeSet::new();
     trackers.retain(|t| seen.insert(t.clone()));
