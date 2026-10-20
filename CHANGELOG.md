@@ -57,6 +57,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `web_music` client too**, as `extractor_args` says; remove it there
   to ask without.
 
+### Fixed
+
+- **A short upload matches its release.** Comparing two recordings
+  counted the windows past the release's edges as disagreeing, though
+  they could not agree; in a clip of half a minute they were a third of
+  the windows, so a clip with an intro or outro was never the same
+  recording as its track. Every comparison is made once again.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added

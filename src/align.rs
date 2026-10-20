@@ -18,7 +18,9 @@
 //! shift drifts: a copy played 0.1% fast drifts 240 ms in four minutes.
 //! The two are one recording when the whole, the drift undone, correlates
 //! at 0.8 or more and at least 80% of the windows lie on the line, each
-//! within 50 ms and correlating at 0.5.
+//! within 50 ms and correlating at 0.5. Only windows that shift places
+//! inside the track count: one past its edge reaches the track only by
+//! moving off the shift, and of a clip's few windows those were a third.
 //!
 //! Measured on uploads paired with their releases, one recording scored
 //! 0.991 to 0.997 with 97% to 100% of its windows agreeing, a music video
@@ -78,7 +80,7 @@ use crate::settings::Ytdlp;
 
 /// Names the method and its constants. A stored match made by another
 /// is made again, so changing anything below means changing this.
-pub const METHOD: &str = "envelope-xcorr/7";
+pub const METHOD: &str = "envelope-xcorr/8";
 
 const SAMPLE_RATE: usize = 8000;
 /// Samples per envelope frame: 10 ms.
@@ -490,7 +492,8 @@ struct Window {
 }
 
 /// The upload's windows, each searched within [`WINDOW_SEARCH`] of the
-/// shift `guess` gives for its middle; flat windows say nothing.
+/// shift `guess` gives for its middle; flat windows say nothing, nor do
+/// those that shift leaves outside the track.
 fn windows(upload: &[f64], track: &[f64], guess: impl Fn(f64) -> isize) -> Vec<Window> {
     let mut found = Vec::new();
     for at in (0..upload.len().saturating_sub(WINDOW - 1)).step_by(WINDOW_HOP) {
@@ -501,6 +504,11 @@ fn windows(upload: &[f64], track: &[f64], guess: impl Fn(f64) -> isize) -> Vec<W
         let middle = real(at + WINDOW / 2);
         let reach = WINDOW_SEARCH.cast_signed();
         let centre = guess(middle);
+        let inside = usize::try_from(at.cast_signed() - centre)
+            .is_ok_and(|from| from + WINDOW <= track.len());
+        if !inside {
+            continue;
+        }
         let best = best((centre - reach..=centre + reach).filter_map(|l| {
             let from = usize::try_from(at.cast_signed() - l).ok()?;
             Some((l, ncc(window, track.get(from..from + WINDOW)?)))
@@ -633,6 +641,17 @@ mod tests {
                 level
             })
             .collect()
+    }
+
+    #[test]
+    fn a_short_track_inside_a_longer_upload_counts_only_its_own_windows() {
+        let track = song(3400, 11);
+        let mut upload = song(520, 12);
+        upload.extend(&track);
+        upload.extend(song(480, 13));
+        let a = align(&upload, &track).unwrap();
+        assert_eq!(a.offset_ms, 5200);
+        assert!(a.fits(), "{a:?}");
     }
 
     #[test]
