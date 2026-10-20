@@ -234,12 +234,13 @@ default `[ytdlp] format` keeps none. A Mix, the radio YouTube plays on
 from a video, is fetched as its one video. yt-dlp runs with `--ignore-config`,
 so your own yt-dlp config never changes what a source holds; `[ytdlp]`
 sets the format, subtitle languages and extra arguments instead
-([configuration](configuration.md)). Two yt-dlp plugins ship inside
+([configuration](configuration.md)). Three yt-dlp plugins ship inside
 muman and are written to its cache folder on the first fetch: one keeps
 out the machine-translated captions that trip YouTube's rate limit, one
-makes a YouTube Music track's square album art its thumbnail. A yt-dlp
-that cannot load them is run once more without them, with a warning,
-rather than fetch nothing. Each file
+makes a YouTube Music track's square album art its thumbnail, one gives
+each file of an archive.org item the item's creator and dates, as yt-dlp
+does a file fetched alone. A yt-dlp that cannot load them is run once
+more without them, with a warning, rather than fetch nothing. Each file
 fetched, or given to `add` as one yt-dlp fetched, keeps the info JSON
 yt-dlp embeds without the cookies and HTTP headers its requests sent,
 so a login passed in `[ytdlp] args` stays out of the store.

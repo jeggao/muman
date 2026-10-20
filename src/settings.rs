@@ -684,8 +684,9 @@ pub struct Ytdlp {
     /// into the Matroska file a source is kept in.
     pub sub_langs: String,
     pub concurrent_fragments: u32,
-    /// Load muman's two postprocessors, which keep generated captions
-    /// out and take a YouTube Music track's square album art.
+    /// Load muman's yt-dlp plugins ([`crate::plugins`]), which keep
+    /// generated captions out, take a YouTube Music track's square album
+    /// art and give each file of an archive.org item its item's details.
     pub plugins: bool,
     /// More arguments for every yt-dlp run: listing, searching, the
     /// audio a comparison downloads, and fetching.

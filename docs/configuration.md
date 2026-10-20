@@ -108,7 +108,7 @@ know.
 | `[audio]` | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | `[loudness]` | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
-| `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, muman's postprocessors, the arguments every run takes, each extractor's arguments, how long partial downloads are kept |
+| `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, muman's yt-dlp plugins, the arguments every run takes, each extractor's arguments, how long partial downloads are kept |
 | `[torrent]` | The arguments every aria2c run takes, how long a fetch waits with nothing arriving, how long a fetched torrent is seeded, how long partial fetches are kept |
 | `[tools.*]` | The ffmpeg, ffprobe, yt-dlp and aria2c muman runs, and whether each one's version is checked |
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |

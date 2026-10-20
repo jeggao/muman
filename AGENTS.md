@@ -63,7 +63,7 @@ src/
   aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
   ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
   music.rs          YouTube Music search and name matching
-  plugins.rs        yt-dlp postprocessors shipped in the binary
+  plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
   similar.rs        names and texts compared in any script
@@ -106,7 +106,7 @@ src/
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
 testdata/           tiny Opus, FLAC and PNG fixtures
-assets/yt-dlp/      the postprocessors plugins.rs embeds
+assets/yt-dlp/      the plugins plugins.rs embeds
 xtask/              cargo xtask comments | docs
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, configuration.md, cli.md (generated)

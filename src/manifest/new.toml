@@ -139,7 +139,8 @@ format = "ba/b"
 # some sites list as subtitles are left out.
 sub_langs = "all,-live_chat,-comments,-danmaku"
 concurrent_fragments = 4
-# muman's postprocessors: no generated captions, square album art.
+# muman's yt-dlp plugins: no generated captions, square album art, an
+# archive.org item's details on each of its files.
 plugins = true
 # More arguments for every yt-dlp run, listing and searching as well as
 # fetching, such as ["--cookies-from-browser", "firefox"] or
