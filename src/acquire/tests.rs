@@ -83,7 +83,7 @@ impl Runner for Net {
             std::fs::write(&path, b"mkv").unwrap();
             let _ = writeln!(
                 lines,
-                "Youtube {id} {}",
+                "Youtube \"{id}\" {}",
                 serde_json::to_string(&path).unwrap()
             );
         }

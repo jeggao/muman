@@ -137,8 +137,9 @@ never change.
 A fetched source's site is the domain it came from and its ID the one
 yt-dlp gives it there, as `youtube.com:vid00000001` or
 `archive.org:<id>`; a file in an archive.org item of several is
-`archive.org:<item>/<file>`, and is fetched again alone. A site yt-dlp
-reaches by several addresses has one domain: a video from YouTube
+`archive.org:<item>/<file>`, its name as it is, as
+`archive.org:<item>/01 Lantern #2.mp3`, and is fetched again alone. A
+site yt-dlp reaches by several addresses has one domain: a video from YouTube
 Music, `youtu.be` or `m.youtube.com` is `youtube.com:<id>`, the one
 source however it was found, and a track on any
 `<artist>.bandcamp.com` is `bandcamp.com:<id>`. Which sites have one
