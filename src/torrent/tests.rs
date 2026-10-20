@@ -378,3 +378,31 @@ fn a_file_checks_when_every_piece_it_spans_does() {
     write(3, b"cc").unwrap();
     assert_eq!(checked(), [true, true, true]);
 }
+
+#[test]
+fn a_part_too_long_for_a_name_is_shortened_by_its_hash_and_keeps_its_extension() {
+    let long = |c: &str| format!("{} Paper Comets.flac", c.repeat(120));
+    let (a, b) = (
+        stored(Path::new(&long("?"))),
+        stored(Path::new(&long("夜"))),
+    );
+    for at in [&a, &b] {
+        let name = at.to_str().unwrap();
+        assert!(
+            name.len() <= crate::store::PART_BYTES,
+            "{} bytes: {name}",
+            name.len()
+        );
+        assert_eq!(at.extension(), Some(std::ffi::OsStr::new("flac")), "{name}");
+    }
+    assert_ne!(a, b);
+    assert_ne!(
+        stored(Path::new(&long("？"))),
+        a,
+        "a lookalike's hash is its own"
+    );
+    assert_eq!(
+        stored(Path::new("01 Paper Comets.flac")),
+        Path::new("01 Paper Comets.flac")
+    );
+}

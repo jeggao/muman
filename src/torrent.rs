@@ -25,7 +25,8 @@
 //! Where a file is kept is a function of its key alone ([`stored`]):
 //! each part with what Windows, FAT or a phone refuses replaced by its
 //! full-width lookalike, as yt-dlp and the library's safe names do, the
-//! same on every system so a home copies between them. Two files of a
+//! same on every system so a home copies between them, and a part longer
+//! than a name may be on any of them shortened, its hash after it. Two files of a
 //! torrent can then be kept at one place, as `song?.mp3` beside
 //! `song？.mp3`, or `Song.mp3` beside `song.mp3` on a system blind to
 //! case; the first the torrent lists is taken and the other left on its
@@ -618,7 +619,35 @@ fn stored_part(name: &str) -> String {
         let at = out.find('.').unwrap_or(out.len());
         out.insert(at, '_');
     }
-    out
+    shortened(out, name)
+}
+
+/// `out`, the part `name` spelled for every system, cut to its first
+/// [`crate::store::PART_BYTES`] bytes or so with a hash of `name` after,
+/// its extension kept, where it runs longer: a torrent's file is known by
+/// its metainfo, not by the name it is kept at, and lookalikes take more
+/// bytes than what they stand for.
+fn shortened(out: String, name: &str) -> String {
+    const HASH: usize = 8;
+    if out.len() <= crate::store::PART_BYTES {
+        return out;
+    }
+    let ext = Path::new(&out)
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| e.len() <= 10 && e.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let room = crate::store::PART_BYTES - HASH - 1 - ext.len();
+    let mut cut = room.min(out.len());
+    while !out.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!(
+        "{}~{}{ext}",
+        &out[..cut],
+        &hex(&Sha1::digest(name.as_bytes()))[..HASH]
+    )
 }
 
 /// A bencoded value; a dictionary keeps the bytes it was read from.

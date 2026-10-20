@@ -88,12 +88,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An archive.org file whose name holds a `+` is fetched again.** The
   address a missing source is fetched from percent-encodes its ID, as
   archive.org read a `+` in it as a space and found no such file.
-- **A fetched file the store cannot keep fails the run.** One whose
-  name runs past what the filesystem takes, as an archive.org file named
-  in percent-escapes does once its `%`s are escaped, was left in the
-  store's staging folder and its song dropped, the run exiting 0 and a
-  later `add` saying "Nothing new"; it is said as an error and the run
-  exits 4.
+- **A source whose name is too long for a file's is kept.** An
+  archive.org file named in percent-escapes, whose `%`s the store
+  escapes again, ran past the 255 bytes a name may take, and its song
+  was dropped, the run exiting 0 and a later `add` saying "Nothing new".
+  A name too long is cut into folders, and a torrent's file shortened by
+  its hash; a fetched file the store still cannot take, as one apart from
+  another only in case where the filesystem is blind to it, is said as
+  an error and the run exits 4.
 - **What yt-dlp fetched but could not embed is not left behind.** A
   subtitle in JSON, as Niconico's comments under a `[ytdlp] sub_langs`
   that asks for them, stayed in the store's hidden staging folder, which
