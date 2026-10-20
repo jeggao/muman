@@ -617,6 +617,13 @@ fn a_magnet_links_metainfo_comes_from_its_peers() {
         manifest.torrents[&hash].trackers,
         ["udp://tracker.example:1337"]
     );
+    let (ok, text) = s.run(&fake, &["add", "--no-match", &link]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        runs.lock().unwrap().len(),
+        2,
+        "its metainfo is kept: {text}"
+    );
 
     let e = run_with(
         &s.job(&["add", "--offline", &link]),

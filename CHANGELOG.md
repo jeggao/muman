@@ -84,6 +84,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   store's staging folder and its song dropped, the run exiting 0 and a
   later `add` saying "Nothing new"; it is said as an error, deleted, and
   the run exits 4.
+- **What yt-dlp fetched but could not embed is not left behind.** A
+  subtitle in JSON, as Niconico's comments under a `[ytdlp] sub_langs`
+  that asks for them, stayed in the store's hidden staging folder, which
+  no `purge` or `check` saw; it goes once its source is placed.
 - **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song

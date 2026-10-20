@@ -29,7 +29,9 @@
 //! A magnet link names a torrent without its metainfo, which aria2c asks
 //! its peers for first (`--bt-metadata-only`), saving it beside the
 //! unfinished fetches as `<v1 hash>.torrent`; muman then reads and keeps
-//! it as a `.torrent` file given to `add` is kept.
+//! it as a `.torrent` file given to `add` is kept. A link of a torrent
+//! whose metainfo the store keeps already is read from there, no peer
+//! asked.
 //!
 //! A fetch selects the files muman takes ([`crate::torrent::selected`])
 //! by their place in the torrent, and names each `files/<place>.<ext>`

@@ -204,6 +204,25 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
     }
     crate::atomic::rename(from, &to)
         .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+    // What yt-dlp could not embed beside it, as a JSON subtitle, is no
+    // source; every source is an `.mkv`, and an ID may be another's and more.
+    let staged = from
+        .file_stem()
+        .map(|s| format!("{}.", s.to_string_lossy()));
+    let beside = std::fs::read_dir(from.parent().unwrap_or(root))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| {
+            p.extension().is_none_or(|e| e != "mkv")
+                && staged.as_deref().is_some_and(|s| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(s))
+                })
+        });
+    for left in beside {
+        let _ = std::fs::remove_file(left);
+    }
     for name in &names {
         let other = folder.join(name);
         if name != to_name
@@ -1218,6 +1237,20 @@ mod tests {
             [loose, vtt, webm],
             "what is no source is clutter"
         );
+    }
+
+    #[test]
+    fn what_yt_dlp_left_beside_a_fetched_file_goes_with_it_and_no_other_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sources/yt-dlp");
+        let staged = "sources/yt-dlp/.incoming/ArchiveOrg/item-1⧸01.mp3";
+        let file = touch(dir.path(), &format!("{staged}.mkv"));
+        let comments = touch(dir.path(), &format!("{staged}.comments.json"));
+        let other = touch(dir.path(), &format!("{staged}.lrc.mkv"));
+        let key = SourceKey::parse("archive.org:item-1/01.mp3").unwrap();
+        place(&root, &key, &file).unwrap();
+        assert!(!comments.exists());
+        assert!(other.exists(), "another source, `item-1/01.mp3.lrc`");
     }
 
     #[test]

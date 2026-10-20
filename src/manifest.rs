@@ -1059,13 +1059,16 @@ fn refuse_unsited(
     albums: &[Album],
     removed: &[Removed],
 ) -> Result<()> {
-    let listed = songs
-        .iter()
-        .flat_map(|s| &s.sources)
-        .chain(albums.iter().map(|a| &a.source))
-        .chain(removed.iter().flat_map(|r| &r.sources));
-    if let Some(key) = listed.into_iter().find(|k| !sites.accepts(k)) {
-        bail!("`{key}` is not a source key: its site's `[sites]` table takes no such ID");
+    let place = |kind: &str, n: usize| format!("{kind} {}", n + 1);
+    let listed = (songs.iter().enumerate())
+        .flat_map(|(n, s)| s.sources.iter().map(move |k| (place("song", n), k)))
+        .chain((albums.iter().enumerate()).map(|(n, a)| (place("album", n), &a.source)))
+        .chain(
+            (removed.iter().enumerate())
+                .flat_map(|(n, r)| r.sources.iter().map(move |k| (place("removed song", n), k))),
+        );
+    if let Some((what, key)) = listed.into_iter().find(|(_, k)| !sites.accepts(k)) {
+        bail!("{what}: `{key}` is not a source key: its site's `[sites]` table takes no such ID");
     }
     Ok(())
 }

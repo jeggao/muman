@@ -830,6 +830,14 @@ fn read_all<R: Runner, W: Write>(
     let mut read = Vec::new();
     for input in inputs {
         match read_torrent(input) {
+            Ok(Given::Magnet(m)) => {
+                let hash = m.v1.as_deref().or(m.v2.as_deref()).unwrap_or_default();
+                let given = match std::fs::read(crate::store::metainfo_path(places.store, hash)) {
+                    Ok(bytes) => Given::Kept(bytes, m.trackers),
+                    Err(_) => Given::Magnet(m),
+                };
+                read.push((input.as_str(), given));
+            }
             Ok(given) => read.push((input.as_str(), given)),
             Err(e) => {
                 ui::error(out, &format!("{e:#}"))?;
@@ -841,7 +849,7 @@ fn read_all<R: Runner, W: Write>(
         .iter()
         .filter_map(|(_, g)| match g {
             Given::Magnet(m) => Some(m),
-            Given::File(_) => None,
+            Given::File(_) | Given::Kept(..) => None,
         })
         .collect();
     let mut asked = stop_on_tool(crate::aria2::metainfos(runner, out, places, &magnets))?
@@ -851,6 +859,7 @@ fn read_all<R: Runner, W: Write>(
     for (input, given) in read {
         let (bytes, trackers) = match given {
             Given::File(bytes) => (Ok(bytes), Vec::new()),
+            Given::Kept(bytes, trackers) => (Ok(bytes), trackers),
             Given::Magnet(m) => (
                 asked.next().unwrap_or_else(|| Err("aria2c failed".into())),
                 m.trackers,
@@ -880,6 +889,9 @@ enum Given {
     Magnet(crate::torrent::Magnet),
     /// The bytes of a `.torrent` file.
     File(Vec<u8>),
+    /// A magnet link of a torrent whose metainfo the store keeps: its
+    /// bytes, and the link's trackers.
+    Kept(Vec<u8>, Vec<String>),
 }
 
 /// The torrent `input` names, read as far as it is without asking a peer.
