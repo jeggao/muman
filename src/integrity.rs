@@ -1,6 +1,6 @@
 //! Whether a source's audio is all there: a [`crate::analysis`] kind,
 //! measured in the decode every source has, from three lengths no header
-//! can fake together.
+//! can fake together, and a fourth from outside the file.
 //!
 //! - **Said:** the audio stream's own length, [`crate::probe::Audio::duration`].
 //!   Never the file's, which counts every stream: a `WebVTT` subtitle
@@ -13,15 +13,22 @@
 //!   packets can sum to more than the file runs.
 //! - **Decoded:** the frames the decoder produced, counted as the
 //!   analysis pass reads them.
+//! - **Stated:** the length the site gave, for what yt-dlp fetched, kept
+//!   with what it served ([`crate::facts::Served`]); not measured, so a
+//!   source measured before it was kept is judged by the three alone.
 //!
-//! Two kinds of [`Damage`] follow. **Cut:** the packets end more than
+//! Three kinds of [`Damage`] follow. **Cut:** the packets end more than
 //! [`SLACK_S`] before the stream says, as a copy or a download stopped
 //! short leaves a file; copied, a song would break off mid-frame, so it is
 //! encoded. **Missing:** less decodes than the packets span, by more than
 //! [`SLACK_S`]: holes in the timeline, as fragments a download lost leave,
 //! or packets too corrupt to decode. Encoding repairs neither, so the
 //! source ranks below an intact copy by what is missing, and a fetched one
-//! is fetched again.
+//! is fetched again. **Short:** the file is whole in itself, but its
+//! packets end well before the length its site stated, as ffmpeg leaves
+//! a remux it is stopped in: every length the file holds was written by
+//! the program that stopped, and agrees. It is fetched again as a cut
+//! file is, but copies cleanly.
 //!
 //! Measured over a library of 2,213 sources, span and decoded length
 //! agree within 26 ms for 99% of them, Opus's pre-skip the most of it;
@@ -39,6 +46,11 @@ pub const METHOD: &str = "integrity/1";
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
 pub const SLACK_S: f64 = 1.0;
+
+/// Seconds, and the share of the length, a source may fall short of the
+/// length its site states, the more of the two: sites round to the
+/// second, and a long stream's stated length is its video's.
+const STATED_SLACK: (f64, f64) = (2.0, 0.01);
 
 /// A gap between packets longer than this is a hole: five Opus packets.
 const HOLE_S: f64 = 0.1;
@@ -70,6 +82,10 @@ pub enum Damage {
     /// `seconds` within its packets' span did not decode, `holes` of them
     /// gaps between packets.
     Missing { seconds: f64, holes: f64 },
+    /// Whole in itself, its packets end at `ends` where its site states
+    /// `stated`: a download stopped while it was written out, as ffmpeg
+    /// ends a remux it is told to stop.
+    Short { stated: f64, ends: f64 },
 }
 
 impl Measure {
@@ -85,6 +101,18 @@ impl Measure {
         (seconds > SLACK_S).then_some(Damage::Missing {
             seconds,
             holes: self.holes,
+        })
+    }
+
+    /// [`Self::damage`], and a source whose site `stated` a length it
+    /// falls well short of.
+    #[must_use]
+    pub fn damage_against(&self, stated: Option<f64>) -> Option<Damage> {
+        self.damage().or_else(|| {
+            let (_, ends) = self.span?;
+            let stated = stated.filter(|s| s.is_finite())?;
+            let slack = STATED_SLACK.0.max(stated * STATED_SLACK.1);
+            (stated - ends > slack).then_some(Damage::Short { stated, ends })
         })
     }
 }
@@ -106,6 +134,10 @@ impl Damage {
                 "{key} lacks {seconds:.0} s of its audio, which does not decode: \
                  its packets are damaged"
             ),
+            Self::Short { stated, ends } => format!(
+                "{key} holds {ends:.0} s of audio where its site says {stated:.0} s: \
+                 cut short, as a download stopped while it was written out"
+            ),
         }
     }
 
@@ -114,7 +146,7 @@ impl Damage {
     #[must_use]
     pub fn missing_ms(&self) -> i64 {
         match *self {
-            Self::Cut { .. } => 0,
+            Self::Cut { .. } | Self::Short { .. } => 0,
             Self::Missing { seconds, .. } => (seconds * 1000.0).round() as i64,
         }
     }
@@ -211,6 +243,38 @@ mod tests {
 
     fn whole(seconds: i64) -> Vec<(i64, i64)> {
         (0..seconds * 50).map(|n| (n * 20 - 7, 20)).collect()
+    }
+
+    #[test]
+    fn a_file_whole_in_itself_but_short_of_its_sites_length_is_cut_short() {
+        let measure = Measure {
+            said: Some(143.78),
+            decoded: 143.78,
+            span: Some((0.0, 143.78)),
+            holes: 0.0,
+            unfinite: 0,
+        };
+        assert_eq!(measure.damage(), None, "every length the file holds agrees");
+        assert_eq!(
+            measure.damage_against(Some(198.0)),
+            Some(Damage::Short {
+                stated: 198.0,
+                ends: 143.78
+            })
+        );
+        assert_eq!(measure.damage_against(Some(145.0)), None, "a site rounds");
+        assert_eq!(measure.damage_against(None), None);
+        let stream = Measure {
+            said: Some(10_750.0),
+            decoded: 10_750.0,
+            span: Some((0.0, 10_750.0)),
+            ..measure
+        };
+        assert_eq!(
+            stream.damage_against(Some(10_800.0)),
+            None,
+            "a share of a long one"
+        );
     }
 
     #[test]

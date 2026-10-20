@@ -105,7 +105,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song
   ended early that `check --decode` passed. Such an `.mkv` is now
-  deleted before a fetch and the original remuxed again.
+  deleted before a fetch and the original remuxed again, and a fetched
+  source whose audio ends well before the length its site states is
+  damaged, fetched again as a cut-off download is.
 - **A removed song's video added alone by URL is listed again on every
   site,** as on YouTube; on another site `add` said "Nothing new".
 - **A key an earlier muman named by an extractor `[sites]` lists, as

@@ -73,6 +73,9 @@ pub struct VideoInfo {
     /// `+`.
     #[serde(default, deserialize_with = "lenient")]
     pub format_id: Option<String>,
+    /// Seconds the site says it plays.
+    #[serde(default, deserialize_with = "lenient")]
+    pub duration: Option<f64>,
     /// Every format the site offered.
     #[serde(default, deserialize_with = "each")]
     pub formats: Vec<Format>,
