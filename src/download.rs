@@ -153,7 +153,7 @@ pub fn ytdlp_command(
     cmd.extend(crate::ytdlp_log::progress_args().map(OsString::from));
     cmd.push("--print-to-file".into());
     cmd.push(
-        "after_move:%(extractor_key)s %(id)s %(filepath)j %(webpage_url)j %(original_url)j".into(),
+        "after_move:%(extractor_key)s %(id)j %(filepath)j %(webpage_url)j %(original_url)j".into(),
     );
     cmd.push(places.done.as_os_str().to_os_string());
     cmd.extend(options.args.iter().map(OsString::from));
@@ -233,18 +233,17 @@ pub struct Fetched {
 pub fn finished(done: &str, sites: &Sites) -> Vec<Fetched> {
     done.lines()
         .filter_map(|line| {
-            let mut parts = line.trim().splitn(3, ' ');
-            let (extractor, id, rest) = (parts.next()?, parts.next()?, parts.next()?);
-            let mut path = serde_json::Deserializer::from_str(rest).into_iter::<String>();
-            let file = path.next()?.ok()?;
+            let (extractor, rest) = line.trim().split_once(' ')?;
+            let mut quoted = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+            let (id, file) = (quoted.next()?.ok()?, quoted.next()?.ok()?);
             // A field yt-dlp has no value for is written `NA`, unquoted; an
             // address has no space.
-            let mut urls = rest[path.byte_offset()..]
+            let mut urls = rest[quoted.byte_offset()..]
                 .split_whitespace()
                 .map(|s| serde_json::from_str::<String>(s).ok());
             let (webpage, original) = (urls.next().flatten(), urls.next().flatten());
             let page = crate::source::page(extractor, webpage.as_deref(), original.as_deref());
-            let key = sites.fetched(extractor, page, id)?;
+            let key = sites.fetched(extractor, page, &id)?;
             Some(Fetched {
                 key,
                 path: PathBuf::from(file),
@@ -619,14 +618,17 @@ mod tests {
 
     #[test]
     fn finished_files_decode_their_key_and_escaped_path() {
-        let done = "Youtube aaaaaaaaaaa \"/o/r/\\u96e8 \\u29f8 x [aaaaaaaaaaa].mkv\" \
+        let done = "Youtube \"aaaaaaaaaaa\" \"/o/r/\\u96e8 \\u29f8 x [aaaaaaaaaaa].mkv\" \
                     \"https://www.youtube.com/watch?v=aaaaaaaaaaa\" \
                     \"https://music.youtube.com/watch?v=aaaaaaaaaaa\"\n\nnot json\n\
-                    Youtube bad \"/o/b.mkv\" NA NA\n\
-                    Generic a \"/o/x/a [a].mp3\" \"https://mirror7.files.example/0/a.mp3\" \
+                    Youtube \"bad\" \"/o/b.mkv\" NA NA\n\
+                    Youtube aaaaaaaaaab \"/o/b.mkv\" NA NA\n\
+                    Generic \"a\" \"/o/x/a [a].mp3\" \"https://mirror7.files.example/0/a.mp3\" \
                     \"https://www.files.example/download/a.mp3\"\n\
-                    Funkwhale b \"/o/x/b [b].mp3\" NA NA\n\
-                    ArchiveOrg i/P_1.mp3 \"/o/u/P_1.mp3 [i\\u29f8P_1.mp3].mp3\" \
+                    Funkwhale \"b\" \"/o/x/b [b].mp3\" NA NA\n\
+                    ArchiveOrg \"i/P_1.mp3\" \"/o/u/P_1.mp3 [i\\u29f8P_1.mp3].mp3\" \
+                    \"https://archive.org/details/i\" NA\n\
+                    ArchiveOrg \"i/01 Lantern #2.mp3\" \"/o/ArchiveOrg/i\\u29f801 Lantern #2.mp3.mp3\" \
                     \"https://archive.org/details/i\" NA\n";
         assert_eq!(
             finished(done, &Sites::default()),
@@ -646,6 +648,10 @@ mod tests {
                 Fetched {
                     key: SourceKey::parse("archive.org:i/P_1.mp3").unwrap(),
                     path: PathBuf::from("/o/u/P_1.mp3 [i⧸P_1.mp3].mp3"),
+                },
+                Fetched {
+                    key: SourceKey::parse("archive.org:i/01 Lantern #2.mp3").unwrap(),
+                    path: PathBuf::from("/o/ArchiveOrg/i⧸01 Lantern #2.mp3.mp3"),
                 },
             ]
         );

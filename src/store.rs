@@ -4,8 +4,8 @@
 //! lyrics and pictures beside it.
 //!
 //! A fetched source is kept at a path of its key alone,
-//! `sources/yt-dlp/<site>/<id>.<ext>` ([`fetched_path`]), a `/` in its
-//! ID written `⧸`: a key has one place, so it has one file, a download
+//! `sources/yt-dlp/<site>/<id>.<ext>` ([`fetched_path`]), its ID spelled
+//! as every system takes a name: a key has one place, so it has one file, a download
 //! resumes at one path whatever the uploader is called this time, and a
 //! file anywhere else is not a source ([`Store::leftovers`]). yt-dlp
 //! writes a run's finished files into [`STAGING`], and each is moved to
@@ -37,6 +37,7 @@
 //! folder's rules, from among its own torrent's files alone.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -55,8 +56,8 @@ use crate::torrent::Metainfo;
 pub const STAGING: &str = ".incoming";
 
 /// Where the file of the fetched source `key` is kept, of extension
-/// `ext`: `<site>/<id>.<ext>`, a `/` in its ID written `⧸` as yt-dlp
-/// writes one in a name. `None` for a key no fetch makes.
+/// `ext`: `<site>/<id>.<ext>`, its ID spelled by `stored_id`. `None`
+/// for a key no fetch makes.
 #[must_use]
 pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> {
     let SourceKey::Remote { site, id } = key else {
@@ -65,10 +66,59 @@ pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> 
     if kept(site).is_some() {
         return None;
     }
-    Some(
-        root.join(site)
-            .join(format!("{}.{ext}", id.replace('/', "⧸"))),
-    )
+    Some(root.join(site).join(format!("{}.{ext}", stored_id(id))))
+}
+
+/// Whether `c` stands in a stored file's name as it is: letters, digits
+/// and `-_.()+,=@!'&~`, and a letter outside ASCII but `⧸`.
+fn kept_in_name(c: char) -> bool {
+    if c.is_ascii() {
+        c.is_ascii_alphanumeric() || "-_.()+,=@!'&~".contains(c)
+    } else {
+        c != '⧸' && !c.is_whitespace()
+    }
+}
+
+/// A key's ID as its file's name spells it: each `/` written `⧸`, as
+/// yt-dlp writes one in a name, and each character [`kept_in_name`]
+/// refuses written `%` and its UTF-8 bytes in hex, so a name holds
+/// nothing Windows, FAT or a phone refuses and reads back as the one ID.
+/// A torrent's file is named by lookalikes instead ([`crate::torrent::stored`]),
+/// as its metainfo says what each is; this name is all a fetched file's
+/// key is read from. An ID of letters, digits and `-_.()+,=@!'&~` alone,
+/// as every ID was before others were taken, is named by itself.
+fn stored_id(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for (n, part) in id.split('/').enumerate() {
+        if n > 0 {
+            out.push('⧸');
+        }
+        for c in part.chars() {
+            if kept_in_name(c) {
+                out.push(c);
+            } else {
+                for b in c.encode_utf8(&mut [0; 4]).bytes() {
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The ID a stored file's name spells, where [`stored_id`] spells it so.
+fn id_of_stored(name: &str) -> Option<String> {
+    let id = name
+        .split('⧸')
+        .map(|part| {
+            percent_encoding::percent_decode_str(part)
+                .decode_utf8()
+                .ok()
+                .map(std::borrow::Cow::into_owned)
+        })
+        .collect::<Option<Vec<String>>>()?
+        .join("/");
+    (stored_id(&id) == name).then_some(id)
 }
 
 /// Where a torrent's metainfo is kept in `root`, the torrents' folder.
@@ -119,7 +169,7 @@ fn key_at(root: &Path, file: &Path) -> Option<SourceKey> {
     if parts.next().is_some() {
         return None;
     }
-    let id = name.file_stem()?.to_str()?.replace('⧸', "/");
+    let id = id_of_stored(name.file_stem()?.to_str()?)?;
     let key = SourceKey::parse(&format!("{site}:{id}")).ok()?;
     matches!(&key, SourceKey::Remote { site: s, .. } if s == site && kept(s).is_none())
         .then_some(key)
@@ -1194,6 +1244,21 @@ mod tests {
             Some(list)
         );
         assert_eq!(fetched_path(&root, &manual("a.flac"), "mkv"), None);
+        let file = SourceKey::parse("archive.org:item-1/01 Lantern #2?.mp3").unwrap();
+        let staged = touch(
+            dir.path(),
+            "sources/yt-dlp/.incoming/ArchiveOrg/item-1⧸01 Lantern #2？.mp3.mp3",
+        );
+        let placed = place(&root, &file, &staged).unwrap();
+        assert_eq!(
+            placed,
+            root.join("archive.org")
+                .join("item-1⧸01%20Lantern%20%232%3F.mp3.mp3")
+        );
+        assert_eq!(key_at(&root, &placed), Some(file));
+        let at = |name: &str| key_at(&root, &root.join("archive.org").join(name));
+        assert_eq!(at("item-1⧸01 Lantern.mp3.mkv"), None, "spelled otherwise");
+        assert_eq!(at("item-1⧸%41.mp3.mkv"), None, "spelled otherwise");
     }
 
     #[test]

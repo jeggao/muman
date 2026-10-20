@@ -51,6 +51,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An archive.org file whose name holds a space, `#`, `?`, `%` or a
+  letter outside ASCII is a source.** `add` said "yt-dlp listed nothing"
+  for one and dropped what it fetched. Its key holds the name as it is,
+  as `archive.org:<item>/01 Lantern #2.mp3`, as a torrent's file's key
+  holds its path, and its file in `sources/yt-dlp` writes in hex what a
+  file's name may not hold on every system.
 - **An archive.org file whose name holds a `+` is fetched again.** The
   address a missing source is fetched from percent-encodes its ID, as
   archive.org read a `+` in it as a space and found no such file.

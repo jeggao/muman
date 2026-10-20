@@ -80,9 +80,11 @@ fn yt_dlp_takes_every_option_muman_passes() {
     assert!(ok, "yt-dlp failed:\n{text}");
     let finished = std::fs::read_to_string(&done).expect("yt-dlp lists what it finished");
     let line = finished.lines().next().unwrap_or_default();
-    assert!(line.starts_with("Generic silence "), "{finished}");
-    // The path is JSON-quoted, as `%(filepath)j` writes it.
-    let quoted = &line[line.find('"').unwrap()..];
+    // The ID and the path are JSON-quoted, as `%(id)j` and `%(filepath)j`
+    // write them.
+    let quoted = line
+        .strip_prefix("Generic \"silence\" ")
+        .unwrap_or_else(|| panic!("{finished}"));
     let file: String = serde_json::Deserializer::from_str(quoted)
         .into_iter()
         .next()

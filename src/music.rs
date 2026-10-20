@@ -859,7 +859,7 @@ not json
             panic!("not a playlist");
         };
         let ids: Vec<_> = videos.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, ["item-1/Part_1.mp3"], "a space no key takes");
+        assert_eq!(ids, ["item-1/Part_1.mp3", "item-1/Part 2.mp3"]);
         let one = br#"{"id": "item-2", "extractor_key": "ArchiveOrg"}"#;
         assert!(
             matches!(listing(one, &Sites::default()), Some(Listing::Video(v)) if v.id == "item-2")

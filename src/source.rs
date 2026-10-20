@@ -13,6 +13,12 @@
 //! list's `[sites]` ([`crate::sites`]); a key read here is checked for its
 //! shape alone, and against those where the song list is read.
 //!
+//! A key's ID is the one yt-dlp gives, as it is: the name of a file in
+//! an archive.org item may hold a space, `#`, `?` or `%`, and a letter
+//! outside ASCII in the normal form archive.org gave it, since it finds a
+//! file only by the bytes of its name. Its file in the store is spelled
+//! for every system ([`crate::store::fetched_path`]).
+//!
 //! Keys were named by yt-dlp's extractor before, as `youtube:<id>` and
 //! `archiveorg:<id>`. Such a key of an extractor [`LEGACY`] names reads
 //! as its domain's, wherever it is read, and is written so; one of any
@@ -368,20 +374,24 @@ fn is_token(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// What another site's ID is made of: tokens of letters, digits and
-/// `-_.()+,=@!'&~`, joined by `/`, as archive.org names a file in an
-/// item `<item>/<file>`. Each is a character yt-dlp keeps as it is in a
-/// file's name, but for `/`, and none is a space, which would split the
-/// list of files finished.
+/// Whether `s` is a key's ID of another site: yt-dlp's ID as it is,
+/// spaces and all, as a torrent's key holds its file's path, in parts
+/// joined by `/` as archive.org's `<item>/<file>`, none empty, `.` or
+/// `..`, and no control character. Its file in the store is named by
+/// [`crate::store::fetched_path`], which spells it for every system.
 fn is_remote_id(s: &str) -> bool {
     s.split('/').all(|part| {
-        !part.is_empty()
-            && part != "."
-            && part != ".."
-            && part
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_.()+,=@!'&~".contains(&b))
+        !part.is_empty() && part != "." && part != ".." && !part.chars().any(char::is_control)
     })
+}
+
+/// Whether `s` is an ID the store's layout before named a file by, in
+/// `[<id>]`: letters, digits and `-_.()+,=@!'&~` alone, so a bracket in
+/// a song's own name, as `[Live]`, is never taken for one.
+fn is_named_id(s: &str) -> bool {
+    is_remote_id(s)
+        && s.bytes()
+            .all(|b| b == b'/' || b.is_ascii_alphanumeric() || b"-_.()+,=@!'&~".contains(&b))
 }
 
 /// The ID a downloaded file is named with, `<title> [<id>].<ext>`, a
@@ -390,7 +400,7 @@ fn is_remote_id(s: &str) -> bool {
 pub fn id_of(file: &Path) -> Option<String> {
     let stem = file.file_stem()?.to_str()?.strip_suffix(']')?;
     let id = stem[stem.rfind('[')? + 1..].replace('⧸', "/");
-    is_remote_id(&id).then_some(id)
+    is_named_id(&id).then_some(id)
 }
 
 /// A path that stays inside the folder it is joined to.
@@ -477,11 +487,24 @@ mod tests {
             "archive.org:a//b",
             "archive.org:../a",
             "archive.org:a/",
-            "archive.org:a b",
-            "archive.org:a[1]",
             "lrclib:a/b",
             "musicbrainz:../a",
         ] {
+            assert!(SourceKey::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_id_is_yt_dlps_as_it_is() {
+        for id in [
+            "item-1/01 Lantern #2?.mp3",
+            "i/100% Venn.flac",
+            "i/Orcharda\u{300} [Live].m4a",
+        ] {
+            let key = SourceKey::parse(&format!("archive.org:{id}")).unwrap();
+            assert_eq!(key.id(), Some(id));
+        }
+        for bad in ["archive.org:a\tb", "archive.org:a\nb", "archive.org:/a"] {
             assert!(SourceKey::parse(bad).is_err(), "{bad}");
         }
     }

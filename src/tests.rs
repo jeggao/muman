@@ -347,7 +347,7 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
             std::fs::write(
                 done,
                 format!(
-                    "Youtube aaaaaaaaaaa {}\n",
+                    "Youtube \"aaaaaaaaaaa\" {}\n",
                     serde_json::to_string(&path).unwrap()
                 ),
             )
@@ -674,7 +674,7 @@ fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
             std::fs::write(
                 done,
                 format!(
-                    "Youtube aaaaaaaaaaa {}\n",
+                    "Youtube \"aaaaaaaaaaa\" {}\n",
                     serde_json::to_string(&path).unwrap()
                 ),
             )
@@ -767,7 +767,7 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
             std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
             std::fs::write(&staged, b"a whole copy").unwrap();
             let line = format!(
-                "Youtube aaaaaaaaaaa {}\n",
+                "Youtube \"aaaaaaaaaaa\" {}\n",
                 serde_json::to_string(&staged).unwrap()
             );
             std::fs::write(done, line).unwrap();
