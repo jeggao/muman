@@ -656,7 +656,11 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                 .get(k)
                 .is_some_and(|f| f.step == Step::Refetch && (retry || f.due(None, now)))
         };
-        let refetched = manifest.keys().into_iter().filter(|k| damaged(k)).count();
+        let refetched = manifest
+            .keys()
+            .into_iter()
+            .filter(|k| matches!(k, SourceKey::Remote { .. }) && damaged(k))
+            .count();
         if refetched > 0 {
             crate::ui::info(
                 self.out,

@@ -275,3 +275,65 @@ fn a_download_already_made_is_taken_up_with_no_peer() {
     let song = muman::store::torrent_path(&store, key);
     assert_eq!(std::fs::read(&song).unwrap(), SONG, "the song, whole");
 }
+
+#[test]
+#[ignore = "needs aria2c"]
+fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
+    let runner = System::default();
+    runner
+        .require("aria2c")
+        .expect("found, at or above its floor");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let seed_port = free_port();
+    let announce = tracker(seed_port);
+    let name = "Rooms of Salt";
+    let files: Vec<(&[&str], Vec<u8>, bool)> =
+        vec![(&["Rooms of Salt.flac"], SONG.to_vec(), false)];
+    let bytes = metainfo(name, &files, &announce);
+    let meta = Metainfo::read(&bytes).unwrap();
+    let seed = root.join("seed");
+    std::fs::create_dir_all(seed.join(name)).unwrap();
+    std::fs::write(seed.join(name).join("Rooms of Salt.flac"), SONG).unwrap();
+    let seed_meta = root.join("seed.torrent");
+    std::fs::write(&seed_meta, &bytes).unwrap();
+    let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
+
+    let mut damaged = SONG.to_vec();
+    let middle = damaged.len() / 2;
+    damaged[middle..middle + 64].fill(0xAA);
+    let downloads = root.join("downloads");
+    std::fs::create_dir_all(downloads.join(name)).unwrap();
+    std::fs::write(downloads.join(name).join("Rooms of Salt.flac"), &damaged).unwrap();
+
+    let (store, partial) = (root.join("store"), root.join("partial"));
+    let options = Torrent {
+        args: ALONE
+            .iter()
+            .map(ToString::to_string)
+            .chain([format!("--listen-port={}", free_port())])
+            .collect(),
+        stall: Duration::from_secs(60),
+        ..Torrent::default()
+    };
+    let places = Places {
+        store: &store,
+        partial: &partial,
+        options: &options,
+    };
+    muman::aria2::keep_metainfo(&store, meta.hash(), &bytes).unwrap();
+    let wanted = selected(&meta);
+    assert_eq!(take_up(&places, &meta, &wanted, &downloads).unwrap(), 1);
+    let mut out = Vec::new();
+    let fetched = fetch(&runner, &mut out, &places, &meta, &wanted).unwrap();
+    assert_eq!(fetched.failure, None, "{}", String::from_utf8_lossy(&out));
+    let [SourceKey::Torrent(key)] = fetched.arrived.as_slice() else {
+        panic!("{:?}", fetched.arrived);
+    };
+    let song = muman::store::torrent_path(&store, key);
+    assert_eq!(
+        std::fs::read(&song).unwrap(),
+        SONG,
+        "the bad piece fetched whole"
+    );
+}

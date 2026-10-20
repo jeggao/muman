@@ -1735,14 +1735,15 @@ fn whole_again(d: &Drift, state: &State) -> bool {
     undamaged && d.was.audio.is_some() && state.damaged.get(&d.key) == d.was.audio.as_ref()
 }
 
-/// Note each fetched source found damaged, to be fetched again: once for
-/// each damaged copy, counted by its revision; and let go of the note,
-/// and of the audio recorded for it, once a whole copy is measured and
-/// its song's record names it.
+/// Note each fetched source found damaged, a torrent's file among them,
+/// to be fetched again: once for each damaged copy, counted by its
+/// revision; and let go of the note, and of the audio recorded for it,
+/// once a whole copy is measured and its song's record names it.
 fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
     let sites = &manifest.settings.sites;
     for key in manifest.keys() {
-        if !matches!(key, SourceKey::Remote { .. }) || crate::provider::is_kept(&key) {
+        let fetched = matches!(key, SourceKey::Remote { .. } | SourceKey::Torrent(_));
+        if !fetched || crate::provider::is_kept(&key) {
             continue;
         }
         let Some(located) = store.locate(&key) else {
@@ -1753,8 +1754,9 @@ fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
             continue;
         };
         let held = manifest.song_with(&key).and_then(|s| s.held.get(&key));
-        let fetchable =
-            sites.fetch_url(&key).is_some() || held.and_then(|h| h.url.as_ref()).is_some();
+        let fetchable = matches!(key, SourceKey::Torrent(_))
+            || sites.fetch_url(&key).is_some()
+            || held.and_then(|h| h.url.as_ref()).is_some();
         let refetching = state
             .failures
             .get(&key)

@@ -94,10 +94,10 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "aria2.rs",
-        3,
+        4,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
-         download taken up, copied in to be checked",
+         download taken up, or a damaged copy, copied in to be checked",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (

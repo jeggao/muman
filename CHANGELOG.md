@@ -22,7 +22,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   the store again, from its kept metainfo or from its hash and recorded
   trackers. `add --from <FOLDER>` takes up a torrent another client
   downloaded, checking it piece by piece and fetching only what is
-  missing or wrong.
+  missing or wrong. A torrent's file found damaged is fetched again as
+  a damaged download is, only its pieces that do not check fetched.
 - **aria2c is one of the programs muman runs**, to fetch torrents:
   `[tools.aria2c]` and `MUMAN_ARIA2C` name it as the others are named,
   and `[torrent]` sets the arguments every run takes, how long a fetch

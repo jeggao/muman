@@ -794,6 +794,93 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
 }
 
 #[test]
+fn a_damaged_torrent_file_is_repaired_from_its_peers_and_taken() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let key = SourceKey::parse(&format!("torrent:{hash}/Paper Comets.flac")).unwrap();
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 4\n\
+             [providers.lrclib]\nenabled = false\n\
+             [providers.acoustid]\nenabled = false\n\
+             [providers.musicbrainz]\nenabled = false\n\
+             [providers.coverart]\nenabled = false\n\
+             [[song]]\nsources = [\"{key}\"]\n"
+        ),
+    );
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::create_dir_all(&torrents).unwrap();
+    std::fs::write(torrents.join(format!("{hash}.torrent")), &bytes).unwrap();
+    let file = torrents.join(&hash).join("Paper Comets.flac");
+    s.written(
+        &format!("home/sources/torrent/{hash}/Paper Comets.flac"),
+        "a copy with holes",
+    );
+    // Three seconds lost from its middle, as a disk that lost sectors.
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let damaged = Fake {
+        timelines: vec![("Paper Comets".into(), holed)],
+        hashes: vec![("Paper Comets".into(), 1)],
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (_, text) = s.run(&damaged, &["sync", "--offline"]);
+    assert!(text.contains("lacks"), "{text}");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+
+    let copied = Arc::new(Mutex::new(Vec::new()));
+    let seen = copied.clone();
+    let partial = s.dir.path().join("home/partial/torrent").join(&hash);
+    let whole = Fake {
+        hashes: vec![("Paper Comets".into(), 2)],
+        on_stream: Some(Box::new(move |_: &[String]| {
+            let at = partial.join("files").join("1.flac");
+            seen.lock()
+                .unwrap()
+                .push(std::fs::read(&at).unwrap_or_default());
+            std::fs::write(&at, b"a whole copy").unwrap();
+            true
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(&whole, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 1 damaged torrent file(s) again"),
+        "{text}"
+    );
+    assert_eq!(
+        *copied.lock().unwrap(),
+        [b"a copy with holes".to_vec()],
+        "aria2c starts from the damaged copy"
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"a whole copy");
+    assert!(
+        text.contains("taken, a whole copy in place of a damaged one"),
+        "{text}"
+    );
+    let (ok, again) = s.run(&whole, &["sync"]);
+    assert!(ok && !again.contains("Fetching"), "{again}");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert!(!state.failures.contains_key(&key) && state.damaged.is_empty());
+}
+
+#[test]
 fn status_changes_nothing() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
