@@ -705,6 +705,78 @@ fn sync_asks_for_every_lost_metainfo_in_one_run_and_every_file_in_another() {
     }
 }
 
+#[test]
+fn torrents_given_together_are_fetched_by_one_aria2c() {
+    let s = Setup::new();
+    let [a, b] = two_torrents(&s);
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c_of(
+        vec![(a.0.clone(), a.1.clone()), (b.0.clone(), b.1.clone())],
+        runs.clone(),
+    );
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            a.2.to_str().unwrap(),
+            b.2.to_str().unwrap(),
+        ],
+    );
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 2, "{text}");
+    let runs = runs.lock().unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].contains(&"--max-concurrent-downloads=2".to_string()));
+    for hash in [&a.0, &b.0] {
+        assert!(
+            runs[0]
+                .iter()
+                .any(|r| r.ends_with(&format!("{hash}.torrent"))),
+            "{runs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_torrent_no_peer_seeds_fails_alone_and_the_one_beside_it_arrives() {
+    let s = Setup::new();
+    let [a, b] = two_torrents(&s);
+    let fetched = aria2c_of(
+        vec![(a.0.clone(), a.1.clone()), (b.0.clone(), b.1.clone())],
+        Arc::default(),
+    );
+    let fake = Fake {
+        lines: vec![
+            "Download Results:".into(),
+            "000001|INPR|       0B/s|  0|partial/files/1.flac".into(),
+            "000002|OK  |   1.0MiB/s|100|partial/files/1.flac".into(),
+        ],
+        on_stream: Some(Box::new(move |args: &[String]| {
+            (fetched.on_stream.as_ref().unwrap())(args);
+            false
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            a.2.to_str().unwrap(),
+            b.2.to_str().unwrap(),
+        ],
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Lantern Weather: no peer sent anything for 10 min"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{}/a.flac", b.0)).unwrap();
+    assert_eq!(s.songs(), [vec![key]], "{text}");
+}
+
 /// A runner as its fake, with no aria2c to start.
 struct NoAria2c(Fake);
 

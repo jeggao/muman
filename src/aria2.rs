@@ -6,18 +6,18 @@
 //! reach it, `args` last so they win. Its DHT routing table is kept with
 //! the unfinished fetches rather than in the user's own aria2 folder.
 //!
-//! A run fetches several torrents, as a sync fetches all it fetches
-//! again in one, each a download of its own in the run's input file
-//! (`--input-file`), with its own folder, files and GID; what all share
-//! stays on the command line. One aria2c keeps one routing table and
-//! listens on one port, which several would fight over, as a fixed
-//! `--listen-port` in `args` would make them, and torrents no peer seeds
-//! stall side by side, [`AT_ONCE`] at a time, rather than one after
+//! A run fetches several torrents, as `add` fetches all it is given in
+//! one and a sync all it fetches again, each a download of its own in the
+//! run's input file (`--input-file`), with its own folder, files and GID;
+//! what all share stays on the command line. One aria2c keeps one routing
+//! table and listens on one port, which several would fight over, as a
+//! fixed `--listen-port` in `args` would make them, and torrents no peer
+//! seeds stall side by side, [`AT_ONCE`] at a time, rather than one after
 //! another. aria2c's exit says only its last error, so how each torrent
-//! ended is read from its row of the results, which names it by the
-//! first six digits of its GID: the n-th download's GID begins with n.
-//! Its error lines name a connection, not a torrent, so torrents failing
-//! side by side are said to, with every error listed once.
+//! ended is read from its row of the results, which names it by the first
+//! six digits of its GID: the n-th download's GID begins with n. Its
+//! error lines name a connection, not a torrent, so torrents failing side
+//! by side are said to, with every error listed once.
 //!
 //! The input file reads a line break in a value as an option of its own
 //! and a leading `#` as a comment, so a value holding a control
