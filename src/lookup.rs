@@ -102,7 +102,7 @@ pub const ORDER: [Provider; 6] = [
 #[must_use]
 pub fn method(p: Provider) -> &'static str {
     match p {
-        Provider::YouTubeMusic => "youtube-music/1",
+        Provider::YouTubeMusic => "youtube-music/2",
         Provider::YouTube => "youtube/1",
         Provider::Lrclib => "lrclib/2",
         Provider::MusicBrainz => "musicbrainz/1",
