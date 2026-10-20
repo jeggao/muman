@@ -70,6 +70,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An archive.org file whose name holds a `+` is fetched again.** The
   address a missing source is fetched from percent-encodes its ID, as
   archive.org read a `+` in it as a space and found no such file.
+- **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
+  Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
+  original in `partial/`, and the next run took it for finished: a song
+  ended early that `check --decode` passed. Such an `.mkv` is now
+  deleted before a fetch and the original remuxed again.
+- **A removed song's video added alone by URL is listed again on every
+  site,** as on YouTube; on another site `add` said "Nothing new".
+- **A key an earlier muman named by an extractor `[sites]` lists, as
+  `jamendo:<id>`, is renamed by that site,** `jamendo.com:<id>`, where
+  a sync named it by its page's domain, as `licensing.jamendo.com`.
+- **`check --upstream` takes a site that lists no formats, as Audius,
+  for serving the one it names,** rather than saying every source of it
+  is no longer served.
+- **`status` says a song whose source a sync would fetch is made once
+  fetched,** rather than that it failed and exiting 4.
+- **`info` counts a notice about the song list, as an old default or a
+  misspelled table, as no song that cannot be made.**
 
 ## [0.6.0] - 2026-10-20
 

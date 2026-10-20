@@ -1829,6 +1829,38 @@ fn a_source_of_a_site_no_table_names_is_renamed_by_its_page() {
 }
 
 #[test]
+fn a_source_of_an_extractor_a_site_lists_is_renamed_by_that_site() {
+    let h = home();
+    h.fetched("1234567");
+    h.songs("[[song]]\nsources = [\"jamendo.com:1234567\"]\n");
+    let fake = || {
+        Fake::default().info(
+            "1234567",
+            r#"{"id": "1234567", "title": "Title 1234567", "uploader": "Chan",
+                "format_id": "mp31",
+                "webpage_url": "https://licensing.jamendo.com/en/track/1234567/title"}"#,
+        )
+    };
+    assert!(h.run(&fake(), Options::default()).0);
+    let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    std::fs::write(h.dirs.manifest(), songs.replace("jamendo.com:", "jamendo:")).unwrap();
+    let old = by_extractor(
+        State::load(&h.dirs.home).unwrap(),
+        &[("jamendo.com", "jamendo")],
+    );
+    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+
+    let fake = fake();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Renamed by the site it came from: jamendo:1234567 → jamendo.com:1234567"),
+        "{text}"
+    );
+    assert_eq!(renders(&fake), 0, "{text}");
+}
+
+#[test]
 fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("lib");

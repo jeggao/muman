@@ -114,9 +114,10 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "download.rs",
-        2,
+        3,
         "a file just fetched or copied in, written again without the cookies \
-         and headers of its info JSON, that JSON kept in scratch",
+         and headers of its info JSON, that JSON kept in scratch; a remux left \
+         cut short in partial downloads",
     ),
     (
         "editor.rs",

@@ -1515,6 +1515,42 @@ fn sync_fills_in_every_setting_and_updates_none_already_current() {
 }
 
 #[test]
+fn info_counts_no_notice_of_the_song_list_as_a_song() {
+    let s = Setup::new();
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\nedition = 3\n\n[ytdlp]\nsub_langs = \"all,-live_chat\"\n\n[audoi]\n",
+    )
+    .unwrap();
+    let (ok, text) = s.report(&flacs(), &["info", "-v"]);
+    assert!(ok, "{text}");
+    let unmade = text.lines().find(|l| l.contains("Cannot be made"));
+    assert_eq!(
+        unmade.map(|l| l.split_whitespace().last()),
+        Some(Some("0")),
+        "{text}"
+    );
+}
+
+#[test]
+fn status_of_a_song_a_sync_would_fetch_says_so_and_fails_nothing() {
+    let s = Setup::new();
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n\n[[song]]\nsources = [\"jamendo.com:1234567\"]\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["status"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Failed"), "{text}");
+    assert!(text.contains("Made once a sync fetches it"), "{text}");
+    let (_, report) = s.report(&flacs(), &["status"]);
+    assert!(report.contains("Songs: 1 made once fetched"), "{report}");
+}
+
+#[test]
 fn status_names_each_old_setting_and_changes_nothing() {
     let s = Setup::new();
     let songs = s.dir.path().join("home/songs.toml");

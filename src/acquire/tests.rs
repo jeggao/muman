@@ -38,6 +38,12 @@ impl Runner for Net {
             }
             ("https://mix", true) => r#"{"id": "vid00000010", "duration": 183}"#,
             ("https://v", false) => r#"{"_type": "video", "id": "vid00000009"}"#,
+            ("https://www.jamendo.com/track/1234567", false) => {
+                r#"{"_type": "video", "id": "1234567", "extractor_key": "Jamendo"}"#
+            }
+            ("https://www.tunes.example/t/item0001", false) => {
+                r#"{"_type": "video", "id": "item0001", "extractor_key": "Funkwhale"}"#
+            }
             _ => anyhow::bail!("offline"),
         };
         Ok(json.as_bytes().to_vec())
@@ -111,6 +117,22 @@ fn a_playlist_is_downloaded_at_its_own_address() {
     let ids: Vec<_> = l.videos.iter().map(|v| v.id.as_str()).collect();
     assert_eq!(ids, ["vid00000009", "vid00000010"]);
     assert_eq!(l.albums, []);
+}
+
+#[test]
+fn a_video_of_any_site_named_alone_is_named_by_its_key() {
+    let l = listed(&[
+        "https://v",
+        "https://www.jamendo.com/track/1234567",
+        "https://www.tunes.example/t/item0001",
+    ]);
+    let keys = [
+        "youtube.com:vid00000009",
+        "jamendo.com:1234567",
+        "tunes.example:item0001",
+    ]
+    .map(|k| SourceKey::parse(k).unwrap());
+    assert_eq!(l.named, BTreeSet::from(keys));
 }
 
 #[test]

@@ -365,7 +365,23 @@ impl Held {
     pub fn upstream(&self, info: &crate::info::VideoInfo) -> Option<Upstream> {
         let recorded = self.format.as_deref()?;
         let parts: Vec<&str> = recorded.split('+').collect();
-        let offered = |id: &str| info.formats.iter().find(|f| f.format_id == id);
+        // A site of one format, as Audius, lists none but the one it serves.
+        let only: Vec<crate::info::Format> = info
+            .format_id
+            .iter()
+            .filter(|_| info.formats.is_empty())
+            .flat_map(|id| id.split('+'))
+            .map(|id| crate::info::Format {
+                format_id: id.to_string(),
+                ..crate::info::Format::default()
+            })
+            .collect();
+        let formats = if info.formats.is_empty() {
+            &only
+        } else {
+            &info.formats
+        };
+        let offered = |id: &str| formats.iter().find(|f| f.format_id == id);
         let audio = parts
             .iter()
             .copied()
@@ -382,8 +398,7 @@ impl Held {
                 },
                 None => Upstream::Unsized(audio.to_string()),
             },
-            None => match info
-                .formats
+            None => match formats
                 .iter()
                 .find(|f| self.size.is_some() && f.filesize == self.size)
             {

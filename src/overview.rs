@@ -100,8 +100,9 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
             store.has(k) || !matches!(k, SourceKey::Manual(_)) && !crate::provider::is_kept(k)
         })
         .collect();
-    let (mut planned, _) = reconcile::plan(
+    let (mut planned, _) = reconcile::plan_with(
         &manifest,
+        &manifest.settings,
         &state,
         &dirs.library,
         Some(&on_disk),

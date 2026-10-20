@@ -24,6 +24,14 @@
 //! place. A remux keeps every stream's packets, pictures and chapters, so
 //! nothing a source is measured or known by changes. A file whose JSON
 //! holds none of them, or none at all, is left as it is.
+//!
+//! yt-dlp remuxes a single-file download into `<id>.mkv` at that name,
+//! with no temporary one, and deletes what it remuxed only once ffmpeg
+//! is done; and a later run takes an `<id>.mkv` it finds for finished.
+//! A run stopped mid-remux, as a Ctrl-C stops ffmpeg with it, leaves an
+//! `<id>.mkv` cut short beside its whole original. So before a fetch
+//! each such `.mkv` is deleted ([`drop_cut_remuxes`]), and yt-dlp
+//! remuxes the original again.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -56,6 +64,36 @@ pub struct Places<'a> {
     /// A file holding the URLs, one per line, in place of the command
     /// line, which Windows caps at 32,767 characters.
     pub batch: Option<&'a Path>,
+}
+
+/// Delete each `<id>.mkv` in a download folder of `partial` that has a
+/// song file of the same stem beside it: a remux stopped short.
+pub fn drop_cut_remuxes(partial: &Path) {
+    let folders = std::fs::read_dir(partial)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| p.is_dir() && !p.ends_with(crate::source::TORRENT));
+    for folder in folders {
+        let files: Vec<PathBuf> = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| Some(e.ok()?.path()))
+            .collect();
+        for mkv in files
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "mkv"))
+        {
+            let original = files.iter().any(|p| {
+                p != mkv
+                    && p.file_stem() == mkv.file_stem()
+                    && crate::store::kind_of(p) == Some(crate::store::Kind::Media)
+            });
+            if original {
+                let _ = std::fs::remove_file(mkv);
+            }
+        }
+    }
 }
 
 /// yt-dlp's argv. Everything is embedded into one `.mkv`, so a source
@@ -447,6 +485,31 @@ mod tests {
             value_after(&cmd, "--remux-video"),
             vec![&OsString::from("mkv")]
         );
+    }
+
+    #[test]
+    fn a_remux_stopped_short_is_deleted_and_every_other_download_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |rel: &str| {
+            let path = rel
+                .split('/')
+                .fold(dir.path().to_path_buf(), |p, part| p.join(part));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"x").unwrap();
+            path
+        };
+        let cut = file("Jamendo/1234567.mkv");
+        let original = file("Jamendo/1234567.flac");
+        let merged = file("Youtube/vid00000001.mkv");
+        let cover = file("Youtube/vid00000001.webp");
+        let part = file("Youtube/vid00000002.f251.webm.part");
+        let torrent = file("torrent/0123/files/1.mkv");
+        let beside = file("torrent/0123/files/1.flac");
+        drop_cut_remuxes(dir.path());
+        assert!(!cut.exists());
+        for kept in [original, merged, cover, part, torrent, beside] {
+            assert!(kept.exists(), "{}", kept.display());
+        }
     }
 
     #[test]
