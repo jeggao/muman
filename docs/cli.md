@@ -16,9 +16,9 @@ A new source the same recording as a listed song, by its fingerprint, is added t
 Exit codes:
   0  Every song was written, or nothing needed to be; or a change was
      declined
-  2  yt-dlp, ffmpeg or ffprobe is missing, does not run or is older than
-     muman runs, the system names no home folder, or the command line
-     does not parse or gives a setting that does not read
+  2  yt-dlp, aria2c, ffmpeg or ffprobe is missing, does not run or is
+     older than muman runs, the system names no home folder, or the
+     command line does not parse or gives a setting that does not read
   4  yt-dlp failed, at least one song could not be written, the song
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change

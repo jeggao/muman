@@ -1,13 +1,16 @@
-# muman, built from this checkout. ffmpeg, ffprobe and yt-dlp are set in
-# MUMAN_FFMPEG, MUMAN_FFPROBE and MUMAN_YT_DLP with --set-default, so the
-# user's own variables still win and hooks see the user's PATH unchanged.
+# muman, built from this checkout. ffmpeg, ffprobe, yt-dlp and aria2c are
+# set in MUMAN_FFMPEG, MUMAN_FFPROBE, MUMAN_YT_DLP and MUMAN_ARIA2C with
+# --set-default, so the user's own variables still win and hooks see the
+# user's PATH unchanged.
 {
   lib,
   rustPlatform,
   makeBinaryWrapper,
   ffmpeg-headless,
   yt-dlp,
+  aria2,
   withYtDlp ? true,
+  withAria2 ? true,
 }:
 
 let
@@ -63,7 +66,8 @@ rustPlatform.buildRustPackage {
     wrapProgram $out/bin/muman \
       --set-default MUMAN_FFMPEG ${lib.getExe' ffmpeg-headless "ffmpeg"} \
       --set-default MUMAN_FFPROBE ${lib.getExe' ffmpeg-headless "ffprobe"} \
-      ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"}
+      ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"} \
+      ${lib.optionalString withAria2 "--set-default MUMAN_ARIA2C ${lib.getExe' aria2 "aria2c"}"}
   '';
 
   meta = {

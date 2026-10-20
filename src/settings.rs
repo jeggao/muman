@@ -51,8 +51,8 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 8] = [
-    "library", "audio", "loudness", "quality", "ytdlp", "tools", "history", "sites",
+pub const TABLES: [&str; 9] = [
+    "library", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history", "sites",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -63,6 +63,7 @@ pub struct Settings {
     pub loudness: Loudness,
     pub quality: Quality,
     pub ytdlp: Ytdlp,
+    pub torrent: Torrent,
     pub tools: Tools,
     pub history: History,
     pub sites: crate::sites::Sites,
@@ -711,14 +712,45 @@ impl Default for Ytdlp {
     }
 }
 
-/// The programs muman runs: `[tools.ffmpeg]`, `[tools.ffprobe]` and
-/// `[tools."yt-dlp"]`.
+/// How aria2c fetches a torrent's files.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Torrent {
+    /// More arguments for every aria2c run, as a port range or a speed
+    /// limit.
+    pub args: Vec<String>,
+    /// How long a fetch waits with no byte arriving before it fails, to
+    /// be tried again by a later sync.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub stall: std::time::Duration,
+    /// How long a fetched torrent is seeded before the run goes on.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub seed_time: std::time::Duration,
+    /// How long an unfinished fetch is kept to resume.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub keep_partial: std::time::Duration,
+}
+
+impl Default for Torrent {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            stall: std::time::Duration::from_secs(10 * 60),
+            seed_time: std::time::Duration::ZERO,
+            keep_partial: crate::units::Time::days(30).duration(),
+        }
+    }
+}
+
+/// The programs muman runs: `[tools.ffmpeg]`, `[tools.ffprobe]`,
+/// `[tools."yt-dlp"]` and `[tools.aria2c]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "WrittenTools")]
 pub struct Tools {
     pub ffmpeg: Program,
     pub ffprobe: Program,
     pub yt_dlp: Program,
+    pub aria2c: Program,
 }
 
 /// One program muman runs.
@@ -764,6 +796,7 @@ impl Default for Tools {
             ffmpeg: Program::called("ffmpeg"),
             ffprobe: Program::called("ffprobe"),
             yt_dlp: Program::called("yt-dlp"),
+            aria2c: Program::called("aria2c"),
         }
     }
 }
@@ -771,11 +804,12 @@ impl Default for Tools {
 impl Tools {
     /// Each of [`crate::tools::TOOLS`] as named here, in that order.
     #[must_use]
-    pub fn named(&self, home: &Path) -> [crate::tools::Named; 3] {
+    pub fn named(&self, home: &Path) -> [crate::tools::Named; crate::tools::TOOLS.len()] {
         crate::tools::TOOLS.each_ref().map(|tool| {
             match tool.name {
                 "ffmpeg" => &self.ffmpeg,
                 "ffprobe" => &self.ffprobe,
+                "aria2c" => &self.aria2c,
                 _ => &self.yt_dlp,
             }
             .named(home)
@@ -792,6 +826,7 @@ struct WrittenTools {
     ffprobe: WrittenProgram,
     #[serde(rename = "yt-dlp")]
     yt_dlp: WrittenProgram,
+    aria2c: WrittenProgram,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -817,6 +852,7 @@ impl From<WrittenTools> for Tools {
             ffmpeg: w.ffmpeg.or(d.ffmpeg),
             ffprobe: w.ffprobe.or(d.ffprobe),
             yt_dlp: w.yt_dlp.or(d.yt_dlp),
+            aria2c: w.aria2c.or(d.aria2c),
         }
     }
 }
@@ -1422,7 +1458,7 @@ mod tests {
             .named(home)
             .map(|n| n.command[0].clone())
             .into();
-        assert_eq!(programs, ["ffmpeg", "ffprobe", "yt-dlp"]);
+        assert_eq!(programs, ["ffmpeg", "ffprobe", "yt-dlp", "aria2c"]);
     }
 
     #[test]

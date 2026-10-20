@@ -3,7 +3,7 @@
 muman is configured in two places, split by what a setting is about:
 
 - **How the library is made** — its layout and file names, encoding,
-  how yt-dlp fetches, which programs muman runs, how much `undo` keeps —
+  how yt-dlp and aria2c fetch, which programs muman runs, how much `undo` keeps —
   is set in the song list, `songs.toml`, so one song list renders the
   same library on every machine that runs it.
 - **Where things are on this machine** — the home folder, the library
@@ -21,6 +21,7 @@ muman is configured in two places, split by what a setting is about:
 | | `MUMAN_FFMPEG` | The ffmpeg to run, over `[tools.ffmpeg] command` |
 | | `MUMAN_FFPROBE` | The ffprobe to run, over `[tools.ffprobe] command` |
 | | `MUMAN_YT_DLP` | The yt-dlp to run, over `[tools.yt-dlp] command`; may be a whole command, such as `python -m yt_dlp` |
+| | `MUMAN_ARIA2C` | The aria2c to run, over `[tools.aria2c] command` |
 
 Without them, each folder is the platform's own:
 
@@ -75,7 +76,7 @@ the space optional:
 |---|---|---|
 | Size | `"32 GiB"`, `"700 MB"`, `"4K"` | `[library] max_size`, `block_size`, `[history] max_size` |
 | Bitrate | `"160 kb/s"`, `"160 kbps"`, `"160k"` | `[audio] *_bitrate` |
-| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[quality.purity] step`, `[ytdlp] keep_partial`, `[providers.*] recheck`, a song's `lyrics_offset` |
+| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[quality.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, a song's `lyrics_offset` |
 | Frequency | `"500 Hz"`, `"1.5 kHz"` | `[quality.bandwidth] step` |
 | Share | `"1 %"`, or `0.01` | `[quality.stereo] incoherence`, `[quality.clipping] cutoffs`, `[quality.resolution] step` |
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
@@ -108,7 +109,8 @@ know.
 | `[loudness]` | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, muman's postprocessors, the arguments every run takes, each extractor's arguments, how long partial downloads are kept |
-| `[tools.*]` | The ffmpeg, ffprobe and yt-dlp muman runs, and whether each one's version is checked |
+| `[torrent]` | The arguments every aria2c run takes, how long a fetch waits with nothing arriving, how long a fetched torrent is seeded, how long partial fetches are kept |
+| `[tools.*]` | The ffmpeg, ffprobe, yt-dlp and aria2c muman runs, and whether each one's version is checked |
 | `[history]` | How many changing runs `undo` keeps, and how much space their replaced files may take together |
 | `[sites.*]` | The sites yt-dlp fetches from: which extractors each names its sources by, the IDs each kind of source takes, and where one is fetched again from |
 

@@ -71,8 +71,8 @@ pub trait Runner: Sync {
 #[derive(Debug)]
 pub struct System {
     /// Each of [`tools::TOOLS`] as the song list names it.
-    named: [Named; 3],
-    found: [OnceLock<Result<Found, ToolError>>; 3],
+    named: [Named; tools::TOOLS.len()],
+    found: [OnceLock<Result<Found, ToolError>>; tools::TOOLS.len()],
 }
 
 impl Default for System {
@@ -84,7 +84,7 @@ impl Default for System {
 impl System {
     /// Each of [`tools::TOOLS`] run as `named` names it, in that order.
     #[must_use]
-    pub fn new(named: [Named; 3]) -> Self {
+    pub fn new(named: [Named; tools::TOOLS.len()]) -> Self {
         Self {
             named,
             found: Default::default(),

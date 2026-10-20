@@ -7,6 +7,9 @@
         "ffmpeg",
         "yt-dlp"
     ],
+    "suggest": {
+        "Fetching torrents": "main/aria2"
+    },
     "architecture": {
         "64bit": {
             "url": "https://github.com/jeggao/muman/releases/download/v@VERSION@/muman-v@VERSION@-x86_64-pc-windows-msvc.zip",

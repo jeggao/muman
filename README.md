@@ -32,8 +32,9 @@ template.
 ## Install
 
 muman needs [ffmpeg](https://ffmpeg.org) 5.1 or newer (with ffprobe),
-and [yt-dlp](https://github.com/yt-dlp/yt-dlp) 2025.03.21 or newer to
-fetch from the web. A run stops with exit code 2 on an older one, naming
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) 2025.03.21 or newer to
+fetch from the web, and [aria2](https://aria2.github.io) 1.35 or newer
+to fetch torrents. A run stops with exit code 2 on an older one, naming
 it. Debian's and Ubuntu's own yt-dlp packages are older, and YouTube
 breaks a yt-dlp more than a few months old, so install it from
 [PyPI](https://pypi.org/project/yt-dlp/) with pipx and keep it updated
@@ -41,11 +42,11 @@ with `pipx upgrade yt-dlp`.
 
 | Platform | Install the tools |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ffmpeg pipx && pipx install yt-dlp` |
-| Fedora | `sudo dnf install yt-dlp`, and ffmpeg from [RPM Fusion](https://rpmfusion.org) |
-| Arch | `sudo pacman -S ffmpeg yt-dlp` |
-| macOS | `brew install ffmpeg yt-dlp` |
-| Windows | `winget install Gyan.FFmpeg yt-dlp.yt-dlp`, or `scoop install ffmpeg yt-dlp` |
+| Debian, Ubuntu | `sudo apt install ffmpeg aria2 pipx && pipx install yt-dlp` |
+| Fedora | `sudo dnf install yt-dlp aria2`, and ffmpeg from [RPM Fusion](https://rpmfusion.org) |
+| Arch | `sudo pacman -S ffmpeg yt-dlp aria2` |
+| macOS | `brew install ffmpeg yt-dlp aria2` |
+| Windows | `winget install Gyan.FFmpeg yt-dlp.yt-dlp aria2.aria2`, or `scoop install ffmpeg yt-dlp aria2` |
 
 `muman info` prints the version and path of each it found.
 
@@ -70,8 +71,8 @@ cargo install --locked --git https://github.com/jeggao/muman
 
 ### Nix
 
-With [Nix](https://nixos.org), the flake builds muman with ffmpeg and
-yt-dlp on Linux and on Macs with Apple silicon, so neither needs
+With [Nix](https://nixos.org), the flake builds muman with ffmpeg,
+yt-dlp and aria2 on Linux and on Macs with Apple silicon, so none needs
 installing:
 
 ```bash
@@ -82,8 +83,8 @@ nix profile add github:jeggao/muman
 These build `main`; name a release's tag, as in
 `github:jeggao/muman/v<version>`, to build that release.
 
-It names its ffmpeg, ffprobe and yt-dlp in `MUMAN_FFMPEG`,
-`MUMAN_FFPROBE` and `MUMAN_YT_DLP` only where those are unset, so a
+It names its ffmpeg, ffprobe, yt-dlp and aria2c in `MUMAN_FFMPEG`,
+`MUMAN_FFPROBE`, `MUMAN_YT_DLP` and `MUMAN_ARIA2C` only where those are unset, so a
 program you name there still wins. For NixOS or Home Manager, add the
 flake's `overlays.default` and install `pkgs.muman`. Without flakes,
 `nix-build` in a checkout builds the same package, from the nixpkgs
@@ -144,7 +145,7 @@ Every flag is in the [command reference](docs/cli.md).
 | Exit code | Means |
 |---|---|
 | 0 | Done, or nothing needed doing, or a change was declined |
-| 2 | ffmpeg, ffprobe or yt-dlp is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse or gives a setting that does not read |
+| 2 | ffmpeg, ffprobe, yt-dlp or aria2c is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse or gives a setting that does not read |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, a song an export left out, or a problem `check` found |
 | 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, a change or `undo` was refused, or `--offline` rules out what was asked |
 

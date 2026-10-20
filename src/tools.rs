@@ -1,13 +1,14 @@
-//! The programs muman runs, ffmpeg, ffprobe and yt-dlp: where each is
-//! found, how its version is read, and the oldest release of each that
-//! takes every option muman passes.
+//! The programs muman runs, ffmpeg, ffprobe, yt-dlp and aria2c: where
+//! each is found, how its version is read, and the oldest release of each
+//! that takes every option muman passes.
 //!
 //! Which program fills each role is the song list's `[tools.*]`
 //! ([`Named`]), so a fork, or a wrapper that speaks a tool's options, is
 //! named once for every machine the list is used on. A tool is looked
 //! for, in order:
 //!
-//! 1. In its variable (`MUMAN_FFMPEG`, `MUMAN_FFPROBE`, `MUMAN_YT_DLP`):
+//! 1. In its variable (`MUMAN_FFMPEG`, `MUMAN_FFPROBE`, `MUMAN_YT_DLP`,
+//!    `MUMAN_ARIA2C`):
 //!    a path or a name, or a whole command such as `python -m yt_dlp`.
 //!    The variable is this machine's, so it overrides the song list.
 //! 1. As the song list's `command` names it: a name beside the muman
@@ -28,6 +29,10 @@
 //! `N-118000-g1a2b3c4`, is taken as new enough: it is newer than any
 //! release. Reading yt-dlp's version is a Python start, up to a second,
 //! once in each run that fetches.
+//!
+//! aria2c fetches torrents. Every option muman passes it is older than
+//! aria2 1.35.0, the oldest release a Debian or Ubuntu still supported
+//! ships, which is its floor; only a run that fetches a torrent needs it.
 //!
 //! A fork may number its releases its own way, and one dated as yt-dlp
 //! is may still lack an option; `version_check = false` runs it whatever
@@ -50,7 +55,7 @@ pub struct Tool {
     pub version_flag: &'static str,
 }
 
-pub const TOOLS: [Tool; 3] = [
+pub const TOOLS: [Tool; 4] = [
     Tool {
         name: "ffmpeg",
         variable: "MUMAN_FFMPEG",
@@ -67,6 +72,12 @@ pub const TOOLS: [Tool; 3] = [
         name: "yt-dlp",
         variable: "MUMAN_YT_DLP",
         floor: Version::new([2025, 3, 21]),
+        version_flag: "--version",
+    },
+    Tool {
+        name: "aria2c",
+        variable: "MUMAN_ARIA2C",
+        floor: Version::new([1, 35, 0]),
         version_flag: "--version",
     },
 ];
@@ -202,6 +213,7 @@ impl ToolError {
             "yt-dlp" => "update it: `yt-dlp -U` for the standalone program, `pipx upgrade \
                          yt-dlp` for one pip installed, else your package manager"
                 .to_string(),
+            "aria2c" => format!("install aria2 {} or newer", tool.floor),
             _ => format!("install ffmpeg {} or newer", tool.floor),
         }
     }
@@ -393,6 +405,19 @@ mod tests {
         assert_eq!(v("2025.03.21.232815"), Some("2025.03.21".into()));
         assert_eq!(v("ffmpeg version N-118000-g1a2b3c4 Copyright"), None);
         assert_eq!(v(""), None);
+    }
+
+    #[test]
+    fn aria2c_is_read_by_the_version_after_its_name() {
+        let aria2c = tool("aria2c").unwrap();
+        let printed = "aria2 version 1.34.0\nCopyright (C) 2006, 2019 Tatsuhiro Tsujikawa\n";
+        let old = accept(aria2c, vec!["aria2c".into()], printed, true).unwrap_err();
+        assert!(
+            old.to_string().contains("install aria2 1.35 or newer"),
+            "{old}"
+        );
+        let fine = accept(aria2c, vec!["aria2c".into()], "aria2 version 1.37.0", true).unwrap();
+        assert_eq!(fine.version, Some(Version::new([1, 37, 0])));
     }
 
     #[test]
