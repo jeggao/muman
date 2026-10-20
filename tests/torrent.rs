@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use muman::aria2::{Places, Wanted, fetch, fetch_all, metainfo_of, take_up};
@@ -88,13 +89,27 @@ fn free_port() -> u16 {
 /// An HTTP tracker on a loopback port that names the one peer at `peer`
 /// to every announce, until the process ends; its announce address.
 fn tracker(peer: u16) -> String {
+    tracker_heard(peer).0
+}
+
+/// [`tracker`], each announcing peer's port sent on the receiver as it
+/// announces.
+fn tracker_heard(peer: u16) -> (String, mpsc::Receiver<u16>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (heard, hear) = mpsc::channel();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
             let mut request = [0; 4096];
-            let _ = stream.read(&mut request);
+            let read = stream.read(&mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]);
+            if let Some(port) = request
+                .split_once("&port=")
+                .and_then(|(_, rest)| rest.split('&').next()?.parse().ok())
+            {
+                let _ = heard.send(port);
+            }
             let mut body = b"d8:intervali5e5:peers6:".to_vec();
             body.extend([127, 0, 0, 1]);
             body.extend(peer.to_be_bytes());
@@ -107,7 +122,7 @@ fn tracker(peer: u16) -> String {
             let _ = stream.write_all(&body);
         }
     });
-    format!("http://127.0.0.1:{port}/announce")
+    (format!("http://127.0.0.1:{port}/announce"), hear)
 }
 
 /// No DHT, peer exchange or local discovery: the tracker alone.
@@ -349,7 +364,7 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let seed_port = free_port();
-    let announce = tracker(seed_port);
+    let (announce, heard) = tracker_heard(seed_port);
     let nobody = format!("http://127.0.0.1:{}/announce", free_port());
     let seeded = "Lantern Weather";
     let files: Vec<(&[&str], Vec<u8>, bool)> = vec![(&["Paper Comets.flac"], SONG.to_vec(), false)];
@@ -361,6 +376,13 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
     let seed_meta = root.join("seed.torrent");
     std::fs::write(&seed_meta, &bytes).unwrap();
     let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
+    // The seeder announces once it has checked its files and can send
+    // them; fetched before then, the seeded torrent could stall too.
+    while heard
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the seeder announces")
+        != seed_port
+    {}
     let lost_bytes = metainfo(
         "The Glass Orchards",
         &[(&["Rooms of Salt.flac"], vec![5; 3000], false)],
@@ -377,7 +399,7 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
             .map(ToString::to_string)
             .chain([format!("--listen-port={}", free_port())])
             .collect(),
-        stall: Duration::from_secs(3),
+        stall: Duration::from_secs(10),
         ..Torrent::default()
     };
     let places = Places {
