@@ -6,6 +6,26 @@
 //! reach it, `args` last so they win. Its DHT routing table is kept with
 //! the unfinished fetches rather than in the user's own aria2 folder.
 //!
+//! A run fetches several torrents, as a sync fetches all it fetches
+//! again in one, each a download of its own in the run's input file
+//! (`--input-file`), with its own folder, files and GID; what all share
+//! stays on the command line. One aria2c keeps one routing table and
+//! listens on one port, which several would fight over, as a fixed
+//! `--listen-port` in `args` would make them, and torrents no peer seeds
+//! stall side by side, [`AT_ONCE`] at a time, rather than one after
+//! another. aria2c's exit says only its last error, so how each torrent
+//! ended is read from its row of the results, which names it by the
+//! first six digits of its GID: the n-th download's GID begins with n.
+//! Its error lines name a connection, not a torrent, so torrents failing
+//! side by side are said to, with every error listed once.
+//!
+//! The input file reads a line break in a value as an option of its own
+//! and a leading `#` as a comment, so a value holding a control
+//! character, or a space at either end, is refused rather than handed
+//! on, and a file is written under its index with its extension only
+//! where that is letters and digits: a torrent names its files as it
+//! likes, and a name that wrote a `dir=` line would write anywhere.
+//!
 //! A magnet link names a torrent without its metainfo, which aria2c asks
 //! its peers for first (`--bt-metadata-only`), saving it beside the
 //! unfinished fetches as `<v1 hash>.torrent`; muman then reads and keeps
@@ -50,7 +70,8 @@
 //! cannot reach as an error, as a torrent's dead trackers make it while
 //! others serve; these are said only when the fetch fails.
 
-use std::ffi::OsString;
+use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -74,18 +95,94 @@ pub struct Places<'a> {
     pub options: &'a Torrent,
 }
 
+/// The most torrents one run fetches at once; the rest wait their turn.
+/// Each opens connections to its own peers, and many at once can run
+/// into a system's limit on open files.
+pub const AT_ONCE: usize = 8;
+
+/// How one download of a run ended, as its row of aria2c's results says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Finished,
+    /// Left unfinished, as a stall leaves it.
+    Unfinished,
+    Failed,
+}
+
 /// What one aria2c run said beyond its exit.
 #[derive(Debug, Default)]
 struct Said {
-    /// Whether a download was left unfinished, as a stall leaves it.
-    unfinished: bool,
-    /// Whether a download ended in an error.
-    failed: bool,
+    /// Each download's end, by the six digits its row names its GID by.
+    ended: BTreeMap<String, Ended>,
     errors: Vec<String>,
 }
 
-/// The arguments every aria2c run takes, writing into `dir`.
-fn common(places: &Places<'_>, dir: &Path) -> Vec<OsString> {
+/// One download of a run, as aria2c's input file names it: what it
+/// fetches, then the options it alone takes.
+#[derive(Debug)]
+struct Entry {
+    uri: OsString,
+    options: Vec<(&'static str, OsString)>,
+}
+
+/// The GID of the `n`-th download of a run, from 0, whose first six
+/// digits, all aria2c's results name it by, are `n + 1`: all zeros is
+/// no GID.
+fn gid(n: usize) -> String {
+    format!("{:06x}{:010x}", n + 1, 0)
+}
+
+/// What aria2c's results name the `n`-th download of a run by.
+fn short_gid(n: usize) -> String {
+    gid(n)[..6].to_string()
+}
+
+/// `value` as the bytes aria2c reads from its input file: a path as the
+/// system spells it, in UTF-8 on Windows, as aria2c reads it there.
+fn input_bytes(value: &OsStr) -> Result<&[u8]> {
+    ensure!(
+        !cfg!(windows) || value.to_str().is_some(),
+        "{} is not Unicode, as aria2c reads it on Windows",
+        value.to_string_lossy()
+    );
+    let bytes = value.as_encoded_bytes();
+    let control = bytes.iter().any(u8::is_ascii_control);
+    let padded = bytes.first().is_some_and(u8::is_ascii_whitespace)
+        || bytes.last().is_some_and(u8::is_ascii_whitespace);
+    ensure!(
+        !control && !padded,
+        "{:?} cannot be handed to aria2c: its input file would read it as more than it is",
+        value.to_string_lossy()
+    );
+    Ok(bytes)
+}
+
+/// aria2c's input file of `entries`, each given the GID of its place.
+fn input_file(entries: &[Entry]) -> Result<Vec<u8>> {
+    let mut text = Vec::new();
+    for (n, entry) in entries.iter().enumerate() {
+        let uri = input_bytes(&entry.uri)?;
+        ensure!(
+            !uri.starts_with(b"#"),
+            "{} cannot be handed to aria2c: its input file would read it as a comment",
+            entry.uri.to_string_lossy()
+        );
+        text.extend(uri);
+        text.push(b'\n');
+        let gid = ("gid", OsString::from(gid(n)));
+        for (name, value) in std::iter::once(&gid).chain(&entry.options) {
+            text.extend(b"  ");
+            text.extend(name.as_bytes());
+            text.push(b'=');
+            text.extend(input_bytes(value)?);
+            text.push(b'\n');
+        }
+    }
+    Ok(text)
+}
+
+/// The arguments every aria2c run of `downloads` takes.
+fn common(places: &Places<'_>, downloads: usize) -> Vec<OsString> {
     let flag = |name: &str, value: &Path| {
         let mut arg = OsString::from(format!("--{name}="));
         arg.push(value);
@@ -94,7 +191,6 @@ fn common(places: &Places<'_>, dir: &Path) -> Vec<OsString> {
     let mut cmd: Vec<OsString> = vec![
         "aria2c".into(),
         "--no-conf=true".into(),
-        flag("dir", dir),
         "--console-log-level=warn".into(),
         "--summary-interval=1".into(),
         "--show-console-readout=false".into(),
@@ -109,6 +205,7 @@ fn common(places: &Places<'_>, dir: &Path) -> Vec<OsString> {
             places.options.seed_time.as_secs_f64() / 60.0
         )
         .into(),
+        format!("--max-concurrent-downloads={}", downloads.clamp(1, AT_ONCE)).into(),
         flag("dht-file-path", &places.partial.join("dht.dat")),
         flag("dht-file-path6", &places.partial.join("dht6.dat")),
     ];
@@ -116,63 +213,125 @@ fn common(places: &Places<'_>, dir: &Path) -> Vec<OsString> {
     cmd
 }
 
-/// The run that asks a magnet link's peers for its torrent's metainfo.
+/// The run that asks the peers of each of `links`, magnet links, for
+/// its torrent's metainfo, reading them from `input`.
 #[must_use]
-pub fn metainfo_command(places: &Places<'_>, link: &str) -> Vec<OsString> {
-    let mut cmd = common(places, places.partial);
+pub fn metainfo_command(places: &Places<'_>, links: usize, input: &Path) -> Vec<OsString> {
+    let mut cmd = common(places, links);
+    let mut dir = OsString::from("--dir=");
+    dir.push(places.partial);
+    cmd.push(dir);
     cmd.push("--bt-metadata-only=true".into());
     cmd.push("--bt-save-metadata=true".into());
-    cmd.push(link.into());
+    cmd.push(input_arg(input));
     cmd
 }
 
-/// Where a selected file is written while it is fetched, in `dir`.
+fn input_arg(input: &Path) -> OsString {
+    let mut arg = OsString::from("--input-file=");
+    arg.push(input);
+    arg
+}
+
+/// Where a selected file is written while it is fetched, in its
+/// torrent's folder: by its place, with its extension where that is
+/// letters and digits alone, as a torrent may name its files anything.
 #[must_use]
 pub fn index_path(file: &File) -> PathBuf {
-    let name = match file.path.extension() {
-        Some(ext) => format!("{}.{}", file.index, ext.to_string_lossy()),
+    let ext = file
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| !e.is_empty() && e.bytes().all(|b| b.is_ascii_alphanumeric()));
+    let name = match ext {
+        Some(ext) => format!("{}.{ext}", file.index),
         None => file.index.to_string(),
     };
     Path::new("files").join(name)
 }
 
-/// The run that fetches `files` of the torrent `metainfo` describes into
-/// `dir`, the files of `beside` written where [`take_up`] copies them, so
-/// the pieces they share with `files` check whole.
+/// The download that fetches `files` of the torrent whose metainfo is
+/// at `metainfo` into `dir`, the files of `beside` written where
+/// [`take_up`] copies them, so the pieces they share with `files` check
+/// whole.
+fn fetch_entry(metainfo: &Path, dir: &Path, files: &[&File], beside: &[&File]) -> Entry {
+    let select: Vec<String> = files.iter().map(|f| f.index.to_string()).collect();
+    let mut options = vec![
+        ("dir", dir.as_os_str().to_os_string()),
+        ("select-file", select.join(",").into()),
+    ];
+    for file in files.iter().chain(beside) {
+        let mut value = OsString::from(format!("{}=", file.index));
+        value.push(index_path(file));
+        options.push(("index-out", value));
+    }
+    Entry {
+        uri: metainfo.as_os_str().to_os_string(),
+        options,
+    }
+}
+
+/// The run that fetches `downloads` torrents' files, reading them from
+/// `input`.
 #[must_use]
-pub fn fetch_command(
-    places: &Places<'_>,
-    metainfo: &Path,
-    dir: &Path,
-    files: &[&File],
-    beside: &[&File],
-) -> Vec<OsString> {
-    let mut cmd = common(places, dir);
+pub fn fetch_command(places: &Places<'_>, downloads: usize, input: &Path) -> Vec<OsString> {
+    let mut cmd = common(places, downloads);
     cmd.extend([
         "--continue=true".into(),
         "--check-integrity=true".into(),
         "--bt-remove-unselected-file=true".into(),
     ]);
-    let select: Vec<String> = files.iter().map(|f| f.index.to_string()).collect();
-    cmd.push(format!("--select-file={}", select.join(",")).into());
-    for file in files.iter().chain(beside) {
-        let mut arg = OsString::from(format!("--index-out={}=", file.index));
-        arg.push(index_path(file));
-        cmd.push(arg);
-    }
-    cmd.push(metainfo.into());
+    cmd.push(input_arg(input));
     cmd
 }
 
-/// Run `cmd`, its progress noted on `step`: whether it succeeded, and
-/// what it said.
+/// Run `cmd` over `entries`, written to an input file in the partial
+/// folder, `labels` naming each on `step`: how each ended, and the
+/// errors aria2c reported.
+fn run<R: Runner>(
+    runner: &R,
+    places: &Places<'_>,
+    cmd: impl FnOnce(&Path) -> Vec<OsString>,
+    entries: &[Entry],
+    labels: &[String],
+    step: &crate::progress::Step,
+) -> Result<(Vec<Ended>, Vec<String>)> {
+    let text = input_file(entries)?;
+    std::fs::create_dir_all(places.partial)
+        .with_context(|| format!("creating {}", places.partial.display()))?;
+    let mut input = tempfile::Builder::new()
+        .prefix("input-")
+        .suffix(".txt")
+        .tempfile_in(places.partial)
+        .with_context(|| format!("writing in {}", places.partial.display()))?;
+    input
+        .write_all(&text)
+        .and_then(|()| input.flush())
+        .with_context(|| format!("writing {}", input.path().display()))?;
+    // Closed, as Windows may refuse another program a file held open.
+    let input = input.into_temp_path();
+    let (ok, said) = stream(runner, &cmd(&input), step, labels)?;
+    let ended = (0..entries.len())
+        .map(|n| match said.ended.get(&short_gid(n)) {
+            Some(ended) => *ended,
+            None if ok => Ended::Finished,
+            None => Ended::Failed,
+        })
+        .collect();
+    Ok((ended, said.errors))
+}
+
+/// Run `cmd`, its progress noted on `step`, each download named by its
+/// label in `labels`: whether it exited successfully, and what it said.
 fn stream<R: Runner>(
     runner: &R,
     cmd: &[OsString],
     step: &crate::progress::Step,
+    labels: &[String],
 ) -> Result<(bool, Said)> {
     let mut said = Said::default();
     let mut results = false;
+    let mut readouts: BTreeMap<String, String> = BTreeMap::new();
     let ok = runner.stream(cmd, &mut |line| {
         let text = match line {
             Line::Out(t) | Line::Err(t) => t.trim(),
@@ -180,14 +339,21 @@ fn stream<R: Runner>(
         if text.starts_with("Download Results:") {
             results = true;
         } else if results && text.contains('|') {
-            match text.split('|').nth(1).map(str::trim) {
-                Some("INPR") => said.unfinished = true,
-                Some("ERR") => said.failed = true,
-                _ => {}
-            }
+            let mut fields = text.split('|').map(str::trim);
+            let (Some(gid), Some(stat)) = (fields.next(), fields.next()) else {
+                return;
+            };
+            let ended = match stat {
+                "OK" => Ended::Finished,
+                "INPR" => Ended::Unfinished,
+                "ERR" | "RM" => Ended::Failed,
+                _ => return,
+            };
+            said.ended.insert(gid.to_string(), ended);
         } else if let Some(readout) = text.strip_prefix("[#") {
-            if let Some(progress) = readout.split_once(' ').map(|(_, p)| p) {
-                step.note(&format!("aria2c: {}", progress.trim_end_matches(']')));
+            if let Some((gid, progress)) = readout.split_once(' ') {
+                readouts.insert(gid.to_string(), progress.trim_end_matches(']').to_string());
+                step.note(&format!("aria2c: {}", progress_of(&readouts, labels)));
             }
         } else if let Some(error) = error_of(text)
             && !said.errors.contains(&error)
@@ -195,7 +361,30 @@ fn stream<R: Runner>(
             said.errors.push(error);
         }
     })?;
-    Ok((ok && !said.unfinished && !said.failed, said))
+    Ok((ok, said))
+}
+
+/// What `readouts`, the last of each download by its short GID, say of
+/// a run: the one download's whole, or each one's share done by its
+/// label.
+fn progress_of(readouts: &BTreeMap<String, String>, labels: &[String]) -> String {
+    if labels.len() < 2 {
+        return readouts.values().next().cloned().unwrap_or_default();
+    }
+    readouts
+        .iter()
+        .map(|(gid, readout)| {
+            let label = (0..labels.len())
+                .find(|&n| short_gid(n) == *gid)
+                .map_or(gid.as_str(), |n| labels[n].as_str());
+            let share = readout
+                .split_once('(')
+                .and_then(|(_, r)| r.split_once(')'))
+                .map_or("", |(s, _)| s);
+            format!("{label} {share}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What an error or warning line says, without aria2c's time and
@@ -211,17 +400,98 @@ fn error_of(line: &str) -> Option<String> {
     Some(rest.trim().to_string())
 }
 
-/// Why a run that did not succeed failed.
-fn failure(places: &Places<'_>, said: &Said) -> String {
-    if said.unfinished {
+/// Why a download that ended as `ended` failed, `errors` what the run
+/// reported and `failed` how many of its downloads ended in an error.
+fn failure(places: &Places<'_>, ended: Ended, errors: &[String], failed: usize) -> String {
+    if ended == Ended::Unfinished {
         return format!(
             "no peer sent anything for {}; a later sync tries again",
             crate::units::Time(places.options.stall.as_millis() as i64).exact()
         );
     }
-    said.errors
-        .last()
-        .map_or_else(|| "aria2c failed".to_string(), |e| format!("aria2c: {e}"))
+    match errors.last() {
+        Some(e) if failed == 1 => format!("aria2c: {e}"),
+        Some(_) => format!("aria2c failed on {failed} torrents at once; its errors are above"),
+        None => "aria2c failed".to_string(),
+    }
+}
+
+/// Say each of `errors` once, where any download of a run failed.
+fn warn<W: Write>(out: &mut W, ended: &[Ended], errors: &[String]) -> Result<()> {
+    if ended.iter().any(|e| *e != Ended::Finished) {
+        for e in errors {
+            crate::ui::warning(out, &format!("aria2c: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// The metainfo of the torrent each of `magnets` names, from its peers,
+/// in one run: its bytes, or why they did not arrive.
+pub fn metainfos<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &Places<'_>,
+    magnets: &[&Magnet],
+) -> Result<Vec<Result<Vec<u8>, String>>> {
+    let label = |m: &Magnet| m.name.clone().unwrap_or_else(|| m.hash().to_string());
+    let mut asked: Vec<&Magnet> = Vec::new();
+    for magnet in magnets {
+        if magnet.v1.is_some() && !asked.iter().any(|a| a.v1 == magnet.v1) {
+            asked.push(magnet);
+        }
+    }
+    let mut ended = Vec::new();
+    let mut errors = Vec::new();
+    if !asked.is_empty() {
+        let entries: Vec<Entry> = asked
+            .iter()
+            .map(|m| Entry {
+                uri: m.link().into(),
+                options: Vec::new(),
+            })
+            .collect();
+        let labels: Vec<String> = asked.iter().map(|m| label(m)).collect();
+        let step = crate::progress::step("Fetching metainfo", None);
+        (ended, errors) = run(
+            runner,
+            places,
+            |input| metainfo_command(places, entries.len(), input),
+            &entries,
+            &labels,
+            &step,
+        )?;
+        warn(out, &ended, &errors)?;
+    }
+    let failed = ended.iter().filter(|e| **e == Ended::Failed).count();
+    let found = magnets
+        .iter()
+        .map(|magnet| {
+            let Some(v1) = &magnet.v1 else {
+                return Err(format!(
+                    "{} names a v2 torrent alone, and no fetcher here reads v2 torrents",
+                    label(magnet)
+                ));
+            };
+            let n = asked.iter().position(|a| a.v1.as_ref() == Some(v1));
+            let ended = n.map_or(Ended::Failed, |n| ended[n]);
+            let saved = places.partial.join(format!("{v1}.torrent"));
+            let bytes = (ended == Ended::Finished)
+                .then(|| std::fs::read(&saved).ok())
+                .flatten();
+            bytes.ok_or_else(|| {
+                format!(
+                    "the metainfo of {} did not arrive: {}",
+                    label(magnet),
+                    failure(places, ended, &errors, failed)
+                )
+            })
+        })
+        .collect();
+    for v1 in asked.iter().filter_map(|m| m.v1.as_ref()) {
+        let _ = std::fs::remove_file(places.partial.join(format!("{v1}.torrent")));
+    }
+    Ok(found)
 }
 
 /// The metainfo of the torrent `magnet` names, from its peers.
@@ -231,30 +501,10 @@ pub fn metainfo_of<R: Runner, W: Write>(
     places: &Places<'_>,
     magnet: &Magnet,
 ) -> Result<Vec<u8>> {
-    let Some(v1) = &magnet.v1 else {
-        bail!(
-            "{} names a v2 torrent alone, and no fetcher here reads v2 torrents",
-            magnet.name.as_deref().unwrap_or(magnet.hash())
-        );
-    };
-    std::fs::create_dir_all(places.partial)
-        .with_context(|| format!("creating {}", places.partial.display()))?;
-    let step = crate::progress::step("Fetching metainfo", None);
-    let (ok, said) = stream(runner, &metainfo_command(places, &magnet.link()), &step)?;
-    let saved = places.partial.join(format!("{v1}.torrent"));
-    if !ok || !saved.exists() {
-        for e in &said.errors {
-            crate::ui::warning(out, &format!("aria2c: {e}"))?;
-        }
-        bail!(
-            "the metainfo of {} did not arrive: {}",
-            magnet.name.as_deref().unwrap_or(v1),
-            failure(places, &said)
-        );
-    }
-    let bytes = std::fs::read(&saved).with_context(|| format!("reading {}", saved.display()))?;
-    let _ = std::fs::remove_file(&saved);
-    Ok(bytes)
+    metainfos(runner, out, places, &[magnet])?
+        .pop()
+        .unwrap_or_else(|| Err("aria2c failed".to_string()))
+        .map_err(anyhow::Error::msg)
 }
 
 /// What a fetch of a torrent's files brought.
@@ -266,42 +516,85 @@ pub struct Fetched {
     pub failure: Option<String>,
 }
 
-/// Fetch `files` of `meta`, whose metainfo the store keeps, and place each
-/// at its key's place.
-pub fn fetch<R: Runner, W: Write>(
+/// The files of one torrent a fetch asks for.
+#[derive(Debug, Clone)]
+pub struct Wanted<'a> {
+    /// Its metainfo, which the store keeps.
+    pub meta: &'a Metainfo,
+    pub files: Vec<&'a File>,
+}
+
+/// Fetch the files each of `wanted` names, in one run, and place each
+/// at its key's place: what each brought, in order. Each torrent is
+/// named once.
+pub fn fetch_all<R: Runner, W: Write>(
     runner: &R,
     out: &mut W,
     places: &Places<'_>,
-    meta: &Metainfo,
-    files: &[&File],
-) -> Result<Fetched> {
-    ensure!(
-        meta.fetchable(),
-        "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
-        meta.name
-    );
-    if files.is_empty() {
-        return Ok(Fetched::default());
-    }
-    let hash = meta.hash();
-    let metainfo = crate::store::metainfo_path(places.store, hash);
-    let dir = places.partial.join(hash);
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let step = crate::progress::step("Fetching", None);
-    let beside = crate::torrent::sharing(meta, files);
-    let cmd = fetch_command(places, &metainfo, &dir, files, &beside);
-    let (ok, said) = stream(runner, &cmd, &step)?;
-    if !ok {
-        for e in &said.errors {
-            crate::ui::warning(out, &format!("aria2c: {e}"))?;
+    wanted: &[Wanted<'_>],
+) -> Result<Vec<Fetched>> {
+    let mut fetched: Vec<Fetched> = wanted.iter().map(|_| Fetched::default()).collect();
+    let mut asked = Vec::new();
+    for (n, w) in wanted.iter().enumerate() {
+        ensure!(
+            !wanted[..n].iter().any(|o| o.meta.hash() == w.meta.hash()),
+            "{} is asked for twice in one fetch",
+            w.meta.name
+        );
+        if !w.meta.fetchable() {
+            fetched[n].failure = Some(format!(
+                "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
+                w.meta.name
+            ));
+        } else if !w.files.is_empty() {
+            asked.push(n);
         }
-        return Ok(Fetched {
-            arrived: Vec::new(),
-            failure: Some(failure(places, &said)),
-        });
     }
+    if asked.is_empty() {
+        return Ok(fetched);
+    }
+    let mut entries = Vec::new();
+    for &n in &asked {
+        let meta = wanted[n].meta;
+        let dir = places.partial.join(meta.hash());
+        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let beside = crate::torrent::sharing(meta, &wanted[n].files);
+        let metainfo = crate::store::metainfo_path(places.store, meta.hash());
+        entries.push(fetch_entry(&metainfo, &dir, &wanted[n].files, &beside));
+    }
+    let labels: Vec<String> = asked.iter().map(|&n| wanted[n].meta.name.clone()).collect();
+    let step = crate::progress::step("Fetching", None);
+    let (ended, errors) = run(
+        runner,
+        places,
+        |input| fetch_command(places, entries.len(), input),
+        &entries,
+        &labels,
+        &step,
+    )?;
+    drop(step);
+    warn(out, &ended, &errors)?;
+    let failed = ended.iter().filter(|e| **e == Ended::Failed).count();
+    for (&n, ended) in asked.iter().zip(ended) {
+        fetched[n] = if ended == Ended::Finished {
+            place(out, places, &wanted[n])?
+        } else {
+            Fetched {
+                arrived: Vec::new(),
+                failure: Some(failure(places, ended, &errors, failed)),
+            }
+        };
+    }
+    Ok(fetched)
+}
+
+/// Place each file of `wanted` a finished fetch wrote at its key's
+/// place.
+fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Result<Fetched> {
+    let meta = wanted.meta;
+    let dir = places.partial.join(meta.hash());
     let mut arrived = Vec::new();
-    for file in files {
+    for file in &wanted.files {
         let from = dir.join(index_path(file));
         let SourceKey::Torrent(key) = meta.key(file) else {
             continue;
@@ -323,6 +616,24 @@ pub fn fetch<R: Runner, W: Write>(
         arrived,
         failure: None,
     })
+}
+
+/// Fetch `files` of `meta`, whose metainfo the store keeps, and place each
+/// at its key's place.
+pub fn fetch<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &Places<'_>,
+    meta: &Metainfo,
+    files: &[&File],
+) -> Result<Fetched> {
+    let wanted = Wanted {
+        meta,
+        files: files.to_vec(),
+    };
+    Ok(fetch_all(runner, out, places, &[wanted])?
+        .pop()
+        .unwrap_or_default())
 }
 
 /// Copy what `from`, a folder another client downloaded `meta` into,
@@ -389,9 +700,23 @@ pub fn missing<R: Runner, W: Write>(
     places: &Places<'_>,
     store: &Store,
     manifest: &Manifest,
-    failures: &std::collections::BTreeMap<SourceKey, Failure>,
+    failures: &BTreeMap<SourceKey, Failure>,
     retry: bool,
 ) -> Result<Vec<(SourceKey, String)>> {
+    let by_hash = due(out, store, manifest, failures, retry)?;
+    fetch_due(runner, out, places, manifest, &by_hash)
+}
+
+/// The listed torrent files the store lacks or holds damaged, by their
+/// torrent's hash, each said; those that failed lately wait unless
+/// `retry`, and are said as waiting.
+pub fn due<W: Write>(
+    out: &mut W,
+    store: &Store,
+    manifest: &Manifest,
+    failures: &BTreeMap<SourceKey, Failure>,
+    retry: bool,
+) -> Result<BTreeMap<String, Vec<SourceKey>>> {
     let now = crate::state::now_secs();
     let damaged = |k: &SourceKey| {
         failures
@@ -421,77 +746,138 @@ pub fn missing<R: Runner, W: Write>(
             ),
         )?;
     }
-    let mut by_hash: std::collections::BTreeMap<&str, Vec<&SourceKey>> =
-        std::collections::BTreeMap::new();
-    for key in &gone {
-        if let SourceKey::Torrent(t) = key {
-            by_hash.entry(t.hash()).or_default().push(key);
+    let mut by_hash: BTreeMap<String, Vec<SourceKey>> = BTreeMap::new();
+    for key in gone {
+        if let SourceKey::Torrent(t) = &key {
+            by_hash.entry(t.hash().to_string()).or_default().push(key);
         }
     }
+    let repaired = by_hash.values().flatten().filter(|k| store.has(k)).count();
+    let gone = by_hash.values().map(Vec::len).sum::<usize>() - repaired;
+    if repaired > 0 {
+        crate::ui::info(
+            out,
+            &format!("Fetching {repaired} damaged torrent file(s) again"),
+        )?;
+    }
+    if gone > 0 {
+        crate::ui::info(
+            out,
+            &format!("Fetching {gone} missing torrent file(s) again"),
+        )?;
+    }
+    Ok(by_hash)
+}
+
+/// Fetch the files `by_hash` names of each torrent again, with the
+/// lyrics and pictures a listed song file of it brings: a run for the
+/// metainfo the store lost, then one for every torrent's files. Each
+/// key that did not arrive, with why.
+pub fn fetch_due<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &Places<'_>,
+    manifest: &Manifest,
+    by_hash: &BTreeMap<String, Vec<SourceKey>>,
+) -> Result<Vec<(SourceKey, String)>> {
     let mut failed = Vec::new();
+    let lost: Vec<(&String, Magnet)> = by_hash
+        .keys()
+        .filter(|h| !crate::store::metainfo_path(places.store, h).is_file())
+        .map(|h| (h, magnet_of(manifest, h)))
+        .collect();
+    let magnets: Vec<&Magnet> = lost.iter().map(|(_, m)| m).collect();
+    let asked = metainfos(runner, out, places, &magnets)
+        .unwrap_or_else(|e| magnets.iter().map(|_| Err(format!("{e:#}"))).collect());
+    let mut metas = Vec::new();
     for (hash, keys) in by_hash {
-        let repaired = keys.iter().filter(|k| store.has(k)).count();
-        if repaired > 0 {
-            crate::ui::info(
-                out,
-                &format!("Fetching {repaired} damaged torrent file(s) again"),
-            )?;
+        let found = lost.iter().position(|(h, _)| *h == hash).map(|n| &asked[n]);
+        match read_kept(places, hash, found) {
+            Ok(meta) => metas.push((meta, keys)),
+            Err(e) => fail(out, &mut failed, keys, &format!("{e:#}"))?,
         }
-        if keys.len() > repaired {
-            crate::ui::info(
-                out,
-                &format!(
-                    "Fetching {} missing torrent file(s) again",
-                    keys.len() - repaired
-                ),
-            )?;
-        }
-        let why = match again(runner, out, places, manifest, hash, &keys) {
-            Ok(arrived) => {
-                for key in keys.iter().filter(|k| !arrived.contains(k)) {
-                    failed.push(((*key).clone(), "aria2c did not finish it".to_string()));
-                }
-                continue;
+    }
+    let mut wanted = Vec::new();
+    let mut asking = Vec::new();
+    for (meta, keys) in &metas {
+        let files = wanted_files(places, manifest, meta, keys);
+        match repair_from_store(places, meta, &files) {
+            Ok(()) => {
+                wanted.push(Wanted { meta, files });
+                asking.push(*keys);
             }
-            Err(e) => format!("{e:#}"),
-        };
-        for key in keys {
-            crate::ui::error(out, &format!("Could not fetch {key} again: {why}"))?;
-            failed.push((key.clone(), why.clone()));
+            Err(e) => fail(out, &mut failed, keys, &format!("{e:#}"))?,
+        }
+    }
+    let fetched = fetch_all(runner, out, places, &wanted).unwrap_or_else(|e| {
+        let why = format!("{e:#}");
+        wanted
+            .iter()
+            .map(|_| Fetched {
+                arrived: Vec::new(),
+                failure: Some(why.clone()),
+            })
+            .collect()
+    });
+    for (keys, fetched) in asking.into_iter().zip(fetched) {
+        if let Some(why) = fetched.failure {
+            fail(out, &mut failed, keys, &why)?;
+            continue;
+        }
+        for key in keys.iter().filter(|k| !fetched.arrived.contains(k)) {
+            failed.push((key.clone(), "aria2c did not finish it".to_string()));
         }
     }
     Ok(failed)
 }
 
-/// Fetch the files `keys` name of the torrent of `hash` again, with the
-/// lyrics and pictures a listed song file of it brings: the keys that
-/// arrived.
-fn again<R: Runner, W: Write>(
-    runner: &R,
+/// Say each of `keys` could not be fetched again, for `why`, and add it
+/// to `failed`.
+fn fail<W: Write>(
     out: &mut W,
+    failed: &mut Vec<(SourceKey, String)>,
+    keys: &[SourceKey],
+    why: &str,
+) -> Result<()> {
+    for key in keys {
+        crate::ui::error(out, &format!("Could not fetch {key} again: {why}"))?;
+        failed.push((key.clone(), why.to_string()));
+    }
+    Ok(())
+}
+
+/// A magnet link of the torrent of `hash`, with what the song list
+/// records of it.
+fn magnet_of(manifest: &Manifest, hash: &str) -> Magnet {
+    let recorded = manifest.torrents.get(hash).cloned().unwrap_or_default();
+    Magnet {
+        v1: (hash.len() == crate::torrent::V1_HEX).then(|| hash.to_string()),
+        v2: recorded
+            .v2
+            .clone()
+            .or_else(|| (hash.len() == crate::torrent::V2_HEX).then(|| hash.to_string())),
+        name: recorded.name.clone(),
+        trackers: recorded.trackers,
+    }
+}
+
+/// The metainfo of the torrent of `hash`: as the store keeps it, else as
+/// `asked` of its peers, kept again.
+fn read_kept(
     places: &Places<'_>,
-    manifest: &Manifest,
     hash: &str,
-    keys: &[&SourceKey],
-) -> Result<Vec<SourceKey>> {
+    asked: Option<&Result<Vec<u8>, String>>,
+) -> Result<Metainfo> {
     let kept = crate::store::metainfo_path(places.store, hash);
-    let bytes = if kept.is_file() {
-        std::fs::read(&kept).with_context(|| format!("reading {}", kept.display()))?
-    } else {
-        let recorded = manifest.torrents.get(hash).cloned().unwrap_or_default();
-        let magnet = Magnet {
-            v1: (hash.len() == crate::torrent::V1_HEX).then(|| hash.to_string()),
-            v2: recorded
-                .v2
-                .clone()
-                .or_else(|| (hash.len() == crate::torrent::V2_HEX).then(|| hash.to_string())),
-            name: recorded.name.clone(),
-            trackers: recorded.trackers,
-        };
-        let bytes = metainfo_of(runner, out, places, &magnet)
-            .context("its metainfo is gone from the store; give its .torrent to `add` again")?;
-        keep_metainfo(places.store, hash, &bytes)?;
-        bytes
+    let bytes = match asked {
+        None => std::fs::read(&kept).with_context(|| format!("reading {}", kept.display()))?,
+        Some(Ok(bytes)) => {
+            keep_metainfo(places.store, hash, bytes)?;
+            bytes.clone()
+        }
+        Some(Err(why)) => {
+            bail!("its metainfo is gone from the store; give its .torrent to `add` again: {why}")
+        }
     };
     let meta = Metainfo::read(&bytes)?;
     ensure!(
@@ -499,6 +885,18 @@ fn again<R: Runner, W: Write>(
         "{} is the metainfo of another torrent",
         kept.display()
     );
+    Ok(meta)
+}
+
+/// The files of `meta` to fetch for `keys`: each, and the lyrics and
+/// pictures a listed song file of it brings that the store lacks.
+fn wanted_files<'m>(
+    places: &Places<'_>,
+    manifest: &Manifest,
+    meta: &'m Metainfo,
+    keys: &[SourceKey],
+) -> Vec<&'m File> {
+    let hash = meta.hash();
     let listed: Vec<&Path> = manifest
         .keys()
         .into_iter()
@@ -513,11 +911,11 @@ fn again<R: Runner, W: Write>(
             _ => None,
         })
         .collect();
-    let wanted: Vec<&File> = crate::torrent::selected(&meta)
+    crate::torrent::selected(meta)
         .into_iter()
         .filter(|f| {
             let key = meta.key(f);
-            if keys.contains(&&key) {
+            if keys.contains(&key) {
                 return true;
             }
             let SourceKey::Torrent(t) = &key else {
@@ -527,13 +925,7 @@ fn again<R: Runner, W: Write>(
                 && listed.iter().any(|s| f.path.parent() == s.parent())
                 && !crate::store::torrent_path(places.store, t).is_file()
         })
-        .collect();
-    repair_from_store(places, &meta, &wanted)?;
-    let fetched = fetch(runner, out, places, &meta, &wanted)?;
-    if let Some(failure) = fetched.failure {
-        bail!(failure);
-    }
-    Ok(fetched.arrived)
+        .collect()
 }
 
 /// Copy what the store holds of `files`, a damaged copy among them, and
@@ -579,6 +971,16 @@ mod tests {
             .collect()
     }
 
+    fn file(parts: &[&str], index: usize) -> File {
+        File {
+            path: parts.iter().collect(),
+            length: 3,
+            root: None,
+            index,
+            offset: 3 * (index as u64 - 1),
+        }
+    }
+
     #[test]
     fn a_fetch_selects_its_files_and_names_each_by_its_place() {
         let options = options();
@@ -588,75 +990,177 @@ mod tests {
             options: &options,
         };
         let files = [
-            File {
-                path: PathBuf::from("01 Paper Comets.flac"),
-                length: 3,
-                root: None,
-                index: 1,
-                offset: 0,
-            },
-            File {
-                path: ["CD 2", "cover"].iter().collect(),
-                length: 3,
-                root: None,
-                index: 4,
-                offset: 3,
-            },
+            file(&["01 Paper Comets.flac"], 1),
+            file(&["CD 2", "cover"], 4),
         ];
-        let cmd = text(&fetch_command(
-            &places,
+        let entry = fetch_entry(
             Path::new("store/h.torrent"),
             Path::new("partial/h"),
             &files.iter().collect::<Vec<_>>(),
             &[],
-        ));
-        assert_eq!(cmd[0], "aria2c");
-        assert!(cmd.contains(&"--no-conf=true".to_string()));
-        assert!(cmd.contains(&"--select-file=1,4".to_string()));
-        assert!(cmd.contains(&"--seed-time=0".to_string()));
-        assert!(cmd.contains(&"--bt-stop-timeout=600".to_string()));
+        );
+        let input = String::from_utf8(input_file(&[entry]).unwrap()).unwrap();
         let out = |i: &str, p: &[&str]| {
             format!(
-                "--index-out={i}={}",
+                "  index-out={i}={}",
                 p.iter().collect::<PathBuf>().display()
             )
         };
-        assert!(cmd.contains(&out("1", &["files", "1.flac"])));
-        assert!(cmd.contains(&out("4", &["files", "4"])));
+        let dir = format!("  dir={}", Path::new("partial/h").display());
+        let lines: Vec<&str> = input.lines().collect();
+        assert_eq!(
+            lines[..4],
+            [
+                "store/h.torrent",
+                "  gid=0000010000000000",
+                &dir,
+                "  select-file=1,4"
+            ]
+        );
+        assert_eq!(
+            lines[4..],
+            [out("1", &["files", "1.flac"]), out("4", &["files", "4"])]
+        );
+
+        let cmd = text(&fetch_command(&places, 1, Path::new("partial/input.txt")));
+        assert_eq!(cmd[0], "aria2c");
+        assert!(cmd.contains(&"--no-conf=true".to_string()));
+        assert!(cmd.contains(&"--seed-time=0".to_string()));
+        assert!(cmd.contains(&"--bt-stop-timeout=600".to_string()));
+        assert!(cmd.contains(&"--max-concurrent-downloads=1".to_string()));
+        assert_eq!(cmd.last().unwrap(), "--input-file=partial/input.txt");
         let args = cmd.iter().position(|a| a == "--listen-port=51413").unwrap();
         assert!(args > cmd.iter().position(|a| a == "--no-conf=true").unwrap());
-        assert_eq!(cmd.last().unwrap(), "store/h.torrent");
     }
 
     #[test]
-    fn a_stall_and_errors_are_read_from_its_lines() {
+    fn a_run_fetches_at_most_eight_torrents_at_once_unless_args_say_otherwise() {
+        let options = options();
+        let places = Places {
+            store: Path::new("store"),
+            partial: Path::new("partial"),
+            options: &options,
+        };
+        let cmd = text(&fetch_command(&places, 20, Path::new("i")));
+        let at_once = cmd
+            .iter()
+            .position(|a| a == "--max-concurrent-downloads=8")
+            .unwrap();
+        let args = cmd.iter().position(|a| a == "--listen-port=51413").unwrap();
+        assert!(at_once < args, "[torrent] args come last, and win");
+    }
+
+    #[test]
+    fn nothing_a_torrent_names_is_read_by_aria2c_as_an_option_of_its_own() {
+        let sly = file(&["01 Paper Comets.flac\n  dir=elsewhere"], 1);
+        assert_eq!(index_path(&sly), Path::new("files").join("1"));
+        let entry = |dir: &str| Entry {
+            uri: "store/h.torrent".into(),
+            options: vec![("dir", dir.into())],
+        };
+        for dir in [
+            "partial/h\n  index-out=1=/elsewhere",
+            "partial/h\r",
+            " partial/h",
+        ] {
+            assert!(input_file(&[entry(dir)]).is_err(), "{dir:?}");
+        }
+        assert!(input_file(&[entry("partial/h")]).is_ok());
+        let comment = Entry {
+            uri: "#h.torrent".into(),
+            options: Vec::new(),
+        };
+        assert!(input_file(&[comment]).is_err());
+    }
+
+    #[test]
+    fn each_download_of_a_run_ends_as_its_row_of_the_results_says() {
         let lines = [
             "10/20 10:50:27 [ERROR] CUID#12 - Download aborted. URI=http://tracker.example/a",
-            "[#552677 1.2MiB/40MiB(3%) CN:4 SD:2 DL:300KiB ETA:2m]",
+            "[#000001 1.2MiB/40MiB(3%) CN:4 SD:2 DL:300KiB ETA:2m]",
             "Download Results:",
             "gid   |stat|avg speed  |  %|path/URI",
             "======+====+===========+===+=====",
-            "6fcf70|INPR|       0B/s|  3|partial/h/files/1.flac",
+            "000001|INPR|       0B/s|  3|partial/h/files/1.flac",
+            "   |    |           |  0|partial/h/files/2.png",
+            "000002| OK |   1.2MiB/s|100|partial/g/files/1.flac",
+            "000003|ERR |       0B/s|  0|partial/f/files/1.flac",
         ];
         let runner = crate::testing::Fake {
             lines: lines.iter().map(ToString::to_string).collect(),
             on_stream: Some(Box::new(|_: &[String]| false)),
             ..crate::testing::Fake::default()
         };
-        let step = crate::progress::step("Fetching", None);
-        let (ok, said) = stream(&runner, &["aria2c".into()], &step).unwrap();
-        assert!(!ok);
-        assert!(said.unfinished);
-        assert_eq!(
-            said.errors,
-            ["Download aborted. URI=http://tracker.example/a"]
-        );
+        let dir = tempfile::tempdir().unwrap();
         let options = options();
         let places = Places {
-            store: Path::new("s"),
-            partial: Path::new("p"),
+            store: dir.path(),
+            partial: dir.path(),
             options: &options,
         };
-        assert!(failure(&places, &said).starts_with("no peer sent anything for 10 min"));
+        let entries: Vec<Entry> = ["h", "g", "f", "e"]
+            .iter()
+            .map(|h| Entry {
+                uri: format!("{h}.torrent").into(),
+                options: Vec::new(),
+            })
+            .collect();
+        let labels: Vec<String> = ["Lantern Weather", "Rooms of Salt", "Paper Comets", "Glass"]
+            .map(String::from)
+            .to_vec();
+        let step = crate::progress::step("Fetching", None);
+        let (ended, errors) = run(
+            &runner,
+            &places,
+            |input| fetch_command(&places, 4, input),
+            &entries,
+            &labels,
+            &step,
+        )
+        .unwrap();
+        assert_eq!(
+            ended,
+            [
+                Ended::Unfinished,
+                Ended::Finished,
+                Ended::Failed,
+                Ended::Failed
+            ],
+            "a download the results do not name failed with the run"
+        );
+        assert_eq!(errors, ["Download aborted. URI=http://tracker.example/a"]);
+        assert!(
+            failure(&places, ended[0], &errors, 2).starts_with("no peer sent anything for 10 min")
+        );
+        assert_eq!(
+            failure(&places, ended[2], &errors, 1),
+            "aria2c: Download aborted. URI=http://tracker.example/a"
+        );
+        assert!(failure(&places, ended[2], &errors, 2).contains("failed on 2 torrents at once"));
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "the input file goes with the run"
+        );
+    }
+
+    #[test]
+    fn a_runs_progress_names_each_torrent_by_its_share_done() {
+        let readouts: BTreeMap<String, String> = [
+            ("000001", "1.2MiB/40MiB(3%) CN:4"),
+            ("000002", "20MiB/40MiB(50%) CN:2"),
+        ]
+        .iter()
+        .map(|(g, r)| (g.to_string(), r.to_string()))
+        .collect();
+        let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        assert_eq!(
+            progress_of(&readouts, &labels),
+            "Lantern Weather 3%, Rooms of Salt 50%"
+        );
+        assert_eq!(
+            progress_of(&readouts.into_iter().take(1).collect(), &labels[..1]),
+            "1.2MiB/40MiB(3%) CN:4"
+        );
     }
 }

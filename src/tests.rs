@@ -373,34 +373,69 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
     assert!(text.contains("Added:"), "{text}");
 }
 
-/// A fake aria2c: a metainfo run saves `metainfo` as its peers would
-/// send it, and a fetch writes each file it is told to write, `args` its
-/// command line recorded.
-fn aria2c(metainfo: Vec<u8>, hash: String, runs: Arc<Mutex<Vec<Vec<String>>>>) -> Fake {
+/// The downloads of the input file an aria2c run of `args` reads, each
+/// its address, then its options as its command line would take them.
+fn input_of(args: &[String]) -> Vec<Vec<String>> {
+    let Some(path) = args.iter().find_map(|a| a.strip_prefix("--input-file=")) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<Vec<String>> = Vec::new();
+    for line in std::fs::read_to_string(path).unwrap().lines() {
+        match (line.strip_prefix("  "), entries.last_mut()) {
+            (Some(option), Some(entry)) => entry.push(format!("--{option}")),
+            _ => entries.push(vec![line.to_string()]),
+        }
+    }
+    entries
+}
+
+/// A fake aria2c: a metainfo run saves the metainfo of each torrent of
+/// `torrents`, by hash, its magnet link names, as its peers would send
+/// it, and a fetch writes each file it is told to write, `runs` each
+/// command line recorded with its input file's downloads after it.
+fn aria2c_of(torrents: Vec<(String, Vec<u8>)>, runs: Arc<Mutex<Vec<Vec<String>>>>) -> Fake {
     Fake {
         on_stream: Some(Box::new(move |args: &[String]| {
-            runs.lock().unwrap().push(args.to_vec());
-            let dir = args
-                .iter()
-                .find_map(|a| a.strip_prefix("--dir="))
-                .map(PathBuf::from)
-                .unwrap();
-            std::fs::create_dir_all(&dir).unwrap();
+            let entries = input_of(args);
+            let mut seen = args.to_vec();
+            seen.extend(entries.iter().flatten().cloned());
+            runs.lock().unwrap().push(seen);
+            let option = |of: &[String], name: &str| {
+                of.iter()
+                    .find_map(|a| a.strip_prefix(&format!("--{name}=")))
+                    .map(PathBuf::from)
+            };
             if args.iter().any(|a| a == "--bt-metadata-only=true") {
-                std::fs::write(dir.join(format!("{hash}.torrent")), &metainfo).unwrap();
+                let dir = option(args, "dir").unwrap();
+                std::fs::create_dir_all(&dir).unwrap();
+                for entry in &entries {
+                    for (hash, metainfo) in &torrents {
+                        if entry[0].contains(hash.as_str()) {
+                            std::fs::write(dir.join(format!("{hash}.torrent")), metainfo).unwrap();
+                        }
+                    }
+                }
                 return true;
             }
-            for out in args.iter().filter_map(|a| a.strip_prefix("--index-out=")) {
-                let (_, path) = out.split_once('=').unwrap();
-                let path = dir.join(path);
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                std::fs::write(path, b"x").unwrap();
+            for entry in &entries {
+                let dir = option(entry, "dir").unwrap();
+                for out in entry.iter().filter_map(|a| a.strip_prefix("--index-out=")) {
+                    let (_, path) = out.split_once('=').unwrap();
+                    let path = dir.join(path);
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, b"x").unwrap();
+                }
             }
             true
         })),
         ..Fake::default()
     }
     .probe(".flac", FLAC)
+}
+
+/// [`aria2c_of`] the one torrent of `hash`.
+fn aria2c(metainfo: Vec<u8>, hash: String, runs: Arc<Mutex<Vec<Vec<String>>>>) -> Fake {
+    aria2c_of(vec![(hash, metainfo)], runs)
 }
 
 #[test]
@@ -605,6 +640,147 @@ fn sync_fetches_a_torrents_file_gone_from_the_store_again() {
     assert!(!salt.exists(), "a file no song lists is not fetched again");
 }
 
+/// Two torrents of one file each, as `add` is given them: each its
+/// hash and metainfo, and the `.torrent` file written for it.
+fn two_torrents(s: &Setup) -> [(String, Vec<u8>, PathBuf); 2] {
+    ["Lantern Weather", "The Glass Orchards"].map(|name| {
+        let bytes = crate::testing::metainfo(name, &["a.flac"]);
+        let hash = crate::torrent::Metainfo::read(&bytes)
+            .unwrap()
+            .hash()
+            .to_string();
+        let file = s.dir.path().join(format!("{name}.torrent"));
+        std::fs::write(&file, &bytes).unwrap();
+        (hash, bytes, file)
+    })
+}
+
+#[test]
+fn sync_asks_for_every_lost_metainfo_in_one_run_and_every_file_in_another() {
+    let s = Setup::new();
+    let [a, b] = two_torrents(&s);
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c_of(
+        vec![(a.0.clone(), a.1.clone()), (b.0.clone(), b.1.clone())],
+        runs.clone(),
+    );
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            a.2.to_str().unwrap(),
+            b.2.to_str().unwrap(),
+        ],
+    );
+    assert!(ok, "{text}");
+    let torrents = s.dir.path().join("home/sources/torrent");
+    for hash in [&a.0, &b.0] {
+        std::fs::remove_file(torrents.join(hash).join("a.flac")).unwrap();
+        std::fs::remove_file(torrents.join(format!("{hash}.torrent"))).unwrap();
+    }
+    runs.lock().unwrap().clear();
+
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 2 missing torrent file(s) again"),
+        "{text}"
+    );
+    let runs = runs.lock().unwrap();
+    assert_eq!(
+        runs.len(),
+        2,
+        "the metainfo of both, then the files of both"
+    );
+    assert!(runs[0].contains(&"--bt-metadata-only=true".to_string()));
+    for hash in [&a.0, &b.0] {
+        assert!(runs[0].iter().any(|r| r.contains(&format!("btih:{hash}"))));
+        assert!(
+            runs[1]
+                .iter()
+                .any(|r| r.ends_with(&format!("{hash}.torrent")))
+        );
+        assert!(torrents.join(hash).join("a.flac").is_file());
+    }
+}
+
+/// A runner as its fake, with no aria2c to start.
+struct NoAria2c(Fake);
+
+impl crate::runner::Runner for NoAria2c {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn pipe(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_bytes: &mut dyn FnMut(&[u8]),
+    ) -> anyhow::Result<()> {
+        self.0.pipe(cmd, on_bytes)
+    }
+
+    fn fingerprint(&self, pcm: &std::path::Path) -> anyhow::Result<Vec<u32>> {
+        self.0.fingerprint(pcm)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        anyhow::ensure!(cmd[0] != "aria2c", "aria2c is not installed");
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn a_sync_with_no_aria2c_fails_each_torrent_file_and_goes_on() {
+    let s = Setup::new();
+    let [a, b] = two_torrents(&s);
+    let fake = aria2c_of(
+        vec![(a.0.clone(), a.1.clone()), (b.0.clone(), b.1.clone())],
+        Arc::default(),
+    );
+    let given = [a.2.to_str().unwrap(), b.2.to_str().unwrap()];
+    let (ok, text) = s.run(&fake, &["add", "--no-match", given[0], given[1]]);
+    assert!(ok, "{text}");
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::remove_file(torrents.join(&a.0).join("a.flac")).unwrap();
+    std::fs::remove_file(torrents.join(&b.0).join("a.flac")).unwrap();
+    std::fs::remove_file(torrents.join(format!("{}.torrent", b.0))).unwrap();
+
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &NoAria2c(Fake::default().probe(".flac", FLAC)),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok, "{text}");
+    for hash in [&a.0, &b.0] {
+        assert!(
+            text.contains(&format!("Could not fetch torrent:{hash}/a.flac again:")),
+            "{text}"
+        );
+    }
+    assert_eq!(text.matches("aria2c is not installed").count(), 2, "{text}");
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(
+        text.contains("Not fetching 2 missing torrent file(s) that failed lately"),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_torrents_file_that_failed_to_come_again_waits() {
     let s = Setup::new();
@@ -627,7 +803,7 @@ fn a_torrents_file_that_failed_to_come_again_waits() {
     )
     .unwrap();
     let stalled = Fake {
-        lines: vec!["Download Results:".into(), "6fcf70|INPR|0B/s|-|a".into()],
+        lines: vec!["Download Results:".into(), "000001|INPR|0B/s|-|a".into()],
         on_stream: Some(Box::new(|_: &[String]| false)),
         ..Fake::default()
     };
@@ -650,7 +826,7 @@ fn a_torrent_no_peer_seeds_fails_and_lists_nothing() {
     let fake = Fake {
         lines: vec![
             "Download Results:".into(),
-            "6fcf70|INPR|       0B/s|  -|partial/files/1.flac".into(),
+            "000001|INPR|       0B/s|  -|partial/files/1.flac".into(),
         ],
         on_stream: Some(Box::new(|_: &[String]| false)),
         ..Fake::default()
