@@ -118,6 +118,9 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     let (mut ok, mut failed) = network(job, runner, out, |acquire| {
         acquire.missing(manifest, &state.failures, retry)
     })?;
+    let torrents = missing_torrents(job, runner, manifest, &state.failures, retry, out)?;
+    ok &= torrents.is_empty();
+    failed.extend(torrents);
     let records = lookup::refetch(
         &job.dirs,
         manifest,
@@ -169,6 +172,36 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         State::keep_measures(&job.dirs.home, &state)?;
     }
     Ok(ok)
+}
+
+/// Fetch again every listed torrent's file the store lacks, as
+/// [`crate::aria2::missing`] says: each that did not arrive, with why.
+fn missing_torrents<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    manifest: &Manifest,
+    failures: &std::collections::BTreeMap<SourceKey, state::Failure>,
+    retry: bool,
+    out: &mut W,
+) -> Result<Vec<(SourceKey, String)>> {
+    let store = Store::scan(&job.dirs)?;
+    let wanted = manifest
+        .keys()
+        .iter()
+        .any(|k| matches!(k, SourceKey::Torrent(_)) && !store.has(k));
+    if !wanted {
+        return Ok(Vec::new());
+    }
+    let options = &manifest.settings.torrent;
+    let root = job.dirs.torrent();
+    let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
+    clear_stale(&partial, options.keep_partial, None);
+    let places = crate::aria2::Places {
+        store: &root,
+        partial: &partial,
+        options,
+    };
+    crate::aria2::missing(runner, out, &places, &store, manifest, failures, retry)
 }
 
 /// Move the song list's settings still at an earlier edition's default

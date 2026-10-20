@@ -503,6 +503,95 @@ fn a_magnet_links_metainfo_comes_from_its_peers() {
 }
 
 #[test]
+fn sync_fetches_a_torrents_file_gone_from_the_store_again() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo(
+        "Lantern Weather",
+        &["01 Paper Comets.flac", "02 Rooms of Salt.flac", "cover.jpg"],
+    );
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let link = format!("magnet:?xt=urn:btih:{hash}&tr=udp%3A%2F%2Ftracker.example%3A1337");
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", &link]);
+    assert!(ok, "{text}");
+    let mut manifest = Manifest::load(&s.dir.path().join("home")).unwrap();
+    manifest.edit(crate::manifest::Edit::Remove {
+        key: SourceKey::parse(&format!("torrent:{hash}/02 Rooms of Salt.flac")).unwrap(),
+        note: "Rooms of Salt".into(),
+    });
+    manifest.save().unwrap();
+    let torrents = s.dir.path().join("home/sources/torrent");
+    let comets = torrents.join(&hash).join("01 Paper Comets.flac");
+    let salt = torrents.join(&hash).join("02 Rooms of Salt.flac");
+    std::fs::remove_file(&comets).unwrap();
+    std::fs::remove_file(torrents.join(&hash).join("cover.jpg")).unwrap();
+    std::fs::remove_file(&salt).unwrap();
+    std::fs::remove_file(torrents.join(format!("{hash}.torrent"))).unwrap();
+    runs.lock().unwrap().clear();
+
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Fetching 1 missing torrent file(s) again"),
+        "{text}"
+    );
+    let runs = runs.lock().unwrap();
+    assert_eq!(runs.len(), 2, "its metainfo from its peers, then the file");
+    assert!(
+        runs[0].iter().any(|a| a.contains("tracker.example")),
+        "{:?}",
+        runs[0]
+    );
+    assert!(
+        runs[1].contains(&"--select-file=1,3".to_string()),
+        "{:?}",
+        runs[1]
+    );
+    assert!(comets.is_file() && torrents.join(format!("{hash}.torrent")).is_file());
+    assert!(!salt.exists(), "a file no song lists is not fetched again");
+}
+
+#[test]
+fn a_torrents_file_that_failed_to_come_again_waits() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::default());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    std::fs::remove_file(
+        s.dir
+            .path()
+            .join("home/sources/torrent")
+            .join(&hash)
+            .join("a.flac"),
+    )
+    .unwrap();
+    let stalled = Fake {
+        lines: vec!["Download Results:".into(), "6fcf70|INPR|0B/s|-|a".into()],
+        on_stream: Some(Box::new(|_: &[String]| false)),
+        ..Fake::default()
+    };
+    let (ok, text) = s.run(&stalled, &["sync"]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("no peer sent anything"), "{text}");
+    let (_, text) = s.run(&stalled, &["sync"]);
+    assert!(
+        text.contains("Not fetching 1 missing torrent file(s)"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_torrent_no_peer_seeds_fails_and_lists_nothing() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac"]);

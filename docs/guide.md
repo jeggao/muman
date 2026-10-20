@@ -274,6 +274,10 @@ your own. Peers see your IP address while it fetches. A fetch with
 nothing arriving for `[torrent] stall` fails; what it fetched waits in
 `partial/torrent` to be resumed ([configuration](configuration.md)). A
 torrent of BitTorrent v2 alone, which aria2c cannot fetch, is refused.
+A listed file gone from the store is fetched again by the next `sync`,
+with what it brings, from the kept metainfo, else from the torrent's
+hash and recorded trackers; a file no song lists is not, and one that
+fails waits as a video does.
 
 ### Manual files and sidecars
 

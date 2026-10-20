@@ -22,6 +22,14 @@
 //! placed: a file aria2c has not finished may have holes where pieces
 //! came out of order, whatever its size.
 //!
+//! A listed file gone from the store is fetched again by `sync`
+//! ([`missing`]), with the lyrics and pictures it brings: from the
+//! torrent's metainfo where the store keeps it, else from a magnet link
+//! of its hash and the trackers the song list records, its metainfo
+//! asked of its peers and kept again. Files of the torrent no song lists
+//! are not fetched again, so what `purge` deleted stays deleted. One that
+//! failed lately waits, as a missing video does.
+//!
 //! A fetch with no byte arriving for `[torrent] stall` stops, aria2c
 //! reporting it unfinished, as a torrent no peer seeds leaves it; it is
 //! a failure a later sync tries again. aria2c reports each tracker it
@@ -34,9 +42,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 
+use crate::manifest::Manifest;
 use crate::runner::{Line, Runner};
 use crate::settings::Torrent;
 use crate::source::SourceKey;
+use crate::state::{Failure, Step};
+use crate::store::Store;
 use crate::torrent::{File, Magnet, Metainfo};
 
 /// Where aria2c runs and how.
@@ -297,6 +308,157 @@ pub fn fetch<R: Runner, W: Write>(
         arrived,
         failure: None,
     })
+}
+
+/// Keep the metainfo `bytes` of the torrent of `hash` in the store's
+/// torrents' folder, `root`, unless it is kept.
+pub fn keep_metainfo(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
+    if !crate::store::metainfo_path(root, hash).exists() {
+        crate::atomic::write(
+            root,
+            &crate::atomic::Name::new(format!("{hash}.torrent"))?,
+            bytes,
+        )?;
+    }
+    Ok(())
+}
+
+/// Fetch again every listed torrent's file the store lacks, one that
+/// failed lately waiting unless `retry`: each that did not arrive, with
+/// why.
+pub fn missing<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &Places<'_>,
+    store: &Store,
+    manifest: &Manifest,
+    failures: &std::collections::BTreeMap<SourceKey, Failure>,
+    retry: bool,
+) -> Result<Vec<(SourceKey, String)>> {
+    let now = crate::state::now_secs();
+    let gone: Vec<SourceKey> = manifest
+        .keys()
+        .into_iter()
+        .filter(|k| matches!(k, SourceKey::Torrent(_)) && !store.has(k))
+        .collect();
+    let (gone, waiting): (Vec<SourceKey>, Vec<SourceKey>) = gone.into_iter().partition(|k| {
+        retry
+            || failures
+                .get(k)
+                .filter(|f| f.step == Step::Fetch)
+                .is_none_or(|f| f.due(None, now))
+    });
+    if !waiting.is_empty() {
+        crate::ui::warning(
+            out,
+            &format!(
+                "Not fetching {} missing torrent file(s) that failed lately; `sync --retry` \
+                 tries now",
+                waiting.len()
+            ),
+        )?;
+    }
+    let mut by_hash: std::collections::BTreeMap<&str, Vec<&SourceKey>> =
+        std::collections::BTreeMap::new();
+    for key in &gone {
+        if let SourceKey::Torrent(t) = key {
+            by_hash.entry(t.hash()).or_default().push(key);
+        }
+    }
+    let mut failed = Vec::new();
+    for (hash, keys) in by_hash {
+        crate::ui::info(
+            out,
+            &format!("Fetching {} missing torrent file(s) again", keys.len()),
+        )?;
+        let why = match again(runner, out, places, manifest, hash, &keys) {
+            Ok(arrived) => {
+                for key in keys.iter().filter(|k| !arrived.contains(k)) {
+                    failed.push(((*key).clone(), "aria2c did not finish it".to_string()));
+                }
+                continue;
+            }
+            Err(e) => format!("{e:#}"),
+        };
+        for key in keys {
+            crate::ui::error(out, &format!("Could not fetch {key} again: {why}"))?;
+            failed.push((key.clone(), why.clone()));
+        }
+    }
+    Ok(failed)
+}
+
+/// Fetch the files `keys` name of the torrent of `hash` again, with the
+/// lyrics and pictures a listed song file of it brings: the keys that
+/// arrived.
+fn again<R: Runner, W: Write>(
+    runner: &R,
+    out: &mut W,
+    places: &Places<'_>,
+    manifest: &Manifest,
+    hash: &str,
+    keys: &[&SourceKey],
+) -> Result<Vec<SourceKey>> {
+    let kept = crate::store::metainfo_path(places.store, hash);
+    let bytes = if kept.is_file() {
+        std::fs::read(&kept).with_context(|| format!("reading {}", kept.display()))?
+    } else {
+        let recorded = manifest.torrents.get(hash).cloned().unwrap_or_default();
+        let magnet = Magnet {
+            v1: (hash.len() == crate::torrent::V1_HEX).then(|| hash.to_string()),
+            v2: recorded
+                .v2
+                .clone()
+                .or_else(|| (hash.len() == crate::torrent::V2_HEX).then(|| hash.to_string())),
+            name: recorded.name.clone(),
+            trackers: recorded.trackers,
+        };
+        let bytes = metainfo_of(runner, out, places, &magnet)
+            .context("its metainfo is gone from the store; give its .torrent to `add` again")?;
+        keep_metainfo(places.store, hash, &bytes)?;
+        bytes
+    };
+    let meta = Metainfo::read(&bytes)?;
+    ensure!(
+        meta.hash() == hash,
+        "{} is the metainfo of another torrent",
+        kept.display()
+    );
+    let listed: Vec<&Path> = manifest
+        .keys()
+        .into_iter()
+        .filter_map(|k| match k {
+            SourceKey::Torrent(t) if t.hash() == hash => Some(
+                meta.files
+                    .iter()
+                    .find(|f| crate::relpath::normalized(&f.path) == t.path())?
+                    .path
+                    .as_path(),
+            ),
+            _ => None,
+        })
+        .collect();
+    let wanted: Vec<&File> = crate::torrent::selected(&meta)
+        .into_iter()
+        .filter(|f| {
+            let key = meta.key(f);
+            if keys.contains(&&key) {
+                return true;
+            }
+            let SourceKey::Torrent(t) = &key else {
+                return false;
+            };
+            crate::store::kind_of(&f.path) != Some(crate::store::Kind::Media)
+                && listed.iter().any(|s| f.path.parent() == s.parent())
+                && !crate::store::torrent_path(places.store, t).is_file()
+        })
+        .collect();
+    let fetched = fetch(runner, out, places, &meta, &wanted)?;
+    if let Some(failure) = fetched.failure {
+        bail!(failure);
+    }
+    Ok(fetched.arrived)
 }
 
 #[cfg(test)]
