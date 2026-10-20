@@ -1020,6 +1020,7 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
         {
             if *folder == dirs.manual()
                 || *folder == dirs.ytdlp()
+                || *folder == dirs.torrent()
                 || std::fs::remove_dir(folder).is_err()
             {
                 break;

@@ -62,10 +62,14 @@ use crate::provider;
 use crate::source::SourceKey;
 use crate::tags;
 
-/// The newest format this version reads, written only when songs share
-/// a picture of the user's. Adding a key is not a new version; changing
-/// what an existing key means is.
-pub const VERSION: i64 = 3;
+/// The newest format this version reads, written only when a song lists
+/// a torrent's file, a key no muman before it reads. Adding a key is not
+/// a new version; changing what an existing key means is.
+pub const VERSION: i64 = 4;
+
+/// The format written when songs share a picture of the user's, and no
+/// song lists a torrent's file.
+const PICTURES: i64 = 3;
 
 /// The format written when songs share a record a lookup keeps, and no
 /// picture of the user's.
@@ -403,9 +407,18 @@ const KEYS: [&str; 10] = [
     "defaults",
 ];
 
-/// The oldest format version that reads the songs of `parsed`: what
-/// they share decides it.
+/// The oldest format version that reads the songs of `parsed`: whether
+/// any lists a torrent's file, then what they share.
 fn needed_version(parsed: &Parsed) -> i64 {
+    let torrent = parsed
+        .songs
+        .iter()
+        .flat_map(|s| &s.sources)
+        .chain(parsed.removed.iter().flat_map(|r| &r.sources))
+        .any(|k| matches!(k, SourceKey::Torrent(_)));
+    if torrent {
+        return VERSION;
+    }
     let mut seen = BTreeSet::new();
     // Each song's keys once: a song naming one twice shares it with no one.
     let shared: Vec<&SourceKey> = parsed
@@ -415,7 +428,7 @@ fn needed_version(parsed: &Parsed) -> i64 {
         .filter(|k| shareable(k) && !seen.insert(*k))
         .collect();
     if shared.iter().any(|k| is_picture(k)) {
-        VERSION
+        PICTURES
     } else if shared.is_empty() {
         PLAIN
     } else {
@@ -979,9 +992,11 @@ fn refuse_unsited(
 
 /// How a key written as `text` is written now, where that differs: an
 /// extractor's name for a site [`crate::source::LEGACY`] names, as
-/// `youtube:<id>`, is its domain's.
+/// `youtube:<id>`, is its domain's, and a torrent's hash is lower-case.
 fn spelled_now(text: &str) -> Option<String> {
-    let key = SourceKey::parse(text).ok().filter(|k| k.site().is_some())?;
+    let key = SourceKey::parse(text)
+        .ok()
+        .filter(|k| k.site().is_some() || matches!(k, SourceKey::Torrent(_)))?;
     Some(key.to_string()).filter(|now| now != text)
 }
 

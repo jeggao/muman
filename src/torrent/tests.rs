@@ -106,6 +106,10 @@ fn a_v1_torrent_is_named_by_the_sha1_of_its_info() {
         ],
         "the padding file is no file of it, but keeps its place in the count"
     );
+    assert_eq!(
+        meta.key(&meta.files[0]).to_string(),
+        format!("torrent:{}/01 Paper Comets.flac", meta.hash())
+    );
 }
 
 #[test]

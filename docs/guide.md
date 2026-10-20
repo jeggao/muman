@@ -26,6 +26,8 @@ holds only what muman renders from it.
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |
 | `sources/coverart/<id>.jpg` | Album covers found on the Cover Art Archive, shared by every song of the album |
+| `sources/torrent/<hash>.torrent` | A torrent's metainfo, which names its files |
+| `sources/torrent/<hash>/` | A torrent's files, each at its path in the torrent with what Windows refuses in a name replaced by a lookalike; a file the metainfo does not name is no source, and `purge` deletes it |
 | `history/` | What the latest changing runs replaced or removed, for `undo` |
 | `partial/` | Unfinished downloads, resumed by a later run |
 
@@ -120,8 +122,16 @@ tags.genre = ""
 
 A song has no ID of its own: it is its sources, and any of its keys
 names it. A key is `<site>:<id>` for what yt-dlp fetched, `lrclib:<id>`
-for LRCLIB lyrics, `musicbrainz:<id>` for a MusicBrainz recording, or
-`manual:<path>` for a file under `sources/manual`.
+for LRCLIB lyrics, `musicbrainz:<id>` for a MusicBrainz recording,
+`manual:<path>` for a file under `sources/manual`, or
+`torrent:<hash>/<path>` for a file of a torrent.
+
+A torrent's file is named by the torrent's hash, its v1 hash where it
+has one, else its v2 hash, and the file's path inside the torrent
+without the torrent's own folder, as
+`torrent:<hash>/CD1/01 Paper Comets.flac`; a torrent of one file names
+it by its name. The hash names every byte of the torrent, so its files
+never change.
 
 A fetched source's site is the domain it came from and its ID the one
 yt-dlp gives it there, as `youtube.com:vid00000001` or
@@ -191,7 +201,8 @@ survive every write, and two runs at once keep each other's songs. A
 key that does not parse, a file two songs list, or a pin to a source the
 song does not list stops the run before anything is written. A song list
 in which songs share a record is written as `version = 2`, which muman
-before 0.2 refuses rather than misreads.
+before 0.2 refuses rather than misreads; one in which a song lists a
+torrent's file is written as `version = 4`, which an older muman refuses.
 
 A `[[removed]]` key no song lists is a tombstone: no playlist or dropped
 file lists it again. `muman restore`, adding its video alone by URL, or

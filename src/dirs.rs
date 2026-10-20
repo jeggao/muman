@@ -59,6 +59,13 @@ impl Dirs {
         self.home.join("sources").join("yt-dlp")
     }
 
+    /// Torrents' metainfo and their files, each torrent's in a folder of
+    /// its hash.
+    #[must_use]
+    pub fn torrent(&self) -> PathBuf {
+        self.sources(crate::source::TORRENT)
+    }
+
     /// A folder of sources, by its name in `sources`.
     #[must_use]
     pub fn sources(&self, folder: &str) -> PathBuf {

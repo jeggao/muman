@@ -229,7 +229,7 @@ fn a_site_the_song_list_adds_names_its_keys() {
 #[test]
 fn another_version_is_refused_and_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(MANIFEST), "version = 4\n").unwrap();
+    std::fs::write(dir.path().join(MANIFEST), "version = 5\n").unwrap();
     assert!(format!("{:#}", Manifest::load(dir.path()).unwrap_err()).contains("newer"));
     std::fs::write(dir.path().join(MANIFEST), "version = 1\n[[song]\n").unwrap();
     assert!(Manifest::load(dir.path()).is_err());
@@ -282,6 +282,36 @@ fn songs_share_a_kept_record_but_never_a_file() {
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("listed by both"), "{e:#}");
+}
+
+#[test]
+fn a_song_listing_a_torrents_file_is_written_in_version_4() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "[[song]]\nsources = [\"manual:a.flac\"]\n");
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let file = format!("torrent:{}/CD1/01 Paper Comets.flac", "a".repeat(40));
+    m.edit(Edit::Add {
+        sources: vec![SourceKey::parse(&file).unwrap()],
+        album: None,
+    });
+    m.save().unwrap();
+    assert!(
+        text(dir.path()).contains("version = 4"),
+        "{}",
+        text(dir.path())
+    );
+    assert!(text(dir.path()).contains(&file));
+
+    let upper = file.replace(&"a".repeat(40), &"A".repeat(40));
+    write(dir.path(), &format!("[[song]]\nsources = [\"{upper}\"]\n"));
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].sources[0].to_string(), file);
+    m.edit(Edit::Add {
+        sources: vec![SourceKey::Manual("b.flac".into())],
+        album: None,
+    });
+    m.save().unwrap();
+    assert!(text(dir.path()).contains(&file), "{}", text(dir.path()));
 }
 
 #[test]

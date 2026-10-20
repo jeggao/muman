@@ -41,6 +41,26 @@ pub const FLAC: &str = r#"{"streams": [
 pub const INFO: &str = r#"{"id": "aaaaaaaaaaa", "title": "Song / Wren", "uploader": "Hoshi7ne",
     "upload_date": "20260527", "subtitles": {"en": [{"name": "English"}]}}"#;
 
+/// A v1 torrent's metainfo, of a folder `name` holding a byte-long
+/// file at each of `files`, a path in it with `/` between its parts.
+pub fn metainfo(name: &str, files: &[&str]) -> Vec<u8> {
+    let text = |t: &str| format!("{}:{t}", t.len());
+    let list: Vec<String> = files
+        .iter()
+        .map(|f| {
+            let parts: String = f.split('/').map(text).collect();
+            format!("d6:lengthi1e4:pathl{parts}ee")
+        })
+        .collect();
+    let list = list.concat();
+    let info = format!(
+        "d5:filesl{list}e4:name{}12:piece lengthi16384e6:pieces20:{}e",
+        text(name),
+        "0".repeat(20)
+    );
+    format!("d4:info{info}e").into_bytes()
+}
+
 #[derive(Default)]
 pub struct Fake {
     /// ffprobe JSON by a fragment of the probed path; the first match

@@ -372,15 +372,17 @@ pub fn check_format(template: &str, views: &[View]) -> Result<()> {
     Ok(())
 }
 
-/// Whether `word`, lower-cased, is the key's ID or its manual file's
-/// name, with or without its extension.
+/// Whether `word`, lower-cased, is the key's ID or its manual or
+/// torrent's file's name, with or without its extension.
 fn names_key(key: &SourceKey, word: &str) -> bool {
     match key {
         SourceKey::Remote { id, .. } => id.to_lowercase() == word,
-        SourceKey::Manual(key) => [key.path().file_name(), key.path().file_stem()]
-            .into_iter()
-            .flatten()
-            .any(|n| fold(&n.to_string_lossy()) == word),
+        SourceKey::Manual(_) | SourceKey::Torrent(_) => key.file().is_some_and(|path| {
+            [path.file_name(), path.file_stem()]
+                .into_iter()
+                .flatten()
+                .any(|n| fold(&n.to_string_lossy()) == word)
+        }),
     }
 }
 

@@ -30,6 +30,7 @@ use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::facts::hex;
+use crate::source::{SourceKey, TorrentKey};
 
 /// Hex digits of a v1 hash, SHA-1's 20 bytes.
 pub const V1_HEX: usize = 40;
@@ -160,6 +161,12 @@ impl Metainfo {
             .as_deref()
             .or(self.v2.as_deref())
             .unwrap_or_default()
+    }
+
+    /// The key of one of its files.
+    #[must_use]
+    pub fn key(&self, file: &File) -> SourceKey {
+        SourceKey::Torrent(TorrentKey::new(self.hash(), &file.path))
     }
 
     /// Whether a fetcher of v1 swarms can fetch it.
