@@ -1,8 +1,9 @@
-//! aria2c handed the command lines muman builds, against a swarm of this
-//! process's own: a tracker served on a loopback port and a second
-//! aria2c seeding a torrent made here. An option aria2c renames or
-//! drops, or a file it numbers otherwise than muman selects it by, fails
-//! here and not on a user's first fetch. Ignored by default, since it
+//! aria2c handed the command lines and input files muman builds, against
+//! a swarm of this process's own: a tracker served on a loopback port and
+//! a second aria2c seeding a torrent made here. An option aria2c renames
+//! or drops, or no longer takes in an input file, or a file it numbers
+//! otherwise than muman selects it by, fails here and not on a user's
+//! first fetch. Ignored by default, since it
 //! needs aria2c; CI runs it on every platform with
 //! `cargo test --test torrent -- --ignored`. Nothing leaves the machine:
 //! DHT, peer exchange and local discovery are off, and the one tracker
@@ -12,9 +13,10 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::time::Duration;
 
-use muman::aria2::{Places, fetch, metainfo_of, take_up};
+use muman::aria2::{Places, Wanted, fetch, fetch_all, metainfo_of, take_up};
 use muman::runner::System;
 use muman::settings::Torrent;
 use muman::source::SourceKey;
@@ -87,13 +89,27 @@ fn free_port() -> u16 {
 /// An HTTP tracker on a loopback port that names the one peer at `peer`
 /// to every announce, until the process ends; its announce address.
 fn tracker(peer: u16) -> String {
+    tracker_heard(peer).0
+}
+
+/// [`tracker`], each announcing peer's port sent on the receiver as it
+/// announces.
+fn tracker_heard(peer: u16) -> (String, mpsc::Receiver<u16>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (heard, hear) = mpsc::channel();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
             let mut request = [0; 4096];
-            let _ = stream.read(&mut request);
+            let read = stream.read(&mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]);
+            if let Some(port) = request
+                .split_once("&port=")
+                .and_then(|(_, rest)| rest.split('&').next()?.parse().ok())
+            {
+                let _ = heard.send(port);
+            }
             let mut body = b"d8:intervali5e5:peers6:".to_vec();
             body.extend([127, 0, 0, 1]);
             body.extend(peer.to_be_bytes());
@@ -106,7 +122,7 @@ fn tracker(peer: u16) -> String {
             let _ = stream.write_all(&body);
         }
     });
-    format!("http://127.0.0.1:{port}/announce")
+    (format!("http://127.0.0.1:{port}/announce"), hear)
 }
 
 /// No DHT, peer exchange or local discovery: the tracker alone.
@@ -336,4 +352,88 @@ fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
         SONG,
         "the bad piece fetched whole"
     );
+}
+
+#[test]
+#[ignore = "needs aria2c"]
+fn torrents_fetched_in_one_run_end_each_on_their_own() {
+    let runner = System::default();
+    runner
+        .require("aria2c")
+        .expect("found, at or above its floor");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let seed_port = free_port();
+    let (announce, heard) = tracker_heard(seed_port);
+    let nobody = format!("http://127.0.0.1:{}/announce", free_port());
+    let seeded = "Lantern Weather";
+    let files: Vec<(&[&str], Vec<u8>, bool)> = vec![(&["Paper Comets.flac"], SONG.to_vec(), false)];
+    let bytes = metainfo(seeded, &files, &announce);
+    let meta = Metainfo::read(&bytes).unwrap();
+    let seed = root.join("seed");
+    std::fs::create_dir_all(seed.join(seeded)).unwrap();
+    std::fs::write(seed.join(seeded).join("Paper Comets.flac"), SONG).unwrap();
+    let seed_meta = root.join("seed.torrent");
+    std::fs::write(&seed_meta, &bytes).unwrap();
+    let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
+    // The seeder announces once it has checked its files and can send
+    // them; fetched before then, the seeded torrent could stall too.
+    while heard
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the seeder announces")
+        != seed_port
+    {}
+    let lost_bytes = metainfo(
+        "The Glass Orchards",
+        &[(&["Rooms of Salt.flac"], vec![5; 3000], false)],
+        &nobody,
+    );
+    let lost = Metainfo::read(&lost_bytes).unwrap();
+
+    // A home outside ASCII, as aria2c reads it from its input file.
+    let home = root.join("Hjärta ♪");
+    let (store, partial) = (home.join("store"), home.join("partial"));
+    let options = Torrent {
+        args: ALONE
+            .iter()
+            .map(ToString::to_string)
+            .chain([format!("--listen-port={}", free_port())])
+            .collect(),
+        stall: Duration::from_secs(10),
+        ..Torrent::default()
+    };
+    let places = Places {
+        store: &store,
+        partial: &partial,
+        options: &options,
+    };
+    muman::aria2::keep_metainfo(&store, meta.hash(), &bytes).unwrap();
+    muman::aria2::keep_metainfo(&store, lost.hash(), &lost_bytes).unwrap();
+    let wanted = [
+        Wanted {
+            meta: &lost,
+            files: selected(&lost),
+        },
+        Wanted {
+            meta: &meta,
+            files: selected(&meta),
+        },
+    ];
+    let mut out = Vec::new();
+    let fetched = fetch_all(&runner, &mut out, &places, &wanted).unwrap();
+    let said = String::from_utf8_lossy(&out);
+    assert!(
+        fetched[0]
+            .failure
+            .as_deref()
+            .is_some_and(|f| f.starts_with("no peer sent anything")),
+        "{:?}\n{said}",
+        fetched[0]
+    );
+    assert_eq!(fetched[1].failure, None, "{said}");
+    let [SourceKey::Torrent(key)] = fetched[1].arrived.as_slice() else {
+        panic!("{:?}", fetched[1].arrived);
+    };
+    let song = muman::store::torrent_path(&store, key);
+    assert_eq!(std::fs::read(&song).unwrap(), SONG, "the song, whole");
 }
