@@ -1,14 +1,15 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
 //! and named, which codecs are kept and what the rest is encoded to, how
-//! loud songs are made, how sources are ranked, how yt-dlp fetches, which
-//! programs muman runs, and how much history `undo` keeps.
+//! loud songs are made, how sources are ranked, how yt-dlp and aria2c
+//! fetch, which programs muman runs, and how much history `undo` keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
 //! are `[library]`, `[audio]`, `[loudness]` ([`crate::loudness`]),
-//! `[quality]`, `[ytdlp]`, `[tools]` ([`crate::tools`]), `[history]` and
-//! `[sites]` ([`crate::sites`]). A key these tables do not know is an
-//! error naming it, so a misspelled setting is never silently ignored.
+//! `[quality]`, `[ytdlp]`, `[torrent]` ([`crate::aria2`]), `[tools]`
+//! ([`crate::tools`]), `[history]` and `[sites]` ([`crate::sites`]). A
+//! key these tables do not know is an error naming it, so a misspelled
+//! setting is never silently ignored.
 //! A flag or a `MUMAN_*` variable says what is where on one machine,
 //! and overrides the folder or the program the song list names.
 //!

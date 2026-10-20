@@ -1,6 +1,8 @@
-//! Everything that reaches the network: yt-dlp fetching into the store,
-//! the listing that says what a URL names, and the YouTube Music
-//! lookups that pair an upload with its released track.
+//! What yt-dlp reaches the network for: fetching into the store, the
+//! listing that says what a URL names, and the YouTube Music lookups
+//! that pair an upload with its released track. aria2c fetches torrents
+//! ([`crate::aria2`]), and the other lookups ask their providers over
+//! HTTP ([`crate::lookup`]).
 //!
 //! Nothing here touches the song list or the library; each step returns
 //! what it found as proposals for the songs they belong to.

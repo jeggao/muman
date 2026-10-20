@@ -1,6 +1,6 @@
-//! The subprocess seam: every yt-dlp, ffmpeg and ffprobe call goes
-//! through [`Runner`], so tests drive the pipeline without spawning one;
-//! [`System`] is the one that spawns, with each tool as
+//! The subprocess seam: every yt-dlp, aria2c, ffmpeg and ffprobe call
+//! goes through [`Runner`], so tests drive the pipeline without spawning
+//! one; [`System`] is the one that spawns, with each tool as
 //! [`crate::tools`] finds it from the song list's `[tools.*]`.
 
 use std::ffi::OsString;
