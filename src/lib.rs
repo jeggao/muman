@@ -74,6 +74,7 @@ pub mod template;
 #[cfg(test)]
 mod testing;
 pub mod tools;
+pub mod torrent;
 pub mod ui;
 pub mod units;
 pub mod ytdlp_log;

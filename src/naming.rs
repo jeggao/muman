@@ -288,8 +288,16 @@ pub(crate) fn reorders(c: char) -> bool {
     matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
+/// The full-width lookalike of a character Windows refuses in a name.
+pub(crate) fn lookalike(c: char) -> Option<char> {
+    LOOKALIKES
+        .iter()
+        .find(|(from, _)| from.starts_with(c))
+        .and_then(|(_, to)| to.chars().next())
+}
+
 /// A name Windows keeps for a device, extension or not: `CON`, `nul.txt`.
-fn reserved(name: &str) -> bool {
+pub(crate) fn reserved(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or_default().trim_end();
     let upper = stem.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
