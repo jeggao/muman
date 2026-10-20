@@ -51,6 +51,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   rather than from a player embedded on another site, and a key written
   into the song list by hand can be fetched.
 
+- **A signal that stops muman stops every program it started.** A
+  `kill` or a service manager's stop reached muman alone, and left
+  aria2c fetching into the home; now ffmpeg, yt-dlp and aria2c stop
+  with it, and muman exits 130, as after a Ctrl-C. aria2c stops too
+  when muman is killed outright. While `edit` runs your editor, a
+  Ctrl-C is the editor's.
+
 ### Changed
 
 - **Niconico's comments and Bilibili's danmaku are not fetched.**

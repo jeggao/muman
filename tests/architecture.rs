@@ -172,6 +172,10 @@ const STATICS: &[(&str, &str)] = &[
         "history.rs",
         "a count that tells two runs of one process apart",
     ),
+    (
+        "runner.rs",
+        "the programs a signal stops with muman, and whether one of the user's own answers it",
+    ),
 ];
 
 #[test]

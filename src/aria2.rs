@@ -206,6 +206,8 @@ fn common(places: &Places<'_>, downloads: usize) -> Vec<OsString> {
         "--auto-file-renaming=false".into(),
         "--allow-overwrite=true".into(),
         "--file-allocation=none".into(),
+        // A muman killed outright, as no signal handler sees, takes it along.
+        format!("--stop-with-process={}", std::process::id()).into(),
         format!("--bt-stop-timeout={}", places.options.stall.as_secs()).into(),
         format!(
             "--seed-time={}",

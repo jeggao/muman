@@ -2,16 +2,130 @@
 //! goes through [`Runner`], so tests drive the pipeline without spawning
 //! one; [`System`] is the one that spawns, with each tool as
 //! [`crate::tools`] finds it from the song list's `[tools.*]`.
+//!
+//! Every program [`System`] starts is held in [`LIVE`] until it has been
+//! waited for, so a signal that stops muman stops them too ([`stop`]):
+//! a Ctrl-C reaches a terminal's whole process group, but a `kill` or a
+//! service manager's stop reaches muman alone, and aria2c, left behind,
+//! would go on fetching into the home. Once [`stop`] begins nothing more
+//! starts, so none is spawned between it and the exit. While a program
+//! of the user's own runs in the terminal, as an editor, a signal is
+//! that program's to answer ([`Interactive`]): Ctrl-C in vim is no stop.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::{OnceLock, mpsc};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+
+use shared_child::SharedChild;
 
 use anyhow::{Context, Result, anyhow};
 
 use crate::tools::{self, Found, Named, Status, Tool, ToolError};
+
+/// Every program started and not yet waited for, and whether muman is
+/// stopping, which refuses any more.
+static LIVE: Mutex<(bool, Vec<Arc<SharedChild>>)> = Mutex::new((false, Vec::new()));
+
+/// How many programs of the user's own run in the terminal now.
+static INTERACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// The exit code of a run a signal stopped: 128 and SIGINT's number, as
+/// shells report a program Ctrl-C stopped.
+pub const STOPPED_EXIT: u8 = 130;
+
+/// Stop every program muman started and start no more: what a signal
+/// does before muman exits. `false` while a program of the user's own
+/// runs in the terminal, whose signal it is.
+pub fn stop() -> bool {
+    if INTERACTIVE.load(Ordering::SeqCst) > 0 {
+        return false;
+    }
+    let mut live = LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    live.0 = true;
+    for child in &live.1 {
+        let _ = child.kill();
+    }
+    true
+}
+
+/// Held while a program of the user's own runs in the terminal, so a
+/// signal is left to it.
+#[derive(Debug)]
+pub struct Interactive(());
+
+impl Interactive {
+    #[must_use]
+    pub fn begin() -> Self {
+        INTERACTIVE.fetch_add(1, Ordering::SeqCst);
+        Self(())
+    }
+}
+
+impl Drop for Interactive {
+    fn drop(&mut self) {
+        INTERACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A program started and held in [`LIVE`] until dropped.
+struct Spawned(Arc<SharedChild>);
+
+impl Spawned {
+    fn new(command: &mut Command, cmd: &[OsString]) -> Result<Self> {
+        let mut live = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        anyhow::ensure!(!live.0, "muman is stopping; {} was not started", name(cmd));
+        let child = Arc::new(
+            SharedChild::spawn(command).with_context(|| format!("spawning {}", name(cmd)))?,
+        );
+        live.1.push(Arc::clone(&child));
+        Ok(Self(child))
+    }
+
+    /// Wait for it, its stdout and stderr read to their ends apart, so a
+    /// program writing much to one never stalls on the other.
+    fn output(self) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
+        let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            pipe.map(|mut p| {
+                std::thread::spawn(move || {
+                    let mut bytes = Vec::new();
+                    let _ = p.read_to_end(&mut bytes);
+                    bytes
+                })
+            })
+        };
+        let out = drain(
+            self.0
+                .take_stdout()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let err = drain(
+            self.0
+                .take_stderr()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let joined = |t: Option<std::thread::JoinHandle<Vec<u8>>>| {
+            t.and_then(|t| t.join().ok()).unwrap_or_default()
+        };
+        let (stdout, stderr) = (joined(out), joined(err));
+        Ok((self.0.wait()?, stdout, stderr))
+    }
+}
+
+impl Drop for Spawned {
+    fn drop(&mut self) {
+        let mut live = LIVE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.1.retain(|c| !Arc::ptr_eq(c, &self.0));
+    }
+}
 
 /// One line a streamed program wrote, without its line ending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,17 +295,20 @@ fn version_of(tool: &'static Tool, command: &[OsString]) -> Result<String, ToolE
     if tool.name == "yt-dlp" {
         python_utf8(&mut version);
     }
-    let out = version.output().map_err(|e| unusable(e.to_string()))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
+    version.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (status, stdout, stderr) = Spawned::new(&mut version, command)
+        .and_then(Spawned::output)
+        .map_err(|e| unusable(format!("{e:#}")))?;
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         let said = stderr.lines().last().unwrap_or_default().trim();
         return Err(unusable(format!(
             "exit {}{}{said}",
-            out.status.code().unwrap_or(-1),
+            status.code().unwrap_or(-1),
             if said.is_empty() { "" } else { ", " }
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 impl Runner for System {
@@ -200,32 +317,28 @@ impl Runner for System {
     }
 
     fn output(&self, cmd: &[OsString]) -> Result<Vec<u8>> {
-        let out = self
-            .command(cmd)?
-            .output()
-            .with_context(|| format!("spawning {}", name(cmd)))?;
-        if out.status.success() {
-            return Ok(out.stdout);
+        let mut command = self.command(cmd)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (status, stdout, stderr) = Spawned::new(&mut command, cmd)?.output()?;
+        if status.success() {
+            return Ok(stdout);
         }
-        Err(failed(cmd, out.status, &out.stderr))
+        Err(failed(cmd, status, &stderr))
     }
 
     fn pipe(&self, cmd: &[OsString], on_bytes: &mut dyn FnMut(&[u8])) -> Result<()> {
-        let mut child = self
-            .command(cmd)?
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawning {}", name(cmd)))?;
+        let mut command = self.command(cmd)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = Spawned::new(&mut command, cmd)?;
         // Drained apart, so a program writing much to stderr never stalls.
-        let stderr = child.stderr.take().map(|mut e| {
+        let stderr = child.0.take_stderr().map(|mut e| {
             std::thread::spawn(move || {
                 let mut bytes = Vec::new();
                 let _ = e.read_to_end(&mut bytes);
                 bytes
             })
         });
-        if let Some(mut out) = child.stdout.take() {
+        if let Some(mut out) = child.0.take_stdout() {
             let mut buf = vec![0; 64 * 1024];
             loop {
                 match out.read(&mut buf) {
@@ -237,7 +350,7 @@ impl Runner for System {
             }
         }
         let stderr = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
-        let status = child.wait()?;
+        let status = child.0.wait()?;
         if status.success() {
             Ok(())
         } else {
@@ -255,17 +368,16 @@ impl Runner for System {
         env: &[(String, String)],
         on_line: &mut dyn FnMut(Line<'_>),
     ) -> Result<bool> {
-        let mut child = self
-            .command(cmd)?
+        let mut command = self.command(cmd)?;
+        command
             .envs(env.iter().map(|(k, v)| (k, v)))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawning {}", name(cmd)))?;
+            .stderr(Stdio::piped());
+        let child = Spawned::new(&mut command, cmd)?;
         let (tx, rx) = mpsc::channel();
         let readers = [
-            child.stdout.take().map(|r| reader(r, true, tx.clone())),
-            child.stderr.take().map(|r| reader(r, false, tx)),
+            child.0.take_stdout().map(|r| reader(r, true, tx.clone())),
+            child.0.take_stderr().map(|r| reader(r, false, tx)),
         ];
         for (out, line) in rx {
             on_line(if out {
@@ -277,7 +389,7 @@ impl Runner for System {
         for r in readers.into_iter().flatten() {
             let _ = r.join();
         }
-        Ok(child.wait()?.success())
+        Ok(child.0.wait()?.success())
     }
 
     fn tool(&self, name: &str) -> Option<Status> {
