@@ -12,7 +12,11 @@
 //! - the track's name inside the upload's title, by letters and digits
 //!   alone, case-folded, and without the featured artists a release
 //!   credits in its name, which an upload credits in its own words and
-//!   script, or not at all;
+//!   script, or not at all; or the name's core alone, without the version
+//!   (`(2011 Remaster)`) or the name in another script (`ガラス果樹園 -
+//!   Glass Orchard`) a release adds in brackets or after a dash, unless
+//!   what is left off names another recording, as `(Live)` does, that the
+//!   title does not (`similar::VERSIONS`);
 //! - an artist, or the release's " - Topic" channel, in the upload's
 //!   channel or title, which covers a label channel's `Artist - Song`
 //!   uploads.
@@ -53,6 +57,7 @@ use serde::Deserialize;
 use crate::clean;
 use crate::download;
 use crate::settings::Ytdlp;
+use crate::similar::{self, Name};
 use crate::sites::Sites;
 use crate::source::SourceKey;
 
@@ -443,13 +448,11 @@ fn is_named(video: &Entry, track: &Entry) -> bool {
     if track.id == video.id || !track.is_track() {
         return false;
     }
-    let title = normalize(video.title.as_deref().unwrap_or_default());
-    let name = normalize(clean::without_credits(
-        track.track.as_deref().unwrap_or_default(),
-    ));
-    if name.is_empty() || !title.contains(&name) {
+    let raw_title = video.title.as_deref().unwrap_or_default();
+    if !carries_name(raw_title, track.track.as_deref().unwrap_or_default()) {
         return false;
     }
+    let title = normalize(raw_title);
     let channels: Vec<String> = [video.uploader.as_deref(), video.channel.as_deref()]
         .into_iter()
         .flatten()
@@ -469,6 +472,24 @@ fn is_named(video: &Entry, track: &Entry) -> bool {
         .map(normalize)
         .filter(|a| !a.is_empty())
         .any(|a| title.contains(&a) || channels.iter().any(|c| c.contains(&a) || a.contains(c)))
+}
+
+/// Whether an upload's title carries a track's name: whole, or its core
+/// without what a release adds in brackets or after a dash, unless that
+/// names another recording the title does not, as `(Live)` does.
+fn carries_name(title: &str, name: &str) -> bool {
+    let whole = normalize(clean::without_credits(name));
+    if whole.is_empty() {
+        return false;
+    }
+    if normalize(title).contains(&whole) {
+        return true;
+    }
+    let (title_name, name) = (Name::new(title), Name::new(name));
+    let core = normalize(&name.core);
+    !core.is_empty()
+        && normalize(&similar::fold(title)).contains(&core)
+        && name.versions().0.is_subset(&title_name.versions().0)
 }
 
 /// Letters and digits only, lower-cased and in NFKC, so punctuation,
@@ -681,6 +702,21 @@ mod tests {
             ..Entry::default()
         };
         assert_eq!(uploads_of(&t, std::slice::from_ref(&mv)).len(), 1);
+    }
+
+    #[test]
+    fn a_release_s_version_or_translation_is_no_part_of_its_name() {
+        let title = "Marlo Venn - Lantern Weather (Official Audio)";
+        assert!(carries_name(title, "Lantern Weather (2011 Remaster)"));
+        assert!(carries_name(title, "Lantern Weather - Original Version"));
+        assert!(carries_name("ガラス果樹園", "ガラス果樹園 - Glass Orchard"));
+        assert!(!carries_name(title, "Lantern Weather (Live)"));
+        assert!(!carries_name(title, "Lantern Weather (Copper Moth Remix)"));
+        assert!(carries_name(
+            "Marlo Venn - Lantern Weather (Live at the Pier)",
+            "Lantern Weather (Live)"
+        ));
+        assert!(!carries_name(title, "Paper Comets (Lantern Weather Edit)"));
     }
 
     #[test]

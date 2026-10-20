@@ -138,11 +138,11 @@ An upload often has a release on YouTube Music: a track whose metadata
 names the song, its artists and album, with the square art the upload
 lacks. Before fetching, `add` searches YouTube Music's songs for each
 new video. A candidate must carry its track name in the upload's title,
-an artist in the upload's channel or title, and a length close to the
-upload's. The two recordings are then aligned at one offset, or along a
-line when one plays up to 1% faster; they are one recording when they
-correlate at 0.8 or more and at least 80% of their windows agree. The
-same comparison measures sound beyond the song.
+less a version or translation in brackets or after a dash that names no
+other recording, as `(Live)` does; an artist in its channel or title;
+and a length close to its own. The two are aligned at one offset, or
+along a line when one plays up to 1% faster, and are one recording when
+they correlate at 0.8 or more and at least 80% of their windows agree.
 
 When the two are one recording, both become the song's sources and each
 aspect is picked by its measures. Otherwise only the release is listed

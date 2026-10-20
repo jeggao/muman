@@ -57,6 +57,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `web_music` client too**, as `extractor_args` says; remove it there
   to ask without.
 
+### Fixed
+
+- **A release that names its version is found for its upload.** A
+  YouTube Music track named `Song (2011 Remaster)`, `Song (Original
+  Version)` or `Song - <the name in another script>` was passed over for
+  an upload titled `Artist - Song`, though its audio was the same
+  recording. Its name now matches without what it adds, unless that
+  names another recording, as `(Live)` or `(Remix)` does. Uploads that
+  found no release are looked up again once.
+
 ## [0.5.1] - 2026-10-18
 
 ### Added
