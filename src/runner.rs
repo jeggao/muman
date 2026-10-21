@@ -3,7 +3,7 @@
 //! one; [`System`] is the one that spawns, with each tool as
 //! [`crate::tools`] finds it from the song list's `[tools.*]`.
 //!
-//! Every program [`System`] starts is held in [`LIVE`] until it has been
+//! Every program [`System`] starts is held in `LIVE` until it has been
 //! waited for, so a signal that stops muman stops them too ([`stop`]):
 //! a Ctrl-C reaches a terminal's whole process group, but a `kill` or a
 //! service manager's stop reaches muman alone, and aria2c, left behind,
