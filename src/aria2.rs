@@ -47,6 +47,14 @@
 //! never does, as archive.org's torrents hold of a file changed since,
 //! keeps the rest of the torrent from no one.
 //!
+//! Each second aria2c says how far each download has got, as
+//! `20MiB/40MiB(50%)`: the bytes it has, of how many, and their share.
+//! A download whose size is not yet known, as a magnet link's before its
+//! metainfo arrives, says no share. One seeding, its files all fetched,
+//! says its share ratio instead, uploaded over fetched (`SEED(0.0)`),
+//! which muman says as 100%. A run of several says each one's share, or
+//! the bytes it has where there is none.
+//!
 //! A torrent already downloaded, as another client leaves it, is taken
 //! up from its folder ([`take_up`]): each file muman selects, and each
 //! file sharing a piece with one, which aria2c needs to check that piece
@@ -104,6 +112,9 @@ pub struct Places<'a> {
 /// Each opens connections to its own peers, and many at once can run
 /// into a system's limit on open files.
 pub const AT_ONCE: usize = 8;
+
+/// How a readout of a download that seeds begins, its share ratio after.
+const SEEDING: &str = "SEED(";
 
 /// How one download of a run ended, as its row of aria2c's results says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,7 +380,10 @@ fn stream<R: Runner>(
 /// label.
 fn progress_of(readouts: &BTreeMap<String, String>, labels: &[String]) -> String {
     if labels.len() < 2 {
-        return readouts.values().next().cloned().unwrap_or_default();
+        return readouts
+            .values()
+            .next()
+            .map_or_else(String::new, |r| whole(r));
     }
     readouts
         .iter()
@@ -377,14 +391,34 @@ fn progress_of(readouts: &BTreeMap<String, String>, labels: &[String]) -> String
             let label = (0..labels.len())
                 .find(|&n| short_gid(n) == *gid)
                 .map_or(gid.as_str(), |n| labels[n].as_str());
-            let share = readout
-                .split_once('(')
-                .and_then(|(_, r)| r.split_once(')'))
-                .map_or("", |(s, _)| s);
-            format!("{label} {share}")
+            format!("{label} {}", share_done(readout))
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// How much of its download `readout` says is done, by its first field:
+/// the share of a known size, all of it while seeding, else the bytes
+/// arrived.
+fn share_done(readout: &str) -> &str {
+    let size = readout.split(' ').next().unwrap_or(readout);
+    if size.starts_with(SEEDING) {
+        return "100%";
+    }
+    size.split_once('(')
+        .and_then(|(_, share)| share.strip_suffix(')'))
+        .unwrap_or_else(|| size.split_once('/').map_or(size, |(done, _)| done))
+}
+
+/// `readout` as said of a run's one download, a seeding one as all done.
+fn whole(readout: &str) -> String {
+    match readout
+        .strip_prefix(SEEDING)
+        .and_then(|r| r.split_once(')'))
+    {
+        Some((_, rest)) => format!("100%{rest}"),
+        None => readout.to_string(),
+    }
 }
 
 /// What an error or warning line says, without aria2c's time and
@@ -1199,5 +1233,56 @@ mod tests {
             progress_of(&readouts.into_iter().take(1).collect(), &labels[..1]),
             "1.2MiB/40MiB(3%) CN:4"
         );
+    }
+
+    #[test]
+    fn a_finished_torrent_seeding_reads_as_all_done_not_as_its_ratio() {
+        let readouts: BTreeMap<String, String> = [
+            ("000001", "SEED(0.0) CN:0 SD:0"),
+            ("000002", "20MiB/40MiB(50%) CN:2 SD:1 DL:1MiB ETA:20s"),
+        ]
+        .iter()
+        .map(|(g, r)| (g.to_string(), r.to_string()))
+        .collect();
+        let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        assert_eq!(
+            progress_of(&readouts, &labels),
+            "Lantern Weather 100%, Rooms of Salt 50%"
+        );
+        assert_eq!(
+            progress_of(&readouts.into_iter().take(1).collect(), &labels[..1]),
+            "100% CN:0 SD:0"
+        );
+    }
+
+    #[test]
+    fn every_readout_aria2c_writes_reads_as_its_share_done() {
+        // Each shape aria2c's ConsoleStatCalc.cc writes, with the parentheses an
+        // upload adds after the size.
+        for (readout, share) in [
+            ("1.2MiB/40MiB(3%) CN:4 SD:2 DL:300KiB ETA:2m", "3%"),
+            ("40MiB/40MiB(100%) CN:1 SD:1", "100%"),
+            (
+                "1.2MiB/40MiB(3%) CN:4 DL:300KiB UL:20KiB(1.1MiB) ETA:2m",
+                "3%",
+            ),
+            ("1234B/40000B(3%) CN:1 DL:300B", "3%"),
+            ("0B/0B CN:1 SD:0 DL:0B", "0B"),
+            ("16KiB/0B CN:1 DL:4KiB UL:2KiB(8KiB)", "16KiB"),
+            ("SEED(0.0) CN:0 SD:0", "100%"),
+            ("SEED(1.5) CN:3 SD:0 UL:40KiB(60MiB)", "100%"),
+            ("SEED(--) CN:0 SD:0", "100%"),
+        ] {
+            assert_eq!(share_done(readout), share, "{readout}");
+        }
+        for (readout, said) in [
+            (
+                "SEED(1.5) CN:3 SD:0 UL:40KiB(60MiB)",
+                "100% CN:3 SD:0 UL:40KiB(60MiB)",
+            ),
+            ("0B/0B CN:1 SD:0 DL:0B", "0B/0B CN:1 SD:0 DL:0B"),
+        ] {
+            assert_eq!(whole(readout), said, "{readout}");
+        }
     }
 }
