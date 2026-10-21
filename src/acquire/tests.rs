@@ -366,7 +366,7 @@ fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
     assert!(text.contains("youtube.com:vid00000009: not kept"), "{text}");
     assert!(!text.contains("Nothing new"), "{text}");
     let staged = crate::store::files_below(&ytdlp.join(crate::store::STAGING), 9, |_| true);
-    assert!(staged.unwrap_or_default().is_empty());
+    assert_eq!(staged.unwrap_or_default(), Vec::<PathBuf>::new());
 }
 
 #[test]
