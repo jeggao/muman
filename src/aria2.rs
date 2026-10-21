@@ -47,6 +47,18 @@
 //! never does, as archive.org's torrents hold of a file changed since,
 //! keeps the rest of the torrent from no one.
 //!
+//! Each second aria2c says how far each download has got, as
+//! `20MiB/40MiB(50%)`: the bytes it has, of how many, and their share.
+//! A download whose size is not yet known, as a magnet link's before its
+//! metainfo arrives, says no share. One seeding, its files all fetched,
+//! says its share ratio instead, uploaded over fetched (`SEED(0.0)`),
+//! which muman says as 100%. A run of several says each one's share, or
+//! the bytes it has where there is none. Each summary names every
+//! download still running, and only those, so one a summary names and
+//! the next does not has stopped, stalled or failed: it is said as
+//! stopped rather than at the share it last had, unless that was all of
+//! it, as a finished download's last readout is.
+//!
 //! A torrent already downloaded, as another client leaves it, is taken
 //! up from its folder ([`take_up`]): each file muman selects, and each
 //! file sharing a piece with one, which aria2c needs to check that piece
@@ -77,7 +89,7 @@
 //! cannot reach as an error, as a torrent's dead trackers make it while
 //! others serve; these are said only when the fetch fails.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -104,6 +116,12 @@ pub struct Places<'a> {
 /// Each opens connections to its own peers, and many at once can run
 /// into a system's limit on open files.
 pub const AT_ONCE: usize = 8;
+
+/// How a readout of a download that seeds begins, its share ratio after.
+const SEEDING: &str = "SEED(";
+
+/// How each of aria2c's summaries begins.
+const SUMMARY: &str = "*** Download Progress Summary";
 
 /// How one download of a run ended, as its row of aria2c's results says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,7 +349,7 @@ fn stream<R: Runner>(
 ) -> Result<(bool, Said)> {
     let mut said = Said::default();
     let mut results = false;
-    let mut readouts: BTreeMap<String, String> = BTreeMap::new();
+    let mut readouts = Readouts::default();
     let ok = runner.stream(cmd, &mut |line| {
         let text = match line {
             Line::Out(t) | Line::Err(t) => t.trim(),
@@ -350,11 +368,8 @@ fn stream<R: Runner>(
                 _ => return,
             };
             said.ended.insert(gid.to_string(), ended);
-        } else if let Some(readout) = text.strip_prefix("[#") {
-            if let Some((gid, progress)) = readout.split_once(' ') {
-                readouts.insert(gid.to_string(), progress.trim_end_matches(']').to_string());
-                step.note(&format!("aria2c: {}", progress_of(&readouts, labels)));
-            }
+        } else if readouts.read(text) {
+            step.note(&format!("aria2c: {}", readouts.said(labels)));
         } else if let Some(error) = error_of(text)
             && !said.errors.contains(&error)
         {
@@ -364,27 +379,98 @@ fn stream<R: Runner>(
     Ok((ok, said))
 }
 
-/// What `readouts`, the last of each download by its short GID, say of
-/// a run: the one download's whole, or each one's share done by its
-/// label.
-fn progress_of(readouts: &BTreeMap<String, String>, labels: &[String]) -> String {
-    if labels.len() < 2 {
-        return readouts.values().next().cloned().unwrap_or_default();
+/// What a run's summaries have said of its downloads, each by its short
+/// GID.
+#[derive(Debug, Default)]
+struct Readouts {
+    /// The last readout of each download a summary has named.
+    last: BTreeMap<String, String>,
+    /// The downloads the summary being read has named so far.
+    named: BTreeSet<String>,
+    /// The downloads a summary named and a later one did not.
+    stopped: BTreeSet<String>,
+}
+
+impl Readouts {
+    /// Read `line` of aria2c's: whether it changed what the run has got
+    /// to.
+    fn read(&mut self, line: &str) -> bool {
+        if line.starts_with(SUMMARY) {
+            let gone: Vec<String> = self
+                .last
+                .keys()
+                .filter(|gid| !self.named.contains(*gid) && !self.stopped.contains(*gid))
+                .cloned()
+                .collect();
+            self.named.clear();
+            self.stopped.extend(gone.iter().cloned());
+            return !gone.is_empty();
+        }
+        let Some((gid, readout)) = line.strip_prefix("[#").and_then(|r| r.split_once(' ')) else {
+            return false;
+        };
+        self.last
+            .insert(gid.to_string(), readout.trim_end_matches(']').to_string());
+        self.named.insert(gid.to_string());
+        self.stopped.remove(gid);
+        true
     }
-    readouts
-        .iter()
-        .map(|(gid, readout)| {
-            let label = (0..labels.len())
-                .find(|&n| short_gid(n) == *gid)
-                .map_or(gid.as_str(), |n| labels[n].as_str());
-            let share = readout
-                .split_once('(')
-                .and_then(|(_, r)| r.split_once(')'))
-                .map_or("", |(s, _)| s);
-            format!("{label} {share}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+
+    /// What the readouts say of the run, `labels` naming each download:
+    /// the one download's whole, or each one's share done by its label.
+    fn said(&self, labels: &[String]) -> String {
+        if labels.len() < 2 {
+            return self
+                .last
+                .keys()
+                .next()
+                .map_or_else(String::new, |gid| self.of(gid, whole));
+        }
+        self.last
+            .keys()
+            .map(|gid| {
+                let label = (0..labels.len())
+                    .find(|&n| short_gid(n) == *gid)
+                    .map_or(gid.as_str(), |n| labels[n].as_str());
+                format!("{label} {}", self.of(gid, |r| share_done(r).to_string()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// What `say` says of the last readout of `gid`, or, of a download
+    /// stopped short of all done, that it stopped.
+    fn of(&self, gid: &str, say: impl Fn(&str) -> String) -> String {
+        let readout = &self.last[gid];
+        if self.stopped.contains(gid) && share_done(readout) != "100%" {
+            return "stopped".to_string();
+        }
+        say(readout)
+    }
+}
+
+/// How much of its download `readout` says is done, by its first field:
+/// the share of a known size, all of it while seeding, else the bytes
+/// arrived.
+fn share_done(readout: &str) -> &str {
+    let size = readout.split(' ').next().unwrap_or(readout);
+    if size.starts_with(SEEDING) {
+        return "100%";
+    }
+    size.split_once('(')
+        .and_then(|(_, share)| share.strip_suffix(')'))
+        .unwrap_or_else(|| size.split_once('/').map_or(size, |(done, _)| done))
+}
+
+/// `readout` as said of a run's one download, a seeding one as all done.
+fn whole(readout: &str) -> String {
+    match readout
+        .strip_prefix(SEEDING)
+        .and_then(|r| r.split_once(')'))
+    {
+        Some((_, rest)) => format!("100%{rest}"),
+        None => readout.to_string(),
+    }
 }
 
 /// What an error or warning line says, without aria2c's time and
@@ -1181,23 +1267,141 @@ mod tests {
         );
     }
 
+    /// The readouts of `lines`, aria2c's, read in turn.
+    fn readouts(lines: &[&str]) -> Readouts {
+        let mut readouts = Readouts::default();
+        for line in lines {
+            readouts.read(line);
+        }
+        readouts
+    }
+
+    const AT: &str = "*** Download Progress Summary as of Tue Oct 20 10:50:27 2026 ***";
+
     #[test]
     fn a_runs_progress_names_each_torrent_by_its_share_done() {
-        let readouts: BTreeMap<String, String> = [
-            ("000001", "1.2MiB/40MiB(3%) CN:4"),
-            ("000002", "20MiB/40MiB(50%) CN:2"),
-        ]
-        .iter()
-        .map(|(g, r)| (g.to_string(), r.to_string()))
-        .collect();
         let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        let readouts = readouts(&[
+            AT,
+            "[#000001 1.2MiB/40MiB(3%) CN:4]",
+            "[#000002 20MiB/40MiB(50%) CN:2]",
+        ]);
         assert_eq!(
-            progress_of(&readouts, &labels),
+            readouts.said(&labels),
             "Lantern Weather 3%, Rooms of Salt 50%"
         );
+        assert_eq!(readouts.said(&labels[..1]), "1.2MiB/40MiB(3%) CN:4");
+    }
+
+    #[test]
+    fn a_finished_torrent_seeding_reads_as_all_done_not_as_its_ratio() {
+        let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        let readouts = readouts(&[
+            AT,
+            "[#000001 SEED(0.0) CN:0 SD:0]",
+            "[#000002 20MiB/40MiB(50%) CN:2 SD:1 DL:1MiB ETA:20s]",
+        ]);
         assert_eq!(
-            progress_of(&readouts.into_iter().take(1).collect(), &labels[..1]),
-            "1.2MiB/40MiB(3%) CN:4"
+            readouts.said(&labels),
+            "Lantern Weather 100%, Rooms of Salt 50%"
         );
+        assert_eq!(readouts.said(&labels[..1]), "100% CN:0 SD:0");
+    }
+
+    #[test]
+    fn a_torrent_no_summary_names_any_more_reads_as_stopped_not_where_it_was() {
+        // What aria2c 1.37.0 wrote of a torrent no peer seeds stalling beside
+        // one fetched, a summary a second, its FILE: lines left out.
+        let lines = [
+            AT,
+            "[#000001 0B/2.9KiB(0%) CN:0 SD:0 DL:0B]",
+            "[#000002 304KiB/2.8MiB(10%) CN:1 SD:1 DL:101KiB ETA:25s]",
+            AT,
+            "[#000002 464KiB/2.8MiB(15%) CN:1 SD:1 DL:115KiB ETA:21s]",
+            AT,
+            "[#000002 2.8MiB/2.8MiB(98%) CN:1 SD:1 DL:134KiB]",
+            AT,
+            "[#000002 SEED(0.0) CN:0 SD:0]",
+            AT,
+        ];
+        let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        let mut readouts = Readouts::default();
+        let mut said = Vec::new();
+        for line in lines {
+            if readouts.read(line) {
+                said.push(readouts.said(&labels));
+            }
+        }
+        assert_eq!(
+            said,
+            [
+                "Lantern Weather 0%",
+                "Lantern Weather 0%, Rooms of Salt 10%",
+                "Lantern Weather 0%, Rooms of Salt 15%",
+                "Lantern Weather stopped, Rooms of Salt 15%",
+                "Lantern Weather stopped, Rooms of Salt 98%",
+                "Lantern Weather stopped, Rooms of Salt 100%",
+            ],
+            "a summary is known whole at the next, so one gone reads as gone then"
+        );
+        assert_eq!(readouts.said(&labels[..1]), "stopped");
+    }
+
+    #[test]
+    fn a_download_gone_once_all_done_stays_all_done() {
+        let labels = ["Lantern Weather".to_string(), "Rooms of Salt".to_string()];
+        // A magnet link's metainfo, as aria2c 1.37.0 says it whole before
+        // the download goes.
+        let readouts = readouts(&[
+            AT,
+            "[#000001 3.6KiB/3.6KiB(100%) CN:1 SD:1]",
+            "[#000002 0B/0B CN:0 SD:0 DL:0B]",
+            AT,
+            "[#000002 0B/0B CN:0 SD:0 DL:0B]",
+            AT,
+        ]);
+        assert_eq!(
+            readouts.said(&labels),
+            "Lantern Weather 100%, Rooms of Salt 0B"
+        );
+        let named_again = self::readouts(&[
+            AT,
+            "[#000001 0B/40MiB(0%) CN:0]",
+            AT,
+            AT,
+            "[#000001 400KiB/40MiB(1%) CN:1]",
+        ]);
+        assert_eq!(named_again.said(&labels), "Lantern Weather 1%");
+    }
+
+    #[test]
+    fn every_readout_aria2c_writes_reads_as_its_share_done() {
+        // Each shape aria2c's ConsoleStatCalc.cc writes, with the parentheses an
+        // upload adds after the size.
+        for (readout, share) in [
+            ("1.2MiB/40MiB(3%) CN:4 SD:2 DL:300KiB ETA:2m", "3%"),
+            ("40MiB/40MiB(100%) CN:1 SD:1", "100%"),
+            (
+                "1.2MiB/40MiB(3%) CN:4 DL:300KiB UL:20KiB(1.1MiB) ETA:2m",
+                "3%",
+            ),
+            ("1234B/40000B(3%) CN:1 DL:300B", "3%"),
+            ("0B/0B CN:1 SD:0 DL:0B", "0B"),
+            ("16KiB/0B CN:1 DL:4KiB UL:2KiB(8KiB)", "16KiB"),
+            ("SEED(0.0) CN:0 SD:0", "100%"),
+            ("SEED(1.5) CN:3 SD:0 UL:40KiB(60MiB)", "100%"),
+            ("SEED(--) CN:0 SD:0", "100%"),
+        ] {
+            assert_eq!(share_done(readout), share, "{readout}");
+        }
+        for (readout, said) in [
+            (
+                "SEED(1.5) CN:3 SD:0 UL:40KiB(60MiB)",
+                "100% CN:3 SD:0 UL:40KiB(60MiB)",
+            ),
+            ("0B/0B CN:1 SD:0 DL:0B", "0B/0B CN:1 SD:0 DL:0B"),
+        ] {
+            assert_eq!(whole(readout), said, "{readout}");
+        }
     }
 }
