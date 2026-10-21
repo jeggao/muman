@@ -392,3 +392,23 @@ fn what_a_sync_fetches_is_decided_once() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+#[test]
+fn what_muman_says_is_never_read_back() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        let reads = [
+            "split_once(",
+            "trim_start_matches(",
+            "strip_prefix(",
+            ".contains(",
+        ];
+        for line in lines_with(&text, &reads) {
+            let said = ["\"Failed: ", "\"Added: ", "\"Updated", "\"Removed: "];
+            if said.iter().any(|s| line.contains(s)) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

@@ -400,20 +400,60 @@ fn error_of(line: &str) -> Option<String> {
     Some(rest.trim().to_string())
 }
 
+/// Why a fetch of a torrent's files did not bring them all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    /// Nothing arrived for `[torrent] stall`; what did waits to resume.
+    Stalled(std::time::Duration),
+    /// aria2c ended it in an error: the one it reported, or, of several
+    /// downloads failing at once, how many.
+    Aria2c(Option<String>, usize),
+    /// A torrent of `BitTorrent` v2 alone, which aria2c cannot fetch.
+    V2Only,
+    /// Files aria2c finished that the store could not take, and why.
+    Unplaced(Vec<String>),
+}
+
+impl Failure {
+    /// Whether giving the torrent to `add` again may bring the rest.
+    #[must_use]
+    pub fn resumes(&self) -> bool {
+        matches!(self, Self::Stalled(_) | Self::Aria2c(..))
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stalled(stall) => write!(
+                f,
+                "no peer sent anything for {}; what arrived waits to be resumed",
+                crate::units::Time(stall.as_millis() as i64).exact()
+            ),
+            Self::Aria2c(Some(e), 1) => write!(f, "aria2c: {e}"),
+            Self::Aria2c(Some(_), failed) => {
+                write!(
+                    f,
+                    "aria2c failed on {failed} torrents at once; its errors are above"
+                )
+            }
+            Self::Aria2c(None, _) => write!(f, "aria2c failed"),
+            Self::V2Only => write!(
+                f,
+                "a v2 torrent alone, and no fetcher here reads v2 torrents"
+            ),
+            Self::Unplaced(why) => write!(f, "{}", why.join("; ")),
+        }
+    }
+}
+
 /// Why a download that ended as `ended` failed, `errors` what the run
 /// reported and `failed` how many of its downloads ended in an error.
-fn failure(places: &Places<'_>, ended: Ended, errors: &[String], failed: usize) -> String {
+fn failure(places: &Places<'_>, ended: Ended, errors: &[String], failed: usize) -> Failure {
     if ended == Ended::Unfinished {
-        return format!(
-            "no peer sent anything for {}; what arrived waits to be resumed",
-            crate::units::Time(places.options.stall.as_millis() as i64).exact()
-        );
+        return Failure::Stalled(places.options.stall);
     }
-    match errors.last() {
-        Some(e) if failed == 1 => format!("aria2c: {e}"),
-        Some(_) => format!("aria2c failed on {failed} torrents at once; its errors are above"),
-        None => "aria2c failed".to_string(),
-    }
+    Failure::Aria2c(errors.last().cloned(), failed)
 }
 
 /// Say each of `errors` once, where any download of a run failed.
@@ -512,8 +552,8 @@ pub fn metainfo_of<R: Runner, W: Write>(
 pub struct Fetched {
     /// The key of each file placed in the store.
     pub arrived: Vec<SourceKey>,
-    /// Why the fetch failed, where it did; nothing is placed then.
-    pub failure: Option<String>,
+    /// Why the fetch did not bring every file, where it did not.
+    pub failure: Option<Failure>,
 }
 
 /// The files of one torrent a fetch asks for.
@@ -542,10 +582,7 @@ pub fn fetch_all<R: Runner, W: Write>(
             w.meta.name
         );
         if !w.meta.fetchable() {
-            fetched[n].failure = Some(format!(
-                "{} is a v2 torrent alone, and no fetcher here reads v2 torrents",
-                w.meta.name
-            ));
+            fetched[n].failure = Some(Failure::V2Only);
         } else if !w.files.is_empty() {
             asked.push(n);
         }
@@ -618,7 +655,7 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
     }
     Ok(Fetched {
         arrived,
-        failure: (!unplaced.is_empty()).then(|| unplaced.join("; ")),
+        failure: (!unplaced.is_empty()).then_some(Failure::Unplaced(unplaced)),
     })
 }
 
@@ -805,16 +842,14 @@ pub fn fetch_due<R: Runner, W: Write>(
             Err(e) => fail(out, &mut failed, keys, &format!("{e:#}"))?,
         }
     }
-    let fetched = fetch_all(runner, out, places, &wanted).unwrap_or_else(|e| {
-        let why = format!("{e:#}");
-        wanted
-            .iter()
-            .map(|_| Fetched {
-                arrived: Vec::new(),
-                failure: Some(why.clone()),
-            })
-            .collect()
-    });
+    let fetched = match fetch_all(runner, out, places, &wanted) {
+        Ok(fetched) => fetched,
+        Err(e) => {
+            let keys: Vec<SourceKey> = asking.into_iter().flatten().cloned().collect();
+            fail(out, &mut failed, &keys, &format!("{e:#}"))?;
+            return Ok(failed);
+        }
+    };
     for (keys, fetched) in asking.into_iter().zip(fetched) {
         if let Some(why) = fetched.failure {
             let lost: Vec<SourceKey> = keys
@@ -822,7 +857,7 @@ pub fn fetch_due<R: Runner, W: Write>(
                 .filter(|k| !fetched.arrived.contains(k))
                 .cloned()
                 .collect();
-            fail(out, &mut failed, &lost, &why)?;
+            fail(out, &mut failed, &lost, &why.to_string())?;
             continue;
         }
         for key in keys.iter().filter(|k| !fetched.arrived.contains(k)) {
@@ -1130,14 +1165,15 @@ mod tests {
             "a download the results do not name failed with the run"
         );
         assert_eq!(errors, ["Download aborted. URI=http://tracker.example/a"]);
-        assert!(
-            failure(&places, ended[0], &errors, 2).starts_with("no peer sent anything for 10 min")
-        );
+        let said =
+            |n: usize, failed: usize| failure(&places, ended[n], &errors, failed).to_string();
+        assert!(said(0, 2).starts_with("no peer sent anything for 10 min"));
         assert_eq!(
-            failure(&places, ended[2], &errors, 1),
+            said(2, 1),
             "aria2c: Download aborted. URI=http://tracker.example/a"
         );
-        assert!(failure(&places, ended[2], &errors, 2).contains("failed on 2 torrents at once"));
+        assert!(said(2, 2).contains("failed on 2 torrents at once"));
+        assert!(failure(&places, ended[0], &errors, 2).resumes());
         assert_eq!(
             std::fs::read_dir(dir.path()).unwrap().count(),
             0,

@@ -712,27 +712,26 @@ fn add_torrents<R: Runner, W: Write>(
             files: missing,
         });
     }
-    let fetched = crate::aria2::fetch_all(runner, out, &places, &wanted);
-    let fetched = stop_on_tool(fetched)?.unwrap_or_else(|e| {
-        let why = format!("{e:#}");
-        wanted
-            .iter()
-            .map(|_| crate::aria2::Fetched {
-                arrived: Vec::new(),
-                failure: Some(why.clone()),
-            })
-            .collect()
-    });
     let mut failed = BTreeSet::new();
+    let fetched = match stop_on_tool(crate::aria2::fetch_all(runner, out, &places, &wanted))? {
+        Ok(fetched) => fetched,
+        Err(e) => {
+            ui::error(out, &format!("Fetching torrents: {e:#}"))?;
+            failed.extend(wanted.iter().map(|w| w.meta.hash()));
+            Vec::new()
+        }
+    };
+    if fetched.is_empty() && !wanted.is_empty() {
+        ok = false;
+    }
     for (w, fetched) in wanted.iter().zip(fetched) {
         if let Some(failure) = fetched.failure {
-            ui::error(
-                out,
-                &format!(
-                    "{}: {failure}; giving it to `add` again goes on",
-                    w.meta.name
-                ),
-            )?;
+            let again = if failure.resumes() {
+                "; giving it to `add` again goes on"
+            } else {
+                ""
+            };
+            ui::error(out, &format!("{}: {failure}{again}", w.meta.name))?;
             if fetched.arrived.is_empty() {
                 failed.insert(w.meta.hash());
             } else {

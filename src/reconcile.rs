@@ -2197,9 +2197,61 @@ fn resolve_all<W: Write>(
     waiting: &BTreeSet<SourceKey>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
-    let naming = Naming::new(&settings.library, library)?;
+    let resolution = resolve_songs(manifest, settings, state, library, on_disk, waiting)?;
+    for &n in &resolution.awaiting {
+        let name = name_of(&manifest.songs[n], None, &state.facts);
+        crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+    }
     let mut failed = BTreeSet::new();
-    let mut planned = Vec::new();
+    for (n, e) in &resolution.unresolved {
+        let song = &manifest.songs[*n];
+        failed.extend(song.sources.iter().cloned());
+        let name = name_of(song, None, &state.facts);
+        crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
+    }
+    if let (Some(max), over @ 1..) = (settings.library.max_path, resolution.over_max_path) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{over} song(s) take more than [library] max_path = {max} characters even \
+                 with their names cut short: the library folder, {}, takes {} itself",
+                library.display(),
+                naming::units(&library.to_string_lossy())
+            ),
+        )?;
+    }
+    Ok((resolution.planned, failed))
+}
+
+/// What resolving every song found, for a caller to say or count.
+pub(crate) struct Resolution {
+    pub planned: Planned,
+    /// Each song that could not be resolved, by its place, and why.
+    pub unresolved: Vec<(usize, anyhow::Error)>,
+    /// Each song that could not be resolved while a source of it waits
+    /// to be fetched, by its place.
+    pub awaiting: Vec<usize>,
+    /// How many songs' paths take more than `[library] max_path`.
+    pub over_max_path: usize,
+}
+
+/// Resolve every song under `settings`, each with a path of its own,
+/// saying nothing.
+pub(crate) fn resolve_songs(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+    waiting: &BTreeSet<SourceKey>,
+) -> Result<Resolution> {
+    let naming = Naming::new(&settings.library, library)?;
+    let mut resolution = Resolution {
+        planned: Vec::new(),
+        unresolved: Vec::new(),
+        awaiting: Vec::new(),
+        over_max_path: 0,
+    };
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));
     for (n, song) in manifest.songs.iter().enumerate() {
         let input = Input {
@@ -2217,38 +2269,25 @@ fn resolve_all<W: Write>(
             placement: settings.library.lyrics,
         };
         match resolve::resolve(&input) {
-            Ok(r) => planned.push((n, r)),
+            Ok(r) => resolution.planned.push((n, r)),
             Err(_) if song.sources.iter().any(|k| waiting.contains(k)) => {
-                let name = name_of(song, None, &state.facts);
-                crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+                resolution.awaiting.push(n);
             }
-            Err(e) => {
-                failed.extend(song.sources.iter().cloned());
-                let name = name_of(song, None, &state.facts);
-                crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
-            }
+            Err(e) => resolution.unresolved.push((n, e)),
         }
     }
     if let Some(max) = settings.library.max_path {
-        let over = planned
-            .iter()
+        resolution.over_max_path = (resolution.planned.iter())
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
-        if over > 0 {
-            crate::ui::warning(
-                out,
-                &format!(
-                    "{over} song(s) take more than [library] max_path = {max} characters even \
-                     with their names cut short: the library folder, {}, takes {} itself",
-                    library.display(),
-                    naming::units(&library.to_string_lossy())
-                ),
-            )?;
-        }
     }
-    crate::loudness::settle(&mut planned, state, settings);
-    separate(&mut planned, &naming, settings.library.max_name_bytes);
-    Ok((planned, failed))
+    crate::loudness::settle(&mut resolution.planned, state, settings);
+    separate(
+        &mut resolution.planned,
+        &naming,
+        settings.library.max_name_bytes,
+    );
+    Ok(resolution)
 }
 
 /// Take each output whose size or time changed since it was written,

@@ -59,8 +59,8 @@ struct Context<'a> {
     state: State,
     store: Store,
     planned: Vec<(usize, Resolved)>,
-    /// What planning said of each song it could not plan.
-    failures: Vec<u8>,
+    /// Each song that could not be planned, named, and why.
+    unresolved: Vec<String>,
     /// The library folder written to before, where it was another.
     moved_from: Option<PathBuf>,
 }
@@ -90,7 +90,6 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     }
     reconcile::vouch_for_copies(&dirs.library, &mut state);
     let store = Store::scan(dirs)?;
-    let mut failures = Vec::new();
     // A source a sync fetches is there by the time it plans; one it does
     // not, as a file of the user's own or one whose fetch failed lately, is not.
     let due = crate::sync::due(&manifest, &store, &state.failures, false, state::now_secs());
@@ -99,15 +98,22 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
         .into_iter()
         .filter(|k| store.has(k) || due.now.contains_key(k))
         .collect();
-    let (mut planned, _) = reconcile::plan_with(
+    let resolution = reconcile::resolve_songs(
         &manifest,
         &manifest.settings,
         &state,
         &dirs.library,
         Some(&on_disk),
-        &mut failures,
+        &BTreeSet::new(),
     )?;
+    let mut planned = resolution.planned;
     crate::limit::as_written(&manifest, &state, &mut planned);
+    let unresolved = (resolution.unresolved.iter())
+        .map(|(n, e)| {
+            let name = reconcile::name_of(&manifest.songs[*n], None, &state.facts);
+            format!("{name}: {e:#}")
+        })
+        .collect();
     let c = Context {
         dirs,
         verbose,
@@ -115,7 +121,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
         state,
         store,
         planned,
-        failures,
+        unresolved,
         moved_from,
     };
     folders(&c, out)?;
@@ -363,11 +369,8 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     group(out, c.verbose, "To move", &moving)?;
     group(out, c.verbose, "Left alone", &alone)?;
     group(out, c.verbose, "To remove", &gone)?;
-    let failures = String::from_utf8_lossy(&c.failures);
-    for line in failures.lines() {
-        if let Some((_, song)) = line.split_once("Failed: ") {
-            unplanned.add(song);
-        }
+    for song in &c.unresolved {
+        unplanned.add(song);
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
     for p in lookup::ORDER {

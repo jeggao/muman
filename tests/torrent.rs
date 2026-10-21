@@ -16,7 +16,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use muman::aria2::{Places, Wanted, fetch, fetch_all, metainfo_of, take_up};
+use muman::aria2::{Failure, Places, Wanted, fetch, fetch_all, metainfo_of, take_up};
 use muman::runner::System;
 use muman::settings::Torrent;
 use muman::source::SourceKey;
@@ -423,10 +423,7 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
     let fetched = fetch_all(&runner, &mut out, &places, &wanted).unwrap();
     let said = String::from_utf8_lossy(&out);
     assert!(
-        fetched[0]
-            .failure
-            .as_deref()
-            .is_some_and(|f| f.starts_with("no peer sent anything")),
+        matches!(fetched[0].failure, Some(Failure::Stalled(_))),
         "{:?}\n{said}",
         fetched[0]
     );
