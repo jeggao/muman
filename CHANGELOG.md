@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
 ### Added
 
 - **A song may list a file of a torrent.** `torrent:<hash>/<path>` names
@@ -1566,7 +1568,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jeggao/muman/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jeggao/muman/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jeggao/muman/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jeggao/muman/compare/v0.4.1...v0.5.0
