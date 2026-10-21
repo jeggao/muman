@@ -4,7 +4,9 @@
 # user's PATH unchanged.
 {
   lib,
+  stdenv,
   rustPlatform,
+  installShellFiles,
   makeBinaryWrapper,
   ffmpeg-headless,
   yt-dlp,
@@ -35,7 +37,10 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [ makeBinaryWrapper ];
+  nativeBuildInputs = [
+    installShellFiles
+    makeBinaryWrapper
+  ];
 
   # The smoke test generates its audio with the ffmpeg on PATH, the
   # yt-dlp test hands yt-dlp muman's command line, and the torrent test
@@ -64,13 +69,20 @@ rustPlatform.buildRustPackage {
     export HOME=$(mktemp -d)
   '';
 
-  postInstall = ''
-    wrapProgram $out/bin/muman \
-      --set-default MUMAN_FFMPEG ${lib.getExe' ffmpeg-headless "ffmpeg"} \
-      --set-default MUMAN_FFPROBE ${lib.getExe' ffmpeg-headless "ffprobe"} \
-      ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"} \
-      ${lib.optionalString withAria2 "--set-default MUMAN_ARIA2C ${lib.getExe' aria2 "aria2c"}"}
-  '';
+  postInstall =
+    lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+      installShellCompletion --cmd muman \
+        --bash <($out/bin/muman completions bash) \
+        --zsh <($out/bin/muman completions zsh) \
+        --fish <($out/bin/muman completions fish)
+    ''
+    + ''
+      wrapProgram $out/bin/muman \
+        --set-default MUMAN_FFMPEG ${lib.getExe' ffmpeg-headless "ffmpeg"} \
+        --set-default MUMAN_FFPROBE ${lib.getExe' ffmpeg-headless "ffprobe"} \
+        ${lib.optionalString withYtDlp "--set-default MUMAN_YT_DLP ${lib.getExe yt-dlp}"} \
+        ${lib.optionalString withAria2 "--set-default MUMAN_ARIA2C ${lib.getExe' aria2 "aria2c"}"}
+    '';
 
   meta = {
     inherit (manifest) description;

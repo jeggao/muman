@@ -59,6 +59,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   with it, and muman exits 130, as after a Ctrl-C. aria2c stops too
   when muman is killed outright. While `edit` runs your editor, a
   Ctrl-C is the editor's.
+- **Shell completion.** `muman completions <SHELL>` writes a script
+  that completes muman's commands, flags, their fixed values and paths
+  in bash, zsh, fish, PowerShell or elvish; its help says how to load it
+  in each.
+  The Homebrew, AUR and Nix packages install it for bash, zsh and fish.
 
 ### Changed
 

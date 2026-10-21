@@ -33,6 +33,7 @@ class Muman < Formula
 
   def install
     bin.install "muman"
+    generate_completions_from_executable(bin/"muman", "completions")
   end
 
   test do

@@ -44,6 +44,7 @@ Exit codes:
 * `export` — Write the song list and the library, as the last run left them, into one zip, or with --folder into a new folder: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the export fits. The library and the song list are left as they are
 * `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
+* `completions` — Write a script that completes muman's commands, flags and values in a shell, for the shell to load
 
 **Options:**
 
@@ -401,3 +402,28 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
 **Usage:** `muman info`
+
+
+
+### `muman completions`
+
+Write a script that completes muman's commands, flags and values in a shell, for the shell to load
+
+**Usage:** `muman completions <SHELL>`
+
+```text
+Loading the script:
+  bash        In ~/.bashrc: `eval "$(muman completions bash)"`
+  zsh         In ~/.zshrc, after compinit: `source <(muman completions zsh)`
+  fish        `muman completions fish > ~/.config/fish/completions/muman.fish`
+  powershell  In $PROFILE: `muman completions powershell | Out-String |
+              Invoke-Expression`
+  elvish      In rc.elv: `eval (muman completions elvish | slurp)`
+Write a script saved to a file again after updating muman.
+```
+
+**Arguments:**
+
+* `<SHELL>` — The shell the script is for
+
+  Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`

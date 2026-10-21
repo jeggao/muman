@@ -163,6 +163,9 @@ pub fn run() -> ExitCode {
         .and_then(|m| Cli::from_arg_matches(&m))
         .map_err(|e| e.format(&mut cli::command()))
         .unwrap_or_else(|e| e.exit());
+    if let Command::Completions { shell } = cli.command {
+        return completions(shell);
+    }
     let live = std::io::stderr().is_terminal();
     let kind = progress::Kind::of(cli.progress, live, taskbar_progress());
     let _progress = progress::install(progress::Progress::new(kind, Box::new(std::io::stderr())));
@@ -265,6 +268,23 @@ pub fn run() -> ExitCode {
     }
 }
 
+/// Write `shell`'s completion script to stdout, before anything else
+/// `run` does: a package build writes the scripts where there may be no
+/// home, song list or ffmpeg, and none is needed.
+fn completions(shell: clap_complete::Shell) -> ExitCode {
+    match cli::completions(shell, &mut std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::from(4),
+        Err(e) => {
+            let _ = ui::error(
+                &mut anstream::stderr(),
+                &format!("writing the completion script: {e}"),
+            );
+            ExitCode::from(4)
+        }
+    }
+}
+
 /// Whether the terminal shows a task's progress in its tab or taskbar
 /// from `OSC 9;4`, as Windows Terminal, `ConEmu`, `WezTerm` and Ghostty do;
 /// another would print the sequence.
@@ -344,6 +364,10 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 .filter_map(|t| runner.tool(t.name))
                 .collect();
             overview::programs(&found, data)?;
+            Ok(true)
+        }
+        Command::Completions { shell } => {
+            cli::completions(*shell, data)?;
             Ok(true)
         }
         Command::Duplicates { query } => {
@@ -585,7 +609,10 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
         Command::Duplicates { .. } => &["Comparing prints"],
-        Command::List { .. } | Command::Info | Command::Purge { .. } => &[],
+        Command::List { .. }
+        | Command::Info
+        | Command::Purge { .. }
+        | Command::Completions { .. } => &[],
     }
 }
 

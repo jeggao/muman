@@ -12,7 +12,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use clap::builder::styling::{AnsiColor, Effects, Styles};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
+use clap_complete::{Generator, Shell};
 
 /// Help's colors, those of `ui::Style`: a heading as a success, what is
 /// typed as an accent, a value as a path, a default muted.
@@ -93,7 +94,8 @@ pub struct Cli {
         global = true,
         env = "MUMAN_HOME",
         hide_env_values = true,
-        value_name = "DIR"
+        value_name = "DIR",
+        value_hint = ValueHint::DirPath
     )]
     pub home: Option<PathBuf>,
 
@@ -104,7 +106,8 @@ pub struct Cli {
         global = true,
         env = "MUMAN_LIBRARY",
         hide_env_values = true,
-        value_name = "DIR"
+        value_name = "DIR",
+        value_hint = ValueHint::DirPath
     )]
     pub library: Option<PathBuf>,
 
@@ -292,6 +295,16 @@ Assignments:
   lyrics_offset=80ms Move the lyrics later; a negative time, earlier
 Every other word is a query, as `muman list` reads it.";
 
+const COMPLETIONS_HELP: &str = "\
+Loading the script:
+  bash        In ~/.bashrc: `eval \"$(muman completions bash)\"`
+  zsh         In ~/.zshrc, after compinit: `source <(muman completions zsh)`
+  fish        `muman completions fish > ~/.config/fish/completions/muman.fish`
+  powershell  In $PROFILE: `muman completions powershell | Out-String |
+              Invoke-Expression`
+  elvish      In rc.elv: `eval (muman completions elvish | slurp)`
+Write a script saved to a file again after updating muman.";
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Add songs: fetch what URLs name, or copy files into the manual
@@ -307,7 +320,7 @@ pub enum Command {
         /// sources/yt-dlp under its key; or
         /// lyrics (.lrc, .txt, .srt, .vtt), pictures, tag files (NAME=value
         /// .txt, .ffmeta, .json) and cue sheets, each given to its songs.
-        #[arg(required = true, value_name = "URL|MAGNET|FILE")]
+        #[arg(required = true, value_name = "URL|MAGNET|FILE", value_hint = ValueHint::AnyPath)]
         inputs: Vec<String>,
 
         /// Give every lyrics, picture and tag file to the songs this
@@ -327,7 +340,7 @@ pub enum Command {
         /// Take up each torrent given from this folder, where another
         /// client downloaded it: its files are copied in and checked
         /// piece by piece, and only what is missing or wrong is fetched.
-        #[arg(long, value_name = "FOLDER")]
+        #[arg(long, value_name = "FOLDER", value_hint = ValueHint::DirPath)]
         from: Option<PathBuf>,
 
         #[command(flatten)]
@@ -563,6 +576,14 @@ pub enum Command {
     /// missing or soft covers, missing lyrics or tags. Reads only what
     /// earlier runs recorded; `--verbose` names every song counted.
     Info,
+    /// Write a script that completes muman's commands, flags and values
+    /// in a shell, for the shell to load.
+    #[command(after_help = COMPLETIONS_HELP)]
+    Completions {
+        /// The shell the script is for.
+        #[arg(value_name = "SHELL")]
+        shell: Shell,
+    },
 }
 
 /// The command line as `run` parses it: [`Cli`]'s, its help colored and
@@ -570,6 +591,18 @@ pub enum Command {
 #[must_use]
 pub fn command() -> clap::Command {
     painted(Cli::command(), help_width())
+}
+
+/// Write `shell`'s completion script to `out`.
+///
+/// It is made from [`Cli`] as written, not from [`command`]: zsh, fish
+/// and `PowerShell` show each flag's help beside it, where the escape
+/// codes `painted` adds would show as text.
+pub fn completions(shell: Shell, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    let mut cmd = Cli::command();
+    cmd.set_bin_name(env!("CARGO_PKG_NAME"));
+    cmd.build();
+    shell.try_generate(&cmd, out)
 }
 
 /// The width clap wraps help to: the terminal's, else `COLUMNS`, at most
@@ -927,6 +960,35 @@ Shelves hold `songs` alone."
         assert!(parse(&["export", "--max-size", "lots"]).is_err());
         assert!(parse(&["export", "--set", "library.path=/x"]).is_err());
         assert!(parse(&["export", "--codec", "flac"]).is_err());
+    }
+
+    #[test]
+    fn every_shell_gets_a_plain_script_of_every_command() {
+        use clap::ValueEnum as _;
+        for shell in Shell::value_variants() {
+            let mut script = Vec::new();
+            completions(*shell, &mut script).unwrap();
+            let script = String::from_utf8(script).unwrap();
+            assert!(script.contains("muman"), "{shell}");
+            assert!(script.contains("duplicates"), "{shell}");
+            assert!(!script.contains('\x1b'), "{shell}");
+        }
+        assert!(parse(&["completions", "powershell"]).is_ok());
+        assert!(parse(&["completions", "tcsh"]).is_err());
+        assert!(parse(&["completions"]).is_err());
+    }
+
+    #[test]
+    fn folders_complete_as_folders() {
+        let cmd = Cli::command();
+        let hint = |arg: &str| {
+            cmd.get_arguments()
+                .find(|a| a.get_id() == arg)
+                .unwrap()
+                .get_value_hint()
+        };
+        assert_eq!(hint("home"), ValueHint::DirPath);
+        assert_eq!(hint("library"), ValueHint::DirPath);
     }
 
     #[test]
