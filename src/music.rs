@@ -108,6 +108,9 @@ pub struct Entry {
     /// `playlist` for a flat entry that lists more.
     #[serde(rename = "_type", default)]
     pub kind: Option<String>,
+    /// The page a whole video was read from.
+    #[serde(default)]
+    pub webpage_url: Option<String>,
 }
 
 impl Entry {
@@ -146,6 +149,17 @@ impl Entry {
                 !other.starts_with("Youtube") && sites.fetched(other, None, &self.id).is_some()
             }
         }
+    }
+
+    /// Its key, as a fetch of it names it ([`Sites::fetched`]): by its
+    /// extractor, YouTube's where it names none, and its page, else
+    /// `given`, the address it was listed from.
+    #[must_use]
+    pub fn key(&self, sites: &Sites, given: Option<&str>) -> Option<SourceKey> {
+        let extractor = (self.extractor_key.as_deref())
+            .or(self.ie_key.as_deref())
+            .unwrap_or("Youtube");
+        sites.fetched(extractor, self.webpage_url.as_deref().or(given), &self.id)
     }
 
     /// Whether a person wrote subtitles for it; `None` when the entry

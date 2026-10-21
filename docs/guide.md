@@ -148,9 +148,9 @@ from is the song list's `[sites]`
 ([configuration](configuration.md#settings-in-the-song-list)); any other
 site is the domain of the page yt-dlp fetched, without `www.`.
 
-An earlier muman named a source by yt-dlp's extractor, as
-`youtube:<id>`, `youtubetab:<id>` or `archiveorg:<id>`. Such a key
-still reads, in the song list and in a query, as its site's, and the
+An earlier muman named a source by yt-dlp's extractor, as `youtube:<id>`
+or `archiveorg:<id>`. Such a key of an extractor the built-in `[sites]`
+lists reads, in the song list and in a query, as its site's, and the
 next command that writes the song list writes it so; the library is
 not written again for it. A key of an extractor whose site muman does
 not know reads as it is until a sync renames it by the page its source

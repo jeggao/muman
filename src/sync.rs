@@ -10,7 +10,7 @@
 //! only once yt-dlp's gives it up ([`crate::progress::step_beneath`]).
 //! Each side's failures are recorded whatever the other's end.
 //!
-//! What a sync fetches is decided once, by [`due`]: the fetches, `status`
+//! What a sync fetches is decided once, by `due`: the fetches, `status`
 //! and `info` all read it, so none says a song is made from a source a
 //! sync would not fetch.
 

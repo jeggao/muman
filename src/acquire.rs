@@ -360,15 +360,7 @@ pub fn list<R: Runner, W: Write>(
         let videos = match found {
             Ok((Listing::Video(video), _)) => {
                 listed.urls.push(url.clone());
-                let key = if video.is_youtube() {
-                    Some(SourceKey::youtube(&video.id))
-                } else {
-                    video
-                        .extractor_key
-                        .as_deref()
-                        .and_then(|e| sites.fetched(e, Some(url), &video.id))
-                };
-                listed.named.extend(key);
+                listed.named.extend(video.key(sites, Some(url)));
                 vec![*video]
             }
             Ok((
@@ -470,7 +462,9 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         let mut ok = true;
         // A listed video already a source still joins its album.
         for video in &listed.videos {
-            let key = SourceKey::youtube(&video.id);
+            let Some(key) = video.key(self.fetcher.sites, None) else {
+                continue;
+            };
             if self.known.contains(&key)
                 && let Some(album) = place(&video.id)
             {

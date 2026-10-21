@@ -42,7 +42,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   fetches a torrent needs it.
 - **Jamendo and Audius are sites of their own.** A Jamendo track is
   `jamendo.com:<id>` whether it was found on `jamendo.com` or
-  `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`. Each
+  `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`; a
+  key an earlier muman named by the licensing domain is renamed by a
+  sync, its file moved, as `[sites]` `aliases` lists it. Each
   is fetched again by its ID, an Audius track though its page's address
   changed with its title, and a track of an album or playlist already
   kept is skipped without being fetched.
@@ -115,8 +117,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A removed song's video added alone by URL is listed again on every
   site,** as on YouTube; on another site `add` said "Nothing new".
 - **A key an earlier muman named by an extractor `[sites]` lists, as
-  `jamendo:<id>`, is renamed by that site,** `jamendo.com:<id>`, where
-  a sync named it by its page's domain, as `licensing.jamendo.com`.
+  `jamendo:<id>`, reads as that site's,** `jamendo.com:<id>`, in the
+  song list and in a query, as `youtube:<id>` does, where a sync renamed
+  it by its page's domain, as `licensing.jamendo.com`, and a query found
+  nothing by it.
 - **`check --upstream` takes a site that lists no formats, as Audius,
   for serving the one it names,** rather than saying every source of it
   is no longer served.

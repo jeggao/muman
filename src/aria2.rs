@@ -54,7 +54,7 @@
 //! every piece and fetches only those missing or wrong. One complete and
 //! right needs no peer.
 //!
-//! A listed file gone from the store is fetched again by `sync` ([`due`],
+//! A listed file gone from the store is fetched again by `sync` (`due`,
 //! [`fetch_due`]), beside yt-dlp's fetches, with the lyrics and pictures
 //! it brings: from the torrent's metainfo where the store keeps it, else
 //! from a magnet link of its hash and the trackers the song list records,

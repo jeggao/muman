@@ -20,12 +20,13 @@
 //! for every system ([`crate::store::fetched_path`]).
 //!
 //! Keys were named by yt-dlp's extractor before, as `youtube:<id>` and
-//! `archiveorg:<id>`. Such a key of an extractor [`LEGACY`] names reads
-//! as its domain's, wherever it is read, and is written so; one of any
-//! other extractor reads as it was, a source like any other, until a
-//! sync renames it by the page it recorded
-//! ([`crate::reconcile`]). [`SourceKey::spelled_before`] gives the old
-//! name back, for what an earlier muman keyed by it.
+//! `archiveorg:<id>`. Such a key of an extractor the built-in `[sites]`
+//! lists ([`crate::sites::built_in`]) reads as its site's, wherever it is
+//! read, and is written so; one of any other extractor, or of a domain a
+//! site lists as an alias, reads as it was, a source like any other,
+//! until a sync renames it by the song list's `[sites]` and the page it
+//! recorded ([`crate::reconcile`]). [`SourceKey::spelled_before`] gives
+//! the old name back, for what an earlier muman keyed by it.
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
@@ -38,26 +39,6 @@ pub const YOUTUBE: &str = "youtube.com";
 
 /// What a YouTube playlist's ID follows in its key.
 const PLAYLIST: &str = "playlist/";
-
-/// The extractors an earlier muman named keys by, lower-cased, and the
-/// domain each such key reads as: a record of what was, never added to,
-/// since a site added to `[sites]` names its keys by its domain from the
-/// first.
-pub const LEGACY: [(&str, &str); 13] = [
-    ("youtube", YOUTUBE),
-    ("youtubetab", YOUTUBE),
-    ("archiveorg", "archive.org"),
-    ("soundcloud", "soundcloud.com"),
-    ("bandcamp", "bandcamp.com"),
-    ("vimeo", "vimeo.com"),
-    ("dailymotion", "dailymotion.com"),
-    ("mixcloud", "mixcloud.com"),
-    ("audiomack", "audiomack.com"),
-    ("niconico", "nicovideo.jp"),
-    ("bilibili", "bilibili.com"),
-    ("twitter", "x.com"),
-    ("tiktok", "tiktok.com"),
-];
 
 /// The scheme of a torrent's files.
 pub const TORRENT: &str = "torrent";
@@ -193,12 +174,12 @@ impl SourceKey {
             )));
         }
         let scheme = scheme.to_ascii_lowercase();
-        let (site, id) = match scheme.as_str() {
-            "youtubetab" => (YOUTUBE.to_string(), format!("{PLAYLIST}{rest}")),
-            old => (
-                site_of(old).map_or_else(|| old.to_string(), str::to_string),
-                rest.to_string(),
-            ),
+        let named = crate::sites::built_in().of_extractor(&scheme);
+        let (site, id) = match named {
+            Some((domain, prefix)) if !scheme.contains('.') => {
+                (domain.to_string(), format!("{prefix}{rest}"))
+            }
+            _ => (scheme, rest.to_string()),
         };
         let valid = if NOT_SITES.contains(&site.as_str()) {
             is_token(&id)
@@ -257,16 +238,10 @@ impl SourceKey {
     /// by yt-dlp's extractor, as `youtube:<id>`.
     #[must_use]
     pub fn spelled_before(&self) -> Option<Self> {
-        let Self::Remote { site, id } = self else {
-            return None;
-        };
-        let (extractor, id) = match id.strip_prefix(PLAYLIST) {
-            Some(list) if site == YOUTUBE => ("youtubetab", list),
-            _ => (LEGACY.iter().find(|(_, s)| s == site)?.0, id.as_str()),
-        };
+        let (extractor, id) = crate::sites::built_in().extractor_of(self)?;
         Some(Self::Remote {
             site: extractor.to_string(),
-            id: id.to_string(),
+            id,
         })
     }
 
@@ -300,14 +275,6 @@ pub fn page<'a>(
     } else {
         webpage
     }
-}
-
-/// The domain a key an earlier muman named by `extractor` reads as.
-fn site_of(extractor: &str) -> Option<&'static str> {
-    LEGACY
-        .iter()
-        .find(|(e, _)| *e == extractor)
-        .map(|(_, s)| *s)
 }
 
 /// The site a page's address names, as yt-dlp's `webpage_url_domain`

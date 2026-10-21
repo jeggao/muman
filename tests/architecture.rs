@@ -412,3 +412,28 @@ fn what_muman_says_is_never_read_back() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Where a fetched source's key is worked out, and why: by
+/// `Sites::fetched` alone, so a source is named alike however it was
+/// reached.
+const NAMED: &[(&str, &str)] = &[
+    ("sites.rs", "the one place a fetched source is named"),
+    ("info.rs", "the info JSON yt-dlp embedded in a file"),
+    ("music.rs", "an entry a URL listed"),
+    ("download.rs", "the files a fetch reports"),
+    ("reconcile.rs", "an old key renamed by the page it recorded"),
+];
+
+#[test]
+fn a_fetched_source_is_named_in_one_place() {
+    let allowed: Vec<&str> = NAMED.iter().map(|(f, _)| *f).collect();
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &[".fetched("]) {
+            if !allowed.contains(&file.as_str()) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
