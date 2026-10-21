@@ -69,6 +69,10 @@ it. To build what is on `main` since the last release instead:
 cargo install --locked --git https://github.com/jeggao/muman
 ```
 
+`muman completions <SHELL>` writes a script that completes muman's
+commands, flags and values in bash, zsh, fish, PowerShell or elvish;
+`muman completions --help` says how to load it.
+
 ### Nix
 
 With [Nix](https://nixos.org), the flake builds muman with ffmpeg,
@@ -88,7 +92,8 @@ It names its ffmpeg, ffprobe, yt-dlp and aria2c in `MUMAN_FFMPEG`,
 program you name there still wins. For NixOS or Home Manager, add the
 flake's `overlays.default` and install `pkgs.muman`. Without flakes,
 `nix-build` in a checkout builds the same package, from the nixpkgs
-`flake.lock` pins.
+`flake.lock` pins. The package installs completion for bash, zsh and
+fish.
 
 ## Quick start
 
@@ -128,6 +133,7 @@ muman undo
 |---|---|
 | `add` | Fetch what URLs name or copy in files, list each as a song or as a source of a listed one, give lyrics, pictures and tag files to their songs, then sync |
 | `check` | Compare the library and the sources with what muman recorded |
+| `completions` | Write a script that completes muman's commands and flags in a shell |
 | `duplicates` | List songs listed apart that are one recording, by fingerprint |
 | `edit` | Edit the songs a query matches in your editor |
 | `export` | Write the song list and the library into a zip or a folder, under other settings or fitted to a size if given |
