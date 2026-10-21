@@ -196,8 +196,9 @@ max_size = "2 GiB"
 # extractors it names, each with the prefix its IDs take; each kind of
 # source it holds has a prefix, a regular expression its IDs match and
 # the address it is fetched again from, {id} its ID, percent-encoded
-# but for /. A source of a site not listed is named by its page's domain
-# and fetched again from it.
+# but for /. `aliases` are other domains its sources were named by, which
+# a sync renames. A source of a site not listed is named by its page's
+# domain and fetched again from it.
 [sites."youtube.com"]
 extractors = { youtube = "", youtubetab = "playlist/" }
 kinds = [
@@ -231,6 +232,7 @@ extractors = { twitter = "" }
 extractors = { tiktok = "" }
 [sites."jamendo.com"]
 extractors = { jamendo = "" }
+aliases = ["licensing.jamendo.com"]
 kinds = [{ prefix = "", id = "^[0-9]+$", fetch = "https://www.jamendo.com/track/{id}" }]
 [sites."audius.co"]
 extractors = { audius = "", audiustrack = "" }

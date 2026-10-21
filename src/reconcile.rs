@@ -897,7 +897,19 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
         state.rekey(&renames)?;
         state.save(home)?;
+        // Its file goes to its new key's place, so it is not fetched again.
+        for (from, to) in &renames {
+            let at = store.locate(from).map(|l| l.path);
+            if let Some(at) = at.filter(|p| p.starts_with(dirs.ytdlp())) {
+                crate::store::place(&dirs.ytdlp(), to, &at)?;
+            }
+        }
     }
+    let store = if renames.is_empty() || opts.dry_run {
+        store
+    } else {
+        Store::scan(dirs)?
+    };
     let listed = manifest.keys();
     if compare(runner, &store, &manifest.songs, &mut state, out)? {
         persist(home, &state, opts.dry_run, &lock)?;
@@ -905,31 +917,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
 
     // A dry run fetches nothing: what a sync would fetch counts as there,
     // and a song waiting on a source never measured is fetched, not failed.
-    let fetchable = |k: &SourceKey| match k {
-        SourceKey::Torrent(_) => true,
-        SourceKey::Manual(_) => false,
-        SourceKey::Remote { .. } => {
-            !crate::provider::is_kept(k)
-                && (manifest.settings.sites.fetch_url(k).is_some()
-                    || manifest
-                        .song_with(k)
-                        .and_then(|s| s.held.get(k)?.url.as_ref())
-                        .is_some())
-        }
+    let to_fetch: BTreeSet<SourceKey> = if opts.dry_run {
+        let due = crate::sync::due(
+            &manifest,
+            &store,
+            &state.failures,
+            opts.retry,
+            crate::state::now_secs(),
+        );
+        (due.now.into_iter())
+            .filter(|(_, f)| *f == crate::sync::Fetch::Missing)
+            .map(|(k, _)| k)
+            .collect()
+    } else {
+        BTreeSet::new()
     };
-    let now = crate::state::now_secs();
-    let due = |k: &SourceKey| {
-        state
-            .failures
-            .get(k)
-            .filter(|f| f.step == Step::Fetch)
-            .is_none_or(|f| opts.retry || f.due(None, now))
-    };
-    let to_fetch: BTreeSet<SourceKey> = listed
-        .iter()
-        .filter(|k| opts.dry_run && !store.has(k) && fetchable(k) && due(k))
-        .cloned()
-        .collect();
     let on_disk: BTreeSet<SourceKey> = listed
         .iter()
         .filter(|k| store.has(k) || to_fetch.contains(k))
@@ -2207,9 +2209,61 @@ fn resolve_all<W: Write>(
     waiting: &BTreeSet<SourceKey>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
-    let naming = Naming::new(&settings.library, library)?;
+    let resolution = resolve_songs(manifest, settings, state, library, on_disk, waiting)?;
+    for &n in &resolution.awaiting {
+        let name = name_of(&manifest.songs[n], None, &state.facts);
+        crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+    }
     let mut failed = BTreeSet::new();
-    let mut planned = Vec::new();
+    for (n, e) in &resolution.unresolved {
+        let song = &manifest.songs[*n];
+        failed.extend(song.sources.iter().cloned());
+        let name = name_of(song, None, &state.facts);
+        crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
+    }
+    if let (Some(max), over @ 1..) = (settings.library.max_path, resolution.over_max_path) {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{over} song(s) take more than [library] max_path = {max} characters even \
+                 with their names cut short: the library folder, {}, takes {} itself",
+                library.display(),
+                naming::units(&library.to_string_lossy())
+            ),
+        )?;
+    }
+    Ok((resolution.planned, failed))
+}
+
+/// What resolving every song found, for a caller to say or count.
+pub(crate) struct Resolution {
+    pub planned: Planned,
+    /// Each song that could not be resolved, by its place, and why.
+    pub unresolved: Vec<(usize, anyhow::Error)>,
+    /// Each song that could not be resolved while a source of it waits
+    /// to be fetched, by its place.
+    pub awaiting: Vec<usize>,
+    /// How many songs' paths take more than `[library] max_path`.
+    pub over_max_path: usize,
+}
+
+/// Resolve every song under `settings`, each with a path of its own,
+/// saying nothing.
+pub(crate) fn resolve_songs(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+    waiting: &BTreeSet<SourceKey>,
+) -> Result<Resolution> {
+    let naming = Naming::new(&settings.library, library)?;
+    let mut resolution = Resolution {
+        planned: Vec::new(),
+        unresolved: Vec::new(),
+        awaiting: Vec::new(),
+        over_max_path: 0,
+    };
     let albums = Albums::of(state.facts.values().map(|f| &f.tags));
     for (n, song) in manifest.songs.iter().enumerate() {
         let input = Input {
@@ -2227,38 +2281,25 @@ fn resolve_all<W: Write>(
             placement: settings.library.lyrics,
         };
         match resolve::resolve(&input) {
-            Ok(r) => planned.push((n, r)),
+            Ok(r) => resolution.planned.push((n, r)),
             Err(_) if song.sources.iter().any(|k| waiting.contains(k)) => {
-                let name = name_of(song, None, &state.facts);
-                crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+                resolution.awaiting.push(n);
             }
-            Err(e) => {
-                failed.extend(song.sources.iter().cloned());
-                let name = name_of(song, None, &state.facts);
-                crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
-            }
+            Err(e) => resolution.unresolved.push((n, e)),
         }
     }
     if let Some(max) = settings.library.max_path {
-        let over = planned
-            .iter()
+        resolution.over_max_path = (resolution.planned.iter())
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
-        if over > 0 {
-            crate::ui::warning(
-                out,
-                &format!(
-                    "{over} song(s) take more than [library] max_path = {max} characters even \
-                     with their names cut short: the library folder, {}, takes {} itself",
-                    library.display(),
-                    naming::units(&library.to_string_lossy())
-                ),
-            )?;
-        }
     }
-    crate::loudness::settle(&mut planned, state, settings);
-    separate(&mut planned, &naming, settings.library.max_name_bytes);
-    Ok((planned, failed))
+    crate::loudness::settle(&mut resolution.planned, state, settings);
+    separate(
+        &mut resolution.planned,
+        &naming,
+        settings.library.max_name_bytes,
+    );
+    Ok(resolution)
 }
 
 /// Take each output whose size or time changed since it was written,
@@ -2651,33 +2692,75 @@ impl Fate {
     }
 }
 
-/// Each listed source an extractor's name keys, as keys were once
-/// named, by the key a fetch now names it: by the site `[sites]` lists
-/// its extractor under, else by the site of the page its facts or its
-/// song's record recorded; one no other song lists nor another source
+/// Measure each fetched source whose facts are not current and note
+/// which are damaged, so a sync's network step fetches them again in the
+/// run that finds them rather than the next: a file damaged on disk
+/// since it was measured is found by measuring, which the offline phase
+/// does after the fetches.
+pub(crate) fn note_damaged<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    retry: bool,
+    out: &mut W,
+) -> Result<()> {
+    let lock = Lock::folder(&dirs.home)?;
+    let manifest = Manifest::load(&dirs.home)?;
+    let mut state = State::load(&dirs.home)?;
+    let store = Store::scan(dirs)?;
+    let fetched: BTreeSet<SourceKey> = manifest
+        .keys()
+        .into_iter()
+        .filter(|k| {
+            matches!(k, SourceKey::Remote { .. } | SourceKey::Torrent(_))
+                && !crate::provider::is_kept(k)
+        })
+        .collect();
+    let temp = crate::atomic::Scratch::new()?;
+    let mut how = Measuring {
+        retry,
+        say_unread: false,
+        checkpoint: &mut |s: &State| persist(&dirs.home, s, false, &lock),
+        analyses: crate::analysis::wanted(&manifest.settings.loudness),
+    };
+    measure(
+        runner,
+        &store,
+        &fetched,
+        &mut state,
+        temp.path(),
+        &mut how,
+        out,
+    )?;
+    note_damage(&manifest, &store, &mut state);
+    persist(&dirs.home, &state, false, &lock)
+}
+
+/// Each listed source the song list's `[sites]` names otherwise, by the
+/// key a fetch now names it: one of an extractor's name, as keys were
+/// once named, by the site listing it, else by the site of the page its
+/// facts or its song's record recorded; one of a domain a site lists as
+/// an alias by that site. One no other song lists nor another source
 /// takes. A source of yt-dlp's generic extractor keeps its name: what
 /// it recorded is the mirror a redirect ended at, not the address it was
 /// fetched by.
 fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, SourceKey> {
     let listed = manifest.keys();
+    let sites = &manifest.settings.sites;
     let mut renames = BTreeMap::new();
     for song in &manifest.songs {
-        for key in song
-            .sources
-            .iter()
-            .filter(|k| k.is_old() && k.site() != Some("generic"))
-        {
+        for key in song.sources.iter().filter(|k| k.site() != Some("generic")) {
             let page = state
                 .facts
                 .get(key)
                 .and_then(|f| f.served.as_ref()?.url.clone())
                 .or_else(|| song.held.get(key)?.url.clone());
-            let to = key.site().zip(key.id()).and_then(|(extractor, id)| {
-                manifest
-                    .settings
-                    .sites
-                    .fetched(extractor, page.as_deref(), id)
-            });
+            let by_page = || {
+                let (extractor, id) = key.site().zip(key.id())?;
+                sites.fetched(extractor, page.as_deref(), id)
+            };
+            let to = sites
+                .renamed(key)
+                .or_else(|| key.is_old().then(by_page).flatten());
             if let Some(to) =
                 to.filter(|t| t != key && !listed.contains(t) && !renames.values().any(|v| v == t))
             {

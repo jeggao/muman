@@ -126,9 +126,12 @@ the site holds: its `prefix`, an `id` regular expression the rest of an
 ID matches, and a `fetch` address with `{id}` where it goes,
 percent-encoded but for `/`, which a missing source is fetched again
 from. A song list naming a key whose ID
-no kind of its site takes is refused when read. A source of a site with
-no table is named by its page's domain and fetched again from the page
-its song records. Adding a site to `new.toml` adds it to every song list
+no kind of its site takes is refused when read. `aliases` lists other
+domains the site's sources were named by, as a page's domain named them
+before the site had a table: a fetch from one is named by the site, and
+a sync renames a listed key of one, its file moved, nothing fetched
+again. A source of a site with no table is named by its page's domain
+and fetched again from the page its song records. Adding a site to `new.toml` adds it to every song list
 the next time muman writes one; list an extractor only for a site whose
 pages are its own, since a source it fetched before is named by its page.
 

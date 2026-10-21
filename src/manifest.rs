@@ -1074,7 +1074,7 @@ fn refuse_unsited(
 }
 
 /// How a key written as `text` is written now, where that differs: an
-/// extractor's name for a site [`crate::source::LEGACY`] names, as
+/// extractor's name for a site the built-in `[sites]` lists, as
 /// `youtube:<id>`, is its domain's, and a torrent's hash is lower-case.
 fn spelled_now(text: &str) -> Option<String> {
     let key = SourceKey::parse(text)

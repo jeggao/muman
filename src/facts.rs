@@ -147,6 +147,9 @@ pub struct Served {
     /// The page it was fetched from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Milliseconds the site said it plays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 impl Served {
@@ -155,6 +158,10 @@ impl Served {
             format: info.format_id.clone()?,
             size: info.audio_format().and_then(|f| f.filesize),
             url: info.page().map(str::to_string),
+            duration_ms: info
+                .duration
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .map(|s| (s * 1000.0).round() as u64),
         })
     }
 }
@@ -228,7 +235,12 @@ impl Facts {
     /// source is judged cut off or missing audio.
     #[must_use]
     pub fn damage(&self) -> Option<Damage> {
-        self.integrity()?.damage()
+        let stated = self
+            .served
+            .as_ref()
+            .and_then(|s| s.duration_ms)
+            .map(|ms| ms as f64 / 1000.0);
+        self.integrity()?.damage_against(stated)
     }
 
     /// Seconds its audio plays: to where a cut-off file's packets end,

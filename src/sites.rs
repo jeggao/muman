@@ -31,6 +31,16 @@
 //! its sources alike on every machine; the list's tables lie over the
 //! built-in ones a site at a time, so a list naming one site keeps the
 //! rest.
+//!
+//! What a page's domain named before is named by its site where the site
+//! lists that domain among its `aliases`: a fetch from it names the site,
+//! and a sync renames a key of it ([`Sites::renamed`]). The built-in
+//! table alone, [`built_in`], reads an extractor's key wherever a key is
+//! read, without the song list.
+//!
+//! A source of yt-dlp's generic extractor, a file at any address, is
+//! named by its page's domain only where no table describes the domain:
+//! a described site's kinds would read its ID, a file's name, as theirs.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -52,6 +62,10 @@ struct Written {
     extractors: BTreeMap<String, String>,
     #[serde(default)]
     kinds: Vec<WrittenKind>,
+    /// Other domains its sources were named by, as the address they were
+    /// found at once named them.
+    #[serde(default)]
+    aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -79,6 +93,7 @@ struct Kind {
 struct Site {
     extractors: BTreeMap<String, String>,
     kinds: Vec<Kind>,
+    aliases: Vec<String>,
 }
 
 /// Every site the song list describes, by domain.
@@ -142,13 +157,32 @@ impl Sites {
                     );
                 }
             }
+            for alias in &w.aliases {
+                if domain_of(alias).as_deref() != Some(alias.as_str()) || alias == domain {
+                    bail!(
+                        "[sites.\"{domain}\"] alias `{alias}` is no other domain, lower-cased and without `www.`"
+                    );
+                }
+            }
             sites.insert(
                 domain.clone(),
                 Site {
                     extractors: w.extractors.clone(),
                     kinds,
+                    aliases: w.aliases.clone(),
                 },
             );
+        }
+        let mut named = BTreeMap::new();
+        for (domain, site) in &sites {
+            for alias in &site.aliases {
+                if sites.contains_key(alias) {
+                    bail!("[sites] `{alias}` is a site of its own and an alias of `{domain}`");
+                }
+                if let Some(other) = named.insert(alias.clone(), domain.clone()) {
+                    bail!("[sites] alias `{alias}` is listed by `{other}` and `{domain}`");
+                }
+            }
         }
         let mut owners = BTreeMap::new();
         for (domain, site) in &sites {
@@ -182,7 +216,63 @@ impl Default for Sites {
     }
 }
 
+/// The built-in table, which reads the keys an earlier muman named by an
+/// extractor it lists wherever a key is read, without a song list's.
+#[must_use]
+pub fn built_in() -> &'static Sites {
+    &BUILT_IN
+}
+
 impl Sites {
+    /// The site that lists `extractor`, lower-cased, and the prefix its
+    /// IDs take.
+    #[must_use]
+    pub fn of_extractor(&self, extractor: &str) -> Option<(&str, &str)> {
+        self.sites.iter().find_map(|(domain, site)| {
+            site.extractors
+                .get(extractor)
+                .map(|prefix| (domain.as_str(), prefix.as_str()))
+        })
+    }
+
+    /// The site a domain names: the one listing it as an alias, else itself.
+    fn site_of_domain(&self, domain: String) -> String {
+        self.sites
+            .iter()
+            .find(|(_, site)| site.aliases.contains(&domain))
+            .map_or(domain, |(d, _)| d.clone())
+    }
+
+    /// How `key` is named now, where the table names it otherwise: a key
+    /// of an extractor it lists, as an earlier muman named sources, by
+    /// that extractor's site, and one of an alias by the site that lists it.
+    #[must_use]
+    pub fn renamed(&self, key: &SourceKey) -> Option<SourceKey> {
+        let SourceKey::Remote { site, id } = key else {
+            return None;
+        };
+        let now = match self.of_extractor(site) {
+            Some((domain, prefix)) if !site.contains('.') => format!("{domain}:{prefix}{id}"),
+            _ => format!("{}:{id}", self.site_of_domain(site.clone())),
+        };
+        SourceKey::parse(&now).ok().filter(|now| now != key)
+    }
+
+    /// The extractor an earlier muman named `key` by, and its ID then: the
+    /// first of its site's extractors whose prefix its ID begins with.
+    #[must_use]
+    pub fn extractor_of(&self, key: &SourceKey) -> Option<(&str, String)> {
+        let SourceKey::Remote { site, id } = key else {
+            return None;
+        };
+        let site = self.sites.get(site)?;
+        site.extractors
+            .iter()
+            .filter(|(_, p)| id.starts_with(p.as_str()))
+            .max_by_key(|(_, p)| p.len())
+            .map(|(e, p)| (e.as_str(), id[p.len()..].to_string()))
+    }
+
     /// The site and the rest of its ID for a key, with the kind it is.
     fn kind_of<'s>(&'s self, key: &SourceKey) -> Option<(&'s Site, Option<&'s Kind>, String)> {
         let SourceKey::Remote { site, id } = key else {
@@ -212,18 +302,25 @@ impl Sites {
 
     /// What yt-dlp fetched, by the extractor key it printed, the page
     /// [`crate::source::page`] picks and the ID: named by the site that
-    /// lists the extractor, else the page's domain, else the extractor.
+    /// lists the extractor, else the site of the page's domain, else the
+    /// extractor. The one place a fetched source is named.
     #[must_use]
     pub fn fetched(&self, extractor: &str, page: Option<&str>, id: &str) -> Option<SourceKey> {
         let extractor = extractor.to_ascii_lowercase();
-        let listed = self.sites.iter().find_map(|(domain, site)| {
-            site.extractors
-                .get(&extractor)
-                .map(|prefix| (domain.clone(), prefix.clone()))
-        });
-        let (site, prefix) = listed
-            .or_else(|| page.and_then(domain_of).map(|d| (d, String::new())))
-            .unwrap_or((extractor, String::new()));
+        let listed = self
+            .of_extractor(&extractor)
+            .map(|(domain, prefix)| (domain.to_string(), prefix.to_string()));
+        let paged = page.and_then(domain_of).map(|d| self.site_of_domain(d));
+        let (site, prefix) = match (listed, paged) {
+            (Some(listed), _) => listed,
+            // A file of any address, read by yt-dlp's generic extractor, is
+            // none of a described site's kinds, which would misread its ID.
+            (None, Some(d)) if extractor == "generic" && self.sites.contains_key(&d) => {
+                (extractor, String::new())
+            }
+            (None, Some(d)) => (d, String::new()),
+            (None, None) => (extractor, String::new()),
+        };
         let key = SourceKey::parse(&format!("{site}:{prefix}{id}")).ok()?;
         self.accepts(&key).then_some(key)
     }
@@ -236,10 +333,13 @@ impl Sites {
         Some(kind?.fetch.as_deref()?.replace("{id}", &id.join("/")))
     }
 
-    /// Every domain the table describes and every extractor it lists.
+    /// Every domain the table describes, every alias and every extractor
+    /// it lists.
     pub fn schemes(&self) -> impl Iterator<Item = &str> {
         self.sites.iter().flat_map(|(domain, site)| {
-            std::iter::once(domain.as_str()).chain(site.extractors.keys().map(String::as_str))
+            std::iter::once(domain.as_str())
+                .chain(site.extractors.keys().map(String::as_str))
+                .chain(site.aliases.iter().map(String::as_str))
         })
     }
 
@@ -287,6 +387,61 @@ mod tests {
         let sites = Sites::default();
         assert!(sites.sites.contains_key(crate::source::YOUTUBE));
         assert!(sites.sites.contains_key("archive.org"));
+    }
+
+    #[test]
+    fn every_key_an_earlier_muman_named_by_its_extractor_reads_as_before() {
+        for (old, now) in [
+            ("youtube:vid00000001", "youtube.com:vid00000001"),
+            ("youtubetab:OLAK5uy_x", "youtube.com:playlist/OLAK5uy_x"),
+            ("archiveorg:item0001", "archive.org:item0001"),
+            ("soundcloud:1", "soundcloud.com:1"),
+            ("bandcamp:1", "bandcamp.com:1"),
+            ("vimeo:1", "vimeo.com:1"),
+            ("dailymotion:x1", "dailymotion.com:x1"),
+            ("mixcloud:a", "mixcloud.com:a"),
+            ("audiomack:a", "audiomack.com:a"),
+            ("niconico:sm1", "nicovideo.jp:sm1"),
+            ("bilibili:BV1", "bilibili.com:BV1"),
+            ("twitter:1", "x.com:1"),
+            ("tiktok:1", "tiktok.com:1"),
+            ("jamendo:1234567", "jamendo.com:1234567"),
+            ("audiustrack:aBc12", "audius.co:aBc12"),
+        ] {
+            assert_eq!(key(old).to_string(), now);
+        }
+        assert_eq!(
+            key("youtube.com:playlist/OLAK5uy_x").spelled_before(),
+            Some(SourceKey::Remote {
+                site: "youtubetab".into(),
+                id: "OLAK5uy_x".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_alias_names_its_sites_sources_and_a_generic_fetch_names_none() {
+        let sites = Sites::default();
+        let page = "https://licensing.jamendo.com/en/track/1234567/title";
+        assert_eq!(
+            sites.fetched("JamendoLicensing", Some(page), "1234567"),
+            Some(key("jamendo.com:1234567"))
+        );
+        assert_eq!(
+            sites.renamed(&key("licensing.jamendo.com:1234567")),
+            Some(key("jamendo.com:1234567"))
+        );
+        assert_eq!(sites.renamed(&key("jamendo.com:1234567")), None);
+        let mirror = "https://archive.org/download/item-1/01.mp3";
+        assert_eq!(
+            sites.fetched("Generic", Some(mirror), "01"),
+            Some(key("generic:01")),
+            "an archive.org kind would read `01` as an item"
+        );
+        assert_eq!(
+            sites.fetched("Generic", Some("https://tunes.example/01.mp3"), "01"),
+            Some(key("tunes.example:01"))
+        );
     }
 
     #[test]

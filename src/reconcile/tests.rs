@@ -1829,7 +1829,7 @@ fn a_source_of_a_site_no_table_names_is_renamed_by_its_page() {
 }
 
 #[test]
-fn a_source_of_an_extractor_a_site_lists_is_renamed_by_that_site() {
+fn a_source_of_an_extractor_a_site_lists_reads_as_that_sites() {
     let h = home();
     h.fetched("1234567");
     h.songs("[[song]]\nsources = [\"jamendo.com:1234567\"]\n");
@@ -1853,11 +1853,49 @@ fn a_source_of_an_extractor_a_site_lists_is_renamed_by_that_site() {
     let fake = fake();
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
+    assert_eq!(renders(&fake), 0, "{text}");
+    let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    assert!(songs.contains("\"jamendo.com:1234567\""), "{songs}");
+}
+
+#[test]
+fn a_source_of_a_sites_alias_is_renamed_by_that_site_and_its_file_moved() {
+    let h = home();
+    let old = h
+        .dirs
+        .ytdlp()
+        .join("licensing.jamendo.com")
+        .join("1234567.mkv");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, b"1234567").unwrap();
+    h.songs("[[song]]\nsources = [\"licensing.jamendo.com:1234567\"]\n");
+    let fake = Fake::default().info(
+        "1234567",
+        r#"{"id": "1234567", "title": "Title 1234567", "uploader": "Chan", "format_id": "mp31",
+            "webpage_url": "https://licensing.jamendo.com/en/track/1234567/title"}"#,
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
     assert!(
-        text.contains("Renamed by the site it came from: jamendo:1234567 → jamendo.com:1234567"),
+        text.contains(
+            "Renamed by the site it came from: licensing.jamendo.com:1234567 → jamendo.com:1234567"
+        ),
         "{text}"
     );
-    assert_eq!(renders(&fake), 0, "{text}");
+    assert!(!old.exists(), "{text}");
+    assert!(
+        h.dirs
+            .ytdlp()
+            .join("jamendo.com")
+            .join("1234567.mkv")
+            .is_file()
+    );
+    let (ok, again) = h.run(&infos(&[]), Options::default());
+    assert!(ok, "{again}");
+    assert!(
+        !again.contains("Renamed") && !again.contains("Failed"),
+        "{again}"
+    );
 }
 
 #[test]

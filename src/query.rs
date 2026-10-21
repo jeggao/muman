@@ -423,16 +423,13 @@ impl Test {
     }
 }
 
-/// The key schemes a query treats as keys: `manual`, every site and
-/// extractor `[sites]` names and keys were once named by
-/// ([`crate::source::LEGACY`]), and every site the song list names.
+/// The key schemes a query treats as keys: `manual`, every site, alias
+/// and extractor `[sites]` names, built in or the song list's, as keys
+/// were once named, and every site the song list names.
 #[must_use]
 pub fn extractors(manifest: &Manifest) -> BTreeSet<String> {
-    let mut found: BTreeSet<String> = ["manual", "youtubetab"].map(String::from).into();
-    for (extractor, site) in crate::source::LEGACY {
-        found.insert(extractor.to_string());
-        found.insert(site.to_string());
-    }
+    let mut found: BTreeSet<String> = ["manual".to_string()].into();
+    found.extend(crate::sites::built_in().schemes().map(str::to_string));
     found.extend(manifest.settings.sites.schemes().map(str::to_string));
     let keys = manifest
         .songs

@@ -805,6 +805,7 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
         let why = match damage {
             Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
             Some(Damage::Missing { seconds, .. }) => format!("{why}, {seconds:.1} s missing"),
+            Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
             None => why,
         };
         (rank, (*key).clone(), why)

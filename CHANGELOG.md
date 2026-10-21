@@ -42,7 +42,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   fetches a torrent needs it.
 - **Jamendo and Audius are sites of their own.** A Jamendo track is
   `jamendo.com:<id>` whether it was found on `jamendo.com` or
-  `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`. Each
+  `licensing.jamendo.com`, and an Audius track is `audius.co:<id>`; a
+  key an earlier muman named by the licensing domain is renamed by a
+  sync, its file moved, as `[sites]` `aliases` lists it. Each
   is fetched again by its ID, an Audius track though its page's address
   changed with its title, and a track of an album or playlist already
   kept is skipped without being fetched.
@@ -101,16 +103,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   that asks for them, stayed in the store's hidden staging folder, which
   no `purge` or `check` saw; each fetch now stages its files in a
   scratch folder of its own, which goes when the fetch ends.
+- **A source damaged on disk is fetched again by the sync that finds
+  it.** A sync measured after its fetches, so a file damaged since it
+  was measured failed its song in that sync and came again only in the
+  next; it is measured before them now.
 - **A fetch stopped while yt-dlp remuxed leaves no song cut short.**
   Stopped mid-remux, ffmpeg left the `.mkv` short beside its whole
   original in `partial/`, and the next run took it for finished: a song
   ended early that `check --decode` passed. Such an `.mkv` is now
-  deleted before a fetch and the original remuxed again.
+  deleted before a fetch and the original remuxed again, and a fetched
+  source whose audio ends well before the length its site states is
+  damaged, fetched again as a cut-off download is.
 - **A removed song's video added alone by URL is listed again on every
   site,** as on YouTube; on another site `add` said "Nothing new".
 - **A key an earlier muman named by an extractor `[sites]` lists, as
-  `jamendo:<id>`, is renamed by that site,** `jamendo.com:<id>`, where
-  a sync named it by its page's domain, as `licensing.jamendo.com`.
+  `jamendo:<id>`, reads as that site's,** `jamendo.com:<id>`, in the
+  song list and in a query, as `youtube:<id>` does, where a sync renamed
+  it by its page's domain, as `licensing.jamendo.com`, and a query found
+  nothing by it.
 - **`check --upstream` takes a site that lists no formats, as Audius,
   for serving the one it names,** rather than saying every source of it
   is no longer served.

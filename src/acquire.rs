@@ -25,7 +25,7 @@ use crate::runner::Runner;
 use crate::settings::Ytdlp;
 use crate::sites::Sites;
 use crate::source::SourceKey;
-use crate::state::{self, Failure, Looked, Outcome, Step};
+use crate::state::{self, Failure, Looked, Outcome};
 use crate::store::Store;
 use crate::ytdlp_log::Relay;
 
@@ -360,15 +360,7 @@ pub fn list<R: Runner, W: Write>(
         let videos = match found {
             Ok((Listing::Video(video), _)) => {
                 listed.urls.push(url.clone());
-                let key = if video.is_youtube() {
-                    Some(SourceKey::youtube(&video.id))
-                } else {
-                    video
-                        .extractor_key
-                        .as_deref()
-                        .and_then(|e| sites.fetched(e, Some(url), &video.id))
-                };
-                listed.named.extend(key);
+                listed.named.extend(video.key(sites, Some(url)));
                 vec![*video]
             }
             Ok((
@@ -470,7 +462,9 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         let mut ok = true;
         // A listed video already a source still joins its album.
         for video in &listed.videos {
-            let key = SourceKey::youtube(&video.id);
+            let Some(key) = video.key(self.fetcher.sites, None) else {
+                continue;
+            };
             if self.known.contains(&key)
                 && let Some(album) = place(&video.id)
             {
@@ -659,20 +653,15 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         failures: &BTreeMap<SourceKey, Failure>,
         retry: bool,
     ) -> Result<(bool, Vec<(SourceKey, String)>)> {
-        type Urls = Vec<(SourceKey, String)>;
-        let now = state::now_secs();
         let held = |k: &SourceKey| manifest.song_with(k).and_then(|s| s.held.get(k));
+        let due = crate::sync::due(manifest, self.store, failures, retry, state::now_secs());
+        let remote = |k: &SourceKey| matches!(k, SourceKey::Remote { .. });
         // A damaged download is fetched again as a missing one is, its
         // whole copy taking the damaged one's place.
-        let damaged = |k: &SourceKey| {
-            failures
-                .get(k)
-                .is_some_and(|f| f.step == Step::Refetch && (retry || f.due(None, now)))
-        };
-        let refetched = manifest
-            .keys()
-            .into_iter()
-            .filter(|k| matches!(k, SourceKey::Remote { .. }) && damaged(k))
+        let refetched = due
+            .now
+            .iter()
+            .filter(|(k, f)| remote(k) && **f == crate::sync::Fetch::Damaged)
             .count();
         if refetched > 0 {
             crate::ui::info(
@@ -680,32 +669,25 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
                 &format!("Fetching {refetched} damaged source(s) again"),
             )?;
         }
-        let (gone, waiting): (Urls, Urls) = manifest
+        let gone: Vec<(SourceKey, String)> = due
+            .now
             .keys()
-            .into_iter()
-            .filter(|k| !self.store.has(k) || damaged(k))
+            .filter(|k| remote(k))
             .filter_map(|k| {
                 let url = self
                     .fetcher
                     .sites
-                    .fetch_url(&k)
-                    .or_else(|| held(&k)?.url.clone())?;
-                Some((k, url))
+                    .fetch_url(k)
+                    .or_else(|| held(k)?.url.clone())?;
+                Some((k.clone(), url))
             })
-            .partition(|(k, _)| {
-                retry
-                    || damaged(k)
-                    || failures
-                        .get(k)
-                        .filter(|f| f.step == Step::Fetch)
-                        .is_none_or(|f| f.due(None, now))
-            });
-        if !waiting.is_empty() {
+            .collect();
+        let waiting = due.waiting.iter().filter(|k| remote(k)).count();
+        if waiting > 0 {
             crate::ui::warning(
                 self.out,
                 &format!(
-                    "Not fetching {} missing source(s) that failed lately; `sync --retry` tries now",
-                    waiting.len()
+                    "Not fetching {waiting} missing source(s) that failed lately; `sync --retry` tries now"
                 ),
             )?;
         }
