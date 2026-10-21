@@ -158,10 +158,7 @@ impl Metainfo {
                 .collect()
         };
         let pieces = match get(info, "pieces") {
-            Some(Value::Bytes(b)) => b
-                .chunks_exact(20)
-                .filter_map(|c| c.try_into().ok())
-                .collect(),
+            Some(Value::Bytes(b)) => b.as_chunks::<20>().0.to_vec(),
             _ => Vec::new(),
         };
         let private = matches!(get(info, "private"), Some(Value::Int(1)));

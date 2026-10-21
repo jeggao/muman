@@ -966,7 +966,7 @@ fn an_add_of_a_torrent_with_no_aria2c_stops_as_a_missing_tool() {
         e.downcast_ref::<crate::tools::ToolError>().is_some(),
         "{e:#}"
     );
-    assert!(s.songs().is_empty());
+    assert_eq!(s.songs(), Vec::<Vec<SourceKey>>::new());
 }
 
 #[test]

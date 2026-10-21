@@ -368,7 +368,7 @@ fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
     assert!(text.contains("youtube.com:vid00000009: not kept"), "{text}");
     assert!(!text.contains("Nothing new"), "{text}");
     let left = crate::store::files_below(&ytdlp, 9, |_| true).unwrap();
-    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(left, Vec::<PathBuf>::new());
 }
 
 #[test]
