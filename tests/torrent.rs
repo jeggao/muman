@@ -9,15 +9,16 @@
 //! DHT, peer exchange and local discovery are off, and the one tracker
 //! names the one seeder.
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use muman::aria2::{Failure, Places, Wanted, fetch, fetch_all, metainfo_of, take_up};
-use muman::runner::System;
+use muman::runner::{Line, Runner, System};
 use muman::settings::Torrent;
 use muman::source::SourceKey;
 use muman::torrent::{Magnet, Metainfo, selected};
@@ -354,11 +355,37 @@ fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
     );
 }
 
+/// [`System`], keeping each line a streamed program writes.
+#[derive(Default)]
+struct Heard {
+    system: System,
+    lines: Mutex<Vec<String>>,
+}
+
+impl Runner for Heard {
+    fn run(&self, cmd: &[OsString]) -> anyhow::Result<()> {
+        self.system.run(cmd)
+    }
+
+    fn output(&self, cmd: &[OsString]) -> anyhow::Result<Vec<u8>> {
+        self.system.output(cmd)
+    }
+
+    fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> anyhow::Result<bool> {
+        self.system.stream(cmd, &mut |line| {
+            let (Line::Out(text) | Line::Err(text)) = line;
+            self.lines.lock().unwrap().push(text.trim().to_string());
+            on_line(line);
+        })
+    }
+}
+
 #[test]
 #[ignore = "needs aria2c"]
 fn torrents_fetched_in_one_run_end_each_on_their_own() {
-    let runner = System::default();
+    let runner = Heard::default();
     runner
+        .system
         .require("aria2c")
         .expect("found, at or above its floor");
     let dir = tempfile::tempdir().unwrap();
@@ -433,4 +460,22 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
     };
     let song = muman::store::torrent_path(&store, key);
     assert_eq!(std::fs::read(&song).unwrap(), SONG, "the song, whole");
+
+    // A download stopped is told by the summaries that no longer name it,
+    // each begun by this line and naming the downloads by their GIDs.
+    let lines = runner.lines.into_inner().unwrap();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("*** Download Progress Summary")),
+        "{lines:#?}"
+    );
+    let readouts: Vec<&String> = lines.iter().filter(|l| l.starts_with("[#")).collect();
+    assert!(!readouts.is_empty(), "{lines:#?}");
+    assert!(
+        readouts
+            .iter()
+            .all(|l| l.starts_with("[#000001 ") || l.starts_with("[#000002 ")),
+        "{readouts:#?}"
+    );
 }
