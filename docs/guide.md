@@ -21,7 +21,7 @@ holds only what muman renders from it.
 |---|---|
 | `songs.toml` | The song list: every song, its sources, tags and pins, and the settings |
 | `state.json` | Which library files muman wrote and from what, and every source's measures |
-| `sources/yt-dlp/<site>/<id>.mkv` | What yt-dlp fetched, video, subtitles and metadata in one file, at a path of its key alone; anything else there is no source, and `purge` deletes it |
+| `sources/yt-dlp/<site>/<id>.mkv` | What yt-dlp fetched, video, subtitles and metadata in one file, at a path of its key alone, one too long for a name cut into folders; anything else there is no source, and `purge` deletes it |
 | `sources/manual/` | Files you dropped in, at any depth, with lyrics and pictures beside them |
 | `sources/lrclib/<id>.lrc` | Lyrics found on LRCLIB, with the record they came from |
 | `sources/musicbrainz/<id>.json` | Tags found on MusicBrainz: a recording and the release picked for it |

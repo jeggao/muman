@@ -549,3 +549,79 @@ fn a_subtitle_past_the_audio_is_no_cut_and_damaged_audio_is_found() {
         text(&checked)
     );
 }
+
+/// A signal that stops muman stops what it started: SIGTERM reaches
+/// muman alone, as `kill` and a service manager send it, so an aria2c
+/// that outlived it would go on fetching into the home.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs ffmpeg"]
+fn a_signal_stops_muman_and_every_program_it_started() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let home = Home::new();
+    let pid_file = home.root.join("aria2c.pid");
+    let aria2c = home.root.join("aria2c");
+    std::fs::write(
+        &aria2c,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = --version ] && {{ echo 'aria2 version 1.37.0'; exit 0; }}\n\
+             echo $$ > '{}'\nexec sleep 600\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&aria2c, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let songs = home.root.join("home").join("songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let tool = format!(
+        "[tools.aria2c]\ncommand = [{:?}]\n",
+        aria2c.display().to_string()
+    );
+    std::fs::write(&songs, format!("{listed}\n{tool}")).unwrap();
+    let torrent = home.root.join("Lantern Weather.torrent");
+    let mut bytes = b"d4:infod6:lengthi1e4:name6:a.flac12:piece lengthi16384e6:pieces20:".to_vec();
+    bytes.extend([0; 20]);
+    bytes.extend(b"ee");
+    std::fs::write(&torrent, bytes).unwrap();
+
+    let mut muman = Command::new(env!("CARGO_BIN_EXE_muman"))
+        .arg("--home")
+        .arg(home.root.join("home"))
+        .arg("--library")
+        .arg(home.root.join("library"))
+        .args(["add", "--no-match"])
+        .arg(&torrent)
+        .spawn()
+        .unwrap();
+    let waited = |done: &dyn Fn() -> bool| {
+        let start = Instant::now();
+        while !done() && start.elapsed() < Duration::from_secs(30) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        done()
+    };
+    assert!(waited(
+        &|| std::fs::read_to_string(&pid_file).is_ok_and(|p| p.ends_with('\n'))
+    ));
+    let aria2c_pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .to_string();
+    let signal = |sig: &str, pid: &str| {
+        Command::new("kill")
+            .args([sig, pid])
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(signal("-TERM", &muman.id().to_string()));
+    let status = muman.wait().unwrap();
+    assert_eq!(status.code(), Some(130), "{status}");
+    assert!(
+        waited(&|| !signal("-0", &aria2c_pid)),
+        "aria2c outlived muman"
+    );
+}

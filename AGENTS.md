@@ -159,8 +159,8 @@ minor and patch bumps as one pull request and each major alone;
   `NO_COLOR` and Windows consoles.
 - **Errors:** `anyhow` with context naming the file or step.
 - **Exit codes:** 0 success or a declined change, 2 a missing tool or no
-  home folder, 4 a failure, 5 a refused change. Listed in `cli.rs`,
-  `EXIT_CODES_HELP`.
+  home folder, 4 a failure, 5 a refused change, 130 stopped by a signal.
+  Listed in `cli.rs`, `EXIT_CODES_HELP`.
 - **Files:** whole-file writes through `atomic::write`; renames and
   deletes in the library through `atomic::rename` and `atomic::remove`,
   which wait out a file Windows reports as held open.

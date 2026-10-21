@@ -87,10 +87,9 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "store.rs",
-        5,
+        4,
         "an upload its release replaced, deleted from the sources; a file \
-         fetched moved to its key's place, replacing the key's other, and \
-         what yt-dlp could not embed in it deleted from staging; a \
+         fetched moved to its key's place, replacing the key's other; a \
          torrent's file aria2c finished moved to its key's place",
     ),
     (
@@ -99,7 +98,7 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
          download taken up, or a damaged copy, copied in to be checked; \
-         the input file of a run stopped before it could delete it",
+         the input file of a run, in scratch",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (
@@ -111,9 +110,8 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",
-        3,
-        "the URL list and download archive handed to yt-dlp, in scratch; a \
-         fetched file no place in the store can take, from staging",
+        2,
+        "the URL list and download archive handed to yt-dlp, in scratch",
     ),
     (
         "download.rs",
@@ -171,6 +169,10 @@ const STATICS: &[(&str, &str)] = &[
     (
         "history.rs",
         "a count that tells two runs of one process apart",
+    ),
+    (
+        "runner.rs",
+        "the programs a signal stops with muman, and whether one of the user's own answers it",
     ),
 ];
 
@@ -340,4 +342,31 @@ fn the_reasons_name_files_that_exist() {
     for (file, _) in STATICS.iter().chain(RESHAPES) {
         assert!(all.contains_key(*file), "{file}");
     }
+}
+
+/// Where a file or folder of a run's own is made, and why: anywhere
+/// else, one a run stopped partway leaves would be nobody's to remove.
+const SCRATCH: &[(&str, &str)] = &[
+    (
+        "atomic.rs",
+        "a whole file written beside its place, and a run's scratch folder",
+    ),
+    (
+        "reconcile.rs",
+        "a step's folder inside a run's scratch folder",
+    ),
+];
+
+#[test]
+fn a_runs_own_files_are_made_in_its_scratch_folder() {
+    let allowed: Vec<&str> = SCRATCH.iter().map(|(f, _)| *f).collect();
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &["tempfile::Builder", "tempfile_in(", "tempdir_in("]) {
+            if !allowed.contains(&file.as_str()) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

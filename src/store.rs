@@ -8,8 +8,15 @@
 //! as every system takes a name: a key has one place, so it has one file, a download
 //! resumes at one path whatever the uploader is called this time, and a
 //! file anywhere else is not a source ([`Store::leftovers`]). yt-dlp
-//! writes a run's finished files into [`STAGING`], and each is moved to
-//! its place as the run ends ([`place`]). A file in the layout before,
+//! writes a run's finished files into a scratch folder of that run's in
+//! the store, [`crate::atomic::Scratch`], and each is moved to its place
+//! as the run ends ([`place`]): hidden, so no scan takes what is in it for
+//! a source; in the store, so a file is renamed in, not copied, and kept
+//! apart from the unfinished downloads, which are cleared by their age,
+//! as a file yt-dlp dated by the server's clock would seem; and gone with
+//! the run, with what yt-dlp could not embed, as a JSON subtitle, and a
+//! file no place could take, so nothing a run fetched outlives it but at
+//! its key's place. A file in the layout before,
 //! named by the uploader and title as `<uploader>/<title> [<id>].mkv`,
 //! stays where it is and is read by its ID; only what is fetched from now
 //! on is kept by its key.
@@ -51,16 +58,17 @@ use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
 use crate::source::{SourceKey, TorrentKey, id_of};
 use crate::torrent::Metainfo;
 
-/// The folder in the store yt-dlp writes a run's finished files into,
-/// each moved to its key's place as the run ends: hidden, so no scan
-/// takes what is in it for a source, and in the store rather than with
-/// the unfinished downloads, which are cleared by their age, as a file
-/// yt-dlp dated by the server's clock would seem.
-pub const STAGING: &str = ".incoming";
+/// The most bytes a part of a stored path takes, its extension aside:
+/// under the 255 bytes or UTF-16 units a name may take on any filesystem
+/// muman writes to, a character never taking fewer bytes in UTF-8 than
+/// units in UTF-16, with room for an extension.
+pub const PART_BYTES: usize = 200;
 
 /// Where the file of the fetched source `key` is kept, of extension
-/// `ext`: `<site>/<id>.<ext>`, its ID spelled by `stored_id`. `None`
-/// for a key no fetch makes.
+/// `ext`: `<site>/<id>.<ext>`, its ID spelled by `stored_id`; a spelling
+/// longer than [`PART_BYTES`] is cut into folders, each of the most that
+/// fits, the last holding the file, and read back joined. `None` for a
+/// key no fetch makes.
 #[must_use]
 pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> {
     let SourceKey::Remote { site, id } = key else {
@@ -69,7 +77,30 @@ pub fn fetched_path(root: &Path, key: &SourceKey, ext: &str) -> Option<PathBuf> 
     if kept(site).is_some() {
         return None;
     }
-    Some(root.join(site).join(format!("{}.{ext}", stored_id(id))))
+    let mut parts = cut(&stored_id(id));
+    let last = parts.pop()?;
+    let mut path = root.join(site);
+    path.extend(parts);
+    Some(path.join(format!("{last}.{ext}")))
+}
+
+/// `name` in parts of [`PART_BYTES`] at most, whole characters each,
+/// none beginning with a `.`, which would hide it: a `.` past the end
+/// stays with the part before, short of a run of dots too long for any
+/// name, which no ID holds.
+fn cut(name: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    for c in name.chars() {
+        let len = parts.last().map_or(0, String::len);
+        let full = len + c.len_utf8() > PART_BYTES;
+        if full && (c != '.' || len >= PART_BYTES + 40) {
+            parts.push(String::new());
+        }
+        if let Some(part) = parts.last_mut() {
+            part.push(c);
+        }
+    }
+    parts
 }
 
 /// Whether `c` stands in a stored file's name as it is: letters, digits
@@ -166,16 +197,16 @@ pub fn place_torrent(root: &Path, key: &TorrentKey, from: &Path) -> Result<PathB
 /// names it.
 fn key_at(root: &Path, file: &Path) -> Option<SourceKey> {
     let rel = file.strip_prefix(root).ok()?;
-    let mut parts = rel.components();
-    let site = parts.next()?.as_os_str().to_str()?;
-    let name = Path::new(parts.next()?.as_os_str());
-    if parts.next().is_some() {
-        return None;
-    }
-    let id = id_of_stored(name.file_stem()?.to_str()?)?;
+    let mut parts = rel.components().map(|c| c.as_os_str().to_str());
+    let site = parts.next()??;
+    let mut name = parts.collect::<Option<Vec<&str>>>()?;
+    let last = Path::new(name.pop()?);
+    let stem = last.file_stem()?.to_str()?;
+    let id = id_of_stored(&format!("{}{stem}", name.concat()))?;
     let key = SourceKey::parse(&format!("{site}:{id}")).ok()?;
-    matches!(&key, SourceKey::Remote { site: s, .. } if s == site && kept(s).is_none())
-        .then_some(key)
+    let ext = last.extension()?.to_str()?;
+    // One place per key: a name cut where it need not be is none.
+    (fetched_path(root, &key, ext).as_deref() == Some(file)).then_some(key)
 }
 
 /// Move `from`, what yt-dlp fetched for `key`, to its key's place in
@@ -207,25 +238,6 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
     }
     crate::atomic::rename(from, &to)
         .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
-    // What yt-dlp could not embed beside it, as a JSON subtitle, is no
-    // source; an ID may be another's and more, so no song file goes.
-    let staged = from
-        .file_stem()
-        .map(|s| format!("{}.", s.to_string_lossy()));
-    let beside = std::fs::read_dir(from.parent().unwrap_or(root))
-        .into_iter()
-        .flatten()
-        .filter_map(|e| Some(e.ok()?.path()))
-        .filter(|p| {
-            kind_of(p) != Some(Kind::Media)
-                && staged.as_deref().is_some_and(|s| {
-                    p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with(s))
-                })
-        });
-    for left in beside {
-        let _ = std::fs::remove_file(left);
-    }
     for name in &names {
         let other = folder.join(name);
         if name != to_name
@@ -490,9 +502,13 @@ impl Store {
             let mkv = |p: &PathBuf| p.extension().is_none_or(|e| e != "mkv");
             mkv(a).cmp(&mkv(b)).then_with(|| a.cmp(b))
         };
-        for file in walk(&root, 2)? {
+        // Deep enough for an ID of thousands of bytes, cut into folders.
+        for file in walk(&root, 32)? {
             let media = kind_of(&file) == Some(Kind::Media);
-            if let (true, Some(id)) = (media, id_of(&file)) {
+            let depth = file
+                .strip_prefix(&root)
+                .map_or(0, |r| r.components().count());
+            if let (true, 2, Some(id)) = (media, depth, id_of(&file)) {
                 store.legacy.entry(id).or_default().push(file);
                 continue;
             }
@@ -1264,17 +1280,34 @@ mod tests {
     }
 
     #[test]
-    fn what_yt_dlp_left_beside_a_fetched_file_goes_with_it_and_no_other_source() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("sources/yt-dlp");
-        let staged = "sources/yt-dlp/.incoming/ArchiveOrg/item-1⧸01.mp3";
-        let file = touch(dir.path(), &format!("{staged}.mkv"));
-        let comments = touch(dir.path(), &format!("{staged}.comments.json"));
-        let other = touch(dir.path(), &format!("{staged}.lrc.mkv"));
-        let key = SourceKey::parse("archive.org:item-1/01.mp3").unwrap();
-        place(&root, &key, &file).unwrap();
-        assert!(!comments.exists());
-        assert!(other.exists(), "another source, `item-1/01.mp3.lrc`");
+    fn every_key_has_one_place_of_names_any_system_takes_and_reads_back() {
+        let root = Path::new("sources").join("yt-dlp");
+        let long = |part: &str, n: usize| part.repeat(n);
+        for id in [
+            "vid00000001".to_string(),
+            format!("item-1/{}.mp3", long("%E6%97%85", 30)),
+            format!("item-1/{}", long("夜の歌 ", 60)),
+            format!("item-1/{}.mp3", long("a", 199)),
+            format!("item-1/{}.mp3", long("a", 600)),
+            format!("item-1/{}{}b.flac", long("a", 188), long(".", 10)),
+        ] {
+            let key = SourceKey::parse(&format!("archive.org:{id}")).unwrap();
+            let at = fetched_path(&root, &key, "mkv").unwrap();
+            for part in at.iter().map(|p| p.to_str().unwrap()) {
+                assert!(part.len() <= 255, "{} bytes: {part}", part.len());
+                assert!(part.encode_utf16().count() <= 255, "{part}");
+                assert!(!part.starts_with('.'), "{part}");
+            }
+            assert_eq!(key_at(&root, &at), Some(key), "{}", at.display());
+        }
+        let key = SourceKey::parse(&format!("archive.org:item-1/{}", long("a", 300))).unwrap();
+        let at = fetched_path(&root, &key, "mkv").unwrap();
+        let stem = at
+            .strip_prefix(root.join("archive.org"))
+            .unwrap()
+            .to_string_lossy();
+        let cut_otherwise = root.join("archive.org").join(stem.replacen('a', "a/", 1));
+        assert_eq!(key_at(&root, &cut_otherwise), None, "one place per key");
     }
 
     #[test]

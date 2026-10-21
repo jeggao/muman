@@ -44,7 +44,9 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, or a change or undo was refused";
+     and was left out, or a change or undo was refused
+  130  Stopped by Ctrl-C or a signal to stop, with every program
+       muman started";
 
 /// A command line that parses but gives what does not read, as a setting
 /// `export --set` gives; it exits as one that does not parse.

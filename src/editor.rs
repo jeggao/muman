@@ -393,6 +393,7 @@ pub fn launch(path: &Path) -> Result<()> {
         .iter()
         .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()))
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
+    let _theirs = crate::runner::Interactive::begin();
     let status = if cfg!(windows) {
         let words = windows_words(&editor)?;
         let program = which::which(&words[0]).unwrap_or_else(|_| words[0].clone().into());
