@@ -712,7 +712,8 @@ fn add_torrents<R: Runner, W: Write>(
             files: missing,
         });
     }
-    let fetched = crate::aria2::fetch_all(runner, out, &places, &wanted).unwrap_or_else(|e| {
+    let fetched = crate::aria2::fetch_all(runner, out, &places, &wanted);
+    let fetched = stop_on_tool(fetched)?.unwrap_or_else(|e| {
         let why = format!("{e:#}");
         wanted
             .iter()
@@ -725,8 +726,25 @@ fn add_torrents<R: Runner, W: Write>(
     let mut failed = BTreeSet::new();
     for (w, fetched) in wanted.iter().zip(fetched) {
         if let Some(failure) = fetched.failure {
-            ui::error(out, &format!("{}: {failure}", w.meta.name))?;
-            failed.insert(w.meta.hash());
+            ui::error(
+                out,
+                &format!(
+                    "{}: {failure}; giving it to `add` again goes on",
+                    w.meta.name
+                ),
+            )?;
+            if fetched.arrived.is_empty() {
+                failed.insert(w.meta.hash());
+            } else {
+                ui::info(
+                    out,
+                    &format!(
+                        "{}: taking the {} file(s) that arrived whole",
+                        w.meta.name,
+                        fetched.arrived.len()
+                    ),
+                )?;
+            }
             ok = false;
         }
     }
@@ -736,6 +754,15 @@ fn add_torrents<R: Runner, W: Write>(
         .collect();
     let proposals = propose_torrents(out, places.store, &fetched, &known)?;
     Ok((ok, proposals))
+}
+
+/// `result` as it is, but for an aria2c that cannot run, which stops a
+/// run fetching torrents, as a missing yt-dlp stops one fetching videos.
+fn stop_on_tool<T>(result: Result<T>) -> Result<Result<T>> {
+    match result {
+        Err(e) if e.downcast_ref::<crate::tools::ToolError>().is_some() => Err(e),
+        other => Ok(other),
+    }
 }
 
 /// Propose each song file of `metas` that is in the store, `root`, and
@@ -753,6 +780,17 @@ fn propose_torrents<W: Write>(
             .filter(|f| store::kind_of(&f.path) == Some(Kind::Media) && on_disk(root, meta, f))
             .map(|f| (meta.key(f), f.path.display().to_string()))
             .collect();
+        for (lost, kept) in crate::torrent::shadowed(meta) {
+            ui::warning(
+                out,
+                &format!(
+                    "{}: {} is not fetched: some systems keep it at the place of {}",
+                    meta.name,
+                    lost.display(),
+                    kept.display()
+                ),
+            )?;
+        }
         if songs.is_empty() {
             ui::warning(out, &format!("{} holds no song file", meta.name))?;
         }
@@ -792,6 +830,17 @@ fn read_all<R: Runner, W: Write>(
     let mut read = Vec::new();
     for input in inputs {
         match read_torrent(input) {
+            Ok(Given::Magnet(m)) => {
+                let hash = m.v1.as_deref().or(m.v2.as_deref()).unwrap_or_default();
+                let kept = std::fs::read(crate::store::metainfo_path(places.store, hash))
+                    .ok()
+                    .filter(|b| crate::torrent::Metainfo::read(b).is_ok_and(|t| t.hash() == hash));
+                let given = match kept {
+                    Some(bytes) => Given::Kept(bytes, m.trackers),
+                    None => Given::Magnet(m),
+                };
+                read.push((input.as_str(), given));
+            }
             Ok(given) => read.push((input.as_str(), given)),
             Err(e) => {
                 ui::error(out, &format!("{e:#}"))?;
@@ -803,16 +852,17 @@ fn read_all<R: Runner, W: Write>(
         .iter()
         .filter_map(|(_, g)| match g {
             Given::Magnet(m) => Some(m),
-            Given::File(_) => None,
+            Given::File(_) | Given::Kept(..) => None,
         })
         .collect();
-    let mut asked = crate::aria2::metainfos(runner, out, places, &magnets)
+    let mut asked = stop_on_tool(crate::aria2::metainfos(runner, out, places, &magnets))?
         .unwrap_or_else(|e| magnets.iter().map(|_| Err(format!("{e:#}"))).collect())
         .into_iter();
     let mut metas = Vec::new();
     for (input, given) in read {
         let (bytes, trackers) = match given {
             Given::File(bytes) => (Ok(bytes), Vec::new()),
+            Given::Kept(bytes, trackers) => (Ok(bytes), trackers),
             Given::Magnet(m) => (
                 asked.next().unwrap_or_else(|| Err("aria2c failed".into())),
                 m.trackers,
@@ -842,6 +892,9 @@ enum Given {
     Magnet(crate::torrent::Magnet),
     /// The bytes of a `.torrent` file.
     File(Vec<u8>),
+    /// A magnet link of a torrent whose metainfo the store keeps: its
+    /// bytes, and the link's trackers.
+    Kept(Vec<u8>, Vec<String>),
 }
 
 /// The torrent `input` names, read as far as it is without asking a peer.
@@ -953,7 +1006,7 @@ pub(crate) fn fetched_key<R: Runner>(
     sites: &crate::sites::Sites,
     path: &Path,
 ) -> Option<SourceKey> {
-    id_of(path)?;
+    crate::source::bracketed_id(path)?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(path)).ok()?).ok()?;
     let attachment = probed.attachment_named("info.json")?;
     let temp = atomic::Scratch::new().ok()?;

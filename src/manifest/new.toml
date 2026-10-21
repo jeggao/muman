@@ -157,8 +157,8 @@ keep_partial = "14 days"
 # More arguments for every aria2c run, such as ["--listen-port=51413"]
 # or ["--max-overall-upload-limit=1M"].
 args = []
-# How long a fetch waits with nothing arriving before it fails; a later
-# sync tries again.
+# How long a fetch waits with nothing arriving before it fails, 1 s or
+# more; a later sync tries again.
 stall = "10 min"
 # How long a fetched torrent is seeded before the run goes on.
 seed_time = "0 s"

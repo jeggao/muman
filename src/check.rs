@@ -156,6 +156,23 @@ pub fn check<R: Runner, W: Write, D: Write>(
     }
 
     let listed = manifest.keys();
+    let unread: std::collections::BTreeSet<&str> = listed
+        .iter()
+        .filter_map(|k| match k {
+            SourceKey::Torrent(t) if !store.has_metainfo(t.hash()) => Some(t.hash()),
+            _ => None,
+        })
+        .collect();
+    for hash in unread {
+        problem(
+            report,
+            format!(
+                "The metainfo of torrent {hash} is gone from sources/torrent: its files bring \
+                 no lyrics or pictures and are not checked piece by piece until its .torrent \
+                 or a magnet link of it is given to `add` again"
+            ),
+        )?;
+    }
     for key in &listed {
         if !store.has(key) {
             let page = manifest

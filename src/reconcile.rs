@@ -903,9 +903,48 @@ pub fn reconcile_into<R: Runner, W: Write>(
         persist(home, &state, opts.dry_run, &lock)?;
     }
 
-    let on_disk: BTreeSet<SourceKey> = listed.iter().filter(|k| store.has(k)).cloned().collect();
-    let (mut planned, mut failed) = plan(&manifest, &state, &dirs.library, Some(&on_disk), out)?;
+    // A dry run fetches nothing: what a sync would fetch counts as there,
+    // and a song waiting on a source never measured is fetched, not failed.
+    let fetchable = |k: &SourceKey| match k {
+        SourceKey::Torrent(_) => true,
+        SourceKey::Manual(_) => false,
+        SourceKey::Remote { .. } => {
+            !crate::provider::is_kept(k)
+                && (manifest.settings.sites.fetch_url(k).is_some()
+                    || manifest
+                        .song_with(k)
+                        .and_then(|s| s.held.get(k)?.url.as_ref())
+                        .is_some())
+        }
+    };
+    let now = crate::state::now_secs();
+    let due = |k: &SourceKey| {
+        state
+            .failures
+            .get(k)
+            .filter(|f| f.step == Step::Fetch)
+            .is_none_or(|f| opts.retry || f.due(None, now))
+    };
+    let to_fetch: BTreeSet<SourceKey> = listed
+        .iter()
+        .filter(|k| opts.dry_run && !store.has(k) && fetchable(k) && due(k))
+        .cloned()
+        .collect();
+    let on_disk: BTreeSet<SourceKey> = listed
+        .iter()
+        .filter(|k| store.has(k) || to_fetch.contains(k))
+        .cloned()
+        .collect();
+    let (mut planned, mut failed) = plan_awaiting(
+        &manifest,
+        &state,
+        &dirs.library,
+        Some(&on_disk),
+        &to_fetch,
+        out,
+    )?;
     let mut ok = failed.is_empty();
+    failed.extend(to_fetch.iter().cloned());
     adopt(&mut state, &dirs.library, out)?;
     vouch_for_copies(&dirs.library, &mut state);
     if !opts.dry_run {
@@ -1001,6 +1040,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             old: &state.outputs,
             state: &state,
             failed: &failed,
+            to_fetch: &to_fetch,
         };
         // Matched here, once measuring has given each song its tags.
         let matched = match &query {
@@ -1776,10 +1816,24 @@ fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
             }
             Some(_) => {}
             None => {
+                let recorded = held.and_then(|h| h.audio.as_ref());
+                // A torrent's hash names every byte of its files: one that
+                // holds other audio than its song was built from is damaged.
+                let now = crate::held::Held::now(&key, facts, sites).and_then(|h| h.audio);
+                if matches!(key, SourceKey::Torrent(_))
+                    && let (Some(was), Some(now)) = (recorded, now)
+                    && *was != now
+                {
+                    if refetching.is_none_or(|r| r.as_deref() != Some(rev.as_str())) {
+                        state.damaged.entry(key.clone()).or_insert(now);
+                        let said = format!("{key} holds other bytes than its torrent's");
+                        state.record_failure(&key, Step::Refetch, Some(rev), said);
+                    }
+                    continue;
+                }
                 if refetching.is_some() {
                     state.clear_failure(&key);
                 }
-                let recorded = held.and_then(|h| h.audio.as_ref());
                 if state.damaged.get(&key).is_some_and(|d| Some(d) != recorded) {
                     state.damaged.remove(&key);
                 }
@@ -2084,6 +2138,19 @@ pub(crate) fn plan<W: Write>(
     on_disk: Option<&BTreeSet<SourceKey>>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
+    plan_awaiting(manifest, state, library, on_disk, &BTreeSet::new(), out)
+}
+
+/// [`plan`], a song that cannot be resolved while a source of it is
+/// `waiting` to be fetched said to wait, and not one that failed.
+fn plan_awaiting<W: Write>(
+    manifest: &Manifest,
+    state: &State,
+    library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+    waiting: &BTreeSet<SourceKey>,
+    out: &mut W,
+) -> Result<(Planned, BTreeSet<SourceKey>)> {
     for key in &manifest.clean.unknown {
         crate::ui::warning(
             out,
@@ -2099,7 +2166,15 @@ pub(crate) fn plan<W: Write>(
     {
         crate::ui::warning(out, &line)?;
     }
-    plan_with(manifest, &manifest.settings, state, library, on_disk, out)
+    resolve_all(
+        manifest,
+        &manifest.settings,
+        state,
+        library,
+        on_disk,
+        waiting,
+        out,
+    )
 }
 
 /// [`plan`] under `settings` rather than the song list's, saying only
@@ -2110,6 +2185,26 @@ pub(crate) fn plan_with<W: Write>(
     state: &State,
     library: &Path,
     on_disk: Option<&BTreeSet<SourceKey>>,
+    out: &mut W,
+) -> Result<(Planned, BTreeSet<SourceKey>)> {
+    resolve_all(
+        manifest,
+        settings,
+        state,
+        library,
+        on_disk,
+        &BTreeSet::new(),
+        out,
+    )
+}
+
+fn resolve_all<W: Write>(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+    waiting: &BTreeSet<SourceKey>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
     let naming = Naming::new(&settings.library, library)?;
@@ -2133,6 +2228,10 @@ pub(crate) fn plan_with<W: Write>(
         };
         match resolve::resolve(&input) {
             Ok(r) => planned.push((n, r)),
+            Err(_) if song.sources.iter().any(|k| waiting.contains(k)) => {
+                let name = name_of(song, None, &state.facts);
+                crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+            }
             Err(e) => {
                 failed.extend(song.sources.iter().cloned());
                 let name = name_of(song, None, &state.facts);
@@ -2465,6 +2564,8 @@ struct Shown<'a> {
     old: &'a BTreeMap<PathBuf, Written>,
     state: &'a State,
     failed: &'a BTreeSet<SourceKey>,
+    /// What a sync would fetch before it plans.
+    to_fetch: &'a BTreeSet<SourceKey>,
 }
 
 /// The state as `decided`'s moves would leave it, which pruning is judged
@@ -2551,9 +2652,10 @@ impl Fate {
 }
 
 /// Each listed source an extractor's name keys, as keys were once
-/// named, by the key the site of the page it was fetched from names it:
-/// one no other song lists nor another source takes, as the page its
-/// facts or its song's record recorded. A source of yt-dlp's generic extractor keeps its name: what
+/// named, by the key a fetch now names it: by the site `[sites]` lists
+/// its extractor under, else by the site of the page its facts or its
+/// song's record recorded; one no other song lists nor another source
+/// takes. A source of yt-dlp's generic extractor keeps its name: what
 /// it recorded is the mirror a redirect ended at, not the address it was
 /// fetched by.
 fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, SourceKey> {
@@ -2570,12 +2672,14 @@ fn sites_found(manifest: &Manifest, state: &State) -> BTreeMap<SourceKey, Source
                 .get(key)
                 .and_then(|f| f.served.as_ref()?.url.clone())
                 .or_else(|| song.held.get(key)?.url.clone());
-            let to = page
-                .as_deref()
-                .and_then(crate::source::domain_of)
-                .and_then(|site| SourceKey::parse(&format!("{site}:{}", key.id()?)).ok());
+            let to = key.site().zip(key.id()).and_then(|(extractor, id)| {
+                manifest
+                    .settings
+                    .sites
+                    .fetched(extractor, page.as_deref(), id)
+            });
             if let Some(to) =
-                to.filter(|t| !listed.contains(t) && !renames.values().any(|v| v == t))
+                to.filter(|t| t != key && !listed.contains(t) && !renames.values().any(|v| v == t))
             {
                 renames.insert(key.clone(), to);
             }
@@ -2615,11 +2719,13 @@ pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, S
 }
 
 /// How many of the songs `showing` matches a sync does each thing with,
-/// and how many it cannot plan; those up to date it hides it says how
+/// how many it plans once it has fetched their sources, and how many it
+/// cannot plan; those up to date it hides it says how
 /// to show.
 fn tally<W: Write>(
     fates: &BTreeMap<Fate, usize>,
     failed: usize,
+    fetched: usize,
     showing: &Showing,
     out: &mut W,
 ) -> Result<()> {
@@ -2627,6 +2733,9 @@ fn tally<W: Write>(
         .iter()
         .filter_map(|f| Some(format!("{} {}", fates.get(f)?, f.name())))
         .collect();
+    if fetched > 0 {
+        parts.push(format!("{fetched} made once fetched"));
+    }
     if failed > 0 {
         parts.push(format!("{failed} failed"));
     }
@@ -2672,6 +2781,7 @@ fn status<W: Write>(
         old,
         state,
         failed,
+        to_fetch,
     } = shown;
     let library = &dirs.library;
     let moved = would_move(planned, decided, old, showing, out)?;
@@ -2722,10 +2832,15 @@ fn status<W: Write>(
         }
     }
     let planned_songs: BTreeSet<usize> = planned.iter().map(|(n, _)| *n).collect();
-    let unplanned = (0..manifest.songs.len())
+    let (fetched, unplanned): (Vec<usize>, Vec<usize>) = (0..manifest.songs.len())
         .filter(|n| showing.matches(*n) && !planned_songs.contains(n))
-        .count();
-    tally(&fates, unplanned, showing, out)?;
+        .partition(|n| {
+            manifest.songs[*n]
+                .sources
+                .iter()
+                .any(|k| to_fetch.contains(k))
+        });
+    tally(&fates, unplanned.len(), fetched.len(), showing, out)?;
     // What a query matches is songs; these are files.
     if showing.matched.is_some() {
         return Ok(());

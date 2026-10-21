@@ -172,4 +172,33 @@ mod tests {
         assert!(gone.iter().all(|p| !p.exists()));
         assert!(kept.iter().all(|p| p.exists()));
     }
+
+    #[test]
+    fn a_listed_torrent_whose_metainfo_is_gone_keeps_its_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+        };
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        let kept = [
+            touch(&dirs, &format!("sources/torrent/{hash}/CD1/a.flac")),
+            touch(&dirs, &format!("sources/torrent/{hash}/CD1/cover.jpg")),
+        ];
+        std::fs::write(
+            dirs.manifest(),
+            format!("version = 4\n[[song]]\nsources = [\"torrent:{hash}/CD1/a.flac\"]\n"),
+        )
+        .unwrap();
+        let confirm = Confirm {
+            yes: true,
+            all: false,
+            dry_run: false,
+        };
+        let mut out = Vec::new();
+        assert!(!purge(&dirs, &confirm, None, &mut out).unwrap());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Nothing unused to delete"), "{text}");
+        assert!(kept.iter().all(|p| p.exists()), "{text}");
+    }
 }

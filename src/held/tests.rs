@@ -196,6 +196,19 @@ fn a_site_serves_the_recorded_format_at_its_size_or_says_how_not() {
 }
 
 #[test]
+fn a_site_of_one_format_serves_the_one_it_names() {
+    let one = |id: &str| {
+        crate::info::parse(format!(r#"{{"id": "aaaaa", "format_id": "{id}"}}"#).as_bytes()).unwrap()
+    };
+    let was = held("0123456789abcdef", Some("0"));
+    assert_eq!(was.upstream(&one("0")), Some(Upstream::Unsized("0".into())));
+    assert_eq!(
+        was.upstream(&one("1")),
+        Some(Upstream::Withdrawn("0".into()))
+    );
+}
+
+#[test]
 fn a_source_two_songs_share_is_held_by_each() {
     let (dir, mut m) = load(
         "version = 3\n[[song]]\nsources = [\"manual:a.flac\", \"manual:added/cover.jpg\"]\n\

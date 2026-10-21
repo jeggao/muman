@@ -78,6 +78,7 @@ impl Fetcher<'_> {
         });
         let n = self.runs.get();
         self.runs.set(n + 1);
+        download::drop_cut_remuxes(self.partial);
         let done = self.temp.join(format!("done-{n}"));
         // Well under Windows' 32,767-character command line, with room
         // for every other argument.
@@ -152,7 +153,11 @@ impl Fetcher<'_> {
                     f.path = path;
                     arrived.push(f);
                 }
-                Err(e) => crate::ui::warning(out, &format!("{e:#}"))?,
+                Err(e) => {
+                    ok = false;
+                    crate::ui::error(out, &format!("{}: not kept: {e:#}", f.key))?;
+                    let _ = std::fs::remove_file(&f.path);
+                }
             }
         }
         Ok((ok, arrived))
@@ -321,7 +326,7 @@ pub struct Listed {
     /// Each album video's album and place on it.
     pub places: BTreeMap<String, (SourceKey, u32)>,
     /// Videos a URL named alone, not by a playlist.
-    pub named: BTreeSet<String>,
+    pub named: BTreeSet<SourceKey>,
 }
 
 /// List each URL once, yt-dlp deciding what it names. A playlist goes to
@@ -354,9 +359,15 @@ pub fn list<R: Runner, W: Write>(
         let videos = match found {
             Ok((Listing::Video(video), _)) => {
                 listed.urls.push(url.clone());
-                if video.is_youtube() {
-                    listed.named.insert(video.id.clone());
-                }
+                let key = if video.is_youtube() {
+                    Some(SourceKey::youtube(&video.id))
+                } else {
+                    video
+                        .extractor_key
+                        .as_deref()
+                        .and_then(|e| sites.fetched(e, Some(url), &video.id))
+                };
+                listed.named.extend(key);
                 vec![*video]
             }
             Ok((
@@ -444,11 +455,10 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
             self.runner,
             self.out,
         )?;
-        for id in &listed.named {
-            let key = SourceKey::youtube(id);
-            if self.removed.contains(&key) {
+        for key in &listed.named {
+            if self.removed.contains(key) {
                 crate::ui::info(self.out, &format!("Listing {key} again, removed before"))?;
-                self.known.remove(&key);
+                self.known.remove(key);
             }
         }
         let mut add = Additions {

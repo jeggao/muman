@@ -293,6 +293,22 @@ fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
 }
 
 #[test]
+fn an_original_whose_id_holds_a_space_goes_into_the_store_under_its_key() {
+    let s = Setup::new();
+    let original = s.file("Downloads/01 Lantern #2.mp3 [item-1⧸01 Lantern #2.mp3].mkv");
+    let fake = Fake::default().info(
+        "Lantern",
+        r#"{"id": "item-1/01 Lantern #2.mp3", "extractor_key": "ArchiveOrg",
+            "title": "Lantern", "uploader": "Marlo Venn"}"#,
+    );
+    let (ok, text) = s.run(&fake, &["add", &original]);
+    assert!(ok, "{text}");
+    let key = SourceKey::parse("archive.org:item-1/01 Lantern #2.mp3").unwrap();
+    assert_eq!(s.songs(), [vec![key]], "{text}");
+    assert!(!s.dir.path().join("home/sources/manual").exists(), "{text}");
+}
+
+#[test]
 fn an_original_in_a_folder_goes_to_its_key_once_and_undo_takes_it_out() {
     let s = Setup::new();
     let original = s.file("Downloads/batch/chan/Song [aaaaaaaaaaa].mkv");
@@ -500,6 +516,69 @@ fn a_torrents_song_files_are_fetched_and_listed_and_the_rest_left() {
 }
 
 #[test]
+fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo(
+        "Lantern Weather",
+        &["01 Paper Comets?.flac", "01 Paper Comets？.flac"],
+    );
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("01 Paper Comets？.flac is not fetched: some systems keep it at the place of 01 Paper Comets?.flac"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/01 Paper Comets?.flac")).unwrap();
+    assert_eq!(s.songs(), [vec![key]]);
+    assert!(
+        runs.lock().unwrap()[0].contains(&"--select-file=1".to_string()),
+        "{:?}",
+        runs.lock().unwrap()
+    );
+}
+
+#[test]
+fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["01 Paper Comets.flac", "cover.jpg"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::default());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::remove_file(torrents.join(format!("{hash}.torrent"))).unwrap();
+
+    let (ok, text) = s.run(&fake, &["status"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&fake, &["check"]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains(&format!("The metainfo of torrent {hash} is gone")),
+        "{report}"
+    );
+    assert!(!report.contains("Missing from sources"), "{report}");
+    let (_, text) = s.run(&fake, &["purge", "-y"]);
+    assert!(
+        torrents.join(&hash).join("01 Paper Comets.flac").is_file(),
+        "{text}"
+    );
+    assert!(torrents.join(&hash).join("cover.jpg").is_file(), "{text}");
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn a_torrent_downloaded_already_is_taken_up_from_its_folder() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac", "scan.png"]);
@@ -572,6 +651,13 @@ fn a_magnet_links_metainfo_comes_from_its_peers() {
     assert_eq!(
         manifest.torrents[&hash].trackers,
         ["udp://tracker.example:1337"]
+    );
+    let (ok, text) = s.run(&fake, &["add", "--no-match", &link]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        runs.lock().unwrap().len(),
+        2,
+        "its metainfo is kept: {text}"
     );
 
     let e = run_with(
@@ -770,10 +856,54 @@ fn a_torrent_no_peer_seeds_fails_alone_and_the_one_beside_it_arrives() {
     );
     assert!(!ok, "{text}");
     assert!(
-        text.contains("Lantern Weather: no peer sent anything for 10 min"),
+        text.contains("Lantern Weather: no peer sent anything for 10 min; what arrived waits to be resumed; giving it to `add` again goes on"),
         "{text}"
     );
     let key = SourceKey::parse(&format!("torrent:{}/a.flac", b.0)).unwrap();
+    assert_eq!(s.songs(), [vec![key]], "{text}");
+}
+
+#[test]
+fn a_torrent_unfinished_keeps_each_file_whose_pieces_check() {
+    use sha1::Digest as _;
+    let s = Setup::new();
+    let pieces: Vec<u8> = [b"x", b"y"]
+        .iter()
+        .flat_map(|p| sha1::Sha1::digest(p).to_vec())
+        .collect();
+    let file = |name: &str| format!("d6:lengthi1e4:pathl{}:{name}ee", name.len());
+    let mut bytes = format!(
+        "d4:infod5:filesl{}{}e4:name15:Lantern Weather12:piece lengthi1e6:pieces40:",
+        file("a.flac"),
+        file("b.flac")
+    )
+    .into_bytes();
+    bytes.extend(pieces);
+    bytes.extend(b"ee");
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let path = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&path, &bytes).unwrap();
+    let fetched = aria2c(bytes, hash.clone(), Arc::default());
+    let fake = Fake {
+        lines: vec![
+            "Download Results:".into(),
+            "000001|INPR|       0B/s| 50|partial/files/1.flac".into(),
+        ],
+        on_stream: Some(Box::new(move |args: &[String]| {
+            (fetched.on_stream.as_ref().unwrap())(args);
+            false
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(&fake, &["add", "--no-match", path.to_str().unwrap()]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Lantern Weather: taking the 1 file(s) that arrived whole"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/a.flac")).unwrap();
     assert_eq!(s.songs(), [vec![key]], "{text}");
 }
 
@@ -806,9 +936,37 @@ impl crate::runner::Runner for NoAria2c {
         cmd: &[std::ffi::OsString],
         on_line: &mut dyn FnMut(crate::runner::Line<'_>),
     ) -> anyhow::Result<bool> {
-        anyhow::ensure!(cmd[0] != "aria2c", "aria2c is not installed");
+        if cmd[0] == "aria2c" {
+            return Err(crate::tools::ToolError::Missing {
+                tool: &crate::tools::TOOLS[3],
+                named: None,
+            }
+            .into());
+        }
         self.0.stream(cmd, on_line)
     }
+}
+
+#[test]
+fn an_add_of_a_torrent_with_no_aria2c_stops_as_a_missing_tool() {
+    let s = Setup::new();
+    let [a, _] = two_torrents(&s);
+    let fake = NoAria2c(aria2c_of(vec![(a.0.clone(), a.1.clone())], Arc::default()));
+    let mut out = Vec::new();
+    let ran = run_with(
+        &s.job(&["add", "--no-match", a.2.to_str().unwrap()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let e = ran.unwrap_err();
+    assert!(
+        e.downcast_ref::<crate::tools::ToolError>().is_some(),
+        "{e:#}"
+    );
+    assert_eq!(s.songs(), Vec::<Vec<SourceKey>>::new());
 }
 
 #[test]
@@ -845,7 +1003,7 @@ fn a_sync_with_no_aria2c_fails_each_torrent_file_and_goes_on() {
             "{text}"
         );
     }
-    assert_eq!(text.matches("aria2c is not installed").count(), 2, "{text}");
+    assert_eq!(text.matches("aria2c not found").count(), 2, "{text}");
     let (_, text) = s.run(&fake, &["sync"]);
     assert!(
         text.contains("Not fetching 2 missing torrent file(s) that failed lately"),
@@ -1099,6 +1257,51 @@ fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
     assert!(ok && !again.contains("Fetching"), "{again}");
     let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
     assert!(!state.failures.contains_key(&key) && state.damaged.is_empty());
+}
+
+#[test]
+fn a_torrent_file_holding_other_bytes_is_damaged() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let key = SourceKey::parse(&format!("torrent:{hash}/Paper Comets.flac")).unwrap();
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 4\n\
+             [providers.lrclib]\nenabled = false\n\
+             [providers.acoustid]\nenabled = false\n\
+             [providers.musicbrainz]\nenabled = false\n\
+             [providers.coverart]\nenabled = false\n\
+             [[song]]\nsources = [\"{key}\"]\n"
+        ),
+    );
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::create_dir_all(&torrents).unwrap();
+    std::fs::write(torrents.join(format!("{hash}.torrent")), &bytes).unwrap();
+    let at = format!("home/sources/torrent/{hash}/Paper Comets.flac");
+    s.written(&at, "as fetched");
+    let hashed = |n| {
+        Fake {
+            hashes: vec![("Paper Comets".into(), n)],
+            ..Fake::default()
+        }
+        .probe(".flac", FLAC)
+    };
+    let (ok, text) = s.run(&hashed(1), &["sync", "--offline"]);
+    assert!(ok, "{text}");
+    s.written(&at, "eight bytes overwritten");
+    let (_, text) = s.run(&hashed(3), &["sync", "--offline"]);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+    assert!(!text.contains("Updated"), "{text}");
 }
 
 #[test]
@@ -1512,6 +1715,51 @@ fn sync_fills_in_every_setting_and_updates_none_already_current() {
     assert!(listed.contains("opus_bitrate = \"192 kb/s\""), "{listed}");
     assert!(!listed.contains("opus_kbps"), "{listed}");
     assert!(listed.contains("[ytdlp]"), "{listed}");
+}
+
+#[test]
+fn info_counts_no_notice_of_the_song_list_as_a_song() {
+    let s = Setup::new();
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\nedition = 3\n\n[ytdlp]\nsub_langs = \"all,-live_chat\"\n\n[audoi]\n",
+    )
+    .unwrap();
+    let (ok, text) = s.report(&flacs(), &["info", "-v"]);
+    assert!(ok, "{text}");
+    let unmade = text.lines().find(|l| l.contains("Cannot be made"));
+    assert_eq!(
+        unmade.map(|l| l.split_whitespace().last()),
+        Some(Some("0")),
+        "{text}"
+    );
+}
+
+#[test]
+fn status_of_a_song_a_sync_would_fetch_says_so_and_fails_nothing() {
+    let s = Setup::new();
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n\n[[song]]\nsources = [\"jamendo.com:1234567\"]\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["status"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Failed"), "{text}");
+    assert!(text.contains("Made once a sync fetches it"), "{text}");
+    let (_, report) = s.report(&flacs(), &["status"]);
+    assert!(report.contains("Songs: 1 made once fetched"), "{report}");
+
+    let home = s.dir.path().join("home");
+    let mut state = crate::state::State::load(&home).unwrap();
+    let key = SourceKey::parse("jamendo.com:1234567").unwrap();
+    state.record_failure(&key, crate::state::Step::Fetch, None, "Not found".into());
+    state.save(&home).unwrap();
+    let (ok, text) = s.run(&flacs(), &["status"]);
+    assert!(!ok, "a source that failed lately is not fetched: {text}");
+    assert!(text.contains("Failed"), "{text}");
 }
 
 #[test]

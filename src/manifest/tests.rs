@@ -892,3 +892,18 @@ fn a_misspelled_table_is_warned_of_and_an_unknown_one_kept_quietly() {
     );
     assert!(said[1].contains("`history`"), "{said:?}");
 }
+
+#[test]
+fn a_key_its_site_takes_no_such_id_of_is_refused_by_its_song() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"jamendo.com:1234567\"]\n\n\
+         [[song]]\nsources = [\"jamendo.com:abc\"]\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("song 2: `jamendo.com:abc` is not a source key"),
+        "{e:#}"
+    );
+}

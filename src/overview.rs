@@ -100,8 +100,9 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
             store.has(k) || !matches!(k, SourceKey::Manual(_)) && !crate::provider::is_kept(k)
         })
         .collect();
-    let (mut planned, _) = reconcile::plan(
+    let (mut planned, _) = reconcile::plan_with(
         &manifest,
+        &manifest.settings,
         &state,
         &dirs.library,
         Some(&on_disk),
@@ -363,8 +364,11 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     group(out, c.verbose, "To move", &moving)?;
     group(out, c.verbose, "Left alone", &alone)?;
     group(out, c.verbose, "To remove", &gone)?;
-    for line in String::from_utf8_lossy(&c.failures).lines() {
-        unplanned.add(line.trim_start_matches("Failed: "));
+    let failures = String::from_utf8_lossy(&c.failures);
+    for line in failures.lines() {
+        if let Some((_, song)) = line.split_once("Failed: ") {
+            unplanned.add(song);
+        }
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
     for p in lookup::ORDER {

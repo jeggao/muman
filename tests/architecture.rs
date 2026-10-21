@@ -87,17 +87,19 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "store.rs",
-        4,
+        5,
         "an upload its release replaced, deleted from the sources; a file \
-         fetched moved to its key's place, replacing the key's other; a \
+         fetched moved to its key's place, replacing the key's other, and \
+         what yt-dlp could not embed in it deleted from staging; a \
          torrent's file aria2c finished moved to its key's place",
     ),
     (
         "aria2.rs",
-        4,
+        5,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
-         download taken up, or a damaged copy, copied in to be checked",
+         download taken up, or a damaged copy, copied in to be checked; \
+         the input file of a run stopped before it could delete it",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (
@@ -109,14 +111,16 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",
-        2,
-        "the URL list and download archive handed to yt-dlp, in scratch",
+        3,
+        "the URL list and download archive handed to yt-dlp, in scratch; a \
+         fetched file no place in the store can take, from staging",
     ),
     (
         "download.rs",
-        2,
+        3,
         "a file just fetched or copied in, written again without the cookies \
-         and headers of its info JSON, that JSON kept in scratch",
+         and headers of its info JSON, that JSON kept in scratch; a remux left \
+         cut short in partial downloads",
     ),
     (
         "editor.rs",

@@ -29,7 +29,9 @@
 //! A magnet link names a torrent without its metainfo, which aria2c asks
 //! its peers for first (`--bt-metadata-only`), saving it beside the
 //! unfinished fetches as `<v1 hash>.torrent`; muman then reads and keeps
-//! it as a `.torrent` file given to `add` is kept.
+//! it as a `.torrent` file given to `add` is kept. A link of a torrent
+//! whose metainfo the store keeps already is read from there, no peer
+//! asked.
 //!
 //! A fetch selects the files muman takes ([`crate::torrent::selected`])
 //! by their place in the torrent, and names each `files/<place>.<ext>`
@@ -38,9 +40,12 @@
 //! which may not suit this system, and a fetch interrupted resumes at the
 //! same paths, its pieces checked again (`--check-integrity`). Pieces
 //! overlap the files next to a selected one, which aria2c writes in part
-//! and removes once done. Only when the run finishes whole are the files
-//! placed: a file aria2c has not finished may have holes where pieces
-//! came out of order, whatever its size.
+//! and removes once done. A file aria2c has not finished may have holes
+//! where pieces came out of order, whatever its size, so a torrent the
+//! run did not finish has placed only each file whose every piece checks
+//! against its metainfo ([`crate::torrent::checks`]): one piece that
+//! never does, as archive.org's torrents hold of a file changed since,
+//! keeps the rest of the torrent from no one.
 //!
 //! A torrent already downloaded, as another client leaves it, is taken
 //! up from its folder ([`take_up`]): each file muman selects, and each
@@ -58,7 +63,8 @@
 //! deleted. One that failed lately waits, as a missing video does.
 //!
 //! A listed file found damaged, cut off or missing audio as a disk or a
-//! copy leaves it, is fetched again as a damaged download is, at once and
+//! copy leaves it, or holding other audio than its song was built from,
+//! which a torrent's file never may, is fetched again as a damaged download is, at once and
 //! then less often ([`crate::state::Failure::due`]). Its damaged copy, and
 //! the files sharing a piece with it, are copied in as a download taken
 //! up is, so aria2c fetches only the pieces that do not check; the whole
@@ -66,7 +72,8 @@
 //!
 //! A fetch with no byte arriving for `[torrent] stall` stops, aria2c
 //! reporting it unfinished, as a torrent no peer seeds leaves it; it is
-//! a failure a later sync tries again. aria2c reports each tracker it
+//! a failure a later sync tries again, or, for a torrent `add` was
+//! given, that `add` resumes when given it again. aria2c reports each tracker it
 //! cannot reach as an error, as a torrent's dead trackers make it while
 //! others serve; these are said only when the fetch fails.
 
@@ -299,6 +306,7 @@ fn run<R: Runner>(
     let text = input_file(entries)?;
     std::fs::create_dir_all(places.partial)
         .with_context(|| format!("creating {}", places.partial.display()))?;
+    sweep_inputs(places.partial);
     let mut input = tempfile::Builder::new()
         .prefix("input-")
         .suffix(".txt")
@@ -319,6 +327,25 @@ fn run<R: Runner>(
         })
         .collect();
     Ok((ended, said.errors))
+}
+
+/// Delete each input file in `partial` a run left that was stopped before
+/// it could: the home's lock on runs keeps any other run from using one.
+fn sweep_inputs(partial: &Path) {
+    let inputs = std::fs::read_dir(partial)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| {
+            p.is_file()
+                && p.extension().is_some_and(|e| e == "txt")
+                && p.file_stem()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("input-"))
+        });
+    for input in inputs {
+        let _ = std::fs::remove_file(input);
+    }
 }
 
 /// Run `cmd`, its progress noted on `step`, each download named by its
@@ -405,7 +432,7 @@ fn error_of(line: &str) -> Option<String> {
 fn failure(places: &Places<'_>, ended: Ended, errors: &[String], failed: usize) -> String {
     if ended == Ended::Unfinished {
         return format!(
-            "no peer sent anything for {}; a later sync tries again",
+            "no peer sent anything for {}; what arrived waits to be resumed",
             crate::units::Time(places.options.stall.as_millis() as i64).exact()
         );
     }
@@ -580,7 +607,7 @@ pub fn fetch_all<R: Runner, W: Write>(
             place(out, places, &wanted[n])?
         } else {
             Fetched {
-                arrived: Vec::new(),
+                arrived: place_checked(places, &wanted[n]),
                 failure: Some(failure(places, ended, &errors, failed)),
             }
         };
@@ -594,6 +621,7 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
     let meta = wanted.meta;
     let dir = places.partial.join(meta.hash());
     let mut arrived = Vec::new();
+    let mut unplaced = Vec::new();
     for file in &wanted.files {
         let from = dir.join(index_path(file));
         let SourceKey::Torrent(key) = meta.key(file) else {
@@ -608,14 +636,40 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
         }
         match crate::store::place_torrent(places.store, &key, &from) {
             Ok(_) => arrived.push(SourceKey::Torrent(key)),
-            Err(e) => crate::ui::warning(out, &format!("{e:#}"))?,
+            Err(e) => unplaced.push(format!("{e:#}")),
         }
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    // A file the store could not take stays to be placed by a later run.
+    if unplaced.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     Ok(Fetched {
         arrived,
-        failure: None,
+        failure: (!unplaced.is_empty()).then(|| unplaced.join("; ")),
     })
+}
+
+/// Place each file of `wanted` an unfinished fetch wrote whole, every
+/// piece of it checking, at its key's place, the rest left to resume.
+fn place_checked(places: &Places<'_>, wanted: &Wanted<'_>) -> Vec<SourceKey> {
+    let meta = wanted.meta;
+    let dir = places.partial.join(meta.hash());
+    let at = |f: &File| dir.join(index_path(f));
+    let whole: Vec<&File> = wanted
+        .files
+        .iter()
+        .copied()
+        .filter(|f| crate::torrent::checks(meta, f, at))
+        .collect();
+    let mut arrived = Vec::new();
+    for file in whole {
+        if let SourceKey::Torrent(key) = meta.key(file)
+            && crate::store::place_torrent(places.store, &key, &at(file)).is_ok()
+        {
+            arrived.push(SourceKey::Torrent(key));
+        }
+    }
+    arrived
 }
 
 /// Fetch `files` of `meta`, whose metainfo the store keeps, and place each
@@ -805,7 +859,12 @@ pub fn fetch_due<R: Runner, W: Write>(
     });
     for (keys, fetched) in asking.into_iter().zip(fetched) {
         if let Some(why) = fetched.failure {
-            fail(out, &mut failed, keys, &why)?;
+            let lost: Vec<SourceKey> = keys
+                .iter()
+                .filter(|k| !fetched.arrived.contains(k))
+                .cloned()
+                .collect();
+            fail(out, &mut failed, &lost, &why)?;
             continue;
         }
         for key in keys.iter().filter(|k| !fetched.arrived.contains(k)) {
@@ -963,6 +1022,24 @@ mod tests {
             index,
             offset: 3 * (index as u64 - 1),
         }
+    }
+
+    #[test]
+    fn an_input_file_a_stopped_run_left_is_deleted_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let left = dir.path().join("input-0qk8oe.txt");
+        let kept = [
+            dir.path().join("notes.txt"),
+            dir.path().join("input-x.torrent"),
+        ];
+        for f in kept.iter().chain([&left]) {
+            std::fs::write(f, b"x").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("input-dir.txt")).unwrap();
+        sweep_inputs(dir.path());
+        assert!(!left.exists());
+        assert!(kept.iter().all(|f| f.exists()));
+        assert!(dir.path().join("input-dir.txt").is_dir());
     }
 
     #[test]
