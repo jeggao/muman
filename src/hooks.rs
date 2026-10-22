@@ -9,6 +9,20 @@
 //! words and as `MUMAN_<NAME>` environment variables. A Windows batch
 //! file (`.bat`, `.cmd`) gets the variables only: cmd.exe re-reads its
 //! arguments, so a title passed as one could run as a command.
+//!
+//! For the same reason a hook that hands a shell a script, as `sh -c`,
+//! PowerShell's `-Command` or `cmd /c` do, is refused where the song list
+//! is read when a placeholder is inside that script: filled
+//! in, a title as `Dusk $(touch x) Lane` would run. The script reads the
+//! variable instead, as `"$MUMAN_PATH"`; a placeholder in a word after a
+//! POSIX shell's script is one of its arguments, `$1` on, and is kept.
+//! The shell is told by the program's file stem, `env` and its
+//! assignments passed over, without case on Windows, where `BASH.EXE` is
+//! bash.
+//!
+//! `{rel}` is the song's path in the library led by `./`, with `/` on
+//! every system as [`crate::relpath`] writes it, so a path beginning
+//! with `-` is never read as an option.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -64,6 +78,19 @@ pub fn read(doc: &DocumentMut) -> Result<Vec<Hook>> {
             if !["on", "run"].contains(&key) {
                 bail!("{what}: `{key}` is no setting");
             }
+        }
+        let inlined = script(&run).into_iter().find_map(|word| {
+            PLACEHOLDERS
+                .into_iter()
+                .find(|name| word.contains(&format!("{{{name}}}")))
+        });
+        if let Some(name) = inlined {
+            let variable = format!("MUMAN_{}", name.to_ascii_uppercase());
+            bail!(
+                "{what}: `{{{name}}}` is filled into the script a shell runs, where a name \
+                 holding `$(...)` or a quote would run as a command; read the variable instead, \
+                 as \"${variable}\" in sh or $env:{variable} in PowerShell"
+            );
         }
         hooks.push(Hook { on, run });
     }
@@ -164,13 +191,82 @@ fn is_batch(program: &str) -> bool {
     batch(Path::new(program)) || (cfg!(windows) && which::which(program).is_ok_and(|p| batch(&p)))
 }
 
+/// The words of `run` a shell reads as its script: after a POSIX shell's
+/// or fish's `-c`, the one word that follows; after PowerShell's
+/// `-Command` or cmd's `/c` or `/k`, every word, as each joins the rest
+/// into one command line.
+fn script(run: &[String]) -> Vec<&str> {
+    let mut words = run;
+    if words.first().is_some_and(|w| stem_is(w, &["env"])) {
+        words = &words[1..];
+        while words
+            .first()
+            .is_some_and(|w| w.starts_with('-') || w.contains('='))
+        {
+            words = &words[1..];
+        }
+    }
+    let Some((program, args)) = words.split_first() else {
+        return Vec::new();
+    };
+    let rest = |at: Option<usize>| {
+        at.map_or_else(Vec::new, |i| {
+            args[i + 1..].iter().map(String::as_str).collect()
+        })
+    };
+    if stem_is(program, &["sh", "bash", "zsh", "dash", "ksh", "fish"]) {
+        if let Some(inline) = args.iter().find_map(|a| a.strip_prefix("--command=")) {
+            return vec![inline];
+        }
+        let flags = |a: &str| {
+            a.strip_prefix('-')
+                .is_some_and(|f| f.contains('c') && f.chars().all(|c| c.is_ascii_alphabetic()))
+        };
+        let at = args.iter().position(|a| a == "--command" || flags(a));
+        return rest(at).into_iter().take(1).collect();
+    }
+    if stem_is(program, &["pwsh", "powershell"]) {
+        let command = |a: &String| {
+            let a = a.to_ascii_lowercase();
+            let name = a.strip_prefix('-').or_else(|| a.strip_prefix('/'));
+            name.is_some_and(|n| !n.is_empty() && "command".starts_with(n))
+        };
+        return rest(args.iter().position(command));
+    }
+    if stem_is(program, &["cmd"]) {
+        let at = args
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"));
+        return rest(at);
+    }
+    Vec::new()
+}
+
+/// Whether `program`'s file stem is one of `names`, without case on
+/// Windows.
+fn stem_is(program: &str, names: &[&str]) -> bool {
+    let Some(stem) = Path::new(program).file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    names.iter().any(|n| {
+        if cfg!(windows) {
+            n.eq_ignore_ascii_case(stem)
+        } else {
+            *n == stem
+        }
+    })
+}
+
+/// Every placeholder a hook may be given.
+const PLACEHOLDERS: [&str; 6] = ["path", "rel", "library", "written", "moved", "removed"];
+
 /// The values a written file's hooks are given: its absolute path, its
-/// path in the library with `/`, and the library folder.
+/// path in the library with `/` led by `./`, and the library folder.
 #[must_use]
 pub fn written_values(library: &Path, rel: &Path) -> [(&'static str, String); 3] {
     [
         ("path", library.join(rel).to_string_lossy().into_owned()),
-        ("rel", crate::relpath::show(rel)),
+        ("rel", format!("./{}", crate::relpath::show(rel))),
         ("library", library.to_string_lossy().into_owned()),
     ]
 }
@@ -193,7 +289,7 @@ mod tests {
         let library = Path::new("lib");
         let rel: std::path::PathBuf = ["A", "b.opus"].iter().collect();
         let values = written_values(library, &rel);
-        assert_eq!(values[1].1, "A/b.opus");
+        assert_eq!(values[1].1, "./A/b.opus");
         let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
         run(&fake, &hooks, Event::Written, &values, &mut out).unwrap();
         assert_eq!(
@@ -241,5 +337,47 @@ mod tests {
         assert!(read_one("[[hook]]\non = \"sometimes\"\nrun = [\"x\"]\n").is_err());
         assert!(read_one("[[hook]]\non = \"changed\"\nrun = []\n").is_err());
         assert!(read_one("[[hook]]\non = \"changed\"\nrun = \"x y\"\n").is_err());
+    }
+
+    #[test]
+    fn a_placeholder_inside_a_shell_s_script_is_refused() {
+        let read_run = |run: &str| {
+            read(
+                &format!("[[hook]]\non = \"written\"\nrun = {run}\n")
+                    .parse()
+                    .unwrap(),
+            )
+        };
+        for run in [
+            r#"["sh", "-c", "echo tagged {path}"]"#,
+            r#"["/bin/bash", "-ec", "tag {rel}"]"#,
+            r#"["fish", "--command=tag {path}"]"#,
+            r#"["/usr/bin/env", "LC_ALL=C", "zsh", "-c", "tag '{path}'"]"#,
+            r#"["pwsh", "-Command", "Write-Host", "{path}"]"#,
+            r#"["powershell.exe", "-c", "tag {library}"]"#,
+            r#"["cmd", "/C", "tag", "{path}"]"#,
+        ] {
+            let e = read_run(run).unwrap_err();
+            assert!(format!("{e}").contains("MUMAN_"), "{run}: {e}");
+        }
+        for run in [
+            r#"["sh", "-c", "tag \"$MUMAN_PATH\""]"#,
+            r#"["sh", "-c", "tag \"$1\"", "sh", "{path}"]"#,
+            r#"["tagger", "-c", "{path}"]"#,
+            r#"["bash", "tag.sh", "{rel}"]"#,
+        ] {
+            assert!(read_run(run).is_ok(), "{run}");
+        }
+        assert_eq!(
+            read_run(r#"["BASH.EXE", "-c", "{path}"]"#).is_err(),
+            cfg!(windows)
+        );
+    }
+
+    #[test]
+    fn rel_is_led_by_dot_slash_so_no_name_reads_as_an_option() {
+        let rel: std::path::PathBuf = ["-Lumo Fenn", "01 Rain.opus"].iter().collect();
+        let values = written_values(Path::new("lib"), &rel);
+        assert_eq!(values[1].1, "./-Lumo Fenn/01 Rain.opus");
     }
 }
