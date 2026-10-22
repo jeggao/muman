@@ -36,32 +36,31 @@ measures after it can make up for it. See
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |
 
 **Audio.** Sound beyond the song is how long a source plays outside the
-stretch it shares with another source of the song: a music video's
-intro counts, silence does not. A source that ends where another plays
-the song on, as an excerpt cut off mid-sound, in a short rest or faded
-out does, lacks the rest of the song, which counts as sound beyond the
-song does, so an excerpt never beats the whole song it was cut from. A
-song's own end is in every source of it, so a video's outro past it is
-sound beyond the song; a release may start on a full chord at its first
+stretch it shares with another source of the song: a music video's intro
+counts, silence does not. A source that ends where another plays the
+song on, as an excerpt cut off mid-sound, in a short rest or faded out
+does, lacks the rest of the song, which counts as sound beyond the song
+does, so an excerpt never beats the whole song it was cut from. A song's
+own end is in every source of it, so a video's outro past it is sound
+beyond the song; a release may start on a full chord at its first
 sample, so a source's start counts as cut only when its end is too.
-Bandwidth
-is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
-file measures as narrow as that file, while a recording whose treble
-fades on its own measures full, as does one whose notes end low over a
-noise floor that runs on to the top. Real stereo tells stereo from mono
-copied into two channels, even at different levels or a few samples
-apart, by the front two of more; clipping is the share of samples stuck at full scale or at the audio's
-own peak, or piled up just under full scale where a lossy encoder
-smeared them. Float lossless audio can hold samples past full scale, so
-in it only those at its own peak count. Every channel is measured as it
-is, never mixed into two. The chosen audio is
-copied when `[audio] codecs` lists its codec; any other is encoded,
-lossless audio to `[audio] lossless` and lossy audio to `[audio] lossy`,
-at the bitrate `[audio]` sets. A file with several audio streams is made
-from the best: lossless before lossy, then the most channels, then the
-highest rate. Lossless audio a codec cannot keep whole, as 32-bit, float
-or more than eight channels in FLAC, is written in one that can, as
-[Codecs](configuration.md#codecs) says.
+Bandwidth is where a lowpass cuts the sound off, so a FLAC transcoded
+from a lossy file measures as narrow as that file, while a recording
+whose treble fades on its own measures full, as does one whose notes end
+low over a noise floor that runs on to the top. Real stereo tells stereo
+from mono copied into two channels, even at different levels or a few
+samples apart, by the front two of more; clipping is the share of
+samples stuck at full scale or at the audio's own peak, or piled up just
+under full scale where a lossy encoder smeared them. Float lossless
+audio can hold samples past full scale, so in it only those at its own
+peak count. Every channel is measured as it is, never mixed into two.
+The chosen audio is copied when `[audio] codecs` lists its codec; any
+other is encoded, lossless audio to `[audio] lossless` and lossy audio
+to `[audio] lossy`, at the bitrate `[audio]` sets. A file with several
+audio streams is made from the best: lossless before lossy, then the
+most channels, then the highest rate. Lossless audio a codec cannot keep
+whole, as 32-bit, float or more than eight channels in FLAC, is written
+in one that can, as [Codecs](configuration.md#codecs) says.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -77,18 +76,17 @@ never do. Lyrics from a source other than the chosen audio must be the
 same recording, and are shifted by the offset measured between the two,
 and stretched when one plays a little faster than the other; a word's
 time moves with its line's, and an `[offset:]` the file states is folded
-into every time it holds. A song file's own lyrics tag, `USLT` in an MP3,
-`LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A or
-`Lyrics` in APEv2, is lyrics of that source, timed when its text is
-LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not list
-ranks after those in a language it does.
-Cues such as `[Music]` or `(Guitar solo)`, symbol-only lines and the
-credits before the first line sung or after the last are dropped; a
-line in brackets of other words is sung, as a backing vocal is. A
-`.lrc` with no audio of its own is taken as timed for the song; one that
-states its length, as LRCLIB's do, is trusted as far as that length
-agrees with the chosen audio's. Whether lyrics go beside the song,
-inside it or both is a `[library]` setting.
+into every time it holds. A song file's own lyrics tag, `USLT` in an
+MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A
+or `Lyrics` in APEv2, is lyrics of that source, timed when its text is
+LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not
+list ranks after those in a language it does. Cues such as `[Music]` or
+`(Guitar solo)`, symbol-only lines and the credits before the first line
+sung or after the last are dropped; a line in brackets of other words is
+sung, as a backing vocal is. A `.lrc` with no audio of its own is taken
+as timed for the song; one that states its length, as LRCLIB's do, is
+trusted as far as that length agrees with the chosen audio's. Whether
+lyrics go beside the song, inside it or both is a `[library]` setting.
 
 **Tags.** Each field describes the recording or the release. The
 recording's, title, artist, genre, ISRC and the recording's and artists'
@@ -366,13 +364,12 @@ refuses the save.
   interrupted run or not muman's, and sources missing, unreadable, cut
   off or missing audio; `info` counts the songs made from damaged audio;
   `--decode` decodes every source in full again, to find damage in a
-  file changed since it was measured.
-  `--upstream` asks each site, downloading nothing, whether it still
-  serves each fetched source in the format and at the size its song
-  records, with the same tags, and names each it serves otherwise:
-  other audio in that format, the format no longer offered, other tags,
-  or the video taken down. The
-  copy in `sources/` is then the only one of what was fetched, and worth
+  file changed since it was measured. `--upstream` asks each site,
+  downloading nothing, whether it still serves each fetched source in
+  the format and at the size its song records, with the same tags, and
+  names each it serves otherwise: other audio in that format, the format
+  no longer offered, other tags, or the video taken down. The copy in
+  `sources/` is then the only one of what was fetched, and worth
   keeping; a large library asks a site many times, as a fetch does.
 - **`purge`** deletes fetched sources and lookup records no song uses,
   which `status` and `info` name: an upload a release took the place of,
@@ -422,6 +419,10 @@ is. Each song is measured once encoded and the rest fitted again on what
 it really took, so the export lands under the cap. When even the lowest
 bitrates cannot fit, nothing is written and the size needed is said. The
 library itself is never changed.
+
+`--redact` writes the zip's `songs.toml` with each secret replaced by
+`<redacted>`, as [the reference](cli.md#muman-export) lists; one among a
+hook's or a program's own words stays, so read those before you share.
 
 ## Hooks
 

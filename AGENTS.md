@@ -94,6 +94,7 @@ src/
   fit.rs            songs fitted into a size, least audible loss first
   limit.rs          the library kept under [library] max_size
   export.rs         the song list and the library into one zip
+  redact.rs         the song list with its secrets replaced, for export --redact
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   check.rs, overview.rs            check and info

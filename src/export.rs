@@ -146,6 +146,8 @@ pub struct Options<'a> {
     pub max_size: Option<u64>,
     /// Settings set over the song list's for the export alone, in order.
     pub settings: &'a [Override],
+    /// Write the song list with its secrets replaced ([`crate::redact`]).
+    pub redact: bool,
 }
 
 /// `KEY=VALUE` as `--set` reads it: a setting of `TABLES`, its value
@@ -378,12 +380,8 @@ pub fn export<R: Runner, W: Write>(
         .iter()
         .map(|s| held_entries(&dirs.library, s))
         .collect();
-    let list_entry = Entry {
-        from: list,
-        name: dirs::MANIFEST.to_string(),
-        made: false,
-    };
     let scratch = crate::atomic::Scratch::within(beside)?;
+    let list_entry = list_entry(list, options.redact, scratch.path(), out)?;
     let (choice, mut made) = if let Some(max) = options.max_size {
         let fixed = entries_size(target, std::slice::from_ref(&list_entry)) + target.end();
         let budget = max
@@ -442,6 +440,32 @@ pub fn export<R: Runner, W: Write>(
         }
     }
     Ok(ok)
+}
+
+/// The song list's entry: the file itself, or with `redact` a copy with
+/// its secrets replaced, written in `scratch`.
+fn list_entry<W: Write>(list: PathBuf, redact: bool, scratch: &Path, out: &mut W) -> Result<Entry> {
+    let name = dirs::MANIFEST.to_string();
+    if !redact {
+        return Ok(Entry {
+            from: list,
+            name,
+            made: false,
+        });
+    }
+    let text = fs::read_to_string(&list).with_context(|| format!("reading {}", list.display()))?;
+    let (redacted, n) = crate::redact::redact(&text)?;
+    crate::atomic::write(
+        scratch,
+        &crate::atomic::Name::new(dirs::MANIFEST)?,
+        redacted.as_bytes(),
+    )?;
+    crate::ui::info(out, &format!("{n} secret(s) redacted in the song list"))?;
+    Ok(Entry {
+        from: scratch.join(dirs::MANIFEST),
+        name,
+        made: true,
+    })
 }
 
 /// Where the export goes and what it is written as, under `settings`.

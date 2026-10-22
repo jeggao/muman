@@ -59,6 +59,7 @@ pub mod purge;
 pub mod quality;
 pub mod query;
 pub mod reconcile;
+pub mod redact;
 pub mod relpath;
 pub mod render;
 pub mod resolve;
@@ -404,6 +405,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             codec,
             template,
             lyrics,
+            redact,
             set,
         } => {
             let settings = export::overrides(
@@ -417,6 +419,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 folder: *folder,
                 max_size: *max_size,
                 settings: &settings,
+                redact: *redact,
             };
             export::export(runner, dirs, &options, out)
         }

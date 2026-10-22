@@ -12,6 +12,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`--trust`**, or `MUMAN_TRUST=1`, trusts the commands and servers the
   song list sets, as it sets them, without asking: for a run with no
   terminal to ask on.
+- **`export --redact` shares a song list without its secrets.** The
+  zip's `songs.toml` is written with AcoustID's key, the logins, headers
+  and tokens in yt-dlp's and aria2c's arguments (`--password`,
+  `--add-header`, `--rpc-secret`, `po_token` and the like) and the
+  credentials in any address replaced by `<redacted>`, its comments and
+  layout kept. A path, as `--cookies` names, stays, as does any other
+  word of a hook or a program. Without it the song list goes in as it is.
 
 ### Changed
 

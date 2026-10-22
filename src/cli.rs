@@ -568,6 +568,13 @@ pub enum Command {
         #[arg(long, value_name = "WHERE", value_parser = ["sidecar", "embedded", "both"])]
         lyrics: Option<String>,
 
+        /// Write the song list with each secret it holds replaced by
+        /// `<redacted>`: AcoustID's key, the passwords, user names and
+        /// headers in yt-dlp's and aria2c's arguments, tokens in yt-dlp's
+        /// extractor arguments, and the credentials in any address.
+        #[arg(long)]
+        redact: bool,
+
         /// A setting of `[library]`, `[audio]` or `[loudness]` for the export
         /// alone, such as `audio.mp3_bitrate=192kb/s`; repeatable, and set
         /// after the flags above. VALUE is TOML, or else text.
