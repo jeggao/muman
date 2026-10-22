@@ -60,7 +60,7 @@ to `[audio] lossy`, at the bitrate `[audio]` sets. A file with several
 audio streams is made from the best: lossless before lossy, then the
 most channels, then the highest rate. Lossless audio a codec cannot keep
 whole, as 32-bit, float or more than eight channels in FLAC, is written
-in one that can, as [Codecs](configuration.md#codecs) says.
+in one that can, as [Codecs](audio.md#codecs) says.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -99,7 +99,7 @@ release's IDs never mix with another's; of albums that rank alike, the
 source holding more of the release's fields wins before the order of
 `sources`. A song on no album is a single named for its title.
 ReplayGain's track gain and peak are measured from the audio the song
-is, and its album gain and peak over every song of its album, as [Loudness](configuration.md#loudness) says; with
+is, and its album gain and peak over every song of its album, as [Loudness](audio.md#loudness) says; with
 `[loudness] mode = "off"`, they come only from the tags of the source
 whose audio the song is, the album's only when the release's fields come
 from it too, since another source's loudness is not this audio's. An
