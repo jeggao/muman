@@ -323,7 +323,10 @@ pub fn gate<W: Write>(
             Some(d) if *d != h.digest => " (changed)",
             Some(_) => "",
         };
-        writeln!(out, "  {}{mark}: {}", escaped(&h.name), escaped(&h.shown))?;
+        crate::ui::line(
+            out,
+            &format!("  {}{mark}: {}", escaped(&h.name), escaped(&h.shown)),
+        )?;
     }
     crate::ui::info(
         out,

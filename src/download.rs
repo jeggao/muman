@@ -371,8 +371,7 @@ pub fn scrub<R: Runner>(runner: &R, path: &Path, scratch: &Path) -> Result<bool>
     std::fs::write(&json, kept).with_context(|| format!("writing {}", json.display()))?;
 
     let mut cmd = ffmpeg::base();
-    cmd.push("-i".into());
-    cmd.push(path.as_os_str().to_os_string());
+    cmd.extend(ffmpeg::Input::from(path).args());
     cmd.extend(["-map", "0"].map(OsString::from));
     for dropped in std::iter::once(attachments[ordinal]).chain(pictures.iter().copied()) {
         cmd.push("-map".into());

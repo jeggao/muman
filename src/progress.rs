@@ -32,6 +32,11 @@
 //! | `json` | stderr | One JSON object a line: `start`, `progress` (at most every [`JSON_EVERY`]) and `finish` events |
 //! | `none` | | Nothing |
 //!
+//! What a step says is under way, a song's name or a download's line,
+//! is made [`crate::ui::printable`] as it is given, so the status line,
+//! a plain line and an event show the same text, and none of them a
+//! sequence a title held.
+//!
 //! Every message a command writes goes through [`Console`], which lifts
 //! the status line out of the way and puts it back, so the two never
 //! tear each other. Terminals that show a task's progress in their tab
@@ -191,7 +196,7 @@ impl Progress {
             .map(|n| (n + 1, plan.len()));
         drop(plan);
         let state = Arc::new(State {
-            name: name.to_string(),
+            name: crate::ui::printable(name).into_owned(),
             index,
             total: Mutex::new(total),
             done: Mutex::new(0),
@@ -421,12 +426,10 @@ impl Step {
     /// Begin on the item `name`, done when the guard is dropped.
     #[must_use]
     pub fn working(&self, name: &str) -> Working<'_> {
-        lock(&self.state.working).push(name.to_string());
+        let name = crate::ui::printable(name).into_owned();
+        lock(&self.state.working).push(name.clone());
         self.update();
-        Working {
-            step: self,
-            name: name.to_string(),
-        }
+        Working { step: self, name }
     }
 
     /// Count `n` more items done, with none named under way.
@@ -438,7 +441,7 @@ impl Step {
     /// Say what is under way when it is no item counted, as a download's
     /// progress is.
     pub fn note(&self, text: &str) {
-        *lock(&self.state.note) = Some(text.to_string());
+        *lock(&self.state.note) = Some(crate::ui::printable(text).into_owned());
         self.update();
     }
 
@@ -932,6 +935,29 @@ mod tests {
             "{}",
             sink.text()
         );
+    }
+
+    #[test]
+    fn what_a_step_says_is_under_way_is_printable() {
+        let sink = Shared::default();
+        let progress = Progress::new(Kind::Json, Box::new(sink.clone()));
+        {
+            let step = progress.step("Fetching", Some(2));
+            step.note("Lantern \x1b]0;X\x07Weather");
+            let _w = step.working("Rooms \x1b[2Jof Salt");
+            assert_eq!(step.state.doing(), "Rooms �[2Jof Salt");
+        }
+        let text = sink.text();
+        assert!(
+            !text.contains('\x1b') && !text.contains("\\u001b"),
+            "{text}"
+        );
+        let progress: serde_json::Value = text
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|e| e["event"] == "progress")
+            .unwrap();
+        assert_eq!(progress["note"], "Lantern �]0;X�Weather");
     }
 
     #[test]

@@ -51,8 +51,10 @@ version_check = false`, as for a fork numbered its own way, neither an
 old version nor one that does not print stops a run. ffmpeg and
 ffprobe are needed by every command that reads audio; yt-dlp only by a
 run that fetches, so a library made only from your own files never needs
-it. `muman info` prints the folders in use and each program's version
-and path.
+it. ffmpeg and ffprobe read a file only as one of the audio, picture and
+subtitle formats muman takes, whatever its name, so a playlist named
+`.flac` is refused rather than fetched. `muman info` prints the folders
+in use and each program's version and path.
 
 ## Settings in the song list
 
@@ -438,7 +440,9 @@ The refused characters become their full-width lookalikes (`：`, `？`,
 `⧸`, …), as yt-dlp names its files, so a title stays readable. `[library]
 replace` maps characters or strings to replacements of your own,
 applied first and over these: `{ ":" = " -" }` turns `A: B` into
-`A - B`. A reserved device name gets `_` after it: `CON_.opus`.
+`A - B`. A reserved device name gets `_` after it: `CON_.opus`. On
+Windows itself, `none` replaces what `windows` does all the same, since
+Windows holds no such name.
 
 File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
 bytes of UTF-8, which no filesystem counts more strictly, once they are

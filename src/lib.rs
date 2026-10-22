@@ -27,6 +27,7 @@ pub mod facts;
 pub mod ffmpeg;
 pub mod fingerprint;
 pub mod fit;
+pub mod given;
 pub mod held;
 pub mod history;
 pub mod hooks;
@@ -423,7 +424,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let planned = history::plan(dirs)?;
             ui::info(out, "Undoing the last run:")?;
             for line in planned.lines() {
-                writeln!(out, "  {line}")?;
+                ui::line(out, &format!("  {line}"))?;
             }
             let confirm = cli::Confirm {
                 yes: *yes,
@@ -688,7 +689,7 @@ fn list_songs<D: Write>(
         .iter()
         .filter(|v| !v.keys.is_empty() && parsed.matches(v))
     {
-        match writeln!(data, "{}", query::format(template, view)) {
+        match ui::line(data, &query::format(template, view)) {
             // A reader such as `head` that has read enough closes the pipe.
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
             written => written?,
