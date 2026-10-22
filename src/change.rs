@@ -223,7 +223,7 @@ pub fn remove<W: Write>(
     crate::ui::info(out, &format!("Removing {} song(s):", picked.len()))?;
     for n in &picked {
         let view = &read.views[*n];
-        writeln!(out, "  {}", label(view))?;
+        crate::ui::line(out, &format!("  {}", label(view)))?;
         let written = read
             .state
             .outputs
@@ -240,7 +240,10 @@ pub fn remove<W: Write>(
                 "deletes"
             };
             for file in std::iter::once(path).chain(&w.lyrics) {
-                writeln!(out, "    {how} {}", dirs.library.join(file).display())?;
+                crate::ui::line(
+                    out,
+                    &format!("    {how} {}", dirs.library.join(file).display()),
+                )?;
             }
         }
         if purge {
@@ -260,17 +263,16 @@ pub fn remove<W: Write>(
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
                     for file in store_files(&store, dirs, key) {
-                        writeln!(
+                        crate::ui::line(
                             out,
-                            "    keeps {}, which a removed song lists",
-                            file.display()
+                            &format!("    keeps {}, which a removed song lists", file.display()),
                         )?;
                     }
                     continue;
                 }
                 for file in store_files(&store, dirs, key) {
                     let how = if own { "trashes" } else { "deletes" };
-                    writeln!(out, "    {how} {}", file.display())?;
+                    crate::ui::line(out, &format!("    {how} {}", file.display()))?;
                     doomed.push((file, own));
                 }
             }
@@ -373,7 +375,7 @@ pub fn restore<W: Write>(
     }
     crate::ui::info(out, &format!("Listing {} song(s) again:", picked.len()))?;
     for n in &picked {
-        writeln!(out, "  {}", label(&views[*n]))?;
+        crate::ui::line(out, &format!("  {}", label(&views[*n])))?;
     }
     if !confirmed(confirm, prompter, out)? {
         return Ok(false);
@@ -586,9 +588,9 @@ pub fn set<W: Write>(
         if table.to_string() == before {
             continue;
         }
-        writeln!(out, "  {}", label(view))?;
+        crate::ui::line(out, &format!("  {}", label(view)))?;
         for a in &assigns {
-            writeln!(out, "    {}", a.describe(view))?;
+            crate::ui::line(out, &format!("    {}", a.describe(view)))?;
         }
         songs.push((id, Rewritten::Table(SongTable(table))));
     }

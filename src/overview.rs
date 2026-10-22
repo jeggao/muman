@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::ui::Style;
+use crate::ui::{Painted, Style};
 use anyhow::Result;
 
 use crate::codec::Codec;
@@ -139,17 +139,18 @@ pub fn programs<W: Write>(found: &[crate::tools::Status], out: &mut W) -> Result
     }
     heading(out, "Programs")?;
     for status in found {
-        let value = match &status.found {
+        let (style, value) = match &status.found {
             Ok(f) => {
                 let program = f.command[0].to_string_lossy();
-                match f.version {
+                let value = match f.version {
                     Some(v) => format!("{v} at {program}"),
                     None => format!("{program} (version not read)"),
-                }
+                };
+                (Style::Plain, value)
             }
-            Err(e) => Style::Muted.paint(&e.to_string()).to_string(),
+            Err(e) => (Style::Muted, e.to_string()),
         };
-        row(out, status.tool.name, &value)?;
+        painted_row(out, status.tool.name, style.paint(&value))?;
     }
     Ok(())
 }
@@ -580,12 +581,17 @@ impl Health {
 }
 
 fn heading<W: Write>(out: &mut W, title: &str) -> Result<()> {
-    writeln!(out, "{}", Style::Accent.paint(title))?;
+    crate::ui::painted(out, &[Style::Accent.paint(title)])?;
     Ok(())
 }
 
 fn row<W: Write>(out: &mut W, label: &str, value: &str) -> Result<()> {
-    writeln!(out, "  {label:<LABEL$} {value}")?;
+    painted_row(out, label, Style::Plain.paint(value))
+}
+
+fn painted_row<W: Write>(out: &mut W, label: &str, value: Painted<'_>) -> Result<()> {
+    let label = format!("  {label:<LABEL$} ");
+    crate::ui::painted(out, &[Style::Plain.paint(&label), value])?;
     Ok(())
 }
 
@@ -593,15 +599,18 @@ fn row<W: Write>(out: &mut W, label: &str, value: &str) -> Result<()> {
 /// it when `verbose`.
 fn group<W: Write>(out: &mut W, verbose: bool, label: &str, g: &Group) -> Result<()> {
     let n = g.len().to_string();
-    let n = if g.len() == 0 {
-        n
+    let style = if g.len() == 0 {
+        Style::Plain
     } else {
-        Style::Warning.paint(&n).to_string()
+        Style::Warning
     };
-    row(out, label, &n)?;
+    painted_row(out, label, style.paint(&n))?;
     if verbose {
         for member in &g.0 {
-            writeln!(out, "      {}", Style::Muted.paint(member))?;
+            crate::ui::painted(
+                out,
+                &[Style::Plain.paint("      "), Style::Muted.paint(member)],
+            )?;
         }
     }
     Ok(())

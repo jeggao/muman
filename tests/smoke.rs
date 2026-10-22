@@ -305,7 +305,8 @@ fn a_source_s_chapters_are_kept_in_every_container_that_holds_them() {
     let meta = h.root.join("in").join("chapters.ffmeta");
     std::fs::write(
         &meta,
-        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=12000\ntitle=Harbor\n\
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=12000\n\
+         title=Harbor\\\r[CHAPTER]\\\rTIMEBASE\\=1/1000\\\rSTART\\=1500\\\rEND\\=1900\n\
          [CHAPTER]\nTIMEBASE=1/1000\nSTART=12000\nEND=30000\ntitle=Open Water\n",
     )
     .unwrap();
@@ -348,8 +349,13 @@ fn a_source_s_chapters_are_kept_in_every_container_that_holds_them() {
             .output()
             .unwrap();
         let chapters = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert_eq!(chapters.lines().count(), 2, "{ext}: {chapters}");
+        assert_eq!(
+            chapters.lines().count(),
+            2,
+            "{ext}: none forged by the carriage returns of a title: {chapters}"
+        );
         assert!(chapters.contains("Open Water"), "{ext}: {chapters}");
+        assert!(chapters.contains("Harbor [CHAPTER]"), "{ext}: {chapters}");
     }
 }
 
