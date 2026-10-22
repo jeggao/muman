@@ -606,7 +606,7 @@ fn a_manifest_or_an_address_given_as_a_song_is_never_fetched() {
     let posing = dir.join("Lantern Weather.flac");
     std::fs::write(&posing, manifest(port)).unwrap();
     h.muman(&["--offline", "add", "--new", posing.to_str().unwrap()]);
-    assert!(h.library_files("flac").is_empty());
+    assert_eq!(h.library_files("flac"), Vec::<PathBuf>::new());
 
     // As a song's cover, read by ffmpeg rather than ffprobe.
     let song = h.song("Low Orchard.flac", 2, "Low Orchard");
