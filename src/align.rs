@@ -147,18 +147,11 @@ impl Alignment {
 /// One file's first audio stream as 8 kHz mono 16-bit samples on stdout.
 #[must_use]
 pub fn pcm_command(path: &Path) -> Vec<OsString> {
-    let mut cmd: Vec<OsString> = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        "-i",
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
-    cmd.push(path.as_os_str().to_os_string());
+    let mut cmd: Vec<OsString> = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    cmd.extend(crate::ffmpeg::Input::from(path).args());
     let rate = SAMPLE_RATE.to_string();
     cmd.extend(
         [

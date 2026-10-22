@@ -1083,6 +1083,7 @@ fn encode<R: Runner>(
             library: &library,
             sources,
             scratch: &scratch.join("work"),
+            claim: &[],
         },
     )?;
     let entries = std::iter::once(&rendered.audio)
