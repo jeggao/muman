@@ -24,9 +24,9 @@
 //! any other field, which no Vorbis name stands for, is reported as
 //! skipped rather than dropped unsaid.
 //!
-//! A name is given at most [`MOST_VALUES`] values, and a song or an
-//! album at most [`MOST_NAMES`] names, the rest reported as skipped; and
-//! at most [`MOST_SKIPPED`] reasons are reported. A song's artists,
+//! A name is given at most `MOST_VALUES` values, and a song or an
+//! album at most `MOST_NAMES` names, the rest reported as skipped; and
+//! at most `MOST_SKIPPED` reasons are reported. A song's artists,
 //! performers or genres run to a few dozen at the most, and Picard writes
 //! a hundred names or so, but each value and name is looked for among
 //! those before it, so a file of tens of thousands of them, as no tagger
