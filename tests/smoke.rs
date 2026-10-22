@@ -3,8 +3,12 @@
 //! removed and put back. Ignored by default, since it needs ffmpeg; CI
 //! runs it on every platform with `cargo test --test smoke -- --ignored`.
 
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use lofty::file::TaggedFileExt;
 use lofty::tag::Accessor;
@@ -550,6 +554,168 @@ fn a_subtitle_past_the_audio_is_no_cut_and_damaged_audio_is_found() {
     );
 }
 
+/// A listener on 127.0.0.1, its port and how many connections it has
+/// been offered; each is closed unanswered.
+fn listener() -> (u16, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let offered = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&offered);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            count.fetch_add(1, Ordering::SeqCst);
+            drop(stream);
+        }
+    });
+    (port, offered)
+}
+
+/// How many connections `offered` counts once a second has passed
+/// without one more.
+fn settled(offered: &AtomicUsize) -> usize {
+    loop {
+        let seen = offered.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_secs(1));
+        if offered.load(Ordering::SeqCst) == seen {
+            return seen;
+        }
+    }
+}
+
+/// A DASH manifest whose media is at `port` on 127.0.0.1.
+fn manifest(port: u16) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+         <MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" \
+         mediaPresentationDuration=\"PT10S\" minBufferTime=\"PT1S\" \
+         profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\">\n\
+         <BaseURL>http://127.0.0.1:{port}/leak/</BaseURL>\n\
+         <Period><AdaptationSet mimeType=\"audio/mp4\">\
+         <Representation id=\"a\" bandwidth=\"1000\" codecs=\"mp4a.40.2\">\
+         <BaseURL>a.mp4</BaseURL></Representation></AdaptationSet></Period>\n</MPD>\n"
+    )
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_manifest_or_an_address_given_as_a_song_is_never_fetched() {
+    let h = Home::new();
+    let (port, offered) = listener();
+    let dir = h.root.join("in");
+    std::fs::create_dir_all(&dir).unwrap();
+    let posing = dir.join("Lantern Weather.flac");
+    std::fs::write(&posing, manifest(port)).unwrap();
+    h.muman(&["--offline", "add", "--new", posing.to_str().unwrap()]);
+    assert!(h.library_files("flac").is_empty());
+
+    // As a song's cover, read by ffmpeg rather than ffprobe.
+    let song = h.song("Low Orchard.flac", 2, "Low Orchard");
+    std::fs::write(dir.join("Low Orchard.jpg"), manifest(port)).unwrap();
+    let added = h.muman(&["--offline", "add", "--new", song.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+    assert_eq!(h.library_files("flac").len(), 1);
+
+    // An address given as a path in the current folder, a file of that
+    // name where one can be.
+    let address = format!("http:127.0.0.1:{port}?x.flac");
+    #[cfg(unix)]
+    std::fs::copy(&song, dir.join(&address)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_muman"))
+        .current_dir(&dir)
+        .arg("--home")
+        .arg(h.root.join("home"))
+        .arg("--library")
+        .arg(h.root.join("library"))
+        .args(["--offline", "add", "--new", &address])
+        .output()
+        .unwrap();
+    eprintln!("{}", text(&out));
+    assert_eq!(settled(&offered), 0, "muman reached the listener");
+
+    // The manifest is live: ffprobe given it bare fetches from it.
+    Command::new("ffprobe")
+        .args(["-v", "quiet"])
+        .arg(&posing)
+        .status()
+        .unwrap();
+    if settled(&offered) == 0 {
+        eprintln!("this ffprobe reads no DASH manifest, so nothing was shown");
+    }
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn every_fixture_is_read_as_muman_reads_a_source() {
+    // Probed, then decoded, each by the command line muman reads it with.
+    let read = |path: &Path| {
+        let probe = muman::probe::ffprobe_command(path);
+        let probed = Command::new(&probe[0]).args(&probe[1..]).output().unwrap();
+        let null = muman::ffmpeg::Output::of(&["-f", "null"], Path::new("-"));
+        let decode = muman::ffmpeg::outputs_command(&[path], &[null]);
+        let decoded = Command::new(&decode[0])
+            .args(&decode[1..])
+            .output()
+            .unwrap();
+        eprintln!("{}: {}{}", path.display(), text(&probed), text(&decoded));
+        probed.status.success() && decoded.status.success()
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    let mut found = Vec::new();
+    walk(&fixtures, &mut found);
+    assert!(found.len() >= 7, "{found:?}");
+    for fixture in &found {
+        assert!(read(fixture), "{}", fixture.display());
+    }
+
+    // A JPEG longer than the first probe is read by its name, by image2;
+    // a name image2 would take for a sequence is never read as one.
+    let h = Home::new();
+    let dir = h.root.join("in");
+    std::fs::create_dir_all(&dir).unwrap();
+    let long = dir.join("cover.jpg");
+    ffmpeg(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "mandelbrot=s=600x600",
+            "-frames:v",
+            "1",
+        ],
+        &long,
+    );
+    assert!(read(&long));
+    std::fs::copy(&long, dir.join("cover1.jpg")).unwrap();
+    std::fs::copy(&long, dir.join("cover%d.jpg")).unwrap();
+    assert!(!read(&dir.join("cover%d.jpg")));
+    std::fs::copy(&long, dir.join("half 50%.jpg")).unwrap();
+    assert!(read(&dir.join("half 50%.jpg")));
+    std::fs::copy(fixtures.join("silence.flac"), dir.join("take%d.flac")).unwrap();
+    assert!(read(&dir.join("take%d.flac")));
+
+    // Each fixture as a song, the picture beside the FLAC as its cover.
+    let mut songs = Vec::new();
+    for fixture in found
+        .iter()
+        .filter(|f| f.extension() != Some("png".as_ref()))
+    {
+        let ext = fixture.extension().unwrap().to_str().unwrap();
+        let song = dir.join(format!("Fixture {ext}.{ext}"));
+        std::fs::copy(fixture, &song).unwrap();
+        songs.push(song.to_str().unwrap().to_string());
+    }
+    std::fs::copy(fixtures.join("pixel.png"), dir.join("Fixture flac.png")).unwrap();
+    let args: Vec<&str> = ["add", "--new"]
+        .into_iter()
+        .chain(songs.iter().map(String::as_str))
+        .collect();
+    let added = h.muman(&args);
+    assert!(added.status.success(), "{}", text(&added));
+    let mut written = Vec::new();
+    walk(&h.root.join("library"), &mut written);
+    assert_eq!(written.len(), songs.len(), "{written:?}");
+}
+
 /// A signal that stops muman stops what it started: SIGTERM reaches
 /// muman alone, as `kill` and a service manager send it, so an aria2c
 /// that outlived it would go on fetching into the home.
@@ -558,7 +724,7 @@ fn a_subtitle_past_the_audio_is_no_cut_and_damaged_audio_is_found() {
 #[ignore = "needs ffmpeg"]
 fn a_signal_stops_muman_and_every_program_it_started() {
     use std::os::unix::fs::PermissionsExt;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     let home = Home::new();
     let pid_file = home.root.join("aria2c.pid");
