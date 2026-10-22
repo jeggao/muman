@@ -30,6 +30,36 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A picture's name is never read as a pattern of other files.** A
   cover named as `cover%d.jpg` was read as the numbered pictures beside
   it, as `cover1.jpg`; it is now refused.
+- **A server's `Retry-After` date far in the future no longer ends the
+  run.** A date past the year 9999 crashed the lookup step, on every
+  run after too, as nothing was recorded; it is now no date, and the
+  request is asked again as after any refusal.
+- **A lookup asked over https stays on https.** A redirect from an
+  https service to a plain http address, where the lookup would go on
+  unencrypted, fails that request. A server the song list names with
+  `http://` is followed as before.
+- **A crafted `.torrent` file is refused rather than crashing muman.**
+  A piece length past libtorrent's largest, files running past 256 TiB,
+  a v2 piece length that is no power of two from 16 KiB, or a count of
+  piece hashes that does not match the files refuse the torrent, where
+  muman could stop on an allocation of terabytes or an overflow. A
+  piece is checked a chunk at a time, so a long one no longer takes its
+  length in memory.
+- **A torrent naming a file with a control character or a drive refuses
+  it.** A name holding an escape could drive the terminal it was
+  printed to, and a name such as `C:x` reads, on Windows, a folder off
+  the one `add --from` names. A name of dots and spaces alone, which
+  Windows trims to `..` or nothing, is refused too.
+- **Lyrics full of unclosed `<` or `{` are read in time linear in their
+  length.** Lyrics from LRCLIB, a subtitle, a tag or a file of tens of
+  thousands of them took seconds to minutes, and are read as before.
+- **A picture of more than 8192 × 8192 pixels is not measured.** A
+  small PNG of one color can hold a picture of a hundred megapixels or
+  more, which took over a gigabyte of memory and nearly a minute to
+  measure; it is now no picture, as one that does not decode is.
+- **A tag file gives a name at most 64 values and a song 256 names.**
+  A file of tens of thousands of them took half a minute to read; the
+  rest are reported as skipped, with at most 64 reasons.
 
 ## [0.7.0] - 2026-10-21
 

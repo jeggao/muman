@@ -35,6 +35,15 @@
 //! An error's body is kept only as far as `ERROR_EXCERPT`, whitespace
 //! run together: a failure is recorded and printed with it, and a
 //! server's error page runs to megabytes.
+//!
+//! What a server answers is read as a hostile server may write it. A
+//! `Retry-After` date is read only up to the year 9999, the last RFC 9110's
+//! four digits write, and in checked arithmetic, so a date no clock holds
+//! is no date rather than a panic that ends the run and comes again on
+//! every run after. A request asked over https follows its redirects over
+//! https alone, so a lookup sent encrypted is never sent on in the clear;
+//! one asked over http, as at a server a song list names that way, follows
+//! them as they come.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -123,8 +132,13 @@ fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
     Some(http_date(value)?.duration_since(now).unwrap_or_default())
 }
 
+/// The last year an HTTP date is read in: RFC 9110 writes the year in
+/// four digits.
+const LAST_YEAR: i64 = 9999;
+
 /// An HTTP date in the one form RFC 9110 has servers send,
 /// `Sun, 06 Nov 1994 08:49:37 GMT`.
+#[deny(clippy::arithmetic_side_effects)]
 fn http_date(s: &str) -> Option<SystemTime> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -133,7 +147,7 @@ fn http_date(s: &str) -> Option<SystemTime> {
     let [day, month, year, time, "GMT"] = rest.split(' ').collect::<Vec<_>>()[..] else {
         return None;
     };
-    let month = i64::try_from(MONTHS.iter().position(|m| *m == month)? + 1).ok()?;
+    let month = i64::try_from(MONTHS.iter().position(|m| *m == month)?).ok()?;
     let (day, year): (i64, i64) = (day.parse().ok()?, year.parse().ok()?);
     let hms: Vec<u64> = time
         .split(':')
@@ -142,18 +156,42 @@ fn http_date(s: &str) -> Option<SystemTime> {
     let [h, m, sec] = hms[..] else {
         return None;
     };
-    if !(1..=31).contains(&day) || h > 23 || m > 59 || sec > 60 {
+    if !(1..=31).contains(&day) || !(0..=LAST_YEAR).contains(&year) || h > 23 || m > 59 || sec > 60
+    {
         return None;
     }
     // Days since 1970-01-01, by the proleptic Gregorian calendar's
     // 400-year eras of 146,097 days, the year taken to begin in March.
-    let y = if month <= 2 { year - 1 } else { year };
+    let y = if month < 2 {
+        year.checked_sub(1)?
+    } else {
+        year
+    };
     let era = y.div_euclid(400);
-    let year_of_era = y - era * 400;
-    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = u64::try_from(era * 146_097 + day_of_era - 719_468).ok()?;
-    Some(UNIX_EPOCH + Duration::from_secs(days * 86_400 + h * 3600 + m * 60 + sec))
+    let year_of_era = y.rem_euclid(400);
+    let march_month = month.checked_add(10)?.rem_euclid(12);
+    let day_of_year = march_month
+        .checked_mul(153)?
+        .checked_add(2)?
+        .checked_div(5)?
+        .checked_add(day)?
+        .checked_sub(1)?;
+    let day_of_era = year_of_era
+        .checked_mul(365)?
+        .checked_add(year_of_era.checked_div(4)?)?
+        .checked_sub(year_of_era.checked_div(100)?)?
+        .checked_add(day_of_year)?;
+    let days = era
+        .checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)?;
+    let secs = u64::try_from(days)
+        .ok()?
+        .checked_mul(86_400)?
+        .checked_add(h.checked_mul(3600)?)?
+        .checked_add(m.checked_mul(60)?)?
+        .checked_add(sec)?;
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
 /// The agent is built per call so each request's timeout is exact.
@@ -167,19 +205,7 @@ impl HttpTransport for UreqTransport {
         headers: &[(&str, &str)],
         timeout: Duration,
     ) -> Result<Vec<u8>, TransportError> {
-        let connect = CONNECT.min(timeout / 2);
-        let tls = ureq::tls::TlsConfig::builder()
-            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-            .build();
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .tls_config(tls)
-            .timeout_global(Some(timeout))
-            .timeout_resolve(Some(connect))
-            .timeout_connect(Some(connect))
-            .http_status_as_error(false)
-            .build()
-            .into();
-        let mut request = agent.get(url);
+        let mut request = agent(url, timeout).get(url);
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -211,6 +237,29 @@ impl HttpTransport for UreqTransport {
             .map_err(|e| TransportError::Transport(e.to_string()))
     }
 }
+
+/// The agent asking `url`, waiting `timeout` in all: one asking over
+/// https follows no redirect off it.
+fn agent(url: &str, timeout: Duration) -> ureq::Agent {
+    let connect = CONNECT.min(timeout / 2);
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
+    let https = url
+        .get(..HTTPS.len())
+        .is_some_and(|s| s.eq_ignore_ascii_case(HTTPS));
+    ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_global(Some(timeout))
+        .timeout_resolve(Some(connect))
+        .timeout_connect(Some(connect))
+        .http_status_as_error(false)
+        .https_only(https)
+        .build()
+        .into()
+}
+
+const HTTPS: &str = "https://";
 
 /// The longest a connection may take to open, a proxy's CONNECT and the
 /// TLS handshake included, before the server counts as unreachable: on a
@@ -797,9 +846,37 @@ mod tests {
             "soon",
             "Sun, 06 Nov 1994 08:49:37 CET",
             "Sun, 32 Nov 1994 08:49:37 GMT",
+            "Sun, 06 Nov 300000000000 08:49:37 GMT",
+            "Sun, 06 Nov 9223372036854775807 08:49:37 GMT",
+            "Sun, 06 Jan -9223372036854775808 08:49:37 GMT",
+            "Sun, 06 Nov 10000 08:49:37 GMT",
         ] {
             assert_eq!(retry_after(bad, now), None, "{bad}");
         }
+        assert_eq!(
+            http_date("Fri, 31 Dec 9999 23:59:59 GMT"),
+            Some(UNIX_EPOCH + Duration::from_secs(253_402_300_799))
+        );
+    }
+
+    #[test]
+    fn a_request_over_https_follows_no_redirect_off_it() {
+        let second = Duration::from_secs(1);
+        assert!(
+            agent("https://lyrics.example/a", second)
+                .config()
+                .https_only()
+        );
+        assert!(
+            agent("HTTPS://lyrics.example/a", second)
+                .config()
+                .https_only()
+        );
+        assert!(
+            !agent("http://127.0.0.1:8080/a", second)
+                .config()
+                .https_only()
+        );
     }
 
     #[test]
