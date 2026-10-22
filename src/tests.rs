@@ -1945,6 +1945,51 @@ fn a_file_of_your_own_at_a_songs_path_is_written_over_only_when_forced() {
 }
 
 #[test]
+fn lyrics_of_your_own_beside_a_song_are_written_over_only_when_forced_and_undone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let built = std::fs::read(&song).unwrap();
+    let mine = song.with_extension("lrc");
+    std::fs::write(&mine, "[00:01.00]my own words").unwrap();
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(
+        &songs,
+        listed.replace("mode = \"tags\"", "mode = \"audio\""),
+    )
+    .unwrap();
+
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        text.contains(
+            "Left at Artist/Record/02 Song.flac: Artist/Record/02 Song.lrc is not muman's"
+        ),
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+    let (_, report) = s.report(&flacs(), &["status", "--all"]);
+    assert!(
+        report.contains("left where it is, Artist/Record/02 Song.lrc not muman's"),
+        "{report}"
+    );
+
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert!(!mine.exists(), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&mine).unwrap(),
+        "[00:01.00]my own words",
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+}
+
+#[test]
 fn undo_of_a_forced_sync_leaves_a_file_retagged_by_hand_changed() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -8,6 +8,7 @@ use lofty::tag::Accessor;
 
 use super::*;
 use crate::codec::Codec;
+use crate::library::{Ledger, Owned};
 use crate::quality::Rect;
 use crate::resolve::{AudioRef, render_version};
 use crate::store::Kind;
@@ -79,6 +80,18 @@ fn plan(format: Format) -> Plan {
 }
 
 fn go(fake: &Fake, f: &Fixture, plan: &Plan) -> Result<Rendered> {
+    let folder = Path::new("A/Record");
+    // As a sync claims the files a build before left at the song's paths.
+    let claim: Vec<Owned> = fs::read_dir(f.dir.path().join("lib").join(folder))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| Ledger::taken(&folder.join(e.file_name())))
+        .collect();
+    go_claiming(fake, f, plan, &claim)
+}
+
+fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result<Rendered> {
     render(
         fake,
         &Job {
@@ -87,6 +100,7 @@ fn go(fake: &Fake, f: &Fixture, plan: &Plan) -> Result<Rendered> {
             library: &f.dir.path().join("lib"),
             sources: &f.sources,
             scratch: &f.dir.path().join("scratch"),
+            claim,
         },
     )
 }
@@ -452,6 +466,52 @@ fn a_vorbis_song_keeps_vorbis_comments_in_ogg() {
 }
 
 #[test]
+fn lyrics_not_claimed_are_neither_written_over_nor_removed() {
+    let f = fixture();
+    let mine = f.dir.path().join("lib/A/Record/Song.lrc");
+    fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    for p in [
+        plan(Format::Copy { codec: Codec::Opus }),
+        Plan {
+            lyrics: None,
+            ..plan(Format::Copy { codec: Codec::Opus })
+        },
+    ] {
+        fs::write(&mine, "mine").unwrap();
+        let e = go_claiming(&Fake::default(), &f, &p, &[]).unwrap_err();
+        assert!(format!("{e:#}").contains("not muman's"), "{e:#}");
+        assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
+        assert!(!f.dir.path().join("lib/A/Record/Song.opus").exists());
+        assert!(leftover_parts(&f.dir.path().join("lib/A/Record")).is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_left_at_a_staged_name_is_not_written_through() {
+    let f = fixture();
+    let folder = f.dir.path().join("lib/A/Record");
+    fs::create_dir_all(&folder).unwrap();
+    let elsewhere = f.dir.path().join("elsewhere");
+    fs::write(&elsewhere, "not the library's").unwrap();
+    for name in ["Song.opus.part", "Song.lrc.part"] {
+        std::os::unix::fs::symlink(&elsewhere, folder.join(name)).unwrap();
+    }
+    let r = go(
+        &Fake::default(),
+        &f,
+        &plan(Format::Copy { codec: Codec::Opus }),
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "not the library's");
+    assert!(r.lyrics.is_some());
+    for file in [&r.audio, r.lyrics.as_ref().unwrap()] {
+        let meta = fs::symlink_metadata(f.dir.path().join("lib").join(file)).unwrap();
+        assert!(meta.file_type().is_file(), "{}", file.display());
+    }
+}
+
+#[test]
 fn failed_lyrics_cost_only_themselves_and_clear_the_last_build_s() {
     let f = fixture();
     let stale = f.dir.path().join("lib/A/Record/Song.lrc");
@@ -559,7 +619,14 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         p.tags[0] = ("TITLE".into(), vec!["Paper Comets".into()]);
         let library = f.dir.path().join("lib");
         let calls = fake.calls().len();
-        let again = retag(&library, &first.audio, first.lyrics.as_deref(), &p).unwrap();
+        let again = retag(
+            &library,
+            &first.audio,
+            first.lyrics.as_deref(),
+            &p,
+            &[Ledger::taken(&first.audio)],
+        )
+        .unwrap();
         assert_eq!(fake.calls().len(), calls, "{format:?}: nothing is run");
         assert_eq!(again.audio, first.audio);
         let file = lofty::read_from_path(library.join(&again.audio)).unwrap();
@@ -649,7 +716,14 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             vec!["Paper Comets, a title longer than the last".into()],
         );
         let library = f.dir.path().join("lib");
-        retag(&library, &r.audio, r.lyrics.as_deref(), &q).unwrap();
+        retag(
+            &library,
+            &r.audio,
+            r.lyrics.as_deref(),
+            &q,
+            &[Ledger::taken(&r.audio)],
+        )
+        .unwrap();
         let retagged = fs::read(library.join(&r.audio)).unwrap();
         assert!(
             retagged == built(&q).0,

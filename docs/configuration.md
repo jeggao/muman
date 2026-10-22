@@ -405,7 +405,9 @@ The refused characters become their full-width lookalikes (`：`, `？`,
 `⧸`, …), as yt-dlp names its files, so a title stays readable. `[library]
 replace` maps characters or strings to replacements of your own,
 applied first and over these: `{ ":" = " -" }` turns `A: B` into
-`A - B`. A reserved device name gets `_` after it: `CON_.opus`.
+`A - B`. A reserved device name gets `_` after it: `CON_.opus`. On
+Windows itself, `none` replaces what `windows` does all the same, since
+Windows holds no such name.
 
 File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
 bytes of UTF-8, which no filesystem counts more strictly, once they are

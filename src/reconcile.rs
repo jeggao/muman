@@ -1135,14 +1135,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
             _ => None,
         })
         .collect();
-    // Owned before written, and no longer vouched for: a crash between the
-    // two must leave neither a file no run would delete nor a rewritten
-    // one that looks changed by someone else.
+    let claims: BTreeMap<usize, Vec<Owned>> = due
+        .iter()
+        .map(|((n, r), _)| (*n, claim(&ledger, &old, &path_of(r), opts.force)))
+        .collect();
+    // Owned before written, and no longer vouched for: a crash between the two must leave
+    // neither a file no run would delete nor a rewritten one that looks changed by someone
+    // else, nor lyrics of the user's own that the song leaves alone counted muman's.
     let mut pending = (!due.is_empty()).then(|| state.clone());
     if let Some(pending) = pending.as_mut() {
         for ((n, r), _) in &due {
             let path = path_of(r);
-            let lyrics = Some(path.with_extension("lrc"));
+            let lyrics = Some(path.with_extension("lrc")).filter(|l| {
+                std::fs::symlink_metadata(dirs.library.join(l)).is_err()
+                    || claims[n].iter().any(|o| o.path() == l)
+            });
             pending.outputs.insert(
                 path,
                 Written {
@@ -1159,19 +1166,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         ledger.checkpoint()?;
         pending.save(home)?;
     }
-    let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
-    let mut replaced = Vec::new();
-    for ((_, r), _) in &due {
-        let path = path_of(r);
-        if let Some(written) = old.get(&path) {
-            replaced.extend(ledger.owned(&old, &path, true));
-            if let Some(lyrics) = &written.lyrics {
-                replaced.extend(ledger.owned(&old, lyrics, true));
-            }
-        }
-        // Written over only when forced, and then kept to put back.
-        replaced.extend(foreign(r).iter().map(|f| Ledger::taken(f)));
-    }
+    let replaced: Vec<Owned> = claims.values().flatten().cloned().collect();
     ledger.replacing(&replaced)?;
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
@@ -1192,18 +1187,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 )?;
                 Some(file.clone())
             }
-            Doing::Unowned => {
-                unowned.push(path_of(r));
+            Doing::Unowned { by } => {
+                unowned.push(by.clone());
                 None
             }
             Doing::Held { file } => Some(file.clone()),
-            Doing::Blocked { file } => {
+            Doing::Blocked { file, by } => {
                 crate::ui::warning(
                     out,
                     &format!(
                         "Left at {}: {} is not muman's (`sync --force` writes over it)",
                         crate::relpath::show(file),
-                        crate::relpath::show(&path_of(r))
+                        crate::relpath::show(by)
                     ),
                 )?;
                 Some(file.clone())
@@ -1251,13 +1246,14 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let mut failed_at = Vec::new();
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
+        let claim = &claims[n];
         if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library);
+            return render::place(folder, made, &dirs.library, claim);
         }
         if *retag {
             let path = path_of(r);
             let lyrics = old.get(&path).and_then(|w| w.lyrics.as_deref());
-            return render::retag(&dirs.library, &path, lyrics, &r.plan);
+            return render::retag(&dirs.library, &path, lyrics, &r.plan, claim);
         }
         render::render(
             runner,
@@ -1267,6 +1263,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 library: &dirs.library,
                 sources: &located,
                 scratch: Sub::new(temp.path(), "render-")?.path(),
+                claim,
             },
         )
     };
@@ -1553,24 +1550,51 @@ fn current<'a>(
 }
 
 /// The files at a song's path, its audio or its lyrics, that muman did
-/// not write: a file of the user's own a sync must not write over. A file
-/// that is one muman wrote under a name differing only in case, as a
-/// filesystem blind to case reports, is muman's.
+/// not write: a file of the user's own a sync must not write over or
+/// remove, a `.lrc` beside a song muman wrote among them, and a link,
+/// whether or not it leads anywhere. A file that is one muman wrote under
+/// a name differing only in case, as a filesystem blind to case reports,
+/// is muman's.
 fn foreign(library: &Path, old: &BTreeMap<PathBuf, Written>, path: &Path) -> Vec<PathBuf> {
-    if old.contains_key(path) {
-        return Vec::new();
-    }
-    let lyrics = path.with_extension("lrc");
+    use crate::relpath::folded;
     let owned = |rel: &Path| {
+        let fold = folded(rel);
         old.iter().any(|(p, w)| {
             std::iter::once(p).chain(&w.lyrics).any(|o| {
-                same_file::is_same_file(library.join(o), library.join(rel)).unwrap_or(false)
+                o == rel
+                    || (folded(o) == fold
+                        && same_file::is_same_file(library.join(o), library.join(rel))
+                            .unwrap_or(false))
             })
         })
     };
-    [path.to_path_buf(), lyrics]
+    [path.to_path_buf(), path.with_extension("lrc")]
         .into_iter()
-        .filter(|rel| library.join(rel).exists() && !owned(rel))
+        .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok() && !owned(rel))
+        .collect()
+}
+
+/// The files at a song's paths, its audio and its lyrics, that writing it
+/// may write over or remove, each to be kept for `undo` first: muman's,
+/// under its name or one a filesystem blind to case takes for it, and,
+/// when `forced`, one of the user's own, taken over.
+fn claim(
+    ledger: &Ledger<'_>,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+    forced: bool,
+) -> Vec<Owned> {
+    let library = ledger.root();
+    let foreign = foreign(library, old, path);
+    [path.to_path_buf(), path.with_extension("lrc")]
+        .into_iter()
+        .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
+        .filter(|rel| forced || !foreign.contains(rel))
+        .map(|rel| {
+            ledger
+                .owned(old, &rel, true)
+                .unwrap_or_else(|| Ledger::taken(&rel))
+        })
         .collect()
 }
 
@@ -1704,10 +1728,12 @@ pub(crate) enum Doing {
     Write,
     /// Left alone: its file, changed since muman wrote it.
     Guard { file: PathBuf },
-    /// Left alone: a file not muman's is at its path.
-    Unowned,
-    /// Left where it is: a file not muman's is at the song's new path.
-    Blocked { file: PathBuf },
+    /// Left alone: a file not muman's, `by`, is at its path or its
+    /// lyrics'.
+    Unowned { by: PathBuf },
+    /// Left where it is: a file not muman's, `by`, is at the song's path
+    /// or its lyrics'.
+    Blocked { file: PathBuf, by: PathBuf },
     /// Left as built: a source it was built from was fetched again and
     /// holds otherwise, not yet accepted.
     Held { file: PathBuf },
@@ -1946,9 +1972,9 @@ fn settled(
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
-/// | Elsewhere, and a file not muman's at its path | Left where it is until `--force` |
-/// | None, and a file not muman's at its path | Left alone until `--force` |
 /// | At its path, of the same media | Its tags written |
+/// | Any, and a file not muman's at its path or its lyrics' | Left where it is until `--force` |
+/// | None, and a file not muman's at its path or its lyrics' | Left alone until `--force` |
 /// | Otherwise, or `force` | Written |
 ///
 /// A path is free when no file of anyone's is there, folded as NTFS and
@@ -2056,15 +2082,19 @@ fn decide(
             if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
-            if !foreign(library, old, &path).is_empty() {
-                // Its own file stays where it is rather than go for nothing.
-                return match file.filter(|_| present) {
-                    Some(file) => Doing::Blocked { file: file.clone() },
-                    None => Doing::Unowned,
-                };
-            }
+            // Its tags are written into its own file alone.
             if file == Some(&path) && same_media {
                 return Doing::Retag;
+            }
+            if let Some(by) = foreign(library, old, &path).into_iter().next() {
+                // Its own file stays where it is rather than go for nothing.
+                return match file.filter(|_| present) {
+                    Some(file) => Doing::Blocked {
+                        file: file.clone(),
+                        by,
+                    },
+                    None => Doing::Unowned { by },
+                };
             }
             Doing::Write
         })
@@ -2781,10 +2811,13 @@ pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, S
             Fate::Alone,
             "left alone, changed since muman wrote it".to_string(),
         ),
-        Doing::Unowned => (Fate::Alone, "left alone, not muman's".to_string()),
-        Doing::Blocked { .. } => (
+        Doing::Unowned { by } => (
             Fate::Alone,
-            "left where it is, its new path holding a file not muman's".to_string(),
+            format!("left alone, {} not muman's", crate::relpath::show(by)),
+        ),
+        Doing::Blocked { by, .. } => (
+            Fate::Alone,
+            format!("left where it is, {} not muman's", crate::relpath::show(by)),
         ),
         Doing::Held { .. } => (
             Fate::Alone,
@@ -2877,7 +2910,7 @@ fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file } = d {
+        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } = d {
             path.clone_from(file);
         }
         let (fate, verdict) = verdict(d, before, &r.plan);
@@ -2901,7 +2934,7 @@ fn status<W: Write>(
             Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } | Doing::Blocked { .. } => {
                 moved.get(&path).cloned()
             }
-            Doing::Unowned => None,
+            Doing::Unowned { .. } => None,
             _ => Some(Written {
                 sources: song.sources.clone(),
                 lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
