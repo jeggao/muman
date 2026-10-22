@@ -254,7 +254,7 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
 
-const MEDIA: [&str; 37] = [
+pub(crate) const MEDIA: [&str; 37] = [
     "flac", "wav", "w64", "rf64", "aif", "aiff", "aifc", "caf", "m4a", "m4b", "mp3", "mp2", "ogg",
     "oga", "opus", "spx", "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd",
     "mlp", "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf", "dff", "wma", "au",

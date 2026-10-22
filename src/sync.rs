@@ -387,7 +387,9 @@ pub(crate) fn network<R: Runner, W: Write, T>(
 
 /// Remove what a fetch left unfinished longer than `limit` ago, in any
 /// folder below `partial` but `apart`, which keeps its own time, and the
-/// folders that leaves empty; younger, a later run resumes it.
+/// folders that leaves empty; younger, a later run resumes it. `apart`
+/// itself stays even empty: a torrent fetched beside this run makes its
+/// folder in it, and would find it gone.
 pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Option<&Path>) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];
@@ -401,8 +403,10 @@ pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Opt
             .filter_map(|e| Some(e.ok()?.path()))
         {
             if path.is_dir() {
-                left.push(path.clone());
-                folders.push(path);
+                if Some(path.as_path()) != apart {
+                    folders.push(path.clone());
+                }
+                left.push(path);
                 continue;
             }
             let old = std::fs::metadata(&path)

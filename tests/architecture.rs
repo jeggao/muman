@@ -1,7 +1,8 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, where audio is mixed, and
-//! where what the user gives is walked and copied. Each rule names the one
+//! named, which loop fits songs into a size, where audio is mixed,
+//! where ffmpeg is given a file to read, and where what the user gives
+//! is walked and copied. Each rule names the one
 //! place a thing is done; code that does it anywhere else fails here
 //! until the rule, and the reason beside it, is changed on purpose.
 //!
@@ -73,13 +74,15 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "library.rs",
-        5,
-        "the ledger: every move and removal in the library, recorded first",
+        7,
+        "the ledger: every move and removal in the library, recorded first, \
+         and a song's staged files put in place over only what it proved muman's",
     ),
     (
         "render.rs",
-        7,
-        "a song's new files, written beside and renamed into a path the ledger kept",
+        6,
+        "a song's new files staged beside their paths, whatever was at a staged \
+         name removed first, and those staged files removed when the song fails",
     ),
     (
         "history.rs",
@@ -166,6 +169,42 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+}
+
+/// A library file is written over or removed only as the ledger proves
+/// it muman's: `render.rs`, which writes into the library, renames,
+/// copies and writes nothing itself but staged files it makes anew, and
+/// puts them in place through `library::put` and `library::clear`, which
+/// take an `Owned` no module but the ledger makes; a file not muman's is
+/// taken over, for a forced run, in one place.
+#[test]
+fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
+    let sources = sources();
+    let render = lines_with(
+        &sources["render.rs"],
+        &[
+            "atomic::rename(",
+            "atomic::remove(",
+            "fs::rename(",
+            "fs::copy(",
+            "fs::write(",
+            "File::create(",
+        ],
+    );
+    assert!(render.is_empty(), "render.rs:\n{}", render.join("\n"));
+    let taken: Vec<String> = sources
+        .iter()
+        .flat_map(|(file, text)| {
+            lines_with(text, &["Ledger::taken("])
+                .into_iter()
+                .map(move |l| format!("{file}: {}", l.trim()))
+        })
+        .collect();
+    assert!(
+        taken.len() == 1 && taken[0].starts_with("reconcile.rs: "),
+        "{}",
+        taken.join("\n")
+    );
 }
 
 /// The state that lives for the whole process, and why it may.
@@ -319,6 +358,24 @@ fn samples_are_changed_only_as_a_plan_s_chain_says() {
         wrong.is_empty(),
         "render a gain or dynamics filter in `codec::Codec::encoder_args`, from the plan's \
          chain, so a song's samples change only as its plan says:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn ffmpeg_reads_a_file_only_as_its_input_says() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file != "ffmpeg.rs" {
+            for line in lines_with(&text, &["\"-i\""]) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "give ffmpeg and ffprobe a file by `ffmpeg::Input::args`, which says what it may be \
+         read as, so a manifest or an address named as a song is never fetched:\n{}",
         wrong.join("\n")
     );
 }

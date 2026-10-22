@@ -28,7 +28,15 @@
 //!   them. Float lossless audio holds samples past full scale unclipped, so
 //!   in it only runs just under its own peak count.
 //!
-//! A picture is measured in gray.
+//! A picture is measured in gray, and only up to [`MOST_PIXELS`]: a
+//! larger one is no picture, as one that does not decode is. A picture
+//! is a few bytes a pixel to measure, in memory and time, and a PNG of
+//! one color compresses its pixels a thousandfold: a 167 KB one of
+//! 16000 × 9000 took 1.28 GB and 54 s of CPU to measure. Cover art runs
+//! far smaller, 3000 px a side at the most stores serve, and even a
+//! 12-inch sleeve scanned at 600 dpi, 7200 px a side, fits within
+//! 8192 px. ffmpeg refuses the picture before decoding it
+//! (`-max_pixels`), and a graymap past it is not read.
 //!
 //! - **Content.** In a picture that is not square, uniform rows or columns
 //!   that match on opposite sides, within 2% of each other in width, are
@@ -312,13 +320,23 @@ pub fn segment_output(input: usize, index: u32) -> Vec<OsString> {
 /// a picture cut short, as a JPEG that stops before its end, decodes to
 /// gray past where its bytes stop and would measure as sharp as it was
 /// made; read so, it fails, and ranks after every picture that decodes.
+/// A picture of more than [`MOST_PIXELS`] fails alike, before it is
+/// decoded.
 #[must_use]
 pub fn whole_pictures() -> Vec<OsString> {
-    ["-err_detect:v", "explode"]
-        .into_iter()
-        .map(OsString::from)
-        .collect()
+    [
+        "-err_detect:v".to_string(),
+        "explode".to_string(),
+        "-max_pixels:v".to_string(),
+        MOST_PIXELS.to_string(),
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect()
 }
+
+/// The most pixels a picture measured may hold, as the module says.
+pub const MOST_PIXELS: u64 = 8192 * 8192;
 
 /// The ffmpeg output options that write one frame of the picture
 /// `input:stream` as a binary graymap, which carries its own size.
