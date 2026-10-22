@@ -23,6 +23,15 @@
 //! file's path, bitrate and length, is no tag of the song and sets none;
 //! any other field, which no Vorbis name stands for, is reported as
 //! skipped rather than dropped unsaid.
+//!
+//! A name is given at most [`MOST_VALUES`] values, and a song or an
+//! album at most [`MOST_NAMES`] names, the rest reported as skipped; and
+//! at most [`MOST_SKIPPED`] reasons are reported. A song's artists,
+//! performers or genres run to a few dozen at the most, and Picard writes
+//! a hundred names or so, but each value and name is looked for among
+//! those before it, so a file of tens of thousands of them, as no tagger
+//! writes, would otherwise take a time growing with the square of its
+//! length: forty thousand names and skips took 35 s.
 
 use std::path::Path;
 
@@ -83,6 +92,18 @@ const ONE_VALUE: [&str; 7] = [
 
 /// The longest value taken, as the tags of a source are capped.
 const MOST_BYTES: usize = 4096;
+
+/// The most values one name is given, as the module says.
+const MOST_VALUES: usize = 64;
+
+/// The most names one song or album is given, as the module says.
+const MOST_NAMES: usize = 256;
+
+/// The most reasons a file's skipped names are reported with, the last
+/// followed by [`MORE_SKIPPED`].
+const MOST_SKIPPED: usize = 64;
+
+const MORE_SKIPPED: &str = "more names, past these";
 
 /// One song's part of a tag file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,11 +169,21 @@ impl Sheet {
             self.skip(format!("{key}, which describes another file"));
             return;
         }
-        let mut put = |key: &str, value: String| match tags.iter_mut().find(|(k, _)| k == key) {
-            Some((_, v)) if one => *v = vec![value],
-            Some((_, v)) if !v.contains(&value) => v.push(value),
-            Some(_) => {}
-            None => tags.push((key.to_string(), vec![value])),
+        let mut full = None;
+        let mut put = |key: &str, value: String| {
+            let names = tags.len();
+            match tags.iter_mut().find(|(k, _)| k == key) {
+                Some((_, v)) if one => *v = vec![value],
+                Some((_, v)) if v.contains(&value) => {}
+                Some((_, v)) if v.len() >= MOST_VALUES => {
+                    full = Some(format!("{key}'s values past its first {MOST_VALUES}"));
+                }
+                Some((_, v)) => v.push(value),
+                None if names >= MOST_NAMES => {
+                    full = Some(format!("{key}, past the first {MOST_NAMES} names"));
+                }
+                None => tags.push((key.to_string(), vec![value])),
+            }
         };
         match key {
             "TRACKNUMBER" | "DISCNUMBER" => {
@@ -174,11 +205,16 @@ impl Sheet {
                 Err(why) => self.skip(why),
             },
         }
+        if let Some(why) = full {
+            self.skip(why);
+        }
     }
 
     fn skip(&mut self, why: String) {
-        if !self.skipped.contains(&why) {
+        if self.skipped.len() < MOST_SKIPPED && !self.skipped.contains(&why) {
             self.skipped.push(why);
+        } else if self.skipped.len() == MOST_SKIPPED {
+            self.skipped.push(MORE_SKIPPED.to_string());
         }
     }
 }
@@ -602,6 +638,7 @@ fn recorded(sheet: &mut Sheet, record: &crate::musicbrainz::Record) -> Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     fn values<'a>(tags: &'a Tags, name: &str) -> Vec<&'a str> {
         tags.iter()
@@ -830,6 +867,32 @@ mod tests {
         let sheet = read(Path::new("a.txt"), "TITLE=x\nTRACKTOTAL=abc\nDISCTOTAL=2\n").unwrap();
         assert_eq!(values(&sheet.tracks[0].tags, "TRACKTOTAL"), [] as [&str; 0]);
         assert_eq!(values(&sheet.tracks[0].tags, "DISCTOTAL"), ["2"]);
+    }
+
+    #[test]
+    fn a_name_keeps_its_first_values_and_skips_the_rest() {
+        let mut text = String::from("TITLE=Copper Moth\n");
+        for i in 0..40_000 {
+            let _ = writeln!(text, "ARTIST=Marlo Venn {i}");
+        }
+        let sheet = read(Path::new("a.txt"), &text).unwrap();
+        let artists = values(&sheet.tracks[0].tags, "ARTIST");
+        assert_eq!(artists.len(), MOST_VALUES);
+        assert_eq!(artists[0], "Marlo Venn 0");
+        assert_eq!(sheet.skipped, ["ARTIST's values past its first 64"]);
+    }
+
+    #[test]
+    fn a_file_of_many_names_keeps_the_first_and_says_some_skipped() {
+        let mut text = String::from("TITLE=Copper Moth\n");
+        for i in 0..40_000 {
+            let _ = writeln!(text, "NAME{i}=x\nLYRICS{i}=y");
+        }
+        let sheet = read(Path::new("a.txt"), &text).unwrap();
+        assert_eq!(sheet.tracks[0].tags.len(), MOST_NAMES);
+        assert_eq!(sheet.skipped.len(), MOST_SKIPPED + 1);
+        assert_eq!(sheet.skipped[0], "LYRICS0, which describes another file");
+        assert_eq!(sheet.skipped[MOST_SKIPPED], MORE_SKIPPED);
     }
 
     #[test]

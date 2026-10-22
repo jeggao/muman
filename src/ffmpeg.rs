@@ -207,7 +207,10 @@ pub fn read_pgm(bytes: &[u8]) -> Option<(u32, u32, &[u8])> {
         return None;
     }
     let pixels = bytes.get(at + 1..)?;
-    (pixels.len() >= w as usize * h as usize).then_some((w, h, pixels))
+    let size = usize::try_from(w)
+        .ok()?
+        .checked_mul(usize::try_from(h).ok()?)?;
+    (pixels.len() >= size).then_some((w, h, pixels))
 }
 
 #[cfg(test)]
@@ -221,6 +224,7 @@ mod tests {
         assert_eq!(read_pgm(&pgm), Some((3, 2, &[1, 2, 3, 4, 5, 6][..])));
         assert_eq!(read_pgm(b"P6\n1 1\n255\nxyz"), None);
         assert_eq!(read_pgm(b"P5\n4 4\n255\n12"), None, "too few pixels");
+        assert_eq!(read_pgm(b"P5\n4294967295 4294967295\n255\n12"), None);
     }
 
     #[test]
