@@ -248,7 +248,10 @@ impl Naming {
 
     /// A display name as one path component within `limit` bytes, in NFC
     /// before it is cut: composing a name can lengthen it, as a nukta
-    /// letter NFC keeps apart grows from 3 bytes to 6.
+    /// letter NFC keeps apart grows from 3 bytes to 6. Trailing dots and
+    /// spaces and a device name are made safe under `restrict`, and on
+    /// Windows itself always: there `CON` names the console, not a file,
+    /// and a trailing dot is dropped, so two songs would share a file.
     fn component(&self, name: &str, limit: usize) -> String {
         // What the template itself spells, values aside, is made safe too.
         let safe: String = name
@@ -263,7 +266,7 @@ impl Naming {
             .collect();
         let trimmed = safe.trim().trim_start_matches('.');
         let mut out = cut(trimmed, limit);
-        if self.restrict != Restrict::None {
+        if self.restrict != Restrict::None || cfg!(windows) {
             out = out.trim_end_matches(['.', ' ']).to_string();
             if reserved(&out) {
                 let at = out.find('.').unwrap_or(out.len());
@@ -502,6 +505,14 @@ mod tests {
                 path(&["A_ B", "x", "Why_"])
             } else {
                 path(&["A: B", "x", "Why?"])
+            }
+        );
+        assert_eq!(
+            naming(&none).stem(&tags("CON", "LPT9.", "x. ")).unwrap(),
+            if cfg!(windows) {
+                path(&["CON_", "LPT9_", "x"])
+            } else {
+                path(&["CON", "LPT9.", "x."])
             }
         );
     }

@@ -62,11 +62,15 @@ pub fn ffmetadata(chapters: &[Chapter]) -> String {
     text
 }
 
-/// `text` with what `FFMETADATA` reads as its own escaped.
+/// `text` with what `FFMETADATA` reads as its own escaped: ffmpeg ends a
+/// line at a carriage return as at a line break, so a title holding
+/// either unescaped would end there and the rest be read as lines of the
+/// file, a chapter of a title's making among them. A NUL, which ends
+/// ffmpeg's reading of the file whether escaped or not, is dropped.
 fn escaped(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if matches!(c, '=' | ';' | '#' | '\\' | '\n') {
+    for c in text.chars().filter(|c| *c != '\0') {
+        if matches!(c, '=' | ';' | '#' | '\\' | '\n' | '\r') {
             out.push('\\');
         }
         out.push(c);
@@ -186,5 +190,19 @@ mod tests {
         let frames = id3(&two());
         assert_eq!(frames.len(), 3, "a CTOC and two CHAPs");
         assert_eq!(id3(&[]).len(), 0);
+    }
+
+    #[test]
+    fn a_title_cannot_end_its_line_in_ffmetadata() {
+        let forged = Chapter {
+            start_ms: 0,
+            end_ms: 1000,
+            title: "One\r[CHAPTER]\rSTART=1500\ntitle=Two\0".into(),
+        };
+        assert_eq!(
+            ffmetadata(&[forged]),
+            ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\n\
+             title=One\\\r[CHAPTER]\\\rSTART\\=1500\\\ntitle\\=Two\n"
+        );
     }
 }

@@ -153,7 +153,7 @@ Every flag is in the [command reference](docs/cli.md).
 | 0 | Done, or nothing needed doing, or a change was declined |
 | 2 | ffmpeg, ffprobe, yt-dlp or aria2c is missing, does not run or is older than muman runs, the system names no home folder, or the command line does not parse or gives a setting that does not read |
 | 4 | Something failed: a download, a song, reading or writing the song list or state, a song an export left out, or a problem `check` found |
-| 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, a change or `undo` was refused, or `--offline` rules out what was asked |
+| 5 | A query for a change matched no song or did not read, a change needs a terminal, `-y` or `--all`, a file `add` was given matched no song for sure, a change or `undo` was refused, `--offline` rules out what was asked, or the song list sets commands or servers not trusted, with no terminal to ask on and no `--trust` |
 | 130 | Stopped by Ctrl-C or a signal to stop, with every program muman started; a later run resumes what was fetched |
 
 ## Documentation

@@ -67,6 +67,7 @@ src/
   plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
+  given.rs          folders given to `add`: walked and copied, links followed inside
   similar.rs        names and texts compared in any script
   picture.rs        perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
@@ -100,6 +101,7 @@ src/
   purge.rs          fetched sources and records no song uses, deleted
   progress.rs       how far a long step has got, on stderr
   parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
+  trust.rs          the song list's commands and servers, run only once trusted
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes

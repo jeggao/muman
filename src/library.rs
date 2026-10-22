@@ -2,16 +2,19 @@
 //! file written over goes through a [`Ledger`], which records it in the
 //! run's history before making it, so a run stopped at any point is one
 //! the next sync follows and `undo` reverses. Writing a song's new file
-//! is [`crate::render`]'s, into a path the ledger has kept, or one no
-//! file holds.
+//! is [`crate::render`]'s, staged beside its place and put there by
+//! [`put`], over a file the ledger has kept, or where no file is.
 //!
-//! A file is removed, or kept before it is written over, only as
+//! A file is removed, written over or kept before either, only as
 //! [`Owned`]: one the state lists as muman's, its bytes as muman wrote
 //! them, or its lyrics; or one a forced run takes over, kept for `undo`
 //! first like any other. No other value names a file the ledger may
 //! delete, so a file of the user's own cannot reach a removal by any path
-//! through the code. `tests/architecture.rs` holds every other module to
-//! changing no library file.
+//! through the code: [`put`] and [`clear`], which `render` places a song's
+//! files through, refuse a file at the path that no [`Owned`] names, a
+//! `.lrc` of the user's own beside a song among them. `tests/architecture.rs`
+//! holds every other module to changing no library file, and `render` to
+//! replacing none but through them.
 //!
 //! A move that only changes a name's case goes through a temporary name,
 //! which a filesystem blind to case would otherwise take for a rename
@@ -179,6 +182,51 @@ impl<'a> Ledger<'a> {
         }
         remove_empty_folders(self.root, &left);
         Ok(done)
+    }
+}
+
+/// Put the file staged at `staged` in its place at `rel` in the library
+/// `root`: over a file there only as `claim` holds it, and never a staged
+/// path that is no longer a plain file, as a link put in its place is not.
+pub fn put(root: &Path, staged: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
+    let plain = std::fs::symlink_metadata(staged).is_ok_and(|m| m.file_type().is_file());
+    if !plain {
+        return Err(anyhow!("{} is not the file muman staged", staged.display()));
+    }
+    held(root, rel, claim)?;
+    let to = root.join(rel);
+    crate::atomic::rename(staged, &to)
+        .with_context(|| format!("renaming {} → {}", staged.display(), to.display()))
+}
+
+/// Remove `rel` from the library `root` if a file is there, as `claim`
+/// holds it.
+pub fn clear(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
+    held(root, rel, claim)?;
+    let path = root.join(rel);
+    match crate::atomic::remove(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        r => r.with_context(|| format!("removing {}", path.display())),
+    }
+}
+
+/// Refuse a file at `rel` that no file of `claim` is, under its name or
+/// one a filesystem blind to case takes for it.
+fn held(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
+    let at = root.join(rel);
+    if std::fs::symlink_metadata(&at).is_err() {
+        return Ok(());
+    }
+    let ours = claim.iter().any(|o| {
+        o.path() == rel || same_file::is_same_file(root.join(o.path()), &at).unwrap_or(false)
+    });
+    if ours {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "{} is not muman's, and is left alone",
+            crate::relpath::show(rel)
+        ))
     }
 }
 
@@ -350,6 +398,37 @@ mod tests {
         assert_eq!(removal.gone, [PathBuf::from("A/B/x.opus")]);
         assert_eq!(removal.held, []);
         assert!(!root.join("A").exists());
+    }
+
+    #[test]
+    fn a_file_is_put_over_or_cleared_only_as_claimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        std::fs::write(root.join("A/x.lrc"), "mine").unwrap();
+        std::fs::write(root.join("A/x.lrc.part"), "new").unwrap();
+        let rel = Path::new("A/x.lrc");
+        assert!(put(root, &root.join("A/x.lrc.part"), rel, &[]).is_err());
+        assert!(clear(root, rel, &[]).is_err());
+        assert_eq!(std::fs::read_to_string(root.join(rel)).unwrap(), "mine");
+        let claim = [Ledger::taken(rel)];
+        put(root, &root.join("A/x.lrc.part"), rel, &claim).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(rel)).unwrap(), "new");
+        clear(root, rel, &claim).unwrap();
+        assert!(!root.join(rel).exists());
+        clear(root, rel, &[]).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_place_of_a_staged_file_is_not_put() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("elsewhere"), "x").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join("x.opus.part")).unwrap();
+        let staged = root.join("x.opus.part");
+        assert!(put(root, &staged, Path::new("x.opus"), &[]).is_err());
+        assert!(!root.join("x.opus").exists());
     }
 
     #[test]
