@@ -3,6 +3,13 @@
 //!
 //! Every file is written as `<name>.part` and renamed into place, the
 //! audio last, so a player scanning the library never sees half a track.
+//! A `.part` is made anew, whatever was at its name removed first and the
+//! file created only if nothing took its place: a link left there by
+//! someone who may write the library folder would send the write
+//! elsewhere. ffmpeg, which opens its output itself, writes into a `.part`
+//! made so just before it runs. A song's files go into place through
+//! [`crate::library::put`] and [`crate::library::clear`], over or in
+//! place of only the files the sync claimed as muman's or took over.
 //! A cover or lyrics that fail are reported and the song is written
 //! without them. A song that fails leaves the folders made for it, since
 //! another song rendered at the same time may be writing into one; the
@@ -87,6 +94,7 @@ use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
 use crate::ffmpeg::{self, Output};
+use crate::library::Owned;
 use crate::lyrics;
 use crate::resolve::{CoverRef, Format, LyricsRef, Plan};
 use crate::runner::Runner;
@@ -104,6 +112,8 @@ pub struct Job<'a> {
     pub sources: &'a BTreeMap<SourceKey, Located>,
     /// An empty folder of this song's own for intermediates.
     pub scratch: &'a Path,
+    /// The files at the song's paths it may write over or remove.
+    pub claim: &'a [Owned],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +139,21 @@ fn part(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".part");
     PathBuf::from(s)
+}
+
+/// A new, empty file at `part`, whatever was there removed first.
+fn stage(part: &Path) -> Result<fs::File> {
+    match fs::remove_file(part) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("removing {}", part.display()));
+        }
+        _ => {}
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part)
+        .with_context(|| format!("creating {}", part.display()))
 }
 
 /// The inputs of one ffmpeg run, each file once.
@@ -287,6 +312,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
 
     let input_paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
+    stage(&audio_part)?;
     let results = ffmpeg::run_outputs(runner, &input_paths, &outputs);
     let failed = |path: &Path| {
         outputs
@@ -359,30 +385,31 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
         match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
             Some(text) => {
-                fs::write(&lyrics_part, text)
+                std::io::Write::write_all(&mut stage(&lyrics_part)?, text.as_bytes())
                     .with_context(|| format!("writing {}", lyrics_part.display()))?;
                 Ok(Some(lyrics_rel.clone()))
             }
             None => Ok(None),
         }
     })();
-    match staged {
-        Ok(lyrics) => {
-            if lyrics.is_some() {
-                rename(&lyrics_part, &lyrics_path)?;
-            } else {
-                // A song that has no lyrics now must not keep the last build's.
-                remove_if_present(&lyrics_path)?;
-            }
-            rename(&audio_part, &audio_path)?;
-            Ok(Rendered {
-                audio_bytes: size_of(&audio_path),
-                lyrics_bytes: lyrics.as_ref().map_or(0, |_| size_of(&lyrics_path)),
-                audio: audio_rel,
-                lyrics,
-                problems,
-            })
+    let placed = staged.and_then(|lyrics| {
+        if lyrics.is_some() {
+            crate::library::put(job.library, &lyrics_part, &lyrics_rel, job.claim)?;
+        } else {
+            // A song that has no lyrics now must not keep the last build's.
+            crate::library::clear(job.library, &lyrics_rel, job.claim)?;
         }
+        crate::library::put(job.library, &audio_part, &audio_rel, job.claim)?;
+        Ok(lyrics)
+    });
+    match placed {
+        Ok(lyrics) => Ok(Rendered {
+            audio_bytes: size_of(&audio_path),
+            lyrics_bytes: lyrics.as_ref().map_or(0, |_| size_of(&lyrics_path)),
+            audio: audio_rel,
+            lyrics,
+            problems,
+        }),
         Err(e) => {
             let _ = fs::remove_file(&audio_part);
             let _ = fs::remove_file(&lyrics_part);
@@ -464,18 +491,28 @@ fn fit_cover<R: Runner>(
 /// Write a song whose plan changed only in its tags by writing them into
 /// the file it has at `audio`, with the cover and the embedded lyrics
 /// that file holds: what [`render`] would write, without decoding or
-/// encoding anything. Through `.part`, as [`render`] writes.
-pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -> Result<Rendered> {
+/// encoding anything. Through `.part`, as [`render`] writes, put over the
+/// file `claim` holds.
+pub fn retag(
+    library: &Path,
+    audio: &Path,
+    lyrics: Option<&Path>,
+    plan: &Plan,
+    claim: &[Owned],
+) -> Result<Rendered> {
     use lofty::file::TaggedFileExt;
 
     let path = library.join(audio);
     let staged = part(&path);
     // Into a new file, as a song written anew is: a copy would carry over
     // a read-only mode and refuse the tags.
-    (|| -> std::io::Result<u64> {
-        std::io::copy(&mut fs::File::open(&path)?, &mut fs::File::create(&staged)?)
-    })()
+    let mut into = stage(&staged)?;
+    std::io::copy(
+        &mut fs::File::open(&path).with_context(|| format!("opening {}", path.display()))?,
+        &mut into,
+    )
     .with_context(|| format!("copying {}", path.display()))?;
+    drop(into);
     let result = (|| -> Result<Vec<String>> {
         // The copy is the file byte for byte, and a `.part` names no format.
         let held = crate::tags::read_tagged(&path)
@@ -513,7 +550,10 @@ pub fn retag(library: &Path, audio: &Path, lyrics: Option<&Path>, plan: &Plan) -
             return Err(e);
         }
     };
-    rename(&staged, &path)?;
+    if let Err(e) = crate::library::put(library, &staged, audio, claim) {
+        let _ = fs::remove_file(&staged);
+        return Err(e);
+    }
     Ok(Rendered {
         audio_bytes: size_of(&path),
         lyrics_bytes: lyrics.map_or(0, |l| size_of(&library.join(l))),
@@ -604,21 +644,35 @@ fn size_of(path: &Path) -> u64 {
 /// Put a song [`render`] wrote into the library folder `from` at its
 /// place in `library`, as rendering it there would have: lyrics first,
 /// audio last, each through `.part`, and the last build's lyrics gone
-/// when it has none now.
-pub fn place(from: &Path, rendered: &Rendered, library: &Path) -> Result<Rendered> {
+/// when it has none now: over or in place of only the files `claim`
+/// holds.
+pub fn place(
+    from: &Path,
+    rendered: &Rendered,
+    library: &Path,
+    claim: &[Owned],
+) -> Result<Rendered> {
     let copy_in = |rel: &Path| -> Result<()> {
         let to = library.join(rel);
         if let Some(dir) = to.parent() {
             fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let staged = part(&to);
-        fs::copy(from.join(rel), &staged)
-            .with_context(|| format!("copying {} into the library", rel.display()))?;
-        rename(&staged, &to)
+        let copied = stage(&staged).and_then(|mut into| {
+            let mut made = fs::File::open(from.join(rel))?;
+            std::io::copy(&mut made, &mut into)?;
+            Ok(())
+        });
+        copied
+            .and_then(|()| crate::library::put(library, &staged, rel, claim))
+            .inspect_err(|_| {
+                let _ = fs::remove_file(&staged);
+            })
+            .with_context(|| format!("copying {} into the library", rel.display()))
     };
     match &rendered.lyrics {
         Some(lyrics) => copy_in(lyrics)?,
-        None => remove_if_present(&library.join(rendered.audio.with_extension("lrc")))?,
+        None => crate::library::clear(library, &rendered.audio.with_extension("lrc"), claim)?,
     }
     copy_in(&rendered.audio)?;
     Ok(rendered.clone())
@@ -1356,18 +1410,6 @@ fn ape_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> ApeTag {
         }
     }
     ape
-}
-
-fn remove_if_present(path: &Path) -> Result<()> {
-    match crate::atomic::remove(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        r => r.with_context(|| format!("removing {}", path.display())),
-    }
-}
-
-fn rename(from: &Path, to: &Path) -> Result<()> {
-    crate::atomic::rename(from, to)
-        .with_context(|| format!("renaming {} → {}", from.display(), to.display()))
 }
 
 #[cfg(test)]

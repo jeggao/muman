@@ -17,6 +17,12 @@
 //! name, and is one only in a block at the start or end of the lyrics,
 //! where credits sit: between two lines sung, `Music by the water` is
 //! sung too.
+//!
+//! Lyrics come from LRCLIB, subtitles, tags and files anyone may write,
+//! up to a body of megabytes, so each line is read in time linear in its
+//! length: a time is read where it stands, never by copying the rest of
+//! the line, and a closing `>` or `}` found missing once is not looked
+//! for again from each later `<` or `{`.
 
 use crate::units;
 use std::fmt::Write as _;
@@ -419,7 +425,7 @@ fn without_word_times(line: &str) -> String {
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
-        if lrc_time(&after.replacen('>', "]", 1)).is_some() {
+        if time_closed_by(after, &[']', '>']).is_some() {
             let close = after.find('>').map_or(after.len(), |c| c + 1);
             rest = &after[close..];
         } else {
@@ -567,6 +573,7 @@ pub fn clean_lrc(text: &str) -> String {
 fn unmarked(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
+    let mut unclosed = Vec::new();
     while let Some(at) = rest.find(['<', '{']) {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];
@@ -576,7 +583,13 @@ fn unmarked(line: &str) -> String {
             Some(c) => c == '\\',
             None => false,
         };
-        if let Some(end) = tail.find(close).filter(|_| markup) {
+        let end = (markup && !unclosed.contains(&close))
+            .then(|| tail.find(close))
+            .flatten();
+        if markup && end.is_none() {
+            unclosed.push(close);
+        }
+        if let Some(end) = end {
             rest = &tail[end + 1..];
         } else {
             out.push_str(&tail[..1]);
@@ -678,12 +691,14 @@ fn stamp(out: &mut String, ms: i64, open: char, close: char) {
 /// `words` with each word time, as `<00:12.30>`, moved by `moved`.
 fn move_words(out: &mut String, words: &str, moved: &dyn Fn(i64) -> i64) {
     let mut rest = words;
+    let mut unclosed = false;
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
-        let bracketed = after.replacen('>', "]", 1);
-        let timed = after.find('>').zip(lrc_time(&bracketed).map(|(ms, _)| ms));
-        if let Some((close, ms)) = timed {
+        let ms = time_closed_by(after, &[']', '>']).map(|(ms, _)| ms);
+        let close = ms.filter(|_| !unclosed).and_then(|_| after.find('>'));
+        unclosed |= ms.is_some() && close.is_none();
+        if let Some((close, ms)) = close.zip(ms) {
             stamp(out, moved(ms), '<', '>');
             rest = &after[close + 1..];
         } else {
@@ -755,7 +770,20 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
 fn lrc_time(s: &str) -> Option<(i64, &str)> {
-    let (tag, after) = s.split_once(']')?;
+    let (ms, close) = time_closed_by(s, &[']'])?;
+    Some((ms, &s[close + 1..]))
+}
+
+/// A time at the start of `s`, closed by the first of `closers` after it,
+/// and where that closer is. A time holds only digits, `:` and `.`, so it
+/// is read without looking past them: a line of a thousand `<` reads each
+/// in a step, not to the line's end.
+fn time_closed_by(s: &str, closers: &[char]) -> Option<(i64, usize)> {
+    let close = s.find(|c: char| !(c.is_ascii_digit() || c == ':' || c == '.'))?;
+    if !s[close..].starts_with(closers) {
+        return None;
+    }
+    let tag = &s[..close];
     let (min, sec) = tag.split_once(':')?;
     // `[01:02.50]`, or `[01:02:50]` as some tools write it.
     let (whole, frac) = sec.split_once(['.', ':']).unwrap_or((sec, "0"));
@@ -774,7 +802,7 @@ fn lrc_time(s: &str) -> Option<(i64, &str)> {
         .checked_mul(60_000)?
         .checked_add(whole.parse::<i64>().ok()?.checked_mul(1000)?)?
         .checked_add(frac_ms)?;
-    Some((ms, after))
+    Some((ms, close))
 }
 
 /// `ms` played `stretch_ppm` parts per million longer, brought back.
@@ -788,6 +816,28 @@ fn unstretch(ms: i64, stretch_ppm: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_of_unclosed_brackets_is_read_in_one_pass() {
+        let n = 200_000;
+        for body in [
+            "<".repeat(n),
+            "<a".repeat(n / 2),
+            "<1:2]".repeat(n / 5),
+            "{\\".repeat(n / 2),
+        ] {
+            let text = format!("[00:01.00]Paper comets {body}\n");
+            assert!(clean_lrc(&text).len() <= text.len());
+            assert_eq!(timing(&text).map(|t| t.lines), Some(1));
+            assert!(sung(&text).len() <= text.len());
+            assert!(shift_lrc(&text, 500, 0).starts_with("[00:00.50]Paper comets"));
+        }
+        assert_eq!(
+            shift_lrc("[00:02.00]a <00:03.00>b <00:04.00]c <5\n", 1000, 0),
+            "[00:01.00]a <00:02.00>b <00:04.00]c <5\n",
+            "a word time is closed by `>`"
+        );
+    }
 
     #[test]
     fn signs_are_sung_word_times_are_not_and_huge_times_are_no_times() {

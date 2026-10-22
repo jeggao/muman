@@ -36,32 +36,31 @@ measures after it can make up for it. See
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |
 
 **Audio.** Sound beyond the song is how long a source plays outside the
-stretch it shares with another source of the song: a music video's
-intro counts, silence does not. A source that ends where another plays
-the song on, as an excerpt cut off mid-sound, in a short rest or faded
-out does, lacks the rest of the song, which counts as sound beyond the
-song does, so an excerpt never beats the whole song it was cut from. A
-song's own end is in every source of it, so a video's outro past it is
-sound beyond the song; a release may start on a full chord at its first
+stretch it shares with another source of the song: a music video's intro
+counts, silence does not. A source that ends where another plays the
+song on, as an excerpt cut off mid-sound, in a short rest or faded out
+does, lacks the rest of the song, which counts as sound beyond the song
+does, so an excerpt never beats the whole song it was cut from. A song's
+own end is in every source of it, so a video's outro past it is sound
+beyond the song; a release may start on a full chord at its first
 sample, so a source's start counts as cut only when its end is too.
-Bandwidth
-is where a lowpass cuts the sound off, so a FLAC transcoded from a lossy
-file measures as narrow as that file, while a recording whose treble
-fades on its own measures full, as does one whose notes end low over a
-noise floor that runs on to the top. Real stereo tells stereo from mono
-copied into two channels, even at different levels or a few samples
-apart, by the front two of more; clipping is the share of samples stuck at full scale or at the audio's
-own peak, or piled up just under full scale where a lossy encoder
-smeared them. Float lossless audio can hold samples past full scale, so
-in it only those at its own peak count. Every channel is measured as it
-is, never mixed into two. The chosen audio is
-copied when `[audio] codecs` lists its codec; any other is encoded,
-lossless audio to `[audio] lossless` and lossy audio to `[audio] lossy`,
-at the bitrate `[audio]` sets. A file with several audio streams is made
-from the best: lossless before lossy, then the most channels, then the
-highest rate. Lossless audio a codec cannot keep whole, as 32-bit, float
-or more than eight channels in FLAC, is written in one that can, as
-[Codecs](configuration.md#codecs) says.
+Bandwidth is where a lowpass cuts the sound off, so a FLAC transcoded
+from a lossy file measures as narrow as that file, while a recording
+whose treble fades on its own measures full, as does one whose notes end
+low over a noise floor that runs on to the top. Real stereo tells stereo
+from mono copied into two channels, even at different levels or a few
+samples apart, by the front two of more; clipping is the share of
+samples stuck at full scale or at the audio's own peak, or piled up just
+under full scale where a lossy encoder smeared them. Float lossless
+audio can hold samples past full scale, so in it only those at its own
+peak count. Every channel is measured as it is, never mixed into two.
+The chosen audio is copied when `[audio] codecs` lists its codec; any
+other is encoded, lossless audio to `[audio] lossless` and lossy audio
+to `[audio] lossy`, at the bitrate `[audio]` sets. A file with several
+audio streams is made from the best: lossless before lossy, then the
+most channels, then the highest rate. Lossless audio a codec cannot keep
+whole, as 32-bit, float or more than eight channels in FLAC, is written
+in one that can, as [Codecs](audio.md#codecs) says.
 
 **Covers.** A picture that is not square is checked for bars, and a
 video frame with square art in the middle is cropped to that art.
@@ -77,18 +76,17 @@ never do. Lyrics from a source other than the chosen audio must be the
 same recording, and are shifted by the offset measured between the two,
 and stretched when one plays a little faster than the other; a word's
 time moves with its line's, and an `[offset:]` the file states is folded
-into every time it holds. A song file's own lyrics tag, `USLT` in an MP3,
-`LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A or
-`Lyrics` in APEv2, is lyrics of that source, timed when its text is
-LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not list
-ranks after those in a language it does.
-Cues such as `[Music]` or `(Guitar solo)`, symbol-only lines and the
-credits before the first line sung or after the last are dropped; a
-line in brackets of other words is sung, as a backing vocal is. A
-`.lrc` with no audio of its own is taken as timed for the song; one that
-states its length, as LRCLIB's do, is trusted as far as that length
-agrees with the chosen audio's. Whether lyrics go beside the song,
-inside it or both is a `[library]` setting.
+into every time it holds. A song file's own lyrics tag, `USLT` in an
+MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A
+or `Lyrics` in APEv2, is lyrics of that source, timed when its text is
+LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not
+list ranks after those in a language it does. Cues such as `[Music]` or
+`(Guitar solo)`, symbol-only lines and the credits before the first line
+sung or after the last are dropped; a line in brackets of other words is
+sung, as a backing vocal is. A `.lrc` with no audio of its own is taken
+as timed for the song; one that states its length, as LRCLIB's do, is
+trusted as far as that length agrees with the chosen audio's. Whether
+lyrics go beside the song, inside it or both is a `[library]` setting.
 
 **Tags.** Each field describes the recording or the release. The
 recording's, title, artist, genre, ISRC and the recording's and artists'
@@ -101,7 +99,7 @@ release's IDs never mix with another's; of albums that rank alike, the
 source holding more of the release's fields wins before the order of
 `sources`. A song on no album is a single named for its title.
 ReplayGain's track gain and peak are measured from the audio the song
-is, and its album gain and peak over every song of its album, as [Loudness](configuration.md#loudness) says; with
+is, and its album gain and peak over every song of its album, as [Loudness](audio.md#loudness) says; with
 `[loudness] mode = "off"`, they come only from the tags of the source
 whose audio the song is, the album's only when the release's fields come
 from it too, since another source's loudness is not this audio's. An
@@ -184,16 +182,13 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
-`--offline`, or `MUMAN_OFFLINE=1`, makes a run look nothing up and
-fetch nothing, and refuses URLs. Any `[[trigger]]` in the song list
-replaces all of them. A
-`[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
-once), `recheck` (how long a lookup that found nothing waits, as
-`"30 days"`),
-`per_run` (the most one run makes, `0` for no limit), for `lrclib`,
-`musicbrainz`, `acoustid` and `coverart`, `url`, another server, such as
-a mirror, and for `acoustid`, `key`, the application key it is asked
-with, muman's own unless you set one:
+Any `[[trigger]]` in the song list replaces all of them, and `--offline`
+makes no lookup. A `[providers.<name>]` table sets `enabled`,
+`concurrency` (lookups at once), `recheck` (how long a lookup that found
+nothing waits, as `"30 days"`), `per_run` (the most one run makes, `0`
+for no limit), for `lrclib`, `musicbrainz`, `acoustid` and `coverart`,
+`url`, another server, such as a mirror, and for `acoustid`, `key`, the
+application key it is asked with, muman's own unless you set one:
 
 ```toml
 [[trigger]]
@@ -369,13 +364,12 @@ refuses the save.
   interrupted run or not muman's, and sources missing, unreadable, cut
   off or missing audio; `info` counts the songs made from damaged audio;
   `--decode` decodes every source in full again, to find damage in a
-  file changed since it was measured.
-  `--upstream` asks each site, downloading nothing, whether it still
-  serves each fetched source in the format and at the size its song
-  records, with the same tags, and names each it serves otherwise:
-  other audio in that format, the format no longer offered, other tags,
-  or the video taken down. The
-  copy in `sources/` is then the only one of what was fetched, and worth
+  file changed since it was measured. `--upstream` asks each site,
+  downloading nothing, whether it still serves each fetched source in
+  the format and at the size its song records, with the same tags, and
+  names each it serves otherwise: other audio in that format, the format
+  no longer offered, other tags, or the video taken down. The copy in
+  `sources/` is then the only one of what was fetched, and worth
   keeping; a large library asks a site many times, as a fetch does.
 - **`purge`** deletes fetched sources and lookup records no song uses,
   which `status` and `info` name: an upload a release took the place of,
@@ -398,6 +392,9 @@ folder, which gets `muman.zip`. With `--folder`, `-o` names a folder to
 make, or an empty one, and what the zip would hold is written into it,
 for a card or a player to read as it is; a folder holding anything is
 refused, so nothing in it is written over.
+
+The zip's `songs.toml` keeps the song list's commands, which whoever runs
+muman on it is [asked to trust](configuration.md#commands-servers-and-secrets).
 
 The library's settings may be changed for the export alone: any setting
 of `[library]`, `[audio]` and `[loudness]` with `--set table.key=value`,
@@ -423,9 +420,14 @@ it really took, so the export lands under the cap. When even the lowest
 bitrates cannot fit, nothing is written and the size needed is said. The
 library itself is never changed.
 
+`--redact` writes the zip's `songs.toml` with each secret replaced by
+`<redacted>`, as [the reference](cli.md#muman-export) lists; one among a
+hook's or a program's own words stays, so read those before you share.
+
 ## Hooks
 
-A `[[hook]]` runs a command as the library changes:
+A `[[hook]]` runs a command as you as the library changes, once you have
+[trusted it](configuration.md#commands-servers-and-secrets):
 
 ```toml
 [[hook]]
@@ -439,13 +441,13 @@ run = ["mpc", "update"]
 
 | Event | Runs | Values |
 |---|---|---|
-| `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`), `library` |
+| `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`, led by `./`), `library` |
 | `changed` | Once, after a run that wrote, moved or removed any file, an undo's files put back counting as written | `library`, `written`, `moved`, `removed` (counts) |
 
 Each value reaches the command as a `{name}` placeholder in its words
 and as a `MUMAN_<NAME>` environment variable, such as `MUMAN_PATH`.
-`run` is an argument list, run without a shell. A Windows batch file
-(`.bat`, `.cmd`) gets the variables only, since cmd.exe could run a
-title passed as an argument; a batch hook with placeholders is skipped
-with a warning. A hook's output is shown prefixed `hook:`, and a hook
-that fails is warned of but fails nothing. `status` runs no hooks.
+`run` is an argument list, run without a shell; a script it hands a
+shell (`sh -c`, `pwsh -Command`, `cmd /c`) reads `"$MUMAN_PATH"`, as a
+placeholder in it, where a title could run, is refused. A batch file
+(`.bat`, `.cmd`) gets the variables only. A hook's output shows as
+`hook:`; one that fails is warned of but fails nothing. `status` runs none.

@@ -82,7 +82,12 @@
 //! file sharing a piece with one, which aria2c needs to check that piece
 //! whole, is copied to the path the fetch writes it at, and aria2c checks
 //! every piece and fetches only those missing or wrong. One complete and
-//! right needs no peer.
+//! right needs no peer. A link in that folder is followed only to a place
+//! inside it, as in any folder given to `add` ([`crate::given`]): the
+//! pieces checking, what a link leading out reads could reach the store
+//! only if the torrent held it already, but until aria2c fetched the
+//! piece again it would wait in the partial downloads, as long as
+//! `[torrent] keep_partial` keeps them.
 //!
 //! A listed file gone from the store is fetched again by `sync` (`due`,
 //! [`fetch_due`]), beside yt-dlp's fetches, with the lyrics and pictures
@@ -907,13 +912,16 @@ pub fn fetch<R: Runner, W: Write>(
 /// holds of `files` and the files sharing a piece with them to where a
 /// fetch writes each, for aria2c to check and finish: how many were
 /// copied. `from` may be the torrent's own folder or the one holding it,
-/// or the one file of a torrent of one.
-pub fn take_up(
+/// or the one file of a torrent of one; a link in it leading out of it is
+/// left out and named ([`crate::given`]).
+pub fn take_up<W: Write>(
+    out: &mut W,
     places: &Places<'_>,
     meta: &Metainfo,
     files: &[&File],
     from: &Path,
 ) -> Result<usize> {
+    let within = crate::given::Folder::new(from);
     let root = if from.join(&meta.name).is_dir() {
         from.join(&meta.name)
     } else {
@@ -921,6 +929,7 @@ pub fn take_up(
     };
     let dir = places.partial.join(meta.hash());
     let mut copied = 0;
+    let mut outside = Vec::new();
     for file in files
         .iter()
         .copied()
@@ -931,16 +940,22 @@ pub fn take_up(
         } else {
             file.path.iter().fold(root.clone(), |p, part| p.join(part))
         };
-        if std::fs::metadata(&at).map(|m| m.len()).ok() != Some(file.length) {
+        if within.leads_out(&at) {
+            outside.push(at);
+            continue;
+        }
+        if std::fs::metadata(&at).map(|m| m.len()).ok() != Some(file.length) || !within.holds(&at) {
             continue;
         }
         let to = dir.join(index_path(file));
         std::fs::create_dir_all(to.parent().unwrap_or(&dir))
             .with_context(|| format!("creating {}", dir.display()))?;
-        std::fs::copy(&at, &to)
-            .with_context(|| format!("copying {} to {}", at.display(), to.display()))?;
+        within.copy(&at, &to)?;
         copied += 1;
     }
+    outside.sort();
+    outside.dedup();
+    crate::given::say_outside(from, &outside, out)?;
     Ok(copied)
 }
 

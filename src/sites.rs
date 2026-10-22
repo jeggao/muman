@@ -333,6 +333,16 @@ impl Sites {
         Some(kind?.fetch.as_deref()?.replace("{id}", &id.join("/")))
     }
 
+    /// Each kind's `fetch` address, as its site's domain, the kind's
+    /// prefix and the address.
+    pub fn fetches(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.sites.iter().flat_map(|(domain, site)| {
+            site.kinds.iter().filter_map(move |k| {
+                Some((domain.as_str(), k.prefix.as_str(), k.fetch.as_deref()?))
+            })
+        })
+    }
+
     /// Every domain the table describes, every alias and every extractor
     /// it lists.
     pub fn schemes(&self) -> impl Iterator<Item = &str> {

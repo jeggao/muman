@@ -8,7 +8,8 @@
 //!
 //! The home is in the local, not the roaming, application data on
 //! Windows: its sources run to gigabytes, which a roaming profile would
-//! copy at every sign-in.
+//! copy at every sign-in. The library's lock is kept under the cache
+//! folder ([`locks`]), as [`crate::atomic`] says why.
 
 use std::path::{Path, PathBuf};
 
@@ -37,6 +38,13 @@ pub fn defaults() -> Option<Defaults> {
         library: music.join(NAME),
         cache: Some(project.cache_dir().to_path_buf()),
     })
+}
+
+/// The folder of the user's own the library locks are kept in, under the
+/// cache folder; `None` when the platform names no home directory.
+#[must_use]
+pub fn locks() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", NAME).map(|p| p.cache_dir().join("locks"))
 }
 
 /// When a file arrived where it is: the later of its modification time

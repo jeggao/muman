@@ -284,7 +284,7 @@ fn a_download_already_made_is_taken_up_with_no_peer() {
     };
     muman::aria2::keep_metainfo(&store, meta.hash(), &bytes).unwrap();
     let wanted = selected(&meta);
-    let copied = take_up(&places, &meta, &wanted, &downloads).unwrap();
+    let copied = take_up(&mut Vec::new(), &places, &meta, &wanted, &downloads).unwrap();
     assert_eq!(copied, 3, "the song and the two files its pieces share");
     let mut out = Vec::new();
     let fetched = fetch(&runner, &mut out, &places, &meta, &wanted).unwrap();
@@ -343,7 +343,10 @@ fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
     };
     muman::aria2::keep_metainfo(&store, meta.hash(), &bytes).unwrap();
     let wanted = selected(&meta);
-    assert_eq!(take_up(&places, &meta, &wanted, &downloads).unwrap(), 1);
+    assert_eq!(
+        take_up(&mut Vec::new(), &places, &meta, &wanted, &downloads).unwrap(),
+        1
+    );
     let mut out = Vec::new();
     let fetched = fetch(&runner, &mut out, &places, &meta, &wanted).unwrap();
     assert_eq!(fetched.failure, None, "{}", String::from_utf8_lossy(&out));
