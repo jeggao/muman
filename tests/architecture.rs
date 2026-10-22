@@ -592,6 +592,11 @@ const WRITES: &[(&str, usize, &str)] = &[
     ("lyrics.rs", 1, "a timestamp, in a String"),
     ("sites.rs", 1, "yt-dlp's download archive, in a String"),
     ("store.rs", 1, "an id escaped for a file name, in a String"),
+    (
+        "trust.rs",
+        1,
+        "a setting's hidden character escaped, in a String",
+    ),
     ("atomic.rs", 1, "a whole file's bytes"),
     ("ogg.rs", 1, "an Opus header's page, in its file"),
     (

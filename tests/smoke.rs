@@ -764,7 +764,7 @@ fn a_signal_stops_muman_and_every_program_it_started() {
         .arg(home.root.join("home"))
         .arg("--library")
         .arg(home.root.join("library"))
-        .args(["add", "--no-match"])
+        .args(["--trust", "add", "--no-match"])
         .arg(&torrent)
         .spawn()
         .unwrap();

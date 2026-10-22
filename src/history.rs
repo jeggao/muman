@@ -704,6 +704,13 @@ impl UndoPlan {
         &self.lines
     }
 
+    /// The song list undoing puts back; `None` when the home had none,
+    /// and a new home's is put back.
+    #[must_use]
+    pub fn songs_before(&self) -> Option<&str> {
+        self.record.songs_before.as_deref()
+    }
+
     /// Whether `other` undoes the same run.
     #[must_use]
     pub fn same_run(&self, other: &Self) -> bool {

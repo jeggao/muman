@@ -177,6 +177,15 @@ pub trait Runner: Sync {
         let _ = name;
         None
     }
+
+    /// Fail now, with [`ToolError`], when the tool called `name` cannot
+    /// be found or is below its floor, so a run that needs it stops
+    /// before its first song rather than failing every one; a runner that
+    /// runs no real program has every one.
+    fn require(&self, name: &str) -> Result<()> {
+        let _ = name;
+        Ok(())
+    }
 }
 
 /// The production runner. Commands name a tool by its bare name; each
@@ -203,17 +212,6 @@ impl System {
             named,
             found: Default::default(),
         }
-    }
-
-    /// Fail now, with [`ToolError`], when `name` cannot be found or is
-    /// below its floor, so a run that needs it stops before its first
-    /// song rather than failing every one.
-    pub fn require(&self, name: &str) -> Result<()> {
-        let index = tools::TOOLS
-            .iter()
-            .position(|t| t.name == name)
-            .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
-        self.tool(index).map(drop).map_err(Into::into)
     }
 
     /// The tool at `index` of [`tools::TOOLS`], found and checked once.
@@ -399,6 +397,14 @@ impl Runner for System {
             found: self.tool(index).cloned(),
         })
     }
+
+    fn require(&self, name: &str) -> Result<()> {
+        let index = tools::TOOLS
+            .iter()
+            .position(|t| t.name == name)
+            .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
+        self.tool(index).map(drop).map_err(Into::into)
+    }
 }
 
 /// The error of `cmd` exiting with `status`, naming the tail of `stderr`.
@@ -474,6 +480,10 @@ impl<R: Runner> Runner for Traced<R> {
 
     fn tool(&self, name: &str) -> Option<Status> {
         self.0.tool(name)
+    }
+
+    fn require(&self, name: &str) -> Result<()> {
+        self.0.require(name)
     }
 }
 

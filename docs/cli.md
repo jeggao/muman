@@ -23,7 +23,8 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, or a change or undo was refused
+     and was left out, a change or undo was refused, or the song list
+     sets commands or servers not trusted, with no terminal to ask on
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started
 ```
@@ -51,6 +52,7 @@ Exit codes:
 * `--home <DIR>` — The home folder: the song list, the state file and the sources [default: the platform's local data folder, then `muman`]
 * `--library <DIR>` — Folder the songs are written to [default: the song list's `[library] path`, else the platform's music folder, then `muman`]
 * `--offline` — Reach no network: make no lookup, fetch nothing missing, and refuse URLs; what is on disk is written as ever
+* `--trust` — Trust the commands and servers the song list sets, as it sets them now, without asking: its hooks, its programs, yt-dlp's and aria2c's arguments, the providers' servers and keys, and the sites' fetch addresses. A list setting any not trusted yet is asked about on a terminal and refused without one; -y does not trust it
 * `-v`, `--verbose` — Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how close each new source came to every song it was compared with
 * `--progress <MODE>` — How a long step says how far it has got, on stderr: `auto`, a status line on a terminal and plain lines elsewhere; `plain` lines; `json` events, one a line, each message one too; or `none`
 

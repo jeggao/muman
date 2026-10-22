@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`--trust`**, or `MUMAN_TRUST=1`, trusts the commands and servers the
+  song list sets, as it sets them, without asking: for a run with no
+  terminal to ask on.
+
+### Changed
+
+- **A song list that sets commands or servers asks once before muman
+  runs them.** The first command after updating that could run a song
+  list's hook, a program of its `[tools]`, yt-dlp's or aria2c's
+  arguments, or reach its providers' servers or sites' addresses lists
+  them and asks whether to trust them; without a terminal it exits with
+  5 and runs nothing. Answer once on a terminal, or give a script or a
+  scheduled `muman sync` `--trust` once. `-y` trusts nothing.
+
 ### Fixed
 
 - **A torrent fetched beside yt-dlp no longer loses its folder.** A
@@ -107,6 +123,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `list`'s lines and a prompt's items show such a character as `�`, the
   rest of its sequence as text, and so too a mark that would turn the
   rest of a line around; muman's own colours are kept.
+- **A song list you are given runs nothing you have not trusted.** Its
+  `[[hook]]`s, `[tools.*] command`, `[ytdlp] args` and `extractor_args`
+  (yt-dlp's `--exec`), `[torrent] args` (aria2c's
+  `--on-download-complete`), `[providers.*] url` and `key` and `[sites]`
+  fetch addresses run programs and send requests as you, and a song list
+  from someone else, or one inside an export's zip, ran them unasked, a
+  `[tools.ffprobe]` wrapper even on `muman info`. muman keeps what you
+  trusted in `state.json`, by value, so formatting, comments, songs and
+  settings at their defaults never ask, and asks again when one changes,
+  by hand or by an `undo` putting it back. Each is shown escaped, so no
+  control character hides part of one. The docs say what each can do.
 
 ## [0.7.0] - 2026-10-21
 

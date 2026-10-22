@@ -2780,7 +2780,7 @@ fn hooks_run_for_each_file_written_and_once_a_run_changed_anything() {
     let fake = flacs();
     let mut out = Vec::new();
     run_with(
-        &s.job(&["sync"]),
+        &s.job(&["--trust", "sync"]),
         &fake,
         &Server::default(),
         None,
@@ -2835,7 +2835,7 @@ fn the_changed_hook_runs_after_a_run_that_only_put_back_or_moved_files() {
             .collect();
         (ran, String::from_utf8(out).unwrap())
     };
-    hooked(&["sync"]);
+    hooked(&["--trust", "sync"]);
     hooked(&["set", "-y", "manual:a.flac", "genre=Folk"]);
     let (ran, text) = hooked(&["undo", "-y"]);
     assert!(text.contains("Put back:"), "{text}");
@@ -2851,6 +2851,106 @@ fn the_changed_hook_runs_after_a_run_that_only_put_back_or_moved_files() {
     let (ran, text) = hooked(&["sync"]);
     assert!(text.contains("Moved:"), "{text}");
     assert_eq!(ran, [["mpc", "update", "0", "1", "0"]], "{text}");
+}
+
+impl Setup {
+    /// Run `args` with `prompter` answering, if any; the error, if any.
+    fn trusting(
+        &self,
+        fake: &Fake,
+        args: &[&str],
+        prompter: Option<&mut crate::ui::MockPrompter>,
+    ) -> Result<String> {
+        let mut out = Vec::new();
+        let prompter = prompter.map(|p| p as &mut dyn Prompter);
+        run_with(
+            &self.job(args),
+            fake,
+            &Server::default(),
+            prompter,
+            &mut out,
+            &mut Vec::new(),
+        )?;
+        Ok(String::from_utf8(out).unwrap())
+    }
+}
+
+const HOOKED: &str = "version = 1\n[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{rel}\"]\n";
+
+#[test]
+fn a_song_list_s_hook_runs_only_once_trusted_and_y_trusts_nothing() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(s.dir.path().join("home/songs.toml"), HOOKED).unwrap();
+    for args in [
+        &["sync"][..],
+        &["set", "-y", "manual:a.flac", "genre=Folk"],
+        &["info"],
+    ] {
+        let fake = flacs();
+        let e = s.trusting(&fake, args, None).unwrap_err();
+        assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+        assert!(format!("{e}").contains("--trust"), "{e}");
+        assert_eq!(fake.calls(), Vec::<Vec<String>>::new(), "{args:?}");
+    }
+    assert!(s.trusting(&flacs(), &["list"], None).is_ok());
+    let fake = flacs();
+    let mut no = crate::ui::MockPrompter::answering([false]);
+    let text = s.trusting(&fake, &["sync"], Some(&mut no)).unwrap();
+    assert!(
+        text.contains("[[hook]] 1 (new): on = \"written\""),
+        "{text}"
+    );
+    assert!(fake.calls().is_empty(), "declined, nothing runs");
+    let fake = flacs();
+    let mut yes = crate::ui::MockPrompter::answering([true]);
+    s.trusting(&fake, &["sync"], Some(&mut yes)).unwrap();
+    assert!(fake.ran("tagger"), "{:?}", fake.calls());
+    let mut unasked = crate::ui::MockPrompter::new();
+    s.trusting(&flacs(), &["sync", "--force"], Some(&mut unasked))
+        .unwrap();
+    assert!(unasked.asked.is_empty(), "trusted once");
+}
+
+#[test]
+fn undo_putting_back_a_hook_taken_out_asks_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let songs = s.dir.path().join("home/songs.toml");
+    std::fs::write(&songs, HOOKED).unwrap();
+    s.trusting(&flacs(), &["--trust", "sync"], None).unwrap();
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let hook = "[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{rel}\"]\n";
+    assert!(listed.contains(hook), "{listed}");
+    std::fs::write(&songs, listed.replace(hook, "")).unwrap();
+    s.trusting(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "genre=Folk"],
+        None,
+    )
+    .unwrap();
+    let e = s.trusting(&flacs(), &["undo", "-y"], None).unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(!std::fs::read_to_string(&songs).unwrap().contains(hook));
+    s.trusting(&flacs(), &["--trust", "undo", "-y"], None)
+        .unwrap();
+    assert!(std::fs::read_to_string(&songs).unwrap().contains(hook));
+}
+
+#[test]
+fn an_export_asks_no_trust_to_copy_and_asks_it_to_encode() {
+    let (s, fake) = exported_home("200.0");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
+    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    s.trusting(&fake, &["--trust", "sync"], None).unwrap();
+    State::keep_trusted(&s.dir.path().join("home"), &BTreeMap::new()).unwrap();
+    let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
+    s.trusting(&fake, &["export", "-o", &zip], None).unwrap();
+    let encoded = ["export", "-o", &zip, "--codec", "mp3"];
+    let e = s.trusting(&fake, &encoded, None).unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
 }
 
 #[test]
