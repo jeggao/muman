@@ -136,8 +136,9 @@ pub struct Cli {
     )]
     pub trust: bool,
 
-    /// Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how
-    /// close each new source came to every song it was compared with.
+    /// Say each yt-dlp, aria2c, ffmpeg and ffprobe command as it runs,
+    /// logins, passwords, headers and tokens hidden, and how close each
+    /// new source came to every song it was compared with.
     #[arg(short, long, global = true)]
     pub verbose: bool,
 

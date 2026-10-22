@@ -40,6 +40,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   beginning with `-` is never read as an option. A hook that joins
   `{rel}` to a folder of its own still works; one that compares it with
   a path as written before drops the `./` first.
+- **Where `[ytdlp] args` set what an option of muman's own sets,
+  muman's wins,** as yt-dlp reads its config file before its command
+  line; `format`, `sub_langs` and `concurrent_fragments` set three of
+  those.
 
 ### Fixed
 
@@ -152,6 +156,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   settings at their defaults never ask, and asks again when one changes,
   by hand or by an `undo` putting it back. Each is shown escaped, so no
   control character hides part of one. The docs say what each can do.
+- **A login in the song list stays off the command line.** Any user of
+  the machine could read every yt-dlp run's arguments, `[ytdlp] args`
+  and `extractor_args` among them, with `ps`. They now reach yt-dlp in a
+  config file only you can read; of `[torrent] args`, a login, password,
+  header, proxy or tracker reaches aria2c the same way.
+- **`--verbose` hides logins, passwords, headers and tokens** in each
+  command it says, which it printed as given.
+- **An AcoustID error names no key.** An answer that did not read was
+  reported with the request's whole address, the AcoustID key and the
+  song's fingerprint in it, printed and recorded in `state.json`; an
+  error names a request without its query.
+- **A private tracker's passkey stays out of aria2c's errors.** An error
+  naming a tracker's announce address, printed and recorded in
+  `state.json`, keeps its scheme and host alone.
+- **A new home is yours alone.** On Linux and macOS the home muman
+  makes, the run history's folders and each run's record, which holds
+  the song list's text, are made readable by you alone, as is each run's
+  scratch folder. A home made before keeps its permissions; `chmod -R
+  go= <home>` makes it yours alone.
 
 ## [0.7.0] - 2026-10-21
 

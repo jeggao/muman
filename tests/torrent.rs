@@ -196,11 +196,14 @@ fn aria2c_fetches_the_files_muman_selects_from_a_swarm() {
     let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
 
     let (store, partial) = (root.join("store"), root.join("partial"));
+    // A login, which goes to a config file aria2c must read.
+    let login = ["--http-user=marlo", "--http-passwd", "not a password"].map(String::from);
     let options = Torrent {
         args: ALONE
             .iter()
             .map(ToString::to_string)
             .chain([format!("--listen-port={}", free_port())])
+            .chain(login)
             .collect(),
         stall: Duration::from_secs(60),
         ..Torrent::default()

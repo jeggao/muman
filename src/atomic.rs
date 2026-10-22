@@ -10,6 +10,16 @@
 //! when the name is made, so a name built from what a server answered
 //! cannot write outside its folder.
 //!
+//! What holds the song list's text, which may hold logins and tokens, is
+//! its owner's alone on Unix: a new home and the run history's folders
+//! are made `0700` ([`private_dir`]), as is a run's scratch folder, and a
+//! run's record and a config file handed to a program `0600`
+//! ([`write_private`], [`private_file`]): `ps` shows any user a program's
+//! command line, but no file in a folder of another's. A folder that
+//! exists is left as it is. Windows has no modes: a folder made takes its
+//! parent's permissions, which for the default home and the temporary
+//! folder are the user's own profile's.
+//!
 //! On Windows a file open in a player, the search indexer or a virus
 //! scanner cannot be replaced or deleted for a moment: the call fails
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
@@ -83,6 +93,15 @@ impl Name {
 /// that is a link is written where it leads, so the link stays, and a
 /// file replaced keeps its permissions.
 pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
+    write_as(dir, name, bytes, false)
+}
+
+/// [`write()`], the file its owner's alone on Unix, whatever its mode was.
+pub fn write_private(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
+    write_as(dir, name, bytes, true)
+}
+
+fn write_as(dir: &Path, name: &Name, bytes: &[u8], private: bool) -> Result<()> {
     let name = name.as_str();
     let named = dir.join(name);
     let file = match std::fs::symlink_metadata(&named) {
@@ -101,13 +120,13 @@ pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
         // A file made anew is made as any program makes one, through the
         // umask, not private as a temporary file is.
         #[cfg(unix)]
-        if !file.exists() {
+        if !file.exists() && !private {
             use std::os::unix::fs::PermissionsExt;
             builder.permissions(std::fs::Permissions::from_mode(0o666));
         }
         let mut part = builder.tempfile_in(dir)?;
         part.write_all(bytes)?;
-        if let Ok(meta) = std::fs::metadata(&file) {
+        if !private && let Ok(meta) = std::fs::metadata(&file) {
             part.as_file().set_permissions(meta.permissions())?;
         }
         part.as_file().sync_all()?;
@@ -122,6 +141,42 @@ pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
         Ok(())
     })()
     .with_context(|| format!("writing {}", file.display()))
+}
+
+/// Make the folder `dir`, its owner's alone on Unix, and any missing
+/// above it as any program makes one; a folder that exists is left as
+/// it is.
+pub fn private_dir(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    #[cfg(unix)]
+    let made =
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(dir);
+    #[cfg(not(unix))]
+    let made = std::fs::DirBuilder::new().create(dir);
+    match made {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        other => other.with_context(|| format!("creating {}", dir.display())),
+    }
+}
+
+/// Write `bytes` to the new file `path`, its owner's alone on Unix from
+/// the moment it is made: a secret handed to a program in a file rather
+/// than on its command line.
+pub fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = File::options();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// How long a file another program holds open is waited for.
@@ -220,7 +275,7 @@ impl Lock {
     /// so a run's record begins where the run before it ended. Apart from
     /// [`Lock::folder`]'s, which each step takes for its reads and writes.
     pub fn runs(home: &Path) -> Result<Self> {
-        std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
+        private_dir(home)?;
         Self::at(&home.join(RUNS_LOCK_FILE), home)
     }
 
@@ -325,8 +380,11 @@ impl Scratch {
     /// A scratch folder within `parent`.
     pub fn within(parent: &Path) -> Result<Self> {
         clear_scratch(parent);
-        let dir = tempfile::Builder::new()
-            .prefix(SCRATCH)
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(SCRATCH);
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let dir = builder
             .tempdir_in(parent)
             .with_context(|| format!("creating a scratch folder in {}", parent.display()))?;
         let lock = Lock::folder(dir.path())?;
@@ -416,6 +474,41 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o664);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_folder_and_scratch_are_their_owner_s_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&shared).unwrap();
+        assert_eq!(mode(&shared), 0o755, "a folder that exists is left");
+        let home = shared.join("a").join("home");
+        private_dir(&home).unwrap();
+        assert_eq!(mode(&home), 0o700);
+        std::fs::write(home.join("run.json"), "{}").unwrap();
+        std::fs::set_permissions(
+            home.join("run.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        write_private(&home, &name("run.json"), b"{\"a\": 1}").unwrap();
+        assert_eq!(
+            mode(&home.join("run.json")),
+            0o600,
+            "tightened when written"
+        );
+        write_private(&home, &name("new.json"), b"{}").unwrap();
+        assert_eq!(mode(&home.join("new.json")), 0o600);
+        private_file(&home.join("args.conf"), b"'--secret'").unwrap();
+        assert_eq!(mode(&home.join("args.conf")), 0o600);
+        assert!(private_file(&home.join("args.conf"), b"again").is_err());
+        let scratch = Scratch::within(dir.path()).unwrap();
+        assert_eq!(mode(scratch.path()), 0o700);
     }
 
     #[test]

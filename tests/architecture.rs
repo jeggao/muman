@@ -597,7 +597,7 @@ const WRITES: &[(&str, usize, &str)] = &[
         1,
         "a setting's hidden character escaped, in a String",
     ),
-    ("atomic.rs", 1, "a whole file's bytes"),
+    ("atomic.rs", 2, "a whole file's bytes, and a private file's"),
     ("ogg.rs", 1, "an Opus header's page, in its file"),
     (
         "render.rs",

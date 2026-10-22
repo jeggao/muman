@@ -144,7 +144,8 @@ concurrent_fragments = 4
 plugins = true
 # More arguments for every yt-dlp run, listing and searching as well as
 # fetching, such as ["--cookies-from-browser", "firefox"] or
-# ["--js-runtimes", "node"].
+# ["--js-runtimes", "node"]. They reach yt-dlp in a file only you can
+# read, not on its command line, and muman's own options win over them.
 args = []
 # yt-dlp's --extractor-args for each fetch, by extractor. YouTube's
 # machine-translated captions run to hundreds a video and trip its rate
