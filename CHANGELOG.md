@@ -13,6 +13,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   sync clearing yt-dlp's stale partial downloads removed the empty
   `partial/torrent` folder while aria2c's fetch made a folder in it, so
   a torrent fetched in the same sync could fail with no such file.
+- **A `.lrc` of your own beside a song muman wrote is left alone.** A
+  sync that wrote the song again, as a change of `[loudness] mode`
+  makes it, deleted or wrote over that `.lrc`, and `undo` did not bring
+  it back. It keeps the song from being written again, with a warning,
+  as a file of your own at the song's path does, until `sync --force`
+  writes over or removes it, kept for `undo` first.
+- **`[library] restrict = "none"` names no file Windows cannot hold, on
+  Windows.** A device name such as `CON` or `LPT9.mp3`, and a name
+  ending in a dot or a space, were kept as they were; they get the `_`
+  and lose the dot as under `windows`.
 
 ### Security
 
@@ -60,6 +70,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A tag file gives a name at most 64 values and a song 256 names.**
   A file of tens of thousands of them took half a minute to read; the
   rest are reported as skipped, with at most 64 reasons.
+- **A file muman stages beside a song in the library follows no link.**
+  The `.part` a song is written to, by muman or by ffmpeg, is made anew,
+  whatever was at its name removed first, so a link someone who may
+  write the library folder left there no longer sends the write
+  elsewhere, and a staged file that is no longer a plain file is not
+  put in place.
+- **The library's lock is kept in a folder of your own,** under your
+  cache folder and private, rather than in the system's temporary
+  folder, where another user could make it first as a link, to have
+  muman make or empty a file of their choosing, or hold it, to keep
+  every run waiting. Two users who share one library folder no longer
+  keep each other out of it.
+- **A `state.json` or a run's record naming a path outside its folder
+  is refused**, naming the file, rather than have a sync or `undo`
+  remove, move or copy a file through `..` or, on Windows, a drive.
 
 ## [0.7.0] - 2026-10-21
 

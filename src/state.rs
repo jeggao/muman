@@ -999,5 +999,12 @@ mod tests {
         assert!(format!("{:#}", State::load(dir.path()).unwrap_err()).contains("move it aside"));
         std::fs::write(dir.path().join(STATE), "{\"version\": 9}").unwrap();
         assert!(format!("{:#}", State::load(dir.path()).unwrap_err()).contains("newer"));
+        std::fs::write(
+            dir.path().join(STATE),
+            r#"{"version": 1, "outputs": {"../../elsewhere.opus": {"sources": []}}}"#,
+        )
+        .unwrap();
+        let e = format!("{:#}", State::load(dir.path()).unwrap_err());
+        assert!(e.contains(STATE) && e.contains("outside its folder"), "{e}");
     }
 }
