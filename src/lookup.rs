@@ -371,7 +371,7 @@ struct Clients<'a> {
     transport: &'a (dyn HttpTransport + Sync),
     throttle: &'a Throttle,
     sites: &'a crate::sites::Sites,
-    ytdlp: &'a crate::settings::Ytdlp,
+    ytdlp: &'a crate::download::Passed,
 }
 
 impl Clients<'_> {
@@ -641,7 +641,7 @@ pub fn run<R: Runner, W: Write>(
             transport: http,
             throttle: &throttles.coverart,
             sites: &manifest.settings.sites,
-            ytdlp: &manifest.settings.ytdlp,
+            ytdlp: acquire.fetcher.passed,
         };
         let audio = acquire.temp().join("audio");
         let resolved: HashMap<usize, &Resolved> = planned.iter().map(|(n, r)| (*n, r)).collect();

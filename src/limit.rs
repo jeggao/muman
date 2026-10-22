@@ -418,6 +418,7 @@ impl Learnt {
                     library: &folder.join("library"),
                     sources: at.sources,
                     scratch: &folder.join("work"),
+                    claim: &[],
                 },
             );
             (folder.join("library"), done)

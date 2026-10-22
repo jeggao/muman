@@ -122,11 +122,14 @@ pub fn report<W: Write, D: Write>(
             (n, Some(held)) => format!("on {n} albums, twice on {held}"),
             (n, None) => format!("on {n} albums"),
         };
-        writeln!(report, "{} songs, one recording, {on}:", group.len())?;
+        crate::ui::line(
+            report,
+            &format!("{} songs, one recording, {on}:", group.len()),
+        )?;
         for n in *group {
             let view = &views[*n];
             let key = view.id().map(ToString::to_string).unwrap_or_default();
-            writeln!(report, "  {key}\t{}\t{}", view.name(), album(*n))?;
+            crate::ui::line(report, &format!("  {key}\t{}\t{}", view.name(), album(*n)))?;
         }
     }
     summary(report, (alone.len(), across.len()), groups.len())

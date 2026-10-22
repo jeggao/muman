@@ -34,6 +34,10 @@ fn an_original_s_facts_take_three_runs() {
         fake.ran("-err_detect:v"),
         "a picture cut short fails rather than measuring sharp"
     );
+    assert!(
+        fake.ran("-max_pixels:v"),
+        "a picture too large to measure fails before it is decoded"
+    );
     let audio = facts.audio.unwrap();
     assert!(
         audio.analysis.loudness().is_some(),
@@ -52,6 +56,28 @@ fn an_original_s_facts_take_three_runs() {
     assert_eq!(facts.tags[&tags::Field::Artist].values, ["Hoshi7ne"]);
     assert_eq!(facts.duration, Some(200.0));
     assert_eq!(audio.bytes, Some(3_200_000), "listed in the same run");
+}
+
+#[test]
+fn a_graymap_past_the_most_pixels_is_no_picture_and_is_not_read() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    let pgm = |name: &str, side: u64, padded: u64| {
+        let path = dir.path().join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        write!(file, "P5\n{side} {side}\n255\n").unwrap();
+        let pixels: Vec<u8> = (0..side * side).map(|i| (i * 37 % 256) as u8).collect();
+        file.write_all(&pixels).unwrap();
+        if padded > 0 {
+            file.set_len(padded).unwrap();
+        }
+        path
+    };
+    let (quality, look) = measure_image(&pgm("small.pgm", 16, 0));
+    assert_eq!(quality.unwrap().width, 16);
+    assert!(look.is_some());
+    let past = pgm("large.pgm", 8, quality::MOST_PIXELS + 1024);
+    assert!(matches!(measure_image(&past), (None, None)));
 }
 
 #[test]

@@ -61,7 +61,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     request: Request,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    crate::create(&dirs.home)?;
+    crate::atomic::private_dir(&dirs.home)?;
     manifest::start(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
     let done = (|| {
@@ -369,12 +369,14 @@ pub(crate) fn network<R: Runner, W: Write, T>(
         Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
         _ => None,
     };
+    let passed = crate::download::Passed::write(&manifest.settings.ytdlp, temp.path())?;
     let fetcher = Fetcher {
         store: &ytdlp,
         temp: temp.path(),
         partial: &partial,
         plugins: plugins.as_deref(),
         options: &manifest.settings.ytdlp,
+        passed: &passed,
         sites: &manifest.settings.sites,
         live: job.live,
         runs: Cell::new(0),
@@ -396,7 +398,9 @@ pub(crate) fn network<R: Runner, W: Write, T>(
 
 /// Remove what a fetch left unfinished longer than `limit` ago, in any
 /// folder below `partial` but `apart`, which keeps its own time, and the
-/// folders that leaves empty; younger, a later run resumes it.
+/// folders that leaves empty; younger, a later run resumes it. `apart`
+/// itself stays even empty: a torrent fetched beside this run makes its
+/// folder in it, and would find it gone.
 pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Option<&Path>) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];
@@ -410,8 +414,10 @@ pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Opt
             .filter_map(|e| Some(e.ok()?.path()))
         {
             if path.is_dir() {
-                left.push(path.clone());
-                folders.push(path);
+                if Some(path.as_path()) != apart {
+                    folders.push(path.clone());
+                }
+                left.push(path);
                 continue;
             }
             let old = std::fs::metadata(&path)

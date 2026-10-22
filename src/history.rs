@@ -64,6 +64,14 @@
 //! the file it came from untouched, and one changed since goes to the
 //! trash.
 //!
+//! A record holds the song list's text, and with it any login or token
+//! the song list holds, so on Unix the history's folders are made `0700`
+//! and a record is written `0600` every time, one an older muman left
+//! readable to all made private as an undo rewrites it
+//! ([`crate::atomic`]). A folder that exists is left as it is, as the
+//! home is, and no record is rewritten only to make it private: what the
+//! owner made of their home's permissions is theirs to change.
+//!
 //! `run.json` carries a `version`; a record without one is of version 1.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -489,10 +497,12 @@ impl Run {
     }
 
     fn write(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
+        if let Some(history) = self.dir.parent() {
+            atomic::private_dir(history)?;
+        }
+        atomic::private_dir(&self.dir)?;
         let text = serde_json::to_vec(&self.record).context("writing the run record")?;
-        atomic::write(&self.dir, &atomic::Name::new(RECORD)?, &text)
+        atomic::write_private(&self.dir, &atomic::Name::new(RECORD)?, &text)
     }
 
     /// Write the record when the run changed the song list or the
@@ -573,7 +583,7 @@ fn let_go(dir: &Path) -> Result<()> {
             record.kept.clear();
             record.bytes = 0;
             let text = serde_json::to_vec(&record).context("writing the run record")?;
-            atomic::write(dir, &atomic::Name::new(RECORD)?, &text)?;
+            atomic::write_private(dir, &atomic::Name::new(RECORD)?, &text)?;
             dir.join("files")
         }
         None => dir.to_path_buf(),
@@ -702,6 +712,13 @@ impl UndoPlan {
     #[must_use]
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    /// The song list undoing puts back; `None` when the home had none,
+    /// and a new home's is put back.
+    #[must_use]
+    pub fn songs_before(&self) -> Option<&str> {
+        self.record.songs_before.as_deref()
     }
 
     /// Whether `other` undoes the same run.
@@ -893,7 +910,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     if !record.undoing {
         record.undoing = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
-        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
+        atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     // In the reverse of the order the run went: it moved a file before it
     // wrote over it where it moved to, as a song retagged and moved.
@@ -960,7 +977,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     if !record.undone {
         record.undone = true;
         let text = serde_json::to_vec(&record).context("writing the run record")?;
-        atomic::write(&dir, &atomic::Name::new(RECORD)?, &text)?;
+        atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
     Ok(Undone { dir, changed })
 }
@@ -1107,6 +1124,24 @@ mod tests {
         std::fs::create_dir_all(&d.home).unwrap();
         Run::begin(&d.home).unwrap().finish(&d.home).unwrap();
         assert_eq!(runs(&d.home).unwrap(), Vec::<PathBuf>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_of_the_song_list_s_text_is_its_owner_s_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        std::fs::create_dir_all(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "args = [\"--password\", \"0001\"]").unwrap();
+        let run = Run::begin(&d.home).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "args = [\"--password\", \"0002\"]").unwrap();
+        run.finish(&d.home).unwrap();
+        let kept = runs(&d.home).unwrap();
+        assert_eq!(mode(&history(&d.home)), 0o700);
+        assert_eq!(mode(&kept[0]), 0o700);
+        assert_eq!(mode(&kept[0].join(RECORD)), 0o600);
     }
 
     #[test]

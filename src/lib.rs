@@ -27,6 +27,7 @@ pub mod facts;
 pub mod ffmpeg;
 pub mod fingerprint;
 pub mod fit;
+pub mod given;
 pub mod held;
 pub mod history;
 pub mod hooks;
@@ -58,6 +59,7 @@ pub mod purge;
 pub mod quality;
 pub mod query;
 pub mod reconcile;
+pub mod redact;
 pub mod relpath;
 pub mod render;
 pub mod resolve;
@@ -76,6 +78,7 @@ pub mod template;
 mod testing;
 pub mod tools;
 pub mod torrent;
+pub mod trust;
 pub mod ui;
 pub mod units;
 pub mod ytdlp_log;
@@ -103,6 +106,8 @@ use crate::ui::{InquirePrompter, Prompter};
 
 /// One run, with every path resolved.
 #[derive(Debug)]
+// Each is a flag of its own on the command line.
+#[expect(clippy::struct_excessive_bools)]
 pub struct Job {
     pub command: Command,
     pub dirs: Dirs,
@@ -123,6 +128,9 @@ pub struct Job {
     pub progress: progress::Mode,
     /// Whether the run reaches no network.
     pub offline: bool,
+    /// Trust the commands and servers the song list sets without asking
+    /// ([`trust`]).
+    pub trust: bool,
 }
 
 impl Job {
@@ -141,6 +149,7 @@ impl Job {
             live: false,
             progress: cli.progress,
             offline: cli.offline,
+            trust: cli.trust,
         }
     }
 }
@@ -202,34 +211,6 @@ pub fn run() -> ExitCode {
     let prompter: Option<&mut dyn Prompter> =
         (std::io::stdin().is_terminal() && job.live).then_some(&mut inquire);
     let system = System::new(listed.tools.named(&job.dirs.home));
-    // yt-dlp is found when a run first fetches; a library made from
-    // files alone never needs it.
-    let needs_ffmpeg = match &job.command {
-        Command::Info
-        | Command::List { .. }
-        | Command::Duplicates { .. }
-        | Command::Purge { .. } => false,
-        Command::Check { decode, .. } => *decode,
-        Command::Export {
-            max_size,
-            codec,
-            template,
-            lyrics,
-            set,
-            ..
-        } => {
-            max_size.is_some()
-                || codec.is_some()
-                || template.is_some()
-                || lyrics.is_some()
-                || !set.is_empty()
-        }
-        _ => true,
-    };
-    if needs_ffmpeg && let Err(e) = system.require("ffmpeg").and(system.require("ffprobe")) {
-        let _ = ui::error(&mut err, &format!("{e:#}"));
-        return ExitCode::from(2);
-    }
     let mut data = anstream::stdout();
     let http = UreqTransport;
     let ran = if job.verbose {
@@ -335,6 +316,24 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         crate::manifest::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
+    if trust::gated(&job.command) {
+        let held = trust::held_in(&dirs.home)?;
+        if !trust::gate(
+            &dirs.home,
+            &held,
+            job.trust,
+            change::reborrow(&mut prompter),
+            out,
+        )? {
+            return Ok(true);
+        }
+    }
+    // yt-dlp is found when a run first fetches; a library made from
+    // files alone never needs it.
+    if needs_ffmpeg(&job.command) {
+        runner.require("ffmpeg")?;
+        runner.require("ffprobe")?;
+    }
     match &job.command {
         Command::Status { query, all } => {
             // Read only: a home not made yet is not made by asking.
@@ -406,6 +405,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             codec,
             template,
             lyrics,
+            redact,
             set,
         } => {
             let settings = export::overrides(
@@ -419,6 +419,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 folder: *folder,
                 max_size: *max_size,
                 settings: &settings,
+                redact: *redact,
             };
             export::export(runner, dirs, &options, out)
         }
@@ -426,14 +427,19 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let planned = history::plan(dirs)?;
             ui::info(out, "Undoing the last run:")?;
             for line in planned.lines() {
-                writeln!(out, "  {line}")?;
+                ui::line(out, &format!("  {line}"))?;
             }
             let confirm = cli::Confirm {
                 yes: *yes,
                 all: false,
                 dry_run: *dry_run,
             };
-            if !change::confirmed(&confirm, prompter, out)? {
+            if !change::confirmed(&confirm, change::reborrow(&mut prompter), out)? {
+                return Ok(true);
+            }
+            let back = planned.songs_before().unwrap_or(crate::manifest::NEW);
+            let held = trust::held_of(back).context("reading the song list undo puts back")?;
+            if !trust::gate(&dirs.home, &held, job.trust, prompter, out)? {
                 return Ok(true);
             }
             // As a run holds it, so no run begins between the undo and its sync.
@@ -587,6 +593,34 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
     reconcile::reconcile(runner, &job.dirs, opts, run, out)
 }
 
+/// Whether `command` may run ffmpeg or ffprobe: an export only when it
+/// encodes, `check` only when it decodes.
+pub(crate) fn needs_ffmpeg(command: &Command) -> bool {
+    match command {
+        Command::Info
+        | Command::List { .. }
+        | Command::Duplicates { .. }
+        | Command::Purge { .. }
+        | Command::Completions { .. } => false,
+        Command::Check { decode, .. } => *decode,
+        Command::Export {
+            max_size,
+            codec,
+            template,
+            lyrics,
+            set,
+            ..
+        } => {
+            max_size.is_some()
+                || codec.is_some()
+                || template.is_some()
+                || lyrics.is_some()
+                || !set.is_empty()
+        }
+        _ => true,
+    }
+}
+
 /// The long steps a command may take, in the order it takes them, which
 /// number them as it goes.
 fn steps_of(command: &Command) -> &'static [&'static str] {
@@ -658,7 +692,7 @@ fn list_songs<D: Write>(
         .iter()
         .filter(|v| !v.keys.is_empty() && parsed.matches(v))
     {
-        match writeln!(data, "{}", query::format(template, view)) {
+        match ui::line(data, &query::format(template, view)) {
             // A reader such as `head` that has read enough closes the pipe.
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
             written => written?,

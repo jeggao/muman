@@ -115,7 +115,7 @@ fn listed(urls: &[&str]) -> Listed {
     list(
         &urls,
         &crate::sites::Sites::default(),
-        &Ytdlp::default(),
+        &crate::download::Passed::default(),
         &Net::default(),
         &mut Vec::new(),
     )
@@ -193,6 +193,7 @@ fn acquire_urls(
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -294,6 +295,7 @@ fn missing_sources_are_fetched_again_without_the_archive() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -336,6 +338,7 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
             plugins: None,
             sites: &crate::sites::Sites::default(),
             options: &crate::settings::Ytdlp::default(),
+            passed: &crate::download::Passed::default(),
             live: false,
             runs: Cell::new(0),
         };
@@ -375,6 +378,7 @@ fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -411,6 +415,7 @@ fn nothing_a_fetch_left_beside_what_it_placed_outlives_it() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -456,6 +461,7 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -542,6 +548,7 @@ fn fetch_with(s: &Setup, runner: &Failing, plugins: Option<&Path>) -> (bool, Str
         plugins,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -685,7 +692,7 @@ fn a_release_naming_its_version_is_found_by_its_audio() {
     let found = lookup(
         &Music,
         &crate::sites::Sites::default(),
-        &crate::settings::Ytdlp::default(),
+        &crate::download::Passed::default(),
         &upload,
         dir.path(),
     )

@@ -6,6 +6,24 @@
 //! reach it, `args` last so they win. Its DHT routing table is kept with
 //! the unfinished fetches rather than in the user's own aria2 folder.
 //!
+//! The command line is any user's to see (`ps`), so an option of `args`
+//! that carries a login, a password, a header or an address that may
+//! hold them ([`SECRET`]) goes to a config file of the run's own instead,
+//! its owner's alone ([`crate::atomic`]), named by `--conf-path` in place
+//! of `--no-conf`: aria2c then reads that file and no other. aria2c reads
+//! the file's options before the command line's, but muman sets none of
+//! these, and a `header` there adds to those given elsewhere, as on the
+//! command line. Its lines are `name=value`, the value trimmed at both
+//! ends, so a value holding a control character or a space at either
+//! end is refused. Every other option stays on the command line: which
+//! take a value of the next argument, and what each short option names,
+//! only aria2c's own table says.
+//!
+//! aria2c names the address an error concerns, a tracker's announce URL
+//! among them, and a private tracker's holds the user's passkey; an
+//! error is said and recorded in the state, so an address in one keeps
+//! its scheme and host alone (`error_of`).
+//!
 //! A run fetches several torrents, as `add` fetches all it is given in
 //! one and a sync all it fetches again, each a download of its own in the
 //! run's input file (`--input-file`), with its own folder, files and GID;
@@ -64,7 +82,12 @@
 //! file sharing a piece with one, which aria2c needs to check that piece
 //! whole, is copied to the path the fetch writes it at, and aria2c checks
 //! every piece and fetches only those missing or wrong. One complete and
-//! right needs no peer.
+//! right needs no peer. A link in that folder is followed only to a place
+//! inside it, as in any folder given to `add` ([`crate::given`]): the
+//! pieces checking, what a link leading out reads could reach the store
+//! only if the torrent held it already, but until aria2c fetched the
+//! piece again it would wait in the partial downloads, as long as
+//! `[torrent] keep_partial` keeps them.
 //!
 //! A listed file gone from the store is fetched again by `sync` (`due`,
 //! [`fetch_due`]), beside yt-dlp's fetches, with the lyrics and pictures
@@ -212,16 +235,96 @@ fn input_file(entries: &[Entry]) -> Result<Vec<u8>> {
     Ok(text)
 }
 
-/// The arguments every aria2c run of `downloads` takes.
-fn common(places: &Places<'_>, downloads: usize) -> Vec<OsString> {
+/// aria2c's options that carry a login, a password, a header or an
+/// address that may hold either: given in `[torrent] args`, each goes to
+/// the run's config file rather than its command line.
+pub const SECRET: [&str; 21] = [
+    "header",
+    "http-user",
+    "http-passwd",
+    "ftp-user",
+    "ftp-passwd",
+    "all-proxy",
+    "all-proxy-user",
+    "all-proxy-passwd",
+    "http-proxy",
+    "http-proxy-user",
+    "http-proxy-passwd",
+    "https-proxy",
+    "https-proxy-user",
+    "https-proxy-passwd",
+    "ftp-proxy",
+    "ftp-proxy-user",
+    "ftp-proxy-passwd",
+    "rpc-user",
+    "rpc-passwd",
+    "rpc-secret",
+    "bt-tracker",
+];
+
+/// The config file of a run's [`SECRET`] options, beside its input file.
+const CONF: &str = "aria2.conf";
+
+/// `[torrent] args` apart: those for the command line, and each option
+/// of [`SECRET`] with its value, as `--name=value` or `--name value`
+/// give it.
+fn secrets_apart(args: &[String]) -> (Vec<OsString>, Vec<(&str, &str)>) {
+    let (mut kept, mut secret) = (Vec::new(), Vec::new());
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let option = arg
+            .strip_prefix("--")
+            .map(|o| o.split_once('=').unwrap_or((o, "")));
+        match option {
+            Some((name, value)) if SECRET.contains(&name) && arg.contains('=') => {
+                secret.push((name, value));
+            }
+            Some((name, _)) if SECRET.contains(&name) => match args.next() {
+                Some(value) => secret.push((name, value.as_str())),
+                None => kept.push(arg.into()),
+            },
+            _ => kept.push(arg.into()),
+        }
+    }
+    (kept, secret)
+}
+
+/// The config file of `secret`, one `name=value` a line. aria2c reads a
+/// line break as the next option and trims the value's ends, so a value
+/// holding a control character or a space at either end is refused.
+fn conf_file(secret: &[(&str, &str)]) -> Result<Vec<u8>> {
+    let mut text = Vec::new();
+    for (name, value) in secret {
+        let plain = !value.bytes().any(|b| b.is_ascii_control()) && value.trim() == *value;
+        ensure!(
+            plain,
+            "[torrent] args: the value of --{name} cannot be handed to aria2c, as its config \
+             file would read it as other than it is"
+        );
+        text.extend(format!("{name}={value}\n").into_bytes());
+    }
+    Ok(text)
+}
+
+/// The arguments every aria2c run of `downloads` takes, its input file
+/// at `input`.
+fn common(places: &Places<'_>, downloads: usize, input: &Path) -> Vec<OsString> {
     let flag = |name: &str, value: &Path| {
         let mut arg = OsString::from(format!("--{name}="));
         arg.push(value);
         arg
     };
+    let (args, secret) = secrets_apart(&places.options.args);
+    // --conf-path names the one config file read, so a personal one is
+    // still not.
+    let conf = if secret.is_empty() {
+        "--no-conf=true".into()
+    } else {
+        flag("conf-path", &input.with_file_name(CONF))
+    };
     let mut cmd: Vec<OsString> = vec![
         "aria2c".into(),
-        "--no-conf=true".into(),
+        conf,
         "--console-log-level=warn".into(),
         "--summary-interval=1".into(),
         "--show-console-readout=false".into(),
@@ -242,7 +345,7 @@ fn common(places: &Places<'_>, downloads: usize) -> Vec<OsString> {
         flag("dht-file-path", &places.partial.join("dht.dat")),
         flag("dht-file-path6", &places.partial.join("dht6.dat")),
     ];
-    cmd.extend(places.options.args.iter().map(OsString::from));
+    cmd.extend(args);
     cmd
 }
 
@@ -250,7 +353,7 @@ fn common(places: &Places<'_>, downloads: usize) -> Vec<OsString> {
 /// its torrent's metainfo, reading them from `input`.
 #[must_use]
 pub fn metainfo_command(places: &Places<'_>, links: usize, input: &Path) -> Vec<OsString> {
-    let mut cmd = common(places, links);
+    let mut cmd = common(places, links, input);
     let mut dir = OsString::from("--dir=");
     dir.push(places.partial);
     cmd.push(dir);
@@ -308,7 +411,7 @@ fn fetch_entry(metainfo: &Path, dir: &Path, files: &[&File], beside: &[&File]) -
 /// `input`.
 #[must_use]
 pub fn fetch_command(places: &Places<'_>, downloads: usize, input: &Path) -> Vec<OsString> {
-    let mut cmd = common(places, downloads);
+    let mut cmd = common(places, downloads, input);
     cmd.extend([
         "--continue=true".into(),
         "--check-integrity=true".into(),
@@ -331,11 +434,15 @@ fn run<R: Runner>(
     step: &crate::progress::Step,
 ) -> Result<(Vec<Ended>, Vec<String>)> {
     let text = input_file(entries)?;
+    let conf = conf_file(&secrets_apart(&places.options.args).1)?;
     std::fs::create_dir_all(places.partial)
         .with_context(|| format!("creating {}", places.partial.display()))?;
     let scratch = crate::atomic::Scratch::new()?;
     let input = scratch.path().join("input.txt");
     std::fs::write(&input, &text).with_context(|| format!("writing {}", input.display()))?;
+    if !conf.is_empty() {
+        crate::atomic::private_file(&input.with_file_name(CONF), &conf)?;
+    }
     let (ok, said) = stream(runner, &cmd(&input), step, labels)?;
     let ended = (0..entries.len())
         .map(|n| match said.ended.get(&short_gid(n)) {
@@ -482,7 +589,7 @@ fn whole(readout: &str) -> String {
 }
 
 /// What an error or warning line says, without aria2c's time and
-/// connection number.
+/// connection number, each address in it cut to its scheme and host.
 fn error_of(line: &str) -> Option<String> {
     let at = line.find("[ERROR]").or_else(|| line.find("[WARN]"))?;
     let rest = &line[at..];
@@ -491,7 +598,22 @@ fn error_of(line: &str) -> Option<String> {
         .strip_prefix("CUID#")
         .and_then(|r| r.split_once(" - "))
         .map_or(rest, |(_, r)| r);
-    Some(rest.trim().to_string())
+    Some(without_paths(rest.trim()))
+}
+
+/// `text`, each `scheme://` address in it cut to its scheme and host, its
+/// login, path and query, where a private tracker's passkey is, left out.
+fn without_paths(text: &str) -> String {
+    static ADDRESS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"([A-Za-z][A-Za-z0-9+.-]*://)(?:[^/?#\s@]*@)?([^/?#\s]*)([/?#]\S*)?")
+            .expect("valid")
+    });
+    ADDRESS
+        .replace_all(text, |c: &regex::Captures<'_>| {
+            let cut = if c.get(3).is_some() { "/…" } else { "" };
+            format!("{}{}{cut}", &c[1], &c[2])
+        })
+        .into_owned()
 }
 
 /// Why a fetch of a torrent's files did not bring them all.
@@ -798,13 +920,16 @@ pub fn fetch<R: Runner, W: Write>(
 /// holds of `files` and the files sharing a piece with them to where a
 /// fetch writes each, for aria2c to check and finish: how many were
 /// copied. `from` may be the torrent's own folder or the one holding it,
-/// or the one file of a torrent of one.
-pub fn take_up(
+/// or the one file of a torrent of one; a link in it leading out of it is
+/// left out and named ([`crate::given`]).
+pub fn take_up<W: Write>(
+    out: &mut W,
     places: &Places<'_>,
     meta: &Metainfo,
     files: &[&File],
     from: &Path,
 ) -> Result<usize> {
+    let within = crate::given::Folder::new(from);
     let root = if from.join(&meta.name).is_dir() {
         from.join(&meta.name)
     } else {
@@ -812,6 +937,7 @@ pub fn take_up(
     };
     let dir = places.partial.join(meta.hash());
     let mut copied = 0;
+    let mut outside = Vec::new();
     for file in files
         .iter()
         .copied()
@@ -822,16 +948,22 @@ pub fn take_up(
         } else {
             file.path.iter().fold(root.clone(), |p, part| p.join(part))
         };
-        if std::fs::metadata(&at).map(|m| m.len()).ok() != Some(file.length) {
+        if within.leads_out(&at) {
+            outside.push(at);
+            continue;
+        }
+        if std::fs::metadata(&at).map(|m| m.len()).ok() != Some(file.length) || !within.holds(&at) {
             continue;
         }
         let to = dir.join(index_path(file));
         std::fs::create_dir_all(to.parent().unwrap_or(&dir))
             .with_context(|| format!("creating {}", dir.display()))?;
-        std::fs::copy(&at, &to)
-            .with_context(|| format!("copying {} to {}", at.display(), to.display()))?;
+        within.copy(&at, &to)?;
         copied += 1;
     }
+    outside.sort();
+    outside.dedup();
+    crate::given::say_outside(from, &outside, out)?;
     Ok(copied)
 }
 
@@ -1164,6 +1296,62 @@ mod tests {
     }
 
     #[test]
+    fn a_login_or_header_goes_to_a_config_file_and_every_other_arg_on_the_command_line() {
+        let options = Torrent {
+            args: [
+                "--listen-port=51413",
+                "--header",
+                "Cookie: uid=0001; pass=0002",
+                "--http-passwd=hunter-0001",
+                "-x4",
+                "--bt-tracker=https://tracker.example/0001/announce",
+            ]
+            .map(String::from)
+            .to_vec(),
+            ..Torrent::default()
+        };
+        let places = Places {
+            store: Path::new("store"),
+            partial: Path::new("partial"),
+            options: &options,
+        };
+        let input = Path::new("scratch").join("input.txt");
+        let cmd = text(&fetch_command(&places, 1, &input));
+        assert!(!cmd.iter().any(|a| a.contains("0001")), "{cmd:?}");
+        let conf = format!("--conf-path={}", Path::new("scratch").join(CONF).display());
+        assert_eq!(cmd[1], conf);
+        assert!(!cmd.contains(&"--no-conf=true".to_string()));
+        for kept in ["--listen-port=51413", "-x4"] {
+            assert!(cmd.contains(&kept.to_string()), "{kept}");
+        }
+        assert_eq!(
+            String::from_utf8(conf_file(&secrets_apart(&options.args).1).unwrap()).unwrap(),
+            "header=Cookie: uid=0001; pass=0002\nhttp-passwd=hunter-0001\n\
+             bt-tracker=https://tracker.example/0001/announce\n"
+        );
+        for read_otherwise in ["a\nrpc-secret=x", " padded", "padded "] {
+            assert!(
+                conf_file(&[("header", read_otherwise)]).is_err(),
+                "{read_otherwise:?}"
+            );
+        }
+        let alone = ["--header".to_string()];
+        assert_eq!(secrets_apart(&alone), (vec!["--header".into()], Vec::new()));
+    }
+
+    #[test]
+    fn an_error_names_an_address_by_its_scheme_and_host_alone() {
+        assert_eq!(
+            without_paths(
+                "Download aborted. URI=https://u:p@tracker.example:8443/0123/announce?passkey=4567 \
+                 then udp://tracker.example:6969, magnet:?xt=urn:btih:0123"
+            ),
+            "Download aborted. URI=https://tracker.example:8443/… then udp://tracker.example:6969, \
+             magnet:?xt=urn:btih:0123"
+        );
+    }
+
+    #[test]
     fn a_run_fetches_at_most_eight_torrents_at_once_unless_args_say_otherwise() {
         let options = options();
         let places = Places {
@@ -1206,7 +1394,7 @@ mod tests {
     #[test]
     fn each_download_of_a_run_ends_as_its_row_of_the_results_says() {
         let lines = [
-            "10/20 10:50:27 [ERROR] CUID#12 - Download aborted. URI=http://tracker.example/a",
+            "10/20 10:50:27 [ERROR] CUID#12 - Download aborted. URI=http://tracker.example/announce.php?passkey=0123456789abcdef",
             "[#000001 1.2MiB/40MiB(3%) CN:4 SD:2 DL:300KiB ETA:2m]",
             "Download Results:",
             "gid   |stat|avg speed  |  %|path/URI",
@@ -1258,13 +1446,13 @@ mod tests {
             ],
             "a download the results do not name failed with the run"
         );
-        assert_eq!(errors, ["Download aborted. URI=http://tracker.example/a"]);
+        assert_eq!(errors, ["Download aborted. URI=http://tracker.example/…"]);
         let said =
             |n: usize, failed: usize| failure(&places, ended[n], &errors, failed).to_string();
         assert!(said(0, 2).starts_with("no peer sent anything for 10 min"));
         assert_eq!(
             said(2, 1),
-            "aria2c: Download aborted. URI=http://tracker.example/a"
+            "aria2c: Download aborted. URI=http://tracker.example/…"
         );
         assert!(said(2, 2).contains("failed on 2 torrents at once"));
         assert!(failure(&places, ended[0], &errors, 2).resumes());

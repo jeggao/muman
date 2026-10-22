@@ -5,7 +5,32 @@
 //! is no terminal or `NO_COLOR` is set, and translate them for the
 //! legacy Windows console. Nothing here holds process-wide state, so
 //! tests capture styled text in a buffer and strip it with [`plain`].
+//!
+//! Much of what muman says carries text from elsewhere: a video's or a
+//! playlist's title, a torrent's name, a line yt-dlp wrote, a service's
+//! error. Such text can hold what a terminal acts on rather than shows,
+//! and `anstream` passes it to a terminal as it is: an `OSC` sequence
+//! retitles the window, writes the clipboard or makes a link that reads
+//! as one address and opens another, and a `CSI` one or a carriage
+//! return clears or overwrites what muman said. So every text muman
+//! prints is made [`printable`] on its way out, and only the text, never
+//! muman's own styles: by [`Painted`], which every message here and every
+//! styled piece goes through, by [`line()`] and [`painted`] for lines of
+//! no style or of several, by [`InquirePrompter`] for a prompt's question
+//! and items, and by `progress` for what a step says is under way.
+//! Fixing each source instead would miss the next one added, and a rule
+//! in `tests/architecture.rs` keeps other code from writing around them.
+//!
+//! [`printable`] shows each control character but a line break and a
+//! tab as U+FFFD, so the rest of a sequence shows as the text it is.
+//! The bidirectional embeddings, overrides and isolates go too: one
+//! left open in a title turns the rest of the line around, muman's own
+//! words and paths after it included, so a line can read as something
+//! it does not say. A right-to-left title needs none of them to show
+//! in its order, and the marks that only set a neutral character's
+//! direction stay.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::io::{self, Write};
 
@@ -20,6 +45,8 @@ pub enum Style {
     Accent,
     Path,
     Muted,
+    /// No style, for a piece of a line that has others.
+    Plain,
 }
 
 impl Style {
@@ -33,6 +60,7 @@ impl Style {
             Self::Accent => fg(AnsiColor::Cyan),
             Self::Path => fg(AnsiColor::Yellow),
             Self::Muted => anstyle::Style::new().effects(Effects::DIMMED),
+            Self::Plain => anstyle::Style::new(),
         }
     }
 
@@ -51,8 +79,38 @@ pub struct Painted<'a> {
 impl fmt::Display for Painted<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let style = self.style.style();
-        write!(f, "{style}{}{style:#}", self.text)
+        write!(f, "{style}{}{style:#}", printable(self.text))
     }
+}
+
+/// `text` as a terminal shows it rather than acts on it: each control
+/// character but a line break and a tab, and each bidirectional
+/// embedding, override and isolate, shown as U+FFFD. A carriage return
+/// ending a line, as a Windows program writes one, is dropped.
+#[must_use]
+pub fn printable(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(acts) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            continue;
+        }
+        out.push(if acts(c) {
+            char::REPLACEMENT_CHARACTER
+        } else {
+            c
+        });
+    }
+    Cow::Owned(out)
+}
+
+/// Whether a terminal acts on `c`, or it turns the text after it around.
+fn acts(c: char) -> bool {
+    (c.is_control() && c != '\n' && c != '\t')
+        || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// `text` without its styles.
@@ -92,6 +150,19 @@ pub fn trace<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
     writeln!(w, "{}", Style::Muted.paint(&format!("trace: {msg}")))
 }
 
+/// A line of no style, as a listing's or a report's.
+pub fn line<W: Write>(w: &mut W, msg: &str) -> io::Result<()> {
+    writeln!(w, "{}", Style::Plain.paint(msg))
+}
+
+/// A line of `pieces`, each in its own style.
+pub fn painted<W: Write>(w: &mut W, pieces: &[Painted<'_>]) -> io::Result<()> {
+    for piece in pieces {
+        write!(w, "{piece}")?;
+    }
+    writeln!(w)
+}
+
 /// How the user is asked. `run` passes [`InquirePrompter`] when both
 /// ends are a terminal and none otherwise; tests pass `MockPrompter`.
 pub trait Prompter {
@@ -120,8 +191,9 @@ pub struct InquirePrompter;
 
 impl Prompter for InquirePrompter {
     fn ask(&mut self, question: &str) -> io::Result<bool> {
+        let question = printable(question);
         let answer = crate::progress::suspend(|| {
-            inquire::Confirm::new(question)
+            inquire::Confirm::new(&question)
                 .with_default(false)
                 .prompt_skippable()
         })
@@ -135,8 +207,9 @@ impl Prompter for InquirePrompter {
         items: &[String],
         picked: &[usize],
     ) -> io::Result<Vec<usize>> {
+        let (question, items) = (printable(question), printable_all(items));
         let picked = crate::progress::suspend(|| {
-            inquire::MultiSelect::new(question, items.to_vec())
+            inquire::MultiSelect::new(&question, items)
                 .with_default(picked)
                 .with_help_message("space toggles, → all, ← none, type to filter, enter accepts")
                 .raw_prompt_skippable()
@@ -150,8 +223,9 @@ impl Prompter for InquirePrompter {
     }
 
     fn select(&mut self, question: &str, items: &[String]) -> io::Result<Option<usize>> {
+        let (question, items) = (printable(question), printable_all(items));
         let picked = crate::progress::suspend(|| {
-            inquire::Select::new(question, items.to_vec())
+            inquire::Select::new(&question, items)
                 .with_help_message("↑↓ moves, type to filter, enter picks, esc for none")
                 .raw_prompt_skippable()
         })
@@ -160,14 +234,21 @@ impl Prompter for InquirePrompter {
     }
 
     fn text(&mut self, question: &str, help: &str) -> io::Result<Option<String>> {
+        let (question, help) = (printable(question), printable(help));
         let typed = crate::progress::suspend(|| {
-            inquire::Text::new(question)
-                .with_help_message(help)
+            inquire::Text::new(&question)
+                .with_help_message(&help)
                 .prompt_skippable()
         })
         .map_err(io::Error::other)?;
         Ok(typed.filter(|t| !t.trim().is_empty()))
     }
+}
+
+/// Each of `items` made [`printable`], in order, so a pick's index is
+/// the item's.
+fn printable_all(items: &[String]) -> Vec<String> {
+    items.iter().map(|i| printable(i).into_owned()).collect()
 }
 
 /// Answers from queues, in order; running out panics, surfacing the
@@ -269,6 +350,53 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with('\x1b'), "{text:?}");
         assert_eq!(plain(&text), "careful\n");
+    }
+
+    #[test]
+    fn what_a_terminal_acts_on_is_shown_rather_than_passed_on() {
+        let cases = [
+            ("Song \x1b]0;X\x07", "Song �]0;X�"),
+            ("\x1b]52;c;Zm9v\x1b\\", "�]52;c;Zm9v�\\"),
+            (
+                "\x1b]8;;x.example\x07Link\x1b]8;;\x07",
+                "�]8;;x.example�Link�]8;;�",
+            ),
+            ("\x1b[2J\x1b[1;31mRed", "�[2J�[1;31mRed"),
+            ("\u{9b}2J", "�2J"),
+            ("Nul\0, bell\x07, back\x08", "Nul�, bell�, back�"),
+            ("Over\rwritten", "Over�written"),
+            ("Rooms \u{202e}tlaS fo\u{202c}", "Rooms �tlaS fo�"),
+            ("\u{2067}Isolated\u{2069}", "�Isolated�"),
+        ];
+        for (text, shown) in cases {
+            assert_eq!(printable(text), shown, "{text:?}");
+        }
+        assert!(matches!(
+            printable("Paper Comets\tB\u{200f}\nnext"),
+            Cow::Borrowed("Paper Comets\tB\u{200f}\nnext")
+        ));
+        assert_eq!(printable("line\r\nnext\r\n"), "line\nnext\n");
+    }
+
+    #[test]
+    fn a_message_s_text_is_printable_and_its_style_kept() {
+        let mut out = Vec::new();
+        error(&mut out, "Lantern \x1b]0;X\x07Weather").unwrap();
+        painted(
+            &mut out,
+            &[
+                Style::Plain.paint("  → "),
+                Style::Path.paint("\x1b[2Ja.flac"),
+            ],
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            !text.contains("\x1b]") && !text.contains("\x1b[2J"),
+            "{text:?}"
+        );
+        assert!(text.starts_with("\x1b[1m\x1b[31m"), "{text:?}");
+        assert_eq!(plain(&text), "Lantern �]0;X�Weather\n  → �[2Ja.flac\n");
     }
 
     #[test]

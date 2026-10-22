@@ -9,6 +9,28 @@
 //! each needs; `extractor_args` go to a fetch and the check of what a
 //! source offers upstream, the runs that choose among its formats.
 //!
+//! Neither goes on the command line, which any user of the machine sees
+//! (`ps`, `/proc/<pid>/cmdline`), and which would show a password, a
+//! cookie header or a PO token to them all. Each run writes them to
+//! config files in its scratch folder, its owner's alone
+//! ([`crate::atomic`]), and names them with `--config-locations`
+//! ([`Passed`]), which yt-dlp reads under `--ignore-config` too: one of
+//! `args`, and one of `extractor_args` then `args`, in the order the
+//! command line had them. yt-dlp splits a config file as a POSIX shell
+//! does (`shlex`), so each argument is single-quoted, a `'` in it closed,
+//! escaped and reopened, which keeps any text exactly: spaces, `#`, `\`,
+//! `$` and line breaks. The file begins with a UTF-8 byte-order mark,
+//! which yt-dlp heeds before the locale's encoding, no UTF-8 on Windows
+//! unless Python is told so. The path itself goes through yt-dlp's `~`
+//! and `$VAR` expansion; a scratch folder's name holds neither.
+//!
+//! yt-dlp puts what a config file holds before the command line's own
+//! options, wherever `--config-locations` stands, so where an argument of
+//! the song list's and an option of muman's set the same thing, muman's
+//! wins. muman's own are the output's form, paths and template, the
+//! embedding, the retry sleeps, `--no-playlist`, and those `[ytdlp]` has
+//! a key for, as `format`, which is where they are set.
+//!
 //! Unfinished downloads wait in `partial/` under the state root,
 //! beside the store, named by the extractor and ID alone, so an
 //! interrupted one resumes at the same path on the next run whatever
@@ -64,9 +86,70 @@ pub struct Places<'a> {
     pub plugins: Option<&'a Path>,
     /// The song list's `[ytdlp]`.
     pub options: &'a Ytdlp,
+    /// Its `args` and `extractor_args`, as yt-dlp reads them.
+    pub passed: &'a Passed,
     /// A file holding the URLs, one per line, in place of the command
     /// line, which Windows caps at 32,767 characters.
     pub batch: Option<&'a Path>,
+}
+
+/// The config file of `[ytdlp] args`.
+const EVERY: &str = "ytdlp-args.conf";
+
+/// The config file of `[ytdlp] extractor_args`, then `args`.
+const CHOOSING: &str = "ytdlp-fetch.conf";
+
+/// `[ytdlp] args` and `extractor_args` in the config files a run's
+/// yt-dlp reads them from, off its command line; none for a song list
+/// that sets neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Passed {
+    /// `args`, for every run.
+    every: Option<PathBuf>,
+    /// `extractor_args`, then `args`, for the runs that choose among a
+    /// source's formats.
+    choosing: Option<PathBuf>,
+}
+
+impl Passed {
+    /// Write the arguments of `options` into `dir`, a folder of the
+    /// run's own that holds no such file yet.
+    pub fn write(options: &Ytdlp, dir: &Path) -> Result<Self> {
+        let extractor = options.extractor_args.iter().flat_map(|(extractor, args)| {
+            ["--extractor-args".into(), format!("{extractor}:{args}")]
+        });
+        let choosing: Vec<String> = extractor.chain(options.args.iter().cloned()).collect();
+        let file = |name: &str, args: &[String]| -> Result<Option<PathBuf>> {
+            if args.is_empty() {
+                return Ok(None);
+            }
+            let path = dir.join(name);
+            crate::atomic::private_file(&path, &config(args))?;
+            Ok(Some(path))
+        };
+        Ok(Self {
+            every: file(EVERY, &options.args)?,
+            choosing: file(CHOOSING, &choosing)?,
+        })
+    }
+}
+
+/// `--config-locations` naming `file`, when there is one.
+fn located(file: Option<&Path>) -> Vec<OsString> {
+    file.map(|f| vec!["--config-locations".into(), f.as_os_str().to_os_string()])
+        .unwrap_or_default()
+}
+
+/// `args` as a yt-dlp config file, which yt-dlp splits back into them
+/// exactly: each single-quoted on a line of its own.
+fn config(args: &[String]) -> Vec<u8> {
+    let mut text = String::from('\u{feff}');
+    for arg in args {
+        text.push('\'');
+        text.push_str(&arg.replace('\'', r#"'"'"'"#));
+        text.push_str("'\n");
+    }
+    text.into_bytes()
 }
 
 /// Delete each `<id>.mkv` in a download folder of `partial` that has a
@@ -182,7 +265,6 @@ pub fn ytdlp_command(
             cmd.push(format!("{pp}:when=pre_process").into());
         }
     }
-    cmd.extend(extractor_args(options));
     cmd.push("--paths".into());
     cmd.push(places.store.as_os_str().to_os_string());
     cmd.push("--paths".into());
@@ -197,7 +279,7 @@ pub fn ytdlp_command(
         "after_move:%(extractor_key)s %(id)j %(filepath)j %(webpage_url)j %(original_url)j".into(),
     );
     cmd.push(places.done.as_os_str().to_os_string());
-    cmd.extend(options.args.iter().map(OsString::from));
+    cmd.extend(located(places.passed.choosing.as_deref()));
     if let Some(batch) = places.batch {
         cmd.push("--batch-file".into());
         cmd.push(batch.as_os_str().to_os_string());
@@ -208,22 +290,12 @@ pub fn ytdlp_command(
     cmd
 }
 
-/// `[ytdlp] extractor_args` as yt-dlp's options, one per extractor.
-fn extractor_args(options: &Ytdlp) -> impl Iterator<Item = OsString> + '_ {
-    options.extractor_args.iter().flat_map(|(extractor, args)| {
-        [
-            "--extractor-args".into(),
-            format!("{extractor}:{args}").into(),
-        ]
-    })
-}
-
-/// `cmd`, a yt-dlp run of muman's, with `[ytdlp] args` after its own
-/// options and `target` after the `--` that ends them, as a video ID may
-/// begin with a dash.
+/// `cmd`, a yt-dlp run of muman's, with the config file of `[ytdlp]
+/// args` and `target` after the `--` that ends its options, as a video ID
+/// may begin with a dash.
 #[must_use]
-pub fn ending(mut cmd: Vec<OsString>, options: &Ytdlp, target: &str) -> Vec<OsString> {
-    cmd.extend(options.args.iter().map(OsString::from));
+pub fn ending(mut cmd: Vec<OsString>, passed: &Passed, target: &str) -> Vec<OsString> {
+    cmd.extend(located(passed.every.as_deref()));
     cmd.push("--".into());
     cmd.push(target.into());
     cmd
@@ -233,7 +305,7 @@ pub fn ending(mut cmd: Vec<OsString>, options: &Ytdlp, target: &str) -> Vec<OsSt
 /// `urls` offers now, downloading nothing: asked as a fetch asks, so it
 /// lists the formats a fetch would choose from.
 #[must_use]
-pub fn upstream_command(options: &Ytdlp, urls: &[String]) -> Vec<OsString> {
+pub fn upstream_command(passed: &Passed, urls: &[String]) -> Vec<OsString> {
     let mut cmd: Vec<OsString> = [
         "yt-dlp",
         "--ignore-config",
@@ -247,8 +319,7 @@ pub fn upstream_command(options: &Ytdlp, urls: &[String]) -> Vec<OsString> {
     .into_iter()
     .map(OsString::from)
     .collect();
-    cmd.extend(extractor_args(options));
-    cmd.extend(options.args.iter().map(OsString::from));
+    cmd.extend(located(passed.choosing.as_deref()));
     cmd.push("--".into());
     cmd.extend(urls.iter().map(OsString::from));
     cmd
@@ -374,8 +445,7 @@ pub fn scrub<R: Runner>(runner: &R, path: &Path, scratch: &Path) -> Result<bool>
     std::fs::write(&json, kept).with_context(|| format!("writing {}", json.display()))?;
 
     let mut cmd = ffmpeg::base();
-    cmd.push("-i".into());
-    cmd.push(path.as_os_str().to_os_string());
+    cmd.extend(ffmpeg::Input::from(path).args());
     cmd.extend(["-map", "0"].map(OsString::from));
     for dropped in std::iter::once(attachments[ordinal]).chain(pictures.iter().copied()) {
         cmd.push("-map".into());
@@ -427,6 +497,10 @@ mod tests {
     use super::*;
 
     static OPTIONS: std::sync::LazyLock<Ytdlp> = std::sync::LazyLock::new(Ytdlp::default);
+    static PASSED: Passed = Passed {
+        every: None,
+        choosing: None,
+    };
 
     fn places(plugins: Option<&Path>) -> Places<'_> {
         Places {
@@ -435,6 +509,7 @@ mod tests {
             done: Path::new("/d"),
             plugins,
             options: &OPTIONS,
+            passed: &PASSED,
             batch: None,
         }
     }
@@ -522,58 +597,73 @@ mod tests {
     }
 
     #[test]
-    fn translated_captions_are_skipped() {
-        let cmd = ytdlp_command(&places(None), None, &[]);
-        let args = value_after(&cmd, "--extractor-args");
-        assert!(args[0].to_string_lossy().contains("skip=translated_subs"));
-    }
-
-    #[test]
-    fn with_the_plugin_original_captions_are_kept_too() {
-        let cmd = ytdlp_command(&places(Some(Path::new("/p"))), None, &[]);
-        assert!(cmd.iter().any(|a| a == "--write-auto-subs"));
-        let clear = cmd.iter().position(|a| a == "--no-plugin-dirs").unwrap();
-        let add = cmd.iter().position(|a| a == "--plugin-dirs").unwrap();
-        assert!(clear < add, "clearing after adding would drop the plugin");
+    fn the_song_list_s_arguments_are_named_by_a_config_file_and_never_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = Ytdlp {
+            args: vec!["--password".into(), "pass word".into()],
+            ..Ytdlp::default()
+        };
+        let passed = Passed::write(&options, dir.path()).unwrap();
+        let mut places = places(Some(Path::new("/p")));
+        places.passed = &passed;
+        let every = dir.path().join(EVERY).into_os_string();
+        let choosing = dir.path().join(CHOOSING).into_os_string();
+        for (cmd, file) in [
+            (ytdlp_command(&places, None, &[]), &choosing),
+            (upstream_command(&passed, &[]), &choosing),
+            (ending(vec!["yt-dlp".into()], &passed, "u"), &every),
+        ] {
+            assert_eq!(value_after(&cmd, "--config-locations"), [file], "{cmd:?}");
+            assert!(
+                !cmd.iter()
+                    .any(|a| a == "--extractor-args" || a == "--password")
+            );
+            let end = cmd.iter().position(|a| a == "--").unwrap();
+            assert!(cmd.iter().position(|a| a == "--config-locations").unwrap() < end);
+        }
         assert_eq!(
-            value_after(&cmd, "--plugin-dirs"),
-            vec![&OsString::from("/p")]
+            std::fs::read_to_string(&every).unwrap(),
+            "\u{feff}'--password'\n'pass word'\n"
         );
-        assert_eq!(
-            value_after(&cmd, "--use-postprocessor"),
-            vec![
-                &OsString::from("OriginalSubs:when=pre_process"),
-                &OsString::from("AlbumArt:when=pre_process"),
-            ]
-        );
-        let args = value_after(&cmd, "--extractor-args");
-        assert!(args[0].to_string_lossy().contains("web_music"));
-    }
-
-    #[test]
-    fn extractor_args_are_one_option_each_and_none_when_empty() {
-        let mut options = Ytdlp::default();
-        options
-            .extractor_args
-            .insert("vimeo".into(), "client=web".into());
-        let mut places = places(None);
-        places.options = &options;
-        let cmd = ytdlp_command(&places, None, &[]);
-        let args = value_after(&cmd, "--extractor-args");
-        assert_eq!(args.len(), 2);
+        let choosing = std::fs::read_to_string(&choosing).unwrap();
         assert!(
-            args.contains(&&OsString::from("vimeo:client=web")),
-            "{args:?}"
+            choosing.starts_with(
+                "\u{feff}'--extractor-args'\n\
+                 'youtube:skip=translated_subs;player_client=default,web_music'\n"
+            ),
+            "{choosing}"
         );
-        let upstream = upstream_command(&options, &[]);
-        assert_eq!(value_after(&upstream, "--extractor-args"), args);
+        assert!(
+            choosing.ends_with("'--password'\n'pass word'\n"),
+            "{choosing}"
+        );
+    }
+
+    #[test]
+    fn without_arguments_no_config_file_is_written() {
+        let dir = tempfile::tempdir().unwrap();
         let none = Ytdlp {
             extractor_args: BTreeMap::new(),
             ..Ytdlp::default()
         };
-        places.options = &none;
-        let cmd = ytdlp_command(&places, None, &[]);
-        assert!(!cmd.iter().any(|a| a == "--extractor-args"));
+        let passed = Passed::write(&none, dir.path()).unwrap();
+        assert_eq!(passed, Passed::default());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        let cmd = ending(vec!["yt-dlp".into()], &passed, "u");
+        assert_eq!(cmd, ["yt-dlp", "--", "u"]);
+    }
+
+    #[test]
+    fn an_argument_is_quoted_as_yt_dlp_splits_it_back() {
+        let quoted = config(&[
+            "it's a \"name\"".into(),
+            String::new(),
+            "#not a comment $HOME \\n\nnext line ☂".into(),
+        ]);
+        assert_eq!(
+            String::from_utf8(quoted).unwrap(),
+            "\u{feff}'it'\"'\"'s a \"name\"'\n''\n'#not a comment $HOME \\n\nnext line ☂'\n"
+        );
     }
 
     #[test]
