@@ -2789,7 +2789,7 @@ fn hooks_run_for_each_file_written_and_once_a_run_changed_anything() {
     )
     .unwrap();
     let text = String::from_utf8(out).unwrap();
-    assert!(fake.ran("Artist/Record/02 Song.flac"), "{text}");
+    assert!(fake.ran("./Artist/Record/02 Song.flac"), "{text}");
     assert!(
         fake.calls().iter().any(|c| c == &["mpc", "update", "1"]),
         "{:?}",
