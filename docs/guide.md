@@ -87,8 +87,7 @@ muman's still; one whose size and time are as written but whose bytes
 are not, as a tagger set to keep files' times leaves it, is changed
 too, found as the file is about to be written over or removed. Each
 file is written under a temporary name and renamed into place, so a
-player never sees half a track. Library paths in messages use `/` on
-every system.
+player never sees half a track. Library paths in messages use `/` on every system.
 
 ## The song list
 
@@ -129,10 +128,9 @@ for LRCLIB lyrics, `musicbrainz:<id>` for a MusicBrainz recording,
 
 A torrent's file is named by the torrent's hash, its v1 hash where it
 has one, else its v2 hash, and the file's path inside the torrent
-without the torrent's own folder, as
-`torrent:<hash>/CD1/01 Paper Comets.flac`; a torrent of one file names
-it by its name. The hash names every byte of the torrent, so its files
-never change.
+without the torrent's own folder, as `torrent:<hash>/CD1/01 Paper Comets.flac`;
+a torrent of one file names it by its name. The hash names every byte
+of the torrent, so its files never change.
 
 A fetched source's site is the domain it came from and its ID the one
 yt-dlp gives it there, as `youtube.com:vid00000001` or
@@ -195,9 +193,11 @@ MP4 chapters, as `CHAPTER000` and `CHAPTER000NAME` comments in FLAC, Ogg
 and Opus, and as `CTOC` and `CHAP` frames in MP3; WavPack holds none. A
 source of one chapter has none to keep.
 
-The file also holds the settings tables of
-[configuration](configuration.md), `[clean.*]` ([cleaning](library.md#cleaning)),
-and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.
+The file also holds the settings of [configuration](configuration.md),
+`[clean.*]` ([cleaning](library.md#cleaning)) and the `[providers.*]`,
+`[[trigger]]` and `[[hook]]` tables below. Some run programs or send
+requests as you, which muman asks you to [trust](configuration.md#commands-servers-and-secrets)
+first: read a song list you are given as you would a script.
 muman edits it in place: comments, order and keys it does not know
 survive every write, and two runs at once keep each other's songs. A
 key that does not parse, a file two songs list, or a pin to a source the

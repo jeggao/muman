@@ -184,16 +184,13 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 | `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
 | `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
 
-`--offline`, or `MUMAN_OFFLINE=1`, makes a run look nothing up and
-fetch nothing, and refuses URLs. Any `[[trigger]]` in the song list
-replaces all of them. A
-`[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
-once), `recheck` (how long a lookup that found nothing waits, as
-`"30 days"`),
-`per_run` (the most one run makes, `0` for no limit), for `lrclib`,
-`musicbrainz`, `acoustid` and `coverart`, `url`, another server, such as
-a mirror, and for `acoustid`, `key`, the application key it is asked
-with, muman's own unless you set one:
+Any `[[trigger]]` in the song list replaces all of them, and `--offline`
+makes no lookup. A `[providers.<name>]` table sets `enabled`,
+`concurrency` (lookups at once), `recheck` (how long a lookup that found
+nothing waits, as `"30 days"`), `per_run` (the most one run makes, `0`
+for no limit), for `lrclib`, `musicbrainz`, `acoustid` and `coverart`,
+`url`, another server, such as a mirror, and for `acoustid`, `key`, the
+application key it is asked with, muman's own unless you set one:
 
 ```toml
 [[trigger]]
@@ -399,6 +396,9 @@ make, or an empty one, and what the zip would hold is written into it,
 for a card or a player to read as it is; a folder holding anything is
 refused, so nothing in it is written over.
 
+The zip's `songs.toml` keeps the song list's commands, which whoever runs
+muman on it is [asked to trust](configuration.md#commands-servers-and-secrets).
+
 The library's settings may be changed for the export alone: any setting
 of `[library]`, `[audio]` and `[loudness]` with `--set table.key=value`,
 and the commonest with `--codec`, `--template` and `--lyrics`. The
@@ -425,7 +425,8 @@ library itself is never changed.
 
 ## Hooks
 
-A `[[hook]]` runs a command as the library changes:
+A `[[hook]]` runs a command as you as the library changes, once you have
+[trusted it](configuration.md#commands-servers-and-secrets):
 
 ```toml
 [[hook]]

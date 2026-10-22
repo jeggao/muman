@@ -18,6 +18,7 @@ muman is configured in two places, split by what a setting is about:
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path`. Named anew, each file found at its place there as muman wrote it, the library moved or copied, stays muman's, and the rest is written there; the files in the folder before are left alone, muman's again only as far as they are as written when you go back to it |
 | `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookups, no fetching, URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows how far it has got: `auto`, `plain`, `json` or `none`; see the [guide](guide.md#how-muman-works) |
+| `--trust` | `MUMAN_TRUST` | Trust the commands and servers the song list sets, as it sets them now, without asking: see [commands, servers and secrets](#commands-servers-and-secrets) |
 | | `MUMAN_FFMPEG` | The ffmpeg to run, over `[tools.ffmpeg] command` |
 | | `MUMAN_FFPROBE` | The ffprobe to run, over `[tools.ffprobe] command` |
 | | `MUMAN_YT_DLP` | The yt-dlp to run, over `[tools.yt-dlp] command`; may be a whole command, such as `python -m yt_dlp` |
@@ -144,6 +145,38 @@ A setting that changes what a song file holds, such as a bitrate, a
 codec, a measure's weight or where lyrics go, makes the next `sync`
 write the songs it affects again. A setting that changes only where a song lands, such as the
 template, moves the existing files instead of encoding them again.
+
+### Commands, servers and secrets
+
+Some settings run programs or send requests as you:
+
+| Setting | Runs or reaches |
+|---|---|
+| `[[hook]]` `run` | Its command, as the library changes ([hooks](library.md#hooks)) |
+| `[tools.*] command` | A program in place of ffmpeg, ffprobe, yt-dlp or aria2c; `info` runs each for its version |
+| `[ytdlp] args`, `extractor_args` | Whatever yt-dlp's options run or load, as `--exec`, `--netrc-cmd` or `--plugin-dirs`, and the headers and logins it sends |
+| `[torrent] args` | Whatever aria2c's options run, as `--on-download-complete` |
+| `[providers.*] url`, `key` | The server a provider's lookups go to, and AcoustID's key sent with them |
+| `[sites.*]` `fetch` | The address a source is fetched again from |
+
+The song list holds them so that it renders one library alike on every
+machine, so a song list you are given, or one in a zip `muman export`
+wrote, runs its commands as you; its songs name addresses too, which a
+sync fetches from. Read one as you would a script before you run muman
+on it.
+
+muman runs none of them until you trust them. It keeps what you
+trusted in `state.json`, by each setting's value, not its spelling or
+comments. When a command could run a program, a hook or a request and
+the song list holds one you have not trusted as it is now, muman first
+lists every such setting, marking the new and the changed, and asks
+once whether to trust them; a no runs nothing. Without a terminal it
+stops with exit code 5, unless `--trust` or `MUMAN_TRUST` is given;
+`-y` trusts nothing. A setting at its default needs no trust, so a new
+home's list never asks; one taken out needs none either, and is asked
+about again when put back, by hand or by `undo`. `list`, `duplicates`,
+`purge`, `completions`, `check` without `--decode` or `--upstream`,
+and an export that encodes nothing run none of them and never ask.
 
 ## Codecs
 
