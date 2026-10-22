@@ -1025,12 +1025,16 @@ pub fn moved_manual(
 /// Files below `dir`, at most `depth` folders down, without hidden ones
 /// and without downloads not yet finished.
 pub(crate) fn walk(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
-    files_below(dir, depth, |name| {
-        let unfinished = [".part", ".crdownload", ".tmp", ".ytdl"]
-            .iter()
-            .any(|s| name.ends_with(s));
-        !name.starts_with('.') && !unfinished
-    })
+    files_below(dir, depth, visible)
+}
+
+/// Whether a walk reads the file or folder named `name`: one not hidden
+/// and no download yet unfinished.
+pub(crate) fn visible(name: &str) -> bool {
+    let unfinished = [".part", ".crdownload", ".tmp", ".ytdl"]
+        .iter()
+        .any(|s| name.ends_with(s));
+    !name.starts_with('.') && !unfinished
 }
 
 /// Files below `dir`, at most `depth` folders down, in path order, each
@@ -1040,7 +1044,10 @@ pub(crate) fn walk(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
 /// A linked file or folder is taken as what it links to, except a link
 /// to a folder it is inside, which would hold the same files again
 /// without end; a link that leads nowhere, to nothing or round to
-/// itself, is passed over, as a file deleted during the walk is.
+/// itself, is passed over, as a file deleted during the walk is. It
+/// walks muman's own folders, whose links the user made; a folder given
+/// to `add` is walked by [`crate::given::Folder::walk`], which follows a
+/// link only to a place inside it.
 pub(crate) fn files_below(
     dir: &Path,
     depth: usize,

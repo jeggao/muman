@@ -85,6 +85,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A `state.json` or a run's record naming a path outside its folder
   is refused**, naming the file, rather than have a sync or `undo`
   remove, move or copy a file through `..` or, on Windows, a drive.
+- **`add` copies nothing a link leads to outside the folder given.** A
+  link inside a folder given to `add`, or beside a file given, to a file
+  or a folder outside it, as a `Song.lrc` linked to a key in your home,
+  is left out and named rather than copied into the sources and written
+  into the library; one leading inside the folder is followed. `add
+  --from` takes up a torrent's files alike. A file or folder named on
+  the command line is still followed wherever it leads.
 
 ## [0.7.0] - 2026-10-21
 

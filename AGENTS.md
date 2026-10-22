@@ -67,6 +67,7 @@ src/
   plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
+  given.rs          folders given to `add`: walked and copied, links followed inside
   similar.rs        names and texts compared in any script
   picture.rs        perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags

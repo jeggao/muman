@@ -524,6 +524,22 @@ impl Drop for Kill {
     }
 }
 
+/// A link at `at` to `to`, a folder's link if `to` is a folder; `false`
+/// where the system refuses one, as Windows does outside developer mode.
+pub fn link(to: &Path, at: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(to, at);
+    #[cfg(windows)]
+    let made = if to.is_dir() {
+        std::os::windows::fs::symlink_dir(to, at)
+    } else {
+        std::os::windows::fs::symlink_file(to, at)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let made: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    made.is_ok()
+}
+
 /// Stop the run at the `at`th change of a file under `root`, before it is
 /// made, as a kill would: a panic of [`Killed`], which no message is
 /// printed for. `usize::MAX` stops at none, to count them.
