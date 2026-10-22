@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **A torrent fetched beside yt-dlp no longer loses its folder.** A
+  sync clearing yt-dlp's stale partial downloads removed the empty
+  `partial/torrent` folder while aria2c's fetch made a folder in it, so
+  a torrent fetched in the same sync could fail with no such file.
+
 ### Security
 
 - **A file is never followed to the network by ffmpeg.** ffmpeg and
