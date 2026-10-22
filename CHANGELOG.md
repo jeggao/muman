@@ -22,6 +22,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   them and asks whether to trust them; without a terminal it exits with
   5 and runs nothing. Answer once on a terminal, or give a script or a
   scheduled `muman sync` `--trust` once. `-y` trusts nothing.
+- **A hook that hands a shell a script with a placeholder in it is
+  refused.** In `run = ["sh", "-c", "tag {path}"]` a title holding
+  `$(...)` ran as a command; the same goes for bash, zsh, dash, ksh,
+  fish, PowerShell's `-Command` and `cmd /c`. The song list is refused
+  until the script reads the value from the environment instead:
+  `run = ["sh", "-c", "tag \"$MUMAN_PATH\""]`, or `$env:MUMAN_PATH` in
+  PowerShell. A placeholder after a shell's script, as `$1`, stays.
+- **`{rel}` and `MUMAN_REL` begin with `./`,** so a library path
+  beginning with `-` is never read as an option. A hook that joins
+  `{rel}` to a folder of its own still works; one that compares it with
+  a path as written before drops the `./` first.
 
 ### Fixed
 

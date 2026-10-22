@@ -440,13 +440,13 @@ run = ["mpc", "update"]
 
 | Event | Runs | Values |
 |---|---|---|
-| `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`), `library` |
+| `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`, led by `./`), `library` |
 | `changed` | Once, after a run that wrote, moved or removed any file, an undo's files put back counting as written | `library`, `written`, `moved`, `removed` (counts) |
 
 Each value reaches the command as a `{name}` placeholder in its words
 and as a `MUMAN_<NAME>` environment variable, such as `MUMAN_PATH`.
-`run` is an argument list, run without a shell. A Windows batch file
-(`.bat`, `.cmd`) gets the variables only, since cmd.exe could run a
-title passed as an argument; a batch hook with placeholders is skipped
-with a warning. A hook's output is shown prefixed `hook:`, and a hook
-that fails is warned of but fails nothing. `status` runs no hooks.
+`run` is an argument list, run without a shell; a script it hands a
+shell (`sh -c`, `pwsh -Command`, `cmd /c`) reads `"$MUMAN_PATH"`, as a
+placeholder in it, where a title could run, is refused. A batch file
+(`.bat`, `.cmd`) gets the variables only. A hook's output shows as
+`hook:`; one that fails is warned of but fails nothing. `status` runs none.
