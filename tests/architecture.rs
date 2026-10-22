@@ -116,6 +116,11 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         1,
         "files copied in by `add`, and a download taken up",
     ),
+    (
+        "add.rs",
+        1,
+        "a file fetched before, removed again when its info JSON cannot be cleared",
+    ),
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",

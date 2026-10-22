@@ -145,13 +145,15 @@ impl Fetcher<'_> {
         let mut arrived = Vec::new();
         for mut f in fetched.drain(..) {
             if let Err(e) = download::scrub(runner, &f.path, self.temp) {
-                crate::ui::warning(
+                ok = false;
+                crate::ui::error(
                     out,
                     &format!(
-                        "{} keeps the cookies and headers it was fetched with: {e:#}",
-                        f.path.display()
+                        "{}: not kept, its info JSON not cleared of what the fetch sent: {e:#}",
+                        f.key
                     ),
                 )?;
+                continue;
             }
             match crate::store::place(self.store, &f.key, &f.path) {
                 Ok(path) => {

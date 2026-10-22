@@ -6,12 +6,20 @@
 //! field alone, never the file, whose title, IDs and page say which
 //! source it is.
 //!
-//! As yt-dlp writes it, it also holds what each request of the fetch
-//! sent: the cookies, a login among them when `[ytdlp] args` passes
-//! `--cookies` or `--cookies-from-browser`, and the HTTP headers, at the
-//! top and again in each format and thumbnail. A source keeps none of
-//! them ([`without_sent`]), so a home backed up or a source handed on
-//! carries no login; muman reads none of them.
+//! As yt-dlp writes it, it also holds much muman never reads, some of it
+//! the user's: what each request of the fetch sent, the cookies, a login
+//! among them when `[ytdlp] args` passes `--cookies` or
+//! `--cookies-from-browser`, and the HTTP headers, at the top and again
+//! in each format and thumbnail; and the address of every format,
+//! fragment, thumbnail and subtitle, which a site may sign for the
+//! address that asked, as YouTube's name its IP address and carry a PO
+//! token. A source keeps only what muman reads ([`only_read`]): the
+//! fields [`VideoInfo`], [`Format`] and [`SubtitleFormat`] read, as their
+//! own `Deserialize` names them, so a field read later is kept with no
+//! list to change, and [`TAG_FIELDS`]. Each is kept as it is, so the
+//! tags' digest does not change. What a source still holds of the user's
+//! is what they gave: the page, and the address given to `add`, which
+//! muman reads to name and fetch the source again.
 
 use std::collections::BTreeMap;
 
@@ -156,35 +164,96 @@ pub fn tags_digest(json: &[u8]) -> Option<String> {
     Some(crate::facts::digest(&serde_json::to_vec(&read).ok()?))
 }
 
-/// The fields of an info JSON, at any depth, holding what a request
-/// sent.
-const SENT: [&str; 2] = ["cookies", "http_headers"];
-
-/// `json` without the fields holding what a request sent, `cookies` and
-/// `http_headers` at any depth, or `None` when it holds none or does not
-/// read.
+/// `json` with only the fields muman reads, or `None` when it holds
+/// nothing else or does not read: of the whole, the fields [`VideoInfo`]
+/// reads and [`TAG_FIELDS`]; of each format, those [`Format`] reads; of
+/// each subtitle or caption, those [`SubtitleFormat`] reads. A list item
+/// or table of another type, which reads as nothing, becomes `null`,
+/// which reads as nothing alike.
 #[must_use]
-pub fn without_sent(json: &[u8]) -> Option<Vec<u8>> {
-    let mut value: serde_json::Value = serde_json::from_slice(json).ok()?;
-    if !drop_sent(&mut value) {
+pub fn only_read(json: &[u8]) -> Option<Vec<u8>> {
+    use serde_json::Value;
+    let mut value: Value = serde_json::from_slice(json).ok()?;
+    let before = value.clone();
+    let Value::Object(top) = &mut value else {
         return None;
+    };
+    let read = fields::<VideoInfo>();
+    top.retain(|field, _| read.contains(&field.as_str()) || TAG_FIELDS.contains(&field.as_str()));
+    if let Some(formats) = top.get_mut("formats") {
+        keep_in_each(formats, fields::<Format>());
     }
-    serde_json::to_vec(&value).ok()
+    for captions in ["subtitles", "automatic_captions"] {
+        match top.get_mut(captions) {
+            Some(Value::Object(languages)) => {
+                for formats in languages.values_mut() {
+                    keep_in_each(formats, fields::<SubtitleFormat>());
+                }
+            }
+            Some(other) => *other = Value::Null,
+            None => {}
+        }
+    }
+    (value != before)
+        .then(|| serde_json::to_vec(&value).ok())
+        .flatten()
 }
 
-/// Drop the fields of [`SENT`] from `value` and all it holds; whether
-/// any was there.
-fn drop_sent(value: &mut serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(fields) => {
-            let mut dropped = false;
-            for key in SENT {
-                dropped |= fields.remove(key).is_some();
-            }
-            fields.values_mut().fold(dropped, |d, v| drop_sent(v) | d)
+/// Of each object in the list `items`, the fields of `read` alone; any
+/// other item, or `items` that is no list, `null`.
+fn keep_in_each(items: &mut serde_json::Value, read: &[&str]) {
+    let serde_json::Value::Array(items) = items else {
+        *items = serde_json::Value::Null;
+        return;
+    };
+    for item in items {
+        match item {
+            serde_json::Value::Object(fields) => fields.retain(|f, _| read.contains(&f.as_str())),
+            other => *other = serde_json::Value::Null,
         }
-        serde_json::Value::Array(items) => items.iter_mut().fold(false, |d, v| drop_sent(v) | d),
-        _ => false,
+    }
+}
+
+/// The fields `T`'s derived `Deserialize` reads, as it names them to
+/// serde: a struct is asked of its deserializer with its field names
+/// before any value, so one that stops there reads them off. A field
+/// added to `T` is kept by [`only_read`] with no list to change.
+fn fields<'de, T: Deserialize<'de>>() -> Fields {
+    let names = std::cell::Cell::new(&[][..]);
+    let _ = T::deserialize(FieldNames(&names));
+    names.get()
+}
+
+/// A deserializer that notes the field names of the struct asked of it,
+/// and gives nothing.
+struct FieldNames<'a>(&'a std::cell::Cell<Fields>);
+
+/// A struct's field names, as serde is given them.
+type Fields = &'static [&'static str];
+
+impl<'de> Deserializer<'de> for FieldNames<'_> {
+    type Error = serde::de::value::Error;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+        Err(serde::de::Error::custom(
+            "only a struct's field names are read",
+        ))
+    }
+
+    fn deserialize_struct<V: serde::de::Visitor<'de>>(
+        self,
+        _: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        self.0.set(fields);
+        self.deserialize_any(visitor)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes
+        byte_buf option unit unit_struct newtype_struct seq tuple tuple_struct map
+        enum identifier ignored_any
     }
 }
 
@@ -324,29 +393,78 @@ mod tests {
     }
 
     #[test]
-    fn what_a_request_sent_is_dropped_and_nothing_read_is() {
+    fn only_what_muman_reads_is_kept_and_reads_the_same() {
         let fetched = r#"{"id": "vid00000001", "title": "Lantern Weather", "epoch": 1,
+            "extractor_key": "Youtube", "track_number": "3", "artists": ["Marlo Venn", null],
+            "duration": 241.5, "format_id": "251", "release_year": 2024,
             "cookies": "sess=TOKEN-0001; Domain=.video.test",
             "http_headers": {"User-Agent": "Agent/1", "Authorization": "TOKEN-0002"},
+            "url": "https://media.video.test/v?ip=203.0.113.7&pot=TOKEN-0003",
+            "manifest_url": "https://media.video.test/m?ip=203.0.113.7",
+            "webpage_url": "https://video.test/v/vid00000001",
             "muman_original_url": "https://video.test/v/vid00000001",
-            "formats": [{"format_id": "251", "filesize": 100, "acodec": "opus",
-                "cookies": "sess=TOKEN-0001", "http_headers": {"Referer": "https://video.test/"}}],
-            "thumbnails": [{"url": "https://video.test/t.jpg", "http_headers": {"Cookie": "TOKEN-0003"}}]}"#;
-        let kept = without_sent(fetched.as_bytes()).unwrap();
+            "requested_downloads": [{"filepath": "/home/marlo/partial/vid00000001.webm"}],
+            "formats": [{"format_id": "251", "filesize": 100, "acodec": "opus", "vcodec": "none",
+                "url": "https://media.video.test/251?ip=203.0.113.7&pot=TOKEN-0004",
+                "fragment_base_url": "https://media.video.test/f?ip=203.0.113.7",
+                "fragments": [{"url": "https://media.video.test/f/1?ip=203.0.113.7"}],
+                "cookies": "sess=TOKEN-0001", "http_headers": {"Referer": "https://video.test/"}},
+                "not a format"],
+            "subtitles": {"en": [{"ext": "vtt", "name": "English",
+                "url": "https://video.test/sub?ip=203.0.113.7&pot=TOKEN-0005"}]},
+            "automatic_captions": {"ja": [{"url": "https://video.test/cap?ip=203.0.113.7"}]},
+            "thumbnails": [{"url": "https://video.test/t.jpg", "http_headers": {"Cookie": "TOKEN-0006"}}]}"#;
+        let kept = only_read(fetched.as_bytes()).unwrap();
         let text = String::from_utf8(kept.clone()).unwrap();
-        for sent in ["TOKEN-", "cookies", "http_headers", "User-Agent"] {
+        for sent in [
+            "TOKEN-",
+            "203.0.113.7",
+            "cookies",
+            "http_headers",
+            "/home/marlo",
+            "epoch",
+        ] {
             assert!(!text.contains(sent), "{sent} in {text}");
         }
         assert_eq!(tags_digest(&kept), tags_digest(fetched.as_bytes()));
-        let i = parse(&kept).unwrap();
-        assert_eq!(i.title.as_deref(), Some("Lantern Weather"));
         assert_eq!(
-            i.muman_original_url.as_deref(),
-            Some("https://video.test/v/vid00000001")
+            format!("{:?}", parse(&kept).unwrap()),
+            format!("{:?}", parse(fetched.as_bytes()).unwrap()),
+            "read the same"
         );
-        assert_eq!(i.formats[0].filesize, Some(100));
-        assert_eq!(without_sent(&kept), None, "nothing left to drop");
-        assert_eq!(without_sent(b"not json"), None);
+        let i = parse(&kept).unwrap();
+        assert_eq!(i.subtitle_names("en"), ["English"]);
+        assert!(i.knows_subtitles());
+        assert_eq!(i.audio_format().and_then(|f| f.filesize), Some(100));
+        assert_eq!(only_read(&kept), None, "nothing left to drop");
+        assert_eq!(only_read(b"not json"), None);
+        let odd = r#"{"id": "a", "subtitles": ["https://video.test/sub?pot=TOKEN-0007"]}"#;
+        let kept = only_read(odd.as_bytes()).unwrap();
+        assert!(!String::from_utf8_lossy(&kept).contains("TOKEN"));
+        assert_eq!(
+            format!("{:?}", parse(&kept).unwrap()),
+            format!("{:?}", parse(odd.as_bytes()).unwrap())
+        );
+    }
+
+    #[test]
+    fn the_fields_kept_are_those_each_struct_reads() {
+        let read = fields::<VideoInfo>();
+        for field in [
+            "muman_original_url",
+            "formats",
+            "subtitles",
+            "format_id",
+            "duration",
+        ] {
+            assert!(read.contains(&field), "{field}");
+        }
+        assert!(TAG_FIELDS.iter().all(|f| read.contains(f)));
+        assert_eq!(
+            fields::<Format>(),
+            ["format_id", "filesize", "acodec", "vcodec"]
+        );
+        assert_eq!(fields::<SubtitleFormat>(), ["name"]);
     }
 
     #[test]

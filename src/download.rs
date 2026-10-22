@@ -39,13 +39,16 @@
 //! key's place ([`crate::store::place`]).
 //!
 //! The info JSON yt-dlp embeds holds the cookies and headers its
-//! requests sent ([`crate::info`]), and no yt-dlp option leaves them out
-//! of the formats it lists, which muman reads. So each finished file is
-//! [`scrub`]bed before it is placed: its info JSON dumped, those fields
+//! requests sent and the signed addresses of what it fetched
+//! ([`crate::info`]), and no yt-dlp option leaves them out of the formats
+//! it lists, which muman reads. So each finished file is [`scrub`]bed
+//! before it is placed: its info JSON dumped, all but what muman reads
 //! dropped, and the file remuxed once with the JSON put back in its
 //! place. A remux keeps every stream's packets, pictures and chapters, so
 //! nothing a source is measured or known by changes. A file whose JSON
-//! holds none of them, or none at all, is left as it is.
+//! holds nothing else, or none at all, is left as it is. A file that
+//! cannot be scrubbed is not placed: its fetch fails, as one yt-dlp did
+//! not finish does.
 //!
 //! yt-dlp remuxes a single-file download into `<id>.mkv` at that name,
 //! with no temporary one, and deletes what it remuxed only once ffmpeg
@@ -388,9 +391,9 @@ struct Streams {
     streams: Vec<Stream>,
 }
 
-/// Drop what the fetch's requests sent from the info JSON embedded in
-/// the Matroska file at `path`, its scratch in `scratch`; whether the
-/// file was written again.
+/// Keep only what muman reads of the info JSON embedded in the Matroska
+/// file at `path`, its scratch in `scratch`; whether the file was
+/// written again.
 ///
 /// ffmpeg reads a JPEG or PNG attachment as a picture stream, which a
 /// copy would write back as a video track, so each is dumped by its
@@ -436,7 +439,7 @@ pub fn scrub<R: Runner>(runner: &R, path: &Path, scratch: &Path) -> Result<bool>
     dump.splice(at..at, packets.collect::<Vec<OsString>>());
     runner.run(&dump)?;
     let read = std::fs::read(&json).with_context(|| format!("reading {}", json.display()))?;
-    let Some(kept) = info::without_sent(&read) else {
+    let Some(kept) = info::only_read(&read) else {
         return Ok(false);
     };
     std::fs::write(&json, kept).with_context(|| format!("writing {}", json.display()))?;

@@ -191,6 +191,15 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
             ),
         )?;
     }
+    if records.off > 0 {
+        ui::info(
+            out,
+            &format!(
+                "Not fetching {} missing record(s) whose provider is off",
+                records.off
+            ),
+        )?;
+    }
     for (why, n) in &records.put_off {
         ui::warning(
             out,
