@@ -163,6 +163,7 @@ Every flag is in the [command reference](docs/cli.md).
   lookups, queries and editing, status, export, hooks.
 - [Configuration](docs/configuration.md): folders, programs, the
   settings in `songs.toml`, the path template and safe names.
+- [Audio](docs/audio.md): codecs, encoding and loudness.
 - [Command reference](docs/cli.md): every command and flag.
 - [Changelog](CHANGELOG.md).
 
