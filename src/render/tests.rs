@@ -482,7 +482,10 @@ fn lyrics_not_claimed_are_neither_written_over_nor_removed() {
         assert!(format!("{e:#}").contains("not muman's"), "{e:#}");
         assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
         assert!(!f.dir.path().join("lib/A/Record/Song.opus").exists());
-        assert!(leftover_parts(&f.dir.path().join("lib/A/Record")).is_empty());
+        assert_eq!(
+            leftover_parts(&f.dir.path().join("lib/A/Record")),
+            Vec::<PathBuf>::new()
+        );
     }
 }
 
