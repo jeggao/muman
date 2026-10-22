@@ -758,10 +758,14 @@ fn mimetype_of(path: &Path) -> String {
 }
 
 fn measure_image(pgm: &Path) -> (Option<ImageQuality>, Option<Look>) {
-    let Some(bytes) = std::fs::read(pgm).ok() else {
+    const HEADER: u64 = 64;
+    let small = std::fs::metadata(pgm).is_ok_and(|m| m.len() <= quality::MOST_PIXELS + HEADER);
+    let Some(bytes) = small.then(|| std::fs::read(pgm).ok()).flatten() else {
         return (None, None);
     };
-    let Some((w, h, pixels)) = ffmpeg::read_pgm(&bytes) else {
+    let Some((w, h, pixels)) = ffmpeg::read_pgm(&bytes)
+        .filter(|(w, h, _)| u64::from(*w) * u64::from(*h) <= quality::MOST_PIXELS)
+    else {
         return (None, None);
     };
     let quality = quality::image(pixels, w, h);

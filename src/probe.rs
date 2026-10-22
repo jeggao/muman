@@ -280,12 +280,11 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
         "-show_streams",
         "-show_format",
         "-show_chapters",
-        "--",
     ]
     .into_iter()
     .map(OsString::from)
     .collect();
-    cmd.push(path.as_os_str().to_os_string());
+    cmd.extend(crate::ffmpeg::Input::from(path).args());
     cmd
 }
 

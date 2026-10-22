@@ -3301,6 +3301,25 @@ fn stale_partial_downloads_go_from_every_folder_and_fresh_ones_stay() {
 }
 
 #[test]
+fn a_stale_clear_leaves_the_folder_it_keeps_apart_even_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let partial = dir.path().join("partial");
+    let apart = partial.join(crate::source::TORRENT);
+    std::fs::create_dir_all(&apart).unwrap();
+    std::fs::create_dir_all(partial.join("Empty")).unwrap();
+    sync::clear_stale(
+        &partial,
+        std::time::Duration::from_secs(14 * 24 * 3600),
+        Some(&apart),
+    );
+    assert!(
+        apart.is_dir(),
+        "a torrent fetched beside it makes its folder in there"
+    );
+    assert!(!partial.join("Empty").exists());
+}
+
+#[test]
 fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
     let s = Setup::new();
     for name in ["a", "b", "c"] {

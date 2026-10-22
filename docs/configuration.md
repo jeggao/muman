@@ -50,8 +50,10 @@ version_check = false`, as for a fork numbered its own way, neither an
 old version nor one that does not print stops a run. ffmpeg and
 ffprobe are needed by every command that reads audio; yt-dlp only by a
 run that fetches, so a library made only from your own files never needs
-it. `muman info` prints the folders in use and each program's version
-and path.
+it. ffmpeg and ffprobe read a file only as one of the audio, picture and
+subtitle formats muman takes, whatever its name, so a playlist named
+`.flac` is refused rather than fetched. `muman info` prints the folders
+in use and each program's version and path.
 
 ## Settings in the song list
 
