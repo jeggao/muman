@@ -1,6 +1,7 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, and where audio is mixed. Each rule names the one
+//! named, which loop fits songs into a size, where audio is mixed and
+//! where ffmpeg is given a file to read. Each rule names the one
 //! place a thing is done; code that does it anywhere else fails here
 //! until the rule, and the reason beside it, is changed on purpose.
 //!
@@ -314,6 +315,24 @@ fn samples_are_changed_only_as_a_plan_s_chain_says() {
         wrong.is_empty(),
         "render a gain or dynamics filter in `codec::Codec::encoder_args`, from the plan's \
          chain, so a song's samples change only as its plan says:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
+fn ffmpeg_reads_a_file_only_as_its_input_says() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file != "ffmpeg.rs" {
+            for line in lines_with(&text, &["\"-i\""]) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "give ffmpeg and ffprobe a file by `ffmpeg::Input::args`, which says what it may be \
+         read as, so a manifest or an address named as a song is never fetched:\n{}",
         wrong.join("\n")
     );
 }

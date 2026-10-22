@@ -14,6 +14,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `partial/torrent` folder while aria2c's fetch made a folder in it, so
   a torrent fetched in the same sync could fail with no such file.
 
+### Security
+
+- **A file is never followed to the network by ffmpeg.** ffmpeg and
+  ffprobe pick how to read a file by what it holds, not its name, so a
+  song file, cover or torrent's file holding a streaming playlist, as a
+  DASH manifest, made them fetch every address it listed, `--offline`
+  or not, and one holding a concat script opened the files it named.
+  Each file is now read only as one of the audio, picture and subtitle
+  formats muman takes; any other is refused before it is read further.
+- **A path is never read as an address.** A file given to `add` by a
+  path relative to the current folder, as `http:host?x.flac` or
+  `concat:a|b`, reached ffmpeg as an address to fetch or join; every
+  path is now made absolute first.
+- **A picture's name is never read as a pattern of other files.** A
+  cover named as `cover%d.jpg` was read as the numbered pictures beside
+  it, as `cover1.jpg`; it is now refused.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added
