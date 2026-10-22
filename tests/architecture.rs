@@ -1,9 +1,11 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, where audio is mixed, and
-//! where text is written to a terminal. Each rule names the one place a
-//! thing is done; code that does it anywhere else fails here until the
-//! rule, and the reason beside it, is changed on purpose.
+//! named, which loop fits songs into a size, where audio is mixed,
+//! where ffmpeg is given a file to read, where what the user gives is
+//! walked and copied, and where text is written to a terminal. Each
+//! rule names the one
+//! place a thing is done; code that does it anywhere else fails here
+//! until the rule, and the reason beside it, is changed on purpose.
 //!
 //! Only code that ships is read: a file's inline `mod tests` and the
 //! `tests.rs` and `testing.rs` files are left out.
@@ -73,13 +75,15 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "library.rs",
-        5,
-        "the ledger: every move and removal in the library, recorded first",
+        7,
+        "the ledger: every move and removal in the library, recorded first, \
+         and a song's staged files put in place over only what it proved muman's",
     ),
     (
         "render.rs",
-        7,
-        "a song's new files, written beside and renamed into a path the ledger kept",
+        6,
+        "a song's new files staged beside their paths, whatever was at a staged \
+         name removed first, and those staged files removed when the song fails",
     ),
     (
         "history.rs",
@@ -95,11 +99,11 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "aria2.rs",
-        5,
+        4,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
-         download taken up, or a damaged copy, copied in to be checked; \
-         the input file of a run, in scratch",
+         damaged copy copied in to be checked; the input file of a run, \
+         in scratch",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (
@@ -107,7 +111,11 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         1,
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
-    ("add.rs", 1, "files copied in by `add`"),
+    (
+        "given.rs",
+        1,
+        "files copied in by `add`, and a download taken up",
+    ),
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",
@@ -162,6 +170,42 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+}
+
+/// A library file is written over or removed only as the ledger proves
+/// it muman's: `render.rs`, which writes into the library, renames,
+/// copies and writes nothing itself but staged files it makes anew, and
+/// puts them in place through `library::put` and `library::clear`, which
+/// take an `Owned` no module but the ledger makes; a file not muman's is
+/// taken over, for a forced run, in one place.
+#[test]
+fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
+    let sources = sources();
+    let render = lines_with(
+        &sources["render.rs"],
+        &[
+            "atomic::rename(",
+            "atomic::remove(",
+            "fs::rename(",
+            "fs::copy(",
+            "fs::write(",
+            "File::create(",
+        ],
+    );
+    assert!(render.is_empty(), "render.rs:\n{}", render.join("\n"));
+    let taken: Vec<String> = sources
+        .iter()
+        .flat_map(|(file, text)| {
+            lines_with(text, &["Ledger::taken("])
+                .into_iter()
+                .map(move |l| format!("{file}: {}", l.trim()))
+        })
+        .collect();
+    assert!(
+        taken.len() == 1 && taken[0].starts_with("reconcile.rs: "),
+        "{}",
+        taken.join("\n")
+    );
 }
 
 /// The state that lives for the whole process, and why it may.
@@ -320,6 +364,24 @@ fn samples_are_changed_only_as_a_plan_s_chain_says() {
 }
 
 #[test]
+fn ffmpeg_reads_a_file_only_as_its_input_says() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file != "ffmpeg.rs" {
+            for line in lines_with(&text, &["\"-i\""]) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "give ffmpeg and ffprobe a file by `ffmpeg::Input::args`, which says what it may be \
+         read as, so a manifest or an address named as a song is never fetched:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
 fn a_plan_changes_format_with_its_renderer_version() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
@@ -340,7 +402,7 @@ fn the_reasons_name_files_that_exist() {
     for (file, ..) in MUTATIONS.iter().chain(WRITES) {
         assert!(all.contains_key(*file), "{file}");
     }
-    for (file, _) in STATICS.iter().chain(RESHAPES) {
+    for (file, _) in STATICS.iter().chain(RESHAPES).chain(WALKS).chain(COPIES) {
         assert!(all.contains_key(*file), "{file}");
     }
 }
@@ -439,6 +501,64 @@ fn a_fetched_source_is_named_in_one_place() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// Where a link is followed wherever it leads, and why. A folder given
+/// to `add` is walked by `given.rs` alone, which follows a link inside
+/// it only to a place inside it; walked anywhere else, a link a
+/// downloaded folder holds could bring a file from anywhere on the
+/// machine into the library.
+const WALKS: &[(&str, &str)] = &[
+    (
+        "given.rs",
+        "what the user gives `add`, a link followed only to a place inside it",
+    ),
+    (
+        "store.rs",
+        "muman's own folders, the sources and the library, whose links the user made",
+    ),
+];
+
+/// Where a file is copied byte for byte, through any link, and why: a
+/// file the user gives `add` is copied by `given.rs` alone, which reads
+/// a regular file at its real path, inside the folder given.
+const COPIES: &[(&str, &str)] = &[
+    (
+        "given.rs",
+        "what the user gives `add`, read only from inside the folder given",
+    ),
+    (
+        "history.rs",
+        "the library's files undo keeps, and puts back",
+    ),
+    (
+        "render.rs",
+        "a song's files, built elsewhere, into the library",
+    ),
+    ("export.rs", "the library's files into an export"),
+    (
+        "aria2.rs",
+        "the store's damaged copy, copied in to be checked",
+    ),
+];
+
+#[test]
+fn what_the_user_gives_is_walked_and_copied_in_one_place() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for (needle, allowed) in [("follow_links(true)", WALKS), ("fs::copy(", COPIES)] {
+            if allowed.iter().all(|(f, _)| *f != file) {
+                for line in lines_with(&text, &[needle]) {
+                    wrong.push(format!("{file}: {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "walk and copy what `add` is given through `given::Folder`:\n{}",
+        wrong.join("\n")
+    );
+}
+
 /// Every file that writes with `write!`, `writeln!` or `write_all` to
 /// anything but a formatter, the most it may, and why. Anywhere else a
 /// message goes through `ui`, which makes the text in it printable, so
@@ -474,7 +594,11 @@ const WRITES: &[(&str, usize, &str)] = &[
     ("store.rs", 1, "an id escaped for a file name, in a String"),
     ("atomic.rs", 1, "a whole file's bytes"),
     ("ogg.rs", 1, "an Opus header's page, in its file"),
-    ("render.rs", 1, "a song's bytes, in its file"),
+    (
+        "render.rs",
+        2,
+        "a song's bytes and its lyrics, in their files",
+    ),
 ];
 
 /// The `write!`, `writeln!` and `write_all` calls of `text` whose first

@@ -15,15 +15,27 @@
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
 //! few seconds before giving up; elsewhere they fail at once.
 //!
-//! The library's lock lives in the system's temporary folder, shared by
-//! every user and every library, so it goes as its holder lets go: the
-//! file is removed while still locked, and a run that locks it checks the
-//! path still names the file it locked, else opens and locks it again. A
-//! run that was waiting on the removed file finds its path gone or
-//! another file there, never two runs holding the lock at once. Windows
-//! deletes a file still open only once the last handle closes, refusing
-//! to open it meanwhile, which a run that locks it waits out as
-//! [`rename`] waits out a held file.
+//! The library's lock is kept out of the library, in a folder of the
+//! user's own under their cache folder ([`crate::platform::locks`]), made
+//! private on Unix. Not in the system's temporary folder, where its
+//! name, the digest of the library's path, is known to every user:
+//! another could make it first as a link, so that opening it made or
+//! emptied a file of their choosing, or hold it locked, so that every run
+//! waited forever. In a folder of the user's own neither can happen, at
+//! the cost that two users who share one library folder do not keep each
+//! other out of it; each user's runs keep out the others of their own,
+//! whichever home they run from. Not the runtime folder either, which some
+//! sessions, as `cron`'s, do not name, so two runs of one user could each
+//! take a lock of their own.
+//!
+//! The lock goes as its holder lets go, so the folder holds a file only
+//! while a run does: the file is removed while still locked, and a run
+//! that locks it checks the path still names the file it locked, else
+//! opens and locks it again. A run that was waiting on the removed file
+//! finds its path gone or another file there, never two runs holding the
+//! lock at once. Windows deletes a file still open only once the last
+//! handle closes, refusing to open it meanwhile, which a run that locks
+//! it waits out as [`rename`] waits out a held file.
 
 use std::fs::{File, TryLockError};
 use std::io::{self, Write};
@@ -169,14 +181,32 @@ impl Drop for Lock {
     }
 }
 
-/// The folder library locks are kept in: the system's temporary folder,
-/// but beside the library in tests, so each test's lock goes with its
-/// folder rather than stay behind by the thousand.
-fn library_locks(library: &Path) -> PathBuf {
-    match library.parent() {
-        Some(parent) if cfg!(test) => parent.to_path_buf(),
-        _ => std::env::temp_dir(),
+/// The folder library locks are kept in: the user's own, made private,
+/// but beside the library in tests, which read no folder of the
+/// machine's.
+fn library_locks(library: &Path) -> Result<PathBuf> {
+    if cfg!(test)
+        && let Some(parent) = library.parent()
+    {
+        return Ok(parent.to_path_buf());
     }
+    let dir = crate::platform::locks()
+        .context("this system names no folder of the user's own to keep the library's lock in")?;
+    private(&dir)?;
+    Ok(dir)
+}
+
+/// Make `dir`, and on Unix make it the user's alone, as it may have been
+/// made by an older muman or another program.
+fn private(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("making {} private", dir.display()))?;
+    }
+    Ok(())
 }
 
 impl Lock {
@@ -205,9 +235,9 @@ impl Lock {
     }
 
     /// A lock on the library folder, so two homes never write one
-    /// library at once. It is kept in the system's temporary folder, named
-    /// by the library's resolved path, to leave no file in the library,
-    /// and removed as it is let go.
+    /// library at once. It is kept in a folder of the user's own, named by
+    /// the library's resolved path, to leave no file in the library, and
+    /// removed as it is let go.
     pub fn library(library: &Path) -> Result<Self> {
         // Made first, so its path resolves alike on the first run and later.
         if !library.exists() {
@@ -216,7 +246,7 @@ impl Lock {
         }
         let resolved = dunce::canonicalize(library).unwrap_or_else(|_| library.to_path_buf());
         let name = crate::facts::digest(resolved.to_string_lossy().as_bytes());
-        let path = library_locks(&resolved).join(format!(".muman-library-{name}.lock"));
+        let path = library_locks(&resolved)?.join(format!(".muman-library-{name}.lock"));
         loop {
             let mut lock = Self::at(&path, library)?;
             let held = lock.file.try_clone().and_then(same_file::Handle::from_file);
@@ -455,6 +485,19 @@ mod tests {
             }
         });
         assert_eq!(locks(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_folder_is_the_user_s_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locks = dir.path().join("cache").join("locks");
+        private(&locks).unwrap();
+        std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o777)).unwrap();
+        private(&locks).unwrap();
+        let mode = std::fs::metadata(&locks).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[cfg(windows)]

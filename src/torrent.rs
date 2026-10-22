@@ -15,7 +15,27 @@
 //! of a torrent of several shares; a torrent of one file names it by
 //! that. A part that would leave the torrent's folder, or holds a
 //! separator, refuses the torrent: its keys would not read back as its
-//! files. Padding files (BEP 47) hold nothing and are no file of it.
+//! files. So does a part that is a plain name on one system and not on
+//! another, the same on every system so a key reads alike on each: one
+//! of dots and spaces alone, which Windows trims to nothing or to `..`,
+//! and one starting with a letter and a colon, which Windows reads as a
+//! drive, so a folder another client left is never read off it. A part
+//! holding a control character refuses it too, rather than have the
+//! character replaced: the key would no longer name the file a client
+//! wrote, and printed as it is, an escape would drive the terminal. No
+//! client writes one, and Windows keeps no file named with one. Padding
+//! files (BEP 47) hold nothing and are no file of it.
+//!
+//! A torrent's numbers are read as a hostile file may write them. Its
+//! piece length is at least a byte and at most libtorrent's largest,
+//! 2^15 − 1 blocks of 16 KiB, and a v2 one a power of two from 16 KiB, as
+//! BEP 52 has it; its files run to at most libtorrent's last offset, 256
+//! TiB, every offset summed in checked arithmetic; and a v1 torrent holds
+//! one hash for each piece its files span, as libtorrent asks. Within
+//! these, no sum of offsets and lengths overflows, and a torrent that
+//! breaks one is refused whole, as libtorrent refuses it. A piece is
+//! checked by reading it a chunk at a time, never whole, so a long piece
+//! costs time, not memory.
 //!
 //! Of a torrent's files, muman fetches its songs and what they bring
 //! ([`selected`]): each `.lrc` and picture named as a song file is, and
@@ -52,6 +72,19 @@ pub const V2_HEX: usize = 64;
 /// few folders deep, and a hostile one must not exhaust the stack.
 const MAX_DEPTH: usize = 64;
 
+/// The longest piece read: libtorrent's, 2^15 - 1 blocks of 16 KiB.
+const MAX_PIECE: u64 = ((1 << 15) - 1) * V2_MIN_PIECE;
+
+/// The shortest piece of a v2 torrent, which BEP 52 has a power of two.
+const V2_MIN_PIECE: u64 = 16 << 10;
+
+/// The most bytes a torrent's files may run to, padding counted:
+/// libtorrent's last file offset, 256 TiB.
+const MAX_TOTAL: u64 = (1 << 48) - 1;
+
+/// How much of a piece is read at once to check it.
+const CHECK_CHUNK: usize = 1 << 20;
+
 /// Whether `s` is a torrent's hash as a key writes it: v1 or v2, in
 /// lower-case hex.
 #[must_use]
@@ -80,6 +113,8 @@ pub struct Metainfo {
     pub piece_length: u64,
     /// The SHA-1 of each v1 piece, in order.
     pub pieces: Vec<[u8; 20]>,
+    /// The bytes of all its files, padding counted.
+    pub total: u64,
 }
 
 /// One file a torrent holds.
@@ -99,6 +134,7 @@ pub struct File {
 
 impl Metainfo {
     /// Read a `.torrent` file's bytes.
+    #[deny(clippy::arithmetic_side_effects)]
     pub fn read(bytes: &[u8]) -> Result<Self> {
         let (top, rest) = parse(bytes, 0).context("not a torrent: its bencoding does not read")?;
         ensure!(rest.is_empty(), "not a torrent: bytes follow its metainfo");
@@ -134,32 +170,34 @@ impl Metainfo {
             _ => Vec::new(),
         };
         let piece_length = match get(info, "piece length") {
-            Some(Value::Int(n)) => u64::try_from(*n).unwrap_or(0),
-            _ => 0,
-        };
-        let files = if v1.is_some() {
+            Some(Value::Int(n)) => u64::try_from(*n)
+                .ok()
+                .filter(|n| (1..=MAX_PIECE).contains(n)),
+            _ => None,
+        }
+        .context("not a torrent: its `piece length` is missing or out of bounds")?;
+        ensure!(
+            v2.is_none() || (piece_length.is_power_of_two() && piece_length >= V2_MIN_PIECE),
+            "not a torrent: a v2 piece length of {piece_length}, no power of two from 16 KiB"
+        );
+        let (files, total) = if v1.is_some() {
             v1_list(info, &name, &roots)?
         } else {
-            let mut offset = 0;
-            roots
-                .into_iter()
-                .enumerate()
-                .map(|(i, (path, length, root))| {
-                    let file = File {
-                        path,
-                        length,
-                        root,
-                        index: i + 1,
-                        offset,
-                    };
-                    offset += length.div_ceil(piece_length.max(1)) * piece_length;
-                    file
-                })
-                .collect()
+            v2_list(roots, piece_length)?
         };
         let pieces = match get(info, "pieces") {
-            Some(Value::Bytes(b)) => b.as_chunks::<20>().0.to_vec(),
-            _ => Vec::new(),
+            Some(Value::Bytes(b)) => {
+                let (pieces, rest) = b.as_chunks::<20>();
+                let want = total.div_ceil(piece_length);
+                ensure!(
+                    rest.is_empty() && u64::try_from(pieces.len()).ok() == Some(want),
+                    "not a torrent: it holds {} bytes of piece hashes for {want} pieces",
+                    b.len()
+                );
+                pieces.to_vec()
+            }
+            Some(_) => bail!("not a torrent: its `pieces` is no string"),
+            None => Vec::new(),
         };
         let private = matches!(get(info, "private"), Some(Value::Int(1)));
         let mut trackers = Vec::new();
@@ -183,6 +221,7 @@ impl Metainfo {
             trackers,
             piece_length,
             pieces,
+            total,
         })
     }
 
@@ -279,53 +318,97 @@ fn wanted(meta: &Metainfo) -> Vec<&File> {
 /// short, and the hash of each the one the metainfo holds. Padding
 /// between files reads as the zeros it holds.
 #[must_use]
+#[deny(clippy::arithmetic_side_effects)]
 pub fn checks(meta: &Metainfo, file: &File, at: impl Fn(&File) -> PathBuf) -> bool {
-    use std::io::{Read as _, Seek as _, SeekFrom};
     let piece = meta.piece_length;
-    if piece == 0 || file.length == 0 {
+    let Some((first, last)) = spanned(file, piece) else {
         return piece > 0;
-    }
-    let total = meta
-        .files
-        .iter()
-        .map(|f| f.offset + f.length)
-        .max()
-        .unwrap_or(0);
-    let (first, last) = (file.offset / piece, (file.offset + file.length - 1) / piece);
+    };
     (first..=last).all(|n| {
         let Some(want) = usize::try_from(n).ok().and_then(|n| meta.pieces.get(n)) else {
             return false;
         };
-        let start = n * piece;
-        let mut bytes = vec![0; usize::try_from((start + piece).min(total) - start).unwrap_or(0)];
-        let read = meta.files.iter().filter(|f| f.length > 0).all(|f| {
-            let (from, to) = (
-                start.max(f.offset),
-                (start + piece).min(f.offset + f.length),
-            );
-            if from >= to {
-                return true;
-            }
-            let Ok(mut opened) = std::fs::File::open(at(f)) else {
-                return false;
-            };
-            let into = &mut bytes[(from - start) as usize..(to - start) as usize];
-            opened.seek(SeekFrom::Start(from - f.offset)).is_ok() && opened.read_exact(into).is_ok()
-        });
-        read && Sha1::digest(&bytes).as_slice() == want
+        let Some(start) = n.checked_mul(piece) else {
+            return false;
+        };
+        let end = start.saturating_add(piece).min(meta.total);
+        piece_hash(meta, start, end, &at).is_some_and(|h| h.as_slice() == want)
     })
+}
+
+/// The first and last piece `file` spans; none for an empty file, or a
+/// piece of no length.
+#[deny(clippy::arithmetic_side_effects)]
+fn spanned(file: &File, piece: u64) -> Option<(u64, u64)> {
+    let last_byte = file.offset.checked_add(file.length.checked_sub(1)?)?;
+    Some((
+        file.offset.checked_div(piece)?,
+        last_byte.checked_div(piece)?,
+    ))
+}
+
+/// The SHA-1 of the bytes from `start` to `end` of `meta`'s files, read
+/// a chunk at a time; none where one of them is missing or short.
+#[deny(clippy::arithmetic_side_effects)]
+fn piece_hash(
+    meta: &Metainfo,
+    start: u64,
+    end: u64,
+    at: &impl Fn(&File) -> PathBuf,
+) -> Option<sha1::digest::Output<Sha1>> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let size = end.checked_sub(start)?;
+    let mut chunk = vec![0; usize::try_from(size).map_or(CHECK_CHUNK, |s| s.min(CHECK_CHUNK))];
+    let mut hash = Sha1::new();
+    let mut done = start;
+    for f in meta.files.iter().filter(|f| f.length > 0) {
+        let (from, to) = (
+            start.max(f.offset),
+            end.min(f.offset.checked_add(f.length)?),
+        );
+        if from >= to {
+            continue;
+        }
+        zeros(&mut hash, &mut chunk, from.saturating_sub(done));
+        let mut opened = std::fs::File::open(at(f)).ok()?;
+        opened
+            .seek(SeekFrom::Start(from.checked_sub(f.offset)?))
+            .ok()?;
+        let mut left = to.checked_sub(from)?;
+        while left > 0 {
+            let take = usize::try_from(left).map_or(chunk.len(), |n| n.min(chunk.len()));
+            opened.read_exact(&mut chunk[..take]).ok()?;
+            hash.update(&chunk[..take]);
+            left = left.saturating_sub(u64::try_from(take).ok()?);
+        }
+        done = to;
+    }
+    zeros(&mut hash, &mut chunk, end.saturating_sub(done));
+    Some(hash.finalize())
+}
+
+/// `n` zeros, as padding holds, hashed into `hash` through `chunk`.
+#[deny(clippy::arithmetic_side_effects)]
+fn zeros(hash: &mut Sha1, chunk: &mut [u8], mut n: u64) {
+    chunk.fill(0);
+    while n > 0 && !chunk.is_empty() {
+        let take = usize::try_from(n).map_or(chunk.len(), |n| n.min(chunk.len()));
+        hash.update(&chunk[..take]);
+        n = n.saturating_sub(u64::try_from(take).unwrap_or(u64::MAX));
+    }
 }
 
 /// The files of `meta` besides `files` that share a piece with one of
 /// them: a piece is checked whole, so taking up a file already on disk
 /// takes these up too.
 #[must_use]
+#[deny(clippy::arithmetic_side_effects)]
 pub fn sharing<'m>(meta: &'m Metainfo, files: &[&File]) -> Vec<&'m File> {
     let piece = meta.piece_length.max(1);
     let pieces = |f: &File| {
-        let first = f.offset / piece;
-        let last = (f.offset + f.length.max(1) - 1) / piece;
-        first..=last
+        let last_byte = f.offset.saturating_add(f.length.saturating_sub(1));
+        let piece_of = |byte: u64| byte.checked_div(piece).unwrap_or_default();
+        piece_of(f.offset)..=piece_of(last_byte)
     };
     meta.files
         .iter()
@@ -341,14 +424,15 @@ pub fn sharing<'m>(meta: &'m Metainfo, files: &[&File]) -> Vec<&'m File> {
 }
 
 /// The files of a v1 or hybrid torrent's `files` or `length`, a hybrid's
-/// with the `pieces root` its file tree gives each. Both name a file by
-/// its path below the torrent's folder, or a torrent of one file by its
-/// name.
+/// with the `pieces root` its file tree gives each, and the bytes they
+/// run to. Both name a file by its path below the torrent's folder, or a
+/// torrent of one file by its name.
+#[deny(clippy::arithmetic_side_effects)]
 fn v1_list(
     info: &[(&[u8], Value<'_>)],
     name: &str,
     roots: &[(PathBuf, u64, Option<String>)],
-) -> Result<Vec<File>> {
+) -> Result<(Vec<File>, u64)> {
     let root_of = |path: &Path| {
         roots
             .iter()
@@ -359,14 +443,18 @@ fn v1_list(
         let Some(Value::Int(length)) = get(info, "length") else {
             bail!("not a torrent: its `info` has neither `files` nor `length`");
         };
-        let length = u64::try_from(*length).context("a file of negative length")?;
-        return Ok(vec![File {
+        let length = end_of(
+            0,
+            u64::try_from(*length).context("a file of negative length")?,
+        )?;
+        let file = File {
             root: root_of(Path::new(name)),
             path: PathBuf::from(name),
             length,
             index: 1,
             offset: 0,
-        }]);
+        };
+        return Ok((vec![file], length));
     };
     let mut files = Vec::new();
     let mut offset = 0;
@@ -384,7 +472,7 @@ fn v1_list(
         };
         let length = u64::try_from(*length).context("a file of negative length")?;
         let start = offset;
-        offset += length;
+        offset = end_of(offset, length)?;
         if padding {
             continue;
         }
@@ -403,11 +491,41 @@ fn v1_list(
             root: root_of(&path),
             path,
             length,
-            index: i + 1,
+            index: i.saturating_add(1),
             offset: start,
         });
     }
-    Ok(files)
+    Ok((files, offset))
+}
+
+/// The files of a v2 torrent's file tree, each starting a piece, and the
+/// bytes they run to.
+#[deny(clippy::arithmetic_side_effects)]
+fn v2_list(roots: Vec<(PathBuf, u64, Option<String>)>, piece: u64) -> Result<(Vec<File>, u64)> {
+    let mut files = Vec::new();
+    let (mut offset, mut total) = (0, 0);
+    for (i, (path, length, root)) in roots.into_iter().enumerate() {
+        total = end_of(offset, length)?;
+        files.push(File {
+            path,
+            length,
+            root,
+            index: i.saturating_add(1),
+            offset,
+        });
+        let padded = length.div_ceil(piece).checked_mul(piece);
+        offset = offset.saturating_add(padded.unwrap_or(u64::MAX));
+    }
+    Ok((files, total))
+}
+
+/// Where a file `length` long starting at `offset` ends, refused past
+/// [`MAX_TOTAL`].
+fn end_of(offset: u64, length: u64) -> Result<u64> {
+    offset
+        .checked_add(length)
+        .filter(|end| *end <= MAX_TOTAL)
+        .context("not a torrent: its files run past 256 TiB")
 }
 
 /// The files of a v2 file tree in its order, by path from the tree's
@@ -448,12 +566,21 @@ fn tree_files(
 }
 
 /// One part of a path a torrent names, in NFC, refused where it is no
-/// plain name of a file or folder.
+/// plain name of a file or folder on every system, as the module says.
 fn part(text: &str) -> Result<String> {
     let nfc: String = text.nfc().collect();
     ensure!(
-        !nfc.is_empty() && nfc != "." && nfc != ".." && !nfc.contains(['/', '\\', '\0']),
+        !nfc.trim_end_matches(['.', ' ']).is_empty() && !nfc.contains(['/', '\\']),
         "is no plain name of a file"
+    );
+    ensure!(
+        !nfc.chars().any(char::is_control),
+        "holds a control character"
+    );
+    let mut start = nfc.chars();
+    ensure!(
+        !(start.next().is_some_and(|c| c.is_ascii_alphabetic()) && start.next() == Some(':')),
+        "starts as a Windows drive does"
     );
     Ok(nfc)
 }

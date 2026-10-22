@@ -9,6 +9,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A torrent fetched beside yt-dlp no longer loses its folder.** A
+  sync clearing yt-dlp's stale partial downloads removed the empty
+  `partial/torrent` folder while aria2c's fetch made a folder in it, so
+  a torrent fetched in the same sync could fail with no such file.
+- **A `.lrc` of your own beside a song muman wrote is left alone.** A
+  sync that wrote the song again, as a change of `[loudness] mode`
+  makes it, deleted or wrote over that `.lrc`, and `undo` did not bring
+  it back. It keeps the song from being written again, with a warning,
+  as a file of your own at the song's path does, until `sync --force`
+  writes over or removes it, kept for `undo` first.
+- **`[library] restrict = "none"` names no file Windows cannot hold, on
+  Windows.** A device name such as `CON` or `LPT9.mp3`, and a name
+  ending in a dot or a space, were kept as they were; they get the `_`
+  and lose the dot as under `windows`.
 - **A chapter's title cannot add chapters to the song made from it.**
   A source's chapter title holding a carriage return ended its line in
   the chapter list ffmpeg reads for an MP4, so the rest of the title was
@@ -18,6 +32,72 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Security
 
+- **A file is never followed to the network by ffmpeg.** ffmpeg and
+  ffprobe pick how to read a file by what it holds, not its name, so a
+  song file, cover or torrent's file holding a streaming playlist, as a
+  DASH manifest, made them fetch every address it listed, `--offline`
+  or not, and one holding a concat script opened the files it named.
+  Each file is now read only as one of the audio, picture and subtitle
+  formats muman takes; any other is refused before it is read further.
+- **A path is never read as an address.** A file given to `add` by a
+  path relative to the current folder, as `http:host?x.flac` or
+  `concat:a|b`, reached ffmpeg as an address to fetch or join; every
+  path is now made absolute first.
+- **A picture's name is never read as a pattern of other files.** A
+  cover named as `cover%d.jpg` was read as the numbered pictures beside
+  it, as `cover1.jpg`; it is now refused.
+- **A server's `Retry-After` date far in the future no longer ends the
+  run.** A date past the year 9999 crashed the lookup step, on every
+  run after too, as nothing was recorded; it is now no date, and the
+  request is asked again as after any refusal.
+- **A lookup asked over https stays on https.** A redirect from an
+  https service to a plain http address, where the lookup would go on
+  unencrypted, fails that request. A server the song list names with
+  `http://` is followed as before.
+- **A crafted `.torrent` file is refused rather than crashing muman.**
+  A piece length past libtorrent's largest, files running past 256 TiB,
+  a v2 piece length that is no power of two from 16 KiB, or a count of
+  piece hashes that does not match the files refuse the torrent, where
+  muman could stop on an allocation of terabytes or an overflow. A
+  piece is checked a chunk at a time, so a long one no longer takes its
+  length in memory.
+- **A torrent naming a file with a control character or a drive refuses
+  it.** A name holding an escape could drive the terminal it was
+  printed to, and a name such as `C:x` reads, on Windows, a folder off
+  the one `add --from` names. A name of dots and spaces alone, which
+  Windows trims to `..` or nothing, is refused too.
+- **Lyrics full of unclosed `<` or `{` are read in time linear in their
+  length.** Lyrics from LRCLIB, a subtitle, a tag or a file of tens of
+  thousands of them took seconds to minutes, and are read as before.
+- **A picture of more than 8192 × 8192 pixels is not measured.** A
+  small PNG of one color can hold a picture of a hundred megapixels or
+  more, which took over a gigabyte of memory and nearly a minute to
+  measure; it is now no picture, as one that does not decode is.
+- **A tag file gives a name at most 64 values and a song 256 names.**
+  A file of tens of thousands of them took half a minute to read; the
+  rest are reported as skipped, with at most 64 reasons.
+- **A file muman stages beside a song in the library follows no link.**
+  The `.part` a song is written to, by muman or by ffmpeg, is made anew,
+  whatever was at its name removed first, so a link someone who may
+  write the library folder left there no longer sends the write
+  elsewhere, and a staged file that is no longer a plain file is not
+  put in place.
+- **The library's lock is kept in a folder of your own,** under your
+  cache folder and private, rather than in the system's temporary
+  folder, where another user could make it first as a link, to have
+  muman make or empty a file of their choosing, or hold it, to keep
+  every run waiting. Two users who share one library folder no longer
+  keep each other out of it.
+- **A `state.json` or a run's record naming a path outside its folder
+  is refused**, naming the file, rather than have a sync or `undo`
+  remove, move or copy a file through `..` or, on Windows, a drive.
+- **`add` copies nothing a link leads to outside the folder given.** A
+  link inside a folder given to `add`, or beside a file given, to a file
+  or a folder outside it, as a `Song.lrc` linked to a key in your home,
+  is left out and named rather than copied into the sources and written
+  into the library; one leading inside the folder is followed. `add
+  --from` takes up a torrent's files alike. A file or folder named on
+  the command line is still followed wherever it leads.
 - **Text from elsewhere cannot drive the terminal.** A video's or a
   playlist's title, a torrent's name, a line yt-dlp wrote or a
   service's error could hold escape sequences, which reached a terminal
