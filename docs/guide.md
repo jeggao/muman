@@ -288,27 +288,27 @@ as a damaged download is, only its pieces that do not check fetched.
 
 ### Manual files and sidecars
 
-`muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you
-drop it there yourself and the next `sync` lists it. A file that
-yt-dlp fetched elsewhere, named `<title> [<id>]` and holding the info
-yt-dlp embeds, goes into `sources/yt-dlp` under its key instead, given
-alone or in a folder; one of a key the store holds already joins its
-song and is not copied again. A dropped file waits until ten seconds after it arrived,
-whatever modification time a copy kept for it, so one still being
-copied is not read half written, and a listed file moved within
-the folder is followed rather than listed again. A song file brings the
-`.lrc` and the JPEG, PNG or WebP pictures named as it is, in any case,
-as `Paper Comets.flac` brings `Paper Comets.lrc` and `paper comets.jpg`,
-and its folder's `cover`, `folder`, `front` or `album` picture. A
-folder given to `add` is copied but for what is no song, lyrics or
-picture, as a booklet `.pdf`, which is left out and named. A `.lrc` or
-a picture can also be listed as a source of its own, and one given to `add` alone goes to the
-songs it belongs to ([lyrics, pictures and tags of their
-own](#lyrics-pictures-and-tags-of-their-own)). A `.lrc` reads in UTF-8 or UTF-16, or in
-an older encoding such as GBK, Shift-JIS or Windows-1252, which muman
-tells by its bytes. A folder linked into the manual folder is read as
-the folder it links to, except a link back to a folder it is inside,
-which is passed over.
+`muman add <FILE|FOLDER>` copies audio into `sources/manual`, or you drop it
+there yourself and the next `sync` lists it. A file that yt-dlp fetched
+elsewhere, named `<title> [<id>]` and holding the info yt-dlp embeds, goes into
+`sources/yt-dlp` under its key instead, given alone or in a folder; one of a key
+the store holds already joins its song and is not copied again. A dropped file
+waits until ten seconds after it arrived, whatever modification time a copy kept
+for it, so one still being copied is not read half written, and a listed file
+moved within the folder is followed rather than listed again. A song file brings
+the `.lrc` and the JPEG, PNG or WebP pictures named as it is, in any case, as
+`Paper Comets.flac` brings `Paper Comets.lrc` and `paper comets.jpg`, and its
+folder's `cover`, `folder`, `front` or `album` picture. A folder given to `add`
+is copied but for what is no song, lyrics or picture, as a booklet `.pdf`, which
+is left out and named. A `.lrc` or a picture can also be listed as a source of
+its own, and one given to `add` alone goes to the songs it belongs to ([lyrics,
+pictures and tags of their own](#lyrics-pictures-and-tags-of-their-own)). A
+`.lrc` reads in UTF-8 or UTF-16, or in an older encoding such as GBK, Shift-JIS
+or Windows-1252, which muman tells by its bytes. A link in the manual folder is
+read as what it leads to, but for one back to a folder it is inside, which is
+passed over. In a folder given to `add`, beside a file given or in the folder
+`--from` names, a link is followed only to a place inside that folder; one
+leading out, as a `Song.lrc` linked to a key of yours, is left out and named.
 
 ### A source that changes
 

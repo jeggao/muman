@@ -1,6 +1,7 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, and where audio is mixed. Each rule names the one
+//! named, which loop fits songs into a size, where audio is mixed, and
+//! where what the user gives is walked and copied. Each rule names the one
 //! place a thing is done; code that does it anywhere else fails here
 //! until the rule, and the reason beside it, is changed on purpose.
 //!
@@ -94,11 +95,11 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "aria2.rs",
-        5,
+        4,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
-         download taken up, or a damaged copy, copied in to be checked; \
-         the input file of a run, in scratch",
+         damaged copy copied in to be checked; the input file of a run, \
+         in scratch",
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (
@@ -106,7 +107,11 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         1,
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
-    ("add.rs", 1, "files copied in by `add`"),
+    (
+        "given.rs",
+        1,
+        "files copied in by `add`, and a download taken up",
+    ),
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",
@@ -339,7 +344,7 @@ fn the_reasons_name_files_that_exist() {
     for (file, ..) in MUTATIONS {
         assert!(all.contains_key(*file), "{file}");
     }
-    for (file, _) in STATICS.iter().chain(RESHAPES) {
+    for (file, _) in STATICS.iter().chain(RESHAPES).chain(WALKS).chain(COPIES) {
         assert!(all.contains_key(*file), "{file}");
     }
 }
@@ -436,4 +441,62 @@ fn a_fetched_source_is_named_in_one_place() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Where a link is followed wherever it leads, and why. A folder given
+/// to `add` is walked by `given.rs` alone, which follows a link inside
+/// it only to a place inside it; walked anywhere else, a link a
+/// downloaded folder holds could bring a file from anywhere on the
+/// machine into the library.
+const WALKS: &[(&str, &str)] = &[
+    (
+        "given.rs",
+        "what the user gives `add`, a link followed only to a place inside it",
+    ),
+    (
+        "store.rs",
+        "muman's own folders, the sources and the library, whose links the user made",
+    ),
+];
+
+/// Where a file is copied byte for byte, through any link, and why: a
+/// file the user gives `add` is copied by `given.rs` alone, which reads
+/// a regular file at its real path, inside the folder given.
+const COPIES: &[(&str, &str)] = &[
+    (
+        "given.rs",
+        "what the user gives `add`, read only from inside the folder given",
+    ),
+    (
+        "history.rs",
+        "the library's files undo keeps, and puts back",
+    ),
+    (
+        "render.rs",
+        "a song's files, built elsewhere, into the library",
+    ),
+    ("export.rs", "the library's files into an export"),
+    (
+        "aria2.rs",
+        "the store's damaged copy, copied in to be checked",
+    ),
+];
+
+#[test]
+fn what_the_user_gives_is_walked_and_copied_in_one_place() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for (needle, allowed) in [("follow_links(true)", WALKS), ("fs::copy(", COPIES)] {
+            if allowed.iter().all(|(f, _)| *f != file) {
+                for line in lines_with(&text, &[needle]) {
+                    wrong.push(format!("{file}: {}", line.trim()));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "walk and copy what `add` is given through `given::Folder`:\n{}",
+        wrong.join("\n")
+    );
 }

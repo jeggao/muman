@@ -3687,6 +3687,127 @@ fn a_path_that_is_not_there_is_told_from_an_address() {
 }
 
 #[test]
+fn a_link_in_a_folder_added_is_followed_only_to_a_place_inside_it() {
+    let s = Setup::new();
+    s.file("rips/Album/Song.flac");
+    s.file("rips/Album/art/front.jpg");
+    s.file("rips/Other/Glass Orchards.flac");
+    let secret = s.written("secret/creds", "[00:01.00]a secret");
+    let album = s.dir.path().join("rips").join("Album");
+    let linked = crate::testing::link(
+        &album.join("art").join("front.jpg"),
+        &album.join("cover.jpg"),
+    ) && crate::testing::link(Path::new(&secret), &album.join("Song.lrc"))
+        && crate::testing::link(
+            &s.dir.path().join("rips").join("Other"),
+            &album.join("extras"),
+        );
+    if !linked {
+        return;
+    }
+    let (ok, text) = s.run(&flacs(), &["add", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("links leading out of it") && text.contains("Song.lrc"),
+        "{text}"
+    );
+    assert!(text.contains("extras"), "{text}");
+    let manual = s.dir.path().join("home/sources/manual/Album");
+    assert!(manual.join("Song.flac").exists());
+    assert!(
+        manual.join("cover.jpg").exists(),
+        "a link inside is followed"
+    );
+    assert!(!manual.join("Song.lrc").exists());
+    assert!(!manual.join("extras").exists());
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("Album/Song.flac".into())]]
+    );
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert!(!s.dir.path().join("lib/Artist/Record/02 Song.lrc").exists());
+}
+
+#[test]
+fn a_file_added_by_its_link_is_followed_and_its_sidecars_bounded_by_its_folder() {
+    let s = Setup::new();
+    let real = s.file("elsewhere/Song.flac");
+    let secret = s.written("secret/creds", "[00:01.00]a secret");
+    let rips = s.dir.path().join("rips");
+    std::fs::create_dir_all(&rips).unwrap();
+    let song = rips.join("Song.flac");
+    let linked = crate::testing::link(Path::new(&real), &song)
+        && crate::testing::link(Path::new(&secret), &rips.join("Song.lrc"));
+    if !linked {
+        return;
+    }
+    let (ok, text) = s.run(&flacs(), &["add", &song.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(text.contains("links leading out of it: Song.lrc"), "{text}");
+    let manual = s.dir.path().join("home/sources/manual");
+    assert_eq!(
+        std::fs::read(manual.join("Song.flac")).unwrap(),
+        b"elsewhere/Song.flac",
+        "the path given is followed"
+    );
+    assert!(!manual.join("Song.lrc").exists());
+    assert!(!s.dir.path().join("lib/Artist/Record/02 Song.lrc").exists());
+}
+
+#[test]
+fn a_torrent_is_taken_up_through_no_link_out_of_its_folder() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac", "scan.png"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let downloads = s.dir.path().join("downloads");
+    s.written("downloads/Lantern Weather/Paper Comets.flac", "x");
+    let secret = s.written("secret/key", "y");
+    let scan = downloads.join("Lantern Weather").join("scan.png");
+    if !crate::testing::link(Path::new(&secret), &scan) {
+        return;
+    }
+    let partial = s.dir.path().join("home/partial/torrent").join(&hash);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let saw = seen.clone();
+    let fake = Fake {
+        on_stream: Some(Box::new(move |_: &[String]| {
+            saw.lock().unwrap().extend([
+                std::fs::read(partial.join("files").join("1.flac")).ok(),
+                std::fs::read(partial.join("files").join("2.png")).ok(),
+            ]);
+            true
+        })),
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "add",
+            "--no-match",
+            "--from",
+            downloads.to_str().unwrap(),
+            file.to_str().unwrap(),
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("links leading out of it") && text.contains("scan.png"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Taking up 1 file(s) of Lantern Weather"),
+        "{text}"
+    );
+    assert_eq!(*seen.lock().unwrap(), [Some(b"x".to_vec()), None]);
+}
+
+#[test]
 fn a_file_muman_does_not_read_is_not_added_and_the_rest_is() {
     let s = Setup::new();
     let notes = s.file("rips/notes.docx");
