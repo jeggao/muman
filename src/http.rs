@@ -35,6 +35,12 @@
 //! An error's body is kept only as far as `ERROR_EXCERPT`, whitespace
 //! run together: a failure is recorded and printed with it, and a
 //! server's error page runs to megabytes.
+//!
+//! An error names its request by its address without the query
+//! ([`shown`]), and the query is cut from what the transport or the
+//! server said too: AcoustID's holds the application key, a key of the
+//! user's own when `[providers.acoustid] key` sets one, and the song's
+//! whole fingerprint, and an error is printed and recorded in the state.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -69,6 +75,45 @@ impl std::fmt::Display for TransportError {
 }
 
 impl std::error::Error for TransportError {}
+
+impl TransportError {
+    /// The error of a request of `url`, the query left out of what it
+    /// says.
+    #[must_use]
+    pub fn hiding(self, url: &str) -> Self {
+        match self {
+            Self::Unreachable(e) => Self::Unreachable(without_query(url, &e)),
+            Self::Transport(e) => Self::Transport(without_query(url, &e)),
+            Self::Status {
+                code,
+                body,
+                retry_after,
+            } => Self::Status {
+                code,
+                body: without_query(url, &body),
+                retry_after,
+            },
+            Self::Timeout => Self::Timeout,
+        }
+    }
+}
+
+/// `url` without its query and fragment: what an error names a request
+/// by.
+#[must_use]
+pub fn shown(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
+/// `text` with the query of `url` left out wherever it appears.
+fn without_query(url: &str, text: &str) -> String {
+    let query = &url[shown(url).len()..];
+    if query.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(query, "")
+    }
+}
 
 pub trait HttpTransport {
     /// GET `url` and return the response body.
@@ -469,9 +514,11 @@ impl Service<'_> {
                     self.throttle.refused(refused, retry_after);
                 }
                 Err(TransportError::Unreachable(why)) => {
-                    return Err(self.stop(Stop::Unreachable(why)));
+                    return Err(self.stop(Stop::Unreachable(without_query(url, &why))));
                 }
-                Err(e) => return Err(anyhow::Error::new(e).context(url.to_string())),
+                Err(e) => {
+                    return Err(anyhow::Error::new(e.hiding(url)).context(shown(url).to_string()));
+                }
             }
         }
     }
@@ -501,7 +548,7 @@ impl Service<'_> {
         timeout: Duration,
     ) -> anyhow::Result<Option<String>> {
         self.get(url, headers, timeout)?
-            .map(|b| text(b).map_err(|e| anyhow::anyhow!("{url}: {e}")))
+            .map(|b| text(b).map_err(|e| anyhow::anyhow!("{}: {e}", shown(url))))
             .transpose()
     }
 }

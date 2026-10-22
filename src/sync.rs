@@ -61,7 +61,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     request: Request,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    crate::create(&dirs.home)?;
+    crate::atomic::private_dir(&dirs.home)?;
     manifest::start(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
     let done = (|| {
@@ -360,12 +360,14 @@ pub(crate) fn network<R: Runner, W: Write, T>(
         Some(cache) if manifest.settings.ytdlp.plugins => Some(plugins::folder(cache)?),
         _ => None,
     };
+    let passed = crate::download::Passed::write(&manifest.settings.ytdlp, temp.path())?;
     let fetcher = Fetcher {
         store: &ytdlp,
         temp: temp.path(),
         partial: &partial,
         plugins: plugins.as_deref(),
         options: &manifest.settings.ytdlp,
+        passed: &passed,
         sites: &manifest.settings.sites,
         live: job.live,
         runs: Cell::new(0),

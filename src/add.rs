@@ -62,7 +62,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     request: Request<'_>,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    crate::create(&dirs.home)?;
+    crate::atomic::private_dir(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
     let mut left_out = 0;
     let mut unread = Vec::new();

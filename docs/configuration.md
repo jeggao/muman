@@ -35,6 +35,13 @@ Neither folder may hold the other, but for a library beside `sources/`
 in the home: a command that writes refuses a library in `sources/` or a
 home in the library.
 
+The song list may hold logins and tokens, and the run history keeps its
+text, so on Linux and macOS a home muman makes is yours alone (`0700`),
+as are the history's folders and records. A home made before keeps its
+permissions: `chmod -R go= <home>` makes it yours alone. On Windows a
+new home takes its parent folder's permissions, your own under the
+default.
+
 A program not named in its variable is run as the song list's
 `[tools.*] command` names it: a name is looked for beside the muman
 executable, then on `PATH` (with `PATHEXT` on Windows, so a `.cmd`
@@ -117,6 +124,16 @@ know.
 A step's torrents are fetched by one aria2c run, eight at a time unless
 `[torrent] args` sets `--max-concurrent-downloads`, so one no peer
 seeds stalls beside the others rather than before them.
+
+Any user of the machine can see a program's command line, so `[ytdlp]
+args` and `extractor_args` reach yt-dlp in a config file of the run's
+own that only you can read. yt-dlp reads such a file before its command
+line, so where an argument sets what an option of muman's own sets,
+muman's wins: `format`, `sub_langs` and `concurrent_fragments` set three
+of those. Of `[torrent] args`, a login, password, header, proxy or tracker
+(`--header`, `--http-passwd`, `--bt-tracker` and their like) reaches
+aria2c the same way, the rest on its command line. `--verbose` names
+each program's command with these values hidden.
 
 Each `[sites."<domain>"]` table describes one site. `extractors` maps
 each of yt-dlp's extractors, lower-cased, to the prefix its IDs take in

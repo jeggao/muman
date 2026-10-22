@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 
-use muman::download::{Places, upstream_command, ytdlp_command};
+use muman::download::{Passed, Places, ending, upstream_command, ytdlp_command};
 use muman::runner::{Line, Runner, System};
 use muman::settings::Ytdlp;
 
@@ -66,12 +66,14 @@ fn yt_dlp_takes_every_option_muman_passes() {
     let (store, temp, done) = (root.join("store"), root.join("temp"), root.join("done"));
     let plugins = muman::plugins::folder(&root.join("cache")).unwrap();
     let options = Ytdlp::default();
+    let passed = Passed::write(&options, root).unwrap();
     let places = Places {
         store: &store,
         temp: &temp,
         done: &done,
         plugins: Some(&plugins),
         options: &options,
+        passed: &passed,
         batch: None,
     };
     let url = serve();
@@ -97,8 +99,30 @@ fn yt_dlp_takes_every_option_muman_passes() {
         file.display()
     );
 
-    let listing = upstream_command(&options, std::slice::from_ref(&url));
+    let listing = upstream_command(&passed, std::slice::from_ref(&url));
     let (ok, text) = lines(&runner, &listing);
     assert!(ok, "yt-dlp failed:\n{text}");
     assert!(text.contains("\"id\": \"silence\""), "{text}");
+}
+
+#[test]
+#[ignore = "needs yt-dlp"]
+fn the_song_list_s_arguments_reach_yt_dlp_from_its_config_file_as_written() {
+    let runner = System::default();
+    runner
+        .require("yt-dlp")
+        .expect("found, at or above its floor");
+    let dir = tempfile::tempdir().unwrap();
+    let written = "it's \"Marlo Venn\" # not a comment $HOME \\ ☂\non a line of its own";
+    let options = Ytdlp {
+        args: vec!["--print".into(), written.into()],
+        ..Ytdlp::default()
+    };
+    let passed = Passed::write(&options, dir.path()).unwrap();
+    let own = ["yt-dlp", "--ignore-config", "--simulate"].map(OsString::from);
+    let cmd = ending(own.into(), &passed, &serve());
+    assert!(!cmd.iter().any(|a| a.to_string_lossy().contains("Marlo")));
+    let (ok, text) = lines(&runner, &cmd);
+    assert!(ok, "yt-dlp failed:\n{text}");
+    assert_eq!(text.trim_end(), written);
 }

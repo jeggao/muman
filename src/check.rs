@@ -325,7 +325,9 @@ fn served<R: Runner, W: Write>(
     )?;
     out.flush()?;
     let urls: Vec<String> = asked.iter().map(|(_, _, u)| u.clone()).collect();
-    let cmd = crate::download::upstream_command(&manifest.settings.ytdlp, &urls);
+    let scratch = crate::atomic::Scratch::new()?;
+    let passed = crate::download::Passed::write(&manifest.settings.ytdlp, scratch.path())?;
+    let cmd = crate::download::upstream_command(&passed, &urls);
     let (mut listed, mut errors) = (Vec::new(), Vec::new());
     runner.stream(&cmd, &mut |line| match line {
         Line::Out(l) => listed.extend(
