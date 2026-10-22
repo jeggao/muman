@@ -2988,6 +2988,22 @@ fn export_writes_the_song_list_and_the_library_into_a_zip() {
 }
 
 #[test]
+fn export_redacts_the_song_list_when_asked_and_leaves_it_as_it_is() {
+    let (s, fake) = exported_home("200.0");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
+    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    assert!(s.run(&fake, &["--trust", "sync"]).0);
+    let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
+    let (ok, text) = s.run(&fake, &["export", "--redact", "-o", &zip]);
+    assert!(ok && text.contains("1 secret(s) redacted"), "{text}");
+    let exported = String::from_utf8(unzip(Path::new(&zip))["songs.toml"].clone()).unwrap();
+    let kept = std::fs::read_to_string(&songs).unwrap();
+    assert_eq!(exported, kept.replace("k0000000", "<redacted>"));
+}
+
+#[test]
 fn export_encodes_songs_lower_to_fit_and_leaves_the_library_alone() {
     let (s, fake) = exported_home("0.05");
     let whole = s.dir.path().join("whole.zip");
