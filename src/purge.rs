@@ -52,7 +52,7 @@ pub fn purge<W: Write>(
         ),
     )?;
     for file in &doomed {
-        writeln!(out, "  {}", file.display())?;
+        crate::ui::line(out, &format!("  {}", file.display()))?;
     }
     if !crate::change::confirmed(confirm, prompter, out)? {
         return Ok(false);

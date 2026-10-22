@@ -7,6 +7,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chapter's title cannot add chapters to the song made from it.**
+  A source's chapter title holding a carriage return ended its line in
+  the chapter list ffmpeg reads for an MP4, so the rest of the title was
+  read as lines of the list, and could forge a chapter. A chapter title
+  keeps no control character, a line break or a tab read as a space,
+  and a carriage return is escaped in the list as a line break is.
+
+### Security
+
+- **Text from elsewhere cannot drive the terminal.** A video's or a
+  playlist's title, a torrent's name, a line yt-dlp wrote or a
+  service's error could hold escape sequences, which reached a terminal
+  as they were: one could retitle the window, write the clipboard,
+  show a link to one address that opens another, or clear the screen
+  and say what muman did not. Every message, a status line's progress,
+  `list`'s lines and a prompt's items show such a character as `�`, the
+  rest of its sequence as text, and so too a mark that would turn the
+  rest of a line around; muman's own colours are kept.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added

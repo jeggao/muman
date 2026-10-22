@@ -1,8 +1,9 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, and where audio is mixed. Each rule names the one
-//! place a thing is done; code that does it anywhere else fails here
-//! until the rule, and the reason beside it, is changed on purpose.
+//! named, which loop fits songs into a size, where audio is mixed, and
+//! where text is written to a terminal. Each rule names the one place a
+//! thing is done; code that does it anywhere else fails here until the
+//! rule, and the reason beside it, is changed on purpose.
 //!
 //! Only code that ships is read: a file's inline `mod tests` and the
 //! `tests.rs` and `testing.rs` files are left out.
@@ -336,7 +337,7 @@ fn a_plan_changes_format_with_its_renderer_version() {
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
-    for (file, ..) in MUTATIONS {
+    for (file, ..) in MUTATIONS.iter().chain(WRITES) {
         assert!(all.contains_key(*file), "{file}");
     }
     for (file, _) in STATICS.iter().chain(RESHAPES) {
@@ -436,4 +437,86 @@ fn a_fetched_source_is_named_in_one_place() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Every file that writes with `write!`, `writeln!` or `write_all` to
+/// anything but a formatter, the most it may, and why. Anywhere else a
+/// message goes through `ui`, which makes the text in it printable, so
+/// that a title or a name from elsewhere cannot hold what a terminal acts
+/// on.
+const WRITES: &[(&str, usize, &str)] = &[
+    ("ui.rs", 9, "the messages, their text made printable"),
+    (
+        "progress.rs",
+        6,
+        "a step's line built in a String, from names made printable as given, and written \
+         to stderr; the messages the console lifts the status line for",
+    ),
+    (
+        "ytdlp_log.rs",
+        2,
+        "yt-dlp's line rewritten in place, made printable",
+    ),
+    (
+        "sync.rs",
+        1,
+        "what torrents fetched beside yt-dlp said through `ui`, held until it is done",
+    ),
+    ("cli.rs", 3, "the help's colours, in a String"),
+    ("chapters.rs", 2, "an FFMETADATA file, in a String"),
+    ("attach.rs", 3, "a song offered to pick, in a String"),
+    ("editor.rs", 1, "the file the editor opens, in a String"),
+    ("facts.rs", 1, "a hash in hex, in a String"),
+    ("held.rs", 1, "what a digest is made of, in a String"),
+    ("lrclib.rs", 1, "lyrics as an `.lrc` file, in a String"),
+    ("lyrics.rs", 1, "a timestamp, in a String"),
+    ("sites.rs", 1, "yt-dlp's download archive, in a String"),
+    ("store.rs", 1, "an id escaped for a file name, in a String"),
+    ("atomic.rs", 1, "a whole file's bytes"),
+    ("ogg.rs", 1, "an Opus header's page, in its file"),
+    ("render.rs", 1, "a song's bytes, in its file"),
+];
+
+/// The `write!`, `writeln!` and `write_all` calls of `text` whose first
+/// argument is not a formatter's `f`, comments aside.
+fn writes(text: &str) -> Vec<&str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut found = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        for name in ["write!(", "writeln!(", "write_all("] {
+            for (at, _) in line.match_indices(name) {
+                let next = lines.get(n + 1).copied().unwrap_or_default();
+                let rest = format!("{}{next}", &line[at + name.len()..]);
+                if !rest.trim_start().starts_with("f,") {
+                    found.push(line.trim());
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn text_reaches_a_terminal_only_through_ui() {
+    let allowed: BTreeMap<&str, usize> = WRITES.iter().map(|(f, n, _)| (*f, *n)).collect();
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        let found = writes(&text);
+        let most = allowed.get(file.as_str()).copied().unwrap_or(0);
+        if found.len() > most {
+            wrong.push(format!(
+                "{file}: {} where {most} may be:\n{}",
+                found.len(),
+                found.join("\n")
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "say it through `ui`, which makes its text printable:\n{}",
+        wrong.join("\n\n")
+    );
 }

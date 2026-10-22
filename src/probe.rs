@@ -136,7 +136,7 @@ impl ProbedChapter {
             .tags
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("title"))
-            .map(|(_, v)| v.trim().to_string())
+            .map(|(_, v)| title(v))
             .unwrap_or_default();
         (end_ms > start_ms).then_some(Chapter {
             start_ms,
@@ -144,6 +144,21 @@ impl ProbedChapter {
             title,
         })
     }
+}
+
+/// A chapter's title as a song keeps it: a control character, which no
+/// title means and which a chapter list a title is written into can
+/// read as its own, is dropped, a line break or a tab becoming a space.
+fn title(tag: &str) -> String {
+    let kept: String = tag
+        .chars()
+        .filter_map(|c| match c {
+            _ if !c.is_control() => Some(c),
+            _ if c.is_whitespace() => Some(' '),
+            _ => None,
+        })
+        .collect();
+    kept.trim().to_string()
 }
 
 #[derive(Deserialize, Default)]
@@ -537,6 +552,16 @@ mod tests {
             ],
             "one of no length is none"
         );
+    }
+
+    #[test]
+    fn a_chapter_title_keeps_no_control_character() {
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+            "channels": 2}],
+          "chapters": [{"start_time": "0.0", "end_time": "1.0",
+            "tags": {"title": " Harbor\r[CHAPTER]\u001b]0;X\u0007\tEnd\u0000 "}}]}"#;
+        let o = parse(json.as_bytes()).unwrap();
+        assert_eq!(o.chapters[0].title, "Harbor [CHAPTER]]0;X End");
     }
 
     #[test]

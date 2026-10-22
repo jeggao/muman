@@ -389,6 +389,63 @@ fn a_url_is_fetched_into_the_store_and_yt_dlp_is_never_shown_raw() {
     assert!(text.contains("Added:"), "{text}");
 }
 
+#[test]
+fn a_title_or_a_torrent_s_name_cannot_drive_the_terminal() {
+    let s = Setup::new();
+    let said = |fake: &Fake, args: &[&str]| {
+        let mut out = anstream::AutoStream::new(Vec::new(), anstream::ColorChoice::Always);
+        run_with(
+            &s.job(args),
+            fake,
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        String::from_utf8(out.into_inner()).unwrap()
+    };
+    let fetched = Fake {
+        lines: vec![
+            "[download] \x1b]0;X\x07Paper Comets".into(),
+            "ERROR: [youtube] aaaaaaaaaaa: \x1b]0;X\x07Gone".into(),
+        ],
+        on_stream: Some(Box::new(|_: &[String]| false)),
+        ..Fake::default()
+    };
+    let url = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
+    let ytdlp = said(&fetched, &["add", "--no-match", url]);
+    let file = s.dir.path().join("a.torrent");
+    let bytes = crate::testing::metainfo("Lantern\x1b]0;X\x07Weather", &["a.flac"]);
+    std::fs::write(&file, bytes).unwrap();
+    let seeded = Fake {
+        lines: vec!["Download Results:".into()],
+        on_stream: Some(Box::new(|_: &[String]| false)),
+        ..Fake::default()
+    };
+    let aria2c = said(&seeded, &["add", "--no-match", file.to_str().unwrap()]);
+    for text in [&ytdlp, &aria2c] {
+        assert!(
+            !text.contains("\x1b]") && !text.contains('\x07'),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("\x1b[31m"),
+            "muman's own colours stay: {text:?}"
+        );
+    }
+    let ytdlp = ui::plain(&ytdlp);
+    assert!(
+        ytdlp.contains("yt-dlp: [download] �]0;X�Paper Comets"),
+        "{ytdlp}"
+    );
+    assert!(
+        ytdlp.contains("yt-dlp: [youtube] aaaaaaaaaaa: �]0;X�Gone"),
+        "{ytdlp}"
+    );
+    assert!(ui::plain(&aria2c).contains("Weather"), "{aria2c:?}");
+}
+
 /// The downloads of the input file an aria2c run of `args` reads, each
 /// its address, then its options as its command line would take them.
 fn input_of(args: &[String]) -> Vec<Vec<String>> {
