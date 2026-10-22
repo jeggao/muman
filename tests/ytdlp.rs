@@ -1,6 +1,8 @@
 //! yt-dlp handed the command line muman builds, against a file served
 //! from this process, so an option yt-dlp renames or drops fails here
-//! and not on a user's first fetch. Ignored by default, since it needs
+//! and not on a user's first fetch; the file it fetched is then scrubbed
+//! of its info JSON's addresses and headers, as yt-dlp writes them.
+//! Ignored by default, since it needs
 //! yt-dlp and ffmpeg; CI runs it on every platform with
 //! `cargo test --test ytdlp -- --ignored`. Nothing leaves the machine:
 //! the one address fetched is the loopback server, and the generic
@@ -96,6 +98,18 @@ fn yt_dlp_takes_every_option_muman_passes() {
         "{}",
         file.display()
     );
+    let scratch = root.join("scratch");
+    assert!(muman::download::scrub(&runner, file, &scratch).expect("scrubbed"));
+    let kept = std::fs::read(scratch.join("scrub").join("info.json")).unwrap();
+    let text = String::from_utf8_lossy(&kept);
+    assert!(
+        !text.contains("\"url\"") && !text.contains("http_headers"),
+        "{text}"
+    );
+    let info = muman::info::parse(&kept).unwrap();
+    assert_eq!(info.id.as_deref(), Some("silence"));
+    assert_eq!(info.formats.len(), 1, "{text}");
+    assert!(info.audio_format().is_some(), "{text}");
 
     let listing = upstream_command(&options, std::slice::from_ref(&url));
     let (ok, text) = lines(&runner, &listing);

@@ -364,6 +364,8 @@ impl Throttles {
 struct Clients<'a> {
     lrclib: lrclib::Client<'a>,
     musicbrainz: musicbrainz::Client<'a>,
+    /// Whether `[providers.musicbrainz]` is on.
+    musicbrainz_on: bool,
     acoustid: acoustid::Client<'a>,
     coverart: &'a str,
     transport: &'a (dyn HttpTransport + Sync),
@@ -374,13 +376,13 @@ struct Clients<'a> {
 
 impl Clients<'_> {
     /// The Cover Art Archive, searching MusicBrainz for what a song's
-    /// tags do not name.
+    /// tags do not name while it is on.
     fn coverart(&self) -> coverart::Client<'_> {
         coverart::Client {
             base: self.coverart,
             transport: self.transport,
             throttle: self.throttle,
-            musicbrainz: &self.musicbrainz,
+            musicbrainz: self.musicbrainz_on.then_some(&self.musicbrainz),
         }
     }
 }
@@ -628,6 +630,7 @@ pub fn run<R: Runner, W: Write>(
                 throttle: &throttles.musicbrainz,
                 releases: &throttles.releases,
             },
+            musicbrainz_on: manifest.providers.on(Provider::MusicBrainz),
             acoustid: acoustid::Client {
                 base: &bases.3,
                 key: &key,
@@ -943,12 +946,14 @@ pub struct Refetched {
     pub put_off: BTreeMap<String, usize>,
     /// How many records were not asked for, as their fetch failed lately.
     pub waiting: usize,
+    /// How many records were not asked for, as their provider is off.
+    pub off: usize,
 }
 
 /// Fetch again every listed LRCLIB, MusicBrainz or Cover Art Archive
 /// record gone from the store, by its ID, asking each at the pace of
 /// `throttles`; one whose fetch `failures` records waits as a fetch
-/// does, unless `retry`.
+/// does, unless `retry`, and one whose provider is off is not asked for.
 pub fn refetch(
     dirs: &Dirs,
     manifest: &Manifest,
@@ -978,7 +983,10 @@ pub fn refetch(
         base: &coverart_base,
         transport: http,
         throttle: &throttles.coverart,
-        musicbrainz: &musicbrainz,
+        musicbrainz: manifest
+            .providers
+            .on(Provider::MusicBrainz)
+            .then_some(&musicbrainz),
     };
     let state = State::load(&dirs.home)?;
     // The album the record named when kept, so it is fetched on the
@@ -997,6 +1005,10 @@ pub fn refetch(
             continue;
         };
         if store.has(&key) || ![LRCLIB, MUSICBRAINZ, COVERART].contains(&site.as_str()) {
+            continue;
+        }
+        if Provider::of(&key, None).is_some_and(|p| !manifest.providers.on(p)) {
+            refetched.off += 1;
             continue;
         }
         let failed_lately = failures

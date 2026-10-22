@@ -145,6 +145,25 @@ codec, a measure's weight or where lyrics go, makes the next `sync`
 write the songs it affects again. A setting that changes only where a song lands, such as the
 template, moves the existing files instead of encoding them again.
 
+### What aria2c shares
+
+While aria2c fetches a torrent it is a peer like any other: each peer
+and tracker it reaches sees your IP address, and it uploads the pieces
+it has to peers as it downloads, at no speed limit. muman leaves
+aria2c's own defaults for how it finds peers: it asks the IPv4 DHT
+(`--enable-dht`) and other peers (`--enable-peer-exchange`) for more
+peers than the trackers name, which tells the DHT's nodes and those
+peers what you fetch, though it asks the DHT nothing for a torrent
+marked private; and it listens for peers on a TCP port and for the DHT
+on a UDP port, each between 6881 and 6999 (`--listen-port`,
+`--dht-listen-port`). Local peer discovery and the IPv6 DHT are off.
+Once a torrent's files are fetched, it seeds them for `[torrent]
+seed_time` at most, or until it has sent as much as it fetched.
+`[torrent] args` changes any of these:
+`["--enable-dht=false", "--enable-peer-exchange=false"]` keeps to a
+torrent's trackers, and `["--max-overall-upload-limit=50K"]` caps the
+upload.
+
 ## Codecs
 
 `[audio] codecs` lists the codecs a song's audio is copied in, packet

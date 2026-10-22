@@ -104,9 +104,12 @@ pub(crate) fn run<R: Runner, W: Write>(
         }
         if !urls.is_empty() {
             let urls: Vec<String> = urls.into_iter().cloned().collect();
-            let (fine, additions) = network(job, runner, out, |acquire| {
-                acquire.urls(&urls, !request.no_match)
-            })?;
+            let matching = !request.no_match
+                && Manifest::load(&dirs.home)?
+                    .providers
+                    .on(crate::provider::Provider::YouTubeMusic);
+            let (fine, additions) =
+                network(job, runner, out, |acquire| acquire.urls(&urls, matching))?;
             ok &= fine;
             proposals.extend(record(dirs, additions)?);
         }
@@ -604,13 +607,12 @@ impl<R: Runner> Originals<'_, R> {
             let scrubbed =
                 atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
             if let Err(e) = scrubbed {
-                ui::warning(
-                    out,
-                    &format!(
-                        "{} keeps the cookies and headers it was fetched with: {e:#}",
-                        to.display()
-                    ),
-                )?;
+                atomic::remove(&to).with_context(|| format!("removing {}", to.display()))?;
+                copied.retain(|c| *c != to);
+                bail!(
+                    "{}: not added, its info JSON not cleared of what its fetch sent: {e:#}",
+                    file.display()
+                );
             }
             self.brought.insert(key.clone());
         }

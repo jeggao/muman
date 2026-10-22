@@ -163,11 +163,11 @@ A song looks for sources it lacks. Each source comes from a provider:
 |---|---|---|
 | `manual` | Files you dropped in | Never looked up |
 | `youtube` | A video that is not a release | Searching YouTube for the artist and title: the first video with a person's subtitles that is the same recording, the artist's channel first |
-| `youtube-music` | A release | Searching YouTube Music's songs, as matching does |
+| `youtube-music` | A release | Searching YouTube Music's songs, as `add`'s matching does, which is off with it |
 | `lrclib` | Lyrics from an LRCLIB server | Title, first artist, album and length |
 | `musicbrainz` | Tags from a MusicBrainz server: the recording's and its release's names, numbers, dates, ISRCs and IDs, the release's type, status and medium, and its label, catalogue number and barcode from one more request a release | Title, first artist and length, preferring the song's album |
-| `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is |
-| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz; made after the song's `acoustid` and `musicbrainz` lookups due that run, so it asks for the release they found |
+| `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is; off while `musicbrainz` is, which it fetches each recording from |
+| `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz while `musicbrainz` is on; made after the song's `acoustid` and `musicbrainz` lookups due that run, so it asks for the release they found |
 
 A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
@@ -186,14 +186,14 @@ little detail to look sharp, as `info` counts). The built-in triggers:
 
 `--offline`, or `MUMAN_OFFLINE=1`, makes a run look nothing up and
 fetch nothing, and refuses URLs. Any `[[trigger]]` in the song list
-replaces all of them. A
-`[providers.<name>]` table sets `enabled`, `concurrency` (lookups at
-once), `recheck` (how long a lookup that found nothing waits, as
-`"30 days"`),
-`per_run` (the most one run makes, `0` for no limit), for `lrclib`,
-`musicbrainz`, `acoustid` and `coverart`, `url`, another server, such as
-a mirror, and for `acoustid`, `key`, the application key it is asked
-with, muman's own unless you set one:
+replaces all of them. A `[providers.<name>]` table sets `enabled`,
+`concurrency` (lookups at once), `recheck` (how long a lookup that
+found nothing waits, as `"30 days"`), `per_run` (the most one run
+makes, `0` for no limit), for `lrclib`, `musicbrainz`, `acoustid` and
+`coverart`, `url`, another server, such as a mirror, and for
+`acoustid`, `key`, the application key it is asked with, muman's own
+unless you set one. A provider not enabled is asked nothing, not even
+for a record of its gone from the store:
 
 ```toml
 [[trigger]]

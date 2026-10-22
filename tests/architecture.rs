@@ -106,7 +106,12 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
         1,
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
-    ("add.rs", 1, "files copied in by `add`"),
+    (
+        "add.rs",
+        2,
+        "files copied in by `add`, and one fetched before removed again when its info JSON \
+         cannot be cleared",
+    ),
     ("sync.rs", 2, "downloads left unfinished too long"),
     (
         "acquire.rs",

@@ -88,6 +88,14 @@
 //! given, that `add` resumes when given it again. aria2c reports each tracker it
 //! cannot reach as an error, as a torrent's dead trackers make it while
 //! others serve; these are said only when the fetch fails.
+//!
+//! How aria2c finds and serves peers is left at its defaults (`common`
+//! sets none of it): the IPv4 DHT and peer exchange on, as a torrent
+//! whose trackers are gone has no other way to its peers, listening on
+//! TCP and UDP ports between 6881 and 6999, uploading at no limit while
+//! it fetches, and seeding for `[torrent] seed_time` or to a share ratio
+//! of 1.0, whichever comes first. `[torrent] args` changes any of these;
+//! the configuration docs say what each shares.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};

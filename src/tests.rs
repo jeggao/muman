@@ -293,6 +293,32 @@ fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
 }
 
 #[test]
+fn an_original_its_info_json_cannot_be_cleared_of_is_not_added() {
+    let s = Setup::new();
+    let original = s.file("Downloads/YouTube/chan/Song [aaaaaaaaaaa].mkv");
+    let fake = Fake::default()
+        .info(
+            "aaaaaaaaaaa",
+            r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song",
+                "url": "https://media.video.test/a?ip=203.0.113.7"}"#,
+        )
+        .probe("aaaaaaaaaaa.mkv", "not what ffprobe writes");
+    let e = run_with(
+        &s.job(&["add", &original]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("not added"), "{e:#}");
+    let store = s.dir.path().join("home/sources/yt-dlp");
+    assert!(!store.join("youtube.com/aaaaaaaaaaa.mkv").exists());
+    assert!(Path::new(&original).exists(), "the file given is left");
+}
+
+#[test]
 fn an_original_whose_id_holds_a_space_goes_into_the_store_under_its_key() {
     let s = Setup::new();
     let original = s.file("Downloads/01 Lantern #2.mp3 [item-1⧸01 Lantern #2.mp3].mkv");
@@ -347,6 +373,65 @@ fn an_original_in_a_folder_goes_to_its_key_once_and_undo_takes_it_out() {
     let (ok, text) = s.run(&fake, &["undo", "-y"]);
     assert!(ok, "{text}");
     assert!(!placed.exists(), "{text}");
+}
+
+/// [`Fake`], but for yt-dlp's listing, which names one upload, and a
+/// YouTube Music search, which finds nothing and is counted.
+struct Listing(Fake, std::sync::atomic::AtomicUsize);
+
+impl Runner for Listing {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        let last = cmd.last().map(|a| a.to_string_lossy()).unwrap_or_default();
+        if last.starts_with("https://music.youtube.com/search") {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Ok(Vec::new());
+        }
+        if cmd.iter().any(|a| a == "--dump-single-json") {
+            return Ok(br#"{"_type": "video", "id": "aaaaaaaaaaa", "extractor_key": "Youtube",
+                "title": "Marlo Venn - Lantern Weather", "uploader": "Marlo Venn", "duration": 66}"#
+                .to_vec());
+        }
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn add_looks_no_track_up_on_youtube_music_while_it_is_off() {
+    let s = Setup::new();
+    let searched = |list: &str| {
+        let home = s.dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(crate::dirs::MANIFEST), list).unwrap();
+        let listing = Listing(Fake::default(), std::sync::atomic::AtomicUsize::new(0));
+        let args = ["add", "https://www.youtube.com/watch?v=aaaaaaaaaaa"];
+        let mut out = Vec::new();
+        let _ = run_with(
+            &s.job(&args),
+            &listing,
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        );
+        listing.1.into_inner()
+    };
+    assert_eq!(searched("version = 1\n"), 1);
+    assert_eq!(
+        searched("version = 1\n[providers.youtube-music]\nenabled = false\n"),
+        0
+    );
 }
 
 #[test]
@@ -2232,6 +2317,21 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     );
 
     std::fs::remove_file(s.dir.path().join("home/sources/lrclib/7.lrc")).unwrap();
+    let list = s.dir.path().join("home").join(crate::dirs::MANIFEST);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(
+        &list,
+        format!("{listed}\n[providers.lrclib]\nenabled = false\n"),
+    )
+    .unwrap();
+    let off = Server::default().answer("/api/get/7", RECORD);
+    let (_, text) = s.run_against(&off, &["sync"]);
+    assert!(off.asked.lock().unwrap().is_empty(), "{text}");
+    assert!(
+        text.contains("1 missing record(s) whose provider is off"),
+        "{text}"
+    );
+    std::fs::write(&list, listed).unwrap();
     let refetch = Server::default().answer("/api/get/7", RECORD);
     let (ok, text) = s.run_against(&refetch, &["sync"]);
     assert!(ok, "{text}");

@@ -7,6 +7,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **A provider turned off is asked nothing.** With `enabled = false`,
+  `sync` still fetched its records gone from the store again, `coverart`
+  searched MusicBrainz and `acoustid` fetched its recordings from there
+  with `musicbrainz` off, and `add` looked each video's YouTube Music
+  track up with `youtube-music` off. `acoustid` is now off while
+  `musicbrainz` is, and `coverart` then finds a cover by the IDs a
+  song's tags name alone.
+
+### Security
+
+- **A fetched source keeps only what muman reads of its info JSON.** It
+  kept the address of every format, fragment, thumbnail and subtitle,
+  which YouTube signs with your IP address and a PO token, beside the
+  cookies and headers it already dropped.
+- **A source that cannot be cleaned is not kept.** A file whose info
+  JSON could not be cleared was kept anyway, with a warning; its fetch
+  now fails, to be made again, and a file given to `add` is not added.
+
 ## [0.7.0] - 2026-10-21
 
 ### Added

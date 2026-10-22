@@ -241,9 +241,9 @@ makes a YouTube Music track's square album art its thumbnail, one gives
 each file of an archive.org item the item's creator and dates, as yt-dlp
 does a file fetched alone. A yt-dlp that cannot load them is run once
 more without them, with a warning, rather than fetch nothing. Each file
-fetched, or given to `add` as one yt-dlp fetched, keeps the info JSON
-yt-dlp embeds without the cookies and HTTP headers its requests sent,
-so a login passed in `[ytdlp] args` stays out of the store.
+fetched, or given to `add` as one yt-dlp fetched, keeps only what muman
+reads of the info JSON yt-dlp embeds, no cookie, header or signed
+address its requests used; one that cannot be cleaned so is not kept.
 
 YouTube changes what it serves every few months, and a yt-dlp behind it
 fails with a sign-in check, a format that is not available or a 403
@@ -272,10 +272,10 @@ from the file as a file of your own is, and lookups are made for it as
 for one. The torrent's metainfo is kept in the store, and its name,
 trackers and v2 hash in the song list's `[torrents."<hash>"]`; a private
 torrent's trackers are left out, since their addresses hold a key of
-your own. Peers see your IP address while it fetches. A fetch with
-nothing arriving for `[torrent] stall` fails, keeping each file whose
-pieces check; the rest waits in `partial/torrent` ([configuration](configuration.md)). A torrent of BitTorrent v2 alone,
-which aria2c cannot fetch, is refused.
+your own. Peers see your IP address and get pieces from you ([what
+aria2c shares](configuration.md#what-aria2c-shares)). A fetch idle for
+`[torrent] stall` fails, keeping each file whose pieces check, the rest
+in `partial/torrent`; a v2-only torrent, which aria2c cannot fetch, is refused.
 `--from <FOLDER>` takes up a torrent another client downloaded there:
 its files are copied in and checked piece by piece, and only what is
 missing or wrong is fetched, so a complete download needs no peer.
