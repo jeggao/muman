@@ -17,9 +17,9 @@ use crate::source::SourceKey;
 use crate::state::{State, Written};
 use crate::store::Store;
 
-use super::decide::Doing;
+use super::decide::{Doing, Intent};
 use super::plan::{PlannedSong, name_of, path_of};
-use super::prune::{Pruned, prune_plan};
+use super::prune::Pruned;
 use super::write::changes;
 
 /// Say which songs were left out for want of room, and what the library
@@ -102,45 +102,38 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
 pub(super) struct Shown<'a> {
     pub(super) manifest: &'a Manifest,
     pub(super) planned: &'a [(usize, Resolved)],
-    /// What a sync would do with each of `planned`.
-    pub(super) decided: &'a [Doing],
+    /// What a sync would do.
+    pub(super) intent: &'a Intent,
     /// Each song's file, as [`files_of`](super::decide::files_of) finds it.
     pub(super) files: &'a BTreeMap<usize, PathBuf>,
     pub(super) old: &'a BTreeMap<PathBuf, Written>,
     pub(super) state: &'a State,
-    pub(super) failed: &'a BTreeSet<SourceKey>,
     /// What a sync would fetch before it plans.
     pub(super) to_fetch: &'a BTreeSet<SourceKey>,
 }
 
-/// The state as `decided`'s moves would leave it, which pruning is judged
-/// by, saying each move.
-pub(super) fn would_move<W: Write>(
+/// Say each move `decided` makes of a song `showing` matches.
+pub(super) fn say_moves<W: Write>(
     planned: &[PlannedSong],
     decided: &[Doing],
-    old: &BTreeMap<PathBuf, Written>,
     showing: &Showing,
     out: &mut W,
-) -> Result<BTreeMap<PathBuf, Written>> {
-    let mut moved = old.clone();
+) -> Result<()> {
     for ((n, r), d) in planned.iter().zip(decided) {
         if let Doing::Move { from, .. } = d
-            && let Some(written) = moved.remove(from)
+            && showing.matches(*n)
         {
-            if showing.matches(*n) {
-                crate::ui::info(
-                    out,
-                    &format!(
-                        "Would move: {} → {}",
-                        crate::relpath::show(from),
-                        crate::relpath::show(&path_of(r))
-                    ),
-                )?;
-            }
-            moved.insert(path_of(r), written);
+            crate::ui::info(
+                out,
+                &format!(
+                    "Would move: {} → {}",
+                    crate::relpath::show(from),
+                    crate::relpath::show(&path_of(r))
+                ),
+            )?;
         }
     }
-    Ok(moved)
+    Ok(())
 }
 
 /// Which songs `status` shows.
@@ -284,18 +277,17 @@ pub(super) fn status<W: Write>(
     let Shown {
         manifest,
         planned,
-        decided,
+        intent,
         files,
         old,
         state,
-        failed,
         to_fetch,
+        ..
     } = shown;
-    let library = &dirs.library;
-    let moved = would_move(planned, decided, old, showing, out)?;
-    let mut after: BTreeMap<PathBuf, Written> = BTreeMap::new();
+    say_moves(planned, &intent.decided, showing, out)?;
+    let moved = &intent.moved;
     let mut fates: BTreeMap<Fate, usize> = BTreeMap::new();
-    for ((n, r), d) in planned.iter().zip(*decided) {
+    for ((n, r), d) in planned.iter().zip(&intent.decided) {
         let song = &manifest.songs[*n];
         let mut path = path_of(r);
         let before = moved
@@ -322,22 +314,6 @@ pub(super) fn status<W: Write>(
             )?;
             show_why(r, out)?;
         }
-        let written = match d {
-            Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } | Doing::Blocked { .. } => {
-                moved.get(&path).cloned()
-            }
-            Doing::Unowned => None,
-            _ => Some(Written {
-                sources: song.sources.clone(),
-                lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
-                plan: Some(r.plan.clone()),
-                stamp: None,
-                digest: None,
-            }),
-        };
-        if let Some(written) = written {
-            after.insert(path, written);
-        }
     }
     let planned_songs: BTreeSet<usize> = planned.iter().map(|(n, _)| *n).collect();
     let (fetched, unplanned): (Vec<usize>, Vec<usize>) = (0..manifest.songs.len())
@@ -353,17 +329,17 @@ pub(super) fn status<W: Write>(
     if showing.matched.is_some() {
         return Ok(());
     }
-    for (path, fate) in prune_plan(library, &moved, &after, failed, false) {
+    for (path, fate) in &intent.pruned {
         match fate {
             Pruned::Removed(_) => crate::ui::warning(
                 out,
-                &format!("Would remove: {}", crate::relpath::show(&path)),
+                &format!("Would remove: {}", crate::relpath::show(path)),
             )?,
             Pruned::LeftChanged => crate::ui::warning(
                 out,
                 &format!(
                     "Would leave in place, changed since muman wrote it: {}",
-                    crate::relpath::show(&path)
+                    crate::relpath::show(path)
                 ),
             )?,
             Pruned::KeptForFailed => {}

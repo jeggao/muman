@@ -1,11 +1,12 @@
 use std::fmt::Write as _;
+use std::path::PathBuf;
 
 use super::measure::out_of_space;
 use super::prune::{Pruned, prune_plan};
 use super::*;
 use crate::facts::Facts;
 use crate::resolve::Plan;
-use crate::state::Step;
+use crate::state::{Step, Written};
 use crate::testing::{Fake, words};
 
 struct Home {
@@ -878,6 +879,48 @@ fn a_move_lands_where_another_song_leaves_and_never_on_its_file() {
         "edited by a tagger",
         "{text}"
     );
+}
+
+#[test]
+fn a_dry_run_names_every_move_and_removal_its_sync_makes() {
+    let h = home();
+    let ids = ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"];
+    for id in ids {
+        h.fetched(id);
+    }
+    h.songs(&format!(
+        "{TWO}[[song]]\nsources = [\"youtube.com:ccccccccccc\"]\n"
+    ));
+    assert!(h.run(&infos(&ids), Options::default()).0);
+    // One song takes the path another leaves, and a third is dropped.
+    h.songs(&format!(
+        "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}Chan/Title bbbbbbbbbbb/Title \
+         bbbbbbbbbbb{{% else %}}moved/{{{{ title }}}}{{% endif %}}\"\n{TWO}"
+    ));
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let (_, said) = h.run(&infos(&ids), dry);
+    let (ok, done) = h.run(&infos(&ids), Options::default());
+    assert!(ok, "{done}");
+    let after = |text: &str, lead: &str| -> BTreeSet<String> {
+        text.lines()
+            .filter_map(|l| Some(l.split_once(lead)?.1.trim().to_string()))
+            .collect()
+    };
+    assert_eq!(
+        after(&said, "Would move: "),
+        after(&done, "Moved: "),
+        "{said}\n{done}"
+    );
+    assert_eq!(after(&said, "Would move: ").len(), 2, "{said}");
+    assert_eq!(
+        after(&said, "Would remove: "),
+        after(&done, "Removed: "),
+        "{said}\n{done}"
+    );
+    assert_eq!(after(&done, "Removed: ").len(), 1, "{done}");
 }
 
 #[test]
