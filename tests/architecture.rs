@@ -421,7 +421,10 @@ const NAMED: &[(&str, &str)] = &[
     ("info.rs", "the info JSON yt-dlp embedded in a file"),
     ("music.rs", "an entry a URL listed"),
     ("download.rs", "the files a fetch reports"),
-    ("reconcile.rs", "an old key renamed by the page it recorded"),
+    (
+        "reconcile/keys.rs",
+        "an old key renamed by the page it recorded",
+    ),
 ];
 
 #[test]
