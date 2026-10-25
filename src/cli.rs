@@ -45,7 +45,8 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, or a change or undo was refused
+     and was left out, a change or undo was refused, or the song list
+     sets commands or servers not trusted, with no terminal to ask on
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started";
 
@@ -121,8 +122,23 @@ pub struct Cli {
     )]
     pub offline: bool,
 
-    /// Say each yt-dlp, ffmpeg and ffprobe command as it runs, and how
-    /// close each new source came to every song it was compared with.
+    /// Trust the commands and servers the song list sets, as it sets them
+    /// now, without asking: its hooks, its programs, yt-dlp's and
+    /// aria2c's arguments, the providers' servers and keys, and the
+    /// sites' fetch addresses. A list setting any not trusted yet is
+    /// asked about on a terminal and refused without one; -y does not
+    /// trust it.
+    #[arg(
+        long,
+        global = true,
+        env = "MUMAN_TRUST",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    pub trust: bool,
+
+    /// Say each yt-dlp, aria2c, ffmpeg and ffprobe command as it runs,
+    /// logins, passwords, headers and tokens hidden, and how close each
+    /// new source came to every song it was compared with.
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
@@ -552,6 +568,13 @@ pub enum Command {
         /// Where lyrics go, as `[library] lyrics`.
         #[arg(long, value_name = "WHERE", value_parser = ["sidecar", "embedded", "both"])]
         lyrics: Option<String>,
+
+        /// Write the song list with each secret it holds replaced by
+        /// `<redacted>`: AcoustID's key, the passwords, user names and
+        /// headers in yt-dlp's and aria2c's arguments, tokens in yt-dlp's
+        /// extractor arguments, and the credentials in any address.
+        #[arg(long)]
+        redact: bool,
 
         /// A setting of `[library]`, `[audio]` or `[loudness]` for the export
         /// alone, such as `audio.mp3_bitrate=192kb/s`; repeatable, and set

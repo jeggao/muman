@@ -10,20 +10,42 @@
 //! when the name is made, so a name built from what a server answered
 //! cannot write outside its folder.
 //!
+//! What holds the song list's text, which may hold logins and tokens, is
+//! its owner's alone on Unix: a new home and the run history's folders
+//! are made `0700` ([`private_dir`]), as is a run's scratch folder, and a
+//! run's record and a config file handed to a program `0600`
+//! ([`write_private`], [`private_file`]): `ps` shows any user a program's
+//! command line, but no file in a folder of another's. A folder that
+//! exists is left as it is. Windows has no modes: a folder made takes its
+//! parent's permissions, which for the default home and the temporary
+//! folder are the user's own profile's.
+//!
 //! On Windows a file open in a player, the search indexer or a virus
 //! scanner cannot be replaced or deleted for a moment: the call fails
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
 //! few seconds before giving up; elsewhere they fail at once.
 //!
-//! The library's lock lives in the system's temporary folder, shared by
-//! every user and every library, so it goes as its holder lets go: the
-//! file is removed while still locked, and a run that locks it checks the
-//! path still names the file it locked, else opens and locks it again. A
-//! run that was waiting on the removed file finds its path gone or
-//! another file there, never two runs holding the lock at once. Windows
-//! deletes a file still open only once the last handle closes, refusing
-//! to open it meanwhile, which a run that locks it waits out as
-//! [`rename`] waits out a held file.
+//! The library's lock is kept out of the library, in a folder of the
+//! user's own under their cache folder ([`crate::platform::locks`]), made
+//! private on Unix. Not in the system's temporary folder, where its
+//! name, the digest of the library's path, is known to every user:
+//! another could make it first as a link, so that opening it made or
+//! emptied a file of their choosing, or hold it locked, so that every run
+//! waited forever. In a folder of the user's own neither can happen, at
+//! the cost that two users who share one library folder do not keep each
+//! other out of it; each user's runs keep out the others of their own,
+//! whichever home they run from. Not the runtime folder either, which some
+//! sessions, as `cron`'s, do not name, so two runs of one user could each
+//! take a lock of their own.
+//!
+//! The lock goes as its holder lets go, so the folder holds a file only
+//! while a run does: the file is removed while still locked, and a run
+//! that locks it checks the path still names the file it locked, else
+//! opens and locks it again. A run that was waiting on the removed file
+//! finds its path gone or another file there, never two runs holding the
+//! lock at once. Windows deletes a file still open only once the last
+//! handle closes, refusing to open it meanwhile, which a run that locks
+//! it waits out as [`rename`] waits out a held file.
 
 use std::fs::{File, TryLockError};
 use std::io::{self, Write};
@@ -71,6 +93,15 @@ impl Name {
 /// that is a link is written where it leads, so the link stays, and a
 /// file replaced keeps its permissions.
 pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
+    write_as(dir, name, bytes, false)
+}
+
+/// [`write()`], the file its owner's alone on Unix, whatever its mode was.
+pub fn write_private(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
+    write_as(dir, name, bytes, true)
+}
+
+fn write_as(dir: &Path, name: &Name, bytes: &[u8], private: bool) -> Result<()> {
     let name = name.as_str();
     let named = dir.join(name);
     let file = match std::fs::symlink_metadata(&named) {
@@ -89,13 +120,13 @@ pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
         // A file made anew is made as any program makes one, through the
         // umask, not private as a temporary file is.
         #[cfg(unix)]
-        if !file.exists() {
+        if !file.exists() && !private {
             use std::os::unix::fs::PermissionsExt;
             builder.permissions(std::fs::Permissions::from_mode(0o666));
         }
         let mut part = builder.tempfile_in(dir)?;
         part.write_all(bytes)?;
-        if let Ok(meta) = std::fs::metadata(&file) {
+        if !private && let Ok(meta) = std::fs::metadata(&file) {
             part.as_file().set_permissions(meta.permissions())?;
         }
         part.as_file().sync_all()?;
@@ -110,6 +141,42 @@ pub fn write(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
         Ok(())
     })()
     .with_context(|| format!("writing {}", file.display()))
+}
+
+/// Make the folder `dir`, its owner's alone on Unix, and any missing
+/// above it as any program makes one; a folder that exists is left as
+/// it is.
+pub fn private_dir(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    #[cfg(unix)]
+    let made =
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(dir);
+    #[cfg(not(unix))]
+    let made = std::fs::DirBuilder::new().create(dir);
+    match made {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        other => other.with_context(|| format!("creating {}", dir.display())),
+    }
+}
+
+/// Write `bytes` to the new file `path`, its owner's alone on Unix from
+/// the moment it is made: a secret handed to a program in a file rather
+/// than on its command line.
+pub fn private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = File::options();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// How long a file another program holds open is waited for.
@@ -169,14 +236,32 @@ impl Drop for Lock {
     }
 }
 
-/// The folder library locks are kept in: the system's temporary folder,
-/// but beside the library in tests, so each test's lock goes with its
-/// folder rather than stay behind by the thousand.
-fn library_locks(library: &Path) -> PathBuf {
-    match library.parent() {
-        Some(parent) if cfg!(test) => parent.to_path_buf(),
-        _ => std::env::temp_dir(),
+/// The folder library locks are kept in: the user's own, made private,
+/// but beside the library in tests, which read no folder of the
+/// machine's.
+fn library_locks(library: &Path) -> Result<PathBuf> {
+    if cfg!(test)
+        && let Some(parent) = library.parent()
+    {
+        return Ok(parent.to_path_buf());
     }
+    let dir = crate::platform::locks()
+        .context("this system names no folder of the user's own to keep the library's lock in")?;
+    private(&dir)?;
+    Ok(dir)
+}
+
+/// Make `dir`, and on Unix make it the user's alone, as it may have been
+/// made by an older muman or another program.
+fn private(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("making {} private", dir.display()))?;
+    }
+    Ok(())
 }
 
 impl Lock {
@@ -190,7 +275,7 @@ impl Lock {
     /// so a run's record begins where the run before it ended. Apart from
     /// [`Lock::folder`]'s, which each step takes for its reads and writes.
     pub fn runs(home: &Path) -> Result<Self> {
-        std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
+        private_dir(home)?;
         Self::at(&home.join(RUNS_LOCK_FILE), home)
     }
 
@@ -205,9 +290,9 @@ impl Lock {
     }
 
     /// A lock on the library folder, so two homes never write one
-    /// library at once. It is kept in the system's temporary folder, named
-    /// by the library's resolved path, to leave no file in the library,
-    /// and removed as it is let go.
+    /// library at once. It is kept in a folder of the user's own, named by
+    /// the library's resolved path, to leave no file in the library, and
+    /// removed as it is let go.
     pub fn library(library: &Path) -> Result<Self> {
         // Made first, so its path resolves alike on the first run and later.
         if !library.exists() {
@@ -216,7 +301,7 @@ impl Lock {
         }
         let resolved = dunce::canonicalize(library).unwrap_or_else(|_| library.to_path_buf());
         let name = crate::facts::digest(resolved.to_string_lossy().as_bytes());
-        let path = library_locks(&resolved).join(format!(".muman-library-{name}.lock"));
+        let path = library_locks(&resolved)?.join(format!(".muman-library-{name}.lock"));
         loop {
             let mut lock = Self::at(&path, library)?;
             let held = lock.file.try_clone().and_then(same_file::Handle::from_file);
@@ -295,8 +380,11 @@ impl Scratch {
     /// A scratch folder within `parent`.
     pub fn within(parent: &Path) -> Result<Self> {
         clear_scratch(parent);
-        let dir = tempfile::Builder::new()
-            .prefix(SCRATCH)
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(SCRATCH);
+        #[cfg(unix)]
+        builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        let dir = builder
             .tempdir_in(parent)
             .with_context(|| format!("creating a scratch folder in {}", parent.display()))?;
         let lock = Lock::folder(dir.path())?;
@@ -388,6 +476,41 @@ mod tests {
         assert_eq!(mode & 0o777, 0o664);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_folder_and_scratch_are_their_owner_s_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&shared).unwrap();
+        assert_eq!(mode(&shared), 0o755, "a folder that exists is left");
+        let home = shared.join("a").join("home");
+        private_dir(&home).unwrap();
+        assert_eq!(mode(&home), 0o700);
+        std::fs::write(home.join("run.json"), "{}").unwrap();
+        std::fs::set_permissions(
+            home.join("run.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        write_private(&home, &name("run.json"), b"{\"a\": 1}").unwrap();
+        assert_eq!(
+            mode(&home.join("run.json")),
+            0o600,
+            "tightened when written"
+        );
+        write_private(&home, &name("new.json"), b"{}").unwrap();
+        assert_eq!(mode(&home.join("new.json")), 0o600);
+        private_file(&home.join("args.conf"), b"'--secret'").unwrap();
+        assert_eq!(mode(&home.join("args.conf")), 0o600);
+        assert!(private_file(&home.join("args.conf"), b"again").is_err());
+        let scratch = Scratch::within(dir.path()).unwrap();
+        assert_eq!(mode(scratch.path()), 0o700);
+    }
+
     #[test]
     fn a_name_of_more_than_one_part_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -455,6 +578,19 @@ mod tests {
             }
         });
         assert_eq!(locks(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_folder_is_the_user_s_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locks = dir.path().join("cache").join("locks");
+        private(&locks).unwrap();
+        std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o777)).unwrap();
+        private(&locks).unwrap();
+        let mode = std::fs::metadata(&locks).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 
     #[cfg(windows)]

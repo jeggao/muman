@@ -12,7 +12,7 @@ use anyhow::Result;
 use crate::dirs::Dirs;
 use crate::facts::Facts;
 use crate::hooks;
-use crate::library::{Ledger, Relocation};
+use crate::library::{Ledger, Owned, Relocation};
 use crate::limit;
 use crate::manifest::{Manifest, Song};
 use crate::parallel;
@@ -25,7 +25,7 @@ use crate::state::{self, State, Written};
 use crate::store::{self, Located};
 
 use super::decide::{Doing, Intent, kept, moved_to};
-use super::owned::{edited_since_written, foreign};
+use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::prune;
 use super::{NAMED, Sub};
@@ -195,14 +195,15 @@ pub(super) fn apply<R: Runner, W: Write>(
         .collect();
     let old = state.outputs.clone();
     let due = due(planned, &doing);
-    let mut pending = before_writing(job, &due, state, ledger, out)?;
-    say_left(planned, &doing, out)?;
+    let (mut pending, claims) = before_writing(job, &due, state, ledger, force, out)?;
+    say_left(&doing, out)?;
     let mut outputs = kept(planned, &doing, job.manifest, &old);
     let wrote = render_due(
         job,
         &due,
         &old,
         &state.facts,
+        &claims,
         (pending.as_mut(), ledger),
         out,
     )?;
@@ -250,25 +251,38 @@ pub(super) struct Wrote {
     pub failed_at: Vec<PathBuf>,
 }
 
+/// The files writing each song may write over or remove, by its place in
+/// the song list, as [`claim`] finds them.
+type Claims = BTreeMap<usize, Vec<Owned>>;
+
 /// Record `due` as muman's before any is written, and no longer vouched
 /// for, returning the state so recorded; and keep, through the ledger,
-/// each file a write replaces.
+/// each file a write replaces, returning those of each song: muman's, and
+/// when `forced` the user's own, taken over.
 fn before_writing<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     due: &[(&PlannedSong, bool)],
     state: &State,
     ledger: &mut Ledger<'_>,
+    forced: bool,
     out: &mut W,
-) -> Result<Option<State>> {
+) -> Result<(Option<State>, Claims)> {
     let old = &state.outputs;
-    // Owned before written, and no longer vouched for: a crash between the
-    // two must leave neither a file no run would delete nor a rewritten
-    // one that looks changed by someone else.
+    let claims: Claims = due
+        .iter()
+        .map(|((n, r), _)| (*n, claim(ledger, old, &path_of(r), forced)))
+        .collect();
+    // Owned before written, and no longer vouched for: a crash between the two must leave
+    // neither a file no run would delete nor a rewritten one that looks changed by someone
+    // else, nor lyrics of the user's own that the song leaves alone counted muman's.
     let mut pending = (!due.is_empty()).then(|| state.clone());
     if let Some(pending) = pending.as_mut() {
         for ((n, r), _) in due {
             let path = path_of(r);
-            let lyrics = Some(path.with_extension("lrc"));
+            let lyrics = Some(path.with_extension("lrc")).filter(|l| {
+                std::fs::symlink_metadata(job.dirs.library.join(l)).is_err()
+                    || claims[n].iter().any(|o| o.path() == l)
+            });
             pending.outputs.insert(
                 path,
                 Written {
@@ -285,33 +299,18 @@ fn before_writing<R: Runner, W: Write>(
         ledger.checkpoint()?;
         pending.save(&job.dirs.home)?;
     }
-    let mut replaced = Vec::new();
-    for ((_, r), _) in due {
-        let path = path_of(r);
-        if let Some(written) = old.get(&path) {
-            replaced.extend(ledger.owned(old, &path, true));
-            if let Some(lyrics) = &written.lyrics {
-                replaced.extend(ledger.owned(old, lyrics, true));
-            }
-        }
-        // Written over only when forced, and then kept to put back.
-        replaced.extend(
-            foreign(&job.dirs.library, old, &path)
-                .iter()
-                .map(|f| Ledger::taken(f)),
-        );
-    }
+    let replaced: Vec<Owned> = claims.values().flatten().cloned().collect();
     ledger.replacing(&replaced)?;
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
     }
-    Ok(pending)
+    Ok((pending, claims))
 }
 
 /// Say which songs' files a sync leaves alone, and why.
-fn say_left<W: Write>(planned: &[PlannedSong], doing: &[Doing], out: &mut W) -> Result<()> {
+fn say_left<W: Write>(doing: &[Doing], out: &mut W) -> Result<()> {
     let mut unowned = Vec::new();
-    for ((_, r), d) in planned.iter().zip(doing) {
+    for d in doing {
         match d {
             Doing::Guard { file } => crate::ui::warning(
                 out,
@@ -320,13 +319,13 @@ fn say_left<W: Write>(planned: &[PlannedSong], doing: &[Doing], out: &mut W) -> 
                     crate::relpath::show(file)
                 ),
             )?,
-            Doing::Unowned => unowned.push(path_of(r)),
-            Doing::Blocked { file } => crate::ui::warning(
+            Doing::Unowned { by } => unowned.push(by.clone()),
+            Doing::Blocked { file, by } => crate::ui::warning(
                 out,
                 &format!(
                     "Left at {}: {} is not muman's (`sync --force` writes over it)",
                     crate::relpath::show(file),
-                    crate::relpath::show(&path_of(r))
+                    crate::relpath::show(by)
                 ),
             )?,
             _ => {}
@@ -361,6 +360,7 @@ fn render_due<R: Runner, W: Write>(
     due: &[(&PlannedSong, bool)],
     old: &BTreeMap<PathBuf, Written>,
     facts: &BTreeMap<SourceKey, Facts>,
+    claims: &Claims,
     (mut pending, ledger): (Option<&mut State>, &mut Ledger<'_>),
     out: &mut W,
 ) -> Result<Wrote> {
@@ -385,13 +385,14 @@ fn render_due<R: Runner, W: Write>(
     let writing = progress::step("Writing", Some(due.len() as u64));
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
+        let claim = &claims[n];
         if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library);
+            return render::place(folder, made, &dirs.library, claim);
         }
         if *retag {
             let path = path_of(r);
             let lyrics = old.get(&path).and_then(|w| w.lyrics.as_deref());
-            return render::retag(&dirs.library, &path, lyrics, &r.plan);
+            return render::retag(&dirs.library, &path, lyrics, &r.plan, claim);
         }
         render::render(
             *runner,
@@ -401,6 +402,7 @@ fn render_due<R: Runner, W: Write>(
                 library: &dirs.library,
                 sources: located,
                 scratch: Sub::new(scratch, "render-")?.path(),
+                claim,
             },
         )
     };

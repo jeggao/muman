@@ -29,6 +29,7 @@ use crate::Job;
 use crate::acquire::Proposal;
 use crate::cli::{Matching, TagArgs};
 use crate::dirs::Dirs;
+use crate::given::{Folder, Walked};
 use crate::history::Run;
 use crate::http::HttpTransport;
 use crate::manifest::{Edit, Manifest};
@@ -62,7 +63,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     request: Request<'_>,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    crate::create(&dirs.home)?;
+    crate::atomic::private_dir(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
     let mut left_out = 0;
     let mut unread = Vec::new();
@@ -104,9 +105,12 @@ pub(crate) fn run<R: Runner, W: Write>(
         }
         if !urls.is_empty() {
             let urls: Vec<String> = urls.into_iter().cloned().collect();
-            let (fine, additions) = network(job, runner, out, |acquire| {
-                acquire.urls(&urls, !request.no_match)
-            })?;
+            let matching = !request.no_match
+                && Manifest::load(&dirs.home)?
+                    .providers
+                    .on(crate::provider::Provider::YouTubeMusic);
+            let (fine, additions) =
+                network(job, runner, out, |acquire| acquire.urls(&urls, matching))?;
             ok &= fine;
             proposals.extend(record(dirs, additions)?);
         }
@@ -319,13 +323,14 @@ pub(crate) fn import<R: Runner, W: Write>(
         runner,
     };
     let mut brought = Vec::new();
-    let mut folders: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut folders: HashMap<PathBuf, Walked> = HashMap::new();
     for path in paths.iter().map(Path::new) {
         let name = path
             .file_name()
             .with_context(|| format!("{} names no file", path.display()))?;
         if let Some(key) = original(runner, sites, path) {
-            originals_in.bring_into(dirs, path, key, (out, copied), &mut brought)?;
+            let given = (&Folder::new(path), path);
+            originals_in.bring_into(dirs, given, key, (out, copied), &mut brought)?;
             continue;
         }
         let to = dirs.manual().join(name);
@@ -339,11 +344,13 @@ pub(crate) fn import<R: Runner, W: Write>(
         }
         let mut originals = Vec::new();
         if path.is_dir() {
-            let files = match walked.remove(path) {
-                Some(files) => files,
-                None => crate::store::walk(path, usize::MAX)?,
+            let folder = Folder::new(path);
+            let walked = match walked.remove(path) {
+                Some(walked) => walked,
+                None => folder.walk(usize::MAX)?,
             };
-            for file in &files {
+            let files = &walked.files;
+            for file in files {
                 if let Some(key) = original(runner, sites, file) {
                     originals.push((file.clone(), key));
                 }
@@ -354,16 +361,18 @@ pub(crate) fn import<R: Runner, W: Write>(
                     && audio(file)
             };
             if originals.len() < files.len() {
-                copy_tree(path, &to, &mut own, copied)?;
+                copy_tree(&folder, files, &to, &mut own, copied)?;
             }
-            say_left_out(path, &files, out)?;
+            say_left_out(path, files, out)?;
+            crate::given::say_outside(path, &walked.outside, out)?;
             for (file, key) in &originals {
-                originals_in.bring_into(dirs, file, key.clone(), (out, copied), &mut brought)?;
+                let given = (&folder, file.as_path());
+                originals_in.bring_into(dirs, given, key.clone(), (out, copied), &mut brought)?;
             }
         } else if !audio(path) {
             continue;
         } else {
-            copy_with_sidecars(path, &to, dirs, &mut folders, copied)?;
+            copy_with_sidecars(path, &to, dirs, (&mut folders, copied), out)?;
         }
         brought.push(Brought::Manual(Manual {
             path: path.to_path_buf(),
@@ -388,25 +397,37 @@ pub(crate) fn import<R: Runner, W: Write>(
 }
 
 /// Copy the song file `path` to `to` with the sidecars beside it, its
-/// folder listed once in `folders` for every file added from it.
-fn copy_with_sidecars(
+/// folder listed once in `folders` for every file added from it; a
+/// sidecar linked to outside the folder is left out and named.
+fn copy_with_sidecars<W: Write>(
     path: &Path,
     to: &Path,
     dirs: &Dirs,
-    folders: &mut HashMap<PathBuf, Vec<PathBuf>>,
-    copied: &mut Vec<PathBuf>,
+    (folders, copied): (&mut HashMap<PathBuf, Walked>, &mut Vec<PathBuf>),
+    out: &mut W,
 ) -> Result<()> {
-    copy_new(path, to, copied)?;
+    copy_new(&Folder::new(path), path, to, copied)?;
     let folder = path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let within = Folder::new(&folder);
     let listed = folders
         .entry(folder.clone())
-        .or_insert_with(|| files_in(&folder));
-    for sidecar in sidecars_among(path, listed) {
+        .or_insert_with(|| files_in(&within));
+    for sidecar in sidecars_among(path, &listed.files) {
         if let Some(n) = sidecar.file_name() {
-            copy_new(&sidecar, &dirs.manual().join(n), copied)?;
+            copy_new(&within, &sidecar, &dirs.manual().join(n), copied)?;
         }
     }
-    Ok(())
+    let all: Vec<PathBuf> = listed
+        .files
+        .iter()
+        .chain(&listed.outside)
+        .cloned()
+        .collect();
+    let outside: Vec<PathBuf> = sidecars_among(path, &all)
+        .into_iter()
+        .filter(|s| listed.outside.contains(s))
+        .collect();
+    crate::given::say_outside(&folder, &outside, out)
 }
 
 /// Whether `path` is a file muman reads no song from, its name starting
@@ -424,13 +445,13 @@ fn hidden(path: &Path) -> bool {
 /// minutes. The folders' files, as walked, and whether each song file
 /// reads as audio.
 fn probe_songs<R: Runner>(runner: &R, paths: &[&String]) -> Result<Probed> {
-    let mut walked: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut walked: HashMap<PathBuf, Walked> = HashMap::new();
     let mut media: Vec<PathBuf> = Vec::new();
     for path in paths.iter().map(Path::new) {
         if path.is_dir() {
-            let files = crate::store::walk(path, usize::MAX)?;
-            media.extend(files.iter().filter(|f| id_of(f).is_none()).cloned());
-            walked.insert(path.to_path_buf(), files);
+            let found = Folder::new(path).walk(usize::MAX)?;
+            media.extend(found.files.iter().filter(|f| id_of(f).is_none()).cloned());
+            walked.insert(path.to_path_buf(), found);
         } else if !hidden(path) && id_of(path).is_none() {
             media.push(path.to_path_buf());
         }
@@ -448,7 +469,7 @@ fn probe_songs<R: Runner>(runner: &R, paths: &[&String]) -> Result<Probed> {
 /// What [`probe_songs`] found: each folder's files, as walked, and
 /// whether each song file reads as audio.
 struct Probed {
-    walked: HashMap<PathBuf, Vec<PathBuf>>,
+    walked: HashMap<PathBuf, Walked>,
     reads: HashMap<PathBuf, bool>,
 }
 
@@ -559,14 +580,14 @@ impl<R: Runner> Originals<'_, R> {
     fn bring_into<W: Write>(
         &mut self,
         dirs: &Dirs,
-        file: &Path,
+        given: (&Folder, &Path),
         key: SourceKey,
         (out, copied): (&mut W, &mut Vec<PathBuf>),
         brought: &mut Vec<Brought>,
     ) -> Result<()> {
         brought.push(Brought::Ready(self.bring(
             dirs,
-            file,
+            given,
             key,
             (out, copied),
         )?));
@@ -574,13 +595,13 @@ impl<R: Runner> Originals<'_, R> {
     }
 
     /// `file`, an original of `key`, copied to its key's place, whether
-    /// given or in a folder given, its info JSON scrubbed as a fetch's
-    /// is; one of a key the store holds already is proposed, not copied
-    /// again.
+    /// given or in a folder given, the one `within`; its info JSON
+    /// scrubbed as a fetch's is; one of a key the store holds already is
+    /// proposed, not copied again.
     fn bring<W: Write>(
         &mut self,
         dirs: &Dirs,
-        file: &Path,
+        (within, file): (&Folder, &Path),
         key: SourceKey,
         (out, copied): (&mut W, &mut Vec<PathBuf>),
     ) -> Result<Proposal> {
@@ -596,7 +617,7 @@ impl<R: Runner> Originals<'_, R> {
             let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
             let to = store::fetched_path(&dirs.ytdlp(), &key, ext)
                 .with_context(|| format!("{key} is fetched by no site"))?;
-            copy_new(file, &to, copied)?;
+            copy_new(within, file, &to, copied)?;
             ui::info(
                 out,
                 &format!("Copied {} into sources/yt-dlp as {key}", file.display()),
@@ -604,13 +625,12 @@ impl<R: Runner> Originals<'_, R> {
             let scrubbed =
                 atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
             if let Err(e) = scrubbed {
-                ui::warning(
-                    out,
-                    &format!(
-                        "{} keeps the cookies and headers it was fetched with: {e:#}",
-                        to.display()
-                    ),
-                )?;
+                atomic::remove(&to).with_context(|| format!("removing {}", to.display()))?;
+                copied.retain(|c| *c != to);
+                bail!(
+                    "{}: not added, its info JSON not cleared of what its fetch sent: {e:#}",
+                    file.display()
+                );
             }
             self.brought.insert(key.clone());
         }
@@ -684,7 +704,7 @@ fn add_torrents<R: Runner, W: Write>(
             continue;
         }
         if let Some(from) = from {
-            let copied = crate::aria2::take_up(&places, meta, &missing, from)?;
+            let copied = crate::aria2::take_up(out, &places, meta, &missing, from)?;
             ui::info(
                 out,
                 &format!(
@@ -1028,28 +1048,18 @@ enum Brought {
     Manual(Manual),
 }
 
-/// The files in `folder`, in path order.
-fn files_in(folder: &Path) -> Vec<PathBuf> {
-    let listed = if folder.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        folder
-    };
-    let mut files: Vec<PathBuf> = std::fs::read_dir(listed)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| folder.join(e.file_name()))
-        .filter(|p| p.is_file())
-        .collect();
-    files.sort();
-    files
+/// The files in `folder`, in path order, and the links in it leading out
+/// of it; a folder that does not read holds none.
+fn files_in(folder: &Folder) -> Walked {
+    folder.walk(1).unwrap_or_default()
 }
 
 /// The `.lrc` and pictures named as a file is, beside it, in any case
-/// as the store takes them, but none named exactly as another song file.
+/// as the store takes them, but none named exactly as another song file
+/// and none linked to outside its folder.
 pub(crate) fn sidecars(path: &Path) -> Vec<PathBuf> {
-    sidecars_among(path, &files_in(path.parent().unwrap_or(Path::new(""))))
+    let folder = Folder::new(path.parent().unwrap_or(Path::new("")));
+    sidecars_among(path, &files_in(&folder).files)
 }
 
 /// [`sidecars`], among `files`, those of the file's folder listed once
@@ -1079,22 +1089,30 @@ fn sidecars_among(path: &Path, files: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn copy_new(from: &Path, to: &Path, copied: &mut Vec<PathBuf>) -> Result<()> {
+/// Copy `from`, a file of the file or folder given `within`, to `to`, a
+/// name not yet taken.
+pub(crate) fn copy_new(
+    within: &Folder,
+    from: &Path,
+    to: &Path,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
     if let Some(dir) = to.parent() {
         crate::create(dir)?;
     }
-    std::fs::copy(from, to)
-        .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+    within.copy(from, to)?;
     copied.push(to.to_path_buf());
     Ok(())
 }
 
-/// Copy the files below `from` that `keep` lets through to `to`.
+/// Copy the files of `files`, as `from` was walked, that `keep` lets
+/// through to `to`.
 pub(crate) fn copy_tree(
-    from: &Path,
+    from: &Folder,
+    files: &[PathBuf],
     to: &Path,
     keep: &mut impl FnMut(&Path) -> bool,
     copied: &mut Vec<PathBuf>,
@@ -1102,10 +1120,10 @@ pub(crate) fn copy_tree(
     if to.exists() {
         bail!("{} exists already; rename one of them first", to.display());
     }
-    for file in crate::store::walk(from, usize::MAX)? {
-        if keep(&file) {
-            let rel = file.strip_prefix(from).unwrap_or(&file);
-            copy_new(&file, &to.join(rel), copied)?;
+    for file in files {
+        if keep(file) {
+            let rel = file.strip_prefix(from.path()).unwrap_or(file);
+            copy_new(from, file, &to.join(rel), copied)?;
         }
     }
     Ok(())

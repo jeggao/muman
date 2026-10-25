@@ -67,6 +67,7 @@ src/
   plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
+  given.rs          folders given to `add`: walked and copied, links followed inside
   similar.rs        names and texts compared in any script
   picture.rs        perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
@@ -95,6 +96,7 @@ src/
   fit.rs            songs fitted into a size, least audible loss first
   limit.rs          the library kept under [library] max_size
   export.rs         the song list and the library into one zip
+  redact.rs         the song list with its secrets replaced, for export --redact
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   check.rs, overview.rs            check and info
@@ -102,6 +104,7 @@ src/
   purge.rs          fetched sources and records no song uses, deleted
   progress.rs       how far a long step has got, on stderr
   parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
+  trust.rs          the song list's commands and servers, run only once trusted
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
@@ -112,7 +115,7 @@ testdata/           tiny Opus, FLAC and PNG fixtures
 assets/yt-dlp/      the plugins plugins.rs embeds
 xtask/              cargo xtask comments | docs
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
-docs/               guide.md, library.md, configuration.md, cli.md (generated)
+docs/               guide.md, library.md, configuration.md, audio.md, cli.md (generated)
 ```
 
 Start from a module's `//!` docs: they hold its design and the reasons
@@ -217,7 +220,7 @@ that package manager is skipped.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md); a rename or a changed default, an edition in `migrate.rs` |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
 | How picking, lookups, editing, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |

@@ -2,7 +2,9 @@
 //! come from yt-dlp, its errors and warnings become muman's own, and
 //! its progress goes into the run's step, counting each video it
 //! finishes; on a terminal with no status line, it is one line rewritten
-//! in place.
+//! in place. Every line is shown as [`crate::ui::printable`] makes it,
+//! since a video's title is the uploader's to choose and can hold what a
+//! terminal acts on.
 //!
 //! Two kinds of line are also noted for the fetch to act on
 //! ([`Relay::flags`]). One says yt-dlp could not read a site as it is
@@ -142,11 +144,7 @@ impl<'a, W: Write> Relay<'a, W> {
         } else if self.live {
             self.status(&format!("yt-dlp: {text}"));
         } else {
-            let _ = writeln!(
-                self.out,
-                "{}",
-                Style::Muted.paint(&format!("yt-dlp: {text}"))
-            );
+            let _ = crate::ui::relayed(self.out, &format!("yt-dlp: {text}"));
         }
     }
 
@@ -154,7 +152,7 @@ impl<'a, W: Write> Relay<'a, W> {
     /// a wide character such as a CJK one takes two columns.
     fn status(&mut self, text: &str) {
         let mut width = 0;
-        let text: String = text
+        let text: String = crate::ui::printable(text)
             .chars()
             .take_while(|c| {
                 width += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
@@ -307,6 +305,16 @@ mod tests {
             "cleared once the run is over: {live:?}"
         );
         assert_eq!(relay(&[Line::Out(&p1)], false), "");
+    }
+
+    #[test]
+    fn a_title_on_the_rewritten_line_is_printable() {
+        let p = format!("{PROGRESS}\t50%\t1MiB\t1MiB/s\tSong \x1b]0;X\x07");
+        let live = plain(&relay(&[Line::Out(&p)], true));
+        assert!(
+            live.starts_with("\ryt-dlp: Song �]0;X�  50% of 1MiB at 1MiB/s"),
+            "{live:?}"
+        );
     }
 
     #[test]

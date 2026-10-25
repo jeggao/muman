@@ -11,6 +11,7 @@
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
+//! | `trusted` | Yes: the song list's commands and servers are asked about again ([`crate::trust`]) |
 //!
 //! An output with no plan is one muman owns but cannot vouch for, as each
 //! a run records just before writing it, new or written over: a crash
@@ -115,6 +116,14 @@ pub struct State {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub damaged: BTreeMap<SourceKey, String>,
+    /// What the user trusted of the song list's commands and servers: a
+    /// digest of each by its name ([`crate::trust`]).
+    #[serde(
+        default,
+        deserialize_with = "lenient_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub trusted: BTreeMap<String, String>,
     /// Sources whose failures this process cleared, for a merge to clear
     /// on disk.
     #[serde(skip)]
@@ -476,6 +485,34 @@ impl State {
         if std::fs::read(home.join(STATE)).is_ok_and(|held| held == text) {
             return Ok(());
         }
+        atomic::write(home, &atomic::Name::new(STATE)?, &text)
+    }
+
+    /// Record `trusted` as [`Self::trusted`] under the folder's lock,
+    /// every other key left as the file holds it: a state an earlier
+    /// version wrote is brought up to this one by a run that reads it
+    /// whole, not here.
+    pub fn keep_trusted(home: &Path, trusted: &BTreeMap<String, String>) -> Result<()> {
+        let _lock = atomic::Lock::folder(home)?;
+        let file = home.join(STATE);
+        let mut held: serde_json::Value = match std::fs::read(&file) {
+            Ok(text) => serde_json::from_slice(&text)
+                .with_context(|| format!("{} cannot be read", file.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::json!({ "version": VERSION })
+            }
+            Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+        };
+        let keys = held
+            .as_object_mut()
+            .with_context(|| format!("{} holds no state", file.display()))?;
+        if trusted.is_empty() {
+            keys.remove("trusted");
+        } else {
+            keys.insert("trusted".into(), serde_json::to_value(trusted)?);
+        }
+        let mut text = serde_json::to_vec_pretty(&held).context("writing the state")?;
+        text.push(b'\n');
         atomic::write(home, &atomic::Name::new(STATE)?, &text)
     }
 
@@ -999,5 +1036,12 @@ mod tests {
         assert!(format!("{:#}", State::load(dir.path()).unwrap_err()).contains("move it aside"));
         std::fs::write(dir.path().join(STATE), "{\"version\": 9}").unwrap();
         assert!(format!("{:#}", State::load(dir.path()).unwrap_err()).contains("newer"));
+        std::fs::write(
+            dir.path().join(STATE),
+            r#"{"version": 1, "outputs": {"../../elsewhere.opus": {"sources": []}}}"#,
+        )
+        .unwrap();
+        let e = format!("{:#}", State::load(dir.path()).unwrap_err());
+        assert!(e.contains(STATE) && e.contains("outside its folder"), "{e}");
     }
 }

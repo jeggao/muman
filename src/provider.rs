@@ -16,6 +16,14 @@
 //! `acoustid` finds MusicBrainz records by a song's fingerprint, so what
 //! it finds is a `musicbrainz:` source ([`Provider::yields`]): a song with
 //! one has what either would find, and no source is from `acoustid`.
+//!
+//! A provider not `enabled` is asked nothing: no lookup, no record of
+//! its fetched again, no request made for another provider's sake.
+//! `acoustid` fetches each recording it finds from MusicBrainz, so it is
+//! off while `musicbrainz` is ([`Config::on`]); `coverart` then asks the
+//! Cover Art Archive by the IDs a song's tags name alone, searching
+//! MusicBrainz for no album; and `add` looks no video's YouTube Music
+//! track up while `youtube-music` is off.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -296,11 +304,17 @@ impl Config {
         &self.providers[&p]
     }
 
-    /// The triggers whose provider looked up is on.
+    /// Whether `p` may be asked anything: it is enabled, and so is the
+    /// provider it fetches what it finds from, as `acoustid` fetches
+    /// from `musicbrainz`.
+    #[must_use]
+    pub fn on(&self, p: Provider) -> bool {
+        self.settings(p).enabled && self.settings(p.yields()).enabled
+    }
+
+    /// The triggers whose provider looked up is [`Self::on`].
     pub fn active(&self) -> impl Iterator<Item = &Trigger> {
-        self.triggers
-            .iter()
-            .filter(|t| self.settings(t.find).enabled)
+        self.triggers.iter().filter(|t| self.on(t.find))
     }
 }
 
@@ -506,6 +520,18 @@ mod tests {
         assert_eq!(c.triggers.len(), 1);
         assert_eq!(c.triggers[0].when, When::NoLyrics);
         assert!(!c.settings(Provider::YouTubeMusic).enabled);
+    }
+
+    #[test]
+    fn acoustid_is_off_with_musicbrainz_which_it_fetches_from() {
+        let c = config("[providers.musicbrainz]\nenabled = false\n").unwrap();
+        assert!(c.settings(Provider::AcoustId).enabled);
+        assert!(!c.on(Provider::AcoustId) && !c.on(Provider::MusicBrainz));
+        assert!(c.on(Provider::CoverArt) && c.on(Provider::Lrclib));
+        assert!(
+            c.active()
+                .all(|t| ![Provider::AcoustId, Provider::MusicBrainz].contains(&t.find))
+        );
     }
 
     #[test]

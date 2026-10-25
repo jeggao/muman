@@ -113,10 +113,12 @@ pub(crate) enum Doing {
     Write,
     /// Left alone: its file, changed since muman wrote it.
     Guard { file: PathBuf },
-    /// Left alone: a file not muman's is at its path.
-    Unowned,
-    /// Left where it is: a file not muman's is at the song's new path.
-    Blocked { file: PathBuf },
+    /// Left alone: a file not muman's, `by`, is at its path or its
+    /// lyrics'.
+    Unowned { by: PathBuf },
+    /// Left where it is: a file not muman's, `by`, is at the song's path
+    /// or its lyrics'.
+    Blocked { file: PathBuf, by: PathBuf },
     /// Left as built: a source it was built from was fetched again and
     /// holds otherwise, not yet accepted.
     Held { file: PathBuf },
@@ -194,9 +196,9 @@ pub(super) fn settled(
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
-/// | Elsewhere, and a file not muman's at its path | Left where it is until `--force` |
-/// | None, and a file not muman's at its path | Left alone until `--force` |
 /// | At its path, of the same media | Its tags written |
+/// | Any, and a file not muman's at its path or its lyrics' | Left where it is until `--force` |
+/// | None, and a file not muman's at its path or its lyrics' | Left alone until `--force` |
 /// | Otherwise, or `force` | Written |
 ///
 /// A path is free when no file of anyone's is there, folded as NTFS and
@@ -304,15 +306,19 @@ pub(super) fn decide(
             if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
-            if !foreign(library, old, &path).is_empty() {
-                // Its own file stays where it is rather than go for nothing.
-                return match file.filter(|_| present) {
-                    Some(file) => Doing::Blocked { file: file.clone() },
-                    None => Doing::Unowned,
-                };
-            }
+            // Its tags are written into its own file alone.
             if file == Some(&path) && same_media {
                 return Doing::Retag;
+            }
+            if let Some(by) = foreign(library, old, &path).into_iter().next() {
+                // Its own file stays where it is rather than go for nothing.
+                return match file.filter(|_| present) {
+                    Some(file) => Doing::Blocked {
+                        file: file.clone(),
+                        by,
+                    },
+                    None => Doing::Unowned { by },
+                };
             }
             Doing::Write
         })
@@ -429,7 +435,9 @@ pub(super) fn kept(
     for ((n, r), d) in planned.iter().zip(doing) {
         let path = match d {
             Doing::Keep => path_of(r),
-            Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file } => file.clone(),
+            Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } => {
+                file.clone()
+            }
             _ => continue,
         };
         let Some(mut written) = outputs.get(&path).cloned() else {

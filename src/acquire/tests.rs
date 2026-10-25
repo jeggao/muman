@@ -8,10 +8,13 @@ use crate::dirs::Dirs;
 use crate::runner::Line;
 
 /// Answers a listing by the URL it ends with, and a download by writing
-/// each video it names into the store unless the archive names it.
+/// each video it names into the store unless the archive names it; a
+/// file fetched holds no info JSON, but for `unprobed`, which ffprobe
+/// cannot read.
 #[derive(Default)]
 struct Net {
     downloads: Mutex<Vec<Vec<String>>>,
+    unprobed: Option<&'static str>,
 }
 
 const PLAYLIST: &str = r#"{"_type": "playlist", "title": "Songs", "webpage_url": "https://own",
@@ -27,6 +30,13 @@ impl Runner for Net {
     }
 
     fn output(&self, cmd: &[OsString]) -> Result<Vec<u8>> {
+        if cmd[0] == "ffprobe" {
+            let path = cmd.last().unwrap().to_string_lossy();
+            if self.unprobed.is_some_and(|id| path.contains(id)) {
+                anyhow::bail!("ffprobe failed (exit 1): Invalid data found");
+            }
+            return Ok(br#"{"streams": []}"#.to_vec());
+        }
         let one = cmd.iter().any(|a| a == "--no-playlist");
         let url = cmd.last().and_then(|u| u.to_str()).unwrap_or_default();
         let json = match (url, one) {
@@ -105,7 +115,7 @@ fn listed(urls: &[&str]) -> Listed {
     list(
         &urls,
         &crate::sites::Sites::default(),
-        &Ytdlp::default(),
+        &crate::download::Passed::default(),
         &Net::default(),
         &mut Vec::new(),
     )
@@ -183,6 +193,7 @@ fn acquire_urls(
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -219,6 +230,23 @@ fn each_new_video_is_proposed_as_a_song_and_known_ones_are_skipped() {
         text.contains("yt-dlp: [download] vid00000010"),
         "yt-dlp's lines are labeled: {text}"
     );
+}
+
+#[test]
+fn a_fetched_file_its_info_json_cannot_be_cleared_of_is_not_kept() {
+    let s = setup();
+    let net = Net {
+        unprobed: Some("vid00000010"),
+        ..Net::default()
+    };
+    let (ok, add, text) = acquire_urls(&s, &net, &[], &["https://p"]);
+    assert!(!ok, "{text}");
+    let proposed: Vec<&Vec<SourceKey>> = add.proposals.iter().map(|p| &p.sources).collect();
+    assert_eq!(proposed, [&vec![SourceKey::youtube("vid00000009")]]);
+    assert!(text.contains("youtube.com:vid00000010: not kept"), "{text}");
+    let store = Store::scan(&s.dirs).unwrap();
+    assert!(store.has(&SourceKey::youtube("vid00000009")));
+    assert!(!store.has(&SourceKey::youtube("vid00000010")));
 }
 
 #[test]
@@ -267,6 +295,7 @@ fn missing_sources_are_fetched_again_without_the_archive() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -309,6 +338,7 @@ fn a_removed_video_is_skipped_in_a_playlist_and_listed_again_named_alone() {
             plugins: None,
             sites: &crate::sites::Sites::default(),
             options: &crate::settings::Ytdlp::default(),
+            passed: &crate::download::Passed::default(),
             live: false,
             runs: Cell::new(0),
         };
@@ -348,6 +378,7 @@ fn a_fetched_file_its_place_cannot_take_fails_the_fetch_and_is_not_left() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -384,6 +415,7 @@ fn nothing_a_fetch_left_beside_what_it_placed_outlives_it() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -429,6 +461,7 @@ fn a_source_fetched_again_asks_for_the_format_and_page_its_song_records() {
         plugins: None,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -515,6 +548,7 @@ fn fetch_with(s: &Setup, runner: &Failing, plugins: Option<&Path>) -> (bool, Str
         plugins,
         sites: &crate::sites::Sites::default(),
         options: &crate::settings::Ytdlp::default(),
+        passed: &crate::download::Passed::default(),
         live: false,
         runs: Cell::new(0),
     };
@@ -658,7 +692,7 @@ fn a_release_naming_its_version_is_found_by_its_audio() {
     let found = lookup(
         &Music,
         &crate::sites::Sites::default(),
-        &crate::settings::Ytdlp::default(),
+        &crate::download::Passed::default(),
         &upload,
         dir.path(),
     )

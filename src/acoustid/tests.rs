@@ -135,3 +135,46 @@ fn an_error_is_told_by_its_message() {
     let e = client(&Refuses, &throttle).find(&query()).unwrap_err();
     assert_eq!(e.to_string(), "AcoustID: invalid API key");
 }
+
+/// Answers every GET as its function says, given the address asked.
+struct Answers(fn(&str) -> Result<Vec<u8>, TransportError>);
+
+impl HttpTransport for Answers {
+    fn get(&self, url: &str, _: &[(&str, &str)], _: Duration) -> Result<Vec<u8>, TransportError> {
+        (self.0)(url)
+    }
+}
+
+#[test]
+fn no_error_names_the_key_or_the_print() {
+    let answers = [
+        Answers(|_| Ok(vec![0xff, 0xfe, b'{'])),
+        Answers(|url| Err(TransportError::Transport(format!("cut off reading {url}")))),
+        Answers(|url| Err(TransportError::Unreachable(format!("no route to {url}")))),
+        Answers(|url| {
+            Err(TransportError::Status {
+                code: 502,
+                body: format!("<p>bad gateway for {url}</p>"),
+                retry_after: None,
+            })
+        }),
+    ];
+    let said: Vec<String> = answers
+        .iter()
+        .map(|answer| {
+            let throttle = Throttle::none();
+            format!(
+                "{:#}",
+                client(answer, &throttle).find(&query()).unwrap_err()
+            )
+        })
+        .collect();
+    for e in &said {
+        assert!(!e.contains("k3y") && !e.contains("fingerprint"), "{e}");
+    }
+    assert!(
+        said[0].starts_with("http://acoustid.test/v2/lookup: the body is not UTF-8"),
+        "{}",
+        said[0]
+    );
+}

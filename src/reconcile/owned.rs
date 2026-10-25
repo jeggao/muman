@@ -8,32 +8,60 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::library::{Ledger, Owned};
 use crate::state::{State, Written};
 use crate::store;
 
 /// The files at a song's path, its audio or its lyrics, that muman did
-/// not write: a file of the user's own a sync must not write over. A file
-/// that is one muman wrote under a name differing only in case, as a
-/// filesystem blind to case reports, is muman's.
+/// not write: a file of the user's own a sync must not write over or
+/// remove, a `.lrc` beside a song muman wrote among them, and a link,
+/// whether or not it leads anywhere. A file that is one muman wrote under
+/// a name differing only in case, as a filesystem blind to case reports,
+/// is muman's.
 pub(super) fn foreign(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
 ) -> Vec<PathBuf> {
-    if old.contains_key(path) {
-        return Vec::new();
-    }
-    let lyrics = path.with_extension("lrc");
+    use crate::relpath::folded;
     let owned = |rel: &Path| {
+        let fold = folded(rel);
         old.iter().any(|(p, w)| {
             std::iter::once(p).chain(&w.lyrics).any(|o| {
-                same_file::is_same_file(library.join(o), library.join(rel)).unwrap_or(false)
+                o == rel
+                    || (folded(o) == fold
+                        && same_file::is_same_file(library.join(o), library.join(rel))
+                            .unwrap_or(false))
             })
         })
     };
-    [path.to_path_buf(), lyrics]
+    [path.to_path_buf(), path.with_extension("lrc")]
         .into_iter()
-        .filter(|rel| library.join(rel).exists() && !owned(rel))
+        .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok() && !owned(rel))
+        .collect()
+}
+
+/// The files at a song's paths, its audio and its lyrics, that writing it
+/// may write over or remove, each to be kept for `undo` first: muman's,
+/// under its name or one a filesystem blind to case takes for it, and,
+/// when `forced`, one of the user's own, taken over.
+pub(super) fn claim(
+    ledger: &Ledger<'_>,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+    forced: bool,
+) -> Vec<Owned> {
+    let library = ledger.root();
+    let foreign = foreign(library, old, path);
+    [path.to_path_buf(), path.with_extension("lrc")]
+        .into_iter()
+        .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
+        .filter(|rel| forced || !foreign.contains(rel))
+        .map(|rel| {
+            ledger
+                .owned(old, &rel, true)
+                .unwrap_or_else(|| Ledger::taken(&rel))
+        })
         .collect()
 }
 

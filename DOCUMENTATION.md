@@ -23,6 +23,7 @@ what is not about one module.
 | Using it: the home, the song list and its sources | [docs/guide.md](docs/guide.md) |
 | Picking, lookups, changing songs, status, export, hooks | [docs/library.md](docs/library.md) |
 | Folders, programs, settings, templates, safe names | [docs/configuration.md](docs/configuration.md) |
+| Codecs, encoding and loudness | [docs/audio.md](docs/audio.md) |
 | Every command and flag | [docs/cli.md](docs/cli.md), generated from `src/cli.rs` |
 | Each setting's default | [src/manifest/new.toml](src/manifest/new.toml) |
 | Why a module works as it does | That module's `//!` docs |

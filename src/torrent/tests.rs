@@ -119,7 +119,7 @@ fn a_file_shares_its_end_pieces_with_its_neighbours_alone() {
     let info = B::D(vec![
         ("name", s("Lantern Weather")),
         ("piece length", B::I(100)),
-        ("pieces", B::S(vec![0; 20])),
+        ("pieces", B::S(vec![0; 5 * 20])),
         (
             "files",
             B::L(vec![
@@ -220,9 +220,23 @@ fn a_v2_torrent_is_named_by_its_v2_hash_and_no_v1_fetcher_takes_it() {
 
 #[test]
 fn a_path_leaving_the_torrent_refuses_it() {
-    for parts in [&["..", "x.flac"][..], &["a/b.flac"], &[""], &["."]] {
+    for parts in [
+        &["..", "x.flac"][..],
+        &["a/b.flac"],
+        &["a\\b.flac"],
+        &[""],
+        &["."],
+        &[".. ", "x.flac"],
+        &["..."],
+        &["C:", "x.flac"],
+        &["c:x.flac"],
+        &["Album\u{1b}]0;Lantern\u{7}", "x.flac"],
+        &["x\u{9b}2J.flac"],
+        &["x\0.flac"],
+    ] {
         let info = B::D(vec![
             ("name", s("Album")),
+            ("piece length", B::I(16384)),
             ("pieces", B::S(vec![0; 20])),
             (
                 "files",
@@ -405,4 +419,138 @@ fn a_part_too_long_for_a_name_is_shortened_by_its_hash_and_keeps_its_extension()
         stored(Path::new("01 Paper Comets.flac")),
         Path::new("01 Paper Comets.flac")
     );
+}
+
+/// A v1 torrent of `files`, each a name and a length, in pieces of
+/// `piece`, holding `hashes` piece hashes.
+fn sized(files: &[(&str, i64)], piece: i64, hashes: usize) -> Vec<u8> {
+    let list = files
+        .iter()
+        .map(|(name, length)| B::D(vec![("length", B::I(*length)), ("path", path(&[name]))]))
+        .collect();
+    let info = B::D(vec![
+        ("name", s("The Glass Orchards")),
+        ("piece length", B::I(piece)),
+        ("pieces", B::S(vec![0; 20 * hashes])),
+        ("files", B::L(list)),
+    ]);
+    torrent(info, &[]).0
+}
+
+/// A v2 torrent of files of `lengths`, in pieces of `piece`.
+fn sized_v2(lengths: &[i64], piece: i64) -> Vec<u8> {
+    let tree = lengths
+        .iter()
+        .zip(["a.flac", "b.flac", "c.flac"])
+        .map(|(length, name)| (name, tree_file(*length, 1)))
+        .collect();
+    let info = B::D(vec![
+        ("name", s("The Glass Orchards")),
+        ("meta version", B::I(2)),
+        ("piece length", B::I(piece)),
+        ("file tree", B::D(tree)),
+    ]);
+    torrent(info, &[]).0
+}
+
+#[test]
+fn a_piece_or_a_torrent_too_long_to_be_real_refuses_it_unread() {
+    let huge = 1 << 42;
+    assert!(Metainfo::read(&sized(&[("a.flac", huge)], huge, 1)).is_err());
+    let most = i64::MAX;
+    let three = [("a.flac", most), ("b.flac", most), ("c.flac", most)];
+    assert!(Metainfo::read(&sized(&three, 16384, 1)).is_err());
+    assert!(Metainfo::read(&sized(&[("a.flac", 1 << 48)], 1 << 28, 1)).is_err());
+    for piece in [0, -1, 1 << 30] {
+        assert!(
+            Metainfo::read(&sized(&[("a.flac", 10)], piece, 1)).is_err(),
+            "{piece}"
+        );
+    }
+    assert!(Metainfo::read(&sized_v2(&[most, most, most], 16384)).is_err());
+    assert!(Metainfo::read(&sized_v2(&[most, most], most)).is_err());
+    assert!(
+        Metainfo::read(&sized_v2(&[10], 16383)).is_err(),
+        "below 16 KiB"
+    );
+    assert!(
+        Metainfo::read(&sized_v2(&[10], 3 << 14)).is_err(),
+        "no power of two"
+    );
+    assert!(Metainfo::read(&sized_v2(&[10, 10], 1 << 15)).is_ok());
+}
+
+#[test]
+fn a_v1_torrent_holds_a_hash_for_each_piece_its_files_span() {
+    let files = [("a.flac", 150), ("b.flac", 100)];
+    assert!(Metainfo::read(&sized(&files, 100, 3)).is_ok());
+    for hashes in [0, 2, 4] {
+        assert!(
+            Metainfo::read(&sized(&files, 100, hashes)).is_err(),
+            "{hashes}"
+        );
+    }
+}
+
+#[test]
+fn a_name_with_a_colon_past_its_start_is_a_plain_name() {
+    let meta = Metainfo::read(&crate::testing::metainfo(
+        "Marlo Venn: Lantern Weather",
+        &["Act 1: Paper Comets.flac", "1:2.flac", "...x.flac"],
+    ))
+    .unwrap();
+    assert_eq!(meta.name, "Marlo Venn: Lantern Weather");
+    assert_eq!(meta.files.len(), 3);
+}
+
+#[test]
+fn a_piece_longer_than_a_read_is_checked_a_chunk_at_a_time() {
+    let piece = CHECK_CHUNK * 3;
+    let song: Vec<u8> = (0..CHECK_CHUNK * 2 + 5).map(|i| (i % 251) as u8).collect();
+    let pad = piece - song.len();
+    let tail = b"tail".to_vec();
+    let whole: Vec<u8> = [song.clone(), vec![0; pad], tail.clone(), vec![0; 6]].concat();
+    let pieces: Vec<u8> = whole
+        .chunks(piece)
+        .flat_map(|p| Sha1::digest(p).to_vec())
+        .collect();
+    let entry = |name: &str, length: usize, padding: bool| {
+        let mut e = vec![
+            ("length", B::I(i64::try_from(length).unwrap())),
+            ("path", path(&[name])),
+        ];
+        if padding {
+            e.push(("attr", s("p")));
+        }
+        B::D(e)
+    };
+    let info = B::D(vec![
+        ("name", s("Marlo Venn - Lantern Weather")),
+        ("piece length", B::I(i64::try_from(piece).unwrap())),
+        ("pieces", B::S(pieces)),
+        (
+            "files",
+            B::L(vec![
+                entry("a.flac", song.len(), false),
+                entry("pad0", pad, true),
+                entry("b.flac", tail.len(), false),
+                entry("pad1", 6, true),
+            ]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    assert_eq!(meta.total, whole.len() as u64);
+    let dir = tempfile::tempdir().unwrap();
+    let at = |f: &File| dir.path().join(f.index.to_string());
+    std::fs::write(dir.path().join("1"), &song).unwrap();
+    std::fs::write(dir.path().join("3"), &tail).unwrap();
+    assert!(checks(&meta, &meta.files[0], at));
+    assert!(
+        checks(&meta, &meta.files[1], at),
+        "its piece ends in padding"
+    );
+    let mut damaged = song;
+    damaged[CHECK_CHUNK + 7] ^= 1;
+    std::fs::write(dir.path().join("1"), &damaged).unwrap();
+    assert!(!checks(&meta, &meta.files[0], at));
 }
