@@ -1,11 +1,17 @@
 //! What a sync does with each song's file, decided for every song before
 //! any is done: kept, moved, tagged again, written, or left alone.
+//!
+//! The decisions and what follows from them, the moves in their order,
+//! the outputs they leave and the files pruned, make one [`Intent`]:
+//! `status` shows it and a sync carries it out, so the two cannot say
+//! different things. A sync departs from it only where a move or a write
+//! fails, and judges pruning again by what was done.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
-use crate::manifest::Manifest;
+use crate::manifest::{Edit, Manifest};
 use crate::resolve::{Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state::{State, Written};
@@ -13,6 +19,7 @@ use crate::state::{State, Written};
 use super::damage::{damaged_since_built, split_drifts};
 use super::owned::{edited_since_written, foreign};
 use super::plan::{PlannedSong, path_of};
+use super::prune::{Pruned, prune_plan};
 
 /// What `old` records of the song's file, when that file is the song as
 /// it would be written now: its plan, its file there and not empty, its
@@ -325,4 +332,122 @@ pub(super) fn own_place(library: &Path, from: &Path, to: &Path) -> bool {
     folded(from) == folded(to)
         && (!library.join(to).exists()
             || same_file::is_same_file(library.join(from), library.join(to)).unwrap_or(false))
+}
+
+/// Everything a sync does to the library, decided before it does any:
+/// `status` shows it, and a sync carries it out, departing from it only
+/// where a move or a write fails.
+pub(super) struct Intent {
+    /// What is done with each planned song, in the order of `planned`.
+    pub decided: Vec<Doing>,
+    /// Each song's file moved to its song's path, in an order the moves
+    /// can be made.
+    pub moves: Vec<(PathBuf, PathBuf)>,
+    /// The outputs as the moves leave them, which pruning is judged by.
+    pub moved: BTreeMap<PathBuf, Written>,
+    /// What becomes of each file of `moved` no song makes once the sync
+    /// is done.
+    pub pruned: Vec<(PathBuf, Pruned)>,
+    /// What each source held, recorded in the song list once the library
+    /// is written.
+    pub edits: Vec<Edit>,
+}
+
+/// The whole of what a sync does with `planned`, by what it decided of
+/// each song: the moves in their order, the outputs they and the writes
+/// leave, the files pruned, and the song list's records.
+pub(super) fn intend(
+    planned: &[PlannedSong],
+    decided: Vec<Doing>,
+    manifest: &Manifest,
+    old: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+    (failed, forced): (&BTreeSet<SourceKey>, bool),
+    edits: Vec<Edit>,
+) -> Intent {
+    let mut moves: Vec<(usize, PathBuf, PathBuf)> = planned
+        .iter()
+        .zip(&decided)
+        .filter_map(|((_, r), d)| match d {
+            Doing::Move { from, order, .. } => Some((*order, from.clone(), path_of(r))),
+            _ => None,
+        })
+        .collect();
+    moves.sort_by_key(|(order, ..)| *order);
+    let moves: Vec<(PathBuf, PathBuf)> = moves.into_iter().map(|(_, f, t)| (f, t)).collect();
+    let mut relocated = old.clone();
+    for (from, to) in &moves {
+        if let Some(written) = relocated.remove(from) {
+            relocated.insert(to.clone(), moved_to(written, to));
+        }
+    }
+    let arrived: Vec<Doing> = decided
+        .iter()
+        .map(|d| match d {
+            Doing::Move { retag: true, .. } => Doing::Retag,
+            Doing::Move { retag: false, .. } => Doing::Keep,
+            d => d.clone(),
+        })
+        .collect();
+    let mut after = kept(planned, &arrived, manifest, &relocated);
+    for ((n, r), d) in planned.iter().zip(&arrived) {
+        if matches!(d, Doing::Write | Doing::Retag) {
+            let path = path_of(r);
+            let written = Written {
+                sources: manifest.songs[*n].sources.clone(),
+                lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
+                plan: Some(r.plan.clone()),
+                stamp: None,
+                digest: None,
+            };
+            after.insert(path, written);
+        }
+    }
+    let pruned = prune_plan(library, &relocated, &after, failed, forced);
+    Intent {
+        decided,
+        moves,
+        moved: relocated,
+        pruned,
+        edits,
+    }
+}
+
+/// What `written` records once its file has moved to `to`, its lyrics
+/// beside it.
+pub(super) fn moved_to(mut written: Written, to: &Path) -> Written {
+    written.lyrics = written.lyrics.map(|_| to.with_extension("lrc"));
+    written
+}
+
+/// The outputs a sync leaves as they are, by what `doing` does with each
+/// song: its file kept, left alone or held, as `outputs` records it,
+/// under the song's sources now, a file kept as it would be written
+/// recording the plan, which keeps the gain the mode asks as a song
+/// written does.
+pub(super) fn kept(
+    planned: &[PlannedSong],
+    doing: &[Doing],
+    manifest: &Manifest,
+    outputs: &BTreeMap<PathBuf, Written>,
+) -> BTreeMap<PathBuf, Written> {
+    let mut kept = BTreeMap::new();
+    for ((n, r), d) in planned.iter().zip(doing) {
+        let path = match d {
+            Doing::Keep => path_of(r),
+            Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } => {
+                file.clone()
+            }
+            _ => continue,
+        };
+        let Some(mut written) = outputs.get(&path).cloned() else {
+            continue;
+        };
+        if *d == Doing::Keep {
+            written.plan = Some(r.plan.clone());
+        }
+        written.sources.clone_from(&manifest.songs[*n].sources);
+        kept.insert(path, written);
+    }
+    kept
 }
