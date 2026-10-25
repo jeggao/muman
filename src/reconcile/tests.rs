@@ -1,6 +1,11 @@
 use std::fmt::Write as _;
 
+use super::measure::out_of_space;
+use super::prune::{Pruned, prune_plan};
 use super::*;
+use crate::facts::Facts;
+use crate::resolve::Plan;
+use crate::state::Step;
 use crate::testing::{Fake, words};
 
 struct Home {

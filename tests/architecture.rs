@@ -207,7 +207,7 @@ fn a_library_file_is_written_over_only_as_the_ledger_proves_it_muman_s() {
         })
         .collect();
     assert!(
-        taken.len() == 1 && taken[0].starts_with("reconcile.rs: "),
+        taken.len() == 1 && taken[0].starts_with("reconcile/owned.rs: "),
         "{}",
         taken.join("\n")
     );
@@ -489,7 +489,10 @@ const NAMED: &[(&str, &str)] = &[
     ("info.rs", "the info JSON yt-dlp embedded in a file"),
     ("music.rs", "an entry a URL listed"),
     ("download.rs", "the files a fetch reports"),
-    ("reconcile.rs", "an old key renamed by the page it recorded"),
+    (
+        "reconcile/keys.rs",
+        "an old key renamed by the page it recorded",
+    ),
 ];
 
 #[test]

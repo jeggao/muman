@@ -73,7 +73,9 @@ src/
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   lookup.rs         lookups due by trigger; provider.rs, lrclib.rs,
                     musicbrainz.rs, acoustid.rs, coverart.rs
-  reconcile.rs      the offline phase: measure, compare, plan, render, prune
+  reconcile.rs      the offline phase, its steps in order, each a module of its own:
+                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
+                    write.rs, prune.rs, report.rs
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   analysis.rs       the whole of a source's audio, one decode, every analyzer
   integrity.rs      whether a source's audio is all there: cut off or missing
