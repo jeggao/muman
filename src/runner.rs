@@ -177,6 +177,15 @@ pub trait Runner: Sync {
         let _ = name;
         None
     }
+
+    /// Fail now, with [`ToolError`], when the tool called `name` cannot
+    /// be found or is below its floor, so a run that needs it stops
+    /// before its first song rather than failing every one; a runner that
+    /// runs no real program has every one.
+    fn require(&self, name: &str) -> Result<()> {
+        let _ = name;
+        Ok(())
+    }
 }
 
 /// The production runner. Commands name a tool by its bare name; each
@@ -203,17 +212,6 @@ impl System {
             named,
             found: Default::default(),
         }
-    }
-
-    /// Fail now, with [`ToolError`], when `name` cannot be found or is
-    /// below its floor, so a run that needs it stops before its first
-    /// song rather than failing every one.
-    pub fn require(&self, name: &str) -> Result<()> {
-        let index = tools::TOOLS
-            .iter()
-            .position(|t| t.name == name)
-            .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
-        self.tool(index).map(drop).map_err(Into::into)
     }
 
     /// The tool at `index` of [`tools::TOOLS`], found and checked once.
@@ -399,6 +397,14 @@ impl Runner for System {
             found: self.tool(index).cloned(),
         })
     }
+
+    fn require(&self, name: &str) -> Result<()> {
+        let index = tools::TOOLS
+            .iter()
+            .position(|t| t.name == name)
+            .ok_or_else(|| anyhow!("{name} is not a tool muman runs"))?;
+        self.tool(index).map(drop).map_err(Into::into)
+    }
 }
 
 /// The error of `cmd` exiting with `status`, naming the tail of `stderr`.
@@ -428,9 +434,9 @@ pub struct Traced<R>(pub R);
 
 impl<R: Runner> Traced<R> {
     fn say(cmd: &[OsString]) {
-        let line = cmd
+        let line = redacted(cmd)
             .iter()
-            .map(|a| quoted(&a.to_string_lossy()))
+            .map(|a| quoted(a))
             .collect::<Vec<_>>()
             .join(" ");
         let _ = crate::ui::trace(&mut std::io::stderr().lock(), &line);
@@ -474,6 +480,97 @@ impl<R: Runner> Runner for Traced<R> {
 
     fn tool(&self, name: &str) -> Option<Status> {
         self.0.tool(name)
+    }
+
+    fn require(&self, name: &str) -> Result<()> {
+        self.0.require(name)
+    }
+}
+
+/// yt-dlp's options, by their long names, whose value is a login, a
+/// password, a header or an address that may hold one; aria2c's are
+/// [`crate::aria2::SECRET`].
+const SECRET: [&str; 11] = [
+    "username",
+    "password",
+    "twofactor",
+    "video-password",
+    "ap-username",
+    "ap-password",
+    "client-certificate-password",
+    "add-header",
+    "add-headers",
+    "proxy",
+    "geo-verification-proxy",
+];
+
+/// yt-dlp's short options of [`SECRET`]: `--username`, `--password` and
+/// `--twofactor`.
+const SECRET_SHORT: [&str; 3] = ["-u", "-p", "-2"];
+
+/// What stands for a value hidden.
+const HIDDEN: &str = "<hidden>";
+
+/// `cmd` as a trace says it: the value of each option that may carry a
+/// secret hidden, given as `--name value` or `--name=value`, a header's
+/// name kept; and in yt-dlp's `--extractor-args`, a PO token and visitor
+/// data, which stand for a session.
+fn redacted(cmd: &[OsString]) -> Vec<String> {
+    let ytdlp = cmd.first().is_some_and(|p| p == "yt-dlp");
+    let secret = |name: &str| SECRET.contains(&name) || crate::aria2::SECRET.contains(&name);
+    let mut said = Vec::new();
+    let mut next: Option<String> = None;
+    let mut options = true;
+    for arg in cmd.iter().map(|a| a.to_string_lossy()) {
+        if let Some(name) = next.take() {
+            said.push(hidden(&name, &arg));
+            continue;
+        }
+        let long = arg.strip_prefix("--").filter(|_| options);
+        let (name, value) = long.map_or((None, None), |o| match o.split_once('=') {
+            Some((name, value)) => (Some(name), Some(value)),
+            None => (Some(o), None),
+        });
+        match (name, value) {
+            _ if arg == "--" => {
+                options = false;
+                said.push(arg.into_owned());
+            }
+            (Some(name), Some(value)) if secret(name) || name == "extractor-args" => {
+                said.push(format!("--{name}={}", hidden(name, value)));
+            }
+            (Some(name), None) if secret(name) || name == "extractor-args" => {
+                next = Some(name.to_string());
+                said.push(arg.into_owned());
+            }
+            (None, _) if ytdlp && options && SECRET_SHORT.contains(&arg.get(..2).unwrap_or("")) => {
+                if arg.len() == 2 {
+                    next = Some(arg.to_string());
+                    said.push(arg.into_owned());
+                } else {
+                    said.push(format!("{}{HIDDEN}", &arg[..2]));
+                }
+            }
+            _ => said.push(arg.into_owned()),
+        }
+    }
+    said
+}
+
+/// The value of the option `name` as a trace says it.
+fn hidden(name: &str, value: &str) -> String {
+    static SESSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\b(po_token|visitor_data)=[^;]*").expect("valid")
+    });
+    match name {
+        "extractor-args" => SESSION
+            .replace_all(value, format!("${{1}}={HIDDEN}"))
+            .into_owned(),
+        "header" | "add-header" | "add-headers" => match value.split_once(':') {
+            Some((header, _)) => format!("{header}: {HIDDEN}"),
+            None => HIDDEN.to_string(),
+        },
+        _ => HIDDEN.to_string(),
     }
 }
 
@@ -532,6 +629,47 @@ mod tests {
             without_addresses("[mp3 @ 0x558127e226c0] Invalid frame size (176)"),
             "[mp3] Invalid frame size (176)"
         );
+    }
+
+    #[test]
+    fn a_trace_hides_every_login_password_header_and_token() {
+        let cmd = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
+        let ytdlp = cmd(&[
+            "yt-dlp",
+            "--username",
+            "marlo",
+            "--password=hunter-0001",
+            "-pHUNTER-0002",
+            "-u",
+            "marlo",
+            "--add-headers",
+            "Authorization:Bearer 0003",
+            "--extractor-args",
+            "youtube:po_token=web.gvs+0004;player_client=default",
+            "--format",
+            "ba/b",
+            "--",
+            "-p",
+        ]);
+        assert_eq!(
+            redacted(&ytdlp).join(" "),
+            "yt-dlp --username <hidden> --password=<hidden> -p<hidden> -u <hidden> \
+             --add-headers Authorization: <hidden> --extractor-args \
+             youtube:po_token=<hidden>;player_client=default --format ba/b -- -p"
+        );
+        let aria2c = cmd(&[
+            "aria2c",
+            "--header=Cookie: uid=0005",
+            "--http-passwd",
+            "0006",
+            "--rpc-secret=0007",
+            "-p",
+            "--bt-tracker=https://tracker.example/0008/announce",
+        ]);
+        let said = redacted(&aria2c).join(" ");
+        assert!(!said.contains("000"), "{said}");
+        assert!(said.contains("--header=Cookie: <hidden>"), "{said}");
+        assert!(said.contains(" -p "), "an option of aria2c's own: {said}");
     }
 
     #[test]

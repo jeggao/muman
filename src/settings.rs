@@ -690,7 +690,9 @@ pub struct Ytdlp {
     /// art and give each file of an archive.org item its item's details.
     pub plugins: bool,
     /// More arguments for every yt-dlp run: listing, searching, the
-    /// audio a comparison downloads, and fetching.
+    /// audio a comparison downloads, and fetching. They reach yt-dlp in a
+    /// config file of the run's own, not on its command line
+    /// ([`crate::download`]).
     pub args: Vec<String>,
     /// yt-dlp's `--extractor-args`, by extractor, for a fetch and the
     /// check of what a source offers upstream.

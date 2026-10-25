@@ -32,14 +32,13 @@ use crate::atomic::Lock;
 use crate::dirs::Dirs;
 use crate::history::Run;
 use crate::hooks;
-use crate::library::Ledger;
+use crate::library::{Ledger, Owned};
 use crate::limit;
 use crate::manifest::{Edit, Manifest};
 use crate::parallel;
 use crate::progress;
 use crate::query::Query;
 use crate::render;
-use crate::resolve::Resolved;
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, State, Written};
@@ -51,7 +50,7 @@ pub(crate) use self::decide::{Doing, Foreseen, files_of, foresee};
 use self::keys::{foresee_moves, sites_found};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, analyze_mixes, compare, hash, sizes};
-use self::owned::foreign;
+use self::owned::claim;
 pub(crate) use self::owned::{
     adopt, changed_since_written, edited_since_written, rehome, vouch_for_copies,
 };
@@ -498,14 +497,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
             _ => None,
         })
         .collect();
-    // Owned before written, and no longer vouched for: a crash between the
-    // two must leave neither a file no run would delete nor a rewritten
-    // one that looks changed by someone else.
+    let claims: BTreeMap<usize, Vec<Owned>> = due
+        .iter()
+        .map(|((n, r), _)| (*n, claim(&ledger, &old, &path_of(r), opts.force)))
+        .collect();
+    // Owned before written, and no longer vouched for: a crash between the two must leave
+    // neither a file no run would delete nor a rewritten one that looks changed by someone
+    // else, nor lyrics of the user's own that the song leaves alone counted muman's.
     let mut pending = (!due.is_empty()).then(|| state.clone());
     if let Some(pending) = pending.as_mut() {
         for ((n, r), _) in &due {
             let path = path_of(r);
-            let lyrics = Some(path.with_extension("lrc"));
+            let lyrics = Some(path.with_extension("lrc")).filter(|l| {
+                std::fs::symlink_metadata(dirs.library.join(l)).is_err()
+                    || claims[n].iter().any(|o| o.path() == l)
+            });
             pending.outputs.insert(
                 path,
                 Written {
@@ -522,19 +528,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         ledger.checkpoint()?;
         pending.save(home)?;
     }
-    let foreign = |r: &Resolved| foreign(&dirs.library, &old, &path_of(r));
-    let mut replaced = Vec::new();
-    for ((_, r), _) in &due {
-        let path = path_of(r);
-        if let Some(written) = old.get(&path) {
-            replaced.extend(ledger.owned(&old, &path, true));
-            if let Some(lyrics) = &written.lyrics {
-                replaced.extend(ledger.owned(&old, lyrics, true));
-            }
-        }
-        // Written over only when forced, and then kept to put back.
-        replaced.extend(foreign(r).iter().map(|f| Ledger::taken(f)));
-    }
+    let replaced: Vec<Owned> = claims.values().flatten().cloned().collect();
     ledger.replacing(&replaced)?;
     if due.len() > 1 {
         crate::ui::info(out, &format!("Writing {} song(s)", due.len()))?;
@@ -555,18 +549,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 )?;
                 Some(file.clone())
             }
-            Doing::Unowned => {
-                unowned.push(path_of(r));
+            Doing::Unowned { by } => {
+                unowned.push(by.clone());
                 None
             }
             Doing::Held { file } => Some(file.clone()),
-            Doing::Blocked { file } => {
+            Doing::Blocked { file, by } => {
                 crate::ui::warning(
                     out,
                     &format!(
                         "Left at {}: {} is not muman's (`sync --force` writes over it)",
                         crate::relpath::show(file),
-                        crate::relpath::show(&path_of(r))
+                        crate::relpath::show(by)
                     ),
                 )?;
                 Some(file.clone())
@@ -614,13 +608,14 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let mut failed_at = Vec::new();
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
+        let claim = &claims[n];
         if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library);
+            return render::place(folder, made, &dirs.library, claim);
         }
         if *retag {
             let path = path_of(r);
             let lyrics = old.get(&path).and_then(|w| w.lyrics.as_deref());
-            return render::retag(&dirs.library, &path, lyrics, &r.plan);
+            return render::retag(&dirs.library, &path, lyrics, &r.plan, claim);
         }
         render::render(
             runner,
@@ -630,6 +625,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 library: &dirs.library,
                 sources: &located,
                 scratch: Sub::new(temp.path(), "render-")?.path(),
+                claim,
             },
         )
     };

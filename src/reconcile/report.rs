@@ -16,6 +16,7 @@ use crate::resolve::{Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state::{State, Written};
 use crate::store::Store;
+use crate::ui::Style;
 
 use super::decide::Doing;
 use super::plan::{PlannedSong, name_of, path_of};
@@ -71,15 +72,19 @@ pub(super) fn fit_summary<W: Write>(fitted: &limit::Fitted, out: &mut W) -> Resu
 
 /// Where each aspect of a song's plan comes from, and why.
 pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
-    writeln!(out, "  audio   {}: {}", r.plan.audio.key, r.why.audio)?;
+    let line = |out: &mut W, text: String| crate::ui::line(out, &text);
+    line(
+        out,
+        format!("  audio   {}: {}", r.plan.audio.key, r.why.audio),
+    )?;
     if let Some(why) = &r.why.fit {
-        writeln!(out, "  format  {why}")?;
+        line(out, format!("  format  {why}"))?;
     }
     if let (Some(c), Some(why)) = (&r.plan.cover, &r.why.cover) {
-        writeln!(out, "  cover   {}: {why}", c.key)?;
+        line(out, format!("  cover   {}: {why}", c.key))?;
     }
     if let (Some(l), Some(why)) = (&r.plan.lyrics, &r.why.lyrics) {
-        writeln!(out, "  lyrics  {}: {why}", l.key)?;
+        line(out, format!("  lyrics  {}: {why}", l.key))?;
     }
     let width = r.plan.tags.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
@@ -88,11 +93,13 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
         } else {
             format!(", cleaned: {}", why.cleaned.join(", "))
         };
-        writeln!(
+        line(
             out,
-            "  {key:<width$} {} ({}{cleaned})",
-            values.join("; "),
-            why.from
+            format!(
+                "  {key:<width$} {} ({}{cleaned})",
+                values.join("; "),
+                why.from
+            ),
         )?;
     }
     Ok(())
@@ -206,10 +213,13 @@ pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, S
             Fate::Alone,
             "left alone, changed since muman wrote it".to_string(),
         ),
-        Doing::Unowned => (Fate::Alone, "left alone, not muman's".to_string()),
-        Doing::Blocked { .. } => (
+        Doing::Unowned { by } => (
             Fate::Alone,
-            "left where it is, its new path holding a file not muman's".to_string(),
+            format!("left alone, {} not muman's", crate::relpath::show(by)),
+        ),
+        Doing::Blocked { by, .. } => (
+            Fate::Alone,
+            format!("left where it is, {} not muman's", crate::relpath::show(by)),
         ),
         Doing::Held { .. } => (
             Fate::Alone,
@@ -302,7 +312,7 @@ pub(super) fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file } = d {
+        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } = d {
             path.clone_from(file);
         }
         let (fate, verdict) = verdict(d, before, &r.plan);
@@ -310,15 +320,17 @@ pub(super) fn status<W: Write>(
             *fates.entry(fate).or_default() += 1;
         }
         if showing.shows(*n, fate) {
-            writeln!(
+            let name = name_of(song, Some(r), &state.facts);
+            let shown = crate::relpath::show(&path);
+            let verdict = format!(" ({verdict})");
+            crate::ui::painted(out, &[Style::Accent.paint(&name)])?;
+            crate::ui::painted(
                 out,
-                "{}",
-                crate::ui::Style::Accent.paint(&name_of(song, Some(r), &state.facts))
-            )?;
-            writeln!(
-                out,
-                "  → {} ({verdict})",
-                crate::ui::Style::Path.paint(&crate::relpath::show(&path))
+                &[
+                    Style::Plain.paint("  → "),
+                    Style::Path.paint(&shown),
+                    Style::Plain.paint(&verdict),
+                ],
             )?;
             show_why(r, out)?;
         }
@@ -326,7 +338,7 @@ pub(super) fn status<W: Write>(
             Doing::Keep | Doing::Guard { .. } | Doing::Held { .. } | Doing::Blocked { .. } => {
                 moved.get(&path).cloned()
             }
-            Doing::Unowned => None,
+            Doing::Unowned { .. } => None,
             _ => Some(Written {
                 sources: song.sources.clone(),
                 lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),

@@ -16,6 +16,8 @@
 //! is, fails the lookup rather than being kept as the cover: a [`Cover`]
 //! is made only from an image. A tag's release ID that is no MBID asks
 //! the archive nothing, and the album is searched for by its names.
+//! While `[providers.musicbrainz]` is off, MusicBrainz is searched for
+//! nothing, and an album whose tags name no ID finds no cover.
 //!
 //! The songs of one album ask once between them: a run looks one album
 //! up per run however many of its songs are due.
@@ -105,7 +107,10 @@ pub struct Client<'a> {
     pub base: &'a str,
     pub transport: &'a (dyn HttpTransport + Sync),
     pub throttle: &'a Throttle,
-    pub musicbrainz: &'a musicbrainz::Client<'a>,
+    /// MusicBrainz, searched for an album its tags name no ID of; `None`
+    /// while `[providers.musicbrainz]` is off, which leaves such an album
+    /// unsearched.
+    pub musicbrainz: Option<&'a musicbrainz::Client<'a>>,
 }
 
 impl std::fmt::Debug for Client<'_> {
@@ -148,7 +153,7 @@ impl Client<'_> {
     }
 
     /// The front of the song's album, by the IDs its tags name, else as a
-    /// search finds the album.
+    /// search finds the album, when MusicBrainz may be searched.
     /// IDs that are no MBID, as a tag may hold, are asked nothing.
     pub fn find(&self, q: &Query) -> Result<Option<Cover>> {
         let group = q.release_group.as_deref().and_then(Mbid::parse);
@@ -163,10 +168,13 @@ impl Client<'_> {
         {
             return Ok(Some(cover));
         }
-        if group.is_some() || release.is_some() {
+        let Some(musicbrainz) = self
+            .musicbrainz
+            .filter(|_| group.is_none() && release.is_none())
+        else {
             return Ok(None);
-        }
-        match self.musicbrainz.release_group(&q.album, &q.album_artist)? {
+        };
+        match musicbrainz.release_group(&q.album, &q.album_artist)? {
             Some(id) => self.front("release-group", &id),
             None => Ok(None),
         }
@@ -212,7 +220,7 @@ mod tests {
             base: "http://caa.test/",
             transport: server,
             throttle: &throttle,
-            musicbrainz: &musicbrainz,
+            musicbrainz: Some(&musicbrainz),
         }
         .find(q)
     }
@@ -259,6 +267,17 @@ mod tests {
         let cover = find(&server, &query()).unwrap();
         assert_eq!(cover.id().as_str(), GROUP, "the exact title wins");
         assert!(find(&Server::default(), &query()).is_none());
+
+        let off = Server::default().answer("/ws/2/release-group?query=", &search);
+        let throttle = Throttle::none();
+        let without = Client {
+            base: "http://caa.test/",
+            transport: &off,
+            throttle: &throttle,
+            musicbrainz: None,
+        };
+        assert!(without.find(&query()).unwrap().is_none());
+        assert!(off.asked.lock().unwrap().is_empty(), "MusicBrainz is off");
     }
 
     #[test]
