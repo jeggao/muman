@@ -53,15 +53,15 @@ pub const TIERS: [(&str, &str); 4] = [
     ("tidy", "Spacing and punctuation only; never removes a word"),
     (
         "packaging",
-        "Removes words that name the release or the video, not the recording",
+        "Removes words or lines that name the release or the video, not the recording",
     ),
     (
         "structure",
-        "Splits a whole value, or swaps it for another, by its shape and the library",
+        "Splits, merges or reorders whole values by their shape and the library",
     ),
     (
         "guesswork",
-        "Reads a video's title by convention and known names; can misread",
+        "Reads a video's title or subtitles by convention and known names; can misread",
     ),
 ];
 

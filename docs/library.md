@@ -125,10 +125,10 @@ switch writes every song with lyrics again.
 
 | Tier | Its tag rules | Its lyric rules |
 |---|---|---|
-| `tidy` | Fix spacing and punctuation only; never remove a word | Drop subtitle markup, as `<i>` or `{\an8}` |
-| `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, and credits before the first line sung or after the last |
-| `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | — |
-| `guesswork` | Read a video title by convention, `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | — |
+| `tidy` | Fix spacing and punctuation only; never remove a word | Drop markup, `\h`, invisible characters, stray spaces and blank lines; give a look-alike letter, the Cyrillic `е` in `hеad`, its word's script |
+| `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, credits, the title and artist restated around the lyrics, and ID tags in untimed lyrics |
+| `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | Put lines in time order; keep a subtitle written again for each frame once |
+| `guesswork` | Read a video title by convention, `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | Keep a subtitle's line typed out over three lines or more as the whole line |
 
 ## YouTube Music matching and albums
 

@@ -23,9 +23,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   credentials in any address replaced by `<redacted>`, its comments and
   layout kept. A path, as `--cookies` names, stays, as does any other
   word of a hook or a program. Without it the song list goes in as it is.
-- **`[clean.lyrics.<tier>]` switches the rules that clean lyrics,** as
-  `[clean.<tier>]` switches the tags': taking out subtitle markup, cues,
-  and the credits before the first line sung or after the last.
+- **Lyrics are cleaned by rules of their own,** each a switch in the
+  song list's `[clean.lyrics.<tier>]`, as tags are by `[clean.<tier>]`.
+  Beside cues and credits they take out the space LRCLIB puts after each
+  time, invisible characters, subtitle markup and `\h`, a subtitle's line
+  written again for every frame or typed out as it grows, the title and
+  artist restated around the lyrics, ID tags in untimed lyrics, and a
+  Cyrillic or Greek letter hidden in a Latin word; credits are read in
+  more shapes, `Translation (English) : …`, `Voice  …` or a credit split
+  over two lines, and cues in untimed lyrics too.
 - **`[library] source_comments`** chooses whether the comment a source's
   own tags carry is written, as a store or an uploader left it; a
   `comment` set in a song's or an album's `tags` is written either way.
