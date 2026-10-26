@@ -86,7 +86,7 @@ src/
   align.rs          audio comparison by loudness envelopes
   resolve.rs        one song's facts to the plan it is written from
   tags.rs, clean.rs tag offers and the cleaning rules
-  lang.rs           language tags: their spellings, ISO 639 codes, preferences
+  lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
   lyrics.rs         subtitle languages, LRC cleaning and timing
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names; template.rs, the path template

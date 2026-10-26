@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::codec::{Codec, Layout, Shape, Speakers};
-use crate::lang::Lang;
+use crate::lang::{Lang, Role};
 use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
@@ -877,14 +877,63 @@ impl From<WrittenTools> for Tools {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Lyrics {
-    /// The languages lyrics are taken in, best first.
+    /// The languages the listener reads, best first: a translation is
+    /// taken only into one of them, and lyrics rank by it among those
+    /// [`Lyrics::prefer`] ranks alike.
     pub read: Vec<Lang>,
+    /// What lyrics a song takes, best first: lyrics rank by the first of
+    /// these that tells them apart. A role left out is never taken; with
+    /// neither `timed` nor `untimed`, timing decides nothing.
+    pub prefer: Vec<Prefer>,
 }
 
 impl Default for Lyrics {
     fn default() -> Self {
         Self {
             read: Lang::parse("en").into_iter().collect(),
+            prefer: vec![
+                Prefer::Translation,
+                Prefer::Original,
+                Prefer::Romanization,
+                Prefer::Timed,
+            ],
+        }
+    }
+}
+
+impl Lyrics {
+    /// Whether lyrics of `role` are taken at all.
+    #[must_use]
+    pub fn takes(&self, role: Role) -> bool {
+        self.prefer.iter().any(|p| p.role() == Some(role))
+    }
+}
+
+/// One trait lyrics are ranked by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Prefer {
+    /// In the language the song is sung in.
+    Original,
+    /// In that language's Latin letters, where it is written in others.
+    Romanization,
+    /// In a language the listener reads, other than the one sung.
+    Translation,
+    /// Their lines carry times.
+    Timed,
+    /// Their lines carry none.
+    Untimed,
+}
+
+impl Prefer {
+    /// The role it prefers, if it prefers one.
+    #[must_use]
+    pub fn role(self) -> Option<Role> {
+        match self {
+            Self::Original => Some(Role::Original),
+            Self::Romanization => Some(Role::Romanization),
+            Self::Translation => Some(Role::Translation),
+            Self::Timed | Self::Untimed => None,
         }
     }
 }
@@ -1109,6 +1158,20 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         if program.command.first().is_none_or(|p| p.trim().is_empty()) {
             bail!("[tools.{name}] command names no program");
         }
+    }
+    let prefer = &settings.lyrics.prefer;
+    if let Some((_, p)) = prefer
+        .iter()
+        .enumerate()
+        .find(|(n, p)| prefer[..*n].contains(p))
+    {
+        bail!(
+            "[lyrics] prefer lists `{}` twice",
+            format!("{p:?}").to_lowercase()
+        );
+    }
+    if prefer.contains(&Prefer::Timed) && prefer.contains(&Prefer::Untimed) {
+        bail!("[lyrics] prefer lists both timed and untimed; keep the one you prefer");
     }
     let library = &settings.library;
     if library.block_size.0 == 0 {
@@ -1379,6 +1442,25 @@ mod tests {
         let e = settings("[library]\nmax_size = \"lots\"\n").unwrap_err();
         assert!(format!("{e:#}").contains("lots"), "{e:#}");
         assert!(settings("[library]\nblock_size = 0\n").is_err());
+    }
+
+    #[test]
+    fn lyrics_preferences_name_each_trait_once_and_one_timing() {
+        let s = settings("[lyrics]\nprefer = [\"untimed\", \"romanization\"]\n").unwrap();
+        assert_eq!(s.lyrics.prefer, [Prefer::Untimed, Prefer::Romanization]);
+        assert!(s.lyrics.takes(Role::Romanization));
+        assert!(!s.lyrics.takes(Role::Original));
+        let twice = settings("[lyrics]\nprefer = [\"original\", \"original\"]\n").unwrap_err();
+        assert!(
+            format!("{twice:#}").contains("`original` twice"),
+            "{twice:#}"
+        );
+        let both = settings("[lyrics]\nprefer = [\"timed\", \"untimed\"]\n").unwrap_err();
+        assert!(
+            format!("{both:#}").contains("both timed and untimed"),
+            "{both:#}"
+        );
+        assert!(settings("[lyrics]\nprefer = [\"sung\"]\n").is_err());
     }
 
     fn doc(text: &str) -> DocumentMut {

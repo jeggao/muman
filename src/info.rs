@@ -111,6 +111,9 @@ pub struct Format {
     pub acodec: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     pub vcodec: Option<String>,
+    /// The language its audio is in, as the site says it.
+    #[serde(default, deserialize_with = "lenient")]
+    pub language: Option<String>,
 }
 
 impl Format {
@@ -371,6 +374,22 @@ impl VideoInfo {
             .copied()
     }
 
+    /// The language its audio is in, as the site says it: the format
+    /// fetched names it, and YouTube's speech recognition track, which
+    /// yt-dlp lists again as `<code>-orig`, is in it too. An info JSON
+    /// kept before muman read formats' languages has the second alone.
+    #[must_use]
+    pub fn audio_language(&self) -> Option<String> {
+        self.audio_format()
+            .and_then(|f| f.language.as_deref())
+            .or_else(|| {
+                self.automatic_captions
+                    .keys()
+                    .find_map(|k| k.strip_suffix("-orig"))
+            })
+            .map(str::to_string)
+    }
+
     /// The display names yt-dlp gave the subtitles in `code`, which it
     /// also writes as each embedded stream's title.
     #[must_use]
@@ -462,7 +481,7 @@ mod tests {
         assert!(TAG_FIELDS.iter().all(|f| read.contains(f)));
         assert_eq!(
             fields::<Format>(),
-            ["format_id", "filesize", "acodec", "vcodec"]
+            ["format_id", "filesize", "acodec", "vcodec", "language"]
         );
         assert_eq!(fields::<SubtitleFormat>(), ["name"]);
     }

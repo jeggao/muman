@@ -47,9 +47,15 @@ touch_root = false
 block_size = "4 KiB"
 
 [lyrics]
-# The languages lyrics are taken in, best first, as language tags: "en",
-# "pt-BR", "zh-Hant".
+# The languages you read, best first, as language tags: "en", "pt-BR",
+# "zh-Hant". A translation is taken only into one of these.
 read = ["en"]
+# What lyrics a song takes, best first; lyrics rank by the first of these
+# that tells them apart. "original" is in the language the song is sung
+# in, "romanization" in its Latin letters, "translation" in a language
+# you read; one left out is never taken. "timed" or "untimed" prefers
+# lyrics whose lines carry times, or those whose lines do not.
+prefer = ["translation", "original", "romanization", "timed"]
 
 [audio]
 # Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac,

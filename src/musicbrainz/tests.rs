@@ -230,6 +230,9 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
         r#"{{"id": "{REC}7", "title": "Lantern Weather", "length": null, "video": false,
             "isrcs": ["XX0000000002"],
             "artist-credit": [{{"name": "Paper Comets"}}],
+            "relations": [{{"type": "performance", "work": {{"languages": ["jpn", "eng"]}}}},
+                          {{"type": "performance", "work": {{"languages": ["eng"]}}}},
+                          {{"type": "producer", "artist": {{"name": "Odile Marsh"}}}}],
             "releases": [{{"id": "{REL}7", "title": "Rooms of Salt", "status": null,
                 "release-group": {{"primary-type": "Album", "secondary-types": []}},
                 "media": [{{"position": 1, "track-offset": 2, "tracks": [{{"position": 3, "number": "A3"}}]}}]}}]}}"#
@@ -241,6 +244,7 @@ fn a_lookup_by_id_reads_the_track_a_lookup_lists() {
         .unwrap()
         .unwrap();
     assert_eq!(record.isrcs, ["XX0000000002"]);
+    assert_eq!(record.languages, ["jpn", "eng"], "each work's, each once");
     let release = record.release.unwrap();
     assert_eq!(
         (release.track, release.disc, release.date),
@@ -357,6 +361,7 @@ fn a_record_is_kept_and_read_back() {
         length_ms: Some(354_000),
         release: None,
         original_date: Some("2001-05-03".into()),
+        languages: vec!["eng".into()],
     };
     let path = keep(dir.path(), &record).unwrap();
     assert_eq!(path, path_of(dir.path(), &record.id));
@@ -384,12 +389,15 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
         "text-representation": {"language": "eng", "script": "Latn"},
         "label-info": [{"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}},
                        {"catalog-number": "HLR-0042", "label": {"name": "Harbor Lights Records"}}]}"#;
+    let works = r#"{"id": "x", "relations": [{"work": {"languages": ["kor"]}}]}"#;
     let server = Server::default()
         .answer("/ws/2/recording?", &body)
+        .answer("/ws/2/recording/", works)
         .answer("/ws/2/release/", looked);
     let throttle = Throttle::none();
     let c = client(&server, &throttle);
     let record = c.find(&query()).unwrap().unwrap();
+    assert_eq!(record.languages, ["kor"], "a search lists no works");
     assert_eq!(record.original_date.as_deref(), Some("2001-05-03"));
     let r = record.release.unwrap();
     assert_eq!(r.status.as_deref(), Some("Official"));

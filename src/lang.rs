@@ -1,5 +1,5 @@
-//! Languages, as BCP 47 tags: what lyrics are written in and what a
-//! listener reads.
+//! Languages, as BCP 47 tags: what lyrics are written in, what a song is
+//! sung in and what its listener reads.
 //!
 //! A language reaches muman spelled many ways: yt-dlp's subtitle codes
 //! (`en`, `pt-BR`, `zh-Hans`, `iw`), a stream's or a file's ISO 639-2 tag
@@ -21,12 +21,18 @@
 //! and its Bokmål, `nb`, are one, as nearly every text in one is the
 //! other.
 //!
+//! Lyrics are then the song's own, a romanization of them or a
+//! translation ([`Role`]): the original is in the language sung, a
+//! romanization in that language's Latin letters where it is written in
+//! others (`ja-Latn` of a song sung in `ja`), and anything else a
+//! translation.
+//!
 //! The codes that name no language, `und`, `mul`, `mis` and `zxx`, are no
 //! [`Lang`]: they match nothing.
 
 use std::fmt;
 
-use icu_locale::subtags::{Language, Script};
+use icu_locale::subtags::{Language, Script, script};
 use icu_locale::{LanguageIdentifier, Locale, LocaleCanonicalizer, LocaleExpander};
 
 /// A language, as a canonical BCP 47 tag of a language and, where
@@ -41,6 +47,17 @@ pub enum Fit {
     Exact,
     /// The language and script named, of another region.
     Near,
+}
+
+/// What lyrics are to a song, by their language and the one it is sung in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Role {
+    /// In the language sung.
+    Original,
+    /// In the Latin letters of a language written in others.
+    Romanization,
+    /// In another language.
+    Translation,
 }
 
 impl Lang {
@@ -104,6 +121,19 @@ impl Lang {
         match self.0.region {
             Some(region) if lang.0.region != Some(region) => Some(Fit::Near),
             _ => Some(Fit::Exact),
+        }
+    }
+
+    /// What lyrics in this language are to a song sung in `sung`.
+    #[must_use]
+    pub fn role(&self, sung: &Self) -> Role {
+        let latin = |l: &Self| l.script() == Some(script!("Latn"));
+        if !self.same_language(sung) {
+            Role::Translation
+        } else if latin(self) && !latin(sung) {
+            Role::Romanization
+        } else {
+            Role::Original
         }
     }
 }
@@ -383,5 +413,16 @@ mod tests {
         assert_eq!(fit("pt-BR", "pt-PT"), Some(Fit::Near));
         assert_eq!(fit("no", "nb"), Some(Fit::Exact));
         assert_eq!(fit("ja", "ko"), None);
+    }
+
+    #[test]
+    fn lyrics_are_original_romanized_or_translated() {
+        let role = |l: &str, sung: &str| lang(l).role(&lang(sung));
+        assert_eq!(role("ja", "ja"), Role::Original);
+        assert_eq!(role("ja-JP", "jpn"), Role::Original);
+        assert_eq!(role("ja-Latn", "ja"), Role::Romanization);
+        assert_eq!(role("en", "ja"), Role::Translation);
+        assert_eq!(role("zh-Hant", "zh"), Role::Original);
+        assert_eq!(role("en-GB", "en"), Role::Original);
     }
 }

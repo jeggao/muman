@@ -110,7 +110,7 @@ tags.genre = ""
 | Key | Means |
 |---|---|
 | `version` | The file's format; a newer one is refused |
-| `lyrics.read` | The languages lyrics are taken in, best first, as [language tags](configuration.md#lyrics-languages) |
+| `lyrics.read` | The languages you read, best first: lyrics in one are taken where a song has none in its own |
 | `sources` | Every source the song may be made from; a file belongs to one song only, while an `lrclib:` or `musicbrainz:` record may be listed by every song of its recording |
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
@@ -165,28 +165,28 @@ it was served from.
 `label`, `catalognumber`, `barcode`, `asin`, `artists`, `artistsort`,
 `albumartistsort`, `titlesort`, `albumsort`, `composersort`, `originaldate`,
 `releasetype`, `releasestatus`, `media`, `script`, `discsubtitle`, `mood`,
-`grouping`, `work`, `language`, `copyright` and `comment`, each written
-where Picard writes it in each format; or any other Vorbis comment name; a
-list sets a tag several times, and `true` or `false` is written `1` or `0`.
-Each value is read as its field holds it: a track or disc as `3`, or `3/12`,
-which sets the total too unless the song names it; a date as `YYYY-MM-DD`,
-`YYYY-MM` or a year, read from `2019/07/04` or `20190704` too; an ISRC
-without the dashes it is shown with; a tempo as a number of up to two
-decimals, rounded where a format holds whole ones (`TBPM`, `tmpo`); a
-barcode as its digits; a language as its ISO 639-2 code, as `jpn`, from any
-tag for it, as `ja`. A key is written as `KEY` and `INITIALKEY` in Vorbis
-comments, as Picard and DJ tools name it, and in `TKEY` where it is a key as
-that frame holds one (`Abm`, `F#`), else as a user text frame. Without a
-`language` of its own, a song's is its lyrics' language. A source's own
-`comment` is written only with `[library] source_comments`. A value its
-field cannot hold, as a date of `July 2019` or `2019-02-30`, a tempo that is
-not from 1 to 9999 once rounded, a ReplayGain gain or peak, which muman
-measures, or a table, refuses the song list, naming the song by its number
-and first source; so does a tag name a Vorbis comment cannot carry, of other
-than printable ASCII or with `=`. A TOML date, `date = 2019-07-04` unquoted,
-is read as its text. `add --artist`, `--album` and the other tag flags set
-these on every song an `add` lists. `muman status` shows each tag's value
-and the source it came from.
+`grouping`, `work`, `language`, `copyright` and `comment`, each written where
+Picard writes it in each format; or any other Vorbis comment name; a list sets
+a tag several times, and `true` or `false` is written `1` or `0`. Each value
+is read as its field holds it: a track or disc as `3`, or `3/12`, which sets
+the total too unless the song names it; a date as `YYYY-MM-DD`, `YYYY-MM` or a
+year, read from `2019/07/04` or `20190704` too; an ISRC without the dashes it
+is shown with; a tempo as a number of up to two decimals, rounded where a
+format holds whole ones (`TBPM`, `tmpo`); a barcode as its digits; a language
+as its ISO 639-2 code, as `jpn`, from any tag for it, as `ja`. A key is
+written as `KEY` and `INITIALKEY` in Vorbis comments, as Picard and DJ tools
+name it, and in `TKEY` where it is a key as that frame holds one (`Abm`,
+`F#`), else as a user text frame. A song's `language` is the one it is sung
+in, which picks its [lyrics](configuration.md#which-lyrics-a-song-takes). A
+source's own `comment` is written only with `[library] source_comments`. A
+value its field cannot hold, as a date of `July 2019` or `2019-02-30`, a tempo
+that is not from 1 to 9999 once rounded, a ReplayGain gain or peak, which
+muman measures, or a table, refuses the song list, naming the song by its
+number and first source; so does a tag name a Vorbis comment cannot carry, of
+other than printable ASCII or with `=`. A TOML date, `date = 2019-07-04`
+unquoted, is read as its text. `add --artist`, `--album` and the other tag
+flags set these on every song an `add` lists. `muman status` shows each tag's
+value and the source it came from.
 
 A song's audio keeps the chapters of the source it is taken from, as an
 M4B audiobook or a video in parts has them: the song stays one file, and

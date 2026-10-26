@@ -115,7 +115,7 @@ know.
 | Table | Sets |
 |---|---|
 | `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, whether sources' comments are written, the most the library may take |
-| [`[lyrics]`](#lyrics-languages) | The languages lyrics are taken in |
+| [`[lyrics]`](#which-lyrics-a-song-takes) | The languages you read, and which lyrics a song takes first: the original, a romanization or a translation, timed or untimed |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | [`[loudness]`](audio.md#loudness) | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
@@ -216,13 +216,42 @@ about again when put back, by hand or by `undo`. `list`, `duplicates`,
 `purge`, `completions`, `check` without `--decode` or `--upstream`,
 and an export that encodes nothing run none of them and never ask.
 
-## Lyrics languages
+## Which lyrics a song takes
 
-`[lyrics] read` lists the languages lyrics are taken in, best first, as
-language tags: `en`, `pt-BR`, `zh-Hant`. They match as a browser
-matches them: `zh` takes `zh-Hant`, `zh-TW` takes `zh-Hant` but never
-`zh-Hans`, `pt-BR` takes `pt-PT` after any `pt-BR`, and `ger`, `deu`
-and `de` are one language.
+Lyrics have one of three roles, by their language and the one the song
+is sung in, its `language` tag: one set by hand, else a MusicBrainz
+work's lyrics language, a file's own tag, the language YouTube says a
+video's audio is in, or that of the audio file's own lyrics tag; never
+a subtitle's, which may be a translation. Lyrics in that language are
+the original; in its Latin letters, as `ja-Latn` for a song sung in
+`ja`, a romanization; in a language `[lyrics] read` names, a
+translation. A translation into a language `read` does not name is
+never taken. Lyrics that say nothing of their language, as LRCLIB's,
+are taken as the original.
+
+`[lyrics] prefer` lists the roles, and `"timed"` or `"untimed"`, best
+first. Lyrics rank by the first entry that tells them apart; a role
+left out is never taken. Its default is in
+[`new.toml`](../src/manifest/new.toml). This takes a song's own words,
+else their romanization, timed lyrics before untimed of the same role,
+and never a translation:
+
+```toml
+[lyrics]
+read = ["en"]
+prefer = ["original", "romanization", "timed"]
+```
+
+Put `"timed"` first to take timed lyrics of any role before untimed
+ones. Of lyrics `prefer` ranks alike, those in the language `read` names
+first win, then the surest to be the chosen audio's recording. Where the
+language sung is not known, no lyrics' role is, so the roles rank all
+lyrics alike, and only lyrics in a language `read` names are taken; a
+song file's own lyrics in another rank after those.
+
+Languages match as a browser matches them: `zh` takes `zh-Hant`,
+`zh-TW` takes `zh-Hant` but never `zh-Hans`, `pt-BR` takes `pt-PT`
+after any `pt-BR`, and `ger`, `deu` and `de` are one language.
 
 ## How sources are ranked
 
