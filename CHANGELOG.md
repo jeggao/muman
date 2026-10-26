@@ -25,6 +25,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **`[defaults] lyrics` is `[lyrics] read`,** and the next write moves
+  it. It takes any language tag, as `zh-Hant` or `pt-BR`, matched as a
+  browser matches one: `zh-TW` takes `zh-Hant` and never `zh-Hans`, and
+  `ger`, `deu` and `de` are one language.
+- **A `language` tag takes any spelling of a language,** as `ja` or
+  `ja-JP`, and is written as its ISO 639-2 terminologic code, `deu`
+  rather than `ger`.
 - **A song list that sets commands or servers asks once before muman
   runs them.** The first command after updating that could run a song
   list's hook, a program of its `[tools]`, yt-dlp's or aria2c's

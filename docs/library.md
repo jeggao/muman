@@ -79,8 +79,8 @@ time moves with its line's, and an `[offset:]` the file states is folded
 into every time it holds. A song file's own lyrics tag, `USLT` in an
 MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A
 or `Lyrics` in APEv2, is lyrics of that source, timed when its text is
-LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not
-list ranks after those in a language it does. Cues such as `[Music]` or
+LRC; one a `USLT` frame marks in a language `[lyrics] read` does not
+name ranks after those in a language it does. Cues such as `[Music]` or
 `(Guitar solo)`, symbol-only lines and the credits before the first line
 sung or after the last are dropped; a line in brackets of other words is
 sung, as a backing vocal is. A `.lrc` with no audio of its own is taken

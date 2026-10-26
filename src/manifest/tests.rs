@@ -18,7 +18,7 @@ const TEMPLATE: &str = "tags.title = \"\"\ntags.artist = \"\"\ntags.album = \"\"
 fn a_new_list_carries_its_header_defaults_and_each_song() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();
-    assert_eq!(m.lyrics, ["en"]);
+    assert_eq!(m.settings.lyrics, crate::settings::Lyrics::default());
     m.edit(Edit::Add {
         sources: vec![yt("aaaaaaaaaaa"), yt("bbbbbbbbbbb")],
         album: None,
@@ -530,7 +530,7 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "\n[defaults]\nlyrics = [\"en\"]\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\n[clean.packaging]\nremaster = false # mine\n",
+        "\n[lyrics]\nread = [\"en\"]\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\n[clean.packaging]\nremaster = false # mine\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     assert!(!m.clean.is_on("packaging.remaster"));
@@ -538,7 +538,7 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
     m.save().unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
-    assert!(at("[defaults]") < at("[clean.tidy]"), "{t}");
+    assert!(at("[lyrics]") < at("[clean.tidy]"), "{t}");
     assert!(at("[clean.guesswork]") < at("\n[[song]]"), "{t}");
     assert!(t.contains("remaster = false # mine"), "{t}");
     assert!(t.contains("# Spacing and punctuation only"), "{t}");

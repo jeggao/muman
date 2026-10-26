@@ -1,14 +1,14 @@
 //! Which language a subtitle is in, and LRC cleaned of what is no
 //! lyric and moved to another cut of the recording.
 //!
-//! A preference is a language code as yt-dlp lists subtitles (`ja`,
-//! `en`, `pt-BR`). The stream it names is found by title, since yt-dlp
-//! titles each embedded stream with the display name its info JSON
-//! records for a person's subtitle; a generated caption has no name, so
-//! speech recognition of a song never becomes its lyrics. The ISO 639-2
-//! language tag is used only when the info JSON says nothing about
-//! subtitles, and it is the weaker match: yt-dlp tags Filipino `fin`,
-//! the code for Finnish.
+//! A preference is a language tag (`ja`, `en`, `pt-BR`, `zh-Hant`),
+//! matched as [`crate::lang`] matches one. The stream it names is found
+//! by title, since yt-dlp titles each embedded stream with the display
+//! name its info JSON records for a person's subtitle; a generated
+//! caption has no name, so speech recognition of a song never becomes
+//! its lyrics. The ISO 639-2 language tag is used only when the info
+//! JSON says nothing about subtitles, and it is the weaker match:
+//! yt-dlp tags Filipino `fin`, the code for Finnish.
 //!
 //! A line is no lyric when it is a cue or a credit. A cue is blank, only
 //! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
@@ -24,6 +24,7 @@
 //! the line, and a closing `>` or `}` found missing once is not looked
 //! for again from each later `<` or `{`.
 
+use crate::lang::{Fit, Lang};
 use crate::units;
 use std::fmt::Write as _;
 
@@ -44,81 +45,21 @@ pub enum Language {
     Unstated,
 }
 
-/// The base language of a preference: `pt-BR` → `pt`.
-fn base(code: &str) -> &str {
-    code.split(['-', '_']).next().unwrap_or(code)
-}
-
-/// The ISO 639-2 code of the language a two-letter code names, the
-/// terminologic one where it has two, as `ID3v2` marks a language.
-#[must_use]
-pub fn iso639_2_of(code: &str) -> Option<&'static str> {
-    iso639_2(code).first().copied()
-}
-
-/// ISO 639-2 codes, bibliographic and terminologic, for the languages
-/// subtitles are commonly offered in.
-fn iso639_2(code: &str) -> &'static [&'static str] {
-    match base(code).to_ascii_lowercase().as_str() {
-        "ja" => &["jpn"],
-        "en" => &["eng"],
-        "zh" => &["zho", "chi"],
-        "ko" => &["kor"],
-        "fr" => &["fra", "fre"],
-        "de" => &["deu", "ger"],
-        "es" => &["spa"],
-        "pt" => &["por"],
-        "it" => &["ita"],
-        "ru" => &["rus"],
-        "id" => &["ind"],
-        "vi" => &["vie"],
-        "th" => &["tha"],
-        "uk" => &["ukr"],
-        "pl" => &["pol"],
-        "nl" => &["nld", "dut"],
-        "tr" => &["tur"],
-        "ar" => &["ara"],
-        "he" | "iw" => &["heb"],
-        "hi" => &["hin"],
-        "bn" => &["ben"],
-        "fa" => &["fas", "per"],
-        "ms" => &["msa", "may"],
-        "tl" | "fil" => &["tgl", "fil"],
-        "sv" => &["swe"],
-        "no" | "nb" => &["nor", "nob"],
-        "da" => &["dan"],
-        "fi" => &["fin"],
-        "is" => &["isl", "ice"],
-        "cs" => &["ces", "cze"],
-        "sk" => &["slk", "slo"],
-        "hu" => &["hun"],
-        "ro" => &["ron", "rum"],
-        "bg" => &["bul"],
-        "sr" => &["srp"],
-        "hr" => &["hrv"],
-        "el" => &["ell", "gre"],
-        "ca" => &["cat"],
-        "eu" => &["eus", "baq"],
-        "gl" => &["glg"],
-        "cy" => &["cym", "wel"],
-        "ga" => &["gle"],
-        "et" => &["est"],
-        "lv" => &["lav"],
-        "lt" => &["lit"],
-        "sl" => &["slv"],
-        "ta" => &["tam"],
-        "te" => &["tel"],
-        "ur" => &["urd"],
-        "sw" => &["swa"],
-        _ => &[],
+impl Language {
+    /// The languages it may be: each code the info JSON gives the
+    /// stream's display name, or the stream's tag; none for a file.
+    #[must_use]
+    pub fn langs(&self) -> Vec<Lang> {
+        match self {
+            // YouTube lists its original track again as `<code>-orig`.
+            Self::Codes(codes) => codes
+                .iter()
+                .filter_map(|c| Lang::parse(c.strip_suffix("-orig").unwrap_or(c)))
+                .collect(),
+            Self::Tag(tag) => Lang::parse(tag).into_iter().collect(),
+            Self::Unstated => Vec::new(),
+        }
     }
-}
-
-/// Whether an info JSON code is a preference or one of its regional
-/// variants (`en` covers `en-US`, `en-GB`).
-fn covers(pref: &str, code: &str) -> bool {
-    let (pref, code) = (pref.to_ascii_lowercase(), code.to_ascii_lowercase());
-    code == pref || code.starts_with(&format!("{pref}-"))
 }
 
 /// What a subtitle stream is written in; `None` for a caption the site
@@ -138,25 +79,24 @@ pub fn language(sub: &Subtitle, info: &VideoInfo) -> Option<Language> {
     sub.language.clone().map(Language::Tag)
 }
 
-/// The position of the first preference `lang` meets.
+/// The first preference `lang` meets, and how closely.
 #[must_use]
-pub fn preference(prefs: &[String], lang: &Language) -> Option<usize> {
-    match lang {
-        Language::Unstated => (!prefs.is_empty()).then_some(0),
-        Language::Codes(codes) => prefs
-            .iter()
-            .position(|p| codes.iter().any(|c| covers(p, c))),
-        Language::Tag(tag) => prefs.iter().position(|p| {
-            iso639_2(p).contains(&tag.to_ascii_lowercase().as_str()) || tag.eq_ignore_ascii_case(p)
-        }),
+pub fn preference(prefs: &[Lang], lang: &Language) -> Option<(usize, Fit)> {
+    if *lang == Language::Unstated {
+        return (!prefs.is_empty()).then_some((0, Fit::Exact));
     }
+    let langs = lang.langs();
+    prefs.iter().enumerate().find_map(|(n, p)| {
+        let fit = langs.iter().filter_map(|l| p.fit(l)).min()?;
+        Some((n, fit))
+    })
 }
 
 /// The subtitle stream to turn into lyrics: the first preference with a
 /// match wins, a stream named for it before one only tagged with it.
 #[must_use]
 pub fn pick<'a>(
-    prefs: &[String],
+    prefs: &[Lang],
     subtitles: &'a [Subtitle],
     info: &VideoInfo,
 ) -> Option<&'a Subtitle> {
@@ -964,8 +904,8 @@ mod tests {
         info::parse(json.as_bytes()).unwrap()
     }
 
-    fn prefs(p: &[&str]) -> Vec<String> {
-        p.iter().map(|s| (*s).to_string()).collect()
+    fn prefs(p: &[&str]) -> Vec<Lang> {
+        p.iter().map(|s| Lang::parse(s).unwrap()).collect()
     }
 
     // The streams and names of a real original.
@@ -1049,11 +989,11 @@ mod tests {
         let (subs, info) = real();
         assert_eq!(
             preference(&prefs(&["fr", "en"]), &language(&subs[1], &info).unwrap()),
-            Some(1)
+            Some((1, Fit::Exact))
         );
         assert_eq!(
             preference(&prefs(&["ja"]), &Language::Unstated),
-            Some(0),
+            Some((0, Fit::Exact)),
             "a file is taken at its word"
         );
     }

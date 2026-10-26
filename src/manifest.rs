@@ -326,8 +326,6 @@ pub struct Manifest {
     pub albums: Vec<Album>,
     /// `[torrents]`, by hash.
     pub torrents: BTreeMap<String, Torrent>,
-    /// Subtitle languages lyrics are taken in, most preferred first.
-    pub lyrics: Vec<String>,
     /// Which cleaning rules are switched off.
     pub clean: Settings,
     pub removed: Vec<Removed>,
@@ -510,7 +508,6 @@ impl Manifest {
             songs: parsed.songs,
             albums: parsed.albums,
             torrents: parsed.torrents,
-            lyrics: parsed.lyrics,
             removed: parsed.removed,
             providers: parsed.providers,
             hooks: parsed.hooks,
@@ -653,8 +650,7 @@ impl Manifest {
         atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, text.as_bytes())?;
         self.text = Some(text);
         self.edits.clear();
-        (self.songs, self.albums, self.lyrics, self.removed) =
-            (parsed.songs, parsed.albums, parsed.lyrics, parsed.removed);
+        (self.songs, self.albums, self.removed) = (parsed.songs, parsed.albums, parsed.removed);
         (self.providers, self.hooks, self.clean) = (parsed.providers, parsed.hooks, parsed.clean);
         (self.settings, self.stale_defaults) = (parsed.settings, parsed.stale_defaults);
         self.torrents = parsed.torrents;
@@ -785,7 +781,6 @@ struct Parsed {
     songs: Vec<Song>,
     albums: Vec<Album>,
     torrents: BTreeMap<String, Torrent>,
-    lyrics: Vec<String>,
     removed: Vec<Removed>,
     providers: provider::Config,
     hooks: Vec<Hook>,
@@ -887,19 +882,6 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
     let respelled = respell(&mut current, &spelled_now);
     let doc = no_misspelled_list(&current)?;
-    let lyrics = doc
-        .get("defaults")
-        .and_then(|d| d.get("lyrics"))
-        .and_then(Item::as_array)
-        .map_or_else(
-            || vec!["en".to_string()],
-            |a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            },
-        );
     let mut songs = Vec::new();
     let mut owner: BTreeMap<SourceKey, usize> = BTreeMap::new();
     for (n, t) in tables(doc, "song").enumerate() {
@@ -964,7 +946,6 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         songs,
         albums,
         torrents: torrents_of(doc)?,
-        lyrics,
         removed,
         providers: provider::read(doc)?,
         hooks: hooks::read(doc)?,
@@ -1728,13 +1709,23 @@ fn clean_of(doc: &DocumentMut) -> Result<Settings> {
     Ok(settings)
 }
 
+/// The last place a table of `item` holds in the file, its own tables'
+/// included.
+fn last_position(item: &Item) -> Option<isize> {
+    let t = item.as_table()?;
+    t.iter()
+        .filter_map(|(_, i)| last_position(i))
+        .chain(t.position())
+        .max()
+}
+
 /// Each tier's `[clean.<tier>]`, with every switch it lacks added on,
-/// placed after `[defaults]` so it is found at the top of the file.
+/// placed after the settings so it is found at the top of the file.
 fn clean_template(doc: &mut DocumentMut) -> bool {
-    let position = doc
-        .get("defaults")
-        .and_then(Item::as_table)
-        .and_then(Table::position);
+    let position = crate::settings::TABLES
+        .iter()
+        .filter_map(|t| last_position(doc.get(t)?))
+        .max();
     let root = doc.as_table_mut();
     let mut changed = false;
     if !root.contains_key("clean") {
@@ -1743,13 +1734,12 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
         t.set_position(position);
         root.insert("clean", Item::Table(t));
         // A new table without a position prints after the one before it
-        // in key order, so `clean` moves up beside `defaults`.
+        // in key order, so `clean` moves up beside the settings.
         let rank = |k: &str| match k {
             "version" | "edition" => 0,
             k if crate::settings::TABLES.contains(&k) => 1,
-            "defaults" => 2,
-            "clean" => 3,
-            _ => 4,
+            "clean" => 2,
+            _ => 3,
         };
         root.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
         changed = true;

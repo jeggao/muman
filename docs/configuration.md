@@ -115,6 +115,7 @@ know.
 | Table | Sets |
 |---|---|
 | `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, whether sources' comments are written, the most the library may take |
+| [`[lyrics]`](#lyrics-languages) | The languages lyrics are taken in |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | [`[loudness]`](audio.md#loudness) | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
@@ -155,9 +156,8 @@ and fetched again from the page its song records. Adding a site to `new.toml` ad
 the next time muman writes one; list an extractor only for a site whose
 pages are its own, since a source it fetched before is named by its page.
 
-The song list's own tables — `[defaults]` (lyrics languages),
-`[clean.*]` (tag cleaning), `[providers.*]`, `[[trigger]]` and
-`[[hook]]` — are described in the [guide](guide.md) and in [making the
+The song list's own tables — `[clean.*]` (tag cleaning),
+`[providers.*]`, `[[trigger]]` and `[[hook]]` — are described in the [guide](guide.md) and in [making the
 library](library.md).
 
 A setting that changes what a song file holds, such as a bitrate, a
@@ -215,6 +215,14 @@ home's list never asks; one taken out needs none either, and is asked
 about again when put back, by hand or by `undo`. `list`, `duplicates`,
 `purge`, `completions`, `check` without `--decode` or `--upstream`,
 and an export that encodes nothing run none of them and never ask.
+
+## Lyrics languages
+
+`[lyrics] read` lists the languages lyrics are taken in, best first, as
+language tags: `en`, `pt-BR`, `zh-Hant`. They match as a browser
+matches them: `zh` takes `zh-Hant`, `zh-TW` takes `zh-Hant` but never
+`zh-Hans`, `pt-BR` takes `pt-PT` after any `pt-BR`, and `ger`, `deu`
+and `de` are one language.
 
 ## How sources are ranked
 

@@ -8,6 +8,7 @@ static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 static QUALITY: std::sync::LazyLock<Quality> = std::sync::LazyLock::new(Quality::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
+use crate::lang::Lang;
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
 use crate::tags::Offers;
@@ -156,6 +157,10 @@ fn why<'r>(r: &'r Resolved, key: &str) -> &'r TagWhy {
     r.why.tags.iter().find(|t| t.key == key).unwrap()
 }
 
+fn english() -> Vec<Lang> {
+    vec![Lang::parse("en").unwrap()]
+}
+
 fn song(sources: &[SourceKey]) -> Song {
     Song {
         sources: sources.to_vec(),
@@ -180,7 +185,7 @@ fn run_with(
         facts,
         on_disk: None,
         alignments,
-        lyrics: &["en".to_string()],
+        lyrics: &english(),
         clean: &Settings::default(),
         albums: &Albums::default(),
         naming: &NAMING,
@@ -678,7 +683,7 @@ fn hand_set_tags_and_the_album_win_last() {
         facts: &facts,
         on_disk: None,
         alignments: &alignments,
-        lyrics: &["en".to_string()],
+        lyrics: &english(),
         clean: &Settings::default(),
         albums: &Albums::default(),
         naming: &NAMING,
@@ -1600,7 +1605,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             facts: &facts,
             on_disk: None,
             alignments: &[],
-            lyrics: &["en".to_string()],
+            lyrics: &english(),
             clean: &Settings::default(),
             albums: &Albums::default(),
             naming: &NAMING,

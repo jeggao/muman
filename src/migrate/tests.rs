@@ -11,7 +11,7 @@ fn renames() -> impl Iterator<Item = &'static Rename> {
         .flat_map(|e| e.steps)
         .filter_map(|s| match s {
             Step::Rename(r) => Some(r),
-            Step::Default(_) => None,
+            Step::Move(_) | Step::Default(_) => None,
         })
 }
 
@@ -255,4 +255,36 @@ fn a_file_of_a_later_edition_is_refused_with_its_edition_named() {
         read(&doc("edition = 99\n")).is_ok(),
         "nothing it does not know"
     );
+}
+
+#[test]
+fn the_lyrics_languages_move_to_their_own_table_with_their_comments() {
+    let mut d = doc("[defaults]\n# Mine.\nlyrics = [\"ja\", \"en\"]\n\n[[song]]\nsources = []\n");
+    let moved = rename_all(&mut d, &EDITIONS).unwrap();
+    assert_eq!(
+        moved[0].to_string(),
+        "[defaults] `lyrics = [\"ja\", \"en\"]` is `[lyrics] read = [\"ja\", \"en\"]` now"
+    );
+    let text = d.to_string();
+    assert!(!text.contains("[defaults]"), "{text}");
+    assert!(
+        text.contains("# Mine.\nread = [\"ja\", \"en\"]\n"),
+        "{text}"
+    );
+    let read: Vec<String> = crate::settings::read(&doc("[defaults]\nlyrics = [\"ja\"]\n"))
+        .unwrap()
+        .lyrics
+        .read
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(read, ["ja"], "read old, it is moved");
+    assert!(
+        rename_all(&mut d, &EDITIONS).unwrap().is_empty(),
+        "once is all"
+    );
+
+    let both = "[defaults]\nlyrics = [\"ja\"]\n[lyrics]\nread = [\"en\"]\n";
+    let e = rename_all(&mut doc(both), &EDITIONS).unwrap_err();
+    assert!(format!("{e:#}").contains("keep [lyrics] `read`"), "{e:#}");
 }

@@ -35,6 +35,7 @@ pub mod http;
 pub mod identify;
 pub mod info;
 pub mod integrity;
+pub mod lang;
 pub mod library;
 pub mod limit;
 pub mod lookup;

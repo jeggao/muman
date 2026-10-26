@@ -8,6 +8,7 @@
 //! | Step | Made | How a file is told to need it |
 //! |---|---|---|
 //! | [`Step::Rename`] | On every read, in memory, and on every write, for good | By its shape: the old name is there |
+//! | [`Step::Move`] | As a rename | By its shape: the old name is in its old table |
 //! | [`Step::Default`] | By `sync --update-defaults`, when asked | By its edition, and a value that reads as the old default |
 //!
 //! A rename loses nothing, so it is made without asking, and is found by
@@ -16,7 +17,9 @@
 //! memory reads the same. Renames chain: each step converts the value
 //! the step before wrote. Making one twice changes nothing, since the old
 //! name is gone after the first. A file naming a setting by both names
-//! is refused, as neither can be told the one meant.
+//! is refused, as neither can be told the one meant. A move is a rename
+//! into another table, its value kept as it is; the table it leaves is
+//! dropped once it holds nothing.
 //!
 //! A changed default is offered, not made: a default written out looks
 //! like a value chosen. A setting still at an edition's old default, read
@@ -53,7 +56,7 @@ use crate::settings::{TABLES, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 4;
+pub const EDITION: i64 = 5;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
@@ -90,6 +93,10 @@ pub const HISTORY: &[Edition] = &[
         number: 4,
         steps: &[changed("ytdlp.sub_langs", r#""all,-live_chat""#)],
     },
+    Edition {
+        number: 5,
+        steps: &[moved("defaults", "lyrics", "lyrics", "read")],
+    },
 ];
 
 /// The editions this muman knows.
@@ -115,6 +122,7 @@ pub struct Edition {
 #[derive(Debug, Clone, Copy)]
 pub enum Step {
     Rename(Rename),
+    Move(Move),
     Default(Change),
 }
 
@@ -129,6 +137,17 @@ pub struct Rename {
     /// The old value as the new name takes it, `None` for one that was
     /// never valid.
     pub convert: fn(&Value) -> Option<Value>,
+}
+
+/// A setting moved into another table, its value as it was.
+#[derive(Debug, Clone, Copy)]
+pub struct Move {
+    /// The top-level table it was in, and its name there.
+    pub from: &'static str,
+    pub old: &'static str,
+    /// The top-level table it is in now, and its name there.
+    pub to: &'static str,
+    pub new: &'static str,
 }
 
 /// A default changed.
@@ -152,6 +171,10 @@ const fn rename(
         new,
         convert,
     })
+}
+
+const fn moved(from: &'static str, old: &'static str, to: &'static str, new: &'static str) -> Step {
+    Step::Move(Move { from, old, to, new })
 }
 
 const fn changed(key: &'static str, was: &'static str) -> Step {
@@ -265,9 +288,9 @@ fn tables_named<'a>(
 pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Renamed>> {
     let mut renamed = Vec::new();
     let steps = editions.history.iter().flat_map(|e| e.steps);
-    for r in steps.filter_map(|s| match s {
+    for r in steps.clone().filter_map(|s| match s {
         Step::Rename(r) => Some(r),
-        Step::Default(_) => None,
+        Step::Move(_) | Step::Default(_) => None,
     }) {
         for (name, table) in tables_named(doc, r.table) {
             let Some(old) = table.get(r.old).and_then(Item::as_value) else {
@@ -298,7 +321,67 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
             replace_key(table, r.old, r.new, &Item::Value(new));
         }
     }
+    for m in steps.filter_map(|s| match s {
+        Step::Move(m) => Some(m),
+        Step::Rename(_) | Step::Default(_) => None,
+    }) {
+        renamed.extend(move_setting(doc, m)?);
+    }
     Ok(renamed)
+}
+
+/// `m` made in `doc`, the setting keeping its comments: what moved.
+fn move_setting(doc: &mut DocumentMut, m: &Move) -> Result<Option<Renamed>> {
+    let Some(from) = doc.get_mut(m.from).and_then(Item::as_table_like_mut) else {
+        return Ok(None);
+    };
+    let Some((key, item)) = from
+        .get_key_value(m.old)
+        .map(|(k, i)| (k.clone(), i.clone()))
+    else {
+        return Ok(None);
+    };
+    let Some(old) = item.as_value() else {
+        bail!(
+            "[{}] `{}` must be a value; set [{}] `{}` instead",
+            m.from,
+            m.old,
+            m.to,
+            m.new
+        );
+    };
+    if doc.get(m.to).and_then(|t| t.get(m.new)).is_some() {
+        bail!(
+            "[{}] `{}` and [{}] `{}`, its new place, are both set; keep [{}] `{}`",
+            m.from,
+            m.old,
+            m.to,
+            m.new,
+            m.to,
+            m.new
+        );
+    }
+    let moved = Renamed {
+        table: m.from.to_string(),
+        old: format!("{} = {}", m.old, text(old)),
+        new: format!("[{}] {} = {}", m.to, m.new, text(old)),
+    };
+    if let Some(from) = doc.get_mut(m.from).and_then(Item::as_table_like_mut) {
+        from.remove(m.old);
+        if from.is_empty() {
+            doc.remove(m.from);
+        }
+    }
+    let to = doc
+        .entry(m.to)
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .with_context(|| format!("[{}] must be a table", m.to))?;
+    to.insert(m.new, item);
+    if let Some(mut k) = to.key_mut(m.new) {
+        *k.leaf_decor_mut() = key.leaf_decor().clone();
+    }
+    Ok(Some(moved))
 }
 
 /// `table` with `old` replaced by `new`, holding `item`, in its place
@@ -357,6 +440,17 @@ pub fn stale_warnings(stale: &[Stale]) -> Vec<String> {
         );
     }
     lines
+}
+
+/// The tables a setting was moved out of.
+pub(crate) fn moved_from() -> impl Iterator<Item = &'static str> {
+    HISTORY
+        .iter()
+        .flat_map(|e| e.steps)
+        .filter_map(|s| match s {
+            Step::Move(m) => Some(m.from),
+            _ => None,
+        })
 }
 
 /// The names a setting called `new` now had in earlier editions.

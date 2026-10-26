@@ -105,6 +105,7 @@ use crate::clean::{self, Albums, Settings};
 use crate::codec::{Adapt, Chain, Codec, Container, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
+use crate::lang::{Fit, Lang};
 use crate::loudness::Gains;
 use crate::lyrics;
 use crate::manifest::{Album, LyricsPin, Song};
@@ -587,7 +588,8 @@ pub struct Input<'a> {
     /// take from; unset, every source measured is taken to be.
     pub on_disk: Option<&'a BTreeSet<SourceKey>>,
     pub alignments: &'a [Aligned],
-    pub lyrics: &'a [String],
+    /// The languages lyrics are taken in, best first.
+    pub lyrics: &'a [Lang],
     pub clean: &'a Settings,
     /// Every album the library holds, for cleaning.
     pub albums: &'a Albums,
@@ -863,16 +865,6 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
     }
 }
 
-/// The ISO 639-2 code of the language `language` names, if it names one.
-fn language_code(language: &crate::lyrics::Language) -> Option<String> {
-    let code = match language {
-        crate::lyrics::Language::Codes(codes) => codes.first()?.clone(),
-        crate::lyrics::Language::Tag(tag) => tag.clone(),
-        crate::lyrics::Language::Unstated => return None,
-    };
-    crate::tags::Kind::Language.read(&code).ok()
-}
-
 fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
     let mut order = 0_i64;
     let mut best: Option<(Rank, CoverRef, String)> = None;
@@ -979,9 +971,14 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         };
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
-            let Some(preference) = lyrics::preference(input.lyrics, &l.language).or_else(|| {
-                (l.at == LyricsAt::Tag && !input.lyrics.is_empty()).then_some(input.lyrics.len())
-            }) else {
+            let wide = |n: usize| i64::try_from(n).unwrap_or(UNKNOWN);
+            let Some(preference) = lyrics::preference(input.lyrics, &l.language)
+                .map(|(n, fit)| wide(n) * 2 + i64::from(fit == Fit::Near))
+                .or_else(|| {
+                    (l.at == LyricsAt::Tag && !input.lyrics.is_empty())
+                        .then(|| wide(input.lyrics.len()) * 2)
+                })
+            else {
                 continue;
             };
             let confidence = match l.stated_ms {
@@ -1003,7 +1000,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
             });
             let rank: Rank = vec![
                 i64::from(l.timing.is_none()),
-                i64::try_from(preference).unwrap_or(UNKNOWN),
+                preference,
                 -((confidence * 20.0).floor() as i64),
                 -coverage,
                 i64::try_from(n).unwrap_or(UNKNOWN),
@@ -1032,7 +1029,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     shift_ms: offset - input.song.lyrics_offset_ms,
                     stretch_ppm,
                     placement: input.placement,
-                    language: language_code(&l.language),
+                    language: l.language.langs().first().map(Lang::iso639_2),
                 },
                 why,
             ));
