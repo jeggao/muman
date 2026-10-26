@@ -52,7 +52,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Key, Table, Value, value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Key, Table, TableLike, Value, value};
 
 use crate::atomic::{self, Lock};
 use crate::clean::{self, Settings};
@@ -120,8 +120,9 @@ const HEADER: &str = "\
 #             offer. Any other Vorbis comment name works too; a list sets
 #             several. `muman status` shows what was picked and why.
 #   Cleaning: [clean.*] turns each rule cleaning what the sources offer on
-#             or off; `muman status` names the rules that changed a tag.
-#             Tags set by hand are never cleaned.
+#             or off, [clean.lyrics.*] each cleaning the lyrics; `muman
+#             status` names the rules that changed a tag. Tags set by
+#             hand are never cleaned.
 #   Held:     held.\"<source>\" records the audio, cover, lyrics and tags
 #             each source held when the song was built. A fetched source
 #             that holds otherwise after a fetch again leaves the song as
@@ -1684,8 +1685,9 @@ fn decor_prefix(decor: &toml_edit::Decor) -> &str {
     decor.prefix().and_then(|p| p.as_str()).unwrap_or("")
 }
 
-/// The cleaning switches the file sets. A key naming no rule is kept,
-/// and reported, so a misspelled one is not silently ignored.
+/// The cleaning switches the file sets, the tags' under `[clean.<tier>]`
+/// and the lyrics' under `[clean.lyrics.<tier>]`. A key naming no rule is
+/// kept, and reported, so a misspelled one is not silently ignored.
 fn clean_of(doc: &DocumentMut) -> Result<Settings> {
     let mut settings = Settings::default();
     let Some(tiers) = doc.get("clean").and_then(Item::as_table_like) else {
@@ -1696,17 +1698,32 @@ fn clean_of(doc: &DocumentMut) -> Result<Settings> {
             settings.unknown.push(format!("clean.{tier}"));
             continue;
         };
-        for (key, item) in rules.iter() {
-            let name = format!("{tier}.{key}");
-            let on = item
-                .as_bool()
-                .with_context(|| format!("`clean.{name}` must be true or false"))?;
-            if !settings.set(&name, on) {
-                settings.unknown.push(format!("clean.{name}"));
+        if tier == "lyrics" {
+            for (tier, item) in rules.iter() {
+                match item.as_table_like() {
+                    Some(rules) => switch(&mut settings, &format!("lyrics.{tier}"), rules)?,
+                    None => settings.unknown.push(format!("clean.lyrics.{tier}")),
+                }
             }
+        } else {
+            switch(&mut settings, tier, rules)?;
         }
     }
     Ok(settings)
+}
+
+/// The switches of the table `[clean.<tier>]` holds.
+fn switch(settings: &mut Settings, tier: &str, rules: &dyn TableLike) -> Result<()> {
+    for (key, item) in rules.iter() {
+        let name = format!("{tier}.{key}");
+        let on = item
+            .as_bool()
+            .with_context(|| format!("`clean.{name}` must be true or false"))?;
+        if !settings.set(&name, on) {
+            settings.unknown.push(format!("clean.{name}"));
+        }
+    }
+    Ok(())
 }
 
 /// The last place a table of `item` holds in the file, its own tables'
@@ -1719,8 +1736,9 @@ fn last_position(item: &Item) -> Option<isize> {
         .max()
 }
 
-/// Each tier's `[clean.<tier>]`, with every switch it lacks added on,
-/// placed after the settings so it is found at the top of the file.
+/// Each tier's `[clean.<tier>]` and `[clean.lyrics.<tier>]`, with every
+/// switch it lacks added on, placed after the settings so it is found at
+/// the top of the file.
 fn clean_template(doc: &mut DocumentMut) -> bool {
     let position = crate::settings::TABLES
         .iter()
@@ -1747,7 +1765,45 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
     let Some(clean) = root.get_mut("clean").and_then(Item::as_table_mut) else {
         return changed;
     };
+    changed |= switches_template(clean, position, clean::switches());
+    if !clean.contains_key("lyrics") {
+        let mut t = Table::new();
+        t.set_implicit(true);
+        t.set_position(position);
+        clean.insert("lyrics", Item::Table(t));
+        changed = true;
+    }
+    if let Some(lyrics) = clean.get_mut("lyrics").and_then(Item::as_table_mut) {
+        changed |= switches_template(lyrics, position, clean::lyrics::switches());
+    }
+    // The tags' tiers first, then the lyrics', whatever order the file had.
+    let rank = |k: &str| {
+        clean::TIERS
+            .iter()
+            .position(|(t, _)| *t == k)
+            .unwrap_or(if k == "lyrics" {
+                clean::TIERS.len()
+            } else {
+                usize::MAX
+            })
+    };
+    clean.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
+    changed
+}
+
+/// Each tier's table in `clean`, with every switch of `switches` it
+/// lacks added on.
+fn switches_template(
+    clean: &mut Table,
+    position: Option<isize>,
+    switches: impl Iterator<Item = (&'static str, &'static str)>,
+) -> bool {
+    let switches: Vec<_> = switches.collect();
+    let mut changed = false;
     for (tier, about) in clean::TIERS {
+        if !switches.iter().any(|(t, _)| *t == tier) {
+            continue;
+        }
         if !clean.contains_key(tier) {
             let mut t = Table::new();
             t.set_position(position);
@@ -1758,7 +1814,7 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
         let Some(t) = clean.get_mut(tier).and_then(Item::as_table_mut) else {
             continue;
         };
-        for (_, key) in clean::switches().filter(|(t, _)| *t == tier) {
+        for (_, key) in switches.iter().filter(|(t, _)| *t == tier) {
             if !t.contains_key(key) {
                 t.insert(key, value(true));
                 changed = true;

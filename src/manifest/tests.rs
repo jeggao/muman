@@ -554,6 +554,38 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
 }
 
 #[test]
+fn every_lyric_cleaning_switch_is_listed_after_the_tags_and_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "\n[lyrics]\nread = [\"en\"]\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n\n[clean.lyrics.packaging]\ncredits = false # mine\n\n[clean.lyrics.odd]\nx = true\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    assert!(!m.clean.is_on("lyrics.packaging.credits"));
+    assert!(m.clean.is_on("lyrics.tidy.markup"));
+    assert_eq!(m.clean.unknown, ["clean.lyrics.odd.x"]);
+    m.save().unwrap();
+    let t = text(dir.path());
+    let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+    assert!(at("[clean.guesswork]") < at("[clean.lyrics.tidy]"), "{t}");
+    assert!(at("[clean.lyrics.tidy]") < at("\n[[song]]"), "{t}");
+    assert!(t.contains("credits = false # mine"), "{t}");
+    let lyrics = &t[at("[clean.lyrics.tidy]")..];
+    for (tier, key) in clean::lyrics::switches() {
+        assert!(
+            lyrics.contains(&format!("{key} = ")),
+            "lyrics.{tier}.{key} in {t}"
+        );
+    }
+    assert!(
+        !Manifest::load(dir.path())
+            .unwrap()
+            .clean
+            .is_on("lyrics.packaging.credits")
+    );
+}
+
+#[test]
 fn a_new_list_lists_its_cleaning_switches_before_its_songs() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();

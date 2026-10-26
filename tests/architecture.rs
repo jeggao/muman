@@ -401,11 +401,68 @@ fn a_plan_changes_format_with_its_renderer_version() {
     );
 }
 
+/// Where lyrics are cleaned, and why there. A library file's lyrics are
+/// cleaned only as its plan names the cleaning, so a change to what the
+/// rules write, or to a switch, writes the file again; anywhere else,
+/// lyrics are cleaned only to be measured or matched.
+const CLEANS: [(&str, &str, &str); 5] = [
+    (
+        "render.rs",
+        "lyrics::clean(",
+        "writes a song's lyrics as its plan's `clean_off` and `cleaning` say",
+    ),
+    (
+        "lyrics.rs",
+        "clean_lrc(",
+        "names the cleaning a measure reads by",
+    ),
+    (
+        "lyrics.rs",
+        "lyrics::all(",
+        "cleans by every rule for a measure",
+    ),
+    (
+        "facts.rs",
+        "clean_lrc(",
+        "measures how a source's lyrics are timed",
+    ),
+    (
+        "attach.rs",
+        "clean_lrc(",
+        "times lyrics given to `add` to match them",
+    ),
+];
+
+#[test]
+fn lyrics_are_cleaned_for_a_library_file_only_as_its_plan_says() {
+    let needles = ["lyrics::clean(", "lyrics::all(", "clean_lrc("];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &needles) {
+            let kept = CLEANS
+                .iter()
+                .any(|(f, needle, _)| *f == file && line.contains(needle));
+            if !kept {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "lyrics are cleaned where no plan names how, so a change to the rules \
+         leaves the library as it was:\n{}",
+        wrong.join("\n")
+    );
+}
+
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
     for (file, ..) in MUTATIONS.iter().chain(WRITES) {
         assert!(all.contains_key(*file), "{file}");
+    }
+    for (file, ..) in CLEANS {
+        assert!(all.contains_key(file), "{file}");
     }
     for (file, _) in STATICS.iter().chain(RESHAPES).chain(WALKS).chain(COPIES) {
         assert!(all.contains_key(*file), "{file}");

@@ -8,6 +8,9 @@
 //! matched to their releases, under two in five titles agreed with the
 //! release before cleaning, and all did after, romanization aside.
 //!
+//! Lyrics have rules of their own, in [`lyrics`], switched under
+//! `[clean.lyrics.<tier>]` in the same tiers.
+//!
 //! Offers are cleaned at each resolve, never when read: the raw offers
 //! stay in the state, so changing a rule or a switch needs nothing read
 //! again, and a song whose tags it changes renders again. Tags set in
@@ -42,6 +45,8 @@
 use std::collections::BTreeSet;
 
 use crate::tags::{Field, Offer, Offers};
+
+pub mod lyrics;
 
 /// The tiers, least invasive first, each with what its rules may do.
 pub const TIERS: [(&str, &str); 4] = [
@@ -185,13 +190,18 @@ pub struct Settings {
 impl Settings {
     /// Turn the rule named `<tier>.<key>` on or off; whether there is one.
     pub fn set(&mut self, name: &str, on: bool) -> bool {
-        let Some(rule) = RULES.iter().find(|r| r.name == name) else {
+        let Some(rule) = RULES
+            .iter()
+            .map(|r| r.name)
+            .chain(lyrics::names())
+            .find(|r| *r == name)
+        else {
             return false;
         };
         if on {
-            self.off.remove(rule.name);
+            self.off.remove(rule);
         } else {
-            self.off.insert(rule.name);
+            self.off.insert(rule);
         }
         true
     }
@@ -205,7 +215,11 @@ impl Settings {
     #[must_use]
     pub fn none() -> Self {
         Self {
-            off: RULES.iter().map(|r| r.name).collect(),
+            off: RULES
+                .iter()
+                .map(|r| r.name)
+                .chain(lyrics::names())
+                .collect(),
             unknown: Vec::new(),
         }
     }

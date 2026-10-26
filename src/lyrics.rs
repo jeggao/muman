@@ -1,5 +1,6 @@
-//! Which language a subtitle is in, and LRC cleaned of what is no
-//! lyric and moved to another cut of the recording.
+//! Which language a subtitle is in, what a line of lyrics is, and LRC
+//! moved to another cut of the recording. [`crate::clean::lyrics`] cleans
+//! lyrics by what the lines are read as here.
 //!
 //! A preference is a language tag (`ja`, `en`, `pt-BR`, `zh-Hant`),
 //! matched as [`crate::lang`] matches one. The stream it names is found
@@ -109,7 +110,7 @@ pub fn pick<'a>(
 
 /// What a line of lyrics is, read on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum Kind {
     Sung,
     /// Blank, only music symbols, or a bracketed cue as `[Music]`.
     Cue,
@@ -270,7 +271,7 @@ fn is_credit(text: &str) -> bool {
 }
 
 /// What the line `text` is, read on its own.
-fn kind(text: &str) -> Kind {
+pub(crate) fn kind(text: &str) -> Kind {
     let t = text.trim();
     if t.chars().all(|c| !c.is_alphanumeric()) {
         return Kind::Cue;
@@ -289,11 +290,10 @@ fn kind(text: &str) -> Kind {
     }
 }
 
-/// Which of `lines`, one text's lines of words in order, are no lyric:
+/// Which of `kinds`, one text's lines of words in order, are no lyric:
 /// the cues, and the credits in a block at its start or end. A credit's
 /// shape between two lines sung is a line sung, as `Music by the water`.
-fn unsung<S: AsRef<str>>(lines: &[S]) -> Vec<bool> {
-    let kinds: Vec<Kind> = lines.iter().map(|l| kind(l.as_ref())).collect();
+pub(crate) fn unsung(kinds: &[Kind]) -> Vec<bool> {
     let first = kinds.iter().position(|k| *k == Kind::Sung);
     let last = kinds.iter().rposition(|k| *k == Kind::Sung);
     kinds
@@ -359,7 +359,7 @@ pub fn headers(text: &str) -> Headers {
 
 /// `line` without the word timings an enhanced LRC line holds, as
 /// `<00:12.30>`; any other `<` or `>` is sung.
-fn without_word_times(line: &str) -> String {
+pub(crate) fn without_word_times(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(at) = rest.find('<') {
@@ -395,8 +395,9 @@ pub fn sung(text: &str) -> String {
             words.push(line.trim().to_string());
         }
     }
+    let kinds: Vec<Kind> = words.iter().map(|w| kind(w)).collect();
     let mut out = String::new();
-    for (line, unsung) in words.iter().zip(unsung(&words)) {
+    for (line, unsung) in words.iter().zip(unsung(&kinds)) {
         if !unsung {
             out.push_str(line);
             out.push('\n');
@@ -472,72 +473,12 @@ fn is_utf8(bytes: &[u8]) -> bool {
     bad < read.max(1)
 }
 
-/// LRC without its timed lines that are no lyric; untimed lines, the
-/// `[ar:…]` headers among them, stay, and so does a timed line of no
-/// words, which ends the line before it where the singing stops.
+/// LRC cleaned by every rule of [`crate::clean::lyrics`], knowing
+/// nothing of its song: what a source's lyrics are measured by, whatever
+/// the song list switches.
 #[must_use]
 pub fn clean_lrc(text: &str) -> String {
-    let lines: Vec<String> = text.lines().map(unmarked).collect();
-    let words: Vec<(usize, String)> = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(i, line)| {
-            let mut rest = line.as_str();
-            let mut timed = false;
-            while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-                timed = true;
-                rest = after;
-            }
-            let words = without_word_times(rest);
-            (timed && !words.trim().is_empty()).then_some((i, words))
-        })
-        .collect();
-    let texts: Vec<&str> = words.iter().map(|(_, w)| w.as_str()).collect();
-    let mut dropped = vec![false; lines.len()];
-    for ((i, _), unsung) in words.iter().zip(unsung(&texts)) {
-        dropped[*i] = unsung;
-    }
-    let mut out = String::new();
-    for (line, dropped) in lines.iter().zip(dropped) {
-        if !dropped {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// `line` without the markup subtitles carry into LRC: an HTML-like tag,
-/// as `<i>` or `</font>`, and an ASS override, as `{\an8}`. A word time,
-/// `<00:12.34>`, is no markup.
-fn unmarked(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    let mut unclosed = Vec::new();
-    while let Some(at) = rest.find(['<', '{']) {
-        out.push_str(&rest[..at]);
-        let tail = &rest[at..];
-        let close = if tail.starts_with('<') { '>' } else { '}' };
-        let markup = match tail[1..].chars().next() {
-            Some(c) if close == '>' => c.is_ascii_alphabetic() || c == '/',
-            Some(c) => c == '\\',
-            None => false,
-        };
-        let end = (markup && !unclosed.contains(&close))
-            .then(|| tail.find(close))
-            .flatten();
-        if markup && end.is_none() {
-            unclosed.push(close);
-        }
-        if let Some(end) = end {
-            rest = &tail[end + 1..];
-        } else {
-            out.push_str(&tail[..1]);
-            rest = &tail[1..];
-        }
-    }
-    out.push_str(rest);
-    out
+    crate::clean::lyrics::all(text)
 }
 
 /// The timed lines of LRC that sing a word, as a line of no words only
@@ -709,7 +650,7 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
 
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
-fn lrc_time(s: &str) -> Option<(i64, &str)> {
+pub(crate) fn lrc_time(s: &str) -> Option<(i64, &str)> {
     let (ms, close) = time_closed_by(s, &[']'])?;
     Some((ms, &s[close + 1..]))
 }

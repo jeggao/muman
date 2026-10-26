@@ -49,8 +49,9 @@
 //! where it is base64 and so a third larger, and ffmpeg reads no APEv2
 //! tag past that, its other items counted, so in every container a cover
 //! past what is left is made a JPEG at most 3000 pixels wide; FLAC embeds
-//! no lyrics past it. Lyrics are cleaned of cues, symbols and credits and moved by
-//! the plan's offset; lyrics from a `.lrc` file need no ffmpeg at all.
+//! no lyrics past it. Lyrics are cleaned as the plan's lyric switches say
+//! ([`crate::clean::lyrics`]), knowing the song's title and artists, and
+//! moved by its offset; lyrics from a `.lrc` file need no ffmpeg at all.
 //!
 //! The audio keeps its source's chapters, as [`crate::chapters`] writes
 //! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
@@ -92,6 +93,7 @@ use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
 use crate::chapters::Chapter;
+use crate::clean;
 use crate::codec::{Codec, Container};
 use crate::facts::{CoverAt, LRC_ARGS, LyricsAt};
 use crate::ffmpeg::{self, Output};
@@ -302,7 +304,14 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     outputs.append(&mut cover_outputs);
     let lyrics_raw = job.scratch.join("lyrics.lrc");
     let lyrics_text = match &plan.lyrics {
-        Some(l) => match lyrics_plan(l, locate(&l.key)?, &lyrics_raw, &mut inputs, &mut outputs) {
+        Some(l) => match lyrics_plan(
+            l,
+            &lyrics_context(plan, l),
+            locate(&l.key)?,
+            &lyrics_raw,
+            &mut inputs,
+            &mut outputs,
+        ) {
             Ok(text) => Some(text),
             Err(e) => {
                 problems.push(format!("no lyrics: {e:#}"));
@@ -338,7 +347,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                     .map(|b| lyrics::decode(&b))
                     .map_err(|e| problems.push(format!("no lyrics: {e}")))
                     .ok()
-                    .map(|t| lyrics::shift_lrc(&lyrics::clean_lrc(&t), l.shift_ms, l.stretch_ppm)),
+                    .map(|t| cleaned(&t, l, &lyrics_context(plan, l))),
             },
             _ => None,
         }
@@ -786,10 +795,32 @@ fn cover_plan<R: Runner>(
     })
 }
 
+/// What lyric cleaning knows of the song a plan writes.
+fn lyrics_context<'p>(plan: &'p Plan, lyrics: &LyricsRef) -> clean::lyrics::Context<'p> {
+    let values = |name: &'static str| {
+        plan.tags
+            .iter()
+            .filter(move |(k, _)| k == name)
+            .flat_map(|(_, v)| v.iter().map(String::as_str))
+    };
+    clean::lyrics::Context {
+        title: values("TITLE").next(),
+        artists: values("ARTIST").chain(values("ARTISTS")).collect(),
+        subtitle: matches!(lyrics.at, LyricsAt::Stream { .. }),
+    }
+}
+
+/// `text` cleaned as the plan's lyrics say, then moved to the audio.
+fn cleaned(text: &str, lyrics: &LyricsRef, ctx: &clean::lyrics::Context<'_>) -> String {
+    let text = clean::lyrics::clean(text, ctx, &lyrics.clean_off).text;
+    lyrics::shift_lrc(&text, lyrics.shift_ms, lyrics.stretch_ppm)
+}
+
 /// Plan the lyrics: a file's text now, or a subtitle stream the run
 /// converts to `raw`, read once it ran (`None`).
 fn lyrics_plan(
     lyrics: &LyricsRef,
+    ctx: &clean::lyrics::Context<'_>,
     source: &Located,
     raw: &Path,
     inputs: &mut Inputs,
@@ -811,11 +842,7 @@ fn lyrics_plan(
             .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
         lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?)
     };
-    Ok(Some(lyrics::shift_lrc(
-        &lyrics::clean_lrc(&text),
-        lyrics.shift_ms,
-        lyrics.stretch_ppm,
-    )))
+    Ok(Some(cleaned(&text, lyrics, ctx)))
 }
 
 /// The file lyrics at `at` of `source` are read from; none for a stream

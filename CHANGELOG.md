@@ -23,6 +23,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   credentials in any address replaced by `<redacted>`, its comments and
   layout kept. A path, as `--cookies` names, stays, as does any other
   word of a hook or a program. Without it the song list goes in as it is.
+- **`[clean.lyrics.<tier>]` switches the rules that clean lyrics,** as
+  `[clean.<tier>]` switches the tags': taking out subtitle markup, cues,
+  and the credits before the first line sung or after the last.
 - **`[library] source_comments`** chooses whether the comment a source's
   own tags carry is written, as a store or an uploader left it; a
   `comment` set in a song's or an album's `tags` is written either way.
@@ -48,6 +51,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   rather than `ger`.
 - **MusicBrainz is asked once more for each song a search finds,** for
   the languages of its works' lyrics.
+- **A song's lyrics are written again when their cleaning changes,** as
+  a rule writes otherwise in a new muman or a switch is flipped; before,
+  lyrics written under older rules stayed as they were. The first sync
+  writes every song with lyrics again.
 
 - **A song list that sets commands or servers asks once before muman
   runs them.** The first command after updating that could run a song

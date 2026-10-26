@@ -368,6 +368,13 @@ pub struct LyricsRef {
     /// The ISO 639-2 code of the language their source names them in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// The lyric cleaning rules switched off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean_off: Vec<String>,
+    /// The [`clean::lyrics::EDITION`] they are cleaned by; 0 before muman
+    /// named one, so lyrics written then are cleaned again.
+    #[serde(default)]
+    pub cleaning: u32,
 }
 
 impl LyricsRef {
@@ -1124,6 +1131,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     stretch_ppm,
                     placement: input.placement,
                     language: l.language.langs().first().map(Lang::iso639_2),
+                    clean_off: clean::lyrics::off(input.clean),
+                    cleaning: clean::lyrics::EDITION,
                 },
                 why,
             ));
