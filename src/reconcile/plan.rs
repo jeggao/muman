@@ -234,6 +234,7 @@ pub(crate) fn resolve_songs(
             audio: &settings.audio,
             quality: &settings.quality,
             placement: settings.library.lyrics,
+            source_comments: settings.library.source_comments,
         };
         match resolve::resolve(&input) {
             Ok(r) => resolution.planned.push((n, r)),

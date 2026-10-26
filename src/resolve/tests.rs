@@ -187,6 +187,7 @@ fn run_with(
         audio,
         quality,
         placement: LyricsPlacement::Sidecar,
+        source_comments: false,
     })
     .unwrap()
 }
@@ -510,6 +511,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         audio: &AUDIO,
         quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
+        source_comments: false,
     })
     .unwrap();
     assert_eq!(r.stem, PathBuf::from("Hoshi7ne/Song ⧸ Wren/Song ⧸ Wren"));
@@ -578,6 +580,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         audio: &AUDIO,
         quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
+        source_comments: false,
     })
     .unwrap();
     let artist = r.plan.tags.iter().find(|(k, _)| k == "ARTIST").unwrap();
@@ -682,6 +685,7 @@ fn hand_set_tags_and_the_album_win_last() {
         audio: &AUDIO,
         quality: &QUALITY,
         placement: LyricsPlacement::Sidecar,
+        source_comments: false,
     })
     .unwrap();
     let get = |k: &str| {
@@ -1158,6 +1162,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             audio: &AUDIO,
             quality: &QUALITY,
             placement: LyricsPlacement::Sidecar,
+            source_comments: false,
         })
         .is_err()
     );
@@ -1575,6 +1580,47 @@ fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
         Some(vec!["jpn".to_string()]),
         "the source's own"
     );
+    assert_eq!(
+        r.plan.lyrics.and_then(|l| l.language).as_deref(),
+        Some("eng"),
+        "the lyrics keep their own"
+    );
+}
+
+#[test]
+fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    tag(&mut f, Field::Comment, &["ripped by a stranger"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let comment = |song: &Song, source_comments: bool| {
+        resolve(&Input {
+            song,
+            album: None,
+            facts: &facts,
+            on_disk: None,
+            alignments: &[],
+            lyrics: &["en".to_string()],
+            clean: &Settings::default(),
+            albums: &Albums::default(),
+            naming: &NAMING,
+            audio: &AUDIO,
+            quality: &QUALITY,
+            placement: LyricsPlacement::Sidecar,
+            source_comments,
+        })
+        .unwrap()
+        .plan
+        .tags
+        .into_iter()
+        .find(|(k, _)| k == "COMMENT")
+        .map(|(_, v)| v)
+    };
+    let mut s = song(&[key]);
+    assert_eq!(comment(&s, false), None);
+    assert_eq!(comment(&s, true), Some(vec!["ripped by a stranger".into()]));
+    s.tags = vec![("comment".into(), vec!["take two".into()])];
+    assert_eq!(comment(&s, false), Some(vec!["take two".into()]));
 }
 
 #[test]
