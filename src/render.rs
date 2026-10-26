@@ -37,9 +37,10 @@
 //! null-separated in `ID3v2.4` and APEv2, and in MP4 one atom holds a
 //! `data` atom for each, as iTunes, Picard and mutagen write one: a reader
 //! that takes one atom a name, as ffmpeg's does, would see only the last
-//! of several atoms. `ID3v2` marks lyrics and comments with the language
-//! the song's `LANGUAGE` tag names. Opus holds ReplayGain's gains as
-//! R128's and no peaks, as RFC 7845 tells its players to read them.
+//! of several atoms. `ID3v2` marks lyrics with the language their source
+//! names them in, `XXX` where it names none, and a comment with English,
+//! as Picard does. Opus holds ReplayGain's gains as R128's and no peaks,
+//! as RFC 7845 tells its players to read them.
 //!
 //! The cover is a front-cover picture: a JPEG or PNG without borders as
 //! its own bytes, any other converted to
@@ -372,6 +373,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             &audio_part,
             plan.format,
             &tags,
+            plan.lyrics_language(),
             picture.clone(),
             &plan.chapters,
         ) {
@@ -379,7 +381,15 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 return Err(e);
             }
             problems.push(format!("no cover: {e:#}"));
-            write_tags(&audio_part, plan.format, &tags, None, &plan.chapters)?;
+            let language = plan.lyrics_language();
+            write_tags(
+                &audio_part,
+                plan.format,
+                &tags,
+                language,
+                None,
+                &plan.chapters,
+            )?;
         }
         set_opus_header(&audio_part, plan)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
@@ -539,7 +549,15 @@ pub fn retag(
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
         let covered = picture.is_some();
-        write_tags(&staged, plan.format, &tags, picture, &plan.chapters)?;
+        let language = plan.lyrics_language();
+        write_tags(
+            &staged,
+            plan.format,
+            &tags,
+            language,
+            picture,
+            &plan.chapters,
+        )?;
         set_opus_header(&staged, plan)?;
         Ok(verify(&staged, &tags, covered))
     })();
@@ -833,10 +851,12 @@ const FFMPEG_VENDOR: &str = "ffmpeg";
 /// Replace every comment the file carries with the plan's tags, the
 /// cover and the chapters, keeping the encoder's vendor string and a
 /// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
+/// `lyrics` is the ISO 639-2 code of the language the `LYRICS` tag is in.
 fn write_tags(
     path: &Path,
     format: Format,
     tags: &[(String, Vec<String>)],
+    lyrics: Option<&str>,
     picture: Option<Picture>,
     chapters: &[Chapter],
 ) -> Result<()> {
@@ -863,7 +883,7 @@ fn write_tags(
             comments.save_to(&mut file, WriteOptions::default())
         }
         Container::Mp3 => {
-            id3_tag(tags, picture, chapters).save_to(&mut file, WriteOptions::default())
+            id3_tag(tags, lyrics, picture, chapters).save_to(&mut file, WriteOptions::default())
         }
         Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
         Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
@@ -1152,13 +1172,14 @@ fn total_alone(tags: &[(String, Vec<String>)], field: Field) -> bool {
     paired(field).is_some_and(|place| values_of(tags, place).is_empty())
 }
 
-/// The ISO 639-2 code a song's `LANGUAGE` tag names, as `ID3v2` marks the
-/// language of its lyrics and comments with.
-fn language_of(tags: &[(String, Vec<String>)]) -> Lang {
-    tags.iter()
-        .find(|(k, _)| k == "LANGUAGE")
-        .and_then(|(_, v)| v.first())
-        .and_then(|code| <Lang>::try_from(code.to_ascii_lowercase().as_bytes()).ok())
+/// The language a `COMM` frame is marked with, as Picard marks it: Picard
+/// reads a comment in any other as a tag apart, as `comment:jpn`.
+const COMMENT_LANGUAGE: Lang = *b"eng";
+
+/// The language `ID3v2` marks lyrics in `code` with: its ISO 639-2 code,
+/// else `XXX`, unknown.
+fn lyrics_language(code: Option<&str>) -> Lang {
+    code.and_then(|code| <Lang>::try_from(code.to_ascii_lowercase().as_bytes()).ok())
         .filter(|code| code.iter().all(u8::is_ascii_lowercase))
         .unwrap_or(UNKNOWN_LANGUAGE)
 }
@@ -1191,6 +1212,7 @@ fn text_frame(key: &str) -> Option<&'static str> {
 /// own where it has one, else a user text frame of its name.
 fn id3_tag(
     tags: &[(String, Vec<String>)],
+    lyrics: Option<&str>,
     picture: Option<Picture>,
     chapters: &[Chapter],
 ) -> Id3v2Tag {
@@ -1206,7 +1228,6 @@ fn id3_tag(
             value,
         ))
     };
-    let language = language_of(tags);
     let mut id3 = Id3v2Tag::new();
     let mut roles = Vec::new();
     for (key, values) in tags {
@@ -1238,7 +1259,7 @@ fn id3_tag(
                 Id3::Key => Some(user("INITIALKEY", joined)),
                 Id3::Comment => Some(Frame::Comment(CommentFrame::new(
                     TextEncoding::UTF8,
-                    language,
+                    COMMENT_LANGUAGE,
                     String::new(),
                     joined,
                 ))),
@@ -1246,7 +1267,7 @@ fn id3_tag(
             None => match key.as_str() {
                 "LYRICS" => Some(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
                     TextEncoding::UTF8,
-                    language,
+                    lyrics_language(lyrics),
                     String::new(),
                     joined,
                 ))),

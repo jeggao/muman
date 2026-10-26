@@ -227,13 +227,14 @@ pub(crate) fn resolve_songs(
             facts: &state.facts,
             on_disk,
             alignments: &state.alignments,
-            lyrics: &manifest.lyrics,
+            lyrics: &settings.lyrics,
             clean: &manifest.clean,
             albums: &albums,
             naming: &naming,
             audio: &settings.audio,
             quality: &settings.quality,
             placement: settings.library.lyrics,
+            source_comments: settings.library.source_comments,
         };
         match resolve::resolve(&input) {
             Ok(r) => resolution.planned.push((n, r)),

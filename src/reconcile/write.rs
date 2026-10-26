@@ -18,7 +18,7 @@ use crate::manifest::{Manifest, Song};
 use crate::parallel;
 use crate::progress;
 use crate::render;
-use crate::resolve::{Plan, Resolved};
+use crate::resolve::{LyricsRef, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, State, Written};
@@ -45,7 +45,8 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     if old.cover != new.cover {
         what.push("cover");
     }
-    if old.lyrics != new.lyrics {
+    let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
+    if lines(old) != lines(new) {
         what.push("lyrics");
     }
     let other_tags = |p: &Plan| {
@@ -57,7 +58,7 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
             .cloned()
             .collect::<Vec<_>>()
     };
-    if other_tags(old) != other_tags(new) {
+    if other_tags(old) != other_tags(new) || old.lyrics_language() != new.lyrics_language() {
         what.push("tags");
     }
     if old.held_loudness() != new.held_loudness()

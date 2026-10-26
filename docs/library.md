@@ -32,7 +32,7 @@ measures after it can make up for it. See
 |---|---|
 | Audio | Least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
-| Lyrics | Timed; in a preferred language; surest to be the chosen audio's recording; spanning most of the song |
+| Lyrics | As `[lyrics] prefer` ranks their role and timing; in the language read first; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A dedicated field over one read off a video title; fewest decorations; most sources agreeing |
 
 **Audio.** Sound beyond the song is how long a source plays outside the
@@ -71,22 +71,22 @@ disc, a booklet) or by its name (`back.jpg`, `cd.png`), is taken only
 when no other picture is. A picture is known by its bytes, never by its
 name: a PNG named `.jpg` is written as PNG, and a WebP converted.
 
-**Lyrics.** Only subtitles a person wrote count; generated captions
-never do. Lyrics from a source other than the chosen audio must be the
-same recording, and are shifted by the offset measured between the two,
-and stretched when one plays a little faster than the other; a word's
-time moves with its line's, and an `[offset:]` the file states is folded
-into every time it holds. A song file's own lyrics tag, `USLT` in an
-MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr` in an M4A
-or `Lyrics` in APEv2, is lyrics of that source, timed when its text is
-LRC; one a `USLT` frame marks in a language `defaults.lyrics` does not
-list ranks after those in a language it does. Cues such as `[Music]` or
-`(Guitar solo)`, symbol-only lines and the credits before the first line
-sung or after the last are dropped; a line in brackets of other words is
-sung, as a backing vocal is. A `.lrc` with no audio of its own is taken
-as timed for the song; one that states its length, as LRCLIB's do, is
-trusted as far as that length agrees with the chosen audio's. Whether
-lyrics go beside the song, inside it or both is a `[library]` setting.
+**Lyrics.** First by [role, timing and
+language](configuration.md#which-lyrics-a-song-takes). Only subtitles a
+person wrote count; generated captions never do. Lyrics from a source
+other than the chosen audio must be the same recording, and are shifted by
+the offset measured between the two, and stretched when one plays a little
+faster than the other; a word's time moves with its line's, and an
+`[offset:]` the file states is folded into every time it holds. A song
+file's own lyrics tag, `USLT` in an MP3, `LYRICS` or `UNSYNCEDLYRICS` in a
+Vorbis comment, `©lyr` in an M4A or `Lyrics` in APEv2, is lyrics of that
+source, timed when its text is LRC. Cues such as `[Music]` or `(Guitar
+solo)`, symbol-only lines and the credits before the first line sung or
+after the last are dropped; a line in brackets of other words is sung, as
+a backing vocal is. A `.lrc` with no audio of its own is taken as timed
+for the song; one that states its length, as LRCLIB's do, is trusted as
+far as that length agrees with the chosen audio's. Whether lyrics go
+beside the song, inside it or both is a `[library]` setting.
 
 **Tags.** Each field describes the recording or the release. The
 recording's, title, artist, genre, ISRC and the recording's and artists'

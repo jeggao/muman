@@ -1,13 +1,15 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
-//! and named, which codecs are kept and what the rest is encoded to, how
-//! loud songs are made, how sources are ranked, how yt-dlp and aria2c
-//! fetch, which programs muman runs, and how much history `undo` keeps.
+//! and named, which lyrics are taken, which codecs are kept and what the
+//! rest is encoded to, how loud songs are made, how sources are ranked,
+//! how yt-dlp and aria2c fetch, which programs muman runs, and how much
+//! history `undo` keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[loudness]` ([`crate::loudness`]),
-//! `[quality]`, `[ytdlp]`, `[torrent]` ([`crate::aria2`]), `[tools]`
-//! ([`crate::tools`]), `[history]` and `[sites]` ([`crate::sites`]). A
+//! are `[library]`, `[lyrics]`, `[audio]`, `[loudness]`
+//! ([`crate::loudness`]), `[quality]`, `[ytdlp]`, `[torrent]`
+//! ([`crate::aria2`]), `[tools]` ([`crate::tools`]), `[history]` and
+//! `[sites]` ([`crate::sites`]). A
 //! key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored.
 //! A flag or a `MUMAN_*` variable says what is where on one machine,
@@ -42,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::codec::{Codec, Layout, Shape, Speakers};
+use crate::lang::{Lang, Role};
 use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
@@ -52,14 +55,16 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 9] = [
-    "library", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history", "sites",
+pub const TABLES: [&str; 10] = [
+    "library", "lyrics", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history",
+    "sites",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub library: Library,
+    pub lyrics: Lyrics,
     pub audio: Audio,
     pub loudness: Loudness,
     pub quality: Quality,
@@ -97,6 +102,9 @@ pub struct Library {
     pub unknown_album: String,
     pub untitled: String,
     pub lyrics: LyricsPlacement,
+    /// Write the comment a source's own tags carry; a comment set by hand
+    /// is written either way.
+    pub source_comments: bool,
     /// Set the library folder's time to now after a run that changed it,
     /// for players that rescan only when it is newer than their last scan.
     pub touch_root: bool,
@@ -126,6 +134,7 @@ impl Default for Library {
             unknown_album: "Unknown Album".into(),
             untitled: "Untitled".into(),
             lyrics: LyricsPlacement::default(),
+            source_comments: false,
             touch_root: false,
             max_size: None,
             block_size: Size(4096),
@@ -864,6 +873,71 @@ impl From<WrittenTools> for Tools {
     }
 }
 
+/// Which lyrics a song takes, by their language: see [`crate::resolve`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lyrics {
+    /// The languages the listener reads, best first: a translation is
+    /// taken only into one of them, and lyrics rank by it among those
+    /// [`Lyrics::prefer`] ranks alike.
+    pub read: Vec<Lang>,
+    /// What lyrics a song takes, best first: lyrics rank by the first of
+    /// these that tells them apart. A role left out is never taken; with
+    /// neither `timed` nor `untimed`, timing decides nothing.
+    pub prefer: Vec<Prefer>,
+}
+
+impl Default for Lyrics {
+    fn default() -> Self {
+        Self {
+            read: Lang::parse("en").into_iter().collect(),
+            prefer: vec![
+                Prefer::Translation,
+                Prefer::Original,
+                Prefer::Romanization,
+                Prefer::Timed,
+            ],
+        }
+    }
+}
+
+impl Lyrics {
+    /// Whether lyrics of `role` are taken at all.
+    #[must_use]
+    pub fn takes(&self, role: Role) -> bool {
+        self.prefer.iter().any(|p| p.role() == Some(role))
+    }
+}
+
+/// One trait lyrics are ranked by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Prefer {
+    /// In the language the song is sung in.
+    Original,
+    /// In that language's Latin letters, where it is written in others.
+    Romanization,
+    /// In a language the listener reads, other than the one sung.
+    Translation,
+    /// Their lines carry times.
+    Timed,
+    /// Their lines carry none.
+    Untimed,
+}
+
+impl Prefer {
+    /// The role it prefers, if it prefers one.
+    #[must_use]
+    pub fn role(self) -> Option<Role> {
+        match self {
+            Self::Original => Some(Role::Original),
+            Self::Romanization => Some(Role::Romanization),
+            Self::Translation => Some(Role::Translation),
+            Self::Timed | Self::Untimed => None,
+        }
+    }
+}
+
 /// What `undo` can put back.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1050,12 +1124,13 @@ pub struct Override {
 /// file's older names are renamed, so one never collides with another.
 pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     let mut only = DocumentMut::new();
-    for table in TABLES {
+    for table in TABLES.into_iter().chain(crate::migrate::moved_from()) {
         if let Some(item) = doc.get(table) {
             only.insert(table, item.clone());
         }
     }
     crate::migrate::rename_all(&mut only, &EDITIONS)?;
+    only.retain(|table, _| TABLES.contains(&table));
     for o in overrides {
         let table = only
             .entry(&o.table)
@@ -1083,6 +1158,20 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         if program.command.first().is_none_or(|p| p.trim().is_empty()) {
             bail!("[tools.{name}] command names no program");
         }
+    }
+    let prefer = &settings.lyrics.prefer;
+    if let Some((_, p)) = prefer
+        .iter()
+        .enumerate()
+        .find(|(n, p)| prefer[..*n].contains(p))
+    {
+        bail!(
+            "[lyrics] prefer lists `{}` twice",
+            format!("{p:?}").to_lowercase()
+        );
+    }
+    if prefer.contains(&Prefer::Timed) && prefer.contains(&Prefer::Untimed) {
+        bail!("[lyrics] prefer lists both timed and untimed; keep the one you prefer");
     }
     let library = &settings.library;
     if library.block_size.0 == 0 {
@@ -1355,6 +1444,25 @@ mod tests {
         assert!(settings("[library]\nblock_size = 0\n").is_err());
     }
 
+    #[test]
+    fn lyrics_preferences_name_each_trait_once_and_one_timing() {
+        let s = settings("[lyrics]\nprefer = [\"untimed\", \"romanization\"]\n").unwrap();
+        assert_eq!(s.lyrics.prefer, [Prefer::Untimed, Prefer::Romanization]);
+        assert!(s.lyrics.takes(Role::Romanization));
+        assert!(!s.lyrics.takes(Role::Original));
+        let twice = settings("[lyrics]\nprefer = [\"original\", \"original\"]\n").unwrap_err();
+        assert!(
+            format!("{twice:#}").contains("`original` twice"),
+            "{twice:#}"
+        );
+        let both = settings("[lyrics]\nprefer = [\"timed\", \"untimed\"]\n").unwrap_err();
+        assert!(
+            format!("{both:#}").contains("both timed and untimed"),
+            "{both:#}"
+        );
+        assert!(settings("[lyrics]\nprefer = [\"sung\"]\n").is_err());
+    }
+
     fn doc(text: &str) -> DocumentMut {
         text.parse().unwrap()
     }
@@ -1362,7 +1470,7 @@ mod tests {
     #[test]
     fn every_setting_a_list_lacks_is_added_ahead_of_its_own_tables() {
         let mut d = doc(
-            "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n\n[audio]\n# Mine.\nopus_bitrate = \"192 kb/s\"\n\n\
+            "version = 1\n\n[clean.tidy]\nspacing = true\n\n[audio]\n# Mine.\nopus_bitrate = \"192 kb/s\"\n\n\
              [quality.stereo]\nweight = 0\n",
         );
         assert!(fill(&mut d, &EDITIONS));
@@ -1374,7 +1482,7 @@ mod tests {
             text.starts_with(&format!("version = 1\nedition = {EDITION}\n")),
             "{text}"
         );
-        assert!(text.find("[library]") < text.find("[defaults]"), "{text}");
+        assert!(text.find("[library]") < text.find("[clean.tidy]"), "{text}");
         assert!(
             text.contains("# Mine.\nopus_bitrate = \"192 kb/s\"\n"),
             "{text}"

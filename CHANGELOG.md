@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[lyrics] prefer`** ranks lyrics by their role and timing, best
+  first: put translations, the original or a romanization first, or
+  timed or untimed lyrics before any role, and leave out a role never to
+  take it.
 - **`--trust`**, or `MUMAN_TRUST=1`, trusts the commands and servers the
   song list sets, as it sets them, without asking: for a run with no
   terminal to ask on.
@@ -19,8 +23,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   credentials in any address replaced by `<redacted>`, its comments and
   layout kept. A path, as `--cookies` names, stays, as does any other
   word of a hook or a program. Without it the song list goes in as it is.
+- **`[library] source_comments`** chooses whether the comment a source's
+  own tags carry is written, as a store or an uploader left it; a
+  `comment` set in a song's or an album's `tags` is written either way.
 
 ### Changed
+
+- **Lyrics are told apart by their role in the song:** the original,
+  in the language it is sung in; a romanization, in that language's
+  Latin letters; or a translation into a language you read. Before,
+  only their language counted, so the Japanese lyrics of a song sung in
+  Japanese were never taken where only `en` was listed. The language
+  sung is the song's `language`: set by hand, else a MusicBrainz work's
+  lyrics language, a file's own tag, the language YouTube says a video's
+  audio is in, or that of the audio file's own lyrics tag. A subtitle's
+  language no longer sets it, since a subtitle may be a translation.
+- **`[defaults] lyrics` is `[lyrics] read`,** the languages you read,
+  and the next write moves it. A translation is taken only into one of
+  them. It takes any language tag, as `zh-Hant`
+  or `pt-BR`, matched as a browser matches one: `zh-TW` takes `zh-Hant`
+  and never `zh-Hans`, and `ger`, `deu` and `de` are one language.
+- **A `language` tag takes any spelling of a language,** as `ja` or
+  `ja-JP`, and is written as its ISO 639-2 terminologic code, `deu`
+  rather than `ger`.
+- **MusicBrainz is asked once more for each song a search finds,** for
+  the languages of its works' lyrics.
 
 - **A song list that sets commands or servers asks once before muman
   runs them.** The first command after updating that could run a song
@@ -44,9 +71,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   muman's wins,** as yt-dlp reads its config file before its command
   line; `format`, `sub_langs` and `concurrent_fragments` set three of
   those.
+- **A source's own comment is no longer written** unless `[library]
+  source_comments` is set; the next `sync` retags each song that held
+  one.
+- **MP3 grouping and work are written where Picard writes them by
+  default:** a grouping in `TIT1`, a work in a `WORK` user text frame,
+  rather than iTunes' `GRP1` and `TIT1`. A source's `GRP1` is still read
+  as its grouping.
 
 ### Fixed
 
+- **An MP3's lyrics are marked with the language they are in,** as
+  their source names it, or `XXX` where it names none, rather than with
+  the song's `LANGUAGE`; its comment with English, as Picard marks one,
+  so Picard reads it as the song's comment. The next `sync` retags every
+  song.
 - **A torrent fetched beside yt-dlp no longer loses its folder.** A
   sync clearing yt-dlp's stale partial downloads removed the empty
   `partial/torrent` folder while aria2c's fetch made a folder in it, so

@@ -1,19 +1,22 @@
 //! Tags from MusicBrainz: a song's recording found by its title, artist
 //! and length, with the release it is best known from, and kept in the
-//! store as `<recording id>.json`. A record offers the recording's title,
-//! artists, ISRCs, MusicBrainz IDs and first release's date, and the
+//! store as `<recording id>.json`. A record offers the recording's
+//! title, artists, ISRCs, MusicBrainz IDs, first release's date and its
+//! works' lyrics languages, the language a song is sung in, and the
 //! release's album, album artist, track, disc, date, track total,
 //! country, IDs, status, types and medium, every one structured, ranked
 //! against the other sources' offers as any tag is
-//! ([`crate::tags::from_record`]). A search answers none of the release's
-//! labels, catalogue numbers, barcode, ASIN or script, nor its release
-//! group's first release, the original date as Picard writes it, so the
-//! release is looked up once more for them, once a run for each
-//! release, so an album's songs ask once; that lookup failing fails the
-//! record's, which is made again rather than kept without them. A record
-//! kept before has them from when it is next fetched again. A
-//! recording's credits, its performers, producer and the like, are not
-//! asked for.
+//! ([`crate::tags::from_record`]). A search answers none of the
+//! release's labels, catalogue numbers, barcode, ASIN or script, nor
+//! its release group's first release, the original date as Picard
+//! writes it, so the release is looked up once more for them, once a
+//! run for each release, so an album's songs ask once; that lookup
+//! failing fails the record's, which is made again rather than kept
+//! without them. A search answers no works either, so the recording it
+//! finds is looked up once more for them, a request more for each song;
+//! a lookup by ID asks for them with the rest. A record kept before has
+//! these from when it is next fetched again. A recording's credits, its
+//! performers, producer and the like, are not asked for.
 //!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
@@ -146,6 +149,10 @@ pub struct Record {
     /// The date of the recording's first release, `YYYY-MM-DD` or less.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_date: Option<String>,
+    /// The languages its works' lyrics are in, as ISO 639-3: `zxx` for a
+    /// work with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +326,37 @@ struct Recording {
     releases: Vec<Found>,
     #[serde(default, rename = "first-release-date")]
     first_release_date: Option<String>,
+    /// Its works, which a lookup asking for `work-rels` lists.
+    #[serde(default, deserialize_with = "or_default")]
+    relations: Vec<Relation>,
+}
+
+/// A recording's relation, as a lookup lists it; only a work's are read.
+#[derive(Debug, Deserialize)]
+struct Relation {
+    #[serde(default)]
+    work: Option<Work>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Work {
+    #[serde(default, deserialize_with = "or_default")]
+    languages: Vec<String>,
+}
+
+/// The lyrics languages of `relations`' works, each once.
+fn languages(relations: &[Relation]) -> Vec<String> {
+    let mut all: Vec<String> = Vec::new();
+    for language in relations
+        .iter()
+        .filter_map(|r| r.work.as_ref())
+        .flat_map(|w| &w.languages)
+    {
+        if !all.contains(language) {
+            all.push(language.clone());
+        }
+    }
+    all
 }
 
 /// An ISRC: a search lists each as `{"id": …}`, a lookup as text.
@@ -564,6 +602,7 @@ impl Recording {
                 .as_ref()
                 .map(|d| d.trim().to_string())
                 .filter(|d| !d.is_empty()),
+            languages: languages(&self.relations),
         })
     }
 }
@@ -606,7 +645,8 @@ impl Client<'_> {
     /// release picked as a search picks it for a song on `album`.
     pub fn by_id(&self, id: &Mbid, album: Option<&str>) -> Result<Option<Record>> {
         let path = format!(
-            "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs&fmt=json",
+            "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs+work-rels\
+             &fmt=json",
             music::percent_encode(id.as_str())
         );
         let Some(body) = self.get(&path)? else {
@@ -682,8 +722,29 @@ impl Client<'_> {
         let mut record = best.and_then(|r| r.record(album));
         if let Some(record) = record.as_mut() {
             self.detail(record)?;
+            self.works(record)?;
         }
         Ok(record)
+    }
+
+    /// `record` given its works' lyrics languages, which a search does not
+    /// answer: a lookup that fails fails the record's, as [`Self::detail`]'s.
+    fn works(&self, record: &mut Record) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Related {
+            #[serde(default, deserialize_with = "or_default")]
+            relations: Vec<Relation>,
+        }
+        let path = format!(
+            "/ws/2/recording/{}?inc=work-rels&fmt=json",
+            music::percent_encode(record.id.as_str())
+        );
+        if let Some(body) = self.get(&path)? {
+            let related: Related = serde_json::from_str(&body)
+                .context("reading MusicBrainz's answer for a recording's works")?;
+            record.languages = languages(&related.relations);
+        }
+        Ok(())
     }
 }
 

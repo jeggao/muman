@@ -13,8 +13,9 @@
 //!   lossless, then the most bits used, then the lowest rate.
 //! - Cover: square content, then effective resolution, then fewest
 //!   block artifacts; borders a video frame adds are cropped off.
-//! - Lyrics: timed, in a preferred language, from a source whose audio
-//!   is the same recording as the chosen audio, covering most of it.
+//! - Lyrics: by `[lyrics] prefer`, their role and whether timed, then
+//!   in the language read first, from a source whose audio is the same
+//!   recording as the chosen audio, covering most of it.
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so an album never
@@ -23,7 +24,9 @@
 //!   titles it as the song is titled, so a record of another recording,
 //!   its names outvoted, lends the song none; where the release's source
 //!   is one and names its recording, its recording IDs are the song's,
-//!   so a release's IDs and its recording's never contradict.
+//!   so a release's IDs and its recording's never contradict. A source's
+//!   comment is taken only with `[library] source_comments`: most are a
+//!   store's or an uploader's words, not the song's.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -65,11 +68,26 @@
 //! timed lines win over untimed or missing ones. A `.lrc` that states no
 //! length is taken as timed for the song.
 //!
+//! The language a song is sung in is its `LANGUAGE` tag, resolved as any
+//! tag from what its sources offer: a work's lyrics languages on
+//! MusicBrainz, a file's own tag, the language YouTube says a video's
+//! audio is in; else the language the audio file's own lyrics tag
+//! names. Lyrics in it are the song's own ([`crate::lang::Role`]); in
+//! its Latin letters, where it is written in others, a romanization; in
+//! another language, a translation, taken only into a language
+//! `[lyrics] read` names. `[lyrics] prefer` lists the roles and timing
+//! in the order a listener ranks them, each deciding only between lyrics
+//! the ones before it rank alike, so one listener may put a translation
+//! first and another timing; a role it leaves out is never taken. Lyrics
+//! that say nothing of their language, as LRCLIB's and a `.lrc` file's,
+//! are taken as the song's own. Where the language sung is not known, no
+//! lyrics' role is, so the roles rank them alike, and only lyrics in a
+//! language `read` names are taken, those that say nothing as its first.
+//!
 //! A media file's own lyrics tag is lyrics of that source, timed when
 //! its text is LRC. One in a language no preference names, as a `USLT`
-//! frame marked `jpn` where only `en` is preferred, ranks after every
-//! preferred language rather than not at all: a subtitle is one of many a
-//! site offers, but a file's own lyrics are what someone chose to keep.
+//! frame marked `jpn` where only `en` is read and the song's language is
+//! not known, ranks after every language read rather than not at all.
 //!
 //! The release fields, album, album artist, track, disc, date, totals,
 //! country and release IDs, come from the one source whose album ranks
@@ -103,12 +121,13 @@ use crate::clean::{self, Albums, Settings};
 use crate::codec::{Adapt, Chain, Codec, Container, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
+use crate::lang::{Fit, Lang, Role};
 use crate::loudness::Gains;
-use crate::lyrics;
+use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
-use crate::settings::{Audio, LyricsPlacement, Quality};
+use crate::settings::{Audio, LyricsPlacement, Prefer, Quality};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
@@ -346,6 +365,21 @@ pub struct LyricsRef {
     #[serde(default)]
     pub stretch_ppm: i64,
     pub placement: LyricsPlacement,
+    /// The ISO 639-2 code of the language their source names them in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl LyricsRef {
+    /// These lyrics with no language: what their lines are, whatever
+    /// their tags mark them as.
+    #[must_use]
+    pub fn lines(&self) -> Self {
+        Self {
+            language: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// Everything a library file is made from. Stored beside each output and
@@ -375,7 +409,7 @@ pub struct Plan {
 /// How tags are written into a file, raised whenever the frames, atoms or
 /// items one plan's tags are written as change, so every song is tagged
 /// again, its audio left as it is.
-pub const TAGGING: u32 = 1;
+pub const TAGGING: u32 = 2;
 
 impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
@@ -439,6 +473,12 @@ impl Plan {
             insert_comment(&mut plan.tags, field, vec![value]);
         }
         plan
+    }
+
+    /// The ISO 639-2 code of the language its lyrics are in, if known.
+    #[must_use]
+    pub fn lyrics_language(&self) -> Option<&str> {
+        self.lyrics.as_ref()?.language.as_deref()
     }
 
     /// The hundredths of a dB of its gain the file holds, by its header or
@@ -564,7 +604,8 @@ pub struct Input<'a> {
     /// take from; unset, every source measured is taken to be.
     pub on_disk: Option<&'a BTreeSet<SourceKey>>,
     pub alignments: &'a [Aligned],
-    pub lyrics: &'a [String],
+    /// Which lyrics are taken, and in what order.
+    pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
     /// Every album the library holds, for cleaning.
     pub albums: &'a Albums,
@@ -572,6 +613,8 @@ pub struct Input<'a> {
     pub audio: &'a Audio,
     pub quality: &'a Quality,
     pub placement: LyricsPlacement,
+    /// Whether a comment its sources' tags carry is written.
+    pub source_comments: bool,
 }
 
 impl Input<'_> {
@@ -632,18 +675,27 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         None => bail!("no source of this song has audio"),
     };
     let cover = pick_cover(input);
-    let lyrics = pick_lyrics(input, &audio_key);
     let (mut tags, mut tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
-    if let Some(code) = lyrics.as_ref().and_then(|(l, _)| lyrics_language(input, l))
+    let mut sung: Vec<Lang> = tags
+        .iter()
+        .find(|(k, _)| k == Field::Language.vorbis())
+        .into_iter()
+        .flat_map(|(_, v)| v)
+        .filter_map(|code| Lang::parse(code))
+        .collect();
+    if sung.is_empty()
         && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
+        && let Some(own) = own_lyrics_language(facts)
     {
-        insert_comment(&mut tags, Field::Language, vec![code]);
+        insert_comment(&mut tags, Field::Language, vec![own.iso639_2()]);
         tag_why.push(TagWhy {
             key: Field::Language.vorbis().to_string(),
-            from: "the lyrics' language".to_string(),
+            from: "the language of the audio file's own lyrics".to_string(),
             cleaned: Vec::new(),
         });
+        sung.push(own);
     }
+    let lyrics = pick_lyrics(input, &audio_key, &sung);
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -838,17 +890,71 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
     }
 }
 
-/// The ISO 639-2 code of the language the lyrics `lyrics` names are in,
-/// if their source says it.
-fn lyrics_language(input: &Input<'_>, lyrics: &LyricsRef) -> Option<String> {
-    let facts = input.facts.get(&lyrics.key)?;
-    let found = facts.lyrics.iter().find(|l| l.at == lyrics.at)?;
-    let code = match &found.language {
-        crate::lyrics::Language::Codes(codes) => codes.first()?.clone(),
-        crate::lyrics::Language::Tag(tag) => tag.clone(),
-        crate::lyrics::Language::Unstated => return None,
+/// The language the lyrics tag of the audio's own file names, as a
+/// `USLT` frame does: a file's own lyrics are the song's as someone kept
+/// it, so most likely in the language it is sung in.
+fn own_lyrics_language(facts: &Facts) -> Option<Lang> {
+    facts
+        .lyrics
+        .iter()
+        .find(|l| l.at == LyricsAt::Tag)?
+        .language
+        .langs()
+        .into_iter()
+        .next()
+}
+
+/// What lyrics in `language` are to a song sung in `sung`, if that is
+/// known, and where they rank by `read`, the languages the listener
+/// reads: `None` for lyrics this song does not take. Where the language
+/// sung is not known, a file's own lyrics tag in no language read ranks
+/// after every language read rather than not at all: a subtitle is one of
+/// many a site offers, but a file's own lyrics are what someone chose to
+/// keep. A translation is taken only into a language read.
+fn lyrics_fit(
+    sung: &[Lang],
+    read: &[Lang],
+    language: &Language,
+    at: &LyricsAt,
+) -> Option<(Option<Role>, i64)> {
+    let wide = |n: usize| i64::try_from(n).unwrap_or(UNKNOWN);
+    let read_rank = || {
+        lyrics::preference(read, language).map(|(n, fit)| wide(n) * 2 + i64::from(fit == Fit::Near))
     };
-    crate::tags::Kind::Language.read(&code).ok()
+    if sung.is_empty() {
+        let kept = (*at == LyricsAt::Tag && !read.is_empty()).then(|| wide(read.len()) * 2);
+        return Some((None, read_rank().or(kept)?));
+    }
+    // Lyrics that say nothing of their language are taken as the song's.
+    if *language == Language::Unstated {
+        return Some((Some(Role::Original), 0));
+    }
+    let role = language
+        .langs()
+        .iter()
+        .flat_map(|l| sung.iter().map(|s| l.role(s)))
+        .min()?;
+    match role {
+        Role::Original | Role::Romanization => Some((Some(role), 0)),
+        Role::Translation => Some((Some(role), read_rank()?)),
+    }
+}
+
+/// Where lyrics of `role` and `timed` or not rank by `prefer`, a place
+/// for each entry: 0 where they have its trait, else 1. Lyrics whose role
+/// is not known have every role's trait alike.
+fn preferred(prefer: &[Prefer], role: Option<Role>, timed: bool) -> Vec<i64> {
+    prefer
+        .iter()
+        .map(|p| {
+            let has = match (p, p.role()) {
+                (Prefer::Timed, _) => timed,
+                (Prefer::Untimed, _) => !timed,
+                (_, wanted) => role.is_none() || role == wanted,
+            };
+            i64::from(!has)
+        })
+        .collect()
 }
 
 fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
@@ -928,7 +1034,7 @@ fn stated_confidence(stated_ms: i64, audio_ms: f64) -> f64 {
     STATED_MAX * (1.0 - gap / STATED_SPAN_MS).max(0.0)
 }
 
-fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, String)> {
+fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(LyricsRef, String)> {
     let pin = match &input.song.lyrics {
         Some(LyricsPin::None) => return None,
         Some(LyricsPin::From(k)) => Some(k),
@@ -957,11 +1063,13 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
         };
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
-            let Some(preference) = lyrics::preference(input.lyrics, &l.language).or_else(|| {
-                (l.at == LyricsAt::Tag && !input.lyrics.is_empty()).then_some(input.lyrics.len())
-            }) else {
+            let read = &input.lyrics.read;
+            let Some((role, preference)) = lyrics_fit(sung, read, &l.language, &l.at) else {
                 continue;
             };
+            if role.is_some_and(|r| !input.lyrics.takes(r)) {
+                continue;
+            }
             let confidence = match l.stated_ms {
                 Some(stated) if facts.audio.is_none() => {
                     let sure = stated_confidence(stated, duration_ms);
@@ -979,17 +1087,17 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     0
                 }
             });
-            let rank: Rank = vec![
-                i64::from(l.timing.is_none()),
-                i64::try_from(preference).unwrap_or(UNKNOWN),
+            let mut rank: Rank = preferred(&input.lyrics.prefer, role, l.timing.is_some());
+            rank.extend([
+                preference,
                 -((confidence * 20.0).floor() as i64),
                 -coverage,
                 i64::try_from(n).unwrap_or(UNKNOWN),
-            ];
+            ]);
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
-            let why = match l.timing {
+            let timing = match l.timing {
                 None => "untimed".to_string(),
                 Some(t) => format!(
                     "timed, {} line(s), {} the chosen audio",
@@ -1001,6 +1109,11 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     }
                 ),
             };
+            let why = match role {
+                Some(Role::Original) | None => timing,
+                Some(Role::Romanization) => format!("a romanization, {timing}"),
+                Some(Role::Translation) => format!("a translation, {timing}"),
+            };
             best = Some((
                 rank,
                 LyricsRef {
@@ -1010,6 +1123,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     shift_ms: offset - input.song.lyrics_offset_ms,
                     stretch_ppm,
                     placement: input.placement,
+                    language: l.language.langs().first().map(Lang::iso639_2),
                 },
                 why,
             ));
@@ -1054,6 +1168,9 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             offers: &facts.tags,
         };
         for (field, raw) in &facts.tags {
+            if *field == Field::Comment && !input.source_comments {
+                continue;
+            }
             let c = clean::clean(*field, raw, &ctx, input.clean);
             all.entry(*field).or_default().push(Candidate {
                 n,
