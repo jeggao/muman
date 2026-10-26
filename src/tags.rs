@@ -264,8 +264,9 @@ pub enum Kind {
     /// A product's barcode, its digits alone, leading zeros kept: a UPC's
     /// 12, an EAN's 13 or 8, a GTIN's 14.
     Barcode,
-    /// A language by its ISO 639-2 code, as `jpn`; a two-letter one, as
-    /// `ja`, read as it.
+    /// A language by its ISO 639-2 code, as `jpn`; any other spelling of
+    /// it, as `ja` or `ja-JP`, read as it. `zxx` names none, as a song
+    /// with no words has.
     Language,
     /// A ReplayGain peak, measured by muman: full scale 1, six decimals.
     Peak,
@@ -308,7 +309,7 @@ impl Kind {
                     .ok_or("no key: give one as Abm")
             }
             Self::Barcode => barcode(v).ok_or("no barcode: give its 8 to 14 digits"),
-            Self::Language => language(v).ok_or("no language: give its ISO 639-2 code, as jpn"),
+            Self::Language => language(v).ok_or("no language: give its code, as jpn or ja"),
         }
     }
 }
@@ -397,10 +398,11 @@ fn barcode(text: &str) -> Option<String> {
 
 fn language(text: &str) -> Option<String> {
     let code = text.trim().to_ascii_lowercase();
-    match code.len() {
-        3 if code.bytes().all(|b| b.is_ascii_lowercase()) => Some(code),
-        2 => crate::lyrics::iso639_2_of(&code).map(str::to_string),
-        _ => None,
+    match crate::lang::Lang::parse(&code) {
+        Some(lang) => Some(lang.iso639_2()),
+        None => ["und", "mul", "mis", "zxx"]
+            .contains(&code.as_str())
+            .then_some(code),
     }
 }
 

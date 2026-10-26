@@ -1,13 +1,15 @@
 //! What `songs.toml` sets beyond its songs: how the library is laid out
-//! and named, which codecs are kept and what the rest is encoded to, how
-//! loud songs are made, how sources are ranked, how yt-dlp and aria2c
-//! fetch, which programs muman runs, and how much history `undo` keeps.
+//! and named, which lyrics are taken, which codecs are kept and what the
+//! rest is encoded to, how loud songs are made, how sources are ranked,
+//! how yt-dlp and aria2c fetch, which programs muman runs, and how much
+//! history `undo` keeps.
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[audio]`, `[loudness]` ([`crate::loudness`]),
-//! `[quality]`, `[ytdlp]`, `[torrent]` ([`crate::aria2`]), `[tools]`
-//! ([`crate::tools`]), `[history]` and `[sites]` ([`crate::sites`]). A
+//! are `[library]`, `[lyrics]`, `[audio]`, `[loudness]`
+//! ([`crate::loudness`]), `[quality]`, `[ytdlp]`, `[torrent]`
+//! ([`crate::aria2`]), `[tools]` ([`crate::tools`]), `[history]` and
+//! `[sites]` ([`crate::sites`]). A
 //! key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored.
 //! A flag or a `MUMAN_*` variable says what is where on one machine,
@@ -42,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::codec::{Codec, Layout, Shape, Speakers};
+use crate::lang::Lang;
 use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
@@ -52,14 +55,16 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 9] = [
-    "library", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history", "sites",
+pub const TABLES: [&str; 10] = [
+    "library", "lyrics", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history",
+    "sites",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub library: Library,
+    pub lyrics: Lyrics,
     pub audio: Audio,
     pub loudness: Loudness,
     pub quality: Quality,
@@ -868,6 +873,22 @@ impl From<WrittenTools> for Tools {
     }
 }
 
+/// Which lyrics a song takes, by their language: see [`crate::resolve`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Lyrics {
+    /// The languages lyrics are taken in, best first.
+    pub read: Vec<Lang>,
+}
+
+impl Default for Lyrics {
+    fn default() -> Self {
+        Self {
+            read: Lang::parse("en").into_iter().collect(),
+        }
+    }
+}
+
 /// What `undo` can put back.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1054,12 +1075,13 @@ pub struct Override {
 /// file's older names are renamed, so one never collides with another.
 pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     let mut only = DocumentMut::new();
-    for table in TABLES {
+    for table in TABLES.into_iter().chain(crate::migrate::moved_from()) {
         if let Some(item) = doc.get(table) {
             only.insert(table, item.clone());
         }
     }
     crate::migrate::rename_all(&mut only, &EDITIONS)?;
+    only.retain(|table, _| TABLES.contains(&table));
     for o in overrides {
         let table = only
             .entry(&o.table)
@@ -1366,7 +1388,7 @@ mod tests {
     #[test]
     fn every_setting_a_list_lacks_is_added_ahead_of_its_own_tables() {
         let mut d = doc(
-            "version = 1\n\n[defaults]\nlyrics = [\"en\"]\n\n[audio]\n# Mine.\nopus_bitrate = \"192 kb/s\"\n\n\
+            "version = 1\n\n[clean.tidy]\nspacing = true\n\n[audio]\n# Mine.\nopus_bitrate = \"192 kb/s\"\n\n\
              [quality.stereo]\nweight = 0\n",
         );
         assert!(fill(&mut d, &EDITIONS));
@@ -1378,7 +1400,7 @@ mod tests {
             text.starts_with(&format!("version = 1\nedition = {EDITION}\n")),
             "{text}"
         );
-        assert!(text.find("[library]") < text.find("[defaults]"), "{text}");
+        assert!(text.find("[library]") < text.find("[clean.tidy]"), "{text}");
         assert!(
             text.contains("# Mine.\nopus_bitrate = \"192 kb/s\"\n"),
             "{text}"

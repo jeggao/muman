@@ -1,5 +1,5 @@
 version = 1
-edition = 4
+edition = 5
 
 # Settings, each written at its default; change any. A size, bitrate,
 # time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
@@ -45,6 +45,11 @@ touch_root = false
 # max_size = "32 GiB"
 # Each file counts rounded up to this: "32 KiB" on a FAT32 card.
 block_size = "4 KiB"
+
+[lyrics]
+# The languages lyrics are taken in, best first, as language tags: "en",
+# "pt-BR", "zh-Hant".
+read = ["en"]
 
 [audio]
 # Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac,
@@ -242,7 +247,3 @@ kinds = [{ prefix = "", id = "^[0-9]+$", fetch = "https://www.jamendo.com/track/
 [sites."audius.co"]
 extractors = { audius = "", audiustrack = "" }
 kinds = [{ prefix = "", fetch = "audius:{id}" }]
-
-[defaults]
-# Subtitle languages lyrics are taken in, most preferred first.
-lyrics = ["en"]
