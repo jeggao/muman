@@ -227,7 +227,7 @@ pub(crate) fn resolve_songs(
             facts: &state.facts,
             on_disk,
             alignments: &state.alignments,
-            lyrics: &settings.lyrics.read,
+            lyrics: &settings.lyrics,
             clean: &manifest.clean,
             albums: &albums,
             naming: &naming,

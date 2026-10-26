@@ -15,7 +15,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/10";
+pub const METHOD: &str = "tags/11";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1194,7 +1194,9 @@ fn one(value: Option<&String>) -> Vec<String> {
 
 /// What yt-dlp's info JSON offers. A release names its track, artists
 /// and album in fields of their own; an upload has only its title and
-/// its channel.
+/// its channel. The language its audio is in, as the site says it, may
+/// be its speech recognition's guess, so it is offered as read off it,
+/// below any source's own tag.
 #[must_use]
 pub fn from_info(info: &VideoInfo) -> Offers {
     let mut o = Offers::new();
@@ -1291,11 +1293,18 @@ pub fn from_info(info: &VideoInfo) -> Offers {
         true,
     );
     offer(&mut o, Field::Genre, one(info.genre.as_ref()), true);
+    offer(
+        &mut o,
+        Field::Language,
+        info.audio_language().into_iter().collect(),
+        false,
+    );
     o
 }
 
 /// What a MusicBrainz record offers: the recording's title, artists,
-/// ISRCs, IDs and first release's date, and its release's album, album
+/// ISRCs, IDs, first release's date and its works' lyrics languages, and
+/// its release's album, album
 /// artist, track, disc, date, track total, country, IDs, status, types
 /// and medium, and the labels, catalogue numbers, barcode, ASIN and
 /// script a lookup of the release answers.
@@ -1319,6 +1328,7 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
         record.artist_ids.clone(),
         true,
     );
+    offer(&mut o, Field::Language, record.languages.clone(), true);
     if let Some(r) = &record.release {
         offer(&mut o, Field::Album, vec![r.title.clone()], true);
         offer(&mut o, Field::AlbumArtist, r.artists.clone(), true);
@@ -1951,6 +1961,32 @@ mod tests {
     }
 
     #[test]
+    fn a_video_offers_the_language_its_audio_is_in_as_derived() {
+        let language = |json: &str| from_info(&info(json)).get(&Field::Language).cloned();
+        let derived = |code: &str| {
+            Some(Offer {
+                values: vec![code.into()],
+                structured: false,
+            })
+        };
+        assert_eq!(
+            language(
+                r#"{"format_id": "251", "formats": [{"format_id": "251", "acodec": "opus",
+                    "vcodec": "none", "language": "ja"}],
+                    "automatic_captions": {"ko-orig": [], "ko": []}}"#
+            ),
+            derived("jpn"),
+            "the format fetched before the captions"
+        );
+        assert_eq!(
+            language(r#"{"automatic_captions": {"en": [], "ko-orig": [], "ko": []}}"#),
+            derived("kor"),
+            "an info JSON kept before formats' languages were"
+        );
+        assert_eq!(language(r#"{"automatic_captions": {"ko": []}}"#), None);
+    }
+
+    #[test]
     fn a_track_or_disc_numbered_0_offers_none() {
         let o = from_info(&info(
             r#"{"title": "Song", "track_number": 0, "disc_number": 0}"#,
@@ -2137,6 +2173,7 @@ mod tests {
             length_ms: None,
             release: None,
             original_date: None,
+            languages: Vec::new(),
         };
         let o = from_record(&record);
         assert_eq!(o[&Field::Title].values, ["Escape Title[2J"]);
@@ -2177,9 +2214,11 @@ mod tests {
                 },
             }),
             original_date: Some("1999-02-01".into()),
+            languages: vec!["jpn".into(), "zxx".into()],
         };
         let o = from_record(&record);
         assert_eq!(o[&Field::OriginalDate].values, ["1999-02-01"]);
+        assert_eq!(o[&Field::Language].values, ["jpn", "zxx"]);
         let mut grouped = record.clone();
         if let Some(r) = grouped.release.as_mut() {
             r.details.original_date = Some("2001".into());
@@ -2206,7 +2245,7 @@ mod tests {
         );
         assert!(!o.contains_key(&Field::MusicBrainzReleaseTrackId));
         assert!(o.values().all(|v| v.structured));
-        assert_eq!(o.len(), 23);
+        assert_eq!(o.len(), 24);
     }
 
     #[test]

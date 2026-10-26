@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[lyrics] prefer`** ranks lyrics by their role and timing, best
+  first: put translations, the original or a romanization first, or
+  timed or untimed lyrics before any role, and leave out a role never to
+  take it.
 - **`--trust`**, or `MUMAN_TRUST=1`, trusts the commands and servers the
   song list sets, as it sets them, without asking: for a run with no
   terminal to ask on.
@@ -25,13 +29,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
-- **`[defaults] lyrics` is `[lyrics] read`,** and the next write moves
-  it. It takes any language tag, as `zh-Hant` or `pt-BR`, matched as a
-  browser matches one: `zh-TW` takes `zh-Hant` and never `zh-Hans`, and
-  `ger`, `deu` and `de` are one language.
+- **Lyrics are told apart by their role in the song:** the original,
+  in the language it is sung in; a romanization, in that language's
+  Latin letters; or a translation into a language you read. Before,
+  only their language counted, so the Japanese lyrics of a song sung in
+  Japanese were never taken where only `en` was listed. The language
+  sung is the song's `language`: set by hand, else a MusicBrainz work's
+  lyrics language, a file's own tag, the language YouTube says a video's
+  audio is in, or that of the audio file's own lyrics tag. A subtitle's
+  language no longer sets it, since a subtitle may be a translation.
+- **`[defaults] lyrics` is `[lyrics] read`,** the languages you read,
+  and the next write moves it. A translation is taken only into one of
+  them. It takes any language tag, as `zh-Hant`
+  or `pt-BR`, matched as a browser matches one: `zh-TW` takes `zh-Hant`
+  and never `zh-Hans`, and `ger`, `deu` and `de` are one language.
 - **A `language` tag takes any spelling of a language,** as `ja` or
   `ja-JP`, and is written as its ISO 639-2 terminologic code, `deu`
   rather than `ger`.
+- **MusicBrainz is asked once more for each song a search finds,** for
+  the languages of its works' lyrics.
+
 - **A song list that sets commands or servers asks once before muman
   runs them.** The first command after updating that could run a song
   list's hook, a program of its `[tools]`, yt-dlp's or aria2c's

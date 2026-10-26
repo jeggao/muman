@@ -8,9 +8,9 @@ static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 static QUALITY: std::sync::LazyLock<Quality> = std::sync::LazyLock::new(Quality::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
-use crate::lang::Lang;
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
+use crate::settings::Prefer;
 use crate::tags::Offers;
 
 fn yt(id: &str) -> SourceKey {
@@ -157,8 +157,17 @@ fn why<'r>(r: &'r Resolved, key: &str) -> &'r TagWhy {
     r.why.tags.iter().find(|t| t.key == key).unwrap()
 }
 
-fn english() -> Vec<Lang> {
-    vec![Lang::parse("en").unwrap()]
+/// Lyrics as `new.toml` takes them: read in English.
+fn english() -> crate::settings::Lyrics {
+    crate::settings::Lyrics::default()
+}
+
+/// Lyrics read in no language.
+fn none_read() -> crate::settings::Lyrics {
+    crate::settings::Lyrics {
+        read: Vec::new(),
+        ..english()
+    }
 }
 
 fn song(sources: &[SourceKey]) -> Song {
@@ -179,13 +188,24 @@ fn run_with(
     audio: &Audio,
     quality: &Quality,
 ) -> Resolved {
+    run_reading(song, facts, alignments, audio, quality, &english())
+}
+
+fn run_reading(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    alignments: &[Aligned],
+    audio: &Audio,
+    quality: &Quality,
+    lyrics: &crate::settings::Lyrics,
+) -> Resolved {
     resolve(&Input {
         song,
         album: None,
         facts,
         on_disk: None,
         alignments,
-        lyrics: &english(),
+        lyrics,
         clean: &Settings::default(),
         albums: &Albums::default(),
         naming: &NAMING,
@@ -509,7 +529,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         facts: &facts,
         on_disk: None,
         alignments: &[],
-        lyrics: &[],
+        lyrics: &none_read(),
         clean: &clean,
         albums: &Albums::default(),
         naming: &NAMING,
@@ -578,7 +598,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         facts: &facts,
         on_disk: None,
         alignments: &[],
-        lyrics: &[],
+        lyrics: &none_read(),
         clean: &Settings::default(),
         albums: &albums,
         naming: &NAMING,
@@ -1160,7 +1180,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             facts: &facts,
             on_disk: None,
             alignments: &[],
-            lyrics: &[],
+            lyrics: &none_read(),
             clean: &Settings::default(),
             albums: &Albums::default(),
             naming: &NAMING,
@@ -1530,7 +1550,7 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
 }
 
 #[test]
-fn a_file_s_own_lyrics_in_a_language_not_preferred_rank_after_the_preferred() {
+fn a_file_s_own_lyrics_name_the_language_it_is_sung_in_unless_a_tag_names_another() {
     let key = manual("x");
     let mut f = audio("flac", 1.0);
     lyrics(&mut f, LyricsAt::Tag, "ja", 12);
@@ -1556,13 +1576,22 @@ fn a_file_s_own_lyrics_in_a_language_not_preferred_rank_after_the_preferred() {
 
     f.lyrics[0].at = LyricsAt::Tag;
     lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let r = run(&song(std::slice::from_ref(&key)), &facts, &[]);
+    assert_eq!(
+        r.plan.lyrics.map(|l| l.at),
+        Some(LyricsAt::Sidecar),
+        "a translation into a language read first, as by default"
+    );
+
+    tag(&mut f, Field::Language, &["eng"], true);
     let facts = BTreeMap::from([(key.clone(), f)]);
     let r = run(&song(&[key]), &facts, &[]);
     assert_eq!(r.plan.lyrics.map(|l| l.at), Some(LyricsAt::Sidecar));
 }
 
 #[test]
-fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
+fn the_language_sung_is_never_read_off_a_subtitle_and_lyrics_keep_their_own() {
     let key = manual("x");
     let mut f = audio("flac", 1.0);
     lyrics(&mut f, LyricsAt::Sidecar, "en", 12);
@@ -1576,7 +1605,11 @@ fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
             .find(|(k, _)| k == "LANGUAGE")
             .map(|(_, v)| v.clone())
     };
-    assert_eq!(language(&r), Some(vec!["eng".to_string()]));
+    assert_eq!(language(&r), None, "a subtitle may be a translation");
+    assert_eq!(
+        r.plan.lyrics.and_then(|l| l.language).as_deref(),
+        Some("eng")
+    );
     tag(&mut f, Field::Language, &["jpn"], true);
     let facts = BTreeMap::from([(key.clone(), f)]);
     let r = run(&song(&[key]), &facts, &[]);
@@ -1589,6 +1622,70 @@ fn the_lyrics_language_is_the_song_s_unless_a_source_says_another() {
         r.plan.lyrics.and_then(|l| l.language).as_deref(),
         Some("eng"),
         "the lyrics keep their own"
+    );
+}
+
+/// The lyrics `prefer` takes of `f`, the facts of `key`, read in English.
+fn taken_by(key: &SourceKey, f: &Facts, prefer: &[Prefer]) -> Option<LyricsAt> {
+    let reading = crate::settings::Lyrics {
+        prefer: prefer.to_vec(),
+        ..english()
+    };
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    let s = song(std::slice::from_ref(key));
+    let r = run_reading(&s, &facts, &[], &AUDIO, &QUALITY, &reading);
+    r.plan.lyrics.map(|l| l.at)
+}
+
+#[test]
+fn lyrics_rank_by_the_role_prefer_lists_first_and_one_left_out_is_never_taken() {
+    use Prefer::{Original, Romanization, Translation};
+    let key = yt("vid00000001");
+    let mut f = audio("opus", 200.0);
+    lyrics(&mut f, LyricsAt::Stream { index: 2 }, "en", 30);
+    lyrics(&mut f, LyricsAt::Stream { index: 3 }, "ja-Latn", 30);
+    lyrics(&mut f, LyricsAt::Stream { index: 4 }, "ja", 30);
+    let stream = |index: u32| Some(LyricsAt::Stream { index });
+    let default = english().prefer;
+    assert_eq!(taken_by(&key, &f, &default), stream(2), "sung in what?");
+
+    tag(&mut f, Field::Language, &["ja"], false);
+    assert_eq!(
+        taken_by(&key, &f, &default),
+        stream(2),
+        "a translation read"
+    );
+    let original_first = [Original, Romanization, Translation];
+    assert_eq!(taken_by(&key, &f, &original_first), stream(4));
+    assert_eq!(taken_by(&key, &f, &[Romanization, Original]), stream(3));
+    f.lyrics.pop();
+    assert_eq!(taken_by(&key, &f, &original_first), stream(3));
+    f.lyrics.pop();
+    assert_eq!(taken_by(&key, &f, &[Original, Romanization]), None);
+    f.lyrics[0].language = Language::Codes(vec!["fr".into()]);
+    assert_eq!(taken_by(&key, &f, &default), None, "a translation not read");
+}
+
+#[test]
+fn timing_ranks_where_prefer_lists_it() {
+    use Prefer::{Original, Timed, Translation, Untimed};
+    let key = manual("x");
+    let mut f = audio("flac", 200.0);
+    tag(&mut f, Field::Language, &["ja"], true);
+    lyrics(&mut f, LyricsAt::Tag, "ja", 30);
+    lyrics(&mut f, LyricsAt::Sidecar, "en", 0);
+    assert_eq!(
+        taken_by(&key, &f, &english().prefer),
+        Some(LyricsAt::Sidecar),
+        "the role before timing, as by default"
+    );
+    let timed_first = [Timed, Translation, Original];
+    assert_eq!(taken_by(&key, &f, &timed_first), Some(LyricsAt::Tag));
+    let untimed_first = [Untimed, Original, Translation];
+    assert_eq!(taken_by(&key, &f, &untimed_first), Some(LyricsAt::Sidecar));
+    assert_eq!(
+        taken_by(&key, &f, &[Original, Translation]),
+        Some(LyricsAt::Tag)
     );
 }
 
