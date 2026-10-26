@@ -46,8 +46,17 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
         what.push("cover");
     }
     let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
-    if lines(old) != lines(new) {
+    let uncleaned = |p: &Plan| {
+        p.lyrics.as_ref().map(|l| LyricsRef {
+            clean_off: Vec::new(),
+            cleaning: 0,
+            ..l.lines()
+        })
+    };
+    if uncleaned(old) != uncleaned(new) {
         what.push("lyrics");
+    } else if lines(old) != lines(new) {
+        what.push("lyric cleaning");
     }
     let other_tags = |p: &Plan| {
         p.tags

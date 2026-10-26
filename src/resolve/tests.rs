@@ -289,6 +289,37 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
 }
 
 #[test]
+fn lyrics_name_the_cleaning_they_are_written_by() {
+    let (song, facts, alignments) = release_and_video();
+    let lyrics = run(&song, &facts, &alignments).plan.lyrics.unwrap();
+    assert_eq!(lyrics.cleaning, clean::lyrics::EDITION);
+    assert!(lyrics.clean_off.is_empty());
+    let mut off = Settings::default();
+    assert!(off.set("lyrics.packaging.credits", false));
+    assert!(off.set("tidy.spacing", false));
+    let r = resolve(&Input {
+        song: &song,
+        album: None,
+        facts: &facts,
+        on_disk: None,
+        alignments: &alignments,
+        lyrics: &english(),
+        clean: &off,
+        albums: &Albums::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        quality: &QUALITY,
+        placement: LyricsPlacement::Sidecar,
+        source_comments: false,
+    })
+    .unwrap();
+    assert_eq!(
+        r.plan.lyrics.unwrap().clean_off,
+        ["lyrics.packaging.credits"]
+    );
+}
+
+#[test]
 fn the_ranking_follows_measures_not_the_list_s_order() {
     let (mut song, facts, alignments) = release_and_video();
     song.sources.reverse();

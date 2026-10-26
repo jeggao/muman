@@ -68,6 +68,8 @@ fn plan(format: Format) -> Plan {
             stretch_ppm: 0,
             placement: LyricsPlacement::Sidecar,
             language: None,
+            clean_off: Vec::new(),
+            cleaning: crate::clean::lyrics::EDITION,
         }),
         tags: vec![
             ("TITLE".into(), vec!["Song".into()]),
@@ -583,6 +585,8 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         stretch_ppm: 0,
         placement: LyricsPlacement::Sidecar,
         language: None,
+        clean_off: Vec::new(),
+        cleaning: crate::clean::lyrics::EDITION,
     });
     let fake = Fake::default();
     go(&fake, &f, &p).unwrap();

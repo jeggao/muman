@@ -176,6 +176,40 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
 }
 
 #[test]
+fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets\n"
+    );
+
+    let list = s.dir.path().join("home/songs.toml");
+    let t = std::fs::read_to_string(&list).unwrap();
+    let at = t.find("[clean.lyrics.packaging]").expect(&t);
+    let off = format!(
+        "{}{}",
+        &t[..at],
+        t[at..].replacen("cues = true", "cues = false", 1)
+    );
+    std::fs::write(&list, off).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (lyric cleaning)"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n"
+    );
+}
+
+#[test]
 fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
