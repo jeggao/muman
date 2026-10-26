@@ -114,7 +114,7 @@ know.
 
 | Table | Sets |
 |---|---|
-| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, the most the library may take |
+| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, whether sources' comments are written, the most the library may take |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | [`[loudness]`](audio.md#loudness) | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
 | `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |

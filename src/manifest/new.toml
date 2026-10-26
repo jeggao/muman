@@ -32,6 +32,10 @@ unknown_album = "Unknown Album"
 untitled = "Untitled"
 # Where lyrics go: "sidecar" (.lrc beside the song), "embedded" or "both".
 lyrics = "sidecar"
+# Write the comment a source's own tags carry, as a store or an uploader
+# left it; a `comment` in a song's or an album's `tags` is written
+# either way.
+source_comments = false
 # Set the library folder's time after a change, for players that rescan
 # only when it is newer.
 touch_root = false

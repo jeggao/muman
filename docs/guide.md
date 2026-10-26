@@ -178,15 +178,15 @@ language as its ISO 639-2 code, as `jpn`. A key is written as `KEY` and
 `INITIALKEY` in Vorbis comments, as Picard and DJ tools name it, and in
 `TKEY` where it is a key as that frame holds one (`Abm`, `F#`), else as
 a user text frame. Without a `language` of its own, a song's is its
-lyrics' language. A value its field cannot hold, as a date of `July 2019`
-or `2019-02-30`, a tempo that is not from 1 to 9999 once rounded, a
-ReplayGain gain or peak, which muman measures, or a table, refuses the
-song list, naming the song by its number and first source; so does a tag
-name a Vorbis comment cannot carry, of other than printable ASCII or with
-`=`. A TOML date, `date = 2019-07-04` unquoted, is read as its text. `add
---artist`, `--album` and the other tag flags set these on every song an
-`add` lists. `muman status` shows each tag's value and the source it
-came from.
+lyrics' language. A source's own `comment` is written only with `[library]
+source_comments`. A value its field cannot hold, as a date of `July 2019` or
+`2019-02-30`, a tempo that is not from 1 to 9999 once rounded, a ReplayGain
+gain or peak, which muman measures, or a table, refuses the song list,
+naming the song by its number and first source; so does a tag name a Vorbis
+comment cannot carry, of other than printable ASCII or with `=`. A TOML
+date, `date = 2019-07-04` unquoted, is read as its text. `add --artist`,
+`--album` and the other tag flags set these on every song an `add` lists.
+`muman status` shows each tag's value and the source it came from.
 
 A song's audio keeps the chapters of the source it is taken from, as an
 M4B audiobook or a video in parts has them: the song stays one file, and

@@ -998,10 +998,10 @@ pub static TABLE: [Spec; 53] = {
             field: F::Grouping,
             vorbis: "GROUPING",
             also_vorbis: &[],
-            aliases: &["grp1", "©grp"],
+            aliases: &["tit1", "grp1", "©grp"],
             kind: K::Text,
             scope: S::Recording,
-            id3: Id3::Text("GRP1"),
+            id3: Id3::Text("TIT1"),
             mp4: Mp4::Text("©grp"),
             ape: Some("Grouping"),
         },
@@ -1009,10 +1009,10 @@ pub static TABLE: [Spec; 53] = {
             field: F::Work,
             vorbis: "WORK",
             also_vorbis: &[],
-            aliases: &["tit1", "©wrk"],
+            aliases: &["©wrk"],
             kind: K::Text,
             scope: S::Recording,
-            id3: Id3::Text("TIT1"),
+            id3: Id3::User("WORK"),
             mp4: Mp4::Text("©wrk"),
             ape: Some("Work"),
         },
@@ -1548,17 +1548,21 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
             .map(str::to_string)
             .collect()
     };
+    let text = |id: &str| {
+        FrameId::new(id)
+            .ok()
+            .and_then(|id| tag.get_text(&id))
+            .map(split)
+    };
     let frames: Vec<&Frame<'_>> = tag.into_iter().collect();
     TABLE
         .iter()
         .map(|spec| {
             let values = match spec.id3 {
                 Id3::Text("TCON") => genres(tag),
-                Id3::Text(id) | Id3::Place(id) => FrameId::new(id)
-                    .ok()
-                    .and_then(|id| tag.get_text(&id))
-                    .map(split)
-                    .unwrap_or_default(),
+                // iTunes writes a grouping into `GRP1`, its `TIT1` then the work.
+                Id3::Text("TIT1") => text("GRP1").or_else(|| text("TIT1")).unwrap_or_default(),
+                Id3::Text(id) | Id3::Place(id) => text(id).unwrap_or_default(),
                 Id3::Time(id) => frames
                     .iter()
                     .find_map(|f| match f {
@@ -2267,6 +2271,40 @@ mod tests {
         assert_eq!(o[&Field::Track].values, ["7"]);
         assert_eq!(o[&Field::TrackTotal].values, ["12"]);
         assert!(read_file(&dir.path().join("none.flac")).is_none());
+    }
+
+    #[test]
+    fn an_mp3_s_grouping_is_its_grp1_else_its_tit1() {
+        use lofty::config::WriteOptions;
+        use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+        use lofty::tag::TagExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("a.mp3");
+        let text = |id: &str, value: &str| {
+            Frame::Text(TextInformationFrame::new(
+                FrameId::new(id.to_string()).unwrap(),
+                lofty::TextEncoding::UTF8,
+                value.to_string(),
+            ))
+        };
+        for (frames, grouping) in [
+            (vec![("TIT1", "Night Songs")], "Night Songs"),
+            (
+                vec![("TIT1", "Harbor Suite"), ("GRP1", "Night Songs")],
+                "Night Songs",
+            ),
+        ] {
+            std::fs::write(&mp3, crate::testing::SILENCE_MP3).unwrap();
+            let mut id3 = Id3v2Tag::new();
+            for (id, value) in frames {
+                id3.insert(text(id, value));
+            }
+            id3.save_to_path(&mp3, WriteOptions::default()).unwrap();
+            let o = from_container(&read_file(&mp3).unwrap());
+            assert_eq!(o[&Field::Grouping].values, [grouping]);
+            assert!(!o.contains_key(&Field::Work));
+        }
     }
 
     #[test]

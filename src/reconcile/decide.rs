@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
 use crate::manifest::{Edit, Manifest};
-use crate::resolve::{Plan, Resolved};
+use crate::resolve::{LyricsRef, Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state::{State, Written};
 
@@ -88,7 +88,7 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
         && (a.opus_header().is_none() || b.opus_header().is_some())
         && a.audio == b.audio
         && a.cover == b.cover
-        && a.lyrics == b.lyrics
+        && a.lyrics.as_ref().map(LyricsRef::lines) == b.lyrics.as_ref().map(LyricsRef::lines)
         // MP4 chapters are ffmpeg's to write.
         && a.chapters == b.chapters
 }

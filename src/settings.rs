@@ -97,6 +97,9 @@ pub struct Library {
     pub unknown_album: String,
     pub untitled: String,
     pub lyrics: LyricsPlacement,
+    /// Write the comment a source's own tags carry; a comment set by hand
+    /// is written either way.
+    pub source_comments: bool,
     /// Set the library folder's time to now after a run that changed it,
     /// for players that rescan only when it is newer than their last scan.
     pub touch_root: bool,
@@ -126,6 +129,7 @@ impl Default for Library {
             unknown_album: "Unknown Album".into(),
             untitled: "Untitled".into(),
             lyrics: LyricsPlacement::default(),
+            source_comments: false,
             touch_root: false,
             max_size: None,
             block_size: Size(4096),

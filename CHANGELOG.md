@@ -19,6 +19,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   credentials in any address replaced by `<redacted>`, its comments and
   layout kept. A path, as `--cookies` names, stays, as does any other
   word of a hook or a program. Without it the song list goes in as it is.
+- **`[library] source_comments`** chooses whether the comment a source's
+  own tags carry is written, as a store or an uploader left it; a
+  `comment` set in a song's or an album's `tags` is written either way.
 
 ### Changed
 
@@ -44,9 +47,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   muman's wins,** as yt-dlp reads its config file before its command
   line; `format`, `sub_langs` and `concurrent_fragments` set three of
   those.
+- **A source's own comment is no longer written** unless `[library]
+  source_comments` is set; the next `sync` retags each song that held
+  one.
+- **MP3 grouping and work are written where Picard writes them by
+  default:** a grouping in `TIT1`, a work in a `WORK` user text frame,
+  rather than iTunes' `GRP1` and `TIT1`. A source's `GRP1` is still read
+  as its grouping.
 
 ### Fixed
 
+- **An MP3's lyrics are marked with the language they are in,** as
+  their source names it, or `XXX` where it names none, rather than with
+  the song's `LANGUAGE`; its comment with English, as Picard marks one,
+  so Picard reads it as the song's comment. The next `sync` retags every
+  song.
 - **A torrent fetched beside yt-dlp no longer loses its folder.** A
   sync clearing yt-dlp's stale partial downloads removed the empty
   `partial/torrent` folder while aria2c's fetch made a folder in it, so

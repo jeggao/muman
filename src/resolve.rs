@@ -23,7 +23,9 @@
 //!   titles it as the song is titled, so a record of another recording,
 //!   its names outvoted, lends the song none; where the release's source
 //!   is one and names its recording, its recording IDs are the song's,
-//!   so a release's IDs and its recording's never contradict.
+//!   so a release's IDs and its recording's never contradict. A source's
+//!   comment is taken only with `[library] source_comments`: most are a
+//!   store's or an uploader's words, not the song's.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -346,6 +348,21 @@ pub struct LyricsRef {
     #[serde(default)]
     pub stretch_ppm: i64,
     pub placement: LyricsPlacement,
+    /// The ISO 639-2 code of the language their source names them in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl LyricsRef {
+    /// These lyrics with no language: what their lines are, whatever
+    /// their tags mark them as.
+    #[must_use]
+    pub fn lines(&self) -> Self {
+        Self {
+            language: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// Everything a library file is made from. Stored beside each output and
@@ -375,7 +392,7 @@ pub struct Plan {
 /// How tags are written into a file, raised whenever the frames, atoms or
 /// items one plan's tags are written as change, so every song is tagged
 /// again, its audio left as it is.
-pub const TAGGING: u32 = 1;
+pub const TAGGING: u32 = 2;
 
 impl PartialEq for Plan {
     fn eq(&self, other: &Self) -> bool {
@@ -439,6 +456,12 @@ impl Plan {
             insert_comment(&mut plan.tags, field, vec![value]);
         }
         plan
+    }
+
+    /// The ISO 639-2 code of the language its lyrics are in, if known.
+    #[must_use]
+    pub fn lyrics_language(&self) -> Option<&str> {
+        self.lyrics.as_ref()?.language.as_deref()
     }
 
     /// The hundredths of a dB of its gain the file holds, by its header or
@@ -572,6 +595,8 @@ pub struct Input<'a> {
     pub audio: &'a Audio,
     pub quality: &'a Quality,
     pub placement: LyricsPlacement,
+    /// Whether a comment its sources' tags carry is written.
+    pub source_comments: bool,
 }
 
 impl Input<'_> {
@@ -634,7 +659,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let cover = pick_cover(input);
     let lyrics = pick_lyrics(input, &audio_key);
     let (mut tags, mut tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
-    if let Some(code) = lyrics.as_ref().and_then(|(l, _)| lyrics_language(input, l))
+    if let Some(code) = lyrics.as_ref().and_then(|(l, _)| l.language.clone())
         && !tags.iter().any(|(k, _)| k == Field::Language.vorbis())
     {
         insert_comment(&mut tags, Field::Language, vec![code]);
@@ -838,12 +863,9 @@ fn speakers(audio: Option<&AudioFacts>, stereo: bool) -> String {
     }
 }
 
-/// The ISO 639-2 code of the language the lyrics `lyrics` names are in,
-/// if their source says it.
-fn lyrics_language(input: &Input<'_>, lyrics: &LyricsRef) -> Option<String> {
-    let facts = input.facts.get(&lyrics.key)?;
-    let found = facts.lyrics.iter().find(|l| l.at == lyrics.at)?;
-    let code = match &found.language {
+/// The ISO 639-2 code of the language `language` names, if it names one.
+fn language_code(language: &crate::lyrics::Language) -> Option<String> {
+    let code = match language {
         crate::lyrics::Language::Codes(codes) => codes.first()?.clone(),
         crate::lyrics::Language::Tag(tag) => tag.clone(),
         crate::lyrics::Language::Unstated => return None,
@@ -1010,6 +1032,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey) -> Option<(LyricsRef, Strin
                     shift_ms: offset - input.song.lyrics_offset_ms,
                     stretch_ppm,
                     placement: input.placement,
+                    language: language_code(&l.language),
                 },
                 why,
             ));
@@ -1054,6 +1077,9 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             offers: &facts.tags,
         };
         for (field, raw) in &facts.tags {
+            if *field == Field::Comment && !input.source_comments {
+                continue;
+            }
             let c = clean::clean(*field, raw, &ctx, input.clean);
             all.entry(*field).or_default().push(Candidate {
                 n,
