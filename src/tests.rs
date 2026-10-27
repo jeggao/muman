@@ -3756,6 +3756,49 @@ fn duplicates_resolved_become_one_song_and_undo_puts_them_back() {
 }
 
 #[test]
+fn merge_twice_merges_the_copies_an_album_holds_and_leaves_tags_set_apart() {
+    let s = Setup::new();
+    for name in ["a", "b", "c", "d"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    let (one, two) = (words(1600, 1), words(1600, 2));
+    let prints = || {
+        flacs()
+            .print("a.flac", one.clone())
+            .print("b.flac", one.clone())
+            .print("c.flac", two.clone())
+            .print("d.flac", two.clone())
+    };
+    let (ok, text) = s.run(&prints(), &["sync", "--new"]);
+    assert!(ok, "{text}");
+    for (key, genre) in [
+        ("manual:c.flac", "genre=Folk"),
+        ("manual:d.flac", "genre=Ambient"),
+    ] {
+        let (ok, text) = s.run(&prints(), &["set", "-y", key, genre]);
+        assert!(ok, "{text}");
+    }
+    s.refused(&["duplicates", "--merge", "twice"]);
+    let (ok, text) = s.run(&prints(), &["duplicates", "--merge", "twice", "-n"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Dry run: nothing changed"), "{text}");
+    assert_eq!(s.songs().len(), 4, "a dry run changes nothing");
+
+    let (ok, text) = s.run(&prints(), &["duplicates", "--merge", "twice", "-y"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("GENRE set by hand to two values"), "{text}");
+    let songs = s.songs();
+    assert_eq!(songs.len(), 3, "{text}");
+    assert!(
+        songs.contains(&vec![
+            SourceKey::Manual("a.flac".into()),
+            SourceKey::Manual("b.flac".into())
+        ]),
+        "{songs:?}"
+    );
+}
+
+#[test]
 fn a_copy_of_a_track_too_short_to_agree_on_six_seconds_is_one_recording() {
     let s = Setup::new();
     let track = s.file("rips/Interlude.flac");

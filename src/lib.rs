@@ -312,8 +312,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             | Command::Restore { .. }
             | Command::Set { .. }
             | Command::Edit { .. }
-            | Command::Duplicates { resolve: true, .. }
-    );
+    ) || merges(&job.command);
     if writes {
         dirs.apart()?;
         crate::manifest::present(&dirs.home)?;
@@ -374,10 +373,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Duplicates {
             query,
-            resolve: true,
+            resolve,
+            merge,
             yes,
             dry_run,
-        } => {
+        } if *resolve || merge.is_some() => {
             let mut run = Run::begin(&dirs.home)?;
             let confirm = cli::Confirm {
                 yes: *yes,
@@ -385,7 +385,12 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 dry_run: *dry_run,
             };
             let done = (|| {
-                if !duplicates::resolve(runner, dirs, query, &confirm, prompter, out)? {
+                let changed = if *resolve {
+                    duplicates::resolve(runner, dirs, query, &confirm, prompter, out)?
+                } else {
+                    duplicates::merge(runner, dirs, query, &confirm, prompter, out)?
+                };
+                if !changed {
                     return Ok(true);
                 }
                 reconcile_now(job, runner, Options::default(), Some(&mut run), out)
@@ -625,7 +630,7 @@ pub(crate) fn needs_ffmpeg(command: &Command) -> bool {
         | Command::List { .. }
         | Command::Purge { .. }
         | Command::Completions { .. } => false,
-        Command::Duplicates { resolve, .. } => *resolve,
+        Command::Duplicates { .. } => merges(command),
         Command::Check { decode, .. } => *decode,
         Command::Export {
             max_size,
@@ -666,7 +671,7 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         Command::Check { .. } => &["Decoding"],
         Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
-        Command::Duplicates { resolve: true, .. } => {
+        Command::Duplicates { .. } if merges(command) => {
             &["Comparing prints", "Comparing", "Measuring", "Writing"]
         }
         Command::Duplicates { .. } => &["Comparing prints"],
@@ -675,6 +680,11 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         | Command::Purge { .. }
         | Command::Completions { .. } => &[],
     }
+}
+
+/// Whether `command` is a `duplicates` that merges, rather than lists.
+pub(crate) fn merges(command: &Command) -> bool {
+    matches!(command, Command::Duplicates { resolve, merge, .. } if *resolve || merge.is_some())
 }
 
 /// Finish `run` whatever became of its command, so one that stopped on

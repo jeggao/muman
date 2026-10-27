@@ -24,6 +24,10 @@
 //! there twice, keeping apart for copies on other albums, which are
 //! offered only once those are done. What is chosen is said, asked
 //! about, and made as one change, so one `undo` puts it back.
+//! `--merge twice` makes the suggestion for every group an album holds
+//! twice without stepping through them, and leaves a group whose songs
+//! set a tag by hand to two values for `--resolve`, since which stays is
+//! the user's to say.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -230,7 +234,9 @@ pub fn resolve<R: Runner, W: Write>(
 ) -> Result<bool> {
     if prompter.is_none() {
         return Err(Refused(
-            "Resolving duplicates asks on a terminal; `muman duplicates` lists them".into(),
+            "Resolving duplicates asks on a terminal; `muman duplicates` lists them, and \
+             `--merge twice -y` merges the copies an album holds twice"
+                .into(),
         )
         .into());
     }
@@ -242,14 +248,7 @@ pub fn resolve<R: Runner, W: Write>(
     let groups: Vec<(bool, Vec<usize>)> = (found.twice.iter().map(|g| (true, g.clone())))
         .chain(found.across.iter().map(|g| (false, g.clone())))
         .collect();
-    let together: Vec<Song> = groups
-        .iter()
-        .map(|(_, g)| merge::together(&found.manifest, g))
-        .collect();
-    let store = Store::scan(dirs)?;
-    if reconcile::compare(runner, &store, &together, &mut found.state, out)? {
-        State::keep_measures(&dirs.home, &found.state)?;
-    }
+    compare_together(runner, dirs, &mut found, &groups, out)?;
     let m = &found.manifest;
     let resolver = reconcile::Resolver::new(m, &m.settings, &found.state, &dirs.library)?;
     let mut chosen = Vec::new();
@@ -281,6 +280,86 @@ pub fn resolve<R: Runner, W: Write>(
     apply(&mut found, &chosen, *confirm, prompter, out)
 }
 
+/// Merge each group an album holds twice, the copies on that album, into
+/// the one with the best audio, leaving a group whose songs set a tag by
+/// hand to two values for `--resolve`. Returns whether anything changed.
+pub fn merge<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    terms: &[String],
+    confirm: &Confirm,
+    prompter: Option<&mut dyn Prompter>,
+    out: &mut W,
+) -> Result<bool> {
+    let mut found = find(dirs, terms, out)?;
+    let groups: Vec<(bool, Vec<usize>)> = found.twice.iter().map(|g| (true, g.clone())).collect();
+    if groups.is_empty() {
+        crate::ui::success(out, "No album holds a recording twice")?;
+        return Ok(false);
+    }
+    compare_together(runner, dirs, &mut found, &groups, out)?;
+    let mut chosen = Vec::new();
+    {
+        let m = &found.manifest;
+        let resolver = reconcile::Resolver::new(m, &m.settings, &found.state, &dirs.library)?;
+        for (_, group) in &groups {
+            let twins = twins(&found.views, group);
+            let keeper = merge::keeper(m, &resolver, &twins);
+            let others: Vec<usize> = twins.iter().copied().filter(|n| *n != keeper).collect();
+            let merged: Vec<usize> = std::iter::once(keeper)
+                .chain(others.iter().copied())
+                .collect();
+            let clashes = merge::clashes(m, &merged);
+            if !clashes.is_empty() {
+                let tags: Vec<&str> = clashes.iter().map(|c| c.tag.as_str()).collect();
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "{}: {} set by hand to two values; left for `muman duplicates --resolve`",
+                        change::named(&found.views[keeper]),
+                        tags.join(", ")
+                    ),
+                )?;
+                continue;
+            }
+            chosen.push(Choice::Merge {
+                keeper,
+                others,
+                winners: Vec::new(),
+            });
+        }
+    }
+    apply(&mut found, &chosen, *confirm, prompter, out)
+}
+
+/// Compare the sources of each of `groups` as one song, as the sync
+/// after merging them would, keeping what was compared.
+fn compare_together<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    found: &mut Found,
+    groups: &[(bool, Vec<usize>)],
+    out: &mut W,
+) -> Result<()> {
+    let together: Vec<Song> = (groups.iter())
+        .map(|(_, g)| merge::together(&found.manifest, g))
+        .collect();
+    let store = Store::scan(dirs)?;
+    if reconcile::compare(runner, &store, &together, &mut found.state, out)? {
+        State::keep_measures(&dirs.home, &found.state)?;
+    }
+    Ok(())
+}
+
+/// The songs of `group` on an album that holds it more than once.
+fn twins(views: &[View], group: &[usize]) -> Vec<usize> {
+    let ids: Vec<_> = group.iter().map(|n| album_id(&views[*n])).collect();
+    (group.iter().zip(&ids))
+        .filter(|(_, id)| id.is_some() && ids.iter().filter(|o| o == id).count() > 1)
+        .map(|(n, _)| *n)
+        .collect()
+}
+
 /// Where a group's question leaves the steps.
 enum Step {
     Chose(Choice),
@@ -302,13 +381,7 @@ impl Asking<'_> {
     /// Show the group side by side and ask what becomes of it.
     fn ask<W: Write>(&self, p: &mut dyn Prompter, out: &mut W) -> Result<Step> {
         let (found, m) = (self.found, &self.found.manifest);
-        let ids: Vec<_> = (self.group.iter())
-            .map(|n| album_id(&found.views[*n]))
-            .collect();
-        let twins: Vec<usize> = (self.group.iter().zip(&ids))
-            .filter(|(_, id)| id.is_some() && ids.iter().filter(|o| o == id).count() > 1)
-            .map(|(n, _)| *n)
-            .collect();
+        let twins = twins(&found.views, self.group);
         let keeper = merge::keeper(
             m,
             self.resolver,
