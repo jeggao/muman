@@ -613,10 +613,13 @@ impl Default for Cover {
             pick: CoverPick::default(),
             out: vec![CoverOut {
                 to: To::Tag,
+                scope: Scope::Song,
                 suffix: String::new(),
+                name: String::new(),
                 format: CoverFormat::Keep,
                 max_side: None,
                 quality: DEFAULT_QUALITY,
+                mixed: Mixed::None,
             }],
         }
     }
@@ -625,7 +628,8 @@ impl Default for Cover {
 impl Cover {
     /// Each `[[cover.out]]` as it may be: one tag at most, holding a
     /// picture players read inside a song, each file's suffix a plain one,
-    /// no name twice, a side and a quality within bounds.
+    /// a folder's file a plain name, no name twice, a side and a quality
+    /// within bounds.
     fn check(&self) -> Result<()> {
         let tags = self.out.iter().filter(|o| o.to == To::Tag).count();
         if tags > 1 {
@@ -637,6 +641,19 @@ impl Cover {
             }
             if !(1..=100).contains(&out.quality) {
                 bail!("[[cover.out]] quality is from 1 to 100");
+            }
+            if out.scope == Scope::Folder {
+                Self::check_folder(&self.out[..n], out)?;
+                continue;
+            }
+            if !out.name.is_empty() {
+                bail!(
+                    "[[cover.out]] name is a folder's file's, scope = \"folder\"; a song's file \
+                     takes a suffix"
+                );
+            }
+            if out.mixed != Mixed::None {
+                bail!("[[cover.out]] mixed is for scope = \"folder\"");
             }
             match out.to {
                 To::Tag if !out.suffix.is_empty() => {
@@ -658,7 +675,9 @@ impl Cover {
                             .collect()
                     };
                     let twice = self.out[..n].iter().any(|o| {
-                        o.to == To::File && names(o).iter().any(|a| names(out).contains(a))
+                        o.to == To::File
+                            && o.scope == Scope::Song
+                            && names(o).iter().any(|a| names(out).contains(a))
                     });
                     if twice {
                         bail!(
@@ -671,6 +690,41 @@ impl Cover {
         }
         Ok(())
     }
+
+    /// A folder's `out` as it may be, after the outputs `before` it: a
+    /// file, named by a plain name rather than a suffix, no name twice.
+    fn check_folder(before: &[CoverOut], out: &CoverOut) -> Result<()> {
+        if out.to != To::File {
+            bail!("[[cover.out]] scope = \"folder\" is a file, to = \"file\"");
+        }
+        if !out.suffix.is_empty() {
+            bail!("[[cover.out]] scope = \"folder\" takes a name, not a suffix");
+        }
+        crate::outputs::check_name(&out.name)
+            .map_err(|e| anyhow::anyhow!("[[cover.out]] name: {e}"))?;
+        let names = |o: &CoverOut| -> Vec<String> {
+            o.format
+                .extensions()
+                .iter()
+                .map(|e| format!("{}.{e}", o.name).to_uppercase())
+                .collect()
+        };
+        let twice = before
+            .iter()
+            .any(|o| o.scope == Scope::Folder && names(o).iter().any(|a| names(out).contains(a)));
+        if twice {
+            bail!(
+                "[[cover.out]] names the folder's file `{}` twice",
+                names(out).join("` or `")
+            );
+        }
+        Ok(())
+    }
+
+    /// The outputs of `scope`.
+    pub fn of(&self, scope: Scope) -> impl Iterator<Item = &CoverOut> {
+        self.out.iter().filter(move |o| o.scope == scope)
+    }
 }
 
 /// The quality a cover is encoded at, where `[[cover.out]]` sets none.
@@ -681,10 +735,16 @@ pub const DEFAULT_QUALITY: u8 = 90;
 #[serde(deny_unknown_fields)]
 pub struct CoverOut {
     pub to: To,
+    /// A song's own, or a file its folder holds once.
+    #[serde(default)]
+    pub scope: Scope,
     /// What follows the song's own name in a file's, before its
     /// extension; a tag has none.
     #[serde(default)]
     pub suffix: String,
+    /// A folder's file's name, before its extension.
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub format: CoverFormat,
     /// The longest side it is scaled down to, in pixels; none keeps it.
@@ -693,6 +753,31 @@ pub struct CoverOut {
     /// How well a JPEG or WebP keeps the picture, from 1 to 100.
     #[serde(default = "default_quality")]
     pub quality: u8,
+    /// What a folder holding songs of several albums takes.
+    #[serde(default)]
+    pub mixed: Mixed,
+}
+
+/// Whose a cover file is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// One song's, named by it.
+    #[default]
+    Song,
+    /// Its folder's, one for every song there.
+    Folder,
+}
+
+/// The cover a folder holding songs of several albums takes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mixed {
+    /// None.
+    #[default]
+    None,
+    /// Its album's whose songs are most of the folder's, where one's are.
+    Majority,
 }
 
 fn default_quality() -> u8 {
@@ -1697,6 +1782,14 @@ mod tests {
         assert_eq!(s.cover.out[1].quality, 70);
         let none = settings("[cover]\nout = []\n").unwrap();
         assert!(none.cover.out.is_empty(), "none at all");
+        let folder = settings(
+            "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n\
+             mixed = \"majority\"\n[[cover.out]]\nto = \"file\"\n",
+        )
+        .unwrap();
+        assert_eq!(folder.cover.of(Scope::Folder).count(), 1);
+        assert_eq!(folder.cover.out[0].mixed, Mixed::Majority);
+        assert_eq!(folder.cover.of(Scope::Song).count(), 1, "names apart");
         for (bad, why) in [
             (
                 "[[cover.out]]\nto = \"tag\"\n[[cover.out]]\nto = \"tag\"\n",
@@ -1715,6 +1808,35 @@ mod tests {
                 "from 1 to 100",
             ),
             ("[[cover.out]]\nto = \"file\"\nmax_side = 0\n", "above 0"),
+            (
+                "[[cover.out]]\nto = \"tag\"\nscope = \"folder\"\nname = \"cover\"\n",
+                "is a file",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\n",
+                "must name a file",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"a/cover\"\n",
+                "a file name cannot",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\nsuffix = \".x\"\n",
+                "not a suffix",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nname = \"cover\"\n",
+                "a folder's file's",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nmixed = \"majority\"\n",
+                "mixed is for",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n\
+                 [[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"Cover\"\nformat = \"png\"\n",
+                "twice",
+            ),
         ] {
             let e = settings(bad).unwrap_err();
             assert!(format!("{e:#}").contains(why), "{bad}: {e:#}");

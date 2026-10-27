@@ -615,6 +615,11 @@ pub struct Plan {
     /// Its audio's chapters, where its container holds them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chapters: Vec<crate::chapters::Chapter>,
+    /// The cover its folder holds once, for a song that holds it for the
+    /// folder's other songs ([`crate::folder`]): each place a file named
+    /// in the folder rather than after the song.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<CoverRef>,
 }
 
 /// How tags are written into a file, raised whenever the frames, atoms or
@@ -634,6 +639,7 @@ impl PartialEq for Plan {
             loudness: _,
             tagging,
             chapters,
+            folder,
         } = self;
         *version == other.version
             && *format == other.format
@@ -643,6 +649,7 @@ impl PartialEq for Plan {
             && *tags == other.tags
             && *tagging == other.tagging
             && *chapters == other.chapters
+            && *folder == other.folder
             && self.held_loudness() == other.held_loudness()
     }
 }
@@ -929,6 +936,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     })?;
     Ok(Resolved {
         plan: Plan {
+            folder: None,
             version: render_version(format.codec()),
             format,
             audio: AudioRef {
@@ -1225,7 +1233,7 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
                         mimetype: cover.mimetype.clone(),
                         crop: q.filter(ImageQuality::is_cropped).map(|q| q.content),
                         made: None,
-                        out: cover_places(&input.cover.out, &cover.mimetype, q),
+                        out: song_places(input.cover, &cover.mimetype, q),
                     };
                     made.made = made
                         .places()
@@ -1238,24 +1246,55 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
             ));
         }
     }
-    // A cover no output takes is written nowhere.
-    best.filter(|(_, c, _)| !c.places().is_empty())
+    // A cover no output takes is written nowhere; one a folder's file
+    // alone takes is the song's all the same, for its folder to take.
+    best.filter(|_| !input.cover.out.is_empty())
         .map(|(_, c, w)| (c, w))
 }
 
-/// Where a cover of `mimetype`, measured as `q` if it was, goes, as the
-/// `[[cover.out]]` say, in a plan's terms: none where it goes inside the
-/// song as it went before them. A place keeping it as it is keeps a JPEG
-/// or a PNG without borders as its own bytes, and makes any other PNG; a
-/// file of it takes the extension of the picture it is, so its name is
-/// known before it is written. A picture longer than a place's
-/// `max_side` is scaled down there, in its own format where kept; one
-/// not measured is scaled as one that may be, never up.
-fn cover_places(
-    outs: &[crate::settings::CoverOut],
+/// `cover` as the places `places` write it, made by ffmpeg where any
+/// of them is.
+#[must_use]
+pub(crate) fn placed(cover: &CoverRef, places: Vec<CoverPlace>) -> CoverRef {
+    let made = places
+        .iter()
+        .any(|p| cover.encodes(p))
+        .then_some(crate::render::COVER_MAKING);
+    CoverRef {
+        out: Some(places),
+        made,
+        ..cover.clone()
+    }
+}
+
+/// Where a song's cover of `mimetype`, measured as `q` if it was, goes,
+/// as the song's `[[cover.out]]` say, in a plan's terms: none where it
+/// goes inside the song as it went before them.
+fn song_places(
+    cover: &crate::settings::Cover,
     mimetype: &str,
     q: Option<ImageQuality>,
 ) -> Option<Vec<CoverPlace>> {
+    let places: Vec<CoverPlace> = cover
+        .of(crate::settings::Scope::Song)
+        .map(|o| place(o, mimetype, q, o.suffix.clone()))
+        .collect();
+    (places != [CoverPlace::default()]).then_some(places)
+}
+
+/// The place `out` gives a cover of `mimetype`, measured as `q` if it
+/// was, a file of it named by `file`. A place keeping it as it is keeps a
+/// JPEG or a PNG without borders as its own bytes, and makes any other
+/// PNG; a file of it takes the extension of the picture it is, so its
+/// name is known before it is written. A picture longer than the place's
+/// `max_side` is scaled down there, in its own format where kept; one not
+/// measured is scaled as one that may be, never up.
+pub(crate) fn place(
+    out: &crate::settings::CoverOut,
+    mimetype: &str,
+    q: Option<ImageQuality>,
+    file: String,
+) -> CoverPlace {
     use crate::settings::CoverFormat;
     let cropped = q.is_some_and(|q| q.is_cropped());
     let own = if mimetype == "image/jpeg" && !cropped {
@@ -1264,30 +1303,24 @@ fn cover_places(
         ImageFormat::Png
     };
     let side = q.map(|q| q.content.width.max(q.content.height));
-    let places: Vec<CoverPlace> = outs
-        .iter()
-        .map(|o| {
-            let max_side = o.max_side.filter(|&m| side.is_none_or(|s| s > m));
-            let (format, keep) = match o.format {
-                CoverFormat::Keep if max_side.is_some() => (own, false),
-                // Inside the song, what is kept is its own bytes or PNG.
-                CoverFormat::Keep if o.to == To::Tag => (ImageFormat::Png, true),
-                CoverFormat::Keep => (own, true),
-                CoverFormat::Jpeg => (ImageFormat::Jpeg, false),
-                CoverFormat::Png => (ImageFormat::Png, false),
-                CoverFormat::Webp => (ImageFormat::Webp, false),
-            };
-            let lossy = matches!(format, ImageFormat::Jpeg | ImageFormat::Webp);
-            CoverPlace {
-                file: (o.to == To::File).then(|| o.suffix.clone()),
-                format,
-                keep,
-                max_side,
-                quality: (lossy && !keep).then_some(o.quality),
-            }
-        })
-        .collect();
-    (places != [CoverPlace::default()]).then_some(places)
+    let max_side = out.max_side.filter(|&m| side.is_none_or(|s| s > m));
+    let (format, keep) = match out.format {
+        CoverFormat::Keep if max_side.is_some() => (own, false),
+        // Inside the song, what is kept is its own bytes or PNG.
+        CoverFormat::Keep if out.to == To::Tag => (ImageFormat::Png, true),
+        CoverFormat::Keep => (own, true),
+        CoverFormat::Jpeg => (ImageFormat::Jpeg, false),
+        CoverFormat::Png => (ImageFormat::Png, false),
+        CoverFormat::Webp => (ImageFormat::Webp, false),
+    };
+    let lossy = matches!(format, ImageFormat::Jpeg | ImageFormat::Webp);
+    CoverPlace {
+        file: (out.to == To::File).then_some(file),
+        format,
+        keep,
+        max_side,
+        quality: (lossy && !keep).then_some(out.quality),
+    }
 }
 
 /// How far a stated length may be from the audio's before lyrics timed

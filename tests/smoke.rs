@@ -328,7 +328,9 @@ fn a_cover_goes_to_each_place_the_song_list_names_scaled_and_encoded_so() {
     let out = "[[cover.out]]\nto = \"tag\"\nformat = \"jpeg\"\nmax_side = 300\n\
                [[cover.out]]\nto = \"file\"\n\
                [[cover.out]]\nto = \"file\"\nsuffix = \".small\"\nformat = \"webp\"\n\
-               max_side = 99\nquality = 60\n";
+               max_side = 99\nquality = 60\n\
+               [[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n\
+               format = \"jpeg\"\n";
     std::fs::write(&songs, format!("{list}\n{out}")).unwrap();
     let song = h.song("song.flac", 4, "Lantern Weather");
     let art = h.root.join("in").join("art.png");
@@ -362,6 +364,10 @@ fn a_cover_goes_to_each_place_the_song_list_names_scaled_and_encoded_so() {
             text(&added)
         );
     }
+    let folder = &h.library_files("jpg")[0];
+    assert_eq!(folder.file_name().unwrap(), "cover.jpg");
+    assert_eq!(folder.parent(), written.parent());
+    assert_eq!(dimensions(folder), (600, 600));
     let synced = h.muman(&["sync"]);
     assert!(text(&synced).contains("Up to date"), "{}", text(&synced));
 }

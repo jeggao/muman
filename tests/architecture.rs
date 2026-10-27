@@ -427,6 +427,26 @@ fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
     );
 }
 
+/// A folder's cover is decided once, from all of the folder's songs:
+/// `folder.rs` alone gives it to the song that holds it.
+#[test]
+fn a_folder_s_cover_is_given_in_one_place() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file == "folder.rs" {
+            continue;
+        }
+        for line in lines_with(&text, &[".folder = Some("]) {
+            wrong.push(format!("{file}: {}", line.trim()));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "give a folder's cover through `folder::assign`:\n{}",
+        wrong.join("\n")
+    );
+}
+
 #[test]
 fn a_plan_changes_format_with_its_renderer_version() {
     let mut wrong = Vec::new();

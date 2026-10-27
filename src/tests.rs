@@ -505,6 +505,187 @@ fn a_cover_file_added_or_taken_out_is_written_or_removed_alone() {
     assert!(!fake.ran("-c:a"), "{text}");
 }
 
+const FOLDER_COVER: &str = "[[cover.out]]\nto = \"tag\"\n\
+                            [[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"cover\"\n";
+
+/// The song the state records as holding `file` beside it, by its first
+/// source.
+fn holder_of(s: &Setup, file: &str) -> Option<SourceKey> {
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    let mut holders = state
+        .outputs
+        .values()
+        .filter(|w| w.sidecar_paths().any(|p| p.ends_with(file)));
+    let holder = holders.next()?.sources.first().cloned();
+    assert!(holders.next().is_none(), "one song holds {file}");
+    holder
+}
+
+#[test]
+fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    assert_eq!(
+        std::fs::read(&cover).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "{text}"
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", &holder.to_string()]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read(&cover).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "handed on: {text}"
+    );
+    let now = holder_of(&s, "cover.jpg").expect("the song left holds it");
+    assert_ne!(now, holder);
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
+fn a_folder_s_own_cover_is_left_alone_and_blocks_no_song() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        format!("version = 1\n{FOLDER_COVER}"),
+    )
+    .unwrap();
+    let mine = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "mine").unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("cover.jpg left alone"), "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "mine");
+    assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+
+    std::fs::remove_file(&mine).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read(&mine).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "written once theirs is gone: {text}"
+    );
+}
+
+#[test]
+fn undo_takes_a_folder_s_cover_back_out() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let folder = "[[cover.out]]\nto = \"file\"\nscope = \"folder\"\nname = \"folder\"\n";
+    std::fs::write(&list, format!("{listed}\n{folder}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/folder.jpg");
+    assert!(cover.exists(), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!cover.exists(), "{text}");
+}
+
+#[test]
+fn a_folder_s_cover_moves_with_its_album() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &list,
+        listed.replace(&default, "template = \"{{ album }}/{{ title }}\""),
+    )
+    .unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved:"), "{text}");
+    let lib = s.dir.path().join("lib");
+    assert_eq!(
+        std::fs::read(lib.join("Record/cover.jpg")).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "{text}"
+    );
+    assert!(!lib.join("Artist").exists(), "{text}");
+    assert!(!fake.ran("-c:a"), "moved, not written: {text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
+fn a_folder_of_several_albums_takes_a_cover_only_by_a_majority() {
+    let s = Setup::new();
+    for name in ["a.flac", "b.flac", "other.flac"] {
+        s.file(&format!("home/sources/manual/{name}"));
+    }
+    let other = crate::testing::FLAC.replace("\"Record\"", "\"Harbor\"");
+    let fake = || {
+        Fake::default()
+            .probe("other.flac", &other)
+            .probe(".flac", FLAC)
+    };
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let flat = "[library]\ntemplate = \"{{ artist }}/{{ title }}\"\n";
+    std::fs::write(&list, format!("version = 1\n{flat}{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/cover.jpg");
+    assert!(!cover.exists(), "{text}");
+    assert!(
+        text.contains("No folder cover where songs of several albums share a folder: Artist"),
+        "{text}"
+    );
+
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let majority = listed.replace("name = \"cover\"", "name = \"cover\"\nmixed = \"majority\"");
+    std::fs::write(&list, &majority).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        cover.exists(),
+        "two songs of Record to one of Harbor: {text}"
+    );
+    assert!(!text.contains("No folder cover"), "{text}");
+
+    let (ok, text) = s.run(&fake(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!cover.exists(), "one song each: {text}");
+    assert!(
+        text.contains("No folder cover where no album has the most of a folder's songs"),
+        "{text}"
+    );
+}
+
 #[test]
 fn lyrics_go_where_their_timing_takes_them() {
     let s = Setup::new();

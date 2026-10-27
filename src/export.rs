@@ -1260,6 +1260,7 @@ mod tests {
     fn songs_whose_names_a_filesystem_blind_to_case_takes_for_one_are_one_in_the_zip() {
         let song = |name: &str| {
             let plan = Plan {
+                folder: None,
                 version: crate::resolve::render_version(Codec::Flac),
                 format: crate::resolve::Format::Copy { codec: Codec::Flac },
                 audio: crate::resolve::AudioRef {

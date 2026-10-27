@@ -575,6 +575,7 @@ mod tests {
             sources: Vec::new(),
             sidecars: Vec::new(),
             plan: Some(crate::resolve::Plan {
+                folder: None,
                 version: crate::resolve::render_version(crate::codec::Codec::Opus),
                 format: crate::resolve::Format::Copy {
                     codec: crate::codec::Codec::Opus,

@@ -169,7 +169,10 @@ step = 0.1
 # as its own bytes and any other picture as PNG; "jpeg", "png" and "webp"
 # encode it, JPEG and WebP at `quality`, from 1 to 100. `max_side`, in
 # pixels, scales a longer picture down. A tag holds "keep", "jpeg" or
-# "png". `out = []` under [cover] writes none.
+# "png". `scope` "folder" makes a file the song's folder holds once,
+# named by `name` and the extension; a folder of several albums' songs
+# takes none, unless `mixed` "majority" takes the album most of its songs
+# are on. `out = []` under [cover] writes none.
 [[cover.out]]
 to = "tag"
 format = "keep"

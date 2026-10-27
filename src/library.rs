@@ -220,6 +220,13 @@ pub fn clear(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
     }
 }
 
+/// Whether `rel` in the library `root` may be put or cleared as `claim`
+/// holds it: no file is there, or one of `claim`.
+#[must_use]
+pub fn may_change(root: &Path, rel: &Path, claim: &[Owned]) -> bool {
+    held(root, rel, claim).is_ok()
+}
+
 /// Refuse a file at `rel` that no file of `claim` is, under its name or
 /// one a filesystem blind to case takes for it.
 fn held(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {

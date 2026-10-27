@@ -703,7 +703,7 @@ fn measure_of<'a>(plan: &Plan, state: &'a State) -> Option<&'a Measure> {
 
 /// The album a song is levelled with, by its album artist and album; none
 /// for a single, named for its title.
-fn album_of(r: &Resolved) -> Option<(String, String)> {
+pub(crate) fn album_of(r: &Resolved) -> Option<(String, String)> {
     let value = |field: Field| {
         r.plan
             .tags

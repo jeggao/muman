@@ -116,7 +116,7 @@ know.
 
 | Table | Sets |
 |---|---|
-| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, whether sources' comments are written, the most the library may take |
+| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, whether sources' comments are written, [the most the library may take](audio.md#library-size) |
 | [`[lyrics]`](#which-lyrics-a-song-takes) | The languages you read, which lyrics a song takes first, the original, a romanization or a translation, timed or untimed, and [where they go](#where-lyrics-go) |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | [`[audio.pick.*]`](#how-sources-are-ranked) | How audio sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
@@ -305,6 +305,25 @@ format = "webp"
 max_side = 600
 ```
 
+`scope = "folder"` makes a file the song's folder holds once, named by
+`name` and the format's extension: the cover most of the folder's songs
+take. Songs share an album when they share an album artist and album; a
+single is an album of its own. A folder holding songs of several albums
+takes none, and `sync` says so, unless `mixed = "majority"` takes the
+album most of its songs are on; where no album has the most, none. A
+file of your own at that name is left alone, even by `sync --force`.
+This writes the cover inside each song and as `cover.jpg` in its folder:
+
+```toml
+[[cover.out]]
+to = "tag"
+[[cover.out]]
+to = "file"
+scope = "folder"
+name = "cover"
+format = "jpeg"
+```
+
 A suffix is a dot and up to 24 bytes a name may hold on every system,
 and every song's name keeps room for the longest. Taking an output out
 removes its files; a change to the files beside a song alone writes
@@ -334,49 +353,6 @@ enabled = false
 The default weights, in [`new.toml`](../src/manifest/new.toml), make
 each measure outweigh all after it, so their order alone decides; weigh
 a measure against the steps of those it should trade with.
-
-## Library size
-
-`[library] max_size` caps what the files muman writes may take, such as
-`"32 GiB"` for a card. Each `sync` fits the library under it: a song
-that does not fit at its best is written at a lower bitrate of
-`[audio] lossy`, never below `[audio] min_bitrate`. The songs lowered are
-those that lose the least audible quality for each byte saved: lossless
-songs first, which an encoder at a high bitrate loses nothing of, and
-lossy songs last, since encoding them again costs a generation. Once
-they fit, each song lowered is raised back to the best format that still
-fits, the songs whose last step down lost the most for each byte saved
-first, then by their first source's key, so no song is left lower than
-the room needs.
-
-Which songs are lowered, and how far, follows from the song list, the
-sources, the settings and the ffmpeg in use, never from what the library
-held before: a library fitted song by song ends exactly as one fitted at
-once, and two homes with the same song list write the same files. One
-ffmpeg on two processors can write other bytes: its FLAC and AAC
-encoders, among others, round otherwise on a processor with other
-vector instructions, so two such homes may fit a song otherwise where
-it fits by a few bytes. That has a cost in time:
-
-- Adding a song can lower others, and removing one or raising the limit
-  raises them again.
-- A song is rendered to learn exactly what it takes before it counts
-  toward the limit. muman keeps what it learns in `state.json`, so a
-  `sync` that changes nothing renders nothing, and a song rendered to be
-  measured is moved into the library, not rendered twice.
-
-Each file counts as whole `block_size` blocks, so set `block_size` to the
-allocation unit of the filesystem the library is copied to: `"32 KiB"` on
-a FAT32 card counts every small `.lrc` as 32 KiB, as the card does.
-
-When even the lowest bitrates cannot fit, `sync` says how much the
-library needs and leaves songs out, the last listed first, until the
-rest fit; their files are removed and the run exits with 4. `status`
-shows each lowered song's format and why, and what the library is
-projected to take; `info` shows what it takes against `max_size`. A song
-you changed since muman wrote it counts as it is and is never encoded
-again, unless `sync --force` writes it again, which fits it as any other
-song; files in the library that muman did not write are not counted.
 
 ## The path template
 
