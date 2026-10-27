@@ -60,7 +60,7 @@ pub fn reborrow<'a>(prompter: &'a mut Option<&mut dyn Prompter>) -> Option<&'a m
 
 /// How a song is named in what a change says: its name, its album and
 /// its key.
-fn named(view: &View) -> String {
+pub(crate) fn named(view: &View) -> String {
     let album = view.first("album");
     let key = view.id().map(ToString::to_string).unwrap_or_default();
     if album.is_empty() {
@@ -77,6 +77,11 @@ fn spoken(items: &[&str]) -> String {
         [one] => (*one).to_string(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
+}
+
+/// `items` as said aloud, as [`spoken`] says them.
+pub(crate) fn spoken_owned(items: &[String]) -> String {
+    spoken(&items.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 /// `n` of `thing`, as "1 song" or "3 songs".

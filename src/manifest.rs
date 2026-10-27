@@ -1129,7 +1129,7 @@ fn tables<'a>(doc: &'a DocumentMut, key: &str) -> impl Iterator<Item = &'a Table
         .flat_map(ArrayOfTables::iter)
 }
 
-fn key_array(keys: &[SourceKey]) -> Item {
+pub(crate) fn key_array(keys: &[SourceKey]) -> Item {
     value(keys.iter().map(ToString::to_string).collect::<Array>())
 }
 

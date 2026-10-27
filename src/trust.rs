@@ -100,7 +100,7 @@ impl Held {
 pub fn gated(command: &Command) -> bool {
     match command {
         Command::List { .. }
-        | Command::Duplicates { .. }
+        | Command::Duplicates { resolve: false, .. }
         | Command::Purge { .. }
         | Command::Completions { .. }
         | Command::Undo { .. } => false,

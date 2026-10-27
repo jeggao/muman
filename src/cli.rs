@@ -586,13 +586,27 @@ pub enum Command {
     /// fingerprints: a file of an album there twice, or a track and its
     /// copies on other albums. Groups an album holds twice come first;
     /// songs any group holds that the query matches name the groups
-    /// shown. Changes nothing.
+    /// shown. Changes nothing, unless `--resolve`.
     #[command(after_help = QUERY_HELP)]
     Duplicates {
         /// Terms a song in each group shown matches; none shows every
         /// group.
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
+
+        /// Step through the groups on a terminal, each shown side by side,
+        /// to merge its songs into one, keep them apart or remove one,
+        /// then make what was chosen as one change `undo` puts back.
+        #[arg(long)]
+        resolve: bool,
+
+        /// Make what was chosen without the last question.
+        #[arg(short = 'y', long, requires = "resolve")]
+        yes: bool,
+
+        /// Say what would change; change nothing.
+        #[arg(short = 'n', long, requires = "resolve")]
+        dry_run: bool,
     },
     /// Count what the library holds, whether it is in step with the song
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,

@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`duplicates --resolve` makes the copies of a recording one song.**
+  Each group is shown side by side, the song a merge keeps first, and
+  merged, kept apart or one removed; what was picked is made as one
+  change `undo` puts back.
 - **`[lyrics] prefer`** ranks lyrics by their role and timing, best
   first: put translations, the original or a romanization first, or
   timed or untimed lyrics before any role, and leave out a role never to
