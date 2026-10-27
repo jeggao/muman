@@ -202,7 +202,7 @@ held."youtube.com:vid00000001" = { audio = "7c1cfa040b3b82c0" }
         let edit = edit(&m, 0, &[1], &winners).unwrap();
         m.trial(std::slice::from_ref(&edit)).unwrap();
         m.edit(edit);
-        assert!(m.save_if_unchanged(&[]).unwrap().is_empty());
+        assert_eq!(m.save_if_unchanged(&[]).unwrap(), Vec::<SourceKey>::new());
         let m = Manifest::load(dir.path()).unwrap();
         assert_eq!(m.songs.len(), 1, "{:?}", m.songs);
         assert!(m.removed.is_empty(), "a merged song leaves no tombstone");
@@ -233,6 +233,6 @@ held."youtube.com:vid00000001" = { audio = "7c1cfa040b3b82c0" }
         let song = together(&m, &[0, 1]);
         assert_eq!(song.sources.len(), 2);
         assert_eq!(song.audio, Some(SourceKey::Manual("a.flac".into())));
-        assert!(song.tags.is_empty());
+        assert_eq!(song.tags, Tags::new());
     }
 }
