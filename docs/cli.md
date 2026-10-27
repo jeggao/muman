@@ -226,7 +226,9 @@ Assignments:
   lyrics=false       Take no lyrics
   audio!             Unpin
   lyrics_offset=80ms Move the lyrics later; a negative time, earlier
-Every other word is a query, as `muman list` reads it.
+Every other word is a query, as `muman list` reads it. A query alone, on
+a terminal, sets them step by step: each field with where its value comes
+from and what the sources offer.
 ```
 
 **Arguments:**

@@ -100,6 +100,7 @@ src/
   redact.rs         the song list with its secrets replaced, for export --redact
   history.rs        run records and undo
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
+  guided.rs         set with a query alone: songs changed field by field
   rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged

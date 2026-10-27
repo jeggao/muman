@@ -9,6 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`set` with a query alone changes a song step by step:** each field
+  with the value written and where it came from, what each source
+  offers, a value typed from the one written and checked as it is
+  typed, and pins picked among the sources by what was measured; saved
+  once reviewed, as one change `undo` puts back.
 - **`duplicates --resolve` makes the copies of a recording one song.**
   Each group is shown side by side, the song a merge keeps first, and
   merged, kept apart or one removed; what was picked is made as one
