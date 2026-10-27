@@ -13,11 +13,12 @@
 //!
 //! A line is no lyric when it is a cue or a credit. A cue is blank, only
 //! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
-//! `(Guitar solo)`, `（間奏）`); brackets of other words hold a backing
-//! vocal, which is sung. A credit is a credit word, a separator and a
-//! name, and is one only in a block at the start or end of the lyrics,
-//! where credits sit: between two lines sung, `Music by the water` is
-//! sung too.
+//! `(Guitar solo)`, `（間奏）`, `*GuitarSolo*`), or a short bracket naming a
+//! passage played (`(gentle piano solo)`); brackets of other words hold a
+//! backing vocal, which is sung. A credit is credit words, a separator
+//! and a name, in the shapes `is_credit` lists, and is one only in a
+//! block at the start or end of the lyrics, where credits sit: between
+//! two lines sung, `Music by the water` is sung too.
 //!
 //! Lyrics come from LRCLIB, subtitles, tags and files anyone may write,
 //! up to a body of megabytes, so each line is read in time linear in its
@@ -122,7 +123,7 @@ pub(crate) enum Kind {
 /// Words that make a wholly bracketed line a cue: a section, a sound
 /// that is not sung, or a repeat. A line in brackets of other words, as
 /// `(Down by the river)`, is a backing vocal and sung.
-const CUES: [&str; 44] = [
+const CUES: [&str; 50] = [
     "instrumental",
     "music",
     "applause",
@@ -145,9 +146,14 @@ const CUES: [&str; 44] = [
     "repeats",
     "spoken",
     "speaking",
+    "sung",
+    "singing",
     "inaudible",
     "unintelligible",
+    "incomprehensible",
     "humming",
+    "fade",
+    "fades",
     "mv",
     "音楽",
     "間奏",
@@ -167,11 +173,12 @@ const CUES: [&str; 44] = [
     "アウトロ",
     "コーラス",
     "ブリッジ",
+    "間奏中",
 ];
 
 /// Words a cue may hold beside its cue words, as `(Guitar solo)` or
 /// `[Music fades out]`, which alone make no cue.
-const CUE_FILLERS: [&str; 26] = [
+const CUE_FILLERS: [&str; 25] = [
     "a",
     "and",
     "the",
@@ -185,8 +192,6 @@ const CUE_FILLERS: [&str; 26] = [
     "end",
     "x",
     "break",
-    "fade",
-    "fades",
     "fading",
     "playing",
     "plays",
@@ -198,29 +203,59 @@ const CUE_FILLERS: [&str; 26] = [
     "drums",
     "bass",
     "crowd",
+    "only",
 ];
 
-/// Words that open a credit, as `Music by …` or `作曲：…`.
-const CREDITS: [&str; 18] = [
-    "lyrics",
-    "lyric",
-    "music",
-    "composer",
-    "composed",
-    "arrange",
-    "arranged",
-    "arrangement",
-    "vocal",
-    "vocals",
-    "illust",
-    "illustration",
-    "movie",
-    "mix",
-    "作詞",
-    "作曲",
-    "編曲",
-    "動画",
+/// How a short bracket of any words ends when it names a passage played,
+/// not sung, as `(gentle piano solo)` or `(Irish dance break)`.
+const CUE_ENDINGS: [&[&str]; 5] = [
+    &["solo"],
+    &["interlude"],
+    &["instrumental"],
+    &["dance", "break"],
+    &["instrumental", "break"],
 ];
+
+/// The pairs a cue or a credit may be wholly wrapped in.
+pub(crate) const WRAPPERS: [(char, char); 5] = [
+    ('[', ']'),
+    ('(', ')'),
+    ('（', '）'),
+    ('【', '】'),
+    ('*', '*'),
+];
+
+/// What `text` holds inside one pair of [`WRAPPERS`] around all of it.
+pub(crate) fn wrapped(text: &str) -> Option<&str> {
+    let t = text.trim();
+    WRAPPERS.iter().find_map(|(o, c)| {
+        let inner = t.strip_prefix(*o)?.strip_suffix(*c)?;
+        (!inner.contains(*c)).then_some(inner)
+    })
+}
+
+/// Lower-cased words, split where letters run from lower to upper case
+/// too, so `GuitarSolo` is `guitar solo`.
+fn cue_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut prev: Option<char> = None;
+    for c in text.chars() {
+        let split =
+            !c.is_alphanumeric() || (c.is_uppercase() && prev.is_some_and(char::is_lowercase));
+        if split && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        if c.is_alphanumeric() {
+            word.extend(c.to_lowercase());
+        }
+        prev = Some(c);
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
 
 /// Whether a word is a repeat, as `x2` or `3x`.
 fn is_repeat(word: &str) -> bool {
@@ -233,41 +268,289 @@ fn is_repeat(word: &str) -> bool {
 
 /// Whether the words inside a pair of brackets are a cue's: every one a
 /// cue word, a filler or a number, and one at least a cue word or a
-/// repeat. What follows a colon names who sings, as `[Chorus: …]`.
-fn is_cue(inner: &str) -> bool {
+/// repeat; or at most four words ending as [`CUE_ENDINGS`] say. What
+/// follows a colon names who sings, as `[Chorus: …]`.
+pub(crate) fn is_cue(inner: &str) -> bool {
     let head = inner.split([':', '：']).next().unwrap_or(inner);
-    let lower = head.to_lowercase().replace('×', "x");
-    let words: Vec<&str> = lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect();
-    let cue = |w: &&str| CUES.contains(w) || is_repeat(w);
-    words.iter().any(cue)
-        && words
+    let words = cue_words(&head.replace('×', "x"));
+    let cue = |w: &String| CUES.contains(&w.as_str()) || is_repeat(w);
+    let ends = words.len() <= 4
+        && CUE_ENDINGS
             .iter()
-            .all(|w| cue(w) || CUE_FILLERS.contains(w) || w.bytes().all(|b| b.is_ascii_digit()))
+            .any(|end| words.ends_with(&end.iter().map(|w| (*w).to_string()).collect::<Vec<_>>()));
+    ends || words.iter().any(cue)
+        && words.iter().all(|w| {
+            cue(w) || CUE_FILLERS.contains(&w.as_str()) || w.bytes().all(|b| b.is_ascii_digit())
+        })
 }
 
-/// Whether `text` is shaped as a credit: a credit word, then `:`, `/`,
-/// `・` or `by`, then a name, which starts with no lowercase letter;
-/// `Lyrics/music: …` chains two.
-fn is_credit(text: &str) -> bool {
-    CREDITS.iter().any(|word| {
-        let Some(rest) = text
-            .get(..word.len())
-            .filter(|head| head.eq_ignore_ascii_case(word))
-            .map(|_| text[word.len()..].trim_start())
-        else {
-            return false;
-        };
-        let name = rest
-            .strip_prefix([':', '：', '/', '・'])
-            .or_else(|| rest.strip_prefix("by "))
-            .or_else(|| rest.strip_prefix("By "));
-        name.map(str::trim_start).is_some_and(|name| {
-            is_credit(name) || name.chars().next().is_some_and(|c| !c.is_lowercase())
+/// Words that name a part in making a song or its video, as `Music` in
+/// `Music by …` or `作曲` in `作曲：…`.
+const CREDITS: [&str; 80] = [
+    "lyrics",
+    "lyric",
+    "lyricist",
+    "words",
+    "music",
+    "song",
+    "songwriter",
+    "songwriting",
+    "written",
+    "writer",
+    "composer",
+    "composed",
+    "composition",
+    "arrange",
+    "arranged",
+    "arranger",
+    "arrangement",
+    "producer",
+    "produced",
+    "production",
+    "vocal",
+    "vocals",
+    "voice",
+    "guitar",
+    "bass",
+    "drums",
+    "piano",
+    "keyboards",
+    "illust",
+    "illustration",
+    "illustrated",
+    "illustrator",
+    "animated",
+    "animator",
+    "choreography",
+    "director",
+    "directed",
+    "editing",
+    "edited",
+    "editor",
+    "proofreading",
+    "assistant",
+    "art",
+    "artwork",
+    "movie",
+    "video",
+    "mv",
+    "pv",
+    "animation",
+    "mix",
+    "mixed",
+    "mixing",
+    "mastering",
+    "mastered",
+    "tuning",
+    "creator",
+    "title",
+    "translation",
+    "translated",
+    "translator",
+    "subtitles",
+    "subtitle",
+    "subs",
+    "cc",
+    "timing",
+    "romanization",
+    "作詞",
+    "作词",
+    "詞",
+    "词",
+    "作曲",
+    "曲",
+    "編曲",
+    "编曲",
+    "唄",
+    "絵",
+    "動画",
+    "翻訳",
+    "翻译",
+    "字幕",
+];
+
+/// Words that join credit words, as `Music and lyrics by …`.
+const JOINERS: [&str; 2] = ["and", "with"];
+
+/// A word of `text` and where it ends.
+fn words_at(text: &str) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        match (start, c.is_alphanumeric()) {
+            (None, true) => start = Some(i),
+            (Some(s), false) => {
+                out.push((text[s..i].to_lowercase(), i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn is_credit_word(word: &str) -> bool {
+    CREDITS.contains(&word)
+}
+
+/// Whether a name may follow a credit: none, one starting with no
+/// lowercase letter, or one word, as a handle `someone_x` is.
+fn is_name(rest: &str) -> bool {
+    let rest = rest.trim();
+    rest.is_empty()
+        || rest.chars().next().is_some_and(|c| !c.is_lowercase())
+        || !rest.contains(char::is_whitespace)
+}
+
+/// Whether `text` is shaped as a credit:
+///
+/// - a head of credit words, at most one other word and qualifiers in
+///   brackets, a colon and a name: `Translation (English) : …`,
+///   `Lyrics/music: …`, `English translation: …`;
+/// - credit words, at most two other words, `by` and a name, or nothing:
+///   `Composed and written by …`, `Lyrics posted by …`, `Arrangement by`;
+/// - a role of [`ROLES`] alone, or before up to four capitalized words:
+///   `Voice Kasane Teto`;
+/// - an address: an e-mail, a URL or an `@handle`;
+/// - any of these wholly in brackets: `(Subtitles: …)`.
+///
+/// A name starts with no lowercase letter or is one word, so `Music by
+/// the water` and `Mix: the night and the morning light` are sung.
+pub(crate) fn is_credit(text: &str) -> bool {
+    let t = text.trim();
+    if let Some(inner) = wrapped(t)
+        && is_credit(inner)
+    {
+        return true;
+    }
+    is_address(t) || headed(t) || by_credit(t) || named(t)
+}
+
+fn is_address(t: &str) -> bool {
+    let lower = t.to_ascii_lowercase();
+    lower.contains("://")
+        || lower.contains("www.")
+        || t.split('@')
+            .skip(1)
+            .any(|after| after.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// How a credit with a colon reads: its head words, how many are credit
+/// words and how many others, and what follows the colon.
+fn colon(t: &str) -> Option<(Vec<String>, usize, usize, &str)> {
+    let at = t.find([':', '：'])?;
+    let mut depth = 0_usize;
+    let head: String = t[..at]
+        .chars()
+        .map(|c| {
+            match c {
+                '(' | '（' => depth += 1,
+                ')' | '）' => depth = depth.saturating_sub(1),
+                _ if depth == 0 => return c,
+                _ => {}
+            }
+            ' '
         })
+        .collect();
+    let words: Vec<String> = words_at(&head).into_iter().map(|(w, _)| w).collect();
+    let credits = words.iter().filter(|w| is_credit_word(w)).count();
+    let others = words
+        .iter()
+        .filter(|w| !is_credit_word(w) && !JOINERS.contains(&w.as_str()))
+        .count();
+    let rest = t[at..].trim_start_matches([':', '：']);
+    Some((words, credits, others, rest))
+}
+
+fn headed(t: &str) -> bool {
+    colon(t).is_some_and(|(words, credits, others, rest)| {
+        ((credits > 0 && others <= 1 && words.len() <= 4) || is_credit_word(&words.concat()))
+            && is_name(rest)
     })
+}
+
+/// Whether `text` is a credit wherever it stands: an address, or credit
+/// words alone before a colon, as `Subtitles: …` or `Vocal:`, which no
+/// line sung is shaped as.
+pub(crate) fn is_sure_credit(text: &str) -> bool {
+    let t = text.trim();
+    if let Some(inner) = wrapped(t)
+        && is_sure_credit(inner)
+    {
+        return true;
+    }
+    is_address(t)
+        || colon(t).is_some_and(|(words, credits, others, rest)| {
+            (credits > 0 && others == 0 && words.len() <= 4 || is_credit_word(&words.concat()))
+                && is_name(rest)
+        })
+}
+
+/// Whether `text` is a credit whose name is on the next line, as
+/// `Vocal:` or `Arrangement by`.
+pub(crate) fn dangles(text: &str) -> bool {
+    let t = text.trim();
+    is_credit(t)
+        && (t.ends_with([':', '：'])
+            || words_at(t)
+                .last()
+                .is_some_and(|(w, end)| w == "by" && t[*end..].trim().is_empty()))
+}
+
+fn by_credit(t: &str) -> bool {
+    let words = words_at(t);
+    let Some(by) = words.iter().position(|(w, _)| w == "by") else {
+        return false;
+    };
+    let rest = t[words[by].1..]
+        .trim_start()
+        .trim_start_matches([':', '：']);
+    if by == 0 {
+        return false;
+    }
+    let before = &words[..by];
+    let credits = before.iter().filter(|(w, _)| is_credit_word(w)).count();
+    let others = before
+        .iter()
+        .filter(|(w, _)| !is_credit_word(w) && !JOINERS.contains(&w.as_str()))
+        .count();
+    is_credit_word(&before[0].0) && credits > 0 && others <= 2 && is_name(rest)
+}
+
+/// Credit words that never open a line sung, which may stand before a
+/// name with no separator: `Voice Kasane Teto`.
+const ROLES: [&str; 16] = [
+    "vocal",
+    "vocals",
+    "voice",
+    "creator",
+    "illust",
+    "illustration",
+    "art",
+    "artwork",
+    "mv",
+    "pv",
+    "mastering",
+    "tuning",
+    "translation",
+    "subtitles",
+    "cc",
+    "lyricist",
+];
+
+fn named(t: &str) -> bool {
+    let words = words_at(t);
+    let Some(((first, end), rest)) = words.split_first() else {
+        return false;
+    };
+    let tail = t[*end..].trim();
+    let shouted = !t.chars().any(char::is_lowercase);
+    ROLES.contains(&first.as_str())
+        && !shouted
+        && rest.len() <= 4
+        && tail
+            .split_whitespace()
+            .all(|w| w.chars().next().is_some_and(|c| !c.is_lowercase()))
 }
 
 /// What the line `text` is, read on its own.
@@ -276,12 +559,7 @@ pub(crate) fn kind(text: &str) -> Kind {
     if t.chars().all(|c| !c.is_alphanumeric()) {
         return Kind::Cue;
     }
-    let pairs = [('[', ']'), ('(', ')'), ('（', '）'), ('【', '】')];
-    let bracketed = pairs.iter().find_map(|(o, c)| {
-        let inner = t.strip_prefix(*o)?.strip_suffix(*c)?;
-        (!inner.contains(*c)).then_some(inner)
-    });
-    if bracketed.is_some_and(is_cue) {
+    if wrapped(t).is_some_and(is_cue) {
         Kind::Cue
     } else if is_credit(t) {
         Kind::Credit
@@ -550,7 +828,7 @@ impl<'a> Lrc<'a> {
 }
 
 /// The value of the line `line` if it is the ID tag `name`, as `[offset:+500]`.
-fn id_tag<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn id_tag<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let inner = line.trim().strip_prefix('[')?.strip_suffix(']')?;
     let (k, v) = inner.split_once(':')?;
     k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
