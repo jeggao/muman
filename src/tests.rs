@@ -200,13 +200,22 @@ fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
         t[at..].replacen("cues = true", "cues = false", 1)
     );
     std::fs::write(&list, off).unwrap();
-    let (ok, text) = s.run(&flacs(), &["sync"]);
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let before = std::fs::read(&song).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
     assert!(ok, "{text}");
     assert!(text.contains("Updated (lyric cleaning)"), "{text}");
     assert_eq!(
         std::fs::read_to_string(&lrc).unwrap(),
         "[00:01.00]Paper comets\n[00:02.00][Chorus]\n"
     );
+    assert!(
+        !fake.calls().iter().any(|c| c.iter().any(|a| a == "-c:a")),
+        "lyrics beside the song alone are written again: {:?}",
+        fake.calls()
+    );
+    assert_eq!(std::fs::read(&song).unwrap(), before, "its file as it was");
 }
 
 #[test]

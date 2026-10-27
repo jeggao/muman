@@ -154,6 +154,39 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
 }
 
 #[test]
+fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none() {
+    let f = fixture();
+    let p = plan(Format::Copy { codec: Codec::Opus });
+    let built = go(&Fake::default(), &f, &p).unwrap();
+    let lib = f.dir.path().join("lib");
+    let lrc = lib.join("A/Record/Song.lrc");
+    let whole = fs::read(&lrc).unwrap();
+    let claim = [Ledger::taken(Path::new("A/Record/Song.lrc"))];
+    let scratch = f.dir.path().join("scratch-beside");
+    let job = |plan| Job {
+        plan,
+        stem: Path::new("A/Record/Song"),
+        library: &lib,
+        sources: &f.sources,
+        scratch: &scratch,
+        claim: &claim,
+    };
+    let fake = Fake::default();
+    let alone = beside(&fake, &job(&p)).unwrap();
+    assert_eq!(alone.lyrics, built.lyrics);
+    assert_eq!(fs::read(&lrc).unwrap(), whole, "as a build writes them");
+    assert!(!fake.ran("copy"), "the audio left alone");
+    assert!(fake.ran("0:2"), "the subtitle stream read again");
+    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<PathBuf>::new());
+
+    let mut embedded = p.clone();
+    embedded.lyrics.as_mut().unwrap().placement = LyricsPlacement::Embedded;
+    let none = beside(&Fake::default(), &job(&embedded)).unwrap();
+    assert_eq!(none.lyrics, None);
+    assert!(!lrc.exists(), "none beside the song");
+}
+
+#[test]
 fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
     let f = fixture();
     let fake = Fake::default();

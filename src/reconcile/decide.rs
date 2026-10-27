@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::held::Drift;
 use crate::manifest::{Edit, Manifest};
 use crate::resolve::{LyricsRef, Plan, Resolved};
+use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
 
@@ -75,10 +76,12 @@ pub(crate) fn files_of(
     files
 }
 
-/// Whether two plans make the same audio, cover and lyrics: a file of
-/// one is a file of the other with its tags written again. Lyrics cleaned
-/// by the song's names are cleaned anew under other names, so a song
-/// retitled is written again, as it would be made from the start.
+/// Whether two plans make the same audio file but for its tags: the same
+/// audio, cover and lyrics within it, so a file of one is a file of the
+/// other with its tags written again, and the files beside it written
+/// anew where [`beside_equal`] says they differ. Lyrics cleaned by the
+/// song's names are cleaned anew under other names, so a song retitled is
+/// written again, as it would be made from the start.
 pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
     a.version == b.version
         && a.format == b.format
@@ -87,10 +90,31 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
         && (a.opus_header().is_none() || b.opus_header().is_some())
         && a.audio == b.audio
         && a.cover == b.cover
-        && a.lyrics.as_ref().map(LyricsRef::lines) == b.lyrics.as_ref().map(LyricsRef::lines)
-        && crate::render::lyrics_names(a) == crate::render::lyrics_names(b)
+        && lyrics_held(a, LyricsPlacement::embedded) == lyrics_held(b, LyricsPlacement::embedded)
         // MP4 chapters are ffmpeg's to write.
         && a.chapters == b.chapters
+}
+
+/// Whether two plans write the same files beside a song: so a song whose
+/// audio file is [`media_equal`] keeps them as they are.
+pub(super) fn beside_equal(a: &Plan, b: &Plan) -> bool {
+    lyrics_held(a, LyricsPlacement::sidecar) == lyrics_held(b, LyricsPlacement::sidecar)
+}
+
+/// The song's title and artists lyrics are cleaned by, where a rule
+/// reads them.
+type Names<'a> = Option<(Option<&'a str>, Vec<&'a str>)>;
+
+/// What a file of `plan` holds of its lyrics where `placed` says they
+/// go, inside the song or beside it: their lines, and the names they are
+/// cleaned by.
+fn lyrics_held(plan: &Plan, placed: fn(LyricsPlacement) -> bool) -> Option<(LyricsRef, Names<'_>)> {
+    let lyrics = plan.lyrics.as_ref().filter(|l| placed(l.placement))?;
+    let lines = LyricsRef {
+        placement: LyricsPlacement::Both,
+        ..lyrics.lines()
+    };
+    Some((lines, crate::render::lyrics_names(plan)))
 }
 
 /// What a sync does with one song, decided for every song before any is
@@ -196,7 +220,7 @@ pub(super) fn settled(
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
-/// | At its path, of the same media | Its tags written |
+/// | At its path, of the same media | Its tags written, and each file beside it that differs |
 /// | Any, and a file not muman's at its path or its lyrics' | Left where it is until `--force` |
 /// | None, and a file not muman's at its path or its lyrics' | Left alone until `--force` |
 /// | Otherwise, or `force` | Written |
