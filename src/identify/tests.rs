@@ -92,14 +92,34 @@ fn the_same_recording_joins_its_song_and_another_stands_alone() {
 }
 
 #[test]
-fn an_uncertain_match_is_asked_about() {
+fn an_uncertain_match_is_shown_beside_the_song_and_asked_about() {
     let h = home(&["part.flac"]);
-    let mut yes = MockPrompter::answering([true]);
-    let (edits, _) = run(&h, vec![proposal("part.flac")], Mode::Ask, Some(&mut yes));
+    let mut add = MockPrompter::new();
+    add.push_select(Some(1));
+    let (edits, text) = run(&h, vec![proposal("part.flac")], Mode::Ask, Some(&mut add));
     assert!(joined(&edits[0]));
-    let mut no = MockPrompter::answering([false]);
-    let (edits, _) = run(&h, vec![proposal("part.flac")], Mode::Ask, Some(&mut no));
+    assert!(text.contains("may be a song already listed"), "{text}");
+    assert!(text.contains("new source"), "{text}");
+    assert!(text.contains("% alike"), "{text}");
+    assert!(add.asked[0].starts_with("Where does"), "{:?}", add.asked);
+    assert!(
+        add.asked[0].contains("\n  Its own song\n  Add to "),
+        "{:?}",
+        add.asked
+    );
+    let mut apart = MockPrompter::new();
+    apart.push_select(Some(0));
+    let (edits, _) = run(&h, vec![proposal("part.flac")], Mode::Ask, Some(&mut apart));
     assert!(!joined(&edits[0]));
+    let mut cancelled = MockPrompter::new();
+    cancelled.push_select(None);
+    let (edits, _) = run(
+        &h,
+        vec![proposal("part.flac")],
+        Mode::Ask,
+        Some(&mut cancelled),
+    );
+    assert!(!joined(&edits[0]), "esc keeps it apart");
 }
 
 #[test]

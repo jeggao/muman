@@ -372,9 +372,9 @@ notes that any two songs share:
 | 10% to 30% | 80% or more | Another master or mix: asked |
 | Less | Any | A different song |
 
-Asked means on a terminal; without one, the source becomes a song of its
-own, with a warning. `-y` joins every unsure match, `--new` compares
-nothing, and `--verbose` shows how close the nearest songs came.
+Asked means shown beside the song on a terminal; without one, the
+source is a song of its own, with a warning. `-y` joins every unsure
+match, `--new` compares nothing, `--verbose` shows how close songs came.
 
 ### Lyrics, pictures and tags of their own
 
