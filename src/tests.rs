@@ -384,6 +384,102 @@ fn lyrics_copied_with_new_times_are_still_muman_s() {
 }
 
 #[test]
+fn where_lyrics_went_becomes_their_outputs_and_writes_no_song_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let now = std::fs::read_to_string(&list).unwrap();
+    let start = now.find("\n# Where the lyrics a song takes").expect(&now);
+    let end = now[start..].find("when = \"any\"\n").unwrap() + start + "when = \"any\"\n".len();
+    let old = format!("{}\n{}", &now[..start], &now[end..])
+        .replace(
+            &format!("edition = {}", crate::migrate::EDITION),
+            "edition = 6",
+        )
+        .replacen("[library]\n", "[library]\nlyrics = \"sidecar\"\n", 1);
+    std::fs::write(&list, &old).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Renamed in the song list: [library] `lyrics = \"sidecar\"`"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    let upgraded = std::fs::read_to_string(&list).unwrap();
+    assert!(
+        upgraded.contains("[[lyrics.out]]\nto = \"file\""),
+        "{upgraded}"
+    );
+    assert!(!upgraded.contains("lyrics = \"sidecar\""), "{upgraded}");
+}
+
+#[test]
+fn each_lyrics_output_writes_its_file_and_one_taken_out_takes_only_its_own() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let two = "version = 1\n[[lyrics.out]]\nto = \"file\"\n\
+               [[lyrics.out]]\nto = \"file\"\nsuffix = \".en\"\n";
+    std::fs::write(&list, two).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    for name in ["02 Song.lrc", "02 Song.en.lrc"] {
+        assert_eq!(
+            std::fs::read_to_string(lib.join(name)).unwrap(),
+            "[00:01.00]Paper comets\n",
+            "{name}: {text}"
+        );
+    }
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let at = listed
+        .find("[[lyrics.out]]\nto = \"file\"\nsuffix = \".en\"")
+        .expect(&listed);
+    std::fs::write(&list, &listed[..at]).unwrap();
+    let before = std::fs::read(lib.join("02 Song.flac")).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!lib.join("02 Song.en.lrc").exists(), "{text}");
+    assert!(lib.join("02 Song.lrc").exists(), "{text}");
+    assert_eq!(std::fs::read(lib.join("02 Song.flac")).unwrap(), before);
+    assert!(
+        !fake.calls().iter().any(|c| c.iter().any(|a| a == "-c:a")),
+        "{text}"
+    );
+}
+
+#[test]
+fn lyrics_go_where_their_timing_takes_them() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "Paper comets\n");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[[lyrics.out]]\nto = \"file\"\nwhen = \"timed\"\n\
+         [[lyrics.out]]\nto = \"file\"\nsuffix = \".plain\"\nwhen = \"untimed\"\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    assert!(!lib.join("02 Song.lrc").exists(), "untimed: {text}");
+    assert_eq!(
+        std::fs::read_to_string(lib.join("02 Song.plain.lrc")).unwrap(),
+        "Paper comets\n"
+    );
+}
+
+#[test]
 fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
@@ -2537,7 +2633,6 @@ fn lyrics_of_your_own_beside_a_song_are_written_over_only_when_forced_and_undone
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
     let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
-    let built = std::fs::read(&song).unwrap();
     let mine = song.with_extension("lrc");
     std::fs::write(&mine, "[00:01.00]my own words").unwrap();
     let songs = s.dir.path().join("home/songs.toml");
@@ -2547,7 +2642,12 @@ fn lyrics_of_your_own_beside_a_song_are_written_over_only_when_forced_and_undone
         listed.replace("mode = \"tags\"", "mode = \"audio\""),
     )
     .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "a song with no lyrics leaves yours be: {text}");
+    assert!(text.contains("Updated"), "{text}");
+    let built = std::fs::read(&song).unwrap();
 
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
     let (_, text) = s.run(&flacs(), &["sync"]);
     assert!(
         text.contains(
@@ -2564,7 +2664,11 @@ fn lyrics_of_your_own_beside_a_song_are_written_over_only_when_forced_and_undone
 
     let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
     assert!(ok, "{text}");
-    assert!(!mine.exists(), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&mine).unwrap(),
+        "[00:01.00]Paper comets\n",
+        "{text}"
+    );
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
     assert!(ok, "{text}");
     assert_eq!(

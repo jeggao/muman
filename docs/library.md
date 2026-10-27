@@ -84,8 +84,9 @@ source, timed when its text is LRC. Lyrics are [cleaned](#cleaning) of cues
 such as `[Music]`, credits and what a site wrapped around them; a line in
 brackets of other words is sung. A `.lrc` with no audio of its own is taken
 as timed for the song; one that states its length, as LRCLIB's do, is
-trusted as far as that length agrees with the chosen audio's. Whether
-lyrics go beside the song, inside it or both is a `[library]` setting.
+trusted as far as that length agrees with the chosen audio's. Where
+they go, beside the song, inside it or both, is
+[`[[lyrics.out]]`](configuration.md#where-lyrics-go)'s to say.
 
 **Tags.** Each field describes the recording or the release. The
 recording's, title, artist, genre, ISRC and the recording's and artists'

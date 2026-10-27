@@ -107,7 +107,6 @@ pub struct Library {
     pub unknown_artist: String,
     pub unknown_album: String,
     pub untitled: String,
-    pub lyrics: LyricsPlacement,
     /// Write the comment a source's own tags carry; a comment set by hand
     /// is written either way.
     pub source_comments: bool,
@@ -139,7 +138,6 @@ impl Default for Library {
             unknown_artist: "Unknown Artist".into(),
             unknown_album: "Unknown Album".into(),
             untitled: "Untitled".into(),
-            lyrics: LyricsPlacement::default(),
             source_comments: false,
             touch_root: false,
             max_size: None,
@@ -189,7 +187,9 @@ pub enum Restrict {
     Ascii,
 }
 
-/// Where lyrics are written.
+/// Where a plan's lyrics are written, as `[library] lyrics` said before
+/// `[[lyrics.out]]` did, and as a plan of its outputs still says it
+/// ([`crate::resolve::LyricsRef`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LyricsPlacement {
@@ -199,6 +199,78 @@ pub enum LyricsPlacement {
     /// The `LYRICS` tag inside the song.
     Embedded,
     Both,
+}
+
+/// One place a song's lyrics are written, a `[[lyrics.out]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LyricsOut {
+    pub to: To,
+    /// What follows the song's own name in a file's, before its
+    /// extension, as `.en`; a tag has none.
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default)]
+    pub format: LyricsFormat,
+    #[serde(default)]
+    pub when: When,
+}
+
+/// Where an output goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum To {
+    /// A file beside the song.
+    File,
+    /// A tag inside the song's file.
+    Tag,
+}
+
+/// How lyrics are written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricsFormat {
+    /// LRC, each line's time before it, as the lyrics are kept.
+    #[default]
+    Lrc,
+}
+
+impl LyricsFormat {
+    /// The extension of a file of it.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Lrc => "lrc",
+        }
+    }
+}
+
+/// Which lyrics an output takes, by whether their lines carry times.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum When {
+    #[default]
+    Any,
+    Timed,
+    Untimed,
+}
+
+impl When {
+    /// Whether it takes lyrics `timed` or not.
+    #[must_use]
+    pub fn takes(self, timed: bool) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Timed => timed,
+            Self::Untimed => !timed,
+        }
+    }
+
+    /// Whether some lyrics are taken by both.
+    #[must_use]
+    pub fn meets(self, other: Self) -> bool {
+        self.takes(true) && other.takes(true) || self.takes(false) && other.takes(false)
+    }
 }
 
 impl LyricsPlacement {
@@ -923,6 +995,8 @@ pub struct Lyrics {
     /// these that tells them apart. A role left out is never taken; with
     /// neither `timed` nor `untimed`, timing decides nothing.
     pub prefer: Vec<Prefer>,
+    /// Where the lyrics a song takes are written; none, nowhere.
+    pub out: Vec<LyricsOut>,
 }
 
 impl Default for Lyrics {
@@ -935,11 +1009,52 @@ impl Default for Lyrics {
                 Prefer::Romanization,
                 Prefer::Timed,
             ],
+            out: vec![LyricsOut {
+                to: To::File,
+                suffix: String::new(),
+                format: LyricsFormat::Lrc,
+                when: When::Any,
+            }],
         }
     }
 }
 
 impl Lyrics {
+    /// Each `[[lyrics.out]]` as it may be: one tag at most, a tag with no
+    /// suffix, each file's suffix a plain one ([`crate::outputs`]), and no
+    /// two files of one name for one song's lyrics.
+    fn check(&self) -> Result<()> {
+        let tags = self.out.iter().filter(|o| o.to == To::Tag).count();
+        if tags > 1 {
+            bail!("[[lyrics.out]] names to = \"tag\" {tags} times; a song holds one lyrics tag");
+        }
+        for (n, out) in self.out.iter().enumerate() {
+            match out.to {
+                To::Tag if !out.suffix.is_empty() => {
+                    bail!("[[lyrics.out]] to = \"tag\" takes no suffix; a tag has no name")
+                }
+                To::Tag => {}
+                To::File => {
+                    crate::outputs::check_suffix(&out.suffix)
+                        .map_err(|e| anyhow::anyhow!("[[lyrics.out]] suffix: {e}"))?;
+                    let name = |o: &LyricsOut| {
+                        format!("{}.{}", o.suffix, o.format.extension()).to_uppercase()
+                    };
+                    let twice = self.out[..n].iter().any(|o| {
+                        o.to == To::File && name(o) == name(out) && o.when.meets(out.when)
+                    });
+                    if twice {
+                        bail!(
+                            "[[lyrics.out]] names the file `<song>{}` twice for one song's lyrics",
+                            name(out)
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Whether lyrics of `role` are taken at all.
     #[must_use]
     pub fn takes(&self, role: Role) -> bool {
@@ -1052,6 +1167,9 @@ fn fill_item(item: &mut Item, default: &Table) -> bool {
                     let mut want = want.clone();
                     if let Some(t) = want.as_table_mut() {
                         ahead(t);
+                    }
+                    if let Some(tables) = want.as_array_of_tables_mut() {
+                        tables.iter_mut().for_each(ahead);
                     }
                     if let Some(key) = default.key(key) {
                         let key = without_hints_held(key, table);
@@ -1233,7 +1351,7 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         (
             "max_name_bytes",
             library.max_name_bytes,
-            crate::naming::MIN_NAME_BYTES,
+            crate::naming::min_name_bytes(crate::outputs::tail(&settings)),
         ),
         (
             "max_folder_bytes",
@@ -1253,6 +1371,7 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     settings.audio.check()?;
     settings.loudness.check()?;
     settings.cover.pick.check()?;
+    settings.lyrics.check()?;
     // aria2c counts its stop in whole seconds, and 0 as never stopping.
     if settings.torrent.stall < std::time::Duration::from_secs(1) {
         bail!("[torrent] stall must be at least 1 s; under it, a fetch would wait for ever");
@@ -1360,10 +1479,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.library.template, "{{ artist }}/{{ title }}");
-        assert_eq!(s.library.lyrics, LyricsPlacement::Both);
+        let to: Vec<To> = s.lyrics.out.iter().map(|o| o.to).collect();
+        assert_eq!(to, [To::File, To::Tag], "read as [[lyrics.out]]");
         assert_eq!(s.library.untitled, "Untitled");
         assert_eq!(s.audio.opus_kbps, 192);
         assert_eq!(s.audio.opus_surround_kbps, 256);
+    }
+
+    #[test]
+    fn each_place_lyrics_go_is_one_of_its_own() {
+        let s = settings(
+            "[[lyrics.out]]\nto = \"file\"\n[[lyrics.out]]\nto = \"file\"\nsuffix = \".en\"\n\
+             [[lyrics.out]]\nto = \"tag\"\nwhen = \"timed\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.lyrics.out.len(), 3);
+        assert_eq!(s.lyrics.out[1].suffix, ".en");
+        assert_eq!(s.lyrics.out[2].when, When::Timed);
+        let none = settings("[lyrics]\nout = []\n").unwrap();
+        assert!(none.lyrics.out.is_empty(), "none at all");
+        assert_eq!(Settings::default().lyrics.out.len(), 1, "a .lrc unset");
+        for (bad, why) in [
+            (
+                "[[lyrics.out]]\nto = \"tag\"\n[[lyrics.out]]\nto = \"tag\"\n",
+                "a song holds one lyrics tag",
+            ),
+            (
+                "[[lyrics.out]]\nto = \"tag\"\nsuffix = \".en\"\n",
+                "takes no suffix",
+            ),
+            (
+                "[[lyrics.out]]\nto = \"file\"\nsuffix = \"/en\"\n",
+                "must begin with a dot",
+            ),
+            (
+                "[[lyrics.out]]\nto = \"file\"\n[[lyrics.out]]\nto = \"file\"\nwhen = \"timed\"\n",
+                "twice",
+            ),
+            ("[[lyrics.out]]\nto = \"aside\"\n", "aside"),
+        ] {
+            let e = settings(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(why), "{bad}: {e:#}");
+        }
+        let apart = "[[lyrics.out]]\nto = \"file\"\nwhen = \"timed\"\n\
+                     [[lyrics.out]]\nto = \"file\"\nwhen = \"untimed\"\n";
+        assert!(settings(apart).is_ok(), "never one song's at once");
+        let long = "[library]\nmax_name_bytes = 40\n[[lyrics.out]]\nto = \"file\"\nsuffix = \".zh-Hant\"\n";
+        let e = settings(long).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("max_name_bytes must be at least"),
+            "{e:#}"
+        );
     }
 
     #[test]

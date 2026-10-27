@@ -68,6 +68,7 @@ fn plan(format: Format) -> Plan {
             shift_ms: 0,
             stretch_ppm: 0,
             placement: LyricsPlacement::Sidecar,
+            files: None,
             language: None,
             clean_off: Vec::new(),
             cleaning: crate::clean::lyrics::EDITION,
@@ -105,8 +106,14 @@ fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result
             sources: &f.sources,
             scratch: &f.dir.path().join("scratch"),
             claim,
+            stale: &[],
         },
     )
+}
+
+/// The files a render wrote beside its song.
+fn names(r: &Rendered) -> Vec<PathBuf> {
+    r.beside.iter().map(|(p, _)| p.clone()).collect()
 }
 
 fn leftover_parts(dir: &Path) -> Vec<PathBuf> {
@@ -127,7 +134,7 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
     let fake = Fake::default();
     let r = go(&fake, &f, &plan(Format::Copy { codec: Codec::Opus })).unwrap();
     assert_eq!(r.audio, PathBuf::from("A/Record/Song.opus"));
-    assert_eq!(r.lyrics, Some(PathBuf::from("A/Record/Song.lrc")));
+    assert_eq!(names(&r), [PathBuf::from("A/Record/Song.lrc")]);
     assert!(r.problems.is_empty(), "{:?}", r.problems);
     assert_eq!(
         fake.calls().len(),
@@ -170,10 +177,11 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
         sources: &f.sources,
         scratch: &scratch,
         claim: &claim,
+        stale: &[],
     };
     let fake = Fake::default();
     let alone = beside(&fake, &job(&p)).unwrap();
-    assert_eq!(alone.lyrics, built.lyrics);
+    assert_eq!(alone.files, built.beside);
     assert_eq!(fs::read(&lrc).unwrap(), whole, "as a build writes them");
     assert!(!fake.ran("copy"), "the audio left alone");
     assert!(fake.ran("0:2"), "the subtitle stream read again");
@@ -181,9 +189,17 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
 
     let mut embedded = p.clone();
     embedded.lyrics.as_mut().unwrap().placement = LyricsPlacement::Embedded;
-    let none = beside(&Fake::default(), &job(&embedded)).unwrap();
-    assert_eq!(none.lyrics, None);
-    assert!(!lrc.exists(), "none beside the song");
+    let stale = [PathBuf::from("A/Record/Song.lrc")];
+    let none = beside(
+        &Fake::default(),
+        &Job {
+            stale: &stale,
+            ..job(&embedded)
+        },
+    )
+    .unwrap();
+    assert_eq!(none.files, []);
+    assert!(!lrc.exists(), "the last build's beside the song gone");
 }
 
 #[test]
@@ -520,23 +536,26 @@ fn lyrics_not_claimed_are_neither_written_over_nor_removed() {
     let f = fixture();
     let mine = f.dir.path().join("lib/A/Record/Song.lrc");
     fs::create_dir_all(mine.parent().unwrap()).unwrap();
-    for p in [
-        plan(Format::Copy { codec: Codec::Opus }),
-        Plan {
-            lyrics: None,
-            ..plan(Format::Copy { codec: Codec::Opus })
-        },
-    ] {
-        fs::write(&mine, "mine").unwrap();
-        let e = go_claiming(&Fake::default(), &f, &p, &[]).unwrap_err();
-        assert!(format!("{e:#}").contains("not muman's"), "{e:#}");
-        assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
-        assert!(!f.dir.path().join("lib/A/Record/Song.opus").exists());
-        assert_eq!(
-            leftover_parts(&f.dir.path().join("lib/A/Record")),
-            Vec::<PathBuf>::new()
-        );
-    }
+    fs::write(&mine, "mine").unwrap();
+    let p = plan(Format::Copy { codec: Codec::Opus });
+    let e = go_claiming(&Fake::default(), &f, &p, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("not muman's"), "{e:#}");
+    assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
+    assert!(!f.dir.path().join("lib/A/Record/Song.opus").exists());
+    assert_eq!(
+        leftover_parts(&f.dir.path().join("lib/A/Record")),
+        Vec::<PathBuf>::new()
+    );
+    let none = Plan {
+        lyrics: None,
+        ..plan(Format::Copy { codec: Codec::Opus })
+    };
+    go_claiming(&Fake::default(), &f, &none, &[]).unwrap();
+    assert_eq!(
+        fs::read_to_string(&mine).unwrap(),
+        "mine",
+        "the song writes none and its last build left none there"
+    );
 }
 
 #[cfg(unix)]
@@ -557,8 +576,8 @@ fn a_link_left_at_a_staged_name_is_not_written_through() {
     )
     .unwrap();
     assert_eq!(fs::read_to_string(&elsewhere).unwrap(), "not the library's");
-    assert!(r.lyrics.is_some());
-    for file in [&r.audio, r.lyrics.as_ref().unwrap()] {
+    assert_eq!(names(&r).len(), 1);
+    for file in std::iter::once(&r.audio).chain(&names(&r)) {
         let meta = fs::symlink_metadata(f.dir.path().join("lib").join(file)).unwrap();
         assert!(meta.file_type().is_file(), "{}", file.display());
     }
@@ -575,7 +594,7 @@ fn failed_lyrics_cost_only_themselves_and_clear_the_last_build_s() {
         ..Fake::default()
     };
     let r = go(&fake, &f, &plan(Format::Copy { codec: Codec::Opus })).unwrap();
-    assert_eq!(r.lyrics, None);
+    assert_eq!(names(&r), [] as [PathBuf; 0]);
     assert!(
         r.problems.iter().any(|p| p.starts_with("no lyrics")),
         "{:?}",
@@ -623,6 +642,7 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         shift_ms: 1000,
         stretch_ppm: 0,
         placement: LyricsPlacement::Sidecar,
+        files: None,
         language: None,
         clean_off: Vec::new(),
         cleaning: crate::clean::lyrics::EDITION,
@@ -678,7 +698,7 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         let again = retag(
             &library,
             &first.audio,
-            first.lyrics.as_deref(),
+            &names(&first),
             &p,
             &[Ledger::taken(&first.audio)],
         )
@@ -775,7 +795,7 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
         retag(
             &library,
             &r.audio,
-            r.lyrics.as_deref(),
+            &names(&r),
             &q,
             &[Ledger::taken(&r.audio)],
         )

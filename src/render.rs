@@ -108,7 +108,6 @@ use crate::library::Owned;
 use crate::lyrics;
 use crate::resolve::{CoverRef, Format, LyricsRef, Plan};
 use crate::runner::Runner;
-use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::store::Located;
 use crate::tags::{Field, Id3, Mp4};
@@ -124,18 +123,34 @@ pub struct Job<'a> {
     pub scratch: &'a Path,
     /// The files at the song's paths it may write over or remove.
     pub claim: &'a [Owned],
+    /// The files the song's last build left beside it, which go unless
+    /// written again.
+    pub stale: &'a [PathBuf],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendered {
-    /// Paths in the library.
+    /// The audio's path in the library.
     pub audio: PathBuf,
-    pub lyrics: Option<PathBuf>,
+    /// Each file written beside it, by its path in the library, with what
+    /// it takes in bytes.
+    pub beside: Vec<(PathBuf, u64)>,
     /// What could not be added, each said once.
     pub problems: Vec<String>,
-    /// What the audio and lyrics files take, in bytes, as written.
+    /// What the audio file takes, in bytes, as written.
     pub audio_bytes: u64,
-    pub lyrics_bytes: u64,
+}
+
+impl Rendered {
+    /// What the files beside the audio take, in whole blocks of `block`
+    /// bytes each, as a filesystem spends them.
+    #[must_use]
+    pub fn beside_blocks(&self, block: u64) -> u64 {
+        self.beside
+            .iter()
+            .map(|(_, bytes)| crate::limit::blocks(*bytes, block))
+            .sum()
+    }
 }
 
 fn with_extension(stem: &Path, ext: &str) -> PathBuf {
@@ -288,11 +303,20 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .ok_or_else(|| anyhow!("{key} is not on disk"))
     };
     let audio_rel = with_extension(job.stem, plan.format.extension());
-    let lyrics_rel = crate::outputs::lyrics_of_stem(job.stem);
-    let (audio_path, lyrics_path) = (job.library.join(&audio_rel), job.library.join(&lyrics_rel));
+    let lyrics_rels: Vec<PathBuf> = plan.lyrics.as_ref().map_or_else(Vec::new, |l| {
+        l.files()
+            .iter()
+            .map(|f| crate::outputs::lyrics_file(job.stem, f))
+            .collect()
+    });
+    let audio_path = job.library.join(&audio_rel);
     let dir = audio_path.parent().unwrap_or(job.library);
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let (audio_part, lyrics_part) = (part(&audio_path), part(&lyrics_path));
+    let audio_part = part(&audio_path);
+    let lyrics_parts: Vec<PathBuf> = lyrics_rels
+        .iter()
+        .map(|r| part(&job.library.join(r)))
+        .collect();
     fs::create_dir_all(job.scratch)?;
 
     let mut inputs = Inputs::default();
@@ -361,7 +385,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .find(|(o, _)| o.path == path)
             .and_then(|(_, r)| r.as_ref().err().map(|e| format!("{e:#}")))
     };
-    let staged = (|| -> Result<Option<PathBuf>> {
+    let staged = (|| -> Result<Vec<PathBuf>> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
         }
@@ -382,11 +406,10 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             _ => None,
         }
         .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
-        let placement = plan.lyrics.as_ref().map(|l| l.placement);
         let mut tags = plan.tags.clone();
         if let Some(text) = text
             .as_ref()
-            .filter(|_| placement.is_some_and(LyricsPlacement::embedded))
+            .filter(|_| plan.lyrics.as_ref().is_some_and(LyricsRef::tag))
         {
             if flac && text.len() > FLAC_BLOCK {
                 problems.push(format!(
@@ -432,39 +455,64 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         }
         set_opus_header(&audio_part, plan)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
-        match text.filter(|_| placement.is_some_and(LyricsPlacement::sidecar)) {
-            Some(text) => {
-                std::io::Write::write_all(&mut stage(&lyrics_part)?, text.as_bytes())
-                    .with_context(|| format!("writing {}", lyrics_part.display()))?;
-                Ok(Some(lyrics_rel.clone()))
-            }
-            None => Ok(None),
+        match text {
+            Some(text) => stage_beside(&lyrics_parts, &text).map(|()| lyrics_rels.clone()),
+            None => Ok(Vec::new()),
         }
     })();
-    let placed = staged.and_then(|lyrics| {
-        if lyrics.is_some() {
-            crate::library::put(job.library, &lyrics_part, &lyrics_rel, job.claim)?;
-        } else {
-            // A song that has no lyrics now must not keep the last build's.
-            crate::library::clear(job.library, &lyrics_rel, job.claim)?;
-        }
+    let placed = staged.and_then(|written| {
+        let beside = put_beside(job, &lyrics_parts, &lyrics_rels, &written)?;
         crate::library::put(job.library, &audio_part, &audio_rel, job.claim)?;
-        Ok(lyrics)
+        Ok(beside)
     });
     match placed {
-        Ok(lyrics) => Ok(Rendered {
+        Ok(beside) => Ok(Rendered {
             audio_bytes: size_of(&audio_path),
-            lyrics_bytes: lyrics.as_ref().map_or(0, |_| size_of(&lyrics_path)),
             audio: audio_rel,
-            lyrics,
+            beside,
             problems,
         }),
         Err(e) => {
-            let _ = fs::remove_file(&audio_part);
-            let _ = fs::remove_file(&lyrics_part);
+            for staged in std::iter::once(&audio_part).chain(&lyrics_parts) {
+                let _ = fs::remove_file(staged);
+            }
             Err(e)
         }
     }
+}
+
+/// `text` staged at each of `parts`, made anew.
+fn stage_beside(parts: &[PathBuf], text: &str) -> Result<()> {
+    for staged in parts {
+        std::io::Write::write_all(&mut stage(staged)?, text.as_bytes())
+            .with_context(|| format!("writing {}", staged.display()))?;
+    }
+    Ok(())
+}
+
+/// Put each of `rels` staged at `parts` that `written` names in its
+/// place, and clear the files the song's last build left beside it that
+/// are not written again, its lyrics that are none now among them; each
+/// put with what it takes.
+fn put_beside(
+    job: &Job<'_>,
+    parts: &[PathBuf],
+    rels: &[PathBuf],
+    written: &[PathBuf],
+) -> Result<Vec<(PathBuf, u64)>> {
+    let mut beside = Vec::new();
+    for (staged, rel) in parts.iter().zip(rels) {
+        if written.contains(rel) {
+            crate::library::put(job.library, staged, rel, job.claim)?;
+            beside.push((rel.clone(), size_of(&job.library.join(rel))));
+        }
+    }
+    for gone in job.stale.iter().chain(rels) {
+        if !written.contains(gone) {
+            crate::library::clear(job.library, gone, job.claim)?;
+        }
+    }
+    Ok(beside)
 }
 
 /// The most a FLAC metadata block holds, as its 24-bit length allows,
@@ -532,7 +580,7 @@ fn fit_cover<R: Runner>(
 pub fn retag(
     library: &Path,
     audio: &Path,
-    lyrics: Option<&Path>,
+    beside: &[PathBuf],
     plan: &Plan,
     claim: &[Owned],
 ) -> Result<Rendered> {
@@ -564,7 +612,7 @@ pub fn retag(
             })
             .or_else(|| ape_cover(&path));
         let mut tags = plan.tags.clone();
-        let embedded = plan.lyrics.as_ref().is_some_and(|l| l.placement.embedded());
+        let embedded = plan.lyrics.as_ref().is_some_and(LyricsRef::tag);
         if let Some(text) = tag
             .and_then(|t| {
                 t.get_string(ItemKey::Lyrics)
@@ -600,9 +648,11 @@ pub fn retag(
     }
     Ok(Rendered {
         audio_bytes: size_of(&path),
-        lyrics_bytes: lyrics.map_or(0, |l| size_of(&library.join(l))),
         audio: audio.to_path_buf(),
-        lyrics: lyrics.map(Path::to_path_buf),
+        beside: beside
+            .iter()
+            .map(|b| (b.clone(), size_of(&library.join(b))))
+            .collect(),
         problems,
     })
 }
@@ -686,15 +736,16 @@ fn size_of(path: &Path) -> u64 {
 }
 
 /// Put a song [`render`] wrote into the library folder `from` at its
-/// place in `library`, as rendering it there would have: lyrics first,
-/// audio last, each through `.part`, and the last build's lyrics gone
-/// when it has none now: over or in place of only the files `claim`
-/// holds.
+/// place in `library`, as rendering it there would have: the files beside
+/// it first, audio last, each through `.part`, and those of `stale` the
+/// last build left that it has none of now gone: over or in place of only
+/// the files `claim` holds.
 pub fn place(
     from: &Path,
     rendered: &Rendered,
     library: &Path,
     claim: &[Owned],
+    stale: &[PathBuf],
 ) -> Result<Rendered> {
     let copy_in = |rel: &Path| -> Result<()> {
         let to = library.join(rel);
@@ -714,9 +765,13 @@ pub fn place(
             })
             .with_context(|| format!("copying {} into the library", rel.display()))
     };
-    match &rendered.lyrics {
-        Some(lyrics) => copy_in(lyrics)?,
-        None => crate::library::clear(library, &crate::outputs::lyrics(&rendered.audio), claim)?,
+    for (file, _) in &rendered.beside {
+        copy_in(file)?;
+    }
+    for gone in stale {
+        if !rendered.beside.iter().any(|(b, _)| b == gone) {
+            crate::library::clear(library, gone, claim)?;
+        }
     }
     copy_in(&rendered.audio)?;
     Ok(rendered.clone())
@@ -840,54 +895,52 @@ fn lyrics_context<'p>(plan: &'p Plan, lyrics: &LyricsRef) -> clean::lyrics::Cont
     }
 }
 
-/// What [`beside`] wrote.
+/// What [`beside`] wrote: each file beside the song, with what it takes
+/// in bytes, and what could not be written, each said once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Beside {
-    /// The lyrics' path in the library, where the plan has them beside.
-    pub lyrics: Option<PathBuf>,
-    pub lyrics_bytes: u64,
-    /// What could not be written, each said once.
+    pub files: Vec<(PathBuf, u64)>,
     pub problems: Vec<String>,
 }
 
 /// Write the files `job`'s plan has beside the song, its lyrics, from
 /// their sources, as [`render`] writes them, leaving the song's audio
 /// file as it is: for a song whose file holds what it would be written
-/// with, its tags aside, as [`retag`] writes them. A lyrics file the plan
-/// has none of goes, as the last build's would.
+/// with, its tags aside, as [`retag`] writes them. A file the last build
+/// left beside it that the plan has none of goes, as [`render`] clears it.
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     let plan = job.plan;
-    let lyrics_rel = crate::outputs::lyrics_of_stem(job.stem);
-    let lyrics_path = job.library.join(&lyrics_rel);
     let mut problems = Vec::new();
-    let text = match plan.lyrics.as_ref().filter(|l| l.placement.sidecar()) {
-        Some(l) => lyrics_text(runner, job, l)
-            .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
-            .ok()
-            .flatten(),
-        None => None,
+    let (rels, text) = match &plan.lyrics {
+        Some(l) if !l.files().is_empty() => {
+            let rels: Vec<PathBuf> = l
+                .files()
+                .iter()
+                .map(|f| crate::outputs::lyrics_file(job.stem, f))
+                .collect();
+            let text = lyrics_text(runner, job, l)
+                .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
+                .ok()
+                .flatten();
+            (rels, text)
+        }
+        _ => (Vec::new(), None),
     };
-    let Some(text) = text else {
-        crate::library::clear(job.library, &lyrics_rel, job.claim)?;
-        return Ok(Beside {
-            lyrics: None,
-            lyrics_bytes: 0,
-            problems,
-        });
-    };
-    let staged = part(&lyrics_path);
-    let written = std::io::Write::write_all(&mut stage(&staged)?, text.as_bytes())
-        .with_context(|| format!("writing {}", staged.display()))
-        .and_then(|()| crate::library::put(job.library, &staged, &lyrics_rel, job.claim));
-    if let Err(e) = written {
-        let _ = fs::remove_file(&staged);
-        return Err(e);
+    let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
+    let placed = match &text {
+        Some(text) => stage_beside(&parts, text).map(|()| rels.clone()),
+        None => Ok(Vec::new()),
     }
-    Ok(Beside {
-        lyrics_bytes: size_of(&lyrics_path),
-        lyrics: Some(lyrics_rel),
-        problems,
-    })
+    .and_then(|written| put_beside(job, &parts, &rels, &written));
+    match placed {
+        Ok(files) => Ok(Beside { files, problems }),
+        Err(e) => {
+            for staged in &parts {
+                let _ = fs::remove_file(staged);
+            }
+            Err(e)
+        }
+    }
 }
 
 /// The text of `lyrics` as `job`'s plan writes them, read from their

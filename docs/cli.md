@@ -368,7 +368,7 @@ written as the library holds it, and said.
   Possible values: `opus`, `vorbis`, `aac`, `mp3`
 
 * `--template <TEMPLATE>` — Each song's path without its extension, as `[library] template`
-* `--lyrics <WHERE>` — Where lyrics go, as `[library] lyrics`
+* `--lyrics <WHERE>` — Where lyrics go: a `.lrc` beside each song (sidecar), inside it (embedded) or both, as `[[lyrics.out]]` says
 
   Possible values: `sidecar`, `embedded`, `both`
 

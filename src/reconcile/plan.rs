@@ -63,16 +63,16 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 /// song of one name are told apart before either writes a `.lrc`, and by
 /// each file a song may write, so `Intro` and its `.en.lrc` never meet
 /// `Intro.en` and its `.lrc`. `beside` names the files a song at a path
-/// may write beside it.
+/// writes beside it by its plan.
 pub(super) fn separate(
     planned: &mut [(usize, Resolved)],
     naming: &Naming,
-    beside: &dyn Fn(&Path) -> Vec<PathBuf>,
+    beside: &dyn Fn(&Path, &resolve::Plan) -> Vec<PathBuf>,
 ) {
     use crate::relpath::folded;
     let files = |r: &Resolved| -> Vec<String> {
         let path = path_of(r);
-        let names = beside(&path);
+        let names = beside(&path, &r.plan);
         std::iter::once(path)
             .chain(names)
             .map(|p| folded(&p))
@@ -251,7 +251,8 @@ impl<'a> Resolver<'a> {
             manifest,
             settings,
             state,
-            naming: Naming::new(&settings.library, library)?,
+            naming: Naming::new(&settings.library, library)?
+                .with_tail(crate::outputs::tail(settings)),
             albums: Albums::of(state.facts.values().map(|f| &f.tags)),
         })
     }
@@ -276,7 +277,6 @@ impl<'a> Resolver<'a> {
             naming: &self.naming,
             audio: &settings.audio,
             cover: &settings.cover.pick,
-            placement: settings.library.lyrics,
             source_comments: settings.library.source_comments,
         }
     }
@@ -322,7 +322,7 @@ pub(crate) fn resolve_songs(
     separate(
         &mut resolution.planned,
         &resolver.naming,
-        &crate::outputs::names,
+        &crate::outputs::planned,
     );
     Ok(resolution)
 }

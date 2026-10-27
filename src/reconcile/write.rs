@@ -290,7 +290,7 @@ fn before_writing<R: Runner, W: Write>(
     let old = &state.outputs;
     let claims: Claims = due
         .iter()
-        .map(|((n, r), _)| (*n, claim(ledger, old, &path_of(r), forced)))
+        .map(|((n, r), _)| (*n, claim(ledger, old, &path_of(r), &r.plan, forced)))
         .collect();
     // Owned before written, and no longer vouched for: a crash between the two must leave
     // neither a file no run would delete nor a rewritten one that looks changed by someone
@@ -302,7 +302,7 @@ fn before_writing<R: Runner, W: Write>(
             // A retag leaving the files beside the song as they are keeps them vouched for.
             let sidecars = match old.get(&path).filter(|_| *retag && !beside_changes(old, r)) {
                 Some(w) => w.sidecars.clone(),
-                None => crate::outputs::names(&path)
+                None => crate::outputs::touched(&path, &r.plan, old.get(&path))
                     .into_iter()
                     .filter(|s| {
                         std::fs::symlink_metadata(job.dirs.library.join(s)).is_err()
@@ -422,8 +422,18 @@ fn render_due<R: Runner, W: Write>(
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
         let claim = &claims[n];
+        let path = path_of(r);
+        let recorded: Vec<PathBuf> = old
+            .get(&path)
+            .map_or_else(Vec::new, |w| w.sidecar_paths().cloned().collect());
+        let planned = crate::outputs::planned(&path, &r.plan);
+        let stale: Vec<PathBuf> = recorded
+            .iter()
+            .filter(|s| !planned.contains(s))
+            .cloned()
+            .collect();
         if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library, claim);
+            return render::place(folder, made, &dirs.library, claim, &stale);
         }
         let work = Sub::new(scratch, "render-")?;
         let render_job = render::Job {
@@ -433,19 +443,13 @@ fn render_due<R: Runner, W: Write>(
             sources: located,
             scratch: work.path(),
             claim,
+            stale: &stale,
         };
         if *retag {
-            let path = path_of(r);
-            let lyrics = crate::outputs::lyrics(&path);
-            let lyrics = old
-                .get(&path)
-                .and_then(|w| w.sidecar_paths().find(|s| **s == lyrics));
-            let lyrics = lyrics.map(PathBuf::as_path);
-            let mut done = render::retag(&dirs.library, &path, lyrics, &r.plan, claim)?;
+            let mut done = render::retag(&dirs.library, &path, &recorded, &r.plan, claim)?;
             if beside_changes(old, r) {
                 let beside = render::beside(*runner, &render_job)?;
-                done.lyrics = beside.lyrics;
-                done.lyrics_bytes = beside.lyrics_bytes;
+                done.beside = beside.files;
                 done.problems.extend(beside.problems);
             }
             return Ok(done);
@@ -535,7 +539,7 @@ fn vouch<R: Runner, W: Write>(
         let measured = state::Measured {
             source: r.plan.audio.key.clone(),
             audio: done.audio_bytes,
-            lyrics: done.lyrics_bytes,
+            beside: done.beside.iter().map(|(_, bytes)| *bytes).collect(),
         };
         (limit::plan_key(&f.tools, &r.plan), measured)
     });
@@ -545,9 +549,9 @@ fn vouch<R: Runner, W: Write>(
     {
         Some(w) => w.sidecars.clone(),
         None => done
-            .lyrics
+            .beside
             .iter()
-            .map(|l| Sidecar::vouched(library, l.clone()))
+            .map(|(path, _)| Sidecar::vouched(library, path.clone()))
             .collect(),
     };
     let vouched = Written {

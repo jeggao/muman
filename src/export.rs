@@ -167,6 +167,17 @@ pub fn setting(arg: &str) -> std::result::Result<Override, String> {
         .split_once('=')
         .ok_or_else(|| format!("`{arg}` sets nothing; write KEY=VALUE, as audio.lossy=mp3"))?;
     let name = name.trim();
+    // Where lyrics go, as `[library] lyrics` said it, as `--lyrics` takes it.
+    if name == "library.lyrics" {
+        let placement = raw.trim().trim_matches('"');
+        return crate::migrate::lyrics_out_value(placement)
+            .map(|value| Override {
+                table: "lyrics".into(),
+                key: "out".into(),
+                value,
+            })
+            .ok_or_else(|| format!("library.lyrics is sidecar, embedded or both, not `{raw}`"));
+    }
     let (table, key) = name.split_once('.').unwrap_or(("", name));
     if !table.is_empty() && !TABLES.contains(&table) {
         return Err(format!(
@@ -220,8 +231,8 @@ pub fn overrides(
     if let Some(template) = template {
         all.push(one("library", "template", template.into()));
     }
-    if let Some(lyrics) = lyrics {
-        all.push(one("library", "lyrics", lyrics.into()));
+    if let Some(out) = lyrics.and_then(crate::migrate::lyrics_out_value) {
+        all.push(one("lyrics", "out", out));
     }
     all.extend(set.iter().cloned());
     all
@@ -1012,15 +1023,18 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
     // The audio file's name and what it holds besides its stream, and what
     // its lyrics beside it take.
     let (name, extras, lyrics) = if song.anew {
-        let (extras, sidecar) = limit::besides_audio(&song.plan);
-        let name = |ext: &str| name_in_zip(&named(&song.stem, Path::new(&format!("_.{ext}"))));
-        let lyrics = if sidecar > 0 {
-            let lrc = crate::outputs::lyrics_of_stem(&song.stem);
-            target.takes(&name_in_zip(&lrc), sidecar)
-        } else {
-            0
-        };
-        (name(song.plan.format.extension()), extras, lyrics)
+        let (extras, beside) = limit::besides_audio(&song.plan);
+        let audio = named(
+            &song.stem,
+            Path::new(&format!("_.{}", song.plan.format.extension())),
+        );
+        let names = crate::outputs::planned(&audio, &song.plan);
+        let lyrics = names
+            .iter()
+            .zip(beside)
+            .map(|(name, bytes)| target.takes(&name_in_zip(name), bytes))
+            .sum();
+        (name_in_zip(&audio), extras, lyrics)
     } else {
         let lyrics = entries_size(target, &held[1..]);
         (held[0].name.clone(), extras(&held[0].from), lyrics)
@@ -1102,10 +1116,11 @@ fn encode<R: Runner>(
             sources,
             scratch: &scratch.join("work"),
             claim: &[],
+            stale: &[],
         },
     )?;
     let entries = std::iter::once(&rendered.audio)
-        .chain(&rendered.lyrics)
+        .chain(rendered.beside.iter().map(|(p, _)| p))
         .map(|p| Entry {
             from: library.join(p),
             name: name_in_zip(p),
@@ -1336,7 +1351,7 @@ mod tests {
                 "audio.codecs=[\"mp3\"]",
                 "audio.lossy=\"mp3\"",
                 "audio.lossless=\"mp3\"",
-                "library.lyrics=\"embedded\"",
+                "lyrics.out=[{ to = \"tag\", suffix = \"\", format = \"lrc\", when = \"any\" }]",
                 "audio.lossless=\"flac\"",
             ]
         );

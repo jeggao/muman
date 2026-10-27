@@ -314,7 +314,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             .iter()
             .flat_map(|(_, r)| {
                 let path = path_of(r);
-                let names = crate::outputs::names(&path);
+                let names = crate::outputs::planned(&path, &r.plan);
                 std::iter::once(path).chain(names)
             })
             .chain(

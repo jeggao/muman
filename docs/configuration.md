@@ -116,8 +116,8 @@ know.
 
 | Table | Sets |
 |---|---|
-| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, whether sources' comments are written, the most the library may take |
-| [`[lyrics]`](#which-lyrics-a-song-takes) | The languages you read, and which lyrics a song takes first: the original, a romanization or a translation, timed or untimed |
+| `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, whether sources' comments are written, the most the library may take |
+| [`[lyrics]`](#which-lyrics-a-song-takes) | The languages you read, which lyrics a song takes first, the original, a romanization or a translation, timed or untimed, and [where they go](#where-lyrics-go) |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
 | [`[audio.pick.*]`](#how-sources-are-ranked) | How audio sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | [`[loudness]`](audio.md#loudness) | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
@@ -255,6 +255,34 @@ song file's own lyrics in another rank after those.
 Languages match as a browser matches them: `zh` takes `zh-Hant`,
 `zh-TW` takes `zh-Hant` but never `zh-Hans`, `pt-BR` takes `pt-PT`
 after any `pt-BR`, and `ger`, `deu` and `de` are one language.
+
+## Where lyrics go
+
+Each `[[lyrics.out]]` is one place the lyrics a song takes are written:
+`to = "file"`, a file beside the song named as the song is, then its
+`suffix`, then the format's extension; or `to = "tag"`, inside the
+song. `when = "timed"` or `"untimed"` writes only lyrics whose lines
+carry times, or only those whose lines do not. `out = []` under
+`[lyrics]` writes none. This writes timed lyrics beside the song and
+inside it, and untimed ones beside it as `Song.plain.lrc`:
+
+```toml
+[[lyrics.out]]
+to = "file"
+when = "timed"
+[[lyrics.out]]
+to = "tag"
+when = "timed"
+[[lyrics.out]]
+to = "file"
+suffix = ".plain"
+when = "untimed"
+```
+
+A suffix is a dot and up to 24 bytes a name may hold on every system,
+and every song's name keeps room for the longest. Taking an output out
+removes its files; a change to lyrics beside a song alone writes those
+files again and leaves the song's own file as it is.
 
 ## How sources are ranked
 

@@ -10,6 +10,7 @@
 //! | [`Step::Rename`] | On every read, in memory, and on every write, for good | By its shape: the old name is there |
 //! | [`Step::Move`] | As a rename | By its shape: the old name is in its old table |
 //! | [`Step::MoveTable`] | As a rename | By its shape: the old table is there |
+//! | [`Step::Reshape`] | As a rename | By its shape: the old name is in its old table |
 //! | [`Step::Default`] | By `sync --update-defaults`, when asked | By its edition, and a value that reads as the old default |
 //!
 //! A rename loses nothing, so it is made without asking, and is found by
@@ -22,7 +23,10 @@
 //! into another table, its value kept as it is; the table it leaves is
 //! dropped once it holds nothing. A table moved whole, as `[quality.purity]`
 //! to `[audio.pick.purity]`, keeps its settings, its comments and its place
-//! in the file, so only its header changes.
+//! in the file, so only its header changes. A setting reshaped, as
+//! `[library] lyrics = "both"` into a `[[lyrics.out]]` for each place the
+//! lyrics go, takes the comments `new.toml` gives its new shape, placed
+//! after the table it joins.
 //!
 //! A changed default is offered, not made: a default written out looks
 //! like a value chosen. A setting still at an edition's old default, read
@@ -59,7 +63,7 @@ use crate::settings::{TABLES, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 6;
+pub const EDITION: i64 = 7;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
@@ -114,6 +118,10 @@ pub const HISTORY: &[Edition] = &[
             moved_table("quality.blockiness", "cover.pick.blockiness"),
         ],
     },
+    Edition {
+        number: 7,
+        steps: &[reshaped("library", "lyrics", "lyrics", "out", lyrics_out)],
+    },
 ];
 
 /// The editions this muman knows.
@@ -141,6 +149,7 @@ pub enum Step {
     Rename(Rename),
     Move(Move),
     MoveTable(MoveTable),
+    Reshape(Reshape),
     Default(Change),
 }
 
@@ -177,6 +186,19 @@ pub struct MoveTable {
     pub to: &'static str,
 }
 
+/// A setting replaced by one of another shape, in another table.
+#[derive(Debug, Clone, Copy)]
+pub struct Reshape {
+    /// The top-level table it was in, and its name there.
+    pub from: &'static str,
+    pub old: &'static str,
+    /// The top-level table it is in now, and its name there.
+    pub to: &'static str,
+    pub new: &'static str,
+    /// The old value as the new shape, `None` for one it never took.
+    pub convert: fn(&Value) -> Option<Item>,
+}
+
 /// A default changed.
 #[derive(Debug, Clone, Copy)]
 pub struct Change {
@@ -209,6 +231,22 @@ const fn moved_table(from: &'static str, to: &'static str) -> Step {
     Step::MoveTable(MoveTable { from, to })
 }
 
+const fn reshaped(
+    from: &'static str,
+    old: &'static str,
+    to: &'static str,
+    new: &'static str,
+    convert: fn(&Value) -> Option<Item>,
+) -> Step {
+    Step::Reshape(Reshape {
+        from,
+        old,
+        to,
+        new,
+        convert,
+    })
+}
+
 const fn changed(key: &'static str, was: &'static str) -> Step {
     Step::Default(Change { key, was })
 }
@@ -232,6 +270,46 @@ fn hz(v: &Value) -> Option<Value> {
 
 fn days(v: &Value) -> Option<Value> {
     whole(v, |n| (n >= 0).then(|| Time::days(n).exact()))
+}
+
+/// `[library] lyrics`, where lyrics went, as the `[[lyrics.out]]` writing
+/// them there: `new.toml`'s, with its comments, for a file beside the
+/// song, and the same with `to = "tag"` for inside it.
+fn lyrics_out(v: &Value) -> Option<Item> {
+    let defaults = defaults();
+    let file = defaults
+        .get("lyrics")?
+        .get("out")?
+        .as_array_of_tables()?
+        .get(0)?
+        .clone();
+    let mut tag = file.clone();
+    tag.insert("to", value("tag"));
+    let mut out = toml_edit::ArrayOfTables::new();
+    match v.as_str()? {
+        "sidecar" => out.push(file),
+        "embedded" => out.push(tag),
+        "both" => {
+            tag.decor_mut().clear();
+            out.push(file);
+            out.push(tag);
+        }
+        _ => return None,
+    }
+    Some(Item::ArrayOfTables(out))
+}
+
+/// `[library] lyrics` as `out` set over `[lyrics]` from outside the song
+/// list, as `export --lyrics` sets it: each place as an inline table.
+pub(crate) fn lyrics_out_value(placement: &str) -> Option<Value> {
+    let Item::ArrayOfTables(out) = lyrics_out(&Value::from(placement))? else {
+        return None;
+    };
+    let places: toml_edit::Array = out
+        .iter()
+        .map(|t| Value::InlineTable(t.clone().into_inline_table()))
+        .collect();
+    Some(Value::Array(places))
 }
 
 fn mib(v: &Value) -> Option<Value> {
@@ -327,7 +405,7 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
     let steps = editions.history.iter().flat_map(|e| e.steps);
     for r in steps.clone().filter_map(|s| match s {
         Step::Rename(r) => Some(r),
-        Step::Move(_) | Step::MoveTable(_) | Step::Default(_) => None,
+        Step::Move(_) | Step::MoveTable(_) | Step::Reshape(_) | Step::Default(_) => None,
     }) {
         for (name, table) in tables_named(doc, r.table) {
             let Some(old) = table.get(r.old).and_then(Item::as_value) else {
@@ -362,6 +440,7 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
         match step {
             Step::Move(m) => renamed.extend(move_setting(doc, m)?),
             Step::MoveTable(m) => renamed.extend(move_table(doc, m)?),
+            Step::Reshape(r) => renamed.extend(reshape(doc, r)?),
             Step::Rename(_) | Step::Default(_) => {}
         }
     }
@@ -481,6 +560,82 @@ fn move_table(doc: &mut DocumentMut, m: &MoveTable) -> Result<Option<Renamed>> {
         old: None,
         new: m.to.to_string(),
     }))
+}
+
+/// `r` made in `doc`: the old setting taken out, and its new shape put
+/// after the table it joins, which is made where the file has none. What
+/// was reshaped.
+fn reshape(doc: &mut DocumentMut, r: &Reshape) -> Result<Option<Renamed>> {
+    let Some(old) = table_at(doc, &[r.from])
+        .and_then(|t| t.get(r.old))
+        .and_then(Item::as_value)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    if table_at(doc, &[r.to]).is_some_and(|t| t.contains_key(r.new)) {
+        bail!(
+            "[{}] `{}` and [{}] `{}`, its new place, are both set; keep [{}] `{}`",
+            r.from,
+            r.old,
+            r.to,
+            r.new,
+            r.to,
+            r.new
+        );
+    }
+    let mut item = (r.convert)(&old).with_context(|| {
+        format!(
+            "[{}] `{} = {}` is not a value it took; set [{}] `{}` instead",
+            r.from,
+            r.old,
+            text(&old),
+            r.to,
+            r.new
+        )
+    })?;
+    let from_at = doc
+        .get(r.from)
+        .and_then(Item::as_table)
+        .and_then(Table::position);
+    if let Some(from) = table_at(doc, &[r.from]) {
+        from.remove(r.old);
+    }
+    let to = doc.entry(r.to).or_insert_with(|| {
+        let mut t = Table::new();
+        t.set_position(from_at);
+        Item::Table(t)
+    });
+    let at = to.as_table().and_then(Table::position);
+    if let Item::ArrayOfTables(tables) = &mut item {
+        for t in tables.iter_mut() {
+            t.set_position(at);
+        }
+    }
+    let shown: Vec<String> = match &item {
+        Item::ArrayOfTables(tables) => tables
+            .iter()
+            .map(|t| format!("[[{}.{}]] {}", r.to, r.new, inline(t)))
+            .collect(),
+        other => vec![format!("[{}] {} = {other}", r.to, r.new)],
+    };
+    to.as_table_like_mut()
+        .with_context(|| format!("[{}] must be a table", r.to))?
+        .insert(r.new, item);
+    Ok(Some(Renamed {
+        table: r.from.to_string(),
+        old: Some(format!("{} = {}", r.old, text(&old))),
+        new: shown.join(", "),
+    }))
+}
+
+/// `table`'s settings on one line, as `to = "file", suffix = ""`.
+fn inline(table: &Table) -> String {
+    table
+        .iter()
+        .filter_map(|(k, i)| Some(format!("{k} = {}", text(i.as_value()?))))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The table at `path` in `doc`, the root at none. Unlike

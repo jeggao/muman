@@ -211,7 +211,6 @@ fn run_reading(
         naming: &NAMING,
         audio,
         cover,
-        placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
     .unwrap()
@@ -310,7 +309,6 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
-        placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
     .unwrap();
@@ -572,7 +570,6 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
-        placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
     .unwrap();
@@ -641,7 +638,6 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
-        placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
     .unwrap();
@@ -746,7 +742,6 @@ fn hand_set_tags_and_the_album_win_last() {
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
-        placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
     .unwrap();
@@ -1219,7 +1214,6 @@ fn a_song_without_audio_on_disk_is_an_error() {
             naming: &NAMING,
             audio: &AUDIO,
             cover: &COVER,
-            placement: LyricsPlacement::Sidecar,
             source_comments: false,
         })
         .is_err()
@@ -1741,7 +1735,6 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             naming: &NAMING,
             audio: &AUDIO,
             cover: &COVER,
-            placement: LyricsPlacement::Sidecar,
             source_comments,
         })
         .unwrap()

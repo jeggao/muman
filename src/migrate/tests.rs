@@ -1,5 +1,5 @@
 use super::*;
-use crate::settings::{Settings, read};
+use crate::settings::{Settings, To, read};
 
 fn doc(text: &str) -> DocumentMut {
     text.parse().unwrap()
@@ -11,7 +11,7 @@ fn renames() -> impl Iterator<Item = &'static Rename> {
         .flat_map(|e| e.steps)
         .filter_map(|s| match s {
             Step::Rename(r) => Some(r),
-            Step::Move(_) | Step::MoveTable(_) | Step::Default(_) => None,
+            Step::Move(_) | Step::MoveTable(_) | Step::Reshape(_) | Step::Default(_) => None,
         })
 }
 
@@ -358,4 +358,49 @@ markup = false
     );
     let e = rename_all(&mut doc("quality = { stereo = 1 }\n"), &EDITIONS).unwrap_err();
     assert!(format!("{e:#}").contains("must be a table"), "{e:#}");
+}
+
+#[test]
+fn where_lyrics_went_reads_as_the_outputs_writing_them_there() {
+    for (placement, to) in [
+        ("sidecar", vec![To::File]),
+        ("embedded", vec![To::Tag]),
+        ("both", vec![To::File, To::Tag]),
+    ] {
+        let mut d = doc(&format!(
+            "edition = 6\n[library]\n# Mine.\nlyrics = \"{placement}\"\n[lyrics]\nread = [\"en\"]\n"
+        ));
+        let moved = rename_all(&mut d, &EDITIONS).unwrap();
+        let said: Vec<String> = moved.iter().map(ToString::to_string).collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].starts_with(&format!(
+                "[library] `lyrics = \"{placement}\"` is `[[lyrics.out]] to = "
+            )),
+            "{said:?}"
+        );
+        let text = d.to_string();
+        assert!(!text.contains("# Mine."), "{text}");
+        assert!(
+            text.contains("# Where the lyrics a song takes are written"),
+            "{text}"
+        );
+        let read = read(&d).unwrap();
+        let wrote: Vec<To> = read.lyrics.out.iter().map(|o| o.to).collect();
+        assert_eq!(wrote, to, "{text}");
+        assert!(
+            rename_all(&mut d, &EDITIONS).unwrap().is_empty(),
+            "once is all"
+        );
+    }
+    let both = "[library]\nlyrics = \"both\"\n[lyrics]\nout = []\n";
+    let e = rename_all(&mut doc(both), &EDITIONS).unwrap_err();
+    assert!(format!("{e:#}").contains("keep [lyrics] `out`"), "{e:#}");
+    let e = rename_all(&mut doc("[library]\nlyrics = \"aside\"\n"), &EDITIONS).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("set [lyrics] `out` instead"),
+        "{e:#}"
+    );
+    let read = read(&doc("[library]\nlyrics = \"embedded\"\n")).unwrap();
+    assert_eq!(read.lyrics.out.len(), 1, "read old, it is reshaped");
 }

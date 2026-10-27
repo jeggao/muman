@@ -1,5 +1,5 @@
 //! The files a song has beside its audio file in the library, and their
-//! names: today its lyrics, a `.lrc`.
+//! names: its lyrics, in each file a `[[lyrics.out]]` names.
 //!
 //! Each is named by the song's audio path without its extension and a
 //! suffix of its own, so the song's files read as one in a folder, and a
@@ -17,41 +17,59 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::resolve::Plan;
+use crate::resolve::{LyricsFile, LyricsRef, Plan};
+use crate::settings::{Settings, To};
+use crate::state::Written;
 
-/// The suffix of a song's lyrics file.
-const LYRICS: &str = ".lrc";
-
-/// The lyrics file beside the song whose audio file is at `audio`.
+/// The file of lyrics `file` beside the song whose path without its
+/// extension is `stem`, which may itself hold a dot: the suffix the
+/// `[[lyrics.out]]` names, then its format's extension.
 #[must_use]
-pub fn lyrics(audio: &Path) -> PathBuf {
-    beside(&audio.with_extension(""), LYRICS)
+pub fn lyrics_file(stem: &Path, file: &LyricsFile) -> PathBuf {
+    beside(
+        stem,
+        &format!("{}.{}", file.suffix, file.format.extension()),
+    )
 }
 
-/// The lyrics file of the song whose path without its extension is
-/// `stem`, which may itself hold a dot.
-#[must_use]
-pub fn lyrics_of_stem(stem: &Path) -> PathBuf {
-    beside(stem, LYRICS)
-}
-
-/// The files `plan` writes beside the song at `audio`: its lyrics, where
-/// they go beside it.
+/// The files `plan` writes beside the song whose audio file is at
+/// `audio`.
 #[must_use]
 pub fn planned(audio: &Path, plan: &Plan) -> Vec<PathBuf> {
+    let stem = audio.with_extension("");
     plan.lyrics
         .iter()
-        .filter(|l| l.placement.sidecar())
-        .map(|_| lyrics(audio))
+        .flat_map(LyricsRef::files)
+        .map(|f| lyrics_file(&stem, &f))
         .collect()
 }
 
-/// Every name a file beside the song at `audio` may take, whether or not
-/// it has one: a file there that is not muman's keeps the song from
-/// being written.
+/// The files beside the song at `audio` that writing it may write or
+/// clear: those `plan` writes, and those `recorded` there as its last
+/// build's. A file of the user's own at any other name is not the song's
+/// to touch.
 #[must_use]
-pub fn names(audio: &Path) -> Vec<PathBuf> {
-    vec![lyrics(audio)]
+pub fn touched(audio: &Path, plan: &Plan, recorded: Option<&Written>) -> Vec<PathBuf> {
+    let mut files = planned(audio, plan);
+    for path in recorded.into_iter().flat_map(Written::sidecar_paths) {
+        if !files.contains(path) {
+            files.push(path.clone());
+        }
+    }
+    files
+}
+
+/// The bytes the longest tail after a song's stem takes: its audio's
+/// extension, or a file beside it, as `[[lyrics.out]]` names them.
+#[must_use]
+pub fn tail(settings: &Settings) -> usize {
+    settings
+        .lyrics
+        .out
+        .iter()
+        .filter(|o| o.to == To::File)
+        .map(|o| o.suffix.len() + 1 + o.format.extension().len())
+        .fold(crate::naming::AUDIO_TAIL, usize::max)
 }
 
 /// Where `sidecar`, beside the song at `from`, goes when the song moves
@@ -170,10 +188,17 @@ mod tests {
         let lrc = Path::new("Marlo Venn")
             .join("Vol. 2")
             .join("03 Lantern.lrc");
-        assert_eq!(lyrics(&song), lrc);
         assert_eq!(
-            lyrics_of_stem(&Path::new("A").join("01 Paper Comets, Vol. 2")),
-            Path::new("A").join("01 Paper Comets, Vol. 2.lrc")
+            lyrics_file(&song.with_extension(""), &LyricsFile::default()),
+            lrc
+        );
+        let en = LyricsFile {
+            suffix: ".en".into(),
+            ..LyricsFile::default()
+        };
+        assert_eq!(
+            lyrics_file(&Path::new("A").join("01 Paper Comets, Vol. 2"), &en),
+            Path::new("A").join("01 Paper Comets, Vol. 2.en.lrc")
         );
         let to = Path::new("Lantern Weather").join("Lantern.opus");
         assert_eq!(

@@ -574,7 +574,8 @@ pub enum Command {
         #[arg(long, value_name = "TEMPLATE")]
         template: Option<String>,
 
-        /// Where lyrics go, as `[library] lyrics`.
+        /// Where lyrics go: a `.lrc` beside each song (sidecar), inside it
+        /// (embedded) or both, as `[[lyrics.out]]` says.
         #[arg(long, value_name = "WHERE", value_parser = ["sidecar", "embedded", "both"])]
         lyrics: Option<String>,
 
