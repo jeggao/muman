@@ -160,7 +160,8 @@ Every flag is in the [command reference](docs/cli.md).
 
 - [Guide](docs/guide.md): the home, the song list and its sources.
 - [Making the library](docs/library.md): how the best of each is picked,
-  lookups, queries and editing, status, export, hooks.
+  lookups, status, export, hooks.
+- [Songs](docs/songs.md): queries, changing songs, duplicates.
 - [Configuration](docs/configuration.md): folders, programs, the
   settings in `songs.toml`, the path template and safe names.
 - [Audio](docs/audio.md): codecs, encoding and loudness.

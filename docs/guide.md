@@ -6,8 +6,8 @@ sources it may be made from. muman measures every source, picks the best
 audio, cover, lyrics and tags among them, and writes the song once into
 the library as a tagged file, in its source's codec or one you choose.
 This page is the home, the song list and its sources; how the best of
-each is picked, the lookups, and the commands that change, report on and
-export the library are in [making the library](library.md). Where the
+each is picked, the lookups, reports and export are in [making the
+library](library.md), and changing songs in [songs](songs.md). Where the
 home and the library are, which programs run, and the settings that
 shape the library are in [configuration](configuration.md); every
 command and flag is in [the command reference](cli.md).
