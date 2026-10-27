@@ -46,6 +46,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   rather than "Go ahead?"; `purge` and `undo` ask by name too.
   `remove --purge` that trashes files of your own takes the count of
   songs typed.
+- **A new source that may be a listed song is shown beside it** before
+  `add` or `sync` asks: the name, album, length and audio of each and
+  how alike they sound, then "Its own song" or "Add to" the song, keeping
+  it apart first.
 - **Lyrics are told apart by their role in the song:** the original,
   in the language it is sung in; a romanization, in that language's
   Latin letters; or a translation into a language you read. Before,
