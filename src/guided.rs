@@ -66,6 +66,7 @@ pub fn edit<W: Write>(
     let ids: Vec<SourceKey> = (picked.iter())
         .filter_map(|n| read.manifest.songs[*n].id().cloned())
         .collect();
+    let album = shared_album(&read, &picked);
     let chosen = {
         let m = &read.manifest;
         let resolver = Resolver::new(m, &m.settings, &read.state, &dirs.library)?;
@@ -74,10 +75,12 @@ pub fn edit<W: Write>(
             picked: &picked,
             resolver,
             pending: Vec::new(),
+            album: album.clone(),
+            on_album: Vec::new(),
         };
         session.run(p, out)?
     };
-    let Some(chosen) = chosen.filter(|c| !c.is_empty()) else {
+    let Some((chosen, on_album)) = chosen.filter(|(c, a)| !c.is_empty() || !a.is_empty()) else {
         crate::ui::info(out, "Nothing changed")?;
         return Ok(false);
     };
@@ -86,28 +89,54 @@ pub fn edit<W: Write>(
             .filter_map(|id| read.manifest.songs.iter().position(|s| s.id() == Some(id)))
             .collect();
         let songs = change::rewrite(&read, &picked, &chosen, out)?;
-        if songs.is_empty() {
+        let held = album.as_ref().and_then(|a| read.manifest.album(a)).cloned();
+        let album_edit = match (&held, on_album.is_empty()) {
+            (Some(a), false) => {
+                crate::ui::line(out, &format!("  ~ the album {}", album_name(a)))?;
+                for (tag, values) in &on_album {
+                    crate::ui::line(out, &format!("    {tag}: {}", show(values)))?;
+                }
+                Some(Edit::AlbumTags {
+                    source: a.source.clone(),
+                    tags: on_album.clone(),
+                })
+            }
+            _ => None,
+        };
+        if songs.is_empty() && album_edit.is_none() {
             crate::ui::info(out, "Nothing changed: each song is so already")?;
             return Ok(false);
         }
-        change::say_changed(songs.len(), out)?;
+        if !songs.is_empty() {
+            change::say_changed(songs.len(), out)?;
+        }
         let whose = match picked.as_slice() {
             [one] => read.views[*one].name(),
-            _ => change::counted(songs.len(), "song"),
+            _ => change::counted(picked.len(), "song"),
         };
         let ask = Ask::YesNo(format!(
             "Save {} to {whose}?",
-            change::counted(chosen.len(), "change")
+            change::counted(chosen.len() + on_album.len(), "change")
         ));
         if !change::confirmed(confirm, &ask, Some(&mut *p), out)? {
             return Ok(false);
         }
         let expected = read.songs(&picked);
-        read.manifest.edit(Edit::Rewrite {
-            songs,
-            new: Vec::new(),
-        });
-        if read.manifest.save_if_unchanged(&expected)?.is_empty() {
+        if !songs.is_empty() {
+            read.manifest.edit(Edit::Rewrite {
+                songs,
+                new: Vec::new(),
+            });
+        }
+        if let Some(edit) = album_edit {
+            read.manifest.edit(edit);
+        }
+        let albums: Vec<_> = held.into_iter().collect();
+        if read
+            .manifest
+            .save_if_unchanged_with(&expected, &albums)?
+            .is_empty()
+        {
             return Ok(true);
         }
         read.manifest.discard();
@@ -124,8 +153,18 @@ pub fn edit<W: Write>(
 enum Item {
     Field(String),
     Pin(&'static str),
+    Offset,
+    Another,
     Review,
 }
+
+/// The fields an album's tags set for its songs, as a new album lists
+/// them.
+const ALBUM_FIELDS: [&str; 4] = ["album", "album_artist", "date", "genre"];
+
+/// What was chosen: the assignments to the songs, and the tags set on
+/// the album they share.
+type Chosen = (Vec<Assign>, Vec<(String, Vec<String>)>);
 
 /// The songs being changed, and what was chosen for them so far.
 struct Session<'a> {
@@ -134,12 +173,16 @@ struct Session<'a> {
     resolver: Resolver<'a>,
     /// One assignment a field or pin, the latest chosen.
     pending: Vec<Assign>,
+    /// The album every song picked is on, if one is.
+    album: Option<SourceKey>,
+    /// Tags chosen for that album rather than for each song.
+    on_album: Vec<(String, Vec<String>)>,
 }
 
 impl Session<'_> {
     /// Ask until the user reviews what was chosen, `None` when they leave
     /// without saving.
-    fn run<W: Write>(&mut self, p: &mut dyn Prompter, out: &mut W) -> Result<Option<Vec<Assign>>> {
+    fn run<W: Write>(&mut self, p: &mut dyn Prompter, out: &mut W) -> Result<Option<Chosen>> {
         let first = self.picked[0];
         let view = &self.read.views[first];
         let head = match self.picked {
@@ -149,22 +192,30 @@ impl Session<'_> {
         crate::ui::info(out, &head)?;
         loop {
             let (items, labels) = self.menu();
-            let question = match self.pending.len() {
+            let count = self.pending.len() + self.on_album.len();
+            let question = match count {
                 0 => "What to change?".to_string(),
                 n => format!("What to change? ({} chosen)", change::counted(n, "change")),
             };
             match p.select(&question, &labels)?.map(|i| &items[i]) {
-                None if self.pending.is_empty() => return Ok(None),
+                None if count == 0 => return Ok(None),
                 None => {
-                    let leave = format!(
-                        "Leave without saving {}?",
-                        change::counted(self.pending.len(), "change")
-                    );
+                    let leave =
+                        format!("Leave without saving {}?", change::counted(count, "change"));
                     if p.ask(&leave)? {
                         return Ok(None);
                     }
                 }
-                Some(Item::Review) => return Ok(Some(std::mem::take(&mut self.pending))),
+                Some(Item::Review) => {
+                    let chosen = std::mem::take(&mut self.pending);
+                    return Ok(Some((chosen, std::mem::take(&mut self.on_album))));
+                }
+                Some(Item::Offset) => self.offset(p)?,
+                Some(Item::Another) => {
+                    if let Some(name) = another(p)? {
+                        self.field(&name, p, out)?;
+                    }
+                }
                 Some(Item::Field(name)) => {
                     let name = name.clone();
                     self.field(&name, p, out)?;
@@ -224,13 +275,19 @@ impl Session<'_> {
         let mut items = Vec::new();
         let mut labels = Vec::new();
         for name in names {
-            let (value, from) = match self.chosen(&name) {
-                Some(Assign::Tag(_, v)) if v.is_empty() => (
+            let key = tags::vorbis_key(&name);
+            let on_album = self
+                .on_album
+                .iter()
+                .find(|(n, _)| tags::vorbis_key(n) == key);
+            let (value, from) = match (on_album, self.chosen(&name)) {
+                (Some((_, v)), _) => (show(v), "✎ to be set on the album".to_string()),
+                (None, Some(Assign::Tag(_, v))) if v.is_empty() => (
                     "what the sources offer".to_string(),
                     "✎ to be cleared".to_string(),
                 ),
-                Some(Assign::Tag(_, v)) => (show(v), "✎ to be set".to_string()),
-                _ => self.across(&tags::vorbis_key(&name)),
+                (None, Some(Assign::Tag(_, v))) => (show(v), "✎ to be set".to_string()),
+                _ => self.across(&key),
             };
             labels.push(line(&name, wide, &value, &from));
             items.push(Item::Field(name));
@@ -263,6 +320,18 @@ impl Session<'_> {
                 items.push(Item::Pin(pin));
             }
         }
+        let offset = match self.chosen("lyrics_offset") {
+            Some(Assign::Offset(Some(ms))) => (crate::units::Time(*ms).exact(), "✎ to be set"),
+            Some(Assign::Offset(None)) => ("none".to_string(), "✎ to be cleared"),
+            _ => match self.read.manifest.songs[self.picked[0]].lyrics_offset_ms {
+                0 => ("none".to_string(), ""),
+                ms => (crate::units::Time(ms).exact(), ""),
+            },
+        };
+        labels.push(line("lyrics_offset", wide, &offset.0, offset.1));
+        items.push(Item::Offset);
+        labels.push("Another tag…".to_string());
+        items.push(Item::Another);
         labels.push("Review and save".to_string());
         items.push(Item::Review);
         (items, labels)
@@ -350,10 +419,11 @@ impl Session<'_> {
         };
         if i == 0 {
             self.pending.retain(|a| a.name() != name);
+            self.on_album.retain(|(n, _)| tags::vorbis_key(n) != key);
             return Ok(());
         }
-        if let Some(a) = picks[i].clone() {
-            self.choose(a);
+        if let Some(Assign::Tag(_, values)) = picks[i].clone() {
+            self.set(name, values, p)?;
         } else if labels[i] == TYPE {
             let named = name.to_string();
             let check: Check = Rc::new(move |typed: &str| {
@@ -361,7 +431,7 @@ impl Session<'_> {
             });
             let help = "several values are parted by \"; \"; enter sets it by hand, esc goes back";
             if let Some(typed) = p.text_with(&format!("{name}:"), help, &now.join("; "), check)? {
-                self.choose(Assign::Tag(name.to_string(), split(&typed)));
+                self.set(name, split(&typed), p)?;
             }
         } else if labels[i] == CHOOSE {
             let ticked: Vec<usize> = (0..candidates.len())
@@ -379,7 +449,67 @@ impl Session<'_> {
                 }
                 values.push(more.trim().to_string());
             }
-            self.choose(Assign::Tag(name.to_string(), values));
+            self.set(name, values, p)?;
+        }
+        Ok(())
+    }
+
+    /// Set `name` to `values`: on each song picked, or, for a field an
+    /// album sets and songs all on one album, on the album when the user
+    /// says so, clearing each song's own value, which would override it.
+    fn set(&mut self, name: &str, values: Vec<String>, p: &mut dyn Prompter) -> Result<()> {
+        let key = tags::vorbis_key(name);
+        let albums = ALBUM_FIELDS.iter().any(|f| tags::vorbis_key(f) == key);
+        let held = (self.album.as_ref()).and_then(|a| self.read.manifest.album(a));
+        if let Some(album) = held.filter(|_| albums && !values.is_empty()) {
+            let items = [
+                format!(
+                    "On each of the {} picked, by hand",
+                    change::counted(self.picked.len(), "song")
+                ),
+                format!(
+                    "On the album {}, for its songs and any added later",
+                    album_name(album)
+                ),
+            ];
+            let question = format!("Set {name} to {} where?", show(&values));
+            match p.select(&question, &items)? {
+                None => return Ok(()),
+                Some(1) => {
+                    self.on_album.retain(|(n, _)| tags::vorbis_key(n) != key);
+                    self.on_album.push((name.to_string(), values));
+                    self.choose(Assign::Tag(name.to_string(), Vec::new()));
+                    return Ok(());
+                }
+                Some(_) => {}
+            }
+        }
+        self.on_album.retain(|(n, _)| tags::vorbis_key(n) != key);
+        self.choose(Assign::Tag(name.to_string(), values));
+        Ok(())
+    }
+
+    /// Ask for the lyrics offset of the songs picked, as a time.
+    fn offset(&mut self, p: &mut dyn Prompter) -> Result<()> {
+        let ms = self.read.manifest.songs[self.picked[0]].lyrics_offset_ms;
+        let now = if ms == 0 {
+            String::new()
+        } else {
+            crate::units::Time(ms).exact()
+        };
+        let check: Check = Rc::new(|typed: &str| {
+            let typed = typed.trim();
+            (!typed.is_empty())
+                .then(|| typed.parse::<crate::units::Time>().err())
+                .flatten()
+        });
+        let help = "a time, as 120 ms, or -0.5 s for earlier; nothing for none";
+        if let Some(typed) = p.text_with("lyrics_offset:", help, &now, check)? {
+            let ms = (!typed.trim().is_empty())
+                .then(|| typed.trim().parse::<crate::units::Time>().map(|t| t.0))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.choose(Assign::Offset(ms));
         }
         Ok(())
     }
@@ -463,6 +593,46 @@ impl Session<'_> {
         }
         Ok(())
     }
+}
+
+/// The name of a tag to set that the menu does not list, as typed;
+/// `None` when the user goes back.
+fn another(p: &mut dyn Prompter) -> Result<Option<String>> {
+    let check: Check = Rc::new(|typed: &str| {
+        let name = typed.trim();
+        if name.is_empty() {
+            return None;
+        }
+        if Field::named(name).is_some_and(Field::is_loudness) {
+            return Some(format!(
+                "{name} is measured by muman and written over on every sync"
+            ));
+        }
+        tags::bad_value(name, "")
+    });
+    let help = "one of muman's tags, as composer or isrc, or a name of your own";
+    let typed = p.text_with("Tag name:", help, "", check)?;
+    Ok(typed
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty()))
+}
+
+/// The album every song at `picked` is on, if they share one.
+fn shared_album(read: &Read, picked: &[usize]) -> Option<SourceKey> {
+    let mut albums = picked
+        .iter()
+        .map(|n| read.manifest.songs[*n].album.as_ref());
+    let first = albums.next()??;
+    albums.all(|a| a == Some(first)).then(|| first.clone())
+}
+
+/// An album as the user knows it: its name, else its key.
+fn album_name(album: &crate::manifest::Album) -> String {
+    (album.tags.iter())
+        .find(|(k, v)| {
+            tags::vorbis_key(k) == Field::Album.vorbis() && !v.is_empty() && !v[0].is_empty()
+        })
+        .map_or_else(|| album.source.to_string(), |(_, v)| v[0].clone())
 }
 
 /// Where a written tag came from, in words.

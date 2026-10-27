@@ -41,9 +41,14 @@ nothing, or, negated, every song.
   lists each field with the value written and where it came from; a
   field opened shows what each source offers, to keep, take, type over,
   choose among or clear, and a pin is picked among the song's sources by
-  what was measured. Nothing is saved until "Review and save", which
-  says each change and asks; a song changed meanwhile gets the changes
-  applied to it as it is then.
+  what was measured. Several songs are changed together, a field's
+  values counted across them; for songs all on one album, an album's
+  field, as genre or date, can be set on the album instead, for its
+  songs and any added later, clearing each song's own. The lyrics
+  offset is typed as a time, and "Another tag…" names any other.
+  Nothing is saved until "Review and save", which says each change and
+  asks; a song changed meanwhile gets the changes applied to it as it
+  is then.
 - **`edit`** opens the songs' entries in `$VISUAL` or `$EDITOR`. Delete
   a table to remove its song, move a key to another table to join the
   two, or into a new table without an `id` to split it off. A file with
