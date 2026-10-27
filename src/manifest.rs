@@ -272,6 +272,9 @@ pub enum Edit {
     /// Tags set in the `tags` of the song listing `key`, over any it
     /// sets already under another spelling of their names.
     Tag { key: SourceKey, tags: Tags },
+    /// Tags set in the `tags` of the album `source` names, as
+    /// [`Edit::Tag`] sets a song's.
+    AlbumTags { source: SourceKey, tags: Tags },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: String },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
@@ -608,14 +611,20 @@ impl Manifest {
 
     /// [`Self::save`] under a lock the caller already holds.
     pub fn save_locked(&mut self, lock: &Lock) -> Result<()> {
-        self.save_expecting(lock, &[]).map(drop)
+        self.save_expecting(lock, &[], &[]).map(drop)
     }
 
     /// Apply what was recorded only while each song in `expected` is
-    /// still listed as it was, by any of its keys. Returns the first key
-    /// of each that changed meanwhile; when any did, nothing is written
-    /// and the edits are kept.
-    pub fn save_expecting(&mut self, _lock: &Lock, expected: &[Song]) -> Result<Vec<SourceKey>> {
+    /// still listed as it was, by any of its keys, and each album in
+    /// `albums` as it was. Returns the first key of each song, and the
+    /// source of each album, that changed meanwhile; when any did,
+    /// nothing is written and the edits are kept.
+    pub fn save_expecting(
+        &mut self,
+        _lock: &Lock,
+        expected: &[Song],
+        albums: &[Album],
+    ) -> Result<Vec<SourceKey>> {
         if self.edits.is_empty() && !self.stale {
             return Ok(Vec::new());
         }
@@ -631,6 +640,11 @@ impl Manifest {
                     .is_some_and(|s| s == *e)
             })
             .filter_map(|e| e.id().cloned())
+            .chain(
+                (albums.iter())
+                    .filter(|e| !now.albums.iter().any(|a| a == *e))
+                    .map(|e| e.source.clone()),
+            )
             .collect();
         if !changed.is_empty() {
             return Ok(changed);
@@ -662,8 +676,17 @@ impl Manifest {
 
     /// [`Self::save_expecting`] under a lock of its own.
     pub fn save_if_unchanged(&mut self, expected: &[Song]) -> Result<Vec<SourceKey>> {
+        self.save_if_unchanged_with(expected, &[])
+    }
+
+    /// [`Self::save_expecting`] under a lock of its own, albums too.
+    pub fn save_if_unchanged_with(
+        &mut self,
+        expected: &[Song],
+        albums: &[Album],
+    ) -> Result<Vec<SourceKey>> {
         let lock = Lock::folder(&self.dir)?;
-        self.save_expecting(&lock, expected)
+        self.save_expecting(&lock, expected, albums)
     }
 
     /// Whether `edits` would leave a song list that reads, applied to the
@@ -1305,6 +1328,18 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             if let Some(song) = song {
                 set_tags(song, tags);
             }
+        }
+        Edit::AlbumTags { source, tags } => {
+            let text = source.to_string();
+            let album = doc
+                .get_mut("album")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|list| {
+                    list.iter_mut()
+                        .find(|t| t.get("source").and_then(Item::as_str) == Some(text.as_str()))
+                })
+                .with_context(|| format!("no album is listed by {text}"))?;
+            set_tags(album, tags);
         }
         Edit::Remove { key, note } => {
             let Some(song) = take(doc, "song", key) else {

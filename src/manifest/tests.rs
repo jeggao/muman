@@ -939,3 +939,67 @@ fn a_key_its_site_takes_no_such_id_of_is_refused_by_its_song() {
         "{e:#}"
     );
 }
+
+const ALBUM: &str = "[[album]]\nsource = \"youtube.com:playlist/PLvid0000001\"\ntracks = 9\ntags = { album = \"Lantern Weather\", genre = \"\" }\n\n[[song]]\nsources = [\"youtube.com:vid00000001\"]\nalbum = \"youtube.com:playlist/PLvid0000001\"\ntrack = 1\n";
+
+#[test]
+fn an_album_s_tags_are_set_unless_the_album_changed_meanwhile() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), ALBUM);
+    let genre = |values: &[&str]| {
+        vec![(
+            "genre".to_string(),
+            values.iter().map(ToString::to_string).collect(),
+        )]
+    };
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let album = m.albums[0].clone();
+    m.edit(Edit::AlbumTags {
+        source: album.source.clone(),
+        tags: genre(&["Folk"]),
+    });
+    assert_eq!(
+        m.save_if_unchanged_with(&[], std::slice::from_ref(&album))
+            .unwrap(),
+        Vec::<SourceKey>::new()
+    );
+    let again = Manifest::load(dir.path()).unwrap();
+    let set = |m: &Manifest| {
+        m.albums[0]
+            .tags
+            .iter()
+            .find(|(k, _)| k == "genre")
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        set(&again),
+        Some(vec!["Folk".to_string()]),
+        "{}",
+        text(dir.path())
+    );
+
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let before = m.albums[0].clone();
+    std::fs::write(
+        dir.path().join(MANIFEST),
+        text(dir.path()).replace("Lantern Weather", "Paper Comets"),
+    )
+    .unwrap();
+    m.edit(Edit::AlbumTags {
+        source: before.source.clone(),
+        tags: genre(&["Ambient"]),
+    });
+    assert_eq!(
+        m.save_if_unchanged_with(&[], &[before]).unwrap(),
+        [album.source]
+    );
+    assert_eq!(
+        set(&Manifest::load(dir.path()).unwrap()),
+        Some(vec!["Folk".to_string()])
+    );
+    let none = Edit::AlbumTags {
+        source: yt("playlist/PLvid0000009"),
+        tags: genre(&["Folk"]),
+    };
+    assert!(m.trial(&[none]).is_err());
+}

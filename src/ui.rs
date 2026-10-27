@@ -185,11 +185,26 @@ pub trait Prompter {
     /// or types nothing.
     fn text(&mut self, question: &str, help: &str) -> io::Result<Option<String>>;
 
+    /// A line of text that starts as `initial`, `help` beneath it, taken
+    /// only once `check` finds nothing wrong with it, else asked again
+    /// with what `check` says. `None` when the user cancels; `Some("")`
+    /// when the line is emptied.
+    fn text_with(
+        &mut self,
+        question: &str,
+        help: &str,
+        initial: &str,
+        check: Check,
+    ) -> io::Result<Option<String>>;
+
     /// The columns an item may take on the screen.
     fn width(&self) -> usize {
         80
     }
 }
+
+/// What is wrong with a line typed, or `None` when it is taken.
+pub type Check = std::rc::Rc<dyn Fn(&str) -> Option<String>>;
 
 #[derive(Debug, Default)]
 pub struct InquirePrompter;
@@ -247,6 +262,32 @@ impl Prompter for InquirePrompter {
         })
         .map_err(io::Error::other)?;
         Ok(typed.filter(|t| !t.trim().is_empty()))
+    }
+
+    fn text_with(
+        &mut self,
+        question: &str,
+        help: &str,
+        initial: &str,
+        check: Check,
+    ) -> io::Result<Option<String>> {
+        let (question, help, initial) = (printable(question), printable(help), printable(initial));
+        let validator = move |typed: &str| {
+            Ok(match check(typed) {
+                Some(why) => {
+                    inquire::validator::Validation::Invalid(printable(&why).into_owned().into())
+                }
+                None => inquire::validator::Validation::Valid,
+            })
+        };
+        crate::progress::suspend(|| {
+            inquire::Text::new(&question)
+                .with_help_message(&help)
+                .with_initial_value(&initial)
+                .with_validator(validator)
+                .prompt_skippable()
+        })
+        .map_err(io::Error::other)
     }
 
     fn width(&self) -> usize {
@@ -363,6 +404,29 @@ impl Prompter for MockPrompter {
             .unwrap_or_else(|| panic!("MockPrompter ran out of texts at {question:?}")))
     }
 
+    fn text_with(
+        &mut self,
+        question: &str,
+        _: &str,
+        initial: &str,
+        check: Check,
+    ) -> io::Result<Option<String>> {
+        self.heard(&format!("{question} [{initial}]"), &[]);
+        loop {
+            let typed = self
+                .texts
+                .pop_front()
+                .unwrap_or_else(|| panic!("MockPrompter ran out of texts at {question:?}"));
+            let Some(typed) = typed else {
+                return Ok(None);
+            };
+            match check(&typed) {
+                Some(why) => self.asked.push(format!("refused: {why}")),
+                None => return Ok(Some(typed)),
+            }
+        }
+    }
+
     fn width(&self) -> usize {
         self.width.unwrap_or(80)
     }
@@ -433,6 +497,21 @@ mod tests {
         let mut out = Vec::new();
         trace(&mut out, "x=1").unwrap();
         assert_eq!(plain(&String::from_utf8(out).unwrap()), "trace: x=1\n");
+    }
+
+    #[test]
+    fn a_line_checked_is_asked_again_until_it_is_taken() {
+        let mut p = MockPrompter::new();
+        p.push_text(Some("spring"))
+            .push_text(Some("2019"))
+            .push_text(None);
+        let check: Check = std::rc::Rc::new(|t: &str| {
+            (!t.chars().all(|c| c.is_ascii_digit())).then(|| format!("{t} is no year"))
+        });
+        let typed = p.text_with("Date:", "", "2018", check.clone()).unwrap();
+        assert_eq!(typed.as_deref(), Some("2019"));
+        assert_eq!(p.asked, ["Date: [2018]", "refused: spring is no year"]);
+        assert_eq!(p.text_with("Date:", "", "", check).unwrap(), None);
     }
 
     #[test]
