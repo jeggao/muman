@@ -280,13 +280,8 @@ pub fn edit<W: Write>(
         return Err(change::Refused("Editing needs a terminal".into()).into());
     }
     let mut read = Read::new(dirs, terms)?;
-    let picked = change::pick(
-        &read.views,
-        &read.query,
-        all || read.query.is_empty(),
-        "edit",
-        change::reborrow(&mut prompter),
-    )?;
+    let all = all || read.query.is_empty();
+    let picked = read.pick(all, "edit", change::reborrow(&mut prompter))?;
     if picked.is_empty() {
         crate::ui::info(out, "Nothing to edit")?;
         return Ok(false);

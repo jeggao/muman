@@ -38,6 +38,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Songs to pick are told apart, and a change asks by name.** When a
+  query matches several songs, each is listed by its album, track,
+  length, audio, cover and lyrics, where they differ, and none is
+  picked to begin with. A change marks each song `−`, `~` or `+`, counts
+  what it does and what `undo` puts back, and asks "Remove 2 songs?"
+  rather than "Go ahead?"; `purge` and `undo` ask by name too.
+  `remove --purge` that trashes files of your own takes the count of
+  songs typed.
 - **Lyrics are told apart by their role in the song:** the original,
   in the language it is sung in; a romanization, in that language's
   Latin letters; or a translation into a language you read. Before,

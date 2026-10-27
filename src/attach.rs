@@ -310,11 +310,6 @@ impl Judged {
     }
 }
 
-fn minutes(ms: i64) -> String {
-    let s = (ms + 500) / 1000;
-    format!("{}:{:02}", s / 60, s % 60)
-}
-
 fn thousandths(d: f64) -> i64 {
     (d * 1000.0).round() as i64
 }
@@ -654,8 +649,8 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                 already: false,
                 reasons: vec![format!(
                     "its last line is at {}, past the song's {}",
-                    minutes(last),
-                    minutes(length)
+                    crate::rows::minutes(last),
+                    crate::rows::minutes(length)
                 )],
             };
         }
@@ -671,8 +666,8 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                     already: false,
                     reasons: vec![format!(
                         "it says it is {} long, the song {}",
-                        minutes(stated),
-                        minutes(length)
+                        crate::rows::minutes(stated),
+                        crate::rows::minutes(length)
                     )],
                 };
             }
@@ -996,7 +991,7 @@ impl<W: Write> Asking<'_, '_, W> {
             let _ = write!(line, " · {}", c.album);
         }
         if let Some(ms) = c.length_ms {
-            let _ = write!(line, " · {}", minutes(ms));
+            let _ = write!(line, " · {}", crate::rows::minutes(ms));
         }
         let mut why: Vec<String> = j.names().map(String::from).into_iter().collect();
         why.extend(j.reasons.iter().cloned());

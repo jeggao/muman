@@ -628,7 +628,7 @@ impl Layout {
 
 /// The terminal's width in columns, or a common width when stderr is no
 /// terminal.
-fn columns() -> usize {
+pub(crate) fn columns() -> usize {
     terminal_size::terminal_size_of(io::stderr()).map_or(80, |(w, _)| usize::from(w.0))
 }
 

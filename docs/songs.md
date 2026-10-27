@@ -68,13 +68,20 @@ muman list | fzf -m -d '\t' --with-nth 2.. --accept-nth 1 | xargs muman remove -
 muman set artist:="Marlo Venn" album="Lantern Weather"
 ```
 
-Every change says what it does first, each tag as `old → new`:
+Songs to pick among are listed by what tells them apart: album, track,
+length, audio, cover, lyrics and key, each shown only where the songs
+differ, and a name they all share said in the question. None is picked
+to begin with. Every change then says what it does first, each song
+marked `−` when it leaves the list, `~` when it changes and `+` when it
+comes back, each tag as `old → new`, with a count and what `undo` puts
+back, and asks by name, as "Remove 2 songs?":
 
 | Situation | On a terminal | Without one |
 |---|---|---|
 | The query matches nothing | Refused, exit 5 | Refused, exit 5 |
 | It matches several songs | Picked from a list | Refused unless `--all`, exit 5 |
 | The change itself | Asked, unless `-y` | Made only with `-y`, else exit 5 |
+| `remove --purge` trashing files of your own | The count of songs typed, unless `-y` | Made only with `-y`, else exit 5 |
 
 `edit` takes no `-y`: it needs a terminal for its editor, `$VISUAL`,
 else `$EDITOR`, else `vi`, or Notepad on Windows. A query of keys alone

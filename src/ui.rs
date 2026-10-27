@@ -184,6 +184,11 @@ pub trait Prompter {
     /// A line of text, `help` beneath it; `None` when the user cancels
     /// or types nothing.
     fn text(&mut self, question: &str, help: &str) -> io::Result<Option<String>>;
+
+    /// The columns an item may take on the screen.
+    fn width(&self) -> usize {
+        80
+    }
 }
 
 #[derive(Debug, Default)]
@@ -243,6 +248,10 @@ impl Prompter for InquirePrompter {
         .map_err(io::Error::other)?;
         Ok(typed.filter(|t| !t.trim().is_empty()))
     }
+
+    fn width(&self) -> usize {
+        crate::progress::columns()
+    }
 }
 
 /// Each of `items` made [`printable`], in order, so a pick's index is
@@ -262,6 +271,10 @@ pub struct MockPrompter {
     texts: std::collections::VecDeque<Option<String>>,
     /// Every question asked, in order, each with the items it offered.
     pub asked: Vec<String>,
+    /// The items ticked to begin with, for each `choose`, in order.
+    pub ticked: Vec<Vec<usize>>,
+    /// The width it says items may take; none set is the trait's own.
+    width: Option<usize>,
 }
 
 #[cfg(test)]
@@ -294,6 +307,12 @@ impl MockPrompter {
         self
     }
 
+    #[must_use]
+    pub fn with_width(mut self, width: usize) -> Self {
+        self.width = Some(width);
+        self
+    }
+
     fn heard(&mut self, question: &str, items: &[String]) {
         let mut asked = question.to_string();
         for item in items {
@@ -314,8 +333,14 @@ impl Prompter for MockPrompter {
             .unwrap_or_else(|| panic!("MockPrompter ran out of answers at {question:?}")))
     }
 
-    fn choose(&mut self, question: &str, items: &[String], _: &[usize]) -> io::Result<Vec<usize>> {
+    fn choose(
+        &mut self,
+        question: &str,
+        items: &[String],
+        picked: &[usize],
+    ) -> io::Result<Vec<usize>> {
         self.heard(question, items);
+        self.ticked.push(picked.to_vec());
         Ok(self
             .choices
             .pop_front()
@@ -336,6 +361,10 @@ impl Prompter for MockPrompter {
             .texts
             .pop_front()
             .unwrap_or_else(|| panic!("MockPrompter ran out of texts at {question:?}")))
+    }
+
+    fn width(&self) -> usize {
+        self.width.unwrap_or(80)
     }
 }
 
