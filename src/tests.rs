@@ -1848,6 +1848,69 @@ fn edit_shows_where_each_tag_comes_from_and_hides_what_was_held() {
 }
 
 #[test]
+fn set_with_a_query_alone_changes_a_song_step_by_step() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(s.refused(&["set", "song"]).contains("step by step"));
+
+    // The menu: the six tags a song list starts with, the track number
+    // the source offers, the three pins, then the review.
+    let (title, date, audio, review) = (0, 5, 7, 10);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(title)).push_select(Some(1));
+    p.push_text(Some("Tide"));
+    p.push_select(Some(date)).push_select(Some(1));
+    p.push_text(Some("spring 2019")).push_text(Some("2019"));
+    p.push_select(Some(audio)).push_select(Some(1));
+    p.push_select(Some(review));
+    let text = s
+        .trusting(&flacs(), &["set", "song"], Some(&mut p))
+        .unwrap();
+    assert!(p.asked[0].starts_with("What to change?"), "{:?}", p.asked);
+    assert!(p.asked[0].contains("\n  title "), "{:?}", p.asked);
+    assert!(p.asked[0].ends_with("\n  Review and save"), "{:?}", p.asked);
+    assert!(
+        p.asked.contains(&"title: [Song]".to_string()),
+        "{:?}",
+        p.asked
+    );
+    assert!(
+        p.asked
+            .iter()
+            .any(|a| a.starts_with("refused: date = \"spring 2019\"")),
+        "{:?}",
+        p.asked
+    );
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Save 3 changes to Song — Artist?"),
+        "{text}"
+    );
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(list.contains("tags.title = \"Tide\""), "{list}");
+    assert!(list.contains("tags.date = \"2019\""), "{list}");
+    assert!(list.contains("audio = \"manual:a.flac\""), "{list}");
+
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(title)).push_select(Some(1));
+    p.push_text(Some("Ember Road"));
+    p.push_select(None);
+    s.trusting(&flacs(), &["set", "manual:a.flac"], Some(&mut p))
+        .unwrap();
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Leave without saving 1 change?")
+    );
+    let after = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        after.contains("tags.title = \"Tide\""),
+        "leaving saves nothing: {after}"
+    );
+}
+
+#[test]
 fn sync_on_a_new_home_writes_the_song_list_to_edit() {
     let s = Setup::new();
     let (ok, text) = s.run(&flacs(), &["sync"]);

@@ -160,7 +160,8 @@ const HEADER_START: &str = "# muman's song list";
 pub const NEW: &str = include_str!("manifest/new.toml");
 
 /// The tags every song's `tags.<name>` keys offer to fill in.
-const TAG_TEMPLATE: [&str; 6] = ["title", "artist", "album", "album_artist", "genre", "date"];
+pub(crate) const TAG_TEMPLATE: [&str; 6] =
+    ["title", "artist", "album", "album_artist", "genre", "date"];
 
 /// Tags by name, each with its values.
 pub type Tags = Vec<(String, Vec<String>)>;

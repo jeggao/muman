@@ -28,6 +28,7 @@ pub mod ffmpeg;
 pub mod fingerprint;
 pub mod fit;
 pub mod given;
+pub mod guided;
 pub mod held;
 pub mod history;
 pub mod hooks;

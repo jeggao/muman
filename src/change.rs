@@ -528,7 +528,7 @@ pub fn restore<W: Write>(
 
 /// One `NAME=VALUE` or `NAME!` of `set`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Assign {
+pub(crate) enum Assign {
     Tag(String, Vec<String>),
     Pin(&'static str, Option<String>),
     Offset(Option<i64>),
@@ -622,7 +622,7 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
 
 impl Assign {
     /// The tag, pin or setting it changes.
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Self::Tag(name, _) => name,
             Self::Pin(pin, _) => pin,
@@ -631,7 +631,7 @@ impl Assign {
     }
 
     /// How it changes `view`'s song, in words.
-    fn describe(&self, view: &View) -> String {
+    pub(crate) fn describe(&self, view: &View) -> String {
         match self {
             Self::Tag(name, values) => {
                 let now = view.values(name).join("; ");
@@ -655,7 +655,7 @@ impl Assign {
         }
     }
 
-    fn apply(&self, table: &mut Table, song: &Song) -> Result<()> {
+    pub(crate) fn apply(&self, table: &mut Table, song: &Song) -> Result<()> {
         match self {
             Self::Tag(name, values) => manifest::set_tags(table, &[(name.clone(), values.clone())]),
             Self::Pin(pin, Some(v)) if v == "false" => {
@@ -688,6 +688,60 @@ impl Assign {
     }
 }
 
+/// The songs at `picked` with `assigns` applied, each said to `out` as
+/// it changes; a song already so is left out.
+pub(crate) fn rewrite<W: Write>(
+    read: &Read,
+    picked: &[usize],
+    assigns: &[Assign],
+    out: &mut W,
+) -> Result<Vec<(SourceKey, Rewritten)>> {
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.manifest.songs[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
+    let mut songs = Vec::new();
+    for n in picked {
+        let view = &read.views[*n];
+        let song = &read.manifest.songs[*n];
+        let id = song.id().context("a song lists no source")?.clone();
+        let Some(mut table) = tables.remove(&id) else {
+            bail!("{id} is no longer listed");
+        };
+        let before = table.to_string();
+        for a in assigns {
+            a.apply(&mut table, song)?;
+        }
+        if table.to_string() == before {
+            continue;
+        }
+        crate::ui::line(out, &format!("  ~ {}", named(view)))?;
+        for a in assigns {
+            crate::ui::line(out, &format!("    {}", a.describe(view)))?;
+        }
+        songs.push((id, Rewritten::Table(SongTable(table))));
+    }
+    Ok(songs)
+}
+
+/// Say that `n` songs change, and that `undo` puts them back.
+pub(crate) fn say_changed<W: Write>(n: usize, out: &mut W) -> Result<()> {
+    let (change, them) = if n == 1 {
+        ("changes", "it")
+    } else {
+        ("change", "them")
+    };
+    crate::ui::info(
+        out,
+        &format!(
+            "{} {change}. `muman undo` puts {them} back",
+            counted(n, "song")
+        ),
+    )?;
+    Ok(())
+}
+
 /// Set what `terms` assign on the songs its query picks. Returns whether
 /// anything was set.
 pub fn set<W: Write>(
@@ -699,7 +753,15 @@ pub fn set<W: Write>(
 ) -> Result<bool> {
     let (query_terms, assigns) = split_terms(terms).map_err(|e| Refused(format!("{e:#}")))?;
     if assigns.is_empty() {
-        return refuse("Nothing to set: give NAME=VALUE or NAME!");
+        if let Some(p) = prompter
+            && !query_terms.is_empty()
+        {
+            return crate::guided::edit(dirs, &query_terms, confirm, p, out);
+        }
+        return refuse(
+            "Nothing to set: give NAME=VALUE or NAME!, or a query alone on a terminal to set \
+             them step by step",
+        );
     }
     if query_terms.is_empty() {
         return refuse("Name the songs to set with a query");
@@ -710,49 +772,13 @@ pub fn set<W: Write>(
         crate::ui::info(out, "Nothing set")?;
         return Ok(false);
     }
-    let ids: Vec<SourceKey> = picked
-        .iter()
-        .filter_map(|n| read.manifest.songs[*n].id().cloned())
-        .collect();
-    let mut tables = read.manifest.tables_by_id(&ids)?;
-    let mut songs = Vec::new();
-    for n in &picked {
-        let view = &read.views[*n];
-        let song = &read.manifest.songs[*n];
-        let id = song.id().context("a song lists no source")?.clone();
-        let Some(mut table) = tables.remove(&id) else {
-            bail!("{id} is no longer listed");
-        };
-        let before = table.to_string();
-        for a in &assigns {
-            a.apply(&mut table, song)?;
-        }
-        if table.to_string() == before {
-            continue;
-        }
-        crate::ui::line(out, &format!("  ~ {}", named(view)))?;
-        for a in &assigns {
-            crate::ui::line(out, &format!("    {}", a.describe(view)))?;
-        }
-        songs.push((id, Rewritten::Table(SongTable(table))));
-    }
+    let songs = rewrite(&read, &picked, &assigns, out)?;
     if songs.is_empty() {
         crate::ui::info(out, "Nothing changed: each song is so already")?;
         return Ok(false);
     }
     let changed = counted(songs.len(), "song");
-    crate::ui::info(
-        out,
-        &format!(
-            "{changed} {}. `muman undo` puts {} back",
-            if songs.len() == 1 {
-                "changes"
-            } else {
-                "change"
-            },
-            if songs.len() == 1 { "it" } else { "them" }
-        ),
-    )?;
+    say_changed(songs.len(), out)?;
     let mut names: Vec<&str> = Vec::new();
     for a in &assigns {
         if !names.contains(&a.name()) {
