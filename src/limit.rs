@@ -57,7 +57,7 @@ use crate::manifest::Manifest;
 use crate::parallel;
 use crate::reconcile::{Planned, changed_since_written};
 use crate::render::{self, Rendered};
-use crate::resolve::{AudioRef, Format, Plan};
+use crate::resolve::{AudioRef, CoverRef, Format, Plan};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{Measured, State, Written};
@@ -274,14 +274,15 @@ pub(crate) fn besides_audio(plan: &Plan) -> (u64, Vec<u64>) {
         .iter()
         .flat_map(|(k, values)| values.iter().map(move |v| k.len() + v.len() + 8))
         .sum();
-    let cover = plan.cover.as_ref().map_or(0, |_| COVER_GUESS);
+    let cover = plan.cover.as_ref();
+    let inside = cover.and_then(CoverRef::inside).map_or(0, |_| COVER_GUESS);
     let lyrics = plan.lyrics.as_ref();
     let embedded = lyrics.filter(|l| l.tag()).map_or(0, |_| LYRICS_GUESS);
     let files = lyrics.map_or(0, |l| l.files().len());
-    (
-        tags as u64 + cover + embedded + HEADERS,
-        vec![LYRICS_GUESS; files],
-    )
+    let pictures = cover.map_or(0, |c| c.files().len());
+    let mut beside = vec![LYRICS_GUESS; files];
+    beside.extend(vec![COVER_GUESS; pictures]);
+    (tags as u64 + inside + embedded + HEADERS, beside)
 }
 
 fn ladder(

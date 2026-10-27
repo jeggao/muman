@@ -599,10 +599,129 @@ impl AudioPick {
 }
 
 /// The song's cover.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cover {
     pub pick: CoverPick,
+    /// Where the cover a song takes is written; none, nowhere.
+    pub out: Vec<CoverOut>,
+}
+
+impl Default for Cover {
+    fn default() -> Self {
+        Self {
+            pick: CoverPick::default(),
+            out: vec![CoverOut {
+                to: To::Tag,
+                suffix: String::new(),
+                format: CoverFormat::Keep,
+                max_side: None,
+                quality: DEFAULT_QUALITY,
+            }],
+        }
+    }
+}
+
+impl Cover {
+    /// Each `[[cover.out]]` as it may be: one tag at most, holding a
+    /// picture players read inside a song, each file's suffix a plain one,
+    /// no name twice, a side and a quality within bounds.
+    fn check(&self) -> Result<()> {
+        let tags = self.out.iter().filter(|o| o.to == To::Tag).count();
+        if tags > 1 {
+            bail!("[[cover.out]] names to = \"tag\" {tags} times; a song holds one front cover");
+        }
+        for (n, out) in self.out.iter().enumerate() {
+            if out.max_side == Some(0) {
+                bail!("[[cover.out]] max_side must be above 0");
+            }
+            if !(1..=100).contains(&out.quality) {
+                bail!("[[cover.out]] quality is from 1 to 100");
+            }
+            match out.to {
+                To::Tag if !out.suffix.is_empty() => {
+                    bail!("[[cover.out]] to = \"tag\" takes no suffix; a tag has no name")
+                }
+                To::Tag if out.format == CoverFormat::Webp => bail!(
+                    "[[cover.out]] to = \"tag\" holds keep, jpeg or png; few players read WebP \
+                     inside a song"
+                ),
+                To::Tag => {}
+                To::File => {
+                    crate::outputs::check_suffix(&out.suffix)
+                        .map_err(|e| anyhow::anyhow!("[[cover.out]] suffix: {e}"))?;
+                    let names = |o: &CoverOut| -> Vec<String> {
+                        o.format
+                            .extensions()
+                            .iter()
+                            .map(|e| format!("{}.{e}", o.suffix).to_uppercase())
+                            .collect()
+                    };
+                    let twice = self.out[..n].iter().any(|o| {
+                        o.to == To::File && names(o).iter().any(|a| names(out).contains(a))
+                    });
+                    if twice {
+                        bail!(
+                            "[[cover.out]] names the file `<song>{}` twice",
+                            names(out).join("` or `<song>")
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The quality a cover is encoded at, where `[[cover.out]]` sets none.
+pub const DEFAULT_QUALITY: u8 = 90;
+
+/// One place a song's cover is written, a `[[cover.out]]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoverOut {
+    pub to: To,
+    /// What follows the song's own name in a file's, before its
+    /// extension; a tag has none.
+    #[serde(default)]
+    pub suffix: String,
+    #[serde(default)]
+    pub format: CoverFormat,
+    /// The longest side it is scaled down to, in pixels; none keeps it.
+    #[serde(default)]
+    pub max_side: Option<u32>,
+    /// How well a JPEG or WebP keeps the picture, from 1 to 100.
+    #[serde(default = "default_quality")]
+    pub quality: u8,
+}
+
+fn default_quality() -> u8 {
+    DEFAULT_QUALITY
+}
+
+/// How a cover is written.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverFormat {
+    /// Its own bytes where they are JPEG or PNG, else PNG.
+    #[default]
+    Keep,
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl CoverFormat {
+    /// The extensions a file of it may take.
+    #[must_use]
+    pub fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Self::Keep => &["jpg", "png"],
+            Self::Jpeg => &["jpg"],
+            Self::Png => &["png"],
+            Self::Webp => &["webp"],
+        }
+    }
 }
 
 /// How the best cover of a song's sources is picked, scored as
@@ -1404,6 +1523,7 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     settings.audio.check()?;
     settings.loudness.check()?;
     settings.cover.pick.check()?;
+    settings.cover.check()?;
     settings.lyrics.check()?;
     // aria2c counts its stop in whole seconds, and 0 as never stopping.
     if settings.torrent.stall < std::time::Duration::from_secs(1) {
@@ -1558,6 +1678,49 @@ mod tests {
                      [[lyrics.out]]\nto = \"file\"\nwhen = \"untimed\"\n";
         assert!(settings(apart).is_ok(), "never one song's at once");
         let long = "[library]\nmax_name_bytes = 40\n[[lyrics.out]]\nto = \"file\"\nsuffix = \".zh-Hant\"\n";
+        let e = settings(long).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("max_name_bytes must be at least"),
+            "{e:#}"
+        );
+    }
+
+    #[test]
+    fn each_place_a_cover_goes_is_one_of_its_own() {
+        let s = settings(
+            "[[cover.out]]\nto = \"tag\"\nformat = \"jpeg\"\nmax_side = 1200\n\
+             [[cover.out]]\nto = \"file\"\nsuffix = \".small\"\nformat = \"webp\"\nquality = 70\n",
+        )
+        .unwrap();
+        assert_eq!(s.cover.out[0].max_side, Some(1200));
+        assert_eq!(s.cover.out[1].format, CoverFormat::Webp);
+        assert_eq!(s.cover.out[1].quality, 70);
+        let none = settings("[cover]\nout = []\n").unwrap();
+        assert!(none.cover.out.is_empty(), "none at all");
+        for (bad, why) in [
+            (
+                "[[cover.out]]\nto = \"tag\"\n[[cover.out]]\nto = \"tag\"\n",
+                "one front cover",
+            ),
+            (
+                "[[cover.out]]\nto = \"tag\"\nformat = \"webp\"\n",
+                "keep, jpeg or png",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\n[[cover.out]]\nto = \"file\"\nformat = \"png\"\n",
+                "twice",
+            ),
+            (
+                "[[cover.out]]\nto = \"file\"\nquality = 0\n",
+                "from 1 to 100",
+            ),
+            ("[[cover.out]]\nto = \"file\"\nmax_side = 0\n", "above 0"),
+        ] {
+            let e = settings(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(why), "{bad}: {e:#}");
+        }
+        let long = "[library]\nmax_name_bytes = 40\n\
+                    [[cover.out]]\nto = \"file\"\nsuffix = \".thumbnail\"\nformat = \"webp\"\n";
         let e = settings(long).unwrap_err();
         assert!(
             format!("{e:#}").contains("max_name_bytes must be at least"),

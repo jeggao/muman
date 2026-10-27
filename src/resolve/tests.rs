@@ -1,12 +1,12 @@
 use super::*;
 use crate::codec::Codec;
-use crate::settings::Library;
+use crate::settings::{Cover, Library};
 
 static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
     Naming::new(&Library::default(), std::path::Path::new("lib")).unwrap()
 });
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
-static COVER: std::sync::LazyLock<CoverPick> = std::sync::LazyLock::new(CoverPick::default);
+static COVER: std::sync::LazyLock<Cover> = std::sync::LazyLock::new(Cover::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
@@ -186,7 +186,7 @@ fn run_with(
     facts: &BTreeMap<SourceKey, Facts>,
     alignments: &[Aligned],
     audio: &Audio,
-    cover: &CoverPick,
+    cover: &Cover,
 ) -> Resolved {
     run_reading(song, facts, alignments, audio, cover, &english())
 }
@@ -196,7 +196,7 @@ fn run_reading(
     facts: &BTreeMap<SourceKey, Facts>,
     alignments: &[Aligned],
     audio: &Audio,
-    cover: &CoverPick,
+    cover: &Cover,
     lyrics: &crate::settings::Lyrics,
 ) -> Resolved {
     resolve(&Input {
@@ -1749,6 +1749,124 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
     assert_eq!(comment(&s, true), Some(vec!["ripped by a stranger".into()]));
     s.tags = vec![("comment".into(), vec!["take two".into()])];
     assert_eq!(comment(&s, false), Some(vec!["take two".into()]));
+}
+
+fn cover_out(
+    to: To,
+    suffix: &str,
+    format: crate::settings::CoverFormat,
+    max_side: Option<u32>,
+) -> crate::settings::CoverOut {
+    crate::settings::CoverOut {
+        to,
+        suffix: suffix.into(),
+        format,
+        max_side,
+        quality: 80,
+    }
+}
+
+#[test]
+fn each_cover_output_is_a_place_of_the_plan_and_the_default_reads_as_before() {
+    use crate::settings::CoverFormat;
+    let key = manual("x");
+    let mut f = audio("flac", 1.0);
+    cover(
+        &mut f,
+        CoverAt::Picture { index: 1 },
+        image(1000, 1000, full(1000, 1000), 1000),
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let plan = |facts: &BTreeMap<SourceKey, Facts>, out| {
+        let settings = Cover {
+            out,
+            ..Cover::default()
+        };
+        run_with(
+            &song(std::slice::from_ref(&key)),
+            facts,
+            &[],
+            &AUDIO,
+            &settings,
+        )
+        .plan
+        .cover
+    };
+    let place = |file: Option<&str>, format, keep, max_side, quality| CoverPlace {
+        file: file.map(str::to_string),
+        format,
+        keep,
+        max_side,
+        quality,
+    };
+
+    let before = plan(&facts, Cover::default().out).unwrap();
+    assert_eq!(
+        (before.out, before.made),
+        (None, None),
+        "a JPEG inside, as it was"
+    );
+
+    let c = plan(
+        &facts,
+        vec![
+            cover_out(To::Tag, "", CoverFormat::Keep, Some(2000)),
+            cover_out(To::File, "", CoverFormat::Keep, None),
+            cover_out(To::File, ".small", CoverFormat::Webp, Some(300)),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        c.places(),
+        [
+            CoverPlace::default(),
+            place(Some(""), ImageFormat::Jpeg, true, None, None),
+            place(
+                Some(".small"),
+                ImageFormat::Webp,
+                false,
+                Some(300),
+                Some(80)
+            ),
+        ],
+        "a picture shorter than the side is kept; a file of it is a JPEG"
+    );
+    assert_eq!(
+        c.made,
+        Some(crate::render::COVER_MAKING),
+        "the WebP is made"
+    );
+    assert_eq!(
+        c.only(|p| p.file.is_none()).unwrap().made,
+        None,
+        "inside, its own bytes"
+    );
+
+    let scaled = plan(
+        &facts,
+        vec![cover_out(To::Tag, "", CoverFormat::Keep, Some(500))],
+    )
+    .unwrap();
+    assert_eq!(
+        scaled.places(),
+        [place(None, ImageFormat::Jpeg, false, Some(500), Some(80))],
+        "a longer picture scaled in its own format"
+    );
+
+    let mut webp = facts.clone();
+    webp.get_mut(&key).unwrap().covers[0].mimetype = "image/webp".into();
+    let kept = plan(
+        &webp,
+        vec![cover_out(To::File, "", CoverFormat::Keep, None)],
+    )
+    .unwrap();
+    assert_eq!(
+        kept.places(),
+        [place(Some(""), ImageFormat::Png, true, None, None)],
+        "a WebP kept is made PNG"
+    );
+
+    assert_eq!(plan(&facts, Vec::new()), None, "written nowhere");
 }
 
 #[test]

@@ -276,7 +276,7 @@ impl<'a> Resolver<'a> {
             albums: &self.albums,
             naming: &self.naming,
             audio: &settings.audio,
-            cover: &settings.cover.pick,
+            cover: &settings.cover,
             source_comments: settings.library.source_comments,
         }
     }

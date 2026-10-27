@@ -227,6 +227,29 @@ fn the_cover_waits_for_the_record_that_names_its_release() {
 }
 
 #[test]
+fn what_no_output_writes_is_looked_up_for_no_song() {
+    let tags = [
+        NAMED[0],
+        NAMED[1],
+        (Field::Album, "Rooms of Salt"),
+        (Field::AlbumArtist, "Paper Comets"),
+    ];
+    let (_d, mut m, mut s, p) = own(false, &tags);
+    s.lookups = vec![Looked {
+        from: SourceKey::parse("manual:a.flac").unwrap(),
+        find: Provider::MusicBrainz.to_string(),
+        method: method(Provider::MusicBrainz).into(),
+        at: NOW,
+        outcome: Outcome::Nothing,
+    }];
+    assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::CoverArt]);
+    m.settings.lyrics.out.clear();
+    assert_eq!(found(&m, &s, &p), [Provider::CoverArt]);
+    m.settings.cover.out.clear();
+    assert_eq!(found(&m, &s, &p), []);
+}
+
+#[test]
 fn a_song_with_a_musicbrainz_record_asks_neither() {
     let (_d, mut m, s, p) = own(true, &NAMED);
     m.songs[0]

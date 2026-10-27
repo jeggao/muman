@@ -60,6 +60,7 @@ fn plan(format: Format) -> Plan {
             mimetype: "image/webp".into(),
             crop: None,
             made: Some(COVER_MAKING),
+            out: None,
         }),
         lyrics: Some(LyricsRef {
             key: yt("aaaaaaaaaaa"),
@@ -233,6 +234,7 @@ fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
         mimetype: "image/jpeg".into(),
         crop: None,
         made: None,
+        out: None,
     });
     let r = go(&fake, &f, &p).unwrap();
     assert!(r.problems.is_empty(), "{:?}", r.problems);
@@ -252,6 +254,142 @@ fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
     assert!(
         fake.ran("accurate_rnd+bitexact") && fake.ran("-dct"),
         "the same bytes on every processor"
+    );
+}
+
+fn place(
+    file: Option<&str>,
+    format: ImageFormat,
+    keep: bool,
+    max_side: Option<u32>,
+    quality: Option<u8>,
+) -> CoverPlace {
+    CoverPlace {
+        file: file.map(str::to_string),
+        format,
+        keep,
+        max_side,
+        quality,
+    }
+}
+
+#[test]
+fn a_cover_goes_to_each_place_its_plan_names_each_picture_made_once() {
+    let f = fixture();
+    let fake = Fake::default();
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.cover.as_mut().unwrap().out = Some(vec![
+        CoverPlace::default(),
+        place(Some(""), ImageFormat::Png, true, None, None),
+        place(
+            Some(".small"),
+            ImageFormat::Webp,
+            false,
+            Some(300),
+            Some(80),
+        ),
+        place(Some(".tiny"), ImageFormat::Webp, false, Some(300), Some(80)),
+        place(Some(".j"), ImageFormat::Jpeg, false, None, Some(80)),
+    ]);
+    let r = go(&fake, &f, &p).unwrap();
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    assert_eq!(
+        names(&r),
+        [
+            "A/Record/Song.lrc",
+            "A/Record/Song.png",
+            "A/Record/Song.small.webp",
+            "A/Record/Song.tiny.webp",
+            "A/Record/Song.j.jpg",
+        ]
+        .map(PathBuf::from)
+    );
+    let lib = f.dir.path().join("lib/A/Record");
+    assert_eq!(
+        fs::read(lib.join("Song.png")).unwrap(),
+        crate::testing::PIXEL,
+        "the attachment's own bytes"
+    );
+    assert_eq!(
+        fs::read(lib.join("Song.tiny.webp")).unwrap(),
+        crate::testing::PIXEL_WEBP
+    );
+    assert_eq!(
+        fs::read(lib.join("Song.j.jpg")).unwrap(),
+        crate::testing::PIXEL_JPEG
+    );
+    let args: Vec<String> = fake.calls().concat();
+    let count = |a: &str| args.iter().filter(|x| *x == a).count();
+    assert_eq!(count("libwebp"), 1, "places alike share one picture");
+    assert!(fake.ran("scale=w='min(300,iw)':h='min(300,ih)':force_original_aspect_ratio=decrease"));
+    assert_eq!(count("80"), 1, "WebP at its quality");
+    assert!(fake.ran(&jpeg_scale(80).to_string()) && fake.ran("mjpeg"));
+    assert_eq!(count("png"), 0, "a PNG kept as its own bytes");
+    assert_eq!((jpeg_scale(100), jpeg_scale(1)), (2, 31));
+    assert_eq!(leftover_parts(&lib), Vec::<PathBuf>::new());
+
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let opus = OpusFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    assert_eq!(opus.vorbis_comments().pictures().len(), 1);
+    p.cover.as_mut().unwrap().out = Some(vec![place(Some(""), ImageFormat::Png, true, None, None)]);
+    let r = go(&Fake::default(), &f, &p).unwrap();
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let opus = OpusFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    assert!(opus.vorbis_comments().pictures().is_empty(), "a file alone");
+}
+
+#[test]
+fn a_cover_file_written_alone_is_the_one_a_build_writes() {
+    let f = fixture();
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.lyrics = None;
+    p.cover = Some(CoverRef {
+        key: yt("bbbbbbbbbbb"),
+        rev: "r".into(),
+        at: CoverAt::Picture { index: 3 },
+        mimetype: "image/png".into(),
+        crop: None,
+        made: Some(COVER_MAKING),
+        out: Some(vec![
+            CoverPlace::default(),
+            place(Some(""), ImageFormat::Png, true, None, None),
+            place(Some(".j"), ImageFormat::Jpeg, false, Some(600), Some(80)),
+        ]),
+    });
+    let built = go(&Fake::default(), &f, &p).unwrap();
+    let lib = f.dir.path().join("lib");
+    let claim = [
+        Ledger::taken(Path::new("A/Record/Song.png")),
+        Ledger::taken(Path::new("A/Record/Song.j.jpg")),
+    ];
+    let fake = Fake::default();
+    let alone = beside(
+        &fake,
+        &Job {
+            plan: &p,
+            stem: Path::new("A/Record/Song"),
+            library: &lib,
+            sources: &f.sources,
+            scratch: &f.dir.path().join("scratch-beside"),
+            claim: &claim,
+            stale: &[],
+        },
+    )
+    .unwrap();
+    assert!(alone.problems.is_empty(), "{:?}", alone.problems);
+    assert_eq!(alone.files, built.beside);
+    assert_eq!(fake.calls().len(), 1, "one run for the pictures");
+    let args = &fake.calls()[0];
+    assert!(
+        !args
+            .iter()
+            .any(|a| a == "-c:a" || a.ends_with("Song.opus.part")),
+        "the audio left alone: {args:?}"
+    );
+    assert_eq!(
+        args.iter().filter(|a| *a == "1:3" || *a == "0:3").count(),
+        2,
+        "the picture stream copied once and made a JPEG once: {args:?}"
     );
 }
 
@@ -1084,7 +1222,7 @@ fn a_cover_too_large_for_any_container_is_made_smaller() {
     let mut bytes = crate::testing::PIXEL.to_vec();
     bytes.resize(FLAC_BLOCK + 1, 0);
     fs::write(&path, &bytes).unwrap();
-    let huge = read_picture(&path, MimeType::Png).unwrap();
+    let huge = read_picture(&path, ImageFormat::Png).unwrap();
     let fake = Fake::default();
     let fitted = fit_cover(&fake, huge, FLAC_BLOCK, &path, dir.path()).unwrap();
     assert!(fitted.data().len() <= FLAC_BLOCK);

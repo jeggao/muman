@@ -458,6 +458,54 @@ fn each_lyrics_output_writes_its_file_and_one_taken_out_takes_only_its_own() {
 }
 
 #[test]
+fn a_cover_file_added_or_taken_out_is_written_or_removed_alone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    let jpg = s.file("home/sources/manual/Song.jpg");
+    std::fs::write(&jpg, crate::testing::PIXEL_JPEG).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    let song = std::fs::read(lib.join("02 Song.flac")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let files = "[[cover.out]]\nto = \"file\"\n\
+                 [[cover.out]]\nto = \"file\"\nsuffix = \".small\"\nformat = \"webp\"\n\
+                 max_side = 300\n";
+    std::fs::write(&list, format!("{listed}\n{files}")).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read(lib.join("02 Song.jpg")).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "its own bytes: {text}"
+    );
+    assert_eq!(
+        std::fs::read(lib.join("02 Song.small.webp")).unwrap(),
+        crate::testing::PIXEL_WEBP,
+        "{text}"
+    );
+    assert_eq!(std::fs::read(lib.join("02 Song.flac")).unwrap(), song);
+    assert!(!fake.ran("-c:a"), "{text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let at = listed
+        .find("[[cover.out]]\nto = \"file\"\nsuffix")
+        .expect(&listed);
+    std::fs::write(&list, &listed[..at]).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!lib.join("02 Song.small.webp").exists(), "{text}");
+    assert!(lib.join("02 Song.jpg").exists(), "{text}");
+    assert_eq!(std::fs::read(lib.join("02 Song.flac")).unwrap(), song);
+    assert!(!fake.ran("-c:a"), "{text}");
+}
+
+#[test]
 fn lyrics_go_where_their_timing_takes_them() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");

@@ -235,6 +235,9 @@ pub fn due(
             .collect();
         let r = resolved.get(&n).copied();
         let (has, timed) = lyrics_of(r, &state.facts);
+        // What no output writes is looked up for no song.
+        let lyrics_out = !manifest.settings.lyrics.out.is_empty();
+        let cover_out = !manifest.settings.cover.out.is_empty();
         let album = album_of(r);
         let mut taken = BTreeSet::new();
         let mut mine = Vec::new();
@@ -244,10 +247,10 @@ pub fn due(
             }
             let wanted = match t.when {
                 When::Always => true,
-                When::NoLyrics => !has,
-                When::NoTimedLyrics => !timed,
+                When::NoLyrics => lyrics_out && !has,
+                When::NoTimedLyrics => lyrics_out && !timed,
                 When::NoAlbum => !album,
-                When::SmallCover => small_cover(r, &state.facts),
+                When::SmallCover => cover_out && small_cover(r, &state.facts),
             };
             let Some((from, _)) = kinds.iter().find(|(_, p)| t.from.contains(p)) else {
                 continue;

@@ -538,6 +538,8 @@ impl Health {
                 None => h.unmeasured.add(&name),
             }
             match &plan.cover {
+                // A song list that writes no cover misses none.
+                None if manifest.settings.cover.out.is_empty() => {}
                 None => h.no_cover.add(&name),
                 Some(c) => {
                     let quality = facts
@@ -554,7 +556,8 @@ impl Health {
                     }
                 }
             }
-            let off = manifest.songs[*n].lyrics == Some(LyricsPin::None);
+            let off = manifest.songs[*n].lyrics == Some(LyricsPin::None)
+                || manifest.settings.lyrics.out.is_empty();
             match &plan.lyrics {
                 None if !off => h.no_lyrics.add(&name),
                 None => {}
