@@ -1754,6 +1754,53 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
 }
 
 #[test]
+fn a_change_on_a_terminal_names_what_it_does_and_asks_by_name() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    let mut p = crate::ui::MockPrompter::answering([false]);
+    p.push_choice([0, 1]);
+    let text = s
+        .trusting(&flacs(), &["remove", "song"], Some(&mut p))
+        .unwrap();
+    assert!(p.asked[0].starts_with("2 songs match"), "{:?}", p.asked);
+    assert_eq!(
+        p.ticked,
+        [Vec::<usize>::new()],
+        "no song is picked to begin with"
+    );
+    assert_eq!(p.asked[1], "Remove 2 songs?");
+    let text = crate::ui::plain(&text);
+    assert!(text.contains("  − "), "{text}");
+    assert!(text.contains("`muman undo` puts them back"), "{text}");
+    assert_eq!(s.songs().len(), 2, "answering no changes nothing: {text}");
+
+    let mut p = crate::ui::MockPrompter::new();
+    p.push_text(Some("2"));
+    let text = s
+        .trusting(
+            &flacs(),
+            &["remove", "--purge", "manual:a.flac"],
+            Some(&mut p),
+        )
+        .unwrap();
+    assert_eq!(
+        p.asked,
+        ["Type 1 to remove 1 song and trash 1 file of yours:"],
+        "{text}"
+    );
+    assert_eq!(
+        s.songs().len(),
+        2,
+        "a count mistyped changes nothing: {text}"
+    );
+    assert!(s.dir.path().join("home/sources/manual/a.flac").exists());
+}
+
+#[test]
 fn sync_on_a_new_home_writes_the_song_list_to_edit() {
     let s = Setup::new();
     let (ok, text) = s.run(&flacs(), &["sync"]);

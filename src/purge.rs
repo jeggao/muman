@@ -43,18 +43,16 @@ pub fn purge<W: Write>(
     }
     let size = |p: &PathBuf| std::fs::metadata(p).map_or(0, |m| m.len());
     let total: u64 = doomed.iter().map(size).sum();
+    let files = crate::change::counted(doomed.len(), "unused file");
     crate::ui::info(
         out,
-        &format!(
-            "Deleting {} unused file(s), {}:",
-            doomed.len(),
-            crate::ui::bytes(total)
-        ),
+        &format!("Deleting {files}, {}:", crate::ui::bytes(total)),
     )?;
     for file in &doomed {
         crate::ui::line(out, &format!("  {}", file.display()))?;
     }
-    if !crate::change::confirmed(confirm, prompter, out)? {
+    let ask = crate::change::Ask::YesNo(format!("Delete {files}?"));
+    if !crate::change::confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
     for file in &doomed {
@@ -161,7 +159,7 @@ mod tests {
         assert!(!purge(&dirs, &confirm, None, &mut out).unwrap());
         assert!(gone.iter().all(|p| p.exists()), "a dry run deletes nothing");
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Deleting 6 unused file(s)"), "{text}");
+        assert!(text.contains("Deleting 6 unused files"), "{text}");
 
         let confirm = Confirm {
             yes: true,

@@ -2,6 +2,18 @@
 //! again, and setting their tags and pins. Each says what it would do,
 //! asks on a terminal or takes `-y`, and records its edits only while
 //! the songs are still listed as they were read.
+//!
+//! Songs to pick among are shown as [`crate::rows`] shows them, by what
+//! tells them apart, and none is picked to begin with: a pick that
+//! starts with every song ticked makes one Enter a change to all of them.
+//! What a change does is said song by song, `−` for a song that leaves
+//! the list, `~` for one that changes and `+` for one that comes back,
+//! then counted with what `muman undo` can put back, and the question
+//! names the change. Most changes take a yes, as `undo` reverses them.
+//! One that moves files of the user's own to the trash takes the count
+//! of songs typed instead: `undo` cannot take a file back from the
+//! desktop's trash on every platform, and a yes given from habit should
+//! not be enough to put it there.
 
 use std::fmt;
 use std::io::Write;
@@ -15,6 +27,8 @@ use crate::cli::Confirm;
 use crate::dirs::Dirs;
 use crate::manifest::{self, Edit, Manifest, Rewritten, Song, SongTable};
 use crate::query::{self, Query, View};
+use crate::resolve::Resolved;
+use crate::rows;
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::Store;
@@ -44,16 +58,43 @@ pub fn reborrow<'a>(prompter: &'a mut Option<&mut dyn Prompter>) -> Option<&'a m
     }
 }
 
-fn label(view: &View) -> String {
-    format!("{} — {}", view.first("key"), view.name())
+/// How a song is named in what a change says: its name, its album and
+/// its key.
+fn named(view: &View) -> String {
+    let album = view.first("album");
+    let key = view.id().map(ToString::to_string).unwrap_or_default();
+    if album.is_empty() {
+        format!("{} · {key}", view.name())
+    } else {
+        format!("{} · {album} · {key}", view.name())
+    }
+}
+
+/// `items` as said aloud, as "genre, date and audio".
+fn spoken(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// `n` of `thing`, as "1 song" or "3 songs".
+pub(crate) fn counted(n: usize, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
+    }
 }
 
 /// The songs among `views` the query matches: one, all of them under
 /// `--all` or when the query is keys alone, each naming one song, else
-/// those picked on a terminal.
+/// those picked on a terminal, each shown by its `cells`.
 /// Refused when none match, or several without a terminal or `--all`.
 pub fn pick(
     views: &[View],
+    cells: &dyn Fn(usize) -> rows::Cells,
     query: &Query,
     all: bool,
     verb: &str,
@@ -71,32 +112,41 @@ pub fn pick(
     if found.len() == 1 || all || (query.names_keys() && found.len() <= query.keys_named()) {
         return Ok(found);
     }
-    let labels: Vec<String> = found.iter().map(|n| label(&views[*n])).collect();
+    let shown: Vec<rows::Cells> = found.iter().map(|n| cells(*n)).collect();
+    let rows = rows::fit(&shown, prompter.as_ref().map(|p| p.width()));
+    let matched = match &rows.shared {
+        Some(name) => format!("{} songs match, all {name}", found.len()),
+        None => format!("{} songs match", found.len()),
+    };
     match prompter {
         Some(p) => {
-            let every: Vec<usize> = (0..labels.len()).collect();
-            let picked = p.choose(
-                &format!("{} songs match; which to {verb}?", found.len()),
-                &labels,
-                &every,
-            )?;
+            let picked = p.choose(&format!("{matched}; which to {verb}?"), &rows.lines, &[])?;
             Ok(picked
                 .into_iter()
                 .filter_map(|i| found.get(i).copied())
                 .collect())
         }
         None => refuse(format!(
-            "{} songs match; narrow the query, or give --all to {verb} every one:\n  {}",
-            found.len(),
-            labels.join("\n  ")
+            "{matched}; narrow the query, or give --all to {verb} every one:\n  {}",
+            rows.lines.join("\n  ")
         )),
     }
 }
 
+/// What a change asks before it is made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ask {
+    /// A yes or no, the question naming the change.
+    YesNo(String),
+    /// A count to type, for a change `undo` cannot take back in full.
+    Typed { count: usize, question: String },
+}
+
 /// Whether to go ahead with what was said: never on a dry run, at once
-/// with `-y`, else as the terminal answers.
+/// with `-y`, else as the terminal answers `ask`.
 pub fn confirmed<W: Write>(
     confirm: &Confirm,
+    ask: &Ask,
     prompter: Option<&mut dyn Prompter>,
     out: &mut W,
 ) -> Result<bool> {
@@ -107,16 +157,22 @@ pub fn confirmed<W: Write>(
     if confirm.yes {
         return Ok(true);
     }
-    match prompter {
-        Some(p) => {
-            let yes = p.ask("Go ahead?")?;
-            if !yes {
-                crate::ui::info(out, "Nothing changed")?;
-            }
-            Ok(yes)
-        }
-        None => refuse("Without a terminal to ask on, -y makes the change"),
+    let Some(p) = prompter else {
+        return refuse("Without a terminal to ask on, -y makes the change");
+    };
+    let yes = match ask {
+        Ask::YesNo(question) => p.ask(question)?,
+        Ask::Typed { count, question } => p
+            .text(
+                question,
+                &format!("type {count} to go ahead; anything else changes nothing"),
+            )?
+            .is_some_and(|typed| typed.trim() == count.to_string()),
+    };
+    if !yes {
+        crate::ui::info(out, "Nothing changed")?;
     }
+    Ok(yes)
 }
 
 /// What the songs a query reads are, with the list and state they came
@@ -126,6 +182,8 @@ pub struct Read {
     pub manifest: Manifest,
     pub state: State,
     pub views: Vec<View>,
+    /// Each song's plan, where it resolves, in the order of `views`.
+    pub resolved: Vec<Option<Resolved>>,
     pub query: Query,
 }
 
@@ -133,15 +191,43 @@ impl Read {
     pub fn new(dirs: &Dirs, terms: &[String]) -> Result<Self> {
         let manifest = Manifest::load(&dirs.home)?;
         let state = State::load(&dirs.home)?;
-        let views = query::views(&manifest, &state, &dirs.library)?;
+        let (views, resolved): (Vec<View>, Vec<_>) =
+            query::resolved_views(&manifest, &state, &dirs.library)?
+                .into_iter()
+                .unzip();
         let query = Query::parse(terms, &query::extractors(&manifest))?;
         query.check_fields(&views)?;
         Ok(Self {
             manifest,
             state,
             views,
+            resolved,
             query,
         })
+    }
+
+    /// The songs the query picks among those read, as [`pick`] picks.
+    pub fn pick(
+        &self,
+        all: bool,
+        verb: &str,
+        prompter: Option<&mut dyn Prompter>,
+    ) -> Result<Vec<usize>> {
+        pick(
+            &self.views,
+            &|n| self.cells(n),
+            &self.query,
+            all,
+            verb,
+            prompter,
+        )
+    }
+
+    /// What song `n` shows when picked among others.
+    #[must_use]
+    pub fn cells(&self, n: usize) -> rows::Cells {
+        let plan = self.resolved[n].as_ref().map(|r| &r.plan);
+        rows::cells(&self.views[n], plan, &self.state.facts)
     }
 
     /// The songs at `picked`, as they were read.
@@ -207,23 +293,17 @@ pub fn remove<W: Write>(
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
-    let picked = pick(
-        &read.views,
-        &read.query,
-        confirm.all,
-        "remove",
-        reborrow(&mut prompter),
-    )?;
+    let picked = read.pick(confirm.all, "remove", reborrow(&mut prompter))?;
     if picked.is_empty() {
         crate::ui::info(out, "Nothing removed")?;
         return Ok(false);
     }
     let store = Store::scan(dirs)?;
     let mut doomed: Vec<(PathBuf, bool)> = Vec::new();
-    crate::ui::info(out, &format!("Removing {} song(s):", picked.len()))?;
+    let mut deleted = 0;
     for n in &picked {
         let view = &read.views[*n];
-        crate::ui::line(out, &format!("  {}", label(view)))?;
+        crate::ui::line(out, &format!("  − {}", named(view)))?;
         let written = read
             .state
             .outputs
@@ -240,6 +320,7 @@ pub fn remove<W: Write>(
                 "deletes"
             };
             for file in std::iter::once(path).chain(&w.lyrics) {
+                deleted += usize::from(!changed);
                 crate::ui::line(
                     out,
                     &format!("    {how} {}", dirs.library.join(file).display()),
@@ -278,7 +359,10 @@ pub fn remove<W: Write>(
             }
         }
     }
-    if !confirmed(confirm, prompter, out)? {
+    let own = doomed.iter().filter(|(_, own)| *own).count();
+    let (said, ask) = removal(picked.len(), deleted, doomed.len() - own, own);
+    crate::ui::info(out, &said)?;
+    if !confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
     for n in &picked {
@@ -306,6 +390,39 @@ pub fn remove<W: Write>(
         }
     }
     Ok(true)
+}
+
+/// What removing `songs` does, with `deleted` library files and
+/// `fetched` files of fetched sources deleted and `own` files of the
+/// user's own trashed, and what to ask before.
+fn removal(songs: usize, deleted: usize, fetched: usize, own: usize) -> (String, Ask) {
+    let named = counted(songs, "song");
+    let leave = if songs == 1 { "leaves" } else { "leave" };
+    let gone = counted(deleted + fetched, "file");
+    if own > 0 {
+        let trashed = counted(own, "file");
+        let said = format!(
+            "{named} {leave} the list, {gone} deleted, {trashed} of yours to the trash. \
+             `muman undo` waits until you put them back"
+        );
+        let question = format!("Type {songs} to remove {named} and trash {trashed} of yours:");
+        return (
+            said,
+            Ask::Typed {
+                count: songs,
+                question,
+            },
+        );
+    }
+    let undo = if fetched > 0 {
+        "`muman undo` lists them again, and a sync fetches what was deleted"
+    } else {
+        "`muman undo` puts them back"
+    };
+    (
+        format!("{named} {leave} the list, {gone} deleted. {undo}"),
+        Ask::YesNo(format!("Remove {named}?")),
+    )
 }
 
 /// Move a file of the user's own to the desktop's trash. On macOS this
@@ -343,6 +460,7 @@ pub fn restore<W: Write>(
     query.check_fields(&views)?;
     let picked = pick(
         &views,
+        &|n| rows::cells(&views[n], None, &state.facts),
         &query,
         confirm.all,
         "restore",
@@ -373,11 +491,27 @@ pub fn restore<W: Write>(
         ))
         .into());
     }
-    crate::ui::info(out, &format!("Listing {} song(s) again:", picked.len()))?;
     for n in &picked {
-        crate::ui::line(out, &format!("  {}", label(&views[*n])))?;
+        crate::ui::line(out, &format!("  + {}", named(&views[*n])))?;
     }
-    if !confirmed(confirm, prompter, out)? {
+    let songs = counted(picked.len(), "song");
+    crate::ui::info(
+        out,
+        &format!(
+            "{songs} {} to the list. `muman undo` takes them out again",
+            if picked.len() == 1 {
+                "comes back"
+            } else {
+                "come back"
+            }
+        ),
+    )?;
+    if !confirmed(
+        confirm,
+        &Ask::YesNo(format!("List {songs} again?")),
+        prompter,
+        out,
+    )? {
         return Ok(false);
     }
     for id in picked.iter().filter_map(|n| views[*n].id()) {
@@ -482,6 +616,15 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
 }
 
 impl Assign {
+    /// The tag, pin or setting it changes.
+    fn name(&self) -> &str {
+        match self {
+            Self::Tag(name, _) => name,
+            Self::Pin(pin, _) => pin,
+            Self::Offset(_) => "lyrics_offset",
+        }
+    }
+
     /// How it changes `view`'s song, in words.
     fn describe(&self, view: &View) -> String {
         match self {
@@ -557,13 +700,7 @@ pub fn set<W: Write>(
         return refuse("Name the songs to set with a query");
     }
     let mut read = Read::new(dirs, &query_terms)?;
-    let picked = pick(
-        &read.views,
-        &read.query,
-        confirm.all,
-        "set",
-        reborrow(&mut prompter),
-    )?;
+    let picked = read.pick(confirm.all, "set", reborrow(&mut prompter))?;
     if picked.is_empty() {
         crate::ui::info(out, "Nothing set")?;
         return Ok(false);
@@ -588,7 +725,7 @@ pub fn set<W: Write>(
         if table.to_string() == before {
             continue;
         }
-        crate::ui::line(out, &format!("  {}", label(view)))?;
+        crate::ui::line(out, &format!("  ~ {}", named(view)))?;
         for a in &assigns {
             crate::ui::line(out, &format!("    {}", a.describe(view)))?;
         }
@@ -598,7 +735,27 @@ pub fn set<W: Write>(
         crate::ui::info(out, "Nothing changed: each song is so already")?;
         return Ok(false);
     }
-    if !confirmed(confirm, prompter, out)? {
+    let changed = counted(songs.len(), "song");
+    crate::ui::info(
+        out,
+        &format!(
+            "{changed} {}. `muman undo` puts {} back",
+            if songs.len() == 1 {
+                "changes"
+            } else {
+                "change"
+            },
+            if songs.len() == 1 { "it" } else { "them" }
+        ),
+    )?;
+    let mut names: Vec<&str> = Vec::new();
+    for a in &assigns {
+        if !names.contains(&a.name()) {
+            names.push(a.name());
+        }
+    }
+    let ask = Ask::YesNo(format!("Set {} on {changed}?", spoken(&names)));
+    if !confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
     read.manifest.edit(Edit::Rewrite {
@@ -657,37 +814,91 @@ mod tests {
             .collect()
     }
 
+    /// Each of `views` shown as the copy of one song on its own album.
+    fn copies(n: usize) -> rows::Cells {
+        rows::Cells {
+            name: "Tide — Ada Quill".into(),
+            album: ["Lantern Weather", "Night Ferry Sessions", "Paper Comets"][n % 3].into(),
+            short: format!("{n:0>11}"),
+            ..rows::Cells::default()
+        }
+    }
+
     #[test]
     fn several_matches_need_all_or_a_terminal() {
         let q = Query::default();
-        assert_eq!(pick(&views(1), &q, false, "remove", None).unwrap(), [0]);
-        let e = pick(&views(2), &q, false, "remove", None).unwrap_err();
+        let pick = |views: &[View], all, p| pick(views, &copies, &q, all, "remove", p);
+        assert_eq!(pick(&views(1), false, None).unwrap(), [0]);
+        let e = pick(&views(2), false, None).unwrap_err();
         assert!(e.downcast_ref::<Refused>().is_some(), "{e:#}");
-        assert_eq!(pick(&views(2), &q, true, "remove", None).unwrap(), [0, 1]);
+        assert!(format!("{e:#}").contains("Night Ferry Sessions"), "{e:#}");
+        assert_eq!(pick(&views(2), true, None).unwrap(), [0, 1]);
         let mut p = crate::ui::MockPrompter::new();
         p.push_choice([1]);
+        assert_eq!(pick(&views(3), false, Some(&mut p)).unwrap(), [1]);
+        assert!(pick(&[], true, None).is_err());
+    }
+
+    #[test]
+    fn songs_alike_are_picked_by_what_tells_them_apart_none_ticked() {
+        let mut p = crate::ui::MockPrompter::new();
+        p.push_choice([0]);
+        let q = Query::default();
+        pick(&views(2), &copies, &q, false, "remove", Some(&mut p)).unwrap();
         assert_eq!(
-            pick(&views(3), &q, false, "remove", Some(&mut p)).unwrap(),
-            [1]
+            p.asked,
+            ["2 songs match, all Tide — Ada Quill; which to remove?\n  \
+             Lantern Weather       00000000000\n  \
+             Night Ferry Sessions  00000000001"]
         );
-        assert!(pick(&[], &q, true, "remove", None).is_err());
+        assert_eq!(p.ticked, [Vec::<usize>::new()]);
     }
 
     #[test]
     fn a_change_without_a_terminal_needs_yes() {
         let mut out = Vec::new();
+        let go = Ask::YesNo("Remove 1 song?".into());
         let ask = Confirm::default();
-        assert!(confirmed(&ask, None, &mut out).is_err());
+        assert!(confirmed(&ask, &go, None, &mut out).is_err());
         let yes = Confirm {
             yes: true,
             ..Confirm::default()
         };
-        assert!(confirmed(&yes, None, &mut out).unwrap());
+        assert!(confirmed(&yes, &go, None, &mut out).unwrap());
         let dry = Confirm {
             yes: true,
             dry_run: true,
             ..Confirm::default()
         };
-        assert!(!confirmed(&dry, None, &mut out).unwrap());
+        assert!(!confirmed(&dry, &go, None, &mut out).unwrap());
+    }
+
+    #[test]
+    fn trashing_files_of_the_user_s_own_takes_the_count_typed() {
+        let mut out = Vec::new();
+        let ask = Ask::Typed {
+            count: 3,
+            question: "Type 3 to remove 3 songs and trash 3 files of yours:".into(),
+        };
+        let mut p = crate::ui::MockPrompter::new();
+        p.push_text(Some("2"))
+            .push_text(Some(" 3 "))
+            .push_text(None);
+        let confirm = Confirm::default();
+        assert!(!confirmed(&confirm, &ask, Some(&mut p), &mut out).unwrap());
+        assert!(confirmed(&confirm, &ask, Some(&mut p), &mut out).unwrap());
+        assert!(!confirmed(&confirm, &ask, Some(&mut p), &mut out).unwrap());
+        let mut p = crate::ui::MockPrompter::answering([true]);
+        let named = Ask::YesNo("Remove 3 songs?".into());
+        assert!(confirmed(&confirm, &named, Some(&mut p), &mut out).unwrap());
+        assert_eq!(p.asked, ["Remove 3 songs?"]);
+    }
+
+    #[test]
+    fn a_list_reads_as_said() {
+        assert_eq!(spoken(&["genre"]), "genre");
+        assert_eq!(spoken(&["genre", "date", "audio"]), "genre, date and audio");
+        assert_eq!(counted(1, "song"), "1 song");
+        assert_eq!(counted(2, "song"), "2 songs");
     }
 }

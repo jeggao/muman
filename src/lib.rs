@@ -64,6 +64,7 @@ pub mod redact;
 pub mod relpath;
 pub mod render;
 pub mod resolve;
+pub mod rows;
 pub mod runner;
 pub mod settings;
 pub mod similar;
@@ -435,7 +436,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 all: false,
                 dry_run: *dry_run,
             };
-            if !change::confirmed(&confirm, change::reborrow(&mut prompter), out)? {
+            let ask = change::Ask::YesNo("Undo the last run?".into());
+            if !change::confirmed(&confirm, &ask, change::reborrow(&mut prompter), out)? {
                 return Ok(true);
             }
             let back = planned.songs_before().unwrap_or(crate::manifest::NEW);
