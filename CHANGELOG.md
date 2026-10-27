@@ -106,6 +106,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`duplicates` tells albums of one name apart by their artist,** so a
+  recording on two artists' "Best Of" is no longer called a file one
+  album holds twice.
 - **An MP3's lyrics are marked with the language they are in,** as
   their source names it, or `XXX` where it names none, rather than with
   the song's `LANGUAGE`; its comment with English, as Picard marks one,

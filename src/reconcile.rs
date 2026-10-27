@@ -46,8 +46,9 @@ use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
 pub(crate) use self::decide::{Doing, Foreseen, files_of, foresee};
 use self::keys::{foresee_moves, sites_found};
+pub(crate) use self::measure::compare;
 pub use self::measure::{Measuring, look, measure};
-use self::measure::{analyze, analyze_mixes, compare, hash, sizes};
+use self::measure::{analyze, analyze_mixes, hash, sizes};
 pub(crate) use self::owned::{
     adopt, changed_since_written, edited_since_written, rehome, vouch_for_copies,
 };
