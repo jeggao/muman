@@ -20,7 +20,7 @@
 //!
 //! Listing them changes nothing. `--resolve` steps through the groups on
 //! a terminal, those an album holds twice first, each shown side by side
-//! with the song [`merge`] would keep; merging is suggested for a file
+//! with the song `merge` would keep; merging is suggested for a file
 //! there twice, keeping apart for copies on other albums, which are
 //! offered only once those are done. What is chosen is said, asked
 //! about, and made as one change, so one `undo` puts it back.
