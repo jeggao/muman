@@ -534,8 +534,8 @@ struct Chosen {
 
 /// Each song's entries at the rung `choice` gives it: what was encoded
 /// for it, else its first rung made anew, else its library file. A song
-/// whose name in the zip another took, as files of one name in two
-/// cases would, is left out and said.
+/// whose name in the zip another took, as a filesystem blind to case
+/// folds names ([`relpath::folded`]), is left out and said.
 fn chosen<W: Write>(
     songs: &[Song],
     held: &[Vec<Entry>],
@@ -558,7 +558,10 @@ fn chosen<W: Write>(
         } else {
             made.remove(&(n, 0)).unwrap_or_else(|| held[n].clone())
         };
-        let names: Vec<String> = entries.iter().map(|e| e.name.to_lowercase()).collect();
+        let names: Vec<String> = entries
+            .iter()
+            .map(|e| relpath::folded(Path::new(&e.name)))
+            .collect();
         if names.iter().any(|name| taken.contains(name)) {
             crate::ui::warning(
                 out,
@@ -1222,6 +1225,57 @@ fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Resul
 mod tests {
     use super::*;
     use crate::codec::Codec;
+
+    #[test]
+    fn songs_whose_names_a_filesystem_blind_to_case_takes_for_one_are_one_in_the_zip() {
+        let song = |name: &str| {
+            let plan = Plan {
+                version: crate::resolve::render_version(Codec::Flac),
+                format: crate::resolve::Format::Copy { codec: Codec::Flac },
+                audio: crate::resolve::AudioRef {
+                    key: SourceKey::Manual(format!("{name}.flac").as_str().into()),
+                    rev: "r".into(),
+                    index: 0,
+                },
+                cover: None,
+                lyrics: None,
+                tags: Vec::new(),
+                loudness: None,
+                tagging: crate::resolve::TAGGING,
+                chapters: Vec::new(),
+            };
+            let entry = Entry {
+                from: PathBuf::from(format!("{name}.flac")),
+                name: format!("library/{name}.flac"),
+                made: false,
+            };
+            (
+                Song {
+                    stem: PathBuf::from(name),
+                    path: PathBuf::from(format!("{name}.flac")),
+                    lyrics: None,
+                    plan,
+                    anew: false,
+                    sources: None,
+                },
+                vec![entry],
+            )
+        };
+        // Lower case tells the final sigma from the other; NTFS's upper case does not.
+        let (songs, held): (Vec<Song>, Vec<Vec<Entry>>) = [
+            "\u{3bf}\u{3b4}\u{3bf}\u{3c2}",
+            "\u{3bf}\u{3b4}\u{3bf}\u{3c3}",
+        ]
+        .into_iter()
+        .map(song)
+        .unzip();
+        let mut out = Vec::new();
+        let chosen = chosen(&songs, &held, &[0, 0], &mut Made::new(), &mut out).unwrap();
+        assert_eq!(chosen.songs, 1);
+        assert!(!chosen.ok);
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("another song takes its name"), "{said}");
+    }
 
     #[test]
     fn a_setting_is_a_table_s_key_and_its_value_toml_or_else_text() {

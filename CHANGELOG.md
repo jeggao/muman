@@ -127,6 +127,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`export` tells names apart as Windows and macOS do.** Two songs
+  whose names only lower case told apart, as `οδος` and `οδοσ`, both went
+  into a folder export, where NTFS and exFAT hold them as one file; the
+  second is left out and said, as for names of one spelling.
 - **A song retitled has its lyrics cleaned by its new title.** A new
   title or artist only retagged the song, keeping lyrics cleaned of the
   old ones, so a library changed song by song differed from one made at
