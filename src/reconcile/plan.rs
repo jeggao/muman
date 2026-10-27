@@ -202,6 +202,61 @@ pub(crate) struct Resolution {
     pub over_max_path: usize,
 }
 
+/// What resolving a song reads beside the song: the song list, the
+/// settings, what was measured, the names a path takes and the albums
+/// the sources offer, made once for many songs. A song need not be
+/// listed, so one made in memory, as songs merged, resolves as the sync
+/// after would resolve it.
+pub(crate) struct Resolver<'a> {
+    manifest: &'a Manifest,
+    settings: &'a crate::settings::Settings,
+    state: &'a State,
+    naming: Naming,
+    albums: Albums,
+}
+
+impl<'a> Resolver<'a> {
+    pub(crate) fn new(
+        manifest: &'a Manifest,
+        settings: &'a crate::settings::Settings,
+        state: &'a State,
+        library: &Path,
+    ) -> Result<Self> {
+        Ok(Self {
+            manifest,
+            settings,
+            state,
+            naming: Naming::new(&settings.library, library)?,
+            albums: Albums::of(state.facts.values().map(|f| &f.tags)),
+        })
+    }
+
+    /// What resolving `song` reads, with the sources `on_disk` when the
+    /// store was looked at.
+    pub(crate) fn input<'s>(
+        &'s self,
+        song: &'s Song,
+        on_disk: Option<&'s BTreeSet<SourceKey>>,
+    ) -> Input<'s> {
+        let settings = self.settings;
+        Input {
+            song,
+            album: song.album.as_ref().and_then(|a| self.manifest.album(a)),
+            facts: &self.state.facts,
+            on_disk,
+            alignments: &self.state.alignments,
+            lyrics: &settings.lyrics,
+            clean: &self.manifest.clean,
+            albums: &self.albums,
+            naming: &self.naming,
+            audio: &settings.audio,
+            quality: &settings.quality,
+            placement: settings.library.lyrics,
+            source_comments: settings.library.source_comments,
+        }
+    }
+}
+
 /// Resolve every song under `settings`, each with a path of its own,
 /// saying nothing.
 pub(crate) fn resolve_songs(
@@ -212,31 +267,15 @@ pub(crate) fn resolve_songs(
     on_disk: Option<&BTreeSet<SourceKey>>,
     waiting: &BTreeSet<SourceKey>,
 ) -> Result<Resolution> {
-    let naming = Naming::new(&settings.library, library)?;
+    let resolver = Resolver::new(manifest, settings, state, library)?;
     let mut resolution = Resolution {
         planned: Vec::new(),
         unresolved: Vec::new(),
         awaiting: Vec::new(),
         over_max_path: 0,
     };
-    let albums = Albums::of(state.facts.values().map(|f| &f.tags));
     for (n, song) in manifest.songs.iter().enumerate() {
-        let input = Input {
-            song,
-            album: song.album.as_ref().and_then(|a| manifest.album(a)),
-            facts: &state.facts,
-            on_disk,
-            alignments: &state.alignments,
-            lyrics: &settings.lyrics,
-            clean: &manifest.clean,
-            albums: &albums,
-            naming: &naming,
-            audio: &settings.audio,
-            quality: &settings.quality,
-            placement: settings.library.lyrics,
-            source_comments: settings.library.source_comments,
-        };
-        match resolve::resolve(&input) {
+        match resolve::resolve(&resolver.input(song, on_disk)) {
             Ok(r) => resolution.planned.push((n, r)),
             Err(_) if song.sources.iter().any(|k| waiting.contains(k)) => {
                 resolution.awaiting.push(n);
@@ -252,7 +291,7 @@ pub(crate) fn resolve_songs(
     crate::loudness::settle(&mut resolution.planned, state, settings);
     separate(
         &mut resolution.planned,
-        &naming,
+        &resolver.naming,
         settings.library.max_name_bytes,
     );
     Ok(resolution)

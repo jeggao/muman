@@ -12,7 +12,9 @@
 //! and 144 across albums.
 //!
 //! A group with an album holding it twice is most likely a file there
-//! twice, whatever other albums hold it too; a group on several albums,
+//! twice, whatever other albums hold it too. An album is told by its
+//! album artist with its name, so two albums of one name by two artists
+//! are two, and a song on none is on no album. A group on several albums,
 //! once on each, is a song and its copies elsewhere, which a library of
 //! whole albums keeps. Nothing is changed: merging is for the user, by
 //! moving the sources into one `[[song]]` or removing the others.
@@ -26,8 +28,7 @@ use crate::dirs::Dirs;
 use crate::fingerprint::{Indexed, Verdict};
 use crate::manifest::Manifest;
 use crate::parallel;
-use crate::query::{self, Query};
-use crate::reconcile;
+use crate::query::{self, Query, View};
 use crate::state::State;
 
 /// The least share of the longer print the shorter is, for two to be
@@ -44,11 +45,17 @@ pub fn report<W: Write, D: Write>(
 ) -> Result<()> {
     let manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
-    let views = query::views(&manifest, &state, &dirs.library)?;
+    let (views, resolved): (Vec<_>, Vec<_>) =
+        query::resolved_views(&manifest, &state, &dirs.library)?
+            .into_iter()
+            .unzip();
     let query = Query::parse(terms, &query::extractors(&manifest))?;
     query.check_fields(&views)?;
-    let (planned, _) =
-        reconcile::plan(&manifest, &state, &dirs.library, None, &mut std::io::sink())?;
+    let planned: Vec<(usize, &crate::resolve::Resolved)> = resolved
+        .iter()
+        .enumerate()
+        .filter_map(|(n, r)| Some((n, r.as_ref()?)))
+        .collect();
     let (mut printed, mut short, mut still) = (Vec::new(), 0_usize, 0_usize);
     for (n, r) in &planned {
         match state.facts.get(&r.plan.audio.key).map(|f| f.print.as_ref()) {
@@ -111,15 +118,15 @@ pub fn report<W: Write, D: Write>(
         .filter(|g| g.iter().any(|n| query.matches(&views[*n])))
         .collect();
     let album = |n: usize| views[n].first("album");
-    let names = |g: &[usize]| g.iter().map(|n| album(*n)).collect::<Vec<_>>();
+    let ids = |g: &[usize]| g.iter().map(|n| album_id(&views[*n])).collect::<Vec<_>>();
     let (alone, across): (Vec<&Vec<usize>>, Vec<&Vec<usize>>) =
-        shown.into_iter().partition(|g| twice(&names(g)).is_some());
+        shown.into_iter().partition(|g| twice(&ids(g)).is_some());
     for group in alone.iter().chain(&across) {
-        let names = names(group);
-        let albums = names.iter().collect::<BTreeSet<_>>().len();
-        let on = match (albums, twice(&names)) {
-            (1, _) => format!("on one album, {}", names[0]),
-            (n, Some(held)) => format!("on {n} albums, twice on {held}"),
+        let ids = ids(group);
+        let albums = ids.iter().collect::<BTreeSet<_>>().len();
+        let on = match (albums, twice(&ids)) {
+            (1, _) => format!("on one album, {}", album(group[0])),
+            (n, Some(at)) => format!("on {n} albums, twice on {}", album(group[at])),
             (n, None) => format!("on {n} albums"),
         };
         crate::ui::line(
@@ -135,14 +142,28 @@ pub fn report<W: Write, D: Write>(
     summary(report, (alone.len(), across.len()), groups.len())
 }
 
-/// The album of `albums`, one per song of a group, that holds it more
-/// than once.
-fn twice(albums: &[String]) -> Option<&str> {
+/// What tells the album `view`'s song is on from another: its album
+/// artist, else its artist, with its name; `None` on no album.
+fn album_id(view: &View) -> Option<(String, String)> {
+    let name = view.first("album");
+    if name.is_empty() {
+        return None;
+    }
+    let mut by = view.first("album_artist");
+    if by.is_empty() {
+        by = view.first("artist");
+    }
+    Some((by, name))
+}
+
+/// Where in `albums`, one per song of a group, an album holds it a
+/// second time.
+fn twice(albums: &[Option<(String, String)>]) -> Option<usize> {
     albums
         .iter()
         .enumerate()
-        .find(|(n, a)| albums[..*n].contains(a))
-        .map(|(_, a)| a.as_str())
+        .find(|(n, a)| a.is_some() && albums[..*n].contains(a))
+        .map(|(n, _)| n)
 }
 
 /// The line after the groups shown, `alone` with an album holding it
@@ -204,10 +225,31 @@ mod tests {
 
     #[test]
     fn an_album_holding_a_recording_twice_is_found_among_others() {
-        let names = |a: &[&str]| a.iter().map(ToString::to_string).collect::<Vec<_>>();
-        let both = names(&["Lantern Weather", "Best Of", "Lantern Weather"]);
-        assert_eq!(twice(&both), Some("Lantern Weather"));
-        assert_eq!(twice(&names(&["Lantern Weather", "Best Of"])), None);
+        let on = |by: &str, name: &str| Some((by.to_string(), name.to_string()));
+        let both = [
+            on("Ada Quill", "Lantern Weather"),
+            on("Ada Quill", "Best Of"),
+            on("Ada Quill", "Lantern Weather"),
+        ];
+        assert_eq!(twice(&both), Some(2));
+        assert_eq!(twice(&both[..2]), None);
+    }
+
+    #[test]
+    fn albums_of_one_name_by_two_artists_or_no_album_hold_nothing_twice() {
+        let on = |by: &str, name: &str| Some((by.to_string(), name.to_string()));
+        assert_eq!(
+            twice(&[on("Ada Quill", "Best Of"), on("Marlo Venn", "Best Of")]),
+            None
+        );
+        assert_eq!(twice(&[None, None]), None);
+        let mut view = View::default();
+        assert_eq!(album_id(&view), None);
+        view.tags = vec![
+            ("ARTIST".into(), vec!["Marlo Venn".into()]),
+            ("ALBUM".into(), vec!["Best Of".into()]),
+        ];
+        assert_eq!(album_id(&view), on("Marlo Venn", "Best Of"));
     }
 
     #[test]
