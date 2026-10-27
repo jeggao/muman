@@ -393,7 +393,7 @@ fn where_lyrics_went_becomes_their_outputs_and_writes_no_song_again() {
     let list = s.dir.path().join("home/songs.toml");
     let now = std::fs::read_to_string(&list).unwrap();
     let start = now.find("\n# Where the lyrics a song takes").expect(&now);
-    let end = now[start..].find("when = \"any\"\n").unwrap() + start + "when = \"any\"\n".len();
+    let end = now[start..].find("words = true\n").unwrap() + start + "words = true\n".len();
     let old = format!("{}\n{}", &now[..start], &now[end..])
         .replace(
             &format!("edition = {}", crate::migrate::EDITION),
@@ -477,6 +477,44 @@ fn lyrics_go_where_their_timing_takes_them() {
         std::fs::read_to_string(lib.join("02 Song.plain.lrc")).unwrap(),
         "Paper comets\n"
     );
+}
+
+#[test]
+fn lyrics_are_written_as_cues_and_plain_text_each_in_its_file() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Paper comets\n[00:03.50]Lantern weather\n",
+    );
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[[lyrics.out]]\nto = \"file\"\nformat = \"vtt\"\n\
+         [[lyrics.out]]\nto = \"file\"\nformat = \"srt\"\n\
+         [[lyrics.out]]\nto = \"file\"\nformat = \"txt\"\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    let vtt = std::fs::read_to_string(lib.join("02 Song.vtt")).unwrap();
+    assert!(
+        vtt.starts_with("WEBVTT\n\n00:00:01.000 --> 00:00:03.500\nPaper comets\n"),
+        "{vtt}"
+    );
+    let srt = std::fs::read_to_string(lib.join("02 Song.srt")).unwrap();
+    assert!(
+        srt.starts_with("1\n00:00:01,000 --> 00:00:03,500\n"),
+        "{srt}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(lib.join("02 Song.txt")).unwrap(),
+        "Paper comets\nLantern weather\n"
+    );
+    assert!(!lib.join("02 Song.lrc").exists());
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
 }
 
 #[test]

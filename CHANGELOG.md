@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **Lyrics as WebVTT, SubRip or plain text.** A `[[lyrics.out]]` of
+  `format = "vtt"` or `"srt"` writes timed lyrics as subtitle cues, word
+  times kept in WebVTT, and `"txt"` as plain lines, in a file or the
+  tag; `words = false` drops word times.
 - **`[[lyrics.out]]` says where lyrics go.** Each is a file beside the
   song, named by a suffix of your own, as `Song.en.lrc`, or the lyrics
   tag inside it, and may take only timed or only untimed lyrics.

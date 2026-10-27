@@ -376,6 +376,14 @@ pub struct LyricsRef {
     /// The files beside the song they go to, where `placement` cannot say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<LyricsFile>>,
+    /// How they are written inside the song, where not as LRC with its
+    /// word times.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inside: Option<LyricsFile>,
+    /// Where the song ends, in ms, which ends the last cue of a file of
+    /// cues; none where no file holds cues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<i64>,
     /// The ISO 639-2 code of the language their source names them in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -433,14 +441,38 @@ impl LyricsRef {
     }
 }
 
-/// A file of lyrics beside a song, as a `[[lyrics.out]]` names it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A file of lyrics beside a song, as a `[[lyrics.out]]` names it, or
+/// the lyrics tag, which has no suffix.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricsFile {
     /// What follows the song's own name, before the extension.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub suffix: String,
     #[serde(default)]
     pub format: crate::settings::LyricsFormat,
+    /// Whether word times are kept.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub words: bool,
+}
+
+impl Default for LyricsFile {
+    fn default() -> Self {
+        Self {
+            suffix: String::new(),
+            format: crate::settings::LyricsFormat::Lrc,
+            words: true,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
+
+// serde hands `skip_serializing_if` a reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
+fn is_yes(b: &bool) -> bool {
+    *b
 }
 
 /// Everything a library file is made from. Stored beside each output and
@@ -1174,7 +1206,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     }
                 ),
             };
-            let (placement, files) = lyrics_outputs(&input.lyrics.out, l.timing.is_some());
+            let (placement, files, inside, end_ms) =
+                lyrics_outputs(input, audio, l.timing.is_some());
             let why = match role {
                 Some(Role::Original) | None => timing,
                 Some(Role::Romanization) => format!("a romanization, {timing}"),
@@ -1190,6 +1223,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     stretch_ppm,
                     placement,
                     files,
+                    inside,
+                    end_ms,
                     language: l.language.langs().first().map(Lang::iso639_2),
                     clean_off: clean::lyrics::off(input.clean),
                     cleaning: clean::lyrics::EDITION,
@@ -1203,22 +1238,42 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
         .map(|(_, l, w)| (l, w))
 }
 
-/// Where lyrics `timed` or not go, as the `[[lyrics.out]]` taking them
-/// say, in a plan's terms ([`LyricsRef::placed`]).
+/// Where a song's lyrics `timed` or not go, as the `[[lyrics.out]]` taking
+/// them say, in a plan's terms: the placement and files of
+/// [`LyricsRef::placed`], how they are written inside the song, and
+/// where the song of `audio` ends, for a file of cues.
 fn lyrics_outputs(
-    outs: &[crate::settings::LyricsOut],
+    input: &Input<'_>,
+    audio: &SourceKey,
     timed: bool,
-) -> (LyricsPlacement, Option<Vec<LyricsFile>>) {
-    let outs = outs.iter().filter(|o| o.when.takes(timed));
-    let tag = outs.clone().any(|o| o.to == To::Tag);
-    let files = outs
-        .filter(|o| o.to == To::File)
-        .map(|o| LyricsFile {
-            suffix: o.suffix.clone(),
-            format: o.format,
-        })
-        .collect();
-    LyricsRef::placed(tag, files)
+) -> (
+    LyricsPlacement,
+    Option<Vec<LyricsFile>>,
+    Option<LyricsFile>,
+    Option<i64>,
+) {
+    let outs = input
+        .lyrics
+        .out
+        .iter()
+        .filter(|o| o.when.takes(timed) && (timed || !o.format.cues()));
+    let form = |o: &crate::settings::LyricsOut| LyricsFile {
+        suffix: o.suffix.clone(),
+        format: o.format,
+        words: o.words,
+    };
+    let tag = outs.clone().find(|o| o.to == To::Tag);
+    let files: Vec<LyricsFile> = outs.filter(|o| o.to == To::File).map(form).collect();
+    let cues = files.iter().any(|f| f.format.cues());
+    let end_ms = input
+        .facts
+        .get(audio)
+        .and_then(Facts::length)
+        .filter(|_| cues)
+        .map(|s| (s * 1000.0).round() as i64);
+    let inside = tag.map(form).filter(|f| *f != LyricsFile::default());
+    let (placement, files) = LyricsRef::placed(tag.is_some(), files);
+    (placement, files, inside, end_ms)
 }
 
 /// What one source offers for a field, as cleaned.

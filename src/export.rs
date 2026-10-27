@@ -1351,7 +1351,7 @@ mod tests {
                 "audio.codecs=[\"mp3\"]",
                 "audio.lossy=\"mp3\"",
                 "audio.lossless=\"mp3\"",
-                "lyrics.out=[{ to = \"tag\", suffix = \"\", format = \"lrc\", when = \"any\" }]",
+                "lyrics.out=[{ to = \"tag\", suffix = \"\", format = \"lrc\", when = \"any\", words = true }]",
                 "audio.lossless=\"flac\"",
             ]
         );

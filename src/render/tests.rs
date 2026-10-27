@@ -10,7 +10,7 @@ use super::*;
 use crate::codec::Codec;
 use crate::library::{Ledger, Owned};
 use crate::quality::Rect;
-use crate::resolve::{AudioRef, render_version};
+use crate::resolve::{AudioRef, LyricsFile, render_version};
 use crate::store::Kind;
 use crate::testing::Fake;
 
@@ -69,6 +69,8 @@ fn plan(format: Format) -> Plan {
             stretch_ppm: 0,
             placement: LyricsPlacement::Sidecar,
             files: None,
+            inside: None,
+            end_ms: None,
             language: None,
             clean_off: Vec::new(),
             cleaning: crate::clean::lyrics::EDITION,
@@ -200,6 +202,23 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     .unwrap();
     assert_eq!(none.files, []);
     assert!(!lrc.exists(), "the last build's beside the song gone");
+}
+
+#[test]
+fn lyrics_go_inside_the_song_in_the_format_the_plan_names() {
+    let f = fixture();
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    let lyrics = p.lyrics.as_mut().unwrap();
+    lyrics.placement = LyricsPlacement::Embedded;
+    lyrics.inside = Some(LyricsFile {
+        format: crate::settings::LyricsFormat::Txt,
+        ..LyricsFile::default()
+    });
+    let r = go(&Fake::default(), &f, &p).unwrap();
+    assert_eq!(names(&r), [] as [PathBuf; 0]);
+    let mut file = fs::File::open(f.dir.path().join("lib").join(&r.audio)).unwrap();
+    let opus = OpusFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    assert_eq!(opus.vorbis_comments().get("LYRICS"), Some("line\nmore\n"));
 }
 
 #[test]
@@ -643,6 +662,8 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         stretch_ppm: 0,
         placement: LyricsPlacement::Sidecar,
         files: None,
+        inside: None,
+        end_ms: None,
         language: None,
         clean_off: Vec::new(),
         cleaning: crate::clean::lyrics::EDITION,
