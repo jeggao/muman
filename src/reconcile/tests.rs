@@ -85,7 +85,7 @@ impl Home {
         let mut recorded: BTreeSet<PathBuf> = yours.iter().map(PathBuf::from).collect();
         for (path, written) in &state.outputs {
             recorded.insert(path.clone());
-            recorded.extend(written.lyrics.clone());
+            recorded.extend(written.sidecar_paths().cloned());
         }
         let on_disk: BTreeSet<PathBuf> = files(&self.dirs.library)
             .into_iter()
@@ -1219,7 +1219,7 @@ fn pruning_keeps_lyrics_a_case_blind_filesystem_takes_for_a_new_songs() {
     }
     let written = |lyrics: &str| Written {
         sources: Vec::new(),
-        lyrics: Some(lyrics.into()),
+        sidecars: vec![crate::state::Sidecar::at(lyrics.into())],
         plan: None,
         stamp: None,
         digest: None,
@@ -1959,7 +1959,7 @@ fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
         "A/x.flac".into(),
         Written {
             sources: vec![],
-            lyrics: None,
+            sidecars: Vec::new(),
             plan: None,
             stamp: None,
             digest: None,

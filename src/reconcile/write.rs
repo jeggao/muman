@@ -21,7 +21,7 @@ use crate::render;
 use crate::resolve::{CoverRef, LyricsRef, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
-use crate::state::{self, State, Written};
+use crate::state::{self, Sidecar, State, Written};
 use crate::store::{self, Located};
 
 use super::decide::{Doing, Intent, kept, moved_to};
@@ -101,11 +101,11 @@ pub(super) fn relocate<W: Write>(
     let pairs: Vec<Relocation> = moves
         .into_iter()
         .map(|(from, to)| {
-            let lyrics = state.outputs[&from]
-                .lyrics
-                .clone()
-                .map(|l| (l, to.with_extension("lrc")));
-            Relocation { from, to, lyrics }
+            let beside = state.outputs[&from]
+                .sidecar_paths()
+                .map(|s| (s.clone(), crate::outputs::moved(&from, &to, s)))
+                .collect();
+            Relocation { from, to, beside }
         })
         .collect();
     let results = ledger.relocate(&pairs, out)?;
@@ -125,7 +125,9 @@ pub(super) fn relocate<W: Write>(
             continue;
         };
         done.insert(m.to.clone());
-        state.outputs.insert(m.to.clone(), moved_to(written, &m.to));
+        state
+            .outputs
+            .insert(m.to.clone(), moved_to(written, &m.from, &m.to));
     }
     Ok(done)
 }
@@ -292,20 +294,28 @@ fn before_writing<R: Runner, W: Write>(
         .collect();
     // Owned before written, and no longer vouched for: a crash between the two must leave
     // neither a file no run would delete nor a rewritten one that looks changed by someone
-    // else, nor lyrics of the user's own that the song leaves alone counted muman's.
+    // else, nor a file of the user's own beside it that the song leaves alone counted muman's.
     let mut pending = (!due.is_empty()).then(|| state.clone());
     if let Some(pending) = pending.as_mut() {
-        for ((n, r), _) in due {
+        for ((n, r), retag) in due {
             let path = path_of(r);
-            let lyrics = Some(path.with_extension("lrc")).filter(|l| {
-                std::fs::symlink_metadata(job.dirs.library.join(l)).is_err()
-                    || claims[n].iter().any(|o| o.path() == l)
-            });
+            // A retag writes nothing beside the song, whose files stay as vouched for.
+            let sidecars = match old.get(&path).filter(|_| *retag) {
+                Some(w) => w.sidecars.clone(),
+                None => crate::outputs::names(&path)
+                    .into_iter()
+                    .filter(|s| {
+                        std::fs::symlink_metadata(job.dirs.library.join(s)).is_err()
+                            || claims[n].iter().any(|o| o.path() == s)
+                    })
+                    .map(Sidecar::at)
+                    .collect(),
+            };
             pending.outputs.insert(
                 path,
                 Written {
                     sources: job.manifest.songs[*n].sources.clone(),
-                    lyrics,
+                    sidecars,
                     plan: None,
                     stamp: None,
                     digest: None,
@@ -409,8 +419,17 @@ fn render_due<R: Runner, W: Write>(
         }
         if *retag {
             let path = path_of(r);
-            let lyrics = old.get(&path).and_then(|w| w.lyrics.as_deref());
-            return render::retag(&dirs.library, &path, lyrics, &r.plan, claim);
+            let lyrics = crate::outputs::lyrics(&path);
+            let lyrics = old
+                .get(&path)
+                .and_then(|w| w.sidecar_paths().find(|s| **s == lyrics));
+            return render::retag(
+                &dirs.library,
+                &path,
+                lyrics.map(PathBuf::as_path),
+                &r.plan,
+                claim,
+            );
         }
         render::render(
             *runner,
@@ -425,12 +444,12 @@ fn render_due<R: Runner, W: Write>(
         )
     };
     parallel::chunked(due, parallel::builds(), render_one, |chunk, rendered| {
-        for (((n, r), _), result) in chunk.iter().zip(rendered) {
+        for (((n, r), retag), result) in chunk.iter().zip(rendered) {
             let song = &manifest.songs[*n];
             let name = name_of(song, Some(r), facts);
             match result {
                 Ok(done) => {
-                    let (vouched, learned) = vouch(job, (song, r), &done, old, out)?;
+                    let (vouched, learned) = vouch(job, (song, r), (&done, *retag), old, out)?;
                     wrote.written += 1;
                     wrote.learned.extend(learned);
                     if let Some(pending) = pending.as_deref_mut() {
@@ -456,12 +475,13 @@ fn render_due<R: Runner, W: Write>(
 }
 
 /// Say what writing `done` did to its song, run the hooks on its file,
-/// and vouch for it as written; with what its plan rendered to, when
+/// and vouch for it and each file beside it as written, those of a song
+/// only `retag`ged as they were; with what its plan rendered to, when
 /// fitting asks.
 fn vouch<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     (song, r): (&Song, &Resolved),
-    done: &render::Rendered,
+    (done, retag): (&render::Rendered, bool),
     old: &BTreeMap<PathBuf, Written>,
     out: &mut W,
 ) -> Result<(Written, Option<(String, state::Measured)>)> {
@@ -510,9 +530,17 @@ fn vouch<R: Runner, W: Write>(
         };
         (limit::plan_key(&f.tools, &r.plan), measured)
     });
+    let sidecars = match old.get(&done.audio).filter(|_| retag) {
+        Some(w) => w.sidecars.clone(),
+        None => done
+            .lyrics
+            .iter()
+            .map(|l| Sidecar::vouched(library, l.clone()))
+            .collect(),
+    };
     let vouched = Written {
         sources: song.sources.clone(),
-        lyrics: done.lyrics.clone(),
+        sidecars,
         plan: Some(r.plan.clone()),
         stamp: store::stamp_text(&library.join(&done.audio)),
         digest: crate::facts::digest_file(&library.join(&done.audio)),

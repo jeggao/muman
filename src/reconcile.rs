@@ -50,7 +50,8 @@ pub(crate) use self::measure::compare;
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, analyze_mixes, hash, sizes};
 pub(crate) use self::owned::{
-    adopt, changed_since_written, edited_since_written, rehome, vouch_for_copies,
+    adopt, changed_since_written, edited_since_written, rehome, sidecar_as_written,
+    vouch_for_copies,
 };
 use self::plan::plan_awaiting;
 pub(crate) use self::plan::{Planned, Resolver, name_of, path_of, plan, plan_with, resolve_songs};
@@ -311,8 +312,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if !opts.dry_run {
         let paths = planned
             .iter()
-            .map(|(_, r)| path_of(r))
-            .chain(state.outputs.keys().cloned());
+            .flat_map(|(_, r)| {
+                let path = path_of(r);
+                let names = crate::outputs::names(&path);
+                std::iter::once(path).chain(names)
+            })
+            .chain(
+                state
+                    .outputs
+                    .iter()
+                    .flat_map(|(p, w)| w.files(p).map(Path::to_path_buf)),
+            );
         crate::library::clear_leftovers(&dirs.library, paths);
     }
     let located: BTreeMap<SourceKey, Located> = listed
@@ -551,7 +561,7 @@ pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
     let state = State::load(&dirs.home).map_err(|e| format!("{e:#}"))?;
     let mut owners: BTreeMap<&SourceKey, &std::path::PathBuf> = BTreeMap::new();
     for (path, written) in &state.outputs {
-        for file in std::iter::once(path).chain(&written.lyrics) {
+        for file in written.files(path) {
             if !dirs.library.join(file).exists() {
                 return Err(format!("{file:?} is recorded, not there"));
             }

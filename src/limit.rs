@@ -352,10 +352,10 @@ fn ladder(
     ladder
 }
 
-/// What a file of the library takes on disk, its lyrics included.
+/// What a file of the library takes on disk, those beside it included.
 fn on_disk(library: &Path, path: &Path, w: &Written, block: u64) -> u64 {
     let size = |p: &Path| store::stamp(&library.join(p)).map_or(0, |(size, _)| size);
-    blocks(size(path), block) + w.lyrics.as_ref().map_or(0, |l| blocks(size(l), block))
+    w.files(path).map(|p| blocks(size(p), block)).sum()
 }
 
 /// What fitting has learnt in this run: the real sizes the passes asked

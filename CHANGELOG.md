@@ -54,6 +54,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Lyrics you change by hand are yours.** A `.lrc` muman wrote and
+  you changed since is neither written over nor deleted until
+  `sync --force`, as a song file you changed is not; `check` names it.
+  `state.json` is format version 3, which an earlier muman refuses.
 - **Each aspect's settings sit under it.** The measures that rank
   sources move from `[quality.*]` to `[audio.pick.*]` (purity, stereo,
   bandwidth, clipping) and `[cover.pick.*]` (square, resolution,

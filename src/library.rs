@@ -7,7 +7,8 @@
 //!
 //! A file is removed, written over or kept before either, only as
 //! [`Owned`]: one the state lists as muman's, its bytes as muman wrote
-//! them, or its lyrics; or one a forced run takes over, kept for `undo`
+//! them, or a file beside one, so too; or one a forced run takes over,
+//! kept for `undo`
 //! first like any other. No other value names a file the ledger may
 //! delete, so a file of the user's own cannot reach a removal by any path
 //! through the code: [`put`] and [`clear`], which `render` places a song's
@@ -64,7 +65,8 @@ impl<'a> Ledger<'a> {
     }
 
     /// `rel` as muman's: a file `outputs` lists whose stamp is as written
-    /// or, when `forced`, whatever became of it; or the lyrics of one.
+    /// or, when `forced`, whatever became of it; or a file beside one, so
+    /// too.
     #[must_use]
     pub fn owned(
         &self,
@@ -74,8 +76,10 @@ impl<'a> Ledger<'a> {
     ) -> Option<Owned> {
         let audio = outputs.contains_key(rel)
             && (forced || !crate::reconcile::changed_since_written(self.root, outputs, rel));
-        let lyrics = outputs.values().any(|w| w.lyrics.as_deref() == Some(rel));
-        (audio || lyrics).then(|| Owned(rel.to_path_buf()))
+        let beside = outputs.values().flat_map(|w| &w.sidecars).any(|s| {
+            s.path == rel && (forced || crate::reconcile::sidecar_as_written(self.root, s))
+        });
+        (audio || beside).then(|| Owned(rel.to_path_buf()))
     }
 
     /// `rel` taken over by a forced run, though it is not muman's.
@@ -130,10 +134,10 @@ impl<'a> Ledger<'a> {
         Ok(Removal { gone, held })
     }
 
-    /// Move each pair of `moves`, a song's file and its lyrics, all
-    /// recorded ahead; a pair whose lyrics cannot follow goes back whole,
-    /// and a pair that cannot move is forgotten from the record. Returns
-    /// each pair's outcome, in order.
+    /// Move each of `moves`, a song's file and those beside it, all
+    /// recorded ahead; a song whose files beside it cannot follow goes
+    /// back whole, and one that cannot move is forgotten from the record.
+    /// Returns each one's outcome, in order.
     pub fn relocate<W: Write>(
         &mut self,
         moves: &[Relocation],
@@ -142,7 +146,7 @@ impl<'a> Ledger<'a> {
         if let Some(run) = self.run.as_deref_mut().filter(|_| !moves.is_empty()) {
             for m in moves {
                 run.moving(&m.from, &m.to);
-                if let Some((a, b)) = &m.lyrics {
+                for (a, b) in &m.beside {
                     run.moving(a, b);
                 }
             }
@@ -151,11 +155,17 @@ impl<'a> Ledger<'a> {
         let mut left = Vec::new();
         let mut done = Vec::new();
         for m in moves {
-            let result = move_file(self.root, &m.from, &m.to).and_then(|()| match &m.lyrics {
-                Some((a, b)) => move_file(self.root, a, b).inspect_err(|_| {
-                    let _ = move_file(self.root, &m.to, &m.from);
-                }),
-                None => Ok(()),
+            let result = move_file(self.root, &m.from, &m.to).and_then(|()| {
+                for (n, (a, b)) in m.beside.iter().enumerate() {
+                    if let Err(e) = move_file(self.root, a, b) {
+                        for (a, b) in m.beside[..n].iter().rev() {
+                            let _ = move_file(self.root, b, a);
+                        }
+                        let _ = move_file(self.root, &m.to, &m.from);
+                        return Err(e);
+                    }
+                }
+                Ok(())
             });
             match &result {
                 Ok(()) => {
@@ -172,7 +182,7 @@ impl<'a> Ledger<'a> {
                 Err(_) => {
                     if let Some(run) = self.run.as_deref_mut() {
                         run.not_moved(&m.from, &m.to);
-                        if let Some((a, b)) = &m.lyrics {
+                        for (a, b) in &m.beside {
                             run.not_moved(a, b);
                         }
                     }
@@ -238,12 +248,13 @@ pub struct Removal {
     pub held: Vec<(PathBuf, String)>,
 }
 
-/// A song's file moved to a new path, with its lyrics where it has them.
+/// A song's file moved to a new path, with each file beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Relocation {
     pub from: PathBuf,
     pub to: PathBuf,
-    pub lyrics: Option<(PathBuf, PathBuf)>,
+    /// Each file beside it, from and to.
+    pub beside: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Rename a library file, creating its new folder.
@@ -270,19 +281,18 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
     }
 }
 
-/// Remove what a run stopped partway left beside the paths muman writes:
-/// a `.part` it was writing, a `.moving` it was renaming through. Only
-/// beside those paths, so a download of the user's own named so is not.
+/// Remove what a run stopped partway left beside the paths muman writes,
+/// each a song's file or one beside it: a `.part` it was writing, a
+/// `.moving` it was renaming through. Only beside those paths, so a
+/// download of the user's own named so is not.
 pub fn clear_leftovers(library: &Path, paths: impl Iterator<Item = PathBuf>) {
-    for path in paths {
-        for file in [path.clone(), path.with_extension("lrc")] {
-            for suffix in [".part", ".moving"] {
-                let mut left = library.join(&file).into_os_string();
-                left.push(suffix);
-                let left = PathBuf::from(left);
-                if left.is_file() {
-                    let _ = crate::atomic::remove(&left);
-                }
+    for file in paths {
+        for suffix in [".part", ".moving"] {
+            let mut left = library.join(&file).into_os_string();
+            left.push(suffix);
+            let left = PathBuf::from(left);
+            if left.is_file() {
+                let _ = crate::atomic::remove(&left);
             }
         }
     }
@@ -335,7 +345,10 @@ mod tests {
     fn written(stamp: Option<String>, lyrics: Option<&str>) -> Written {
         Written {
             sources: Vec::new(),
-            lyrics: lyrics.map(PathBuf::from),
+            sidecars: lyrics
+                .map(|l| crate::state::Sidecar::at(l.into()))
+                .into_iter()
+                .collect(),
             plan: None,
             stamp,
             digest: None,
@@ -444,7 +457,7 @@ mod tests {
         let moves = [Relocation {
             from: "A/x.opus".into(),
             to: "B/x.opus".into(),
-            lyrics: Some(("A/x.lrc".into(), "B/x.lrc".into())),
+            beside: vec![("A/x.lrc".into(), "B/x.lrc".into())],
         }];
         let done = ledger.relocate(&moves, &mut Vec::new()).unwrap();
         assert!(done[0].is_err());

@@ -286,7 +286,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .ok_or_else(|| anyhow!("{key} is not on disk"))
     };
     let audio_rel = with_extension(job.stem, plan.format.extension());
-    let lyrics_rel = with_extension(job.stem, "lrc");
+    let lyrics_rel = crate::outputs::lyrics_of_stem(job.stem);
     let (audio_path, lyrics_path) = (job.library.join(&audio_rel), job.library.join(&lyrics_rel));
     let dir = audio_path.parent().unwrap_or(job.library);
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -714,7 +714,7 @@ pub fn place(
     };
     match &rendered.lyrics {
         Some(lyrics) => copy_in(lyrics)?,
-        None => crate::library::clear(library, &rendered.audio.with_extension("lrc"), claim)?,
+        None => crate::library::clear(library, &crate::outputs::lyrics(&rendered.audio), claim)?,
     }
     copy_in(&rendered.audio)?;
     Ok(rendered.clone())

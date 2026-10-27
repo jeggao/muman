@@ -453,7 +453,7 @@ fn foreign(c: &Context<'_>) -> Result<Group> {
         .state
         .outputs
         .iter()
-        .flat_map(|(p, w)| std::iter::once(p.as_path()).chain(w.lyrics.as_deref()))
+        .flat_map(|(p, w)| w.files(p))
         .collect();
     for file in store::walk(&c.dirs.library, usize::MAX)? {
         if let Ok(rel) = file.strip_prefix(&c.dirs.library)

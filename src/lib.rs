@@ -49,6 +49,7 @@ pub mod music;
 pub mod musicbrainz;
 pub mod naming;
 pub mod ogg;
+pub mod outputs;
 pub mod overview;
 pub mod parallel;
 pub mod picture;
