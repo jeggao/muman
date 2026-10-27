@@ -401,6 +401,12 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 **Options:**
 
 * `--resolve` — Step through the groups on a terminal, each shown side by side, to merge its songs into one, keep them apart or remove one, then make what was chosen as one change `undo` puts back
+* `--merge <GROUPS>` — Merge each group of the kind named into its song with the best audio, without stepping through them; a group whose songs set a tag by hand to two values is left for `--resolve`
+
+  Possible values:
+  - `twice`:
+    Each group an album holds twice, the copies on that album
+
 * `-y`, `--yes` — Make what was chosen without the last question
 * `-n`, `--dry-run` — Say what would change; change nothing
 

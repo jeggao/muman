@@ -115,3 +115,9 @@ A tag set by hand to two values is asked about, which stays. What was
 picked is then said and asked about, `-y` making it without asking and
 `-n` stopping there, and made as one change: `undo` puts it all back.
 Without a terminal it is refused.
+
+`duplicates --merge twice` merges, without stepping through them, the
+copies of each recording an album holds twice into the one a merge would
+keep, leaving a group whose songs set a tag by hand to two values for
+`--resolve`, named. It asks as other changes do: without a terminal,
+`-y` makes it and `-n` says what it would do.

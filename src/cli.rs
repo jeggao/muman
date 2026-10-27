@@ -170,6 +170,13 @@ pub struct Matching {
     pub new: bool,
 }
 
+/// Which groups of one recording `duplicates --merge` merges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Merging {
+    /// Each group an album holds twice, the copies on that album.
+    Twice,
+}
+
 /// How a change to songs a query selects is confirmed.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct Confirm {
@@ -597,15 +604,21 @@ pub enum Command {
         /// Step through the groups on a terminal, each shown side by side,
         /// to merge its songs into one, keep them apart or remove one,
         /// then make what was chosen as one change `undo` puts back.
-        #[arg(long)]
+        #[arg(long, group = "changing")]
         resolve: bool,
 
+        /// Merge each group of the kind named into its song with the best
+        /// audio, without stepping through them; a group whose songs set
+        /// a tag by hand to two values is left for `--resolve`.
+        #[arg(long, value_enum, value_name = "GROUPS", group = "changing")]
+        merge: Option<Merging>,
+
         /// Make what was chosen without the last question.
-        #[arg(short = 'y', long, requires = "resolve")]
+        #[arg(short = 'y', long, requires = "changing")]
         yes: bool,
 
         /// Say what would change; change nothing.
-        #[arg(short = 'n', long, requires = "resolve")]
+        #[arg(short = 'n', long, requires = "changing")]
         dry_run: bool,
     },
     /// Count what the library holds, whether it is in step with the song

@@ -99,8 +99,8 @@ impl Held {
 #[must_use]
 pub fn gated(command: &Command) -> bool {
     match command {
+        Command::Duplicates { .. } => crate::merges(command),
         Command::List { .. }
-        | Command::Duplicates { resolve: false, .. }
         | Command::Purge { .. }
         | Command::Completions { .. }
         | Command::Undo { .. } => false,
