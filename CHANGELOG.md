@@ -14,6 +14,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offers, a value typed from the one written and checked as it is
   typed, and pins picked among the sources by what was measured; saved
   once reviewed, as one change `undo` puts back.
+- **`set` step by step tags a whole album:** for songs all on one
+  album, its genre, date, album or album artist set on the album, for
+  its songs and any added later; the lyrics offset typed as a time; and
+  any other tag named.
 - **`duplicates --resolve` makes the copies of a recording one song.**
   Each group is shown side by side, the song a merge keeps first, and
   merged, kept apart or one removed; what was picked is made as one

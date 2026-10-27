@@ -1856,8 +1856,9 @@ fn set_with_a_query_alone_changes_a_song_step_by_step() {
     assert!(s.refused(&["set", "song"]).contains("step by step"));
 
     // The menu: the six tags a song list starts with, the track number
-    // the source offers, the three pins, then the review.
-    let (title, date, audio, review) = (0, 5, 7, 10);
+    // the source offers, the three pins, the lyrics offset, another tag,
+    // then the review.
+    let (title, date, audio, review) = (0, 5, 7, 12);
     let mut p = crate::ui::MockPrompter::answering([true]);
     p.push_select(Some(title)).push_select(Some(1));
     p.push_text(Some("Tide"));
@@ -1908,6 +1909,84 @@ fn set_with_a_query_alone_changes_a_song_step_by_step() {
         after.contains("tags.title = \"Tide\""),
         "leaving saves nothing: {after}"
     );
+}
+
+#[test]
+fn set_step_by_step_tags_an_album_types_an_offset_and_names_another_tag() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+
+    // A tag named is listed once chosen, so the review moves down one.
+    let (offset, another, review) = (10, 11, 13);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(offset));
+    p.push_text(Some("soon")).push_text(Some("120 ms"));
+    p.push_select(Some(another));
+    p.push_text(Some("composer"));
+    p.push_select(Some(1));
+    p.push_text(Some("Ada Quill"));
+    p.push_select(Some(review));
+    let text = s
+        .trusting(&flacs(), &["set", "manual:a.flac"], Some(&mut p))
+        .unwrap();
+    assert!(
+        p.asked.iter().any(|a| a.starts_with("refused: ")),
+        "{:?}",
+        p.asked
+    );
+    let after = std::fs::read_to_string(&list).unwrap();
+    assert!(
+        after.contains("lyrics_offset = \"120 ms\""),
+        "{after}\n{text}"
+    );
+    assert!(
+        after.contains("composer = \"Ada Quill\""),
+        "{after}\n{text}"
+    );
+
+    let album = "youtube.com:playlist/PLvid0000001";
+    let text = std::fs::read_to_string(&list)
+        .unwrap()
+        .replace("[[song]]\n", &format!("[[song]]\nalbum = \"{album}\"\n"));
+    std::fs::write(
+        &list,
+        format!(
+            "{text}\n[[album]]\nsource = \"{album}\"\ntags = {{ album = \"Lantern Weather\" }}\n"
+        ),
+    )
+    .unwrap();
+
+    // The rows of the menu for two songs on an album, read from a look
+    // that leaves at once.
+    let mut look = crate::ui::MockPrompter::new();
+    look.push_select(None);
+    s.trusting(&flacs(), &["set", "--all", "song"], Some(&mut look))
+        .unwrap();
+    let rows: Vec<&str> = look.asked[0].lines().skip(1).collect();
+    let row = |start: &str| rows.iter().position(|r| r.trim_start().starts_with(start));
+    let (genre, review) = (row("genre ").unwrap(), row("Review and save").unwrap());
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(genre)).push_select(Some(1));
+    p.push_text(Some("Folk"));
+    p.push_select(Some(1));
+    p.push_select(Some(review));
+    let text = s
+        .trusting(&flacs(), &["set", "--all", "song"], Some(&mut p))
+        .unwrap();
+    assert!(
+        p.asked
+            .iter()
+            .any(|a| a.starts_with("Set genre to Folk where?")),
+        "{:?}",
+        p.asked
+    );
+    let after = std::fs::read_to_string(&list).unwrap();
+    let album_table = &after[after.find("[[album]]").unwrap()..];
+    assert!(album_table.contains("genre = \"Folk\""), "{after}\n{text}");
 }
 
 #[test]
