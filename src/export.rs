@@ -29,8 +29,8 @@
 //! is; each is said, and the export fails. A song made anew runs no
 //! `written` hook. The settings that place or cap the library folder,
 //! `path`, `touch_root` and `max_size`, are no export's, and `block_size`
-//! is a folder's alone. Nor is `[quality]`: the measures a sync takes follow
-//! its weights, so an export could rank by measures never taken. Loudness
+//! is a folder's alone. Nor is `[audio.pick]`: the measures a sync takes
+//! follow its weights, so an export could rank by measures never taken. Loudness
 //! is refused for the same reason when the song list's mode measures none.
 //!
 //! With a size, songs are fitted by [`crate::fit`]. Each starts as the file
@@ -120,7 +120,7 @@ const MISS: f64 = 3.0;
 /// The tables `--set` reaches.
 const TABLES: [&str; 3] = ["library", "audio", "loudness"];
 /// The settings of those tables no export takes, and why.
-const NOT_EXPORTS: [(&str, &str, &str); 3] = [
+const NOT_EXPORTS: [(&str, &str, &str); 4] = [
     (
         "library",
         "path",
@@ -132,6 +132,11 @@ const NOT_EXPORTS: [(&str, &str, &str); 3] = [
         "the export touches no library folder",
     ),
     ("library", "max_size", "--max-size caps the export"),
+    (
+        "audio",
+        "pick",
+        "a sync measures sources as its own weights ask, so the export ranks as it does",
+    ),
 ];
 
 /// What `export` writes, and how.
@@ -168,16 +173,17 @@ pub fn setting(arg: &str) -> std::result::Result<Override, String> {
             "an export sets [library], [audio] and [loudness], not [{table}]"
         ));
     }
+    let first = key.split('.').next().unwrap_or(key);
+    if let Some((_, _, why)) = NOT_EXPORTS
+        .iter()
+        .find(|(t, k, _)| *t == table && *k == first)
+    {
+        return Err(format!("{name} is no export's setting: {why}"));
+    }
     if table.is_empty() || key.is_empty() || key.contains('.') {
         return Err(format!(
             "`{name}` names no setting; write its table and key, as audio.lossy"
         ));
-    }
-    if let Some((_, _, why)) = NOT_EXPORTS
-        .iter()
-        .find(|(t, k, _)| *t == table && *k == key)
-    {
-        return Err(format!("{name} is no export's setting: {why}"));
     }
     let value = raw
         .trim()
@@ -1296,12 +1302,15 @@ mod tests {
             "audio.lossy",
             "lossy=mp3",
             "quality.purity.weight=1",
+            "audio.pick.purity.weight=1",
             "ytdlp.format=ba",
             "library.path=/x",
             "library.max_size=1GiB",
         ] {
             assert!(setting(refused).is_err(), "{refused}");
         }
+        let e = setting("audio.pick.stereo.weight=0").unwrap_err();
+        assert!(e.contains("no export's setting"), "{e}");
     }
 
     #[test]

@@ -54,6 +54,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Each aspect's settings sit under it.** The measures that rank
+  sources move from `[quality.*]` to `[audio.pick.*]` (purity, stereo,
+  bandwidth, clipping) and `[cover.pick.*]` (square, resolution,
+  blockiness), and the cleaning switches from `[clean.*]` to
+  `[tags.clean.*]` and from `[clean.lyrics.*]` to `[lyrics.clean.*]`. A
+  song list naming the old tables reads as before, and the next `sync`
+  moves each with its settings and comments.
 - **Songs to pick are told apart, and a change asks by name.** When a
   query matches several songs, each is listed by its album, track,
   length, audio, cover and lyrics, where they differ, and none is

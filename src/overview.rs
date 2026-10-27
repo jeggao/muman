@@ -528,7 +528,7 @@ impl Health {
                     if q.bandwidth_hz < NARROW_HZ {
                         h.narrow.add(&name);
                     }
-                    if !q.is_stereo(manifest.settings.quality.stereo.incoherence) {
+                    if !q.is_stereo(manifest.settings.audio.pick.stereo.incoherence) {
                         h.mono.add(&name);
                     }
                     if q.clipping > CLIPPED {
@@ -545,7 +545,7 @@ impl Health {
                         .and_then(|f| f.covers.iter().find(|x| x.at == c.at))
                         .and_then(|x| x.quality.as_ref());
                     if let Some(q) = quality {
-                        if !q.is_square(manifest.settings.quality.square.tolerance) {
+                        if !q.is_square(manifest.settings.cover.pick.square.tolerance) {
                             h.not_square.add(&name);
                         }
                         if q.effective < SOFT_COVER {

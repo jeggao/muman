@@ -196,7 +196,7 @@ and Opus, and as `CTOC` and `CHAP` frames in MP3; WavPack holds none. A
 source of one chapter has none to keep.
 
 The file also holds the settings tables of
-[configuration](configuration.md), `[clean.*]` ([cleaning](library.md#cleaning)),
+[configuration](configuration.md), `[tags.clean.*]` and `[lyrics.clean.*]` ([cleaning](library.md#cleaning)),
 and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.
 muman edits it in place: comments, order and keys it does not know
 survive every write, and two runs at once keep each other's songs. A

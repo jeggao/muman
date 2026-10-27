@@ -1,6 +1,6 @@
 //! What cleaning takes out of lyrics, and what it mends in them, by
 //! rules in a fixed order. Each rule is a switch in the song list's
-//! `[clean.lyrics.<tier>]`, its tier saying how far it may stray, as the
+//! `[lyrics.clean.<tier>]`, its tier saying how far it may stray, as the
 //! tag rules' tiers say in [`super::TIERS`].
 //!
 //! Measured on a library of about two thousand songs, lyrics from

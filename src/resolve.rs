@@ -1,6 +1,6 @@
 //! What a song is made of: for each aspect, the source whose measures
 //! say it is best. Audio and covers are scored by the song list's
-//! `[quality]`: each measure in whole steps, so noise never decides
+//! `[audio.pick]` and `[cover.pick]`: each measure in whole steps, so noise never decides
 //! between near-equals, times its weight, summed; the lowest score wins.
 //! No rule names a kind of source; a pin in the song list is the only
 //! override, and the order of `sources` breaks the last tie. A source
@@ -127,7 +127,7 @@ use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
-use crate::settings::{Audio, LyricsPlacement, Prefer, Quality};
+use crate::settings::{Audio, CoverPick, LyricsPlacement, Prefer};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
@@ -623,7 +623,7 @@ pub struct Input<'a> {
     pub albums: &'a Albums,
     pub naming: &'a Naming,
     pub audio: &'a Audio,
-    pub quality: &'a Quality,
+    pub cover: &'a CoverPick,
     pub placement: LyricsPlacement,
     /// Whether a comment its sources' tags carry is written.
     pub source_comments: bool,
@@ -815,7 +815,7 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
             .map(|ms| ms + lacks.max(missing))
             .or_else(|| any_missing.then_some(missing));
         let q = facts.audio.as_ref().and_then(|a| a.quality);
-        let w = input.quality;
+        let w = &input.audio.pick;
         let [unknown, sum] = score(&[
             (
                 w.purity.weight(),
@@ -860,7 +860,7 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
                 units::khz_of_hz(q.bandwidth_hz),
                 speakers(
                     facts.audio.as_ref(),
-                    q.is_stereo(input.quality.stereo.incoherence)
+                    q.is_stereo(input.audio.pick.stereo.incoherence)
                 ),
                 q.clipping * 100.0
             ),
@@ -979,7 +979,7 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
         for cover in &facts.covers {
             order += 1;
             let q = cover.quality;
-            let w = input.quality;
+            let w = input.cover;
             let [unknown, sum] = score(&[
                 (
                     w.square.weight(),

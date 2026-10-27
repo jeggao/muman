@@ -6,7 +6,7 @@ static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
     Naming::new(&Library::default(), std::path::Path::new("lib")).unwrap()
 });
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
-static QUALITY: std::sync::LazyLock<Quality> = std::sync::LazyLock::new(Quality::default);
+static COVER: std::sync::LazyLock<CoverPick> = std::sync::LazyLock::new(CoverPick::default);
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
@@ -178,7 +178,7 @@ fn song(sources: &[SourceKey]) -> Song {
 }
 
 fn run(song: &Song, facts: &BTreeMap<SourceKey, Facts>, alignments: &[Aligned]) -> Resolved {
-    run_with(song, facts, alignments, &AUDIO, &QUALITY)
+    run_with(song, facts, alignments, &AUDIO, &COVER)
 }
 
 fn run_with(
@@ -186,9 +186,9 @@ fn run_with(
     facts: &BTreeMap<SourceKey, Facts>,
     alignments: &[Aligned],
     audio: &Audio,
-    quality: &Quality,
+    cover: &CoverPick,
 ) -> Resolved {
-    run_reading(song, facts, alignments, audio, quality, &english())
+    run_reading(song, facts, alignments, audio, cover, &english())
 }
 
 fn run_reading(
@@ -196,7 +196,7 @@ fn run_reading(
     facts: &BTreeMap<SourceKey, Facts>,
     alignments: &[Aligned],
     audio: &Audio,
-    quality: &Quality,
+    cover: &CoverPick,
     lyrics: &crate::settings::Lyrics,
 ) -> Resolved {
     resolve(&Input {
@@ -210,7 +210,7 @@ fn run_reading(
         albums: &Albums::default(),
         naming: &NAMING,
         audio,
-        quality,
+        cover,
         placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
@@ -309,7 +309,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         albums: &Albums::default(),
         naming: &NAMING,
         audio: &AUDIO,
-        quality: &QUALITY,
+        cover: &COVER,
         placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
@@ -571,7 +571,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         albums: &Albums::default(),
         naming: &NAMING,
         audio: &AUDIO,
-        quality: &QUALITY,
+        cover: &COVER,
         placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
@@ -640,7 +640,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         albums: &albums,
         naming: &NAMING,
         audio: &AUDIO,
-        quality: &QUALITY,
+        cover: &COVER,
         placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
@@ -745,7 +745,7 @@ fn hand_set_tags_and_the_album_win_last() {
         albums: &Albums::default(),
         naming: &NAMING,
         audio: &AUDIO,
-        quality: &QUALITY,
+        cover: &COVER,
         placement: LyricsPlacement::Sidecar,
         source_comments: false,
     })
@@ -1065,7 +1065,7 @@ fn formats_follow_the_winning_codec() {
         a.layout = Some(if channels == 6 { "5.1" } else { "stereo" }.into());
         let facts = BTreeMap::from([(key.clone(), f)]);
         assert_eq!(
-            run_with(&song(&[key]), &facts, &[], &settings, &QUALITY)
+            run_with(&song(&[key]), &facts, &[], &settings, &COVER)
                 .plan
                 .format,
             format,
@@ -1107,7 +1107,7 @@ fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
     ] {
         let key = manual("x");
         let facts = BTreeMap::from([(key.clone(), audio(codec, 20.0))]);
-        let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+        let r = run_with(&song(&[key]), &facts, &[], &settings, &COVER);
         assert_eq!(r.plan.format, format, "{codec}");
     }
     let lossy = Audio {
@@ -1117,7 +1117,7 @@ fn a_listed_codec_is_copied_and_the_rest_encoded_to_the_targets() {
     let key = manual("x");
     let facts = BTreeMap::from([(key.clone(), audio("pcm_s24le", 20.0))]);
     assert_eq!(
-        run_with(&song(&[key]), &facts, &[], &lossy, &QUALITY)
+        run_with(&song(&[key]), &facts, &[], &lossy, &COVER)
             .plan
             .format,
         Format::Encode {
@@ -1187,22 +1187,18 @@ fn a_measure_switched_off_or_outweighed_no_longer_decides() {
     let facts = BTreeMap::from([(narrow.clone(), n), (wide.clone(), w)]);
     let alignments = both(&facts, &narrow, &wide, 0, 0.99).to_vec();
     let songs = song(&[narrow.clone(), wide.clone()]);
-    let pick = |quality: &Quality| {
-        run_with(&songs, &facts, &alignments, &AUDIO, quality)
+    let pick = |audio: &Audio| {
+        run_with(&songs, &facts, &alignments, audio, &COVER)
             .plan
             .audio
             .key
     };
-    assert_eq!(
-        pick(&QUALITY),
-        narrow,
-        "mono outweighs 8 steps of bandwidth"
-    );
-    let mut off = Quality::default();
-    off.stereo.enabled = false;
+    assert_eq!(pick(&AUDIO), narrow, "mono outweighs 8 steps of bandwidth");
+    let mut off = Audio::default();
+    off.pick.stereo.enabled = false;
     assert_eq!(pick(&off), wide, "without stereo, bandwidth decides");
-    let mut light = Quality::default();
-    light.stereo.weight = 50;
+    let mut light = Audio::default();
+    light.pick.stereo.weight = 50;
     assert_eq!(pick(&light), wide, "8 steps outweigh a lighter stereo");
 }
 
@@ -1222,7 +1218,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             albums: &Albums::default(),
             naming: &NAMING,
             audio: &AUDIO,
-            quality: &QUALITY,
+            cover: &COVER,
             placement: LyricsPlacement::Sidecar,
             source_comments: false,
         })
@@ -1449,7 +1445,7 @@ fn audio_a_codec_cannot_hold_is_written_in_one_that_can() {
         a.bits = bits;
         a.float = float;
         let facts = BTreeMap::from([(key.clone(), f)]);
-        let r = run_with(&song(&[key]), &facts, &[], settings, &QUALITY);
+        let r = run_with(&song(&[key]), &facts, &[], settings, &COVER);
         assert_eq!(r.plan.format, format, "{codec} {layout:?} {bits}");
     }
 }
@@ -1560,7 +1556,7 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
         &facts,
         &[],
         &settings,
-        &QUALITY,
+        &COVER,
     );
     assert_eq!(
         r.plan.format,
@@ -1582,7 +1578,7 @@ fn a_layout_not_taken_is_mixed_and_loses_its_loudness() {
     a.channels = 6;
     a.layout = Some("5.1(side)".into());
     let facts = BTreeMap::from([(key.clone(), f)]);
-    let r = run_with(&song(&[key]), &facts, &[], &settings, &QUALITY);
+    let r = run_with(&song(&[key]), &facts, &[], &settings, &COVER);
     assert_eq!(r.plan.format, Format::Copy { codec: Codec::Flac });
 }
 
@@ -1670,7 +1666,7 @@ fn taken_by(key: &SourceKey, f: &Facts, prefer: &[Prefer]) -> Option<LyricsAt> {
     };
     let facts = BTreeMap::from([(key.clone(), f.clone())]);
     let s = song(std::slice::from_ref(key));
-    let r = run_reading(&s, &facts, &[], &AUDIO, &QUALITY, &reading);
+    let r = run_reading(&s, &facts, &[], &AUDIO, &COVER, &reading);
     r.plan.lyrics.map(|l| l.at)
 }
 
@@ -1744,7 +1740,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             albums: &Albums::default(),
             naming: &NAMING,
             audio: &AUDIO,
-            quality: &QUALITY,
+            cover: &COVER,
             placement: LyricsPlacement::Sidecar,
             source_comments,
         })
@@ -1828,7 +1824,7 @@ fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
         &facts,
         &[],
         &settings,
-        &QUALITY,
+        &COVER,
     );
     assert_eq!(r.plan.format.codec(), Codec::Mp3);
     assert_eq!(r.plan.format.mix(), Some(Layout::STEREO), "MP3 holds two");
@@ -1836,7 +1832,7 @@ fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
         codecs: vec![Codec::Aac],
         ..settings.clone()
     };
-    let r = run_with(&song(&[key]), &facts, &[], &copying, &QUALITY);
+    let r = run_with(&song(&[key]), &facts, &[], &copying, &COVER);
     assert_eq!(
         r.plan.format,
         Format::Copy { codec: Codec::Aac },

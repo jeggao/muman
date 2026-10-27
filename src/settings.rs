@@ -7,11 +7,17 @@
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
 //! are `[library]`, `[lyrics]`, `[audio]`, `[loudness]`
-//! ([`crate::loudness`]), `[quality]`, `[ytdlp]`, `[torrent]`
+//! ([`crate::loudness`]), `[cover]`, `[ytdlp]`, `[torrent]`
 //! ([`crate::aria2`]), `[tools]` ([`crate::tools`]), `[history]` and
 //! `[sites]` ([`crate::sites`]). A
 //! key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored.
+//!
+//! Each aspect a song is made of keeps what decides it in its own table:
+//! `[audio.pick]` and `[cover.pick]` hold the measures their sources are
+//! ranked by, and `[lyrics.clean]`, as `[tags.clean]`, the switches of the
+//! rules that clean them, which [`crate::manifest`] reads beside the
+//! song list's other tables of its own.
 //! A flag or a `MUMAN_*` variable says what is where on one machine,
 //! and overrides the folder or the program the song list names.
 //!
@@ -56,7 +62,7 @@ use crate::units::serde_as;
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
 pub const TABLES: [&str; 10] = [
-    "library", "lyrics", "audio", "loudness", "quality", "ytdlp", "torrent", "tools", "history",
+    "library", "lyrics", "audio", "loudness", "cover", "ytdlp", "torrent", "tools", "history",
     "sites",
 ];
 
@@ -67,7 +73,7 @@ pub struct Settings {
     pub lyrics: Lyrics,
     pub audio: Audio,
     pub loudness: Loudness,
-    pub quality: Quality,
+    pub cover: Cover,
     pub ytdlp: Ytdlp,
     pub torrent: Torrent,
     pub tools: Tools,
@@ -208,7 +214,7 @@ impl LyricsPlacement {
 }
 
 /// How audio that is not copied is encoded.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Audio {
     /// Codecs copied as they are; audio in any other is encoded. Audio
@@ -245,6 +251,7 @@ pub struct Audio {
     /// What audio in a layout `layouts` takes not is mixed into: the
     /// first with no more channels than it has, or else the fewest.
     pub downmix: Vec<Layout>,
+    pub pick: AudioPick,
 }
 
 impl Default for Audio {
@@ -267,6 +274,7 @@ impl Default for Audio {
             min_kbps: None,
             layouts: vec![Speakers::Any],
             downmix: vec![Layout::STEREO],
+            pick: AudioPick::default(),
         }
     }
 }
@@ -382,7 +390,7 @@ impl Audio {
         if self.mp3_kbps > 320 {
             bail!("[audio] mp3_bitrate is over 320 kb/s, the most MP3 holds");
         }
-        Ok(())
+        self.pick.check()
     }
 }
 
@@ -463,54 +471,84 @@ pub enum GainScope {
     Track,
 }
 
-/// How the best of a song's sources is picked. Each measure scores a
-/// source in whole steps; a source's score is each measure's steps times
-/// its weight, summed, and the lowest wins. A measure switched off, or
-/// weighing 0, counts for nothing; one that could not be taken ranks a
+/// How the best audio of a song's sources is picked. Each measure scores
+/// a source in whole steps; a source's score is each measure's steps
+/// times its weight, summed, and the lowest wins. A measure switched off,
+/// or weighing 0, counts for nothing; one that could not be taken ranks a
 /// source after every one it was taken on. Audio scored alike is told
 /// apart as [`crate::resolve`] says; the last ties go to the source
 /// listed first.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Quality {
+pub struct AudioPick {
     pub purity: Purity,
     pub bandwidth: Bandwidth,
     pub stereo: Stereo,
     pub clipping: Clipping,
-    pub square: Square,
-    pub resolution: Resolution,
-    pub blockiness: Blockiness,
 }
 
-impl Quality {
+impl AudioPick {
     fn check(&self) -> Result<()> {
         let steps = [
             ("purity.step", f64::from(self.purity.step_ms)),
             ("bandwidth.step", f64::from(self.bandwidth.step_hz)),
-            ("resolution.step", self.resolution.step),
-            ("blockiness.step", self.blockiness.step),
         ];
-        for (key, step) in steps {
-            if step.is_nan() || step <= 0.0 {
-                bail!("[quality.{key}] must be above 0");
-            }
-        }
         let cutoffs = self
             .clipping
             .cutoffs
             .iter()
             .map(|c| ("clipping.cutoffs", *c));
-        let bounds = [
-            ("stereo.incoherence", self.stereo.incoherence),
-            ("square.tolerance", self.square.tolerance),
-        ];
-        for (key, value) in bounds.into_iter().chain(cutoffs) {
-            if !value.is_finite() || value < 0.0 {
-                bail!("[quality.{key}] must be a number of 0 or more");
-            }
-        }
-        Ok(())
+        let bounds = std::iter::once(("stereo.incoherence", self.stereo.incoherence));
+        check_measures("audio.pick", &steps, bounds.chain(cutoffs))
     }
+}
+
+/// The song's cover.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Cover {
+    pub pick: CoverPick,
+}
+
+/// How the best cover of a song's sources is picked, scored as
+/// [`AudioPick`] scores audio.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CoverPick {
+    pub square: Square,
+    pub resolution: Resolution,
+    pub blockiness: Blockiness,
+}
+
+impl CoverPick {
+    fn check(&self) -> Result<()> {
+        let steps = [
+            ("resolution.step", self.resolution.step),
+            ("blockiness.step", self.blockiness.step),
+        ];
+        let bounds = std::iter::once(("square.tolerance", self.square.tolerance));
+        check_measures("cover.pick", &steps, bounds)
+    }
+}
+
+/// Each of `steps` above 0, and each of `bounds` a number of 0 or more,
+/// else an error naming it under `table`.
+fn check_measures<'a>(
+    table: &str,
+    steps: &[(&str, f64)],
+    bounds: impl Iterator<Item = (&'a str, f64)>,
+) -> Result<()> {
+    for (key, step) in steps {
+        if step.is_nan() || *step <= 0.0 {
+            bail!("[{table}.{key}] must be above 0");
+        }
+    }
+    for (key, value) in bounds {
+        if !value.is_finite() || value < 0.0 {
+            bail!("[{table}.{key}] must be a number of 0 or more");
+        }
+    }
+    Ok(())
 }
 
 /// Sound in a source beyond the song, a video's intro, outro or skit, and
@@ -1130,7 +1168,14 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         }
     }
     crate::migrate::rename_all(&mut only, &EDITIONS)?;
+    if let Some(left) = crate::migrate::left_behind(&only) {
+        bail!("{left}");
+    }
     only.retain(|table, _| TABLES.contains(&table));
+    // Its cleaning switches are the song list's own, read with `[tags.clean]`.
+    if let Some(lyrics) = only.get_mut("lyrics").and_then(Item::as_table_like_mut) {
+        lyrics.remove("clean");
+    }
     for o in overrides {
         let table = only
             .entry(&o.table)
@@ -1207,7 +1252,7 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     }
     settings.audio.check()?;
     settings.loudness.check()?;
-    settings.quality.check()?;
+    settings.cover.pick.check()?;
     // aria2c counts its stop in whole seconds, and 0 as never stopping.
     if settings.torrent.stall < std::time::Duration::from_secs(1) {
         bail!("[torrent] stall must be at least 1 s; under it, a fetch would wait for ever");
@@ -1416,22 +1461,53 @@ mod tests {
     }
 
     #[test]
-    fn a_quality_table_sets_only_what_it_names() {
-        let s = settings("[quality.stereo]\nweight = 0\n[quality.clipping]\nenabled = false\n")
-            .unwrap();
-        assert_eq!(s.quality.stereo.weight(), 0);
+    fn a_pick_table_sets_only_what_it_names() {
+        let s = settings(
+            "[audio.pick.stereo]\nweight = 0\n[audio.pick.clipping]\nenabled = false\n\
+             [cover.pick.square]\nenabled = false\n",
+        )
+        .unwrap();
+        assert_eq!(s.audio.pick.stereo.weight(), 0);
         assert_eq!(
-            s.quality.stereo,
+            s.audio.pick.stereo,
             Stereo {
                 weight: 0,
                 ..Stereo::default()
             }
         );
-        assert_eq!(s.quality.clipping.weight(), 0);
-        assert_eq!(s.quality.bandwidth, Bandwidth::default());
-        assert!(settings("[quality.bandwidth]\nstep_hz = 0\n").is_err());
-        assert!(settings("[quality.clipping]\ncutoffs = [-1.0]\n").is_err());
-        assert!(settings("[quality.loudness]\nweight = 1\n").is_err());
+        assert_eq!(s.audio.pick.clipping.weight(), 0);
+        assert_eq!(s.audio.pick.bandwidth, Bandwidth::default());
+        assert_eq!(s.cover.pick.square.weight(), 0);
+        assert_eq!(s.cover.pick.resolution, Resolution::default());
+        let e = settings("[audio.pick.bandwidth]\nstep = 0\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("[audio.pick.bandwidth.step]"),
+            "{e:#}"
+        );
+        let e = settings("[cover.pick.square]\ntolerance = -1.0\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains("[cover.pick.square.tolerance]"),
+            "{e:#}"
+        );
+        assert!(settings("[audio.pick.clipping]\ncutoffs = [-1.0]\n").is_err());
+        assert!(settings("[audio.pick.loudness]\nweight = 1\n").is_err());
+        assert!(settings("[cover.pick.stereo]\nweight = 1\n").is_err());
+    }
+
+    #[test]
+    fn the_old_quality_tables_read_in_their_new_places() {
+        let s = settings("[quality.stereo]\nweight = 0\n[quality.square]\nweight = 3\n").unwrap();
+        assert_eq!(s.audio.pick.stereo.weight, 0);
+        assert_eq!(s.cover.pick.square.weight, 3);
+        let e =
+            settings("[quality.stereo]\nweight = 0\n[quality.loudness]\nweight = 1\n").unwrap_err();
+        assert!(
+            format!("{e:#}").contains(
+                "[quality.loudness] is no setting: what [quality] held is under [audio.pick] \
+                 and [cover.pick] now"
+            ),
+            "{e:#}"
+        );
     }
 
     #[test]
@@ -1482,18 +1558,22 @@ mod tests {
             text.starts_with(&format!("version = 1\nedition = {EDITION}\n")),
             "{text}"
         );
-        assert!(text.find("[library]") < text.find("[clean.tidy]"), "{text}");
+        assert!(
+            text.find("[library]") < text.find("[tags.clean.tidy]"),
+            "{text}"
+        );
+        assert!(text.contains("[audio.pick.stereo]\nweight = 0\n"), "{text}");
+        assert!(!text.contains("[quality"), "{text}");
         assert!(
             text.contains("# Mine.\nopus_bitrate = \"192 kb/s\"\n"),
             "{text}"
         );
         let s = read(&again).unwrap();
         assert_eq!(s.audio.opus_kbps, 192);
-        assert_eq!(s.quality.stereo.weight, 0);
+        assert_eq!(s.audio.pick.stereo.weight, 0);
         assert_eq!(
             Settings {
                 audio: Audio::default(),
-                quality: Quality::default(),
                 ..s
             },
             Settings::default()
