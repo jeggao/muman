@@ -41,7 +41,10 @@ nothing, or, negated, every song.
 - **`edit`** opens the songs' entries in `$VISUAL` or `$EDITOR`. Delete
   a table to remove its song, move a key to another table to join the
   two, or into a new table without an `id` to split it off. A file with
-  problems reopens with each as an `# ERROR:` line.
+  problems reopens with each as an `# ERROR:` line. Above each song,
+  comments give each tag it writes, where that came from, and what other
+  sources offer instead; they never reach the song list, nor does what
+  each source held when built, which muman keeps.
 - **`remove`** moves songs to `[[removed]]` and deletes their library
   files; `--purge` also deletes fetched sources and trashes your own.
 - **`restore`** lists removed songs again, fetching any purged source.
