@@ -21,7 +21,8 @@ what is not about one module.
 |---|---|
 | What muman is, installing it, a first run | [README.md](README.md) |
 | Using it: the home, the song list and its sources | [docs/guide.md](docs/guide.md) |
-| Picking, lookups, changing songs, status, export, hooks | [docs/library.md](docs/library.md) |
+| Picking, lookups, status, export, hooks | [docs/library.md](docs/library.md) |
+| Queries, changing songs, duplicates | [docs/songs.md](docs/songs.md) |
 | Folders, programs, settings, templates, safe names | [docs/configuration.md](docs/configuration.md) |
 | Codecs, encoding and loudness | [docs/audio.md](docs/audio.md) |
 | Every command and flag | [docs/cli.md](docs/cli.md), generated from `src/cli.rs` |
