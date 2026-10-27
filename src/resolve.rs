@@ -1141,6 +1141,35 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
     best.map(|(_, l, w)| (l, w))
 }
 
+/// What one source offers for a field, as cleaned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offered {
+    pub key: SourceKey,
+    pub values: Vec<String>,
+    /// The cleaning rules that changed it.
+    pub cleaned: Vec<&'static str>,
+}
+
+/// What each of the song's sources offers for each field, cleaned as the
+/// song's tags are, in the order of its sources.
+#[must_use]
+pub fn offers(input: &Input<'_>) -> BTreeMap<Field, Vec<Offered>> {
+    candidates(input)
+        .into_iter()
+        .map(|(field, all)| {
+            let offered = all
+                .into_iter()
+                .map(|c| Offered {
+                    key: c.key.clone(),
+                    values: c.offer.values,
+                    cleaned: c.cleaned,
+                })
+                .collect();
+            (field, offered)
+        })
+        .collect()
+}
+
 /// One source's offer for a field, cleaned.
 struct Candidate<'a> {
     n: usize,

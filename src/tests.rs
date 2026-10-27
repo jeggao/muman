@@ -1801,6 +1801,53 @@ fn a_change_on_a_terminal_names_what_it_does_and_asks_by_name() {
 }
 
 #[test]
+fn edit_shows_where_each_tag_comes_from_and_hides_what_was_held() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let dirs = crate::dirs::Dirs {
+        home: s.dir.path().join("home"),
+        library: s.dir.path().join("lib"),
+    };
+    let seen = std::cell::RefCell::new(String::new());
+    let mut editor = |path: &std::path::Path| -> anyhow::Result<()> {
+        let text = std::fs::read_to_string(path)?;
+        *seen.borrow_mut() = text.clone();
+        std::fs::write(
+            path,
+            text.replace("tags.genre = \"\"", "tags.genre = \"Folk\""),
+        )?;
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+        filetime::set_file_mtime(path, filetime::FileTime::from_system_time(later))?;
+        Ok(())
+    };
+    let mut p = crate::ui::MockPrompter::new();
+    let changed = crate::editor::edit(
+        &dirs,
+        &[],
+        false,
+        Some(&mut p),
+        &mut editor,
+        &mut || Ok(()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(changed);
+    let shown = seen.into_inner();
+    assert!(shown.contains("# TITLE"), "{shown}");
+    assert!(shown.contains("← manual:a.flac"), "{shown}");
+    assert!(
+        !shown.contains("held."),
+        "what was held is muman's: {shown}"
+    );
+    let list = std::fs::read_to_string(dirs.manifest()).unwrap();
+    assert!(!list.contains("← "), "{list}");
+    assert!(list.contains("tags.genre = \"Folk\""), "{list}");
+    assert!(list.contains("held.\"manual:a.flac\""), "{list}");
+}
+
+#[test]
 fn sync_on_a_new_home_writes_the_song_list_to_edit() {
     let s = Setup::new();
     let (ok, text) = s.run(&flacs(), &["sync"]);

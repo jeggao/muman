@@ -2,7 +2,21 @@
 //! their song-list entries, and what changed applied. A file that does
 //! not read reopens with what is wrong atop it; songs changed in the
 //! song list while it was open are said so, and saving again applies.
+//!
+//! Above each song are comments on what it resolves to now: each tag
+//! written, where it came from, a source, the song's own tags, its
+//! album's or its place there, with the cleaning that changed it, and
+//! below it what other sources offer apart from it, so a tag set by
+//! hand is chosen with what it overrides in sight. They are the
+//! table's prefix, which a save puts back as the song list had it, so
+//! none reaches the song list; a value is shown on one line and cut
+//! short, so none can end its comment and read as TOML. What each
+//! source held when its song was built, `held`, is muman's record and
+//! is left out of the file, then put back for every key a table lists,
+//! whichever song listed it before, so a source joined to another song
+//! keeps its record.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Write;
 use std::path::Path;
@@ -13,10 +27,14 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::change::{self, Read};
 use crate::dirs::Dirs;
+use crate::held::Held;
 use crate::manifest::{Edit, Rewritten, SongTable};
 use crate::query::View;
+use crate::reconcile::Resolver;
+use crate::resolve::{self, Offered, Resolved};
 use crate::source::SourceKey;
 use crate::store::Store;
+use crate::tags::Field;
 
 const HEADER: &str = "\
 # Edit the songs below, then save and close; quit without saving to
@@ -24,18 +42,83 @@ const HEADER: &str = "\
 # id as it is. Delete a [[song]] to remove it. Move a key from one
 # song's sources to another's to join them, or into a new [[song]]
 # without an id to make it a song of its own. A tag left empty keeps
-# what the sources offer; above each song is what it resolves to now.
+# what the sources offer; above each song is what it resolves to now,
+# each tag with where it comes from and what other sources offer.
 ";
 
 /// Lines muman puts atop a file it reopens.
 const PROBLEM: &str = "# ERROR: ";
 const NOTICE: &str = "# NOTE: ";
 
-/// One song as opened: its id, its name, and its table as listed.
+/// One song as opened: its id, its name, its table as listed, and the
+/// comments on where its tags come from.
 struct Opened {
     id: SourceKey,
     name: String,
     table: Table,
+    origins: Vec<String>,
+}
+
+/// The longest a value shows in a comment, in columns.
+const SHOWN: usize = 60;
+
+/// `values` as one comment can hold them: on one line, cut short.
+fn shown(values: &[String]) -> String {
+    let joined = crate::ui::printable(&values.join("; "))
+        .replace('\n', "⏎")
+        .replace('\t', " ");
+    crate::rows::cut(&joined, SHOWN)
+}
+
+/// A comment line for each tag `r` writes, with where it came from,
+/// and below it each other source's offer apart from it.
+fn origins(r: &Resolved, offers: &BTreeMap<Field, Vec<Offered>>) -> Vec<String> {
+    let measured = |k: &str| k.starts_with("REPLAYGAIN_") || k.starts_with("R128_");
+    let width = (r.plan.tags.iter())
+        .filter(|(k, _)| !measured(k))
+        .map(|(k, _)| k.len())
+        .max()
+        .unwrap_or(0);
+    let mut lines = Vec::new();
+    for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
+        if measured(key) {
+            continue;
+        }
+        let mut from = why.from.clone();
+        if !why.cleaned.is_empty() {
+            from = format!("{from}, cleaned: {}", why.cleaned.join(", "));
+        }
+        lines.push(format!("# {key:<width$}  {}  ← {from}", shown(values)));
+        let others = Field::named(key)
+            .and_then(|f| offers.get(&f))
+            .into_iter()
+            .flatten()
+            .filter(|o| o.values != *values && !o.values.is_empty());
+        for o in others {
+            lines.push(format!(
+                "# {:width$}    or {}  ← {}",
+                "",
+                shown(&o.values),
+                o.key
+            ));
+        }
+    }
+    lines
+}
+
+/// `table` with what each key it lists held when built, from `held`.
+fn with_held(mut table: Table, held: &BTreeMap<SourceKey, Held>) -> Table {
+    let keys: Vec<SourceKey> = (table.get("sources").and_then(Item::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(|v| SourceKey::parse(v.as_str()?).ok())
+        .collect();
+    for key in keys {
+        if let Some(h) = held.get(&key) {
+            crate::held::set(&mut table, &key, h);
+        }
+    }
+    table
 }
 
 fn describe(view: &View) -> String {
@@ -73,13 +156,17 @@ fn render(opened: &[Opened], views: &[&View]) -> String {
             .table
             .iter()
             .filter_map(|(k, _)| o.table.get_key_value(k))
-            .filter(|(k, _)| k.get() != "id")
+            .filter(|(k, _)| k.get() != "id" && k.get() != "held")
         {
             table.insert_formatted(key, item.clone());
         }
         let mut prefix = format!("\n# {}\n", describe(view));
         if let Some(path) = &view.path {
             let _ = writeln!(prefix, "# → {}", path.display());
+        }
+        for line in &o.origins {
+            prefix.push_str(line);
+            prefix.push('\n');
         }
         table.decor_mut().set_prefix(prefix);
         list.push(table);
@@ -112,6 +199,7 @@ fn content(t: &Table) -> String {
     let mut t = t.clone();
     t.decor_mut().clear();
     t.remove("id");
+    t.remove("held");
     t.to_string()
 }
 
@@ -147,6 +235,10 @@ fn interpret(
         .filter_map(|o| read.manifest.song_with(&o.id))
         .flat_map(|s| &s.sources)
         .collect();
+    let held: BTreeMap<SourceKey, Held> = (opened.iter())
+        .filter_map(|o| read.manifest.song_with(&o.id))
+        .flat_map(|s| s.held.iter().map(|(k, h)| (k.clone(), h.clone())))
+        .collect();
     for (n, mut table) in tables.into_iter().enumerate() {
         let what = format!("song {}", n + 1);
         let id = table.remove("id");
@@ -175,7 +267,7 @@ fn interpret(
             }
         }
         match id.as_ref().map(|i| i.as_str()) {
-            None => new.push(SongTable(table)),
+            None => new.push(SongTable(with_held(table, &held))),
             Some(Some(id)) => match opened.iter().find(|o| o.id.to_string() == id) {
                 Some(o) if seen.contains(&o.id) => {
                     problems.push(format!("{what}: {id} is the id of an earlier song too"));
@@ -183,6 +275,7 @@ fn interpret(
                 Some(o) => {
                     seen.push(o.id.clone());
                     if content(&table) != content(&o.table) {
+                        let table = with_held(table, &held);
                         songs.push((o.id.clone(), Rewritten::Table(SongTable(table))));
                     }
                 }
@@ -287,26 +380,7 @@ pub fn edit<W: Write>(
         return Ok(false);
     }
     let store = Store::scan(dirs)?;
-    let ids: Vec<SourceKey> = picked
-        .iter()
-        .filter_map(|n| read.views[*n].id().cloned())
-        .collect();
-    let mut tables = read.manifest.tables_by_id(&ids)?;
-    let mut opened = Vec::new();
-    for n in &picked {
-        let id = read.views[*n]
-            .id()
-            .context("a song lists no source")?
-            .clone();
-        let Some(table) = tables.remove(&id) else {
-            bail!("{id} is no longer listed");
-        };
-        opened.push(Opened {
-            id,
-            name: read.views[*n].name(),
-            table,
-        });
-    }
+    let opened = open(&read, &picked, &dirs.library)?;
     let views: Vec<&View> = picked.iter().map(|n| &read.views[*n]).collect();
     let first = render(&opened, &views);
     let dir = tempfile::tempdir().context("creating a temporary directory")?;
@@ -375,6 +449,38 @@ pub fn edit<W: Write>(
             )],
         );
     }
+}
+
+/// The songs at `picked` as opened, each with where its tags come from.
+fn open(read: &Read, picked: &[usize], library: &Path) -> Result<Vec<Opened>> {
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.views[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
+    let settings = &read.manifest.settings;
+    let resolver = Resolver::new(&read.manifest, settings, &read.state, library)?;
+    let mut opened = Vec::new();
+    for n in picked {
+        let id = read.views[*n]
+            .id()
+            .context("a song lists no source")?
+            .clone();
+        let Some(table) = tables.remove(&id) else {
+            bail!("{id} is no longer listed");
+        };
+        let song = &read.manifest.songs[*n];
+        let origins = read.resolved[*n].as_ref().map_or_else(Vec::new, |r| {
+            origins(r, &resolve::offers(&resolver.input(song, None)))
+        });
+        opened.push(Opened {
+            id,
+            name: read.views[*n].name(),
+            table,
+            origins,
+        });
+    }
+    Ok(opened)
 }
 
 /// Run `$VISUAL`, else `$EDITOR`, else the system's own, on `path`. On

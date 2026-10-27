@@ -53,6 +53,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   rather than "Go ahead?"; `purge` and `undo` ask by name too.
   `remove --purge` that trashes files of your own takes the count of
   songs typed.
+- **`edit` says where each tag of a song comes from:** above each song,
+  each tag written, the source, hand tag or album it came from and the
+  cleaning that changed it, and what other sources offer instead. What
+  each source held when built is no longer shown, and is kept when a
+  source moves to another song.
 - **A new source that may be a listed song is shown beside it** before
   `add` or `sync` asks: the name, album, length and audio of each and
   how alike they sound, then "Its own song" or "Add to" the song, keeping
