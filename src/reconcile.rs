@@ -53,7 +53,7 @@ pub(crate) use self::owned::{
     adopt, changed_since_written, edited_since_written, rehome, vouch_for_copies,
 };
 use self::plan::plan_awaiting;
-pub(crate) use self::plan::{Planned, name_of, path_of, plan, plan_with, resolve_songs};
+pub(crate) use self::plan::{Planned, Resolver, name_of, path_of, plan, plan_with, resolve_songs};
 pub(crate) use self::report::{Fate, verdict};
 use self::report::{Showing, Shown, fit_summary, left_out, status};
 use self::write::{Writing, apply, touch};

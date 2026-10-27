@@ -43,7 +43,7 @@ Exit codes:
 * `check` — Check the library against what muman recorded: files missing, empty or changed since written, left by an interrupted run, or not muman's; sources missing, unreadable or damaged
 * `status` — Say what a sync would write, and for each song where each of its aspects comes from and why; the song list and the library are left as they are, and what it measures is kept for the next sync. A song a sync leaves as it is is counted, not shown, unless a query matches it
 * `export` — Write the song list and the library, as the last run left them, into one zip, or with --folder into a new folder: songs.toml at its root, the songs under library/. The library's settings may be changed for the export alone: each song the change touches is made again from its sources, as a library under those settings would hold it. With --max-size, songs are encoded again at lower bitrates, the least audible loss first, until the export fits. The library and the song list are left as they are
-* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
+* `duplicates` — List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing, unless `--resolve`
 * `info` — Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 * `completions` — Write a script that completes muman's commands, flags and values in a shell, for the shell to load
 
@@ -377,9 +377,9 @@ written as the library holds it, and said.
 
 ### `muman duplicates`
 
-List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing
+List the songs listed apart that are one recording, by their audio fingerprints: a file of an album there twice, or a track and its copies on other albums. Groups an album holds twice come first; songs any group holds that the query matches name the groups shown. Changes nothing, unless `--resolve`
 
-**Usage:** `muman duplicates [QUERY]...`
+**Usage:** `muman duplicates [OPTIONS] [QUERY]...`
 
 ```text
 Query:
@@ -397,6 +397,12 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 **Arguments:**
 
 * `<QUERY>` — Terms a song in each group shown matches; none shows every group
+
+**Options:**
+
+* `--resolve` — Step through the groups on a terminal, each shown side by side, to merge its songs into one, keep them apart or remove one, then make what was chosen as one change `undo` puts back
+* `-y`, `--yes` — Make what was chosen without the last question
+* `-n`, `--dry-run` — Say what would change; change nothing
 
 
 

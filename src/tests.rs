@@ -3708,6 +3708,54 @@ fn duplicates_are_the_songs_listed_apart_that_are_one_recording() {
 }
 
 #[test]
+fn duplicates_resolved_become_one_song_and_undo_puts_them_back() {
+    let s = Setup::new();
+    for name in ["a", "b", "c"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    let song = words(1600, 1);
+    let prints = || {
+        flacs()
+            .print("a.flac", song.clone())
+            .print("b.flac", song.clone())
+            .print("c.flac", words(1600, 2))
+    };
+    let (ok, text) = s.run(&prints(), &["sync", "--new"]);
+    assert!(ok, "{text}");
+    s.refused(&["duplicates", "--resolve"]);
+
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(0));
+    let text = s
+        .trusting(&prints(), &["duplicates", "--resolve"], Some(&mut p))
+        .unwrap();
+    assert!(p.asked[0].starts_with("Group 1:"), "{:?}", p.asked);
+    assert!(
+        p.asked[0].contains("(suggested: an album holds it twice)"),
+        "{:?}",
+        p.asked
+    );
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Merge 1 group?"),
+        "{text}"
+    );
+    let text = crate::ui::plain(&text);
+    assert!(text.contains("Group 1 of 1"), "{text}");
+    assert!(text.contains("% alike"), "{text}");
+    let songs = s.songs();
+    assert_eq!(songs.len(), 2, "{text}");
+    assert!(
+        songs.iter().any(|keys| keys.len() == 2),
+        "the copies are one song: {songs:?}"
+    );
+
+    let (ok, text) = s.run(&prints(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 3, "{text}");
+}
+
+#[test]
 fn a_copy_of_a_track_too_short_to_agree_on_six_seconds_is_one_recording() {
     let s = Setup::new();
     let track = s.file("rips/Interlude.flac");

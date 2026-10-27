@@ -255,6 +255,11 @@ impl<'a> Resolver<'a> {
             source_comments: settings.library.source_comments,
         }
     }
+
+    /// `song` resolved, listed or not.
+    pub(crate) fn resolve(&self, song: &Song) -> Result<Resolved> {
+        resolve::resolve(&self.input(song, None))
+    }
 }
 
 /// Resolve every song under `settings`, each with a path of its own,

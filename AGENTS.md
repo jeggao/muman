@@ -102,7 +102,7 @@ src/
   change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info
-  duplicates.rs     songs listed apart that are one recording
+  duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs          fetched sources and records no song uses, deleted
   progress.rs       how far a long step has got, on stderr
   parallel.rs       a fixed number of threads over a list, for subprocess-bound steps

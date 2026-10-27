@@ -312,6 +312,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             | Command::Restore { .. }
             | Command::Set { .. }
             | Command::Edit { .. }
+            | Command::Duplicates { resolve: true, .. }
     );
     if writes {
         dirs.apart()?;
@@ -371,7 +372,27 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             cli::completions(*shell, data)?;
             Ok(true)
         }
-        Command::Duplicates { query } => {
+        Command::Duplicates {
+            query,
+            resolve: true,
+            yes,
+            dry_run,
+        } => {
+            let mut run = Run::begin(&dirs.home)?;
+            let confirm = cli::Confirm {
+                yes: *yes,
+                all: false,
+                dry_run: *dry_run,
+            };
+            let done = (|| {
+                if !duplicates::resolve(runner, dirs, query, &confirm, prompter, out)? {
+                    return Ok(true);
+                }
+                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
+            })();
+            recorded(run, &dirs.home, done)
+        }
+        Command::Duplicates { query, .. } => {
             duplicates::report(dirs, query, out, data)?;
             Ok(true)
         }
@@ -602,9 +623,9 @@ pub(crate) fn needs_ffmpeg(command: &Command) -> bool {
     match command {
         Command::Info
         | Command::List { .. }
-        | Command::Duplicates { .. }
         | Command::Purge { .. }
         | Command::Completions { .. } => false,
+        Command::Duplicates { resolve, .. } => *resolve,
         Command::Check { decode, .. } => *decode,
         Command::Export {
             max_size,
@@ -645,6 +666,9 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         Command::Check { .. } => &["Decoding"],
         Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
         Command::Export { .. } => &["Encoding", "Writing the zip"],
+        Command::Duplicates { resolve: true, .. } => {
+            &["Comparing prints", "Comparing", "Measuring", "Writing"]
+        }
         Command::Duplicates { .. } => &["Comparing prints"],
         Command::List { .. }
         | Command::Info

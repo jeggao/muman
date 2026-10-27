@@ -93,6 +93,25 @@ refuses the save.
 `duplicates` lists songs listed apart that are one recording, by
 their audio fingerprints: a file of an album there twice first, then a
 track and its copies on other albums, which a library of whole albums
-keeps on purpose. It changes nothing; to merge a group, move the
-others' sources into one `[[song]]` with `edit`, or `remove` them. A
-query names the groups shown.
+keeps on purpose. An album is told by its album artist with its name. A
+query names the groups shown. Listing changes nothing.
+
+`duplicates --resolve` steps through the groups on a terminal. Each is
+shown side by side, one column a song: key, album and track, length,
+audio, cover, lyrics, tags set by hand and how alike each is to the
+first, the song a merge keeps, whose source the merged song's audio
+would come from. Merging the copies an album holds twice is offered
+first; copies across albums come after, once asked, with keeping them
+apart offered first:
+
+| Answer | Does |
+|---|---|
+| Merge | The others' sources, and what each held when built, move into the song kept; its album, place, pins and lyrics offset stay, and the others' are let go, named in what it says it does |
+| Keep apart, Decide later | Nothing; the group is asked about again next time |
+| Remove one | Takes the song picked out of the list, as `remove` |
+| Stop | Asks no more, and goes on to what was picked |
+
+A tag set by hand to two values is asked about, which stays. What was
+picked is then said and asked about, `-y` making it without asking and
+`-n` stopping there, and made as one change: `undo` puts it all back.
+Without a terminal it is refused.
