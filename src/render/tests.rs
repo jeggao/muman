@@ -59,6 +59,7 @@ fn plan(format: Format) -> Plan {
             at: CoverAt::Attachment { ordinal: 1 },
             mimetype: "image/webp".into(),
             crop: None,
+            made: Some(COVER_MAKING),
         }),
         lyrics: Some(LyricsRef {
             key: yt("aaaaaaaaaaa"),
@@ -163,6 +164,7 @@ fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
         at: CoverAt::Picture { index: 3 },
         mimetype: "image/jpeg".into(),
         crop: None,
+        made: None,
     });
     let r = go(&fake, &f, &p).unwrap();
     assert!(r.problems.is_empty(), "{:?}", r.problems);
@@ -179,6 +181,10 @@ fn a_jpeg_picture_stream_is_copied_and_a_bordered_one_cropped_to_png() {
     });
     go(&fake, &f, &p).unwrap();
     assert!(fake.ran("crop=1080:1080:420:0") && fake.ran("png"));
+    assert!(
+        fake.ran("accurate_rnd+bitexact") && fake.ran("-dct"),
+        "the same bytes on every processor"
+    );
 }
 
 #[test]

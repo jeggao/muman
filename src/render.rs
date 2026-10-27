@@ -44,7 +44,12 @@
 //!
 //! The cover is a front-cover picture: a JPEG or PNG without borders as
 //! its own bytes, any other converted to
-//! PNG and cropped to the content inside a video frame's bars. A FLAC
+//! PNG and cropped to the content inside a video frame's bars. A picture
+//! ffmpeg encodes takes [`PICTURE_ARGS`], so it is the same bytes on every
+//! processor: measured on ffmpeg 6.1 against `-cpuflags 0`, swscale's
+//! conversion and the JPEG encoder's DCT round otherwise on a processor
+//! with other vector instructions, while the number of threads changed
+//! nothing. A FLAC
 //! metadata block holds at most 16 MiB, as does the same block in Ogg,
 //! where it is base64 and so a third larger, and ffmpeg reads no APEv2
 //! tag past that, its other items counted, so in every container a cover
@@ -231,6 +236,28 @@ fn is_kept_as_is(mimetype: &str) -> Option<MimeType> {
     }
 }
 
+/// How a cover ffmpeg converts is made, raised whenever the bytes it
+/// converts to change: [`CoverRef::made`].
+pub const COVER_MAKING: u32 = 1;
+
+/// The options every picture ffmpeg encodes is written with: swscale and
+/// the JPEG encoder on their exact paths, and no comment naming the
+/// encoder's version.
+pub const PICTURE_ARGS: [&str; 6] = [
+    "-sws_flags",
+    "accurate_rnd+bitexact",
+    "-flags:v",
+    "+bitexact",
+    "-dct",
+    "int",
+];
+
+/// Whether a cover of `mimetype`, cropped or not, is converted rather
+/// than written as its own bytes.
+pub(crate) fn converts(mimetype: &str, cropped: bool) -> bool {
+    cropped || is_kept_as_is(mimetype).is_none()
+}
+
 /// The ffmpeg output options that write one picture as PNG, cropped to
 /// its content when it has borders.
 fn png_output(input: usize, stream: &str, cover: &CoverRef, path: &Path) -> Output {
@@ -244,6 +271,7 @@ fn png_output(input: usize, stream: &str, cover: &CoverRef, path: &Path) -> Outp
         args.push("-vf".into());
         args.push(format!("crop={}:{}:{}:{}", r.width, r.height, r.x, r.y));
     }
+    args.extend(PICTURE_ARGS.map(String::from));
     args.extend(["-c:v", "png", "-f", "image2"].map(String::from));
     Output::new(args.into_iter().map(OsString::from).collect(), path)
 }
@@ -479,23 +507,10 @@ fn fit_cover<R: Runner>(
     }
     let smaller = scratch.join("cover-fit.jpg");
     let scale = format!("scale='min({COVER_WIDTH},iw)':-2");
-    let output = Output::of(
-        &[
-            "-map",
-            "0:v:0",
-            "-frames:v",
-            "1",
-            "-vf",
-            &scale,
-            "-c:v",
-            "mjpeg",
-            "-q:v",
-            "2",
-            "-f",
-            "image2",
-        ],
-        &smaller,
-    );
+    let mut args = vec!["-map", "0:v:0", "-frames:v", "1", "-vf", &scale];
+    args.extend(PICTURE_ARGS);
+    args.extend(["-c:v", "mjpeg", "-q:v", "2", "-f", "image2"]);
+    let output = Output::of(&args, &smaller);
     runner.run(&ffmpeg::outputs_command(&[path], &[output]))?;
     let fitted = read_picture(&smaller, MimeType::Jpeg)?;
     if fitted.data().len() > room {

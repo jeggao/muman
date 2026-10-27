@@ -295,8 +295,11 @@ the room needs.
 Which songs are lowered, and how far, follows from the song list, the
 sources, the settings and the ffmpeg in use, never from what the library
 held before: a library fitted song by song ends exactly as one fitted at
-once, and two homes with the same song list write the same files. That
-has a cost in time:
+once, and two homes with the same song list write the same files. One
+ffmpeg on two processors can write other bytes: its FLAC and AAC
+encoders, among others, round otherwise on a processor with other
+vector instructions, so two such homes may fit a song otherwise where
+it fits by a few bytes. That has a cost in time:
 
 - Adding a song can lower others, and removing one or raising the limit
   raises them again.

@@ -127,6 +127,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A converted cover is the same bytes on every processor.** ffmpeg's
+  scaling and its JPEG encoder rounded otherwise on a processor with
+  other vector instructions, and a JPEG named ffmpeg's version. The next
+  `sync` writes again the songs whose cover is converted, as a video's
+  thumbnail is.
 - **`export` tells names apart as Windows and macOS do.** Two songs
   whose names only lower case told apart, as `οδος` and `οδοσ`, both went
   into a folder export, where NTFS and exFAT hold them as one file; the

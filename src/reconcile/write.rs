@@ -18,7 +18,7 @@ use crate::manifest::{Manifest, Song};
 use crate::parallel;
 use crate::progress;
 use crate::render;
-use crate::resolve::{LyricsRef, Plan, Resolved};
+use crate::resolve::{CoverRef, LyricsRef, Plan, Resolved};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, State, Written};
@@ -42,8 +42,16 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     } else if old.format != new.format {
         what.push("format");
     }
-    if old.cover != new.cover {
+    let made = |p: &Plan| {
+        p.cover.as_ref().map(|c| CoverRef {
+            made: None,
+            ..c.clone()
+        })
+    };
+    if made(old) != made(new) {
         what.push("cover");
+    } else if old.cover != new.cover {
+        what.push("muman's rendering");
     }
     let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
     let uncleaned = |p: &Plan| {
