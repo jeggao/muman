@@ -118,9 +118,12 @@ const PASSES: usize = 4;
 const MISS: f64 = 3.0;
 
 /// The tables `--set` reaches.
-const TABLES: [&str; 3] = ["library", "audio", "loudness"];
+const TABLES: [&str; 5] = ["library", "audio", "loudness", "lyrics", "cover"];
+/// What an [`Override`] of a cleaning rule names as its table; its key is
+/// the rule, as [`crate::clean::Settings::set`] names it.
+const CLEAN: &str = "clean";
 /// The settings of those tables no export takes, and why.
-const NOT_EXPORTS: [(&str, &str, &str); 4] = [
+const NOT_EXPORTS: [(&str, &str, &str); 8] = [
     (
         "library",
         "path",
@@ -136,6 +139,26 @@ const NOT_EXPORTS: [(&str, &str, &str); 4] = [
         "audio",
         "pick",
         "a sync measures sources as its own weights ask, so the export ranks as it does",
+    ),
+    (
+        "cover",
+        "pick",
+        "a sync measures sources as its own weights ask, so the export ranks as it does",
+    ),
+    (
+        "lyrics",
+        "read",
+        "the export takes the lyrics a sync picks, as the song list ranks them",
+    ),
+    (
+        "lyrics",
+        "prefer",
+        "the export takes the lyrics a sync picks, as the song list ranks them",
+    ),
+    (
+        "lyrics",
+        "clean",
+        "name one rule, as lyrics.clean.<tier>.<rule>=false",
     ),
 ];
 
@@ -156,17 +179,41 @@ pub struct Options<'a> {
 }
 
 /// `KEY=VALUE` as `--set` reads it: a setting of `TABLES`, its value
-/// TOML, or else text, so `audio.lossy=mp3` needs no quotes.
+/// TOML, or else text, so `audio.lossy=mp3` needs no quotes; or a
+/// cleaning rule, `tags.clean.<tier>.<rule>` or
+/// `lyrics.clean.<tier>.<rule>`, true or false.
 ///
 /// # Errors
 ///
-/// When it is not `table.key=value`, or names a table or a setting no
-/// export takes.
+/// When it is not `table.key=value`, or names a table, a setting or a
+/// rule no export takes.
 pub fn setting(arg: &str) -> std::result::Result<Override, String> {
     let (name, raw) = arg
         .split_once('=')
         .ok_or_else(|| format!("`{arg}` sets nothing; write KEY=VALUE, as audio.lossy=mp3"))?;
     let name = name.trim();
+    let rule = name
+        .strip_prefix("tags.clean.")
+        .map(str::to_string)
+        .or_else(|| {
+            name.strip_prefix("lyrics.clean.")
+                .map(|r| format!("lyrics.{r}"))
+        });
+    if let Some(rule) = rule {
+        let on = match raw.trim() {
+            "true" => true,
+            "false" => false,
+            _ => return Err(format!("{name} is true or false, not `{raw}`")),
+        };
+        if !crate::clean::Settings::default().set(&rule, on) {
+            return Err(format!("`{name}` names no cleaning rule"));
+        }
+        return Ok(Override {
+            table: CLEAN.into(),
+            key: rule,
+            value: on.into(),
+        });
+    }
     // Where lyrics go, as `[library] lyrics` said it, as `--lyrics` takes it.
     if name == "library.lyrics" {
         let placement = raw.trim().trim_matches('"');
@@ -181,7 +228,8 @@ pub fn setting(arg: &str) -> std::result::Result<Override, String> {
     let (table, key) = name.split_once('.').unwrap_or(("", name));
     if !table.is_empty() && !TABLES.contains(&table) {
         return Err(format!(
-            "an export sets [library], [audio] and [loudness], not [{table}]"
+            "an export sets [library], [audio], [loudness], lyrics.out, cover.out and the \
+             cleaning rules, not [{table}]"
         ));
     }
     let first = key.split('.').next().unwrap_or(key);
@@ -613,7 +661,16 @@ fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> 
             e.context("reading the settings given for the export")
         ))
     };
-    let settings = crate::settings::read_with(&doc, overrides).map_err(invalid)?;
+    let (rules, overrides): (Vec<Override>, Vec<Override>) =
+        overrides.iter().cloned().partition(|o| o.table == CLEAN);
+    let mut settings = crate::settings::read_with(&doc, &overrides).map_err(invalid)?;
+    if !rules.is_empty() {
+        let mut clean = manifest.clean.clone();
+        for rule in &rules {
+            clean.set(&rule.key, rule.value.as_bool() == Some(true));
+        }
+        settings.clean = Some(clean);
+    }
     crate::naming::Naming::new(&settings.library, Path::new("")).map_err(invalid)?;
     if settings.loudness.measured() && !manifest.settings.loudness.measured() {
         return Err(crate::change::Refused(
@@ -630,6 +687,7 @@ fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> 
 fn located(store: &Store, plan: &Plan) -> Option<BTreeMap<SourceKey, Located>> {
     std::iter::once(&plan.audio.key)
         .chain(plan.cover.as_ref().map(|c| &c.key))
+        .chain(plan.folder.as_ref().map(|c| &c.key))
         .chain(plan.lyrics.as_ref().map(|l| &l.key))
         .map(|k| Some((k.clone(), store.locate(k)?)))
         .collect()
@@ -1336,6 +1394,37 @@ mod tests {
         }
         let e = setting("audio.pick.stereo.weight=0").unwrap_err();
         assert!(e.contains("no export's setting"), "{e}");
+    }
+
+    #[test]
+    fn an_export_sets_where_lyrics_and_covers_go_and_which_rules_clean() {
+        let out =
+            setting("cover.out=[{ to = \"file\", scope = \"folder\", name = \"cover\" }]").unwrap();
+        assert_eq!((out.table.as_str(), out.key.as_str()), ("cover", "out"));
+        assert!(out.value.is_array());
+        assert!(setting("lyrics.out=[]").unwrap().value.is_array());
+        let rule = setting("tags.clean.tidy.spacing=false").unwrap();
+        assert_eq!(
+            (rule.table.as_str(), rule.key.as_str()),
+            (CLEAN, "tidy.spacing")
+        );
+        assert_eq!(rule.value.as_bool(), Some(false));
+        assert_eq!(
+            setting("lyrics.clean.tidy.markup=false").unwrap().key,
+            "lyrics.tidy.markup"
+        );
+        for (refused, why) in [
+            ("tags.clean.tidy.nope=false", "names no cleaning rule"),
+            ("tags.clean.tidy.spacing=off", "true or false"),
+            ("lyrics.prefer=[\"timed\"]", "lyrics a sync picks"),
+            ("lyrics.read=[\"en\"]", "lyrics a sync picks"),
+            ("cover.pick.square.weight=1", "ranks as it does"),
+            ("lyrics.clean=false", "name one rule"),
+            ("tags.source_comments=true", "not [tags]"),
+        ] {
+            let e = setting(refused).unwrap_err();
+            assert!(e.contains(why), "{refused}: {e}");
+        }
     }
 
     #[test]
