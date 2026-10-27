@@ -79,7 +79,9 @@ pub(crate) fn files_of(
 }
 
 /// Whether two plans make the same audio, cover and lyrics: a file of
-/// one is a file of the other with its tags written again.
+/// one is a file of the other with its tags written again. Lyrics cleaned
+/// by the song's names are cleaned anew under other names, so a song
+/// retitled is written again, as it would be made from the start.
 pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
     a.version == b.version
         && a.format == b.format
@@ -89,6 +91,7 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
         && a.audio == b.audio
         && a.cover == b.cover
         && a.lyrics.as_ref().map(LyricsRef::lines) == b.lyrics.as_ref().map(LyricsRef::lines)
+        && crate::render::lyrics_names(a) == crate::render::lyrics_names(b)
         // MP4 chapters are ffmpeg's to write.
         && a.chapters == b.chapters
 }

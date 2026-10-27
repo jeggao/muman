@@ -77,6 +77,9 @@ const RULES: [(&str, Edit); 10] = [
     ("lyrics.guesswork.typing", typing),
 ];
 
+/// The rules that read the song's title and artists.
+pub const NAMED: [&str; 1] = ["lyrics.packaging.title"];
+
 /// Every rule's name, `lyrics.<tier>.<key>`, in the order run.
 pub fn names() -> impl Iterator<Item = &'static str> {
     RULES.iter().map(|(name, _)| *name)

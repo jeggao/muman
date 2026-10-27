@@ -55,7 +55,7 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     };
     if uncleaned(old) != uncleaned(new) {
         what.push("lyrics");
-    } else if lines(old) != lines(new) {
+    } else if lines(old) != lines(new) || render::lyrics_names(old) != render::lyrics_names(new) {
         what.push("lyric cleaning");
     }
     let other_tags = |p: &Plan| {
