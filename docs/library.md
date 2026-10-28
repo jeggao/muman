@@ -231,8 +231,9 @@ that gives what it can, as a sharp cover the song's square one beats,
 is never asked about again. LRCLIB is searched again, as a better
 record may have joined it; a MusicBrainz record or a Cover Art Archive
 cover is fetched again by its ID; a YouTube video is never looked for
-again. A record found again in another form takes the place of the one
-kept, and its songs are built anew from it.
+again. A record asked about again that comes back in another form takes
+the place of the one kept, and its songs are built anew from it; one
+another song's lookup finds stays as kept.
 
 `sync --rematch` makes every lookup a song still wants at once,
 whatever its record says. What one round finds can make the next due,

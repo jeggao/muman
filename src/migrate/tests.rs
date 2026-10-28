@@ -494,7 +494,7 @@ fn triggers_as_the_docs_advised_become_the_conditions_they_meant() {
 }
 
 #[test]
-fn a_provider_no_trigger_finds_is_turned_off_and_a_condition_of_another_skips() {
+fn a_provider_no_trigger_finds_skips_every_song_and_a_condition_of_another_skips() {
     let (lines, _) = rewritten(
         "[[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"no-lyrics\"\n\
          [[trigger]]\nfrom = [\"youtube\", \"manual\"]\nfind = \"coverart\"\nwhen = \"no-album\"\n\
@@ -503,12 +503,12 @@ fn a_provider_no_trigger_finds_is_turned_off_and_a_condition_of_another_skips() 
     assert_eq!(
         lines,
         [
-            "youtube-music.enabled = false",
-            "youtube.enabled = false",
+            "youtube-music.skip = [\"key::.\"]",
+            "youtube.skip = [\"key::.\"]",
             "lrclib.until = \"lyrics:yes\"",
             "lrclib.skip = [\"^from:manual\"]",
-            "acoustid.enabled = false",
-            "musicbrainz.enabled = false",
+            "acoustid.skip = [\"key::.\"]",
+            "musicbrainz.skip = [\"key::.\"]",
             "coverart.until = \"from:coverart\"",
             "coverart.skip = [\"has:album\", \"^from:manual ^from:youtube\"]",
         ]

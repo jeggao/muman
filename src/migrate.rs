@@ -371,6 +371,9 @@ const BUILT_IN: [(&[&str], &str, &str); 6] = [
     ),
 ];
 
+/// A query every song matches: each has a key.
+const EVERY_SONG: &str = "key::.";
+
 /// The condition a `when` held for, as a query: `None` for `always`.
 fn condition(when: &str) -> Result<Option<Closed>> {
     Ok(Some(match when {
@@ -421,7 +424,10 @@ fn read_trigger(t: &Table, what: &str) -> Result<Trigger> {
 fn settings_of(p: Provider, mine: &[&Trigger]) -> Result<(String, Vec<(&'static str, Value)>)> {
     let mut set: Vec<(&str, Value)> = Vec::new();
     let Some(first) = mine.first() else {
-        set.push(("enabled", Value::from(false)));
+        // Every song skipped, not the provider turned off, which would stop
+        // what it found before being fetched again, and AcoustID with
+        // MusicBrainz.
+        set.push(("skip", [EVERY_SONG].into_iter().collect()));
         return Ok((format!("no trigger finds {p}"), set));
     };
     let same: Vec<&&Trigger> = mine.iter().filter(|t| t.when == first.when).collect();
@@ -475,7 +481,7 @@ fn settings_of(p: Provider, mine: &[&Trigger]) -> Result<(String, Vec<(&'static 
 /// leaves out a source's provider skips the songs with none of `from`. A
 /// trigger as the built-in one writes nothing, so the provider takes
 /// today's default. A provider no trigger found was never looked up, and
-/// is turned off; of a provider several found, the first trigger's
+/// skips every song; of a provider several found, the first trigger's
 /// condition is kept.
 fn triggers(doc: &mut DocumentMut) -> Result<Vec<Renamed>> {
     let Some(list) = doc.get("trigger") else {

@@ -32,8 +32,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 - **`[[trigger]]` is gone.** The song list's triggers are rewritten as
   `until` and `skip` on the next write; one as the built-in leaves its
-  provider at today's default, and a provider no trigger found is
-  turned off. The edition rises to 8.
+  provider at today's default, and a provider no trigger found skips
+  every song. The edition rises to 8.
 - **MusicBrainz and AcoustID ask until a song has its album, album
   artist, date, track, disc and ISRC**, not only an album, so songs with
   partial tags are looked up too; a backlog drains over runs by

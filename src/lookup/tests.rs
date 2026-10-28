@@ -524,10 +524,55 @@ fn skips_a_song_s_own_lookups_and_its_pins_leave_a_provider_unasked() {
 }
 
 #[test]
-fn a_skip_naming_a_field_no_song_has_is_refused() {
+fn a_skip_naming_a_tag_no_song_has_yet_skips_none_and_key_skips_all() {
     let (_d, mut m, s, p, _) = with_lyrics(false);
-    m.providers.skip = vec!["^gnre:ambient".into()];
-    assert!(due(&m, &s, &p, NOW, Ask::default()).is_err());
+    m.providers.skip = vec!["mood:calm".into()];
+    assert!(matches!(lrclib_verdict(&m, &s, &p, NOW), Verdict::Due(_)));
+    m.providers.skip = vec!["key::.".into()];
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+}
+
+#[test]
+fn a_record_that_falls_short_waits_on_its_newest_lookup_whatever_it_found() {
+    let (_d, m, mut s, p, _) = with_lyrics(false);
+    let mut nothing = Looked::now(
+        SourceKey::parse("manual:a.flac").unwrap(),
+        Provider::Lrclib,
+        Outcome::Nothing,
+    );
+    nothing.at = NOW - DAY;
+    s.lookups = vec![nothing];
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Later(NOW + 6 * DAY),
+        "a search again that found nothing waits out `recheck`"
+    );
+}
+
+#[test]
+fn a_lookup_made_this_run_is_waited_for_no_more() {
+    let (_d, m, s, p) = own(true, &NAMED);
+    let from = SourceKey::parse("manual:a.flac").unwrap();
+    let found = |asked: &BTreeSet<(SourceKey, Provider)>| -> Vec<Provider> {
+        due_in(&m, &s, &p, Ask::default(), asked)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.find)
+            .collect()
+    };
+    assert_eq!(
+        found(&BTreeSet::new()),
+        [Provider::Lrclib, Provider::AcoustId]
+    );
+    let asked = [(from.clone(), Provider::AcoustId), (from, Provider::Lrclib)].into();
+    assert_eq!(
+        found(&asked),
+        [Provider::MusicBrainz],
+        "AcoustID failed this run: search by name"
+    );
 }
 
 #[test]
@@ -599,4 +644,35 @@ fn a_verdict_says_when_and_why() {
         Verdict::Waits(Provider::AcoustId).to_string(),
         "waits for acoustid"
     );
+}
+
+#[test]
+fn a_record_another_lookup_finds_stays_as_kept_and_one_asked_again_is_renewed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("7.json");
+    std::fs::write(&path, b"old").unwrap();
+    let key = SourceKey::parse("lrclib:7").unwrap();
+    let found = |bytes: &'static [u8]| Fetched {
+        key: &key,
+        missing: false,
+        kept: &path,
+        bytes,
+    };
+    let mut renewed = BTreeSet::new();
+    let mut unchanged = 0;
+    assert!(
+        !found(b"new").take(None, &mut renewed, &mut unchanged),
+        "found by another lookup: the kept copy stays"
+    );
+    let asked = (key.clone(), 2);
+    assert!(!found(b"old").take(Some(&asked), &mut renewed, &mut unchanged));
+    assert_eq!(unchanged, 3, "asked again, the same: it waits longer");
+    let mut unchanged = 0;
+    assert!(found(b"new").take(Some(&asked), &mut renewed, &mut unchanged));
+    assert!(renewed.contains(&key) && unchanged == 0);
+    assert!(
+        !found(b"new").take(Some(&asked), &mut renewed, &mut unchanged),
+        "kept once a round, another song of it counted as changed"
+    );
+    assert_eq!(unchanged, 0);
 }

@@ -814,17 +814,6 @@ impl State {
             .find(|l| &l.from == from && l.find == find.name())
     }
 
-    /// The newest lookup of any of `finds` made from any of `sources`: a
-    /// song's record of a provider, whichever of its sources it was made
-    /// from.
-    #[must_use]
-    pub fn newest(&self, sources: &[SourceKey], finds: &[Provider]) -> Option<&Looked> {
-        self.lookups
-            .iter()
-            .filter(|l| sources.contains(&l.from) && finds.iter().any(|p| l.find == p.name()))
-            .max_by_key(|l| l.at)
-    }
-
     /// Record lookups and the uploads releases replaced in the state file
     /// as it is now, under its lock: a failure counts on from the last.
     pub fn keep_lookups(
