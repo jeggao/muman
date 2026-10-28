@@ -1302,6 +1302,37 @@ pub fn from_info(info: &VideoInfo) -> Offers {
     o
 }
 
+/// Every field a MusicBrainz record can offer, as [`from_record`] does
+/// for one that names all it may.
+pub const RECORD_FIELDS: [Field; 26] = [
+    Field::Title,
+    Field::Artist,
+    Field::Isrc,
+    Field::MusicBrainzTrackId,
+    Field::MusicBrainzArtistId,
+    Field::Language,
+    Field::Album,
+    Field::AlbumArtist,
+    Field::Track,
+    Field::Disc,
+    Field::Date,
+    Field::TrackTotal,
+    Field::ReleaseCountry,
+    Field::MusicBrainzAlbumId,
+    Field::MusicBrainzReleaseGroupId,
+    Field::MusicBrainzReleaseTrackId,
+    Field::MusicBrainzAlbumArtistId,
+    Field::ReleaseStatus,
+    Field::ReleaseType,
+    Field::Media,
+    Field::Label,
+    Field::CatalogNumber,
+    Field::Barcode,
+    Field::Asin,
+    Field::Script,
+    Field::OriginalDate,
+];
+
 /// What a MusicBrainz record offers: the recording's title, artists,
 /// ISRCs, IDs, first release's date and its works' lyrics languages, and
 /// its release's album, album
@@ -2217,6 +2248,15 @@ mod tests {
             languages: vec!["jpn".into(), "zxx".into()],
         };
         let o = from_record(&record);
+        let mut whole = record.clone();
+        if let Some(r) = whole.release.as_mut() {
+            r.track_id = Some("00000000-0000-0000-0000-00000000000c".into());
+            r.details.asin = Some("B000000001".into());
+        }
+        let offered: Vec<Field> = from_record(&whole).keys().copied().collect();
+        let mut listed = RECORD_FIELDS.to_vec();
+        listed.sort();
+        assert_eq!(offered, listed, "RECORD_FIELDS names what a record offers");
         assert_eq!(o[&Field::OriginalDate].values, ["1999-02-01"]);
         assert_eq!(o[&Field::Language].values, ["jpn", "zxx"]);
         let mut grouped = record.clone();

@@ -58,7 +58,7 @@ use crate::atomic::{self, Lock};
 use crate::clean::{self, Settings};
 use crate::dirs::MANIFEST;
 use crate::hooks::{self, Hook};
-use crate::provider;
+use crate::provider::{self, Provider};
 use crate::source::SourceKey;
 use crate::tags;
 
@@ -130,10 +130,10 @@ const HEADER: &str = "\
 #             followed.
 #   Removed:  `muman remove` keeps a song under [[removed]], so nothing
 #             lists it again; delete the entry to let it back.
-#   Lookups:  a song looks other sources up by [[trigger]] (from, find,
-#             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck, per_run, and the url of
-#             lrclib, musicbrainz, acoustid and coverart.
+#   Lookups:  [providers.<name>] says what a song asks each provider
+#             `until` it has, which songs it `skip`s, and how the service
+#             is asked. A song sets lookups = false to ask none, or
+#             lookups.<provider> = false to ask that one nothing.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
 #   Settings: [library], [lyrics], [audio], [loudness], [cover],
@@ -187,6 +187,31 @@ pub struct Song {
     pub tags: Tags,
     /// What each source held when the song was built.
     pub held: BTreeMap<SourceKey, crate::held::Held>,
+    /// The providers its `lookups` turns off.
+    pub lookups_off: LookupsOff,
+}
+
+/// The providers a song's `lookups` turns off: `lookups = false` all of
+/// them, `lookups.<provider> = false` each named. A song can only turn
+/// lookups off, so none asks a provider the song list turns off.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum LookupsOff {
+    #[default]
+    None,
+    All,
+    Some(Vec<Provider>),
+}
+
+impl LookupsOff {
+    /// Whether it turns `p`'s lookups off.
+    #[must_use]
+    pub fn covers(&self, p: Provider) -> bool {
+        match self {
+            Self::None => false,
+            Self::All => true,
+            Self::Some(off) => off.contains(&p),
+        }
+    }
 }
 
 impl Song {
@@ -336,7 +361,7 @@ pub struct Manifest {
     /// Which cleaning rules are switched off.
     pub clean: Settings,
     pub removed: Vec<Removed>,
-    /// What `[providers.*]` and `[[trigger]]` set over the defaults.
+    /// What `[providers]` sets over the defaults.
     pub providers: provider::Config,
     pub hooks: Vec<Hook>,
     /// `[library]`, `[audio]`, `[ytdlp]` and `[history]`.
@@ -416,7 +441,7 @@ fn near_miss(key: &str) -> Option<&'static str> {
     (strsim::osa_distance(near, key) <= most).then_some(near)
 }
 
-const KEYS: [&str; 11] = [
+const KEYS: [&str; 10] = [
     "version",
     "edition",
     "song",
@@ -424,7 +449,6 @@ const KEYS: [&str; 11] = [
     "torrents",
     "removed",
     "providers",
-    "trigger",
     "hook",
     "tags",
     "defaults",
@@ -900,6 +924,39 @@ fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
     Ok(time.0)
 }
 
+/// A song's `lookups`: false, or a table of providers each set false.
+fn lookups_off(t: &Table, what: &str) -> Result<LookupsOff> {
+    let Some(item) = t.get("lookups") else {
+        return Ok(LookupsOff::None);
+    };
+    let only_off = || {
+        anyhow::anyhow!(
+            "{what}: `lookups` only turns lookups off: `lookups = false`, or \
+             `lookups.<provider> = false`"
+        )
+    };
+    if let Some(on) = item.as_bool() {
+        return if on {
+            Err(only_off())
+        } else {
+            Ok(LookupsOff::All)
+        };
+    }
+    let table = item.as_table_like().ok_or_else(only_off)?;
+    let mut off = Vec::new();
+    for (name, value) in table.iter() {
+        let p = Provider::named(name).with_context(|| format!("{what}: `lookups`"))?;
+        if !p.findable() {
+            bail!("{what}: `lookups.{name}`: {p} is never looked up");
+        }
+        if value.as_bool() != Some(false) {
+            return Err(only_off());
+        }
+        off.push(p);
+    }
+    Ok(LookupsOff::Some(off))
+}
+
 /// The most lyrics are moved, an hour either way.
 const MAX_OFFSET_MS: u64 = 3_600_000;
 
@@ -935,6 +992,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             lyrics_offset_ms: lyrics_offset(t, &what)?,
             tags: tags_of(t.get("tags"), &what)?,
             held: crate::held::read(t, &sources, &what)?,
+            lookups_off: lookups_off(t, &what)?,
             sources,
         };
         let pinned = [
@@ -1779,7 +1837,7 @@ fn last_position(item: &Item) -> Option<isize> {
 /// order the file holds it, so the lyrics' tiers, under a settings table,
 /// come first, and a song added after them prints after them.
 fn clean_template(doc: &mut DocumentMut) -> bool {
-    let after = crate::settings::TABLES
+    let after = crate::settings::WRITTEN
         .iter()
         .filter_map(|t| doc.get(t)?.as_table())
         .flat_map(|t| {
@@ -1803,7 +1861,7 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
     // `tags`, made new or moved from `[clean]`, goes up beside the settings.
     let rank = |k: &str| match k {
         "version" | "edition" => 0,
-        k if crate::settings::TABLES.contains(&k) => 1,
+        k if crate::settings::WRITTEN.contains(&k) => 1,
         "tags" => 2,
         _ => 3,
     };

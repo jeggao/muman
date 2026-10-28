@@ -1,5 +1,5 @@
 version = 1
-edition = 7
+edition = 8
 
 # Settings, each written at its default; change any. A size, bitrate,
 # time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
@@ -243,6 +243,93 @@ version_check = true
 # may take together.
 runs = 3
 max_size = "2 GiB"
+
+# What each song looks up online, a table a provider. `until` lists what
+# a song asks the provider until it has, every one of them, or until it
+# found something; a provider that finds nothing is asked again after
+# `recheck`. `has:<tag>` holds for a
+# tag a source or this file gives, not one muman fills in itself, as an
+# album artist taken from the artist. `skip` lists queries as `muman
+# list` takes them, one a string, as 'album:="Some Album"' or
+# "from:manual"; a song any matches asks the provider nothing, and
+# [providers] skip leaves songs out of every provider. A song sets
+# lookups = false to ask none, or lookups.<provider> = false. `enabled =
+# false` asks a service nothing at all. `per_run` caps the lookups one
+# sync makes, 0 for none, so a backlog drains over several syncs;
+# `concurrency` is how many run at once. youtube-music is searched from a
+# YouTube upload and youtube from a release; musicbrainz waits while
+# acoustid is due, and coverart while either is; each sync asks in this
+# order for up to three rounds.
+[providers]
+skip = []
+
+# The YouTube Music release of a YouTube upload: album, track, square
+# cover. Takes until "from:youtube-music".
+[providers.youtube-music]
+enabled = true
+until = ["from:youtube-music"]
+skip = []
+recheck = "14 days"
+per_run = 50
+concurrency = 4
+
+# An upload of a release with a person's timed subtitles. Takes until
+# "lyrics:timed", "lyrics:yes" or "from:youtube".
+[providers.youtube]
+enabled = true
+until = ["lyrics:timed"]
+skip = []
+recheck = "14 days"
+per_run = 50
+concurrency = 4
+
+# Lyrics, by title, artist, album and length. Takes until "lyrics:timed",
+# "lyrics:yes" or "from:lrclib".
+[providers.lrclib]
+enabled = true
+until = ["lyrics:timed"]
+skip = []
+recheck = "7 days"
+per_run = 300
+concurrency = 4
+url = "https://lrclib.net"
+
+# The MusicBrainz recording of a song's audio, by its fingerprint: sends
+# a print of the audio's first two minutes. Off while musicbrainz is.
+# Takes until "from:musicbrainz", or "has:<tag>" of a tag a MusicBrainz
+# record gives.
+[providers.acoustid]
+enabled = true
+until = ["has:album", "has:album_artist", "has:date", "has:track", "has:disc", "has:isrc"]
+skip = []
+recheck = "30 days"
+per_run = 200
+concurrency = 1
+url = "https://api.acoustid.org"
+# The application key AcoustID is asked with; unset, muman's own.
+# key = ""
+
+# The MusicBrainz recording, by title, artist and length, when AcoustID
+# found none. Takes until as acoustid does.
+[providers.musicbrainz]
+enabled = true
+until = ["has:album", "has:album_artist", "has:date", "has:track", "has:disc", "has:isrc"]
+skip = []
+recheck = "30 days"
+per_run = 200
+concurrency = 1
+url = "https://musicbrainz.org"
+
+# The front cover of a song's album, from the Cover Art Archive. Takes
+# until "cover:sharp", "cover:yes" or "from:coverart".
+[providers.coverart]
+enabled = true
+until = ["cover:sharp"]
+skip = []
+recheck = "30 days"
+per_run = 500
+concurrency = 1
+url = "https://coverartarchive.org"
 
 # The sites yt-dlp fetches from. Each names its sources by its domain,
 # whatever address they were found at: `extractors` are yt-dlp's

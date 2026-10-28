@@ -186,10 +186,7 @@ impl Looked {
         }
     }
 
-    /// Whether it is due again: one that found nothing or an instrumental
-    /// after `recheck`, one that failed after an hour doubling with
-    /// each failure; one made another way at once, unless what it found
-    /// the song still lists, by `listed`.
+    /// Whether it is due again, by [`Self::again_at`].
     #[must_use]
     pub fn due(
         &self,
@@ -197,19 +194,36 @@ impl Looked {
         recheck: std::time::Duration,
         listed: &dyn Fn(&SourceKey) -> bool,
     ) -> bool {
+        self.again_at(recheck, listed).is_some_and(|at| now >= at)
+    }
+
+    /// When it is due again, in seconds since the Unix epoch, or never:
+    /// one that found nothing or an instrumental after `recheck`, one that
+    /// failed after an hour doubling with each failure; one made another
+    /// way at once, unless what it found the song still lists, by
+    /// `listed`.
+    #[must_use]
+    pub fn again_at(
+        &self,
+        recheck: std::time::Duration,
+        listed: &dyn Fn(&SourceKey) -> bool,
+    ) -> Option<u64> {
         let find = Provider::named(&self.find).ok();
         if find.is_none_or(|p| crate::lookup::method(p) != self.method) {
-            return !matches!(&self.outcome, Outcome::Found(k) if listed(k));
+            return (!matches!(&self.outcome, Outcome::Found(k) if listed(k))).then_some(0);
         }
-        let age = now.saturating_sub(self.at);
         match &self.outcome {
-            Outcome::Found(_) | Outcome::Declined => false,
-            Outcome::Nothing | Outcome::Instrumental => age >= recheck.as_secs(),
-            Outcome::Failed { count, .. } => {
-                age >= 3600_u64
-                    .saturating_mul(1 << count.saturating_sub(1).min(16))
-                    .min(MAX_WAIT_SECS)
+            Outcome::Found(_) | Outcome::Declined => None,
+            Outcome::Nothing | Outcome::Instrumental => {
+                Some(self.at.saturating_add(recheck.as_secs()))
             }
+            Outcome::Failed { count, .. } => Some(
+                self.at.saturating_add(
+                    3600_u64
+                        .saturating_mul(1 << count.saturating_sub(1).min(16))
+                        .min(MAX_WAIT_SECS),
+                ),
+            ),
         }
     }
 }
