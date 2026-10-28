@@ -407,10 +407,11 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         }
         .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
         let mut tags = plan.tags.clone();
-        if let Some(text) = text
-            .as_ref()
-            .filter(|_| plan.lyrics.as_ref().is_some_and(LyricsRef::tag))
-        {
+        let inside = plan.lyrics.as_ref().filter(|l| l.tag()).zip(text.as_ref());
+        if let Some(text) = inside.and_then(|(l, text)| {
+            let form = l.inside.clone().unwrap_or_default();
+            crate::cues::write(text, form.format, form.words, None)
+        }) {
             if flac && text.len() > FLAC_BLOCK {
                 problems.push(format!(
                     "lyrics not embedded: {} is more than a FLAC file's tags hold",
@@ -455,8 +456,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         }
         set_opus_header(&audio_part, plan)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
-        match text {
-            Some(text) => stage_beside(&lyrics_parts, &text).map(|()| lyrics_rels.clone()),
+        match plan.lyrics.as_ref().zip(text) {
+            Some((l, text)) => stage_beside(&lyrics_rels, &lyrics_parts, &contents(l, &text)),
             None => Ok(Vec::new()),
         }
     })();
@@ -481,13 +482,33 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     }
 }
 
-/// `text` staged at each of `parts`, made anew.
-fn stage_beside(parts: &[PathBuf], text: &str) -> Result<()> {
-    for staged in parts {
-        std::io::Write::write_all(&mut stage(staged)?, text.as_bytes())
-            .with_context(|| format!("writing {}", staged.display()))?;
+/// What each file of `lyrics` beside the song holds, from their `text`
+/// as kept; none for one whose format takes no such lyrics.
+fn contents(lyrics: &LyricsRef, text: &str) -> Vec<Option<String>> {
+    lyrics
+        .files()
+        .iter()
+        .map(|f| crate::cues::write(text, f.format, f.words, lyrics.end_ms))
+        .collect()
+}
+
+/// Each of `contents` staged at its file's `.part`, made anew: the files
+/// of `rels` staged.
+fn stage_beside(
+    rels: &[PathBuf],
+    parts: &[PathBuf],
+    contents: &[Option<String>],
+) -> Result<Vec<PathBuf>> {
+    let mut staged = Vec::new();
+    for ((rel, part), content) in rels.iter().zip(parts).zip(contents) {
+        let Some(content) = content else {
+            continue;
+        };
+        std::io::Write::write_all(&mut stage(part)?, content.as_bytes())
+            .with_context(|| format!("writing {}", part.display()))?;
+        staged.push(rel.clone());
     }
-    Ok(())
+    Ok(staged)
 }
 
 /// Put each of `rels` staged at `parts` that `written` names in its
@@ -911,7 +932,7 @@ pub struct Beside {
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     let plan = job.plan;
     let mut problems = Vec::new();
-    let (rels, text) = match &plan.lyrics {
+    let (rels, contents) = match &plan.lyrics {
         Some(l) if !l.files().is_empty() => {
             let rels: Vec<PathBuf> = l
                 .files()
@@ -922,16 +943,14 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
                 .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
                 .ok()
                 .flatten();
-            (rels, text)
+            let contents = text.map_or_else(Vec::new, |t| contents(l, &t));
+            (rels, contents)
         }
-        _ => (Vec::new(), None),
+        _ => (Vec::new(), Vec::new()),
     };
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
-    let placed = match &text {
-        Some(text) => stage_beside(&parts, text).map(|()| rels.clone()),
-        None => Ok(Vec::new()),
-    }
-    .and_then(|written| put_beside(job, &parts, &rels, &written));
+    let placed = stage_beside(&rels, &parts, &contents)
+        .and_then(|written| put_beside(job, &parts, &rels, &written));
     match placed {
         Ok(files) => Ok(Beside { files, problems }),
         Err(e) => {

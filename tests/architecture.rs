@@ -498,6 +498,25 @@ fn a_file_beside_a_song_is_named_in_one_place() {
 }
 
 #[test]
+fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file == "cues.rs" || file == "render.rs" {
+            continue;
+        }
+        for line in lines_with(&text, &["cues::write("]) {
+            wrong.push(format!("{file}: {}", line.trim()));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "lyrics are written in a format outside `render.rs`, which writes them as \
+         a plan's outputs say, so a library file could hold what no plan names:\n{}",
+        wrong.join("\n")
+    );
+}
+
+#[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
     for (file, ..) in MUTATIONS.iter().chain(WRITES) {
@@ -711,6 +730,11 @@ const WRITES: &[(&str, usize, &str)] = &[
         3,
         "a song's bytes and its lyrics, in their files, the lyrics again when \
          they alone are written",
+    ),
+    (
+        "cues.rs",
+        3,
+        "lyrics as cues and word times, into the text render writes to a file",
     ),
 ];
 

@@ -214,6 +214,14 @@ pub struct LyricsOut {
     pub format: LyricsFormat,
     #[serde(default)]
     pub when: When,
+    /// Keep the time of each word, where the lyrics carry them and the
+    /// format holds them.
+    #[serde(default = "yes")]
+    pub words: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Where an output goes.
@@ -226,13 +234,19 @@ pub enum To {
     Tag,
 }
 
-/// How lyrics are written.
+/// How lyrics are written ([`crate::cues`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LyricsFormat {
     /// LRC, each line's time before it, as the lyrics are kept.
     #[default]
     Lrc,
+    /// WebVTT cues.
+    Vtt,
+    /// SubRip cues.
+    Srt,
+    /// Plain text, no times.
+    Txt,
 }
 
 impl LyricsFormat {
@@ -241,7 +255,16 @@ impl LyricsFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::Lrc => "lrc",
+            Self::Vtt => "vtt",
+            Self::Srt => "srt",
+            Self::Txt => "txt",
         }
+    }
+
+    /// Whether it holds only lyrics whose lines carry times, as cues.
+    #[must_use]
+    pub fn cues(self) -> bool {
+        matches!(self, Self::Vtt | Self::Srt)
     }
 }
 
@@ -1014,6 +1037,7 @@ impl Default for Lyrics {
                 suffix: String::new(),
                 format: LyricsFormat::Lrc,
                 when: When::Any,
+                words: true,
             }],
         }
     }
@@ -1033,7 +1057,16 @@ impl Lyrics {
                 To::Tag if !out.suffix.is_empty() => {
                     bail!("[[lyrics.out]] to = \"tag\" takes no suffix; a tag has no name")
                 }
+                To::Tag if out.format.cues() => bail!(
+                    "[[lyrics.out]] to = \"tag\" holds lrc or txt, not {}; a lyrics tag holds \
+                     no cues",
+                    out.format.extension()
+                ),
                 To::Tag => {}
+                To::File if out.format.cues() && out.when == When::Untimed => bail!(
+                    "[[lyrics.out]] format = \"{}\" takes no untimed lyrics; cues need times",
+                    out.format.extension()
+                ),
                 To::File => {
                     crate::outputs::check_suffix(&out.suffix)
                         .map_err(|e| anyhow::anyhow!("[[lyrics.out]] suffix: {e}"))?;

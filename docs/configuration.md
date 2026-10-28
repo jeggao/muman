@@ -261,10 +261,14 @@ after any `pt-BR`, and `ger`, `deu` and `de` are one language.
 Each `[[lyrics.out]]` is one place the lyrics a song takes are written:
 `to = "file"`, a file beside the song named as the song is, then its
 `suffix`, then the format's extension; or `to = "tag"`, inside the
-song. `when = "timed"` or `"untimed"` writes only lyrics whose lines
-carry times, or only those whose lines do not. `out = []` under
-`[lyrics]` writes none. This writes timed lyrics beside the song and
-inside it, and untimed ones beside it as `Song.plain.lrc`:
+song. `format` is `lrc`, `vtt` or `srt`, subtitle cues of timed lyrics
+alone, or `txt`, plain lines; a tag holds `lrc` or `txt`. A cue lasts
+until the next line, the last until the song ends; a line sung twice is
+a cue each time. `words = false` drops each word's time. `when =
+"timed"` or `"untimed"` writes only lyrics whose lines carry times, or
+only those whose lines do not. `out = []` under `[lyrics]` writes none.
+This writes timed lyrics beside the song and inside it, and untimed
+ones beside it as `Song.plain.lrc`:
 
 ```toml
 [[lyrics.out]]

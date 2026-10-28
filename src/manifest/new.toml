@@ -58,15 +58,18 @@ prefer = ["translation", "original", "romanization", "timed"]
 # Where the lyrics a song takes are written, one [[lyrics.out]] each:
 # `to` "file", beside the song, named as it is with `suffix` and the
 # format's extension after, as ".en" names "Song.en.lrc"; or "tag",
-# inside the song. `format` "lrc" times each line. `when` "timed" or
-# "untimed" writes only lyrics whose lines carry times, or only those
-# whose lines do not; "any" writes either. `out = []` under [lyrics]
-# writes none.
+# inside the song. `format` "lrc" times each line, "vtt" and "srt" are
+# subtitle cues, of timed lyrics alone, and "txt" plain lines; a tag
+# holds "lrc" or "txt". `when` "timed" or "untimed" writes only lyrics
+# whose lines carry times, or only those whose lines do not; "any"
+# writes either. `words` keeps each word's time where lyrics carry them.
+# `out = []` under [lyrics] writes none.
 [[lyrics.out]]
 to = "file"
 suffix = ""
 format = "lrc"
 when = "any"
+words = true
 
 [audio]
 # Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac,

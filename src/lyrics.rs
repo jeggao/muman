@@ -926,6 +926,30 @@ pub fn shift_lrc(text: &str, offset_ms: i64, stretch_ppm: i64) -> String {
     out
 }
 
+/// `words` with each word time, as `<00:12.30>`, written as `write`
+/// writes its milliseconds, or left out where it writes none; any other
+/// `<` is sung.
+pub(crate) fn rewrite_word_times(
+    words: &str,
+    write: &mut dyn FnMut(i64) -> Option<String>,
+) -> String {
+    let mut out = String::with_capacity(words.len());
+    let mut rest = words;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if let Some((ms, close)) = time_closed_by(after, &['>']) {
+            out.extend(write(ms));
+            rest = &after[close + 1..];
+        } else {
+            out.push('<');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
 pub(crate) fn lrc_time(s: &str) -> Option<(i64, &str)> {
