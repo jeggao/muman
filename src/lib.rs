@@ -520,6 +520,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         ),
         Command::Sync {
             rematch,
+            until_done,
             force,
             retry,
             accept,
@@ -533,6 +534,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             out,
             sync::Request {
                 rematch: *rematch,
+                until_done: *until_done,
                 force: *force,
                 retry: *retry,
                 accept: *accept,

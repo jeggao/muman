@@ -105,6 +105,28 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
     Ok(())
 }
 
+/// Why song `n` makes each lookup, or does not, of `verdicts`.
+fn show_lookups<W: Write>(
+    n: usize,
+    verdicts: &[(usize, crate::provider::Provider, crate::lookup::Verdict)],
+    out: &mut W,
+) -> Result<()> {
+    let mine: Vec<_> = verdicts.iter().filter(|(m, _, _)| *m == n).collect();
+    if mine.is_empty() {
+        return Ok(());
+    }
+    crate::ui::line(out, "  lookups")?;
+    let width = mine
+        .iter()
+        .map(|(_, p, _)| p.name().len())
+        .max()
+        .unwrap_or(0);
+    for (_, p, v) in mine {
+        crate::ui::line(out, &format!("    {:<width$} {v}", p.name()))?;
+    }
+    Ok(())
+}
+
 /// What a dry run shows: the decisions a sync would act on.
 pub(super) struct Shown<'a> {
     pub(super) manifest: &'a Manifest,
@@ -295,6 +317,17 @@ pub(super) fn status<W: Write>(
         ..
     } = shown;
     say_moves(planned, &intent.decided, showing, out)?;
+    // A song asked of by name is shown with why each lookup is made or not.
+    let lookups = match showing.matched {
+        Some(_) => crate::lookup::verdicts(
+            manifest,
+            state,
+            planned,
+            crate::state::now_secs(),
+            crate::lookup::Ask::default(),
+        )?,
+        None => Vec::new(),
+    };
     let moved = &intent.moved;
     let mut fates: BTreeMap<Fate, usize> = BTreeMap::new();
     for ((n, r), d) in planned.iter().zip(&intent.decided) {
@@ -325,6 +358,7 @@ pub(super) fn status<W: Write>(
                 ],
             )?;
             show_why(r, out)?;
+            show_lookups(*n, &lookups, out)?;
         }
     }
     let planned_songs: BTreeSet<usize> = planned.iter().map(|(n, _)| *n).collect();

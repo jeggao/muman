@@ -28,7 +28,10 @@ fn setup(body: &str, measured: &[(&str, bool)]) -> (tempfile::TempDir, Manifest,
 }
 
 fn finds(manifest: &Manifest, state: &State, force: bool) -> Vec<(SourceKey, Provider)> {
-    let ask = Ask { rematch: force };
+    let ask = Ask {
+        rematch: force,
+        persist: false,
+    };
     due(manifest, state, &Vec::new(), NOW, ask)
         .unwrap()
         .into_iter()
@@ -628,6 +631,42 @@ fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
         panic!("a record on no release falls short: {mine:?}");
     };
     assert_eq!(d.again, Some((record, 0)));
+}
+
+#[test]
+fn until_done_asks_again_at_once_what_failed() {
+    let (_d, m, mut s, p) = own(false, &NAMED);
+    let mut failed = Looked::now(
+        SourceKey::parse("manual:a.flac").unwrap(),
+        Provider::Lrclib,
+        Outcome::Failed {
+            count: 3,
+            error: "x".into(),
+        },
+    );
+    failed.at = NOW;
+    s.lookups = vec![failed];
+    let lrclib = |ask| {
+        due(&m, &s, &p, NOW, ask)
+            .unwrap()
+            .into_iter()
+            .any(|d| d.find == Provider::Lrclib)
+    };
+    assert!(!lrclib(Ask::default()));
+    assert!(lrclib(Ask {
+        rematch: false,
+        persist: true
+    }));
+}
+
+#[test]
+fn a_verdict_says_when_and_why() {
+    assert_eq!(Verdict::Later(NOW).to_string(), "again on 1970-04-11");
+    assert_eq!(date_of(1_793_750_400), "2026-11-04");
+    assert_eq!(
+        Verdict::Waits(Provider::AcoustId).to_string(),
+        "waits for acoustid"
+    );
 }
 
 #[test]

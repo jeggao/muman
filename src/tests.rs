@@ -2160,6 +2160,33 @@ fn status_info_and_check_report_on_stdout() {
     }
 }
 
+#[test]
+fn status_of_a_song_by_name_says_why_each_lookup_is_made_or_not() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let list = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(
+        &list,
+        listed.replace(
+            "until = [\"lyrics:timed\"]\nskip = []\nrecheck = \"7 days\"",
+            "until = [\"lyrics:timed\"]\nskip = [\"from:manual\"]\nrecheck = \"7 days\"",
+        ),
+    )
+    .unwrap();
+    let (_, report) = s.report(&flacs(), &["status", "a.flac"]);
+    assert!(report.contains("  lookups\n"), "{report}");
+    assert!(
+        report.contains("lrclib        skipped: [providers] skip 'from:manual'"),
+        "{report}"
+    );
+    assert!(
+        report.contains("youtube-music cannot ask: no YouTube upload to search from"),
+        "{report}"
+    );
+}
+
 impl Setup {
     /// What a command writes to stdout.
     fn report(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
@@ -3936,6 +3963,30 @@ fn an_export_asks_no_trust_to_copy_and_asks_it_to_encode() {
     let encoded = ["export", "-o", &zip, "--codec", "mp3"];
     let e = s.trusting(&fake, &encoded, None).unwrap_err();
     assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+}
+
+#[test]
+fn until_done_makes_every_lookup_due_in_one_run() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[providers.lrclib]\nper_run = 1\n",
+    )
+    .unwrap();
+    let server = Server::default();
+    let (ok, text) = s.run_against(&server, &["sync", "--until-done"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("wait for the next run"), "{text}");
+    let asked = server
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/search"))
+        .count();
+    assert_eq!(asked, 2, "both songs, past per_run");
 }
 
 #[test]

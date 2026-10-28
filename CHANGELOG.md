@@ -19,6 +19,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   them, such as `'album:="Some Album"'` or `"from:manual"`.
 - **A song turns its own lookups off** with `lookups = false`, or one
   provider's with `lookups.<provider> = false`.
+- **`sync --until-done`** makes every lookup due in one run, past
+  `per_run`, over as many rounds as finds start, asking again at once
+  what failed and fetching again what failed to arrive.
+- **`status <query>` says why each lookup is made, waits or is not**,
+  song by song, and `info` counts lookups waiting, skipped or unable to
+  ask.
 - **Queries read `from:<provider>`, `has:<tag>`, `lyrics:timed` and
   `untimed`, and `cover:sharp` and `small`.** `from:` names a provider a
   song's source is from, `has:` a tag a source or the song list gives

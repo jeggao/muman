@@ -374,7 +374,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         unplanned.add(song);
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
-    let due = lookup::due(
+    let verdicts = lookup::verdicts(
         &c.manifest,
         &c.state,
         &c.planned,
@@ -383,14 +383,33 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     )?;
     for p in lookup::ORDER {
         let mut wanted = Group::default();
-        for d in due.iter().filter(|d| d.find == p) {
-            wanted.add(&reconcile::name_of(
-                &c.manifest.songs[d.song],
-                None,
-                &c.state.facts,
-            ));
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for (n, q, v) in &verdicts {
+            if *q != p {
+                continue;
+            }
+            let kind = match v {
+                lookup::Verdict::Due(_) => {
+                    wanted.add(&reconcile::name_of(
+                        &c.manifest.songs[*n],
+                        None,
+                        &c.state.facts,
+                    ));
+                    continue;
+                }
+                lookup::Verdict::Waits(_) => "waiting on another",
+                lookup::Verdict::Later(_) => "asked again later",
+                lookup::Verdict::Skipped(_) => "skipped",
+                lookup::Verdict::CannotAsk(_) => "cannot ask",
+                _ => continue,
+            };
+            *counts.entry(kind).or_default() += 1;
         }
         group(out, c.verbose, &format!("Look up: {p}"), &wanted)?;
+        if !counts.is_empty() {
+            let said: Vec<String> = counts.iter().map(|(k, n)| format!("{n} {k}")).collect();
+            row(out, &format!("Lookups on {p}"), &said.join(", "))?;
+        }
     }
     let (mut missing, mut to_measure) = (Group::default(), Group::default());
     for key in &listed {
