@@ -795,6 +795,19 @@ fn cover_plan<R: Runner>(
     })
 }
 
+/// The song's title and artists its lyrics are cleaned by, where a rule
+/// switched on reads them.
+pub(crate) fn lyrics_names(plan: &Plan) -> Option<(Option<&str>, Vec<&str>)> {
+    let lyrics = plan.lyrics.as_ref()?;
+    let reads = clean::lyrics::NAMED
+        .iter()
+        .any(|rule| !lyrics.clean_off.iter().any(|off| off == rule));
+    reads.then(|| {
+        let ctx = lyrics_context(plan, lyrics);
+        (ctx.title, ctx.artists)
+    })
+}
+
 /// What lyric cleaning knows of the song a plan writes.
 fn lyrics_context<'p>(plan: &'p Plan, lyrics: &LyricsRef) -> clean::lyrics::Context<'p> {
     let values = |name: &'static str| {

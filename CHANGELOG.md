@@ -127,6 +127,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song retitled has its lyrics cleaned by its new title.** A new
+  title or artist only retagged the song, keeping lyrics cleaned of the
+  old ones, so a library changed song by song differed from one made at
+  once; the song is written again.
 - **`duplicates` tells albums of one name apart by their artist,** so a
   recording on two artists' "Best Of" is no longer called a file one
   album holds twice.

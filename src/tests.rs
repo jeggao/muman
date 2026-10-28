@@ -210,6 +210,65 @@ fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
 }
 
 #[test]
+fn a_song_retitled_cleans_its_lyrics_by_its_new_title() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Artist - Song\n[00:02.00]Paper comets\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = |at: &str| std::fs::read_to_string(s.dir.path().join(at)).unwrap();
+    assert_eq!(
+        lrc("lib/Artist/Record/02 Song.lrc"),
+        "[00:02.00]Paper comets\n",
+        "the title restated goes"
+    );
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:Song.flac", "title=Lantern"],
+    );
+    assert!(ok, "{text}");
+    let retitled = lrc("lib/Artist/Record/02 Lantern.lrc");
+    assert_eq!(
+        retitled, "[00:01.00]Artist - Song\n[00:02.00]Paper comets\n",
+        "{text}"
+    );
+
+    let fresh = Setup::new();
+    fresh.file("home/sources/manual/Song.flac");
+    fresh.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Artist - Song\n[00:02.00]Paper comets\n",
+    );
+    std::fs::write(
+        fresh.dir.path().join("home/songs.toml"),
+        "version = 1\n\n[[song]]\nsources = [\"manual:Song.flac\"]\ntags.title = \"Lantern\"\n",
+    )
+    .unwrap();
+    let (ok, text) = fresh.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(fresh.dir.path().join("lib/Artist/Record/02 Lantern.lrc")).unwrap(),
+        retitled,
+        "as made from the start"
+    );
+    let (ok, text) = s.run(
+        &flacs(),
+        &[
+            "set",
+            "-y",
+            "manual:Song.flac",
+            "artist=Rin Hollow",
+            "album_artist=Artist",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (lyric cleaning, tags)"), "{text}");
+}
+
+#[test]
 fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
