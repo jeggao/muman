@@ -264,6 +264,7 @@ fn the_release_wins_audio_cover_and_tags_and_the_video_gives_its_lyrics() {
     let cover = r.plan.cover.unwrap();
     assert_eq!(cover.key, yt("rrrrrrrrrrr"));
     assert_eq!(cover.crop, None);
+    assert_eq!(cover.made, None, "a JPEG is its own bytes");
     let lyrics = r.plan.lyrics.unwrap();
     assert_eq!(lyrics.key, yt("vvvvvvvvvvv"));
     assert_eq!(lyrics.shift_ms, 20_000, "the video plays 20 s later");
@@ -488,6 +489,11 @@ fn square_detail_beats_pixel_count_and_borders_are_cropped() {
     let cover = r.plan.cover.unwrap();
     assert_eq!(cover.key, c);
     assert_eq!(cover.crop, Some(inner));
+    assert_eq!(
+        cover.made,
+        Some(crate::render::COVER_MAKING),
+        "cropped, it is converted"
+    );
 }
 
 #[test]

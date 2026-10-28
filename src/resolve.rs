@@ -350,6 +350,11 @@ pub struct CoverRef {
     pub mimetype: String,
     /// The content inside the borders, when there are any.
     pub crop: Option<Rect>,
+    /// [`crate::render::COVER_MAKING`] for a cover ffmpeg converts, none
+    /// for one written as its own bytes: a new way of converting one
+    /// writes again only the songs whose cover it converts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1014,12 +1019,17 @@ fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
             );
             best = Some((
                 rank,
-                CoverRef {
-                    key: key.clone(),
-                    rev: facts.cover_rev(cover),
-                    at: cover.at.clone(),
-                    mimetype: cover.mimetype.clone(),
-                    crop: q.filter(ImageQuality::is_cropped).map(|q| q.content),
+                {
+                    let crop = q.filter(ImageQuality::is_cropped).map(|q| q.content);
+                    CoverRef {
+                        key: key.clone(),
+                        rev: facts.cover_rev(cover),
+                        at: cover.at.clone(),
+                        made: crate::render::converts(&cover.mimetype, crop.is_some())
+                            .then_some(crate::render::COVER_MAKING),
+                        mimetype: cover.mimetype.clone(),
+                        crop,
+                    }
                 },
                 why,
             ));

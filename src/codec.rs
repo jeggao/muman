@@ -52,7 +52,9 @@
 //! Every container is written bit-exact: ffmpeg otherwise gives each Ogg
 //! stream a random serial number, so one plan rendered twice would differ
 //! byte for byte, and a library would depend on when its songs were
-//! written.
+//! written. It is not the same on every processor: measured on ffmpeg 6.1
+//! against `-cpuflags 0`, FLAC and AAC, and Opus mixed down to stereo,
+//! were written as other bytes without a processor's vector instructions.
 
 use std::fmt;
 
