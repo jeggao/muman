@@ -61,7 +61,10 @@
 //! what they found, without holding the run's lock; what one round adds
 //! may make the next due. A provider's `per_run` cap lets a backlog, as
 //! the first sync of a library never looked up has, drain over several
-//! runs rather than all at once on a free service.
+//! runs rather than all at once on a free service. `sync --until-done`
+//! lifts the cap and the number of rounds, and asks again at once what
+//! failed, so one run leaves nothing due; it still makes each lookup once
+//! a run, at each service's pace.
 //!
 //! A YouTube Music track found later is fetched beside its upload and
 //! joins the song; the upload stays a source when the two are one
@@ -72,6 +75,7 @@
 //! listed, removed or replaced, is recorded found but never added again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
 
@@ -105,6 +109,7 @@ use crate::tags::Field;
 
 /// Rounds of lookups one run makes: what one round finds starts lookups
 /// of the next, as an upload's release then finds the release's lyrics.
+/// `sync --until-done` goes on until a round has nothing left to ask.
 pub const ROUNDS: usize = 3;
 
 /// The providers looked up, in the order a round makes their lookups.
@@ -149,6 +154,9 @@ pub struct Due {
 pub struct Ask {
     /// Make every lookup now, whatever its record says: `sync --rematch`.
     pub rematch: bool,
+    /// Ask until nothing is due: no `per_run` cap, no limit of rounds,
+    /// and what failed asked again at once: `sync --until-done`.
+    pub persist: bool,
 }
 
 /// What a song's lookup of one provider comes to.
@@ -172,6 +180,26 @@ pub enum Verdict {
     Unwritten,
     /// Why the song cannot ask it.
     CannotAsk(&'static str),
+}
+
+impl fmt::Display for Verdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Due(d) => match &d.again {
+                Some((key, _)) => write!(f, "asks now about {key}, which falls short"),
+                None => f.write_str("asks now"),
+            },
+            Self::Waits(p) => write!(f, "waits for {p}"),
+            Self::Later(at) => write!(f, "again on {}", date_of(*at)),
+            Self::Never => f.write_str("never again: declined, or what it found was taken out"),
+            Self::Done(None) => f.write_str("done: the song has what `until` names"),
+            Self::Done(Some(key)) => write!(f, "done: {key} gives what it can"),
+            Self::Skipped(why) => write!(f, "skipped: {why}"),
+            Self::Off => f.write_str("off"),
+            Self::Unwritten => f.write_str("not sought: no output writes it, or the song pins it"),
+            Self::CannotAsk(why) => write!(f, "cannot ask: {why}"),
+        }
+    }
 }
 
 /// What a Cover Art Archive lookup asks for a resolved song: its album
@@ -241,6 +269,21 @@ fn tag_of(r: &Resolved, f: Field) -> Option<String> {
         .iter()
         .find(|(k, _)| k == f.vorbis())
         .and_then(|(_, v)| v.first().cloned())
+}
+
+/// The day `secs` after the Unix epoch falls on, in UTC, as `2026-11-04`.
+fn date_of(secs: u64) -> String {
+    // Civil from days, after Howard Hinnant's `civil_from_days`.
+    let z = i64::try_from(secs / 86_400).unwrap_or(i64::MAX / 2) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Every lookup due, a song's for each provider at most once.
@@ -506,7 +549,9 @@ impl Asking<'_> {
         if !self.ask.rematch
             && let Some(l) = last
         {
+            let failed = matches!(l.outcome, Outcome::Failed { .. });
             match l.again_at(recheck, &|k| song.has(k)) {
+                _ if failed && self.ask.persist => {}
                 None => return Verdict::Never,
                 Some(at) if self.now < at => return Verdict::Later(at),
                 Some(_) => {}
@@ -571,6 +616,7 @@ impl Asking<'_> {
         let at = match last {
             None => Some(0),
             Some(l) if l.outcome == found => Some(l.short_again_at(settings.recheck)),
+            Some(l) if self.ask.persist && matches!(l.outcome, Outcome::Failed { .. }) => Some(0),
             Some(l) => l.again_at(settings.recheck, &|k| self.song.has(k)),
         };
         if !self.ask.rematch {
@@ -859,7 +905,8 @@ impl ThisRun {
 }
 
 /// Make every lookup due, joining what is found to its song, for up to
-/// [`ROUNDS`] rounds. `ask.rematch` makes the first round's lookups whatever was found
+/// [`ROUNDS`] rounds, or until none is due when `ask.persist`.
+/// `ask.rematch` makes the first round's lookups whatever was found
 /// before; a YouTube Music lookup from a key in `declined` is recorded
 /// declined instead. Returns whether every fetch succeeded.
 // The rounds and each round's steps, in the order they run.
@@ -877,7 +924,10 @@ pub fn run<R: Runner, W: Write>(
     let mut ok = true;
     let mut ask = ask;
     let mut this_run = ThisRun::default();
-    for round in 0..ROUNDS {
+    for round in 0.. {
+        if round >= ROUNDS && !ask.persist {
+            break;
+        }
         let mut manifest = Manifest::load(home)?;
         let mut state = State::load(home)?;
         let store = Store::scan(dirs)?;
@@ -917,7 +967,13 @@ pub fn run<R: Runner, W: Write>(
             .into_iter()
             .map(|d| Looked::now(d.from, d.find, Outcome::Declined))
             .collect();
-        let due = this_run.admit(due, |p| manifest.providers.settings(p).per_run);
+        let due = this_run.admit(due, |p| {
+            if ask.persist {
+                0
+            } else {
+                manifest.providers.settings(p).per_run
+            }
+        });
         if due.is_empty() {
             State::keep_lookups(home, &records, &[])?;
             break;

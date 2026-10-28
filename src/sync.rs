@@ -44,6 +44,7 @@ use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, store, 
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct Request {
     pub rematch: bool,
+    pub until_done: bool,
     pub force: bool,
     pub retry: bool,
     pub accept: bool,
@@ -73,7 +74,8 @@ pub(crate) fn run<R: Runner, W: Write>(
             crate::reconcile::note_damaged(runner, dirs, request.retry, out)?;
         }
         let manifest = Manifest::load(&dirs.home)?;
-        let mut ok = fetch_missing(job, runner, http, &manifest, request.retry, out)?;
+        let retry = request.retry || request.until_done;
+        let mut ok = fetch_missing(job, runner, http, &manifest, retry, out)?;
         let how = Listing {
             mode: crate::mode(request.matching),
             verbose: job.verbose,
@@ -83,11 +85,12 @@ pub(crate) fn run<R: Runner, W: Write>(
         list(runner, dirs, proposals, &how, prompter, out)?;
         let ask = lookup::Ask {
             rematch: request.rematch,
+            persist: request.until_done,
         };
         ok &= look_up(job, runner, http, ask, &BTreeSet::new(), out)?;
         let opts = Options {
             force: request.force,
-            retry: request.retry,
+            retry,
             accept: request.accept,
             ..Options::default()
         };

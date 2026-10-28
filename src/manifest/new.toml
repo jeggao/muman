@@ -260,7 +260,7 @@ max_size = "2 GiB"
 # `concurrency` is how many run at once. youtube-music is searched from a
 # YouTube upload and youtube from a release; musicbrainz waits while
 # acoustid is due, and coverart while either is; each sync asks in this
-# order for up to three rounds.
+# order for up to three rounds, `sync --until-done` until none is due.
 [providers]
 skip = []
 

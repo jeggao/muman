@@ -238,7 +238,11 @@ another song's lookup finds stays as kept.
 `sync --rematch` makes every lookup a song still wants at once,
 whatever its record says. What one round finds can make the next due,
 as an upload's release then finds the release's lyrics; a sync makes up
-to three rounds, each lookup once.
+to three rounds, each lookup once. `sync --until-done` makes every
+lookup due in one run: past `per_run`, over as many rounds as finds
+start, and asking again at once what failed, at each service's own
+pace. `muman status <query>` says for each song it shows why each
+lookup is made, waits or is not, and `info` counts them.
 An LRCLIB record fits when its length is within 2 s of the
 song's and its names hold the song's, compared by letters and digits in
 any width; a record with words wins over one marked instrumental, then

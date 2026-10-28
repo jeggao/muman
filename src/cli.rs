@@ -387,6 +387,14 @@ pub enum Command {
         #[arg(long)]
         rematch: bool,
 
+        /// Keep going until the library is up to date: make every lookup
+        /// due, however many `per_run` allows and over as many rounds as
+        /// what one finds starts, ask again at once what failed, and fetch
+        /// again what failed to arrive, as --retry does. Each service is
+        /// still asked at its own pace.
+        #[arg(long)]
+        until_done: bool,
+
         /// Write every song again, changed or not, a library file changed
         /// since muman wrote it included.
         #[arg(long)]
