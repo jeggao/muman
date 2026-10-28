@@ -9,6 +9,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[[cover.out]]` says where the cover goes.** Each is the cover
+  inside the song or a file beside it, named by a suffix of your own,
+  kept as its own bytes or made JPEG, PNG or WebP at a quality, and
+  scaled down to a longest side. A cover file added or taken out is
+  written or removed alone, the song left as it is; `out = []` writes no
+  cover, and LRCLIB and the Cover Art Archive are asked nothing for what
+  no output writes.
 - **Lyrics as WebVTT, SubRip or plain text.** A `[[lyrics.out]]` of
   `format = "vtt"` or `"srt"` writes timed lyrics as subtitle cues, word
   times kept in WebVTT, and `"txt"` as plain lines, in a file or the

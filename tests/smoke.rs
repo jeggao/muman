@@ -297,6 +297,75 @@ fn every_container_holds_the_tags_ffprobe_reads() {
     }
 }
 
+/// Whether the ffmpeg here writes WebP: one built without libwebp, as
+/// Homebrew's, does not.
+fn encodes_webp() -> bool {
+    Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("libwebp"))
+}
+
+/// The width and height of the picture at `path`, as ffprobe reads them.
+fn dimensions(path: &Path) -> (u32, u32) {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+        .args(["stream=width,height", "-of", "csv=p=0"])
+        .arg(path)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (w, h) = text.trim().split_once(',').expect("a picture");
+    (w.parse().unwrap(), h.parse().unwrap())
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_cover_goes_to_each_place_the_song_list_names_scaled_and_encoded_so() {
+    let h = Home::new();
+    let songs = h.root.join("home").join("songs.toml");
+    let list = std::fs::read_to_string(&songs).unwrap();
+    let out = "[[cover.out]]\nto = \"tag\"\nformat = \"jpeg\"\nmax_side = 300\n\
+               [[cover.out]]\nto = \"file\"\n\
+               [[cover.out]]\nto = \"file\"\nsuffix = \".small\"\nformat = \"webp\"\n\
+               max_side = 99\nquality = 60\n";
+    std::fs::write(&songs, format!("{list}\n{out}")).unwrap();
+    let song = h.song("song.flac", 4, "Lantern Weather");
+    let art = h.root.join("in").join("art.png");
+    embed_cover(&art, &[&song]);
+    let added = h.muman(&["add", "-y", song.to_str().unwrap()]);
+    assert!(added.status.success(), "{}", text(&added));
+
+    let written = &h.library_files("flac")[0];
+    let file = lofty::read_from_path(written).unwrap();
+    let picture = &file.primary_tag().unwrap().pictures()[0];
+    assert_eq!(picture.mime_type(), Some(&lofty::picture::MimeType::Jpeg));
+    let inside = h.root.join("inside.jpg");
+    std::fs::write(&inside, picture.data()).unwrap();
+    assert_eq!(dimensions(&inside), (300, 300));
+    let kept = &h.library_files("png")[0];
+    assert_eq!(std::fs::read(kept).unwrap(), std::fs::read(&art).unwrap());
+    if encodes_webp() {
+        let small = &h.library_files("webp")[0];
+        assert!(
+            small
+                .to_string_lossy()
+                .ends_with("Lantern Weather.small.webp")
+        );
+        let (w, _) = dimensions(small);
+        assert!((98..=99).contains(&w), "{w}");
+    } else {
+        assert_eq!(h.library_files("webp"), Vec::<PathBuf>::new());
+        assert!(
+            text(&added).contains("no cover file Lantern Weather.small.webp"),
+            "{}",
+            text(&added)
+        );
+    }
+    let synced = h.muman(&["sync"]);
+    assert!(text(&synced).contains("Up to date"), "{}", text(&synced));
+}
+
 #[test]
 #[ignore = "needs ffmpeg and ffprobe"]
 fn a_source_s_chapters_are_kept_in_every_container_that_holds_them() {
@@ -699,11 +768,12 @@ fn every_fixture_is_read_as_muman_reads_a_source() {
     std::fs::copy(fixtures.join("silence.flac"), dir.join("take%d.flac")).unwrap();
     assert!(read(&dir.join("take%d.flac")));
 
-    // Each fixture as a song, the picture beside the FLAC as its cover.
+    // Each fixture of audio as a song, a picture beside the FLAC as its cover.
+    let pictures = ["png", "jpg", "webp"].map(std::ffi::OsStr::new);
     let mut songs = Vec::new();
     for fixture in found
         .iter()
-        .filter(|f| f.extension() != Some("png".as_ref()))
+        .filter(|f| f.extension().is_none_or(|e| !pictures.contains(&e)))
     {
         let ext = fixture.extension().unwrap().to_str().unwrap();
         let song = dir.join(format!("Fixture {ext}.{ext}"));

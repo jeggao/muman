@@ -162,6 +162,18 @@ step = "10 %"
 enabled = true
 weight = 1
 step = 0.1
+# Where the cover a song takes is written, one [[cover.out]] each: `to`
+# "tag", inside the song, or "file", beside it, named as it is with
+# `suffix` and the format's extension after, as ".cover" names
+# "Song.cover.jpg". `format` "keep" writes a JPEG or PNG without borders
+# as its own bytes and any other picture as PNG; "jpeg", "png" and "webp"
+# encode it, JPEG and WebP at `quality`, from 1 to 100. `max_side`, in
+# pixels, scales a longer picture down. A tag holds "keep", "jpeg" or
+# "png". `out = []` under [cover] writes none.
+[[cover.out]]
+to = "tag"
+format = "keep"
+quality = 90
 
 [ytdlp]
 # What is kept of a video, as yt-dlp's --format; muman reads its

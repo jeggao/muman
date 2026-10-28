@@ -20,6 +20,8 @@ pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
 pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
 pub const SILENCE_WV: &[u8] = include_bytes!("../testdata/silence.wv");
 pub const PIXEL: &[u8] = include_bytes!("../testdata/pixel.png");
+pub const PIXEL_JPEG: &[u8] = include_bytes!("../testdata/pixel.jpg");
+pub const PIXEL_WEBP: &[u8] = include_bytes!("../testdata/pixel.webp");
 
 /// The ffprobe JSON of a yt-dlp original: video, Opus audio, an English
 /// subtitle, its info JSON and a WebP thumbnail as attachments.
@@ -240,13 +242,26 @@ impl Fake {
         args
     }
 
+    /// A picture stream `map` names of `input` copied out: JPEG for one
+    /// its probe says is, else PNG.
+    fn copied_picture(&self, input: &str, map: Option<&str>) -> &'static [u8] {
+        let probe = find(&self.probes, input).map_or(ORIGINAL, String::as_str);
+        let index = map.and_then(|m| m.split(':').nth(1));
+        let streams: serde_json::Value = serde_json::from_str(probe).unwrap_or_default();
+        let jpeg = streams["streams"].as_array().is_some_and(|all| {
+            all.iter().any(|s| {
+                Some(s["index"].to_string().as_str()) == index && s["codec_name"] == "mjpeg"
+            })
+        });
+        if jpeg { PIXEL_JPEG } else { PIXEL }
+    }
+
     fn write_output(&self, args: &[String], at: usize, inputs: &[String]) -> Result<()> {
         let format = args[at + 1].as_str();
         let path = PathBuf::from(&args[at + 2]);
-        let map = args[..at]
-            .iter()
-            .rposition(|a| a == "-map")
-            .map(|i| args[i + 1].as_str());
+        let mapped = args[..at].iter().rposition(|a| a == "-map");
+        let map = mapped.map(|i| args[i + 1].as_str());
+        let encoder = |name: &str| args[mapped.unwrap_or(0)..at].iter().any(|a| a == name);
         let input = map
             .and_then(|m| m.split(':').next())
             .and_then(|n| n.parse::<usize>().ok())
@@ -283,6 +298,9 @@ impl Fake {
                     .unwrap_or_else(|| seed_of_path(&input));
                 pgm(w, h, seed)
             }
+            "image2" if encoder("copy") => self.copied_picture(&input, map).to_vec(),
+            "image2" if encoder("mjpeg") => PIXEL_JPEG.to_vec(),
+            "image2" if encoder("libwebp") => PIXEL_WEBP.to_vec(),
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),
             "flac" => SILENCE_FLAC.to_vec(),

@@ -174,7 +174,9 @@ A trigger makes a song with a source from any provider in `from`, and
 none from `find`, look `find` up when `when` holds: `always`,
 `no-lyrics`, `no-timed-lyrics`, `no-album` (neither a source nor the
 song list names an album) or `small-cover` (no cover, or one with too
-little detail to look sharp, as `info` counts). The built-in triggers:
+little detail to look sharp, as `info` counts). `no-lyrics` and
+`no-timed-lyrics` hold for no song while `[lyrics] out = []`, nor
+`small-cover` while `[cover] out = []`. The built-in triggers:
 
 | From | Finds | When |
 |---|---|---|

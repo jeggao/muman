@@ -1,5 +1,6 @@
 //! The files a song has beside its audio file in the library, and their
-//! names: its lyrics, in each file a `[[lyrics.out]]` names.
+//! names: its lyrics and its cover, in each file a `[[lyrics.out]]` or a
+//! `[[cover.out]]` names.
 //!
 //! Each is named by the song's audio path without its extension and a
 //! suffix of its own, so the song's files read as one in a folder, and a
@@ -17,7 +18,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::resolve::{LyricsFile, LyricsRef, Plan};
+use crate::resolve::{CoverPlace, CoverRef, LyricsFile, LyricsRef, Plan};
 use crate::settings::{Settings, To};
 use crate::state::Written;
 
@@ -32,16 +33,34 @@ pub fn lyrics_file(stem: &Path, file: &LyricsFile) -> PathBuf {
     )
 }
 
+/// The file of the cover `place` beside the song whose path without its
+/// extension is `stem`: the suffix the `[[cover.out]]` names, then its
+/// format's extension; none for a place inside the song.
+#[must_use]
+pub fn cover_file(stem: &Path, place: &CoverPlace) -> Option<PathBuf> {
+    let suffix = place.file.as_ref()?;
+    Some(beside(
+        stem,
+        &format!("{suffix}.{}", place.format.extension()),
+    ))
+}
+
 /// The files `plan` writes beside the song whose audio file is at
-/// `audio`.
+/// `audio`: its lyrics', then its cover's.
 #[must_use]
 pub fn planned(audio: &Path, plan: &Plan) -> Vec<PathBuf> {
     let stem = audio.with_extension("");
-    plan.lyrics
+    let lyrics = plan
+        .lyrics
         .iter()
         .flat_map(LyricsRef::files)
-        .map(|f| lyrics_file(&stem, &f))
-        .collect()
+        .map(|f| lyrics_file(&stem, &f));
+    let covers = plan
+        .cover
+        .iter()
+        .flat_map(CoverRef::files)
+        .filter_map(|p| cover_file(&stem, &p));
+    lyrics.chain(covers).collect()
 }
 
 /// The files beside the song at `audio` that writing it may write or
@@ -60,15 +79,29 @@ pub fn touched(audio: &Path, plan: &Plan, recorded: Option<&Written>) -> Vec<Pat
 }
 
 /// The bytes the longest tail after a song's stem takes: its audio's
-/// extension, or a file beside it, as `[[lyrics.out]]` names them.
+/// extension, or a file beside it, as `[[lyrics.out]]` and
+/// `[[cover.out]]` name them.
 #[must_use]
 pub fn tail(settings: &Settings) -> usize {
-    settings
+    let lyrics = settings
         .lyrics
         .out
         .iter()
         .filter(|o| o.to == To::File)
-        .map(|o| o.suffix.len() + 1 + o.format.extension().len())
+        .map(|o| o.suffix.len() + 1 + o.format.extension().len());
+    let covers = settings
+        .cover
+        .out
+        .iter()
+        .filter(|o| o.to == To::File)
+        .flat_map(|o| {
+            o.format
+                .extensions()
+                .iter()
+                .map(|e| o.suffix.len() + 1 + e.len())
+        });
+    lyrics
+        .chain(covers)
         .fold(crate::naming::AUDIO_TAIL, usize::max)
 }
 

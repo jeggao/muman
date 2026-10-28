@@ -1021,25 +1021,25 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
     let facts = state.facts.get(&song.plan.audio.key);
     let seconds = facts.and_then(Facts::length).filter(|s| *s > 0.0);
     // The audio file's name and what it holds besides its stream, and what
-    // its lyrics beside it take.
-    let (name, extras, lyrics) = if song.anew {
+    // the files beside it take.
+    let (name, extras, beside) = if song.anew {
         let (extras, beside) = limit::besides_audio(&song.plan);
         let audio = named(
             &song.stem,
             Path::new(&format!("_.{}", song.plan.format.extension())),
         );
         let names = crate::outputs::planned(&audio, &song.plan);
-        let lyrics = names
+        let beside = names
             .iter()
             .zip(beside)
             .map(|(name, bytes)| target.takes(&name_in_zip(name), bytes))
             .sum();
-        (name_in_zip(&audio), extras, lyrics)
+        (name_in_zip(&audio), extras, beside)
     } else {
-        let lyrics = entries_size(target, &held[1..]);
-        (held[0].name.clone(), extras(&held[0].from), lyrics)
+        let beside = entries_size(target, &held[1..]);
+        (held[0].name.clone(), extras(&held[0].from), beside)
     };
-    let takes = |stream: u64| target.takes(&name, stream + extras) + lyrics;
+    let takes = |stream: u64| target.takes(&name, stream + extras) + beside;
     let first = if song.anew {
         let stream = match (facts, seconds) {
             (Some(f), Some(s)) => limit::estimate(song.plan.format, f, s).0 as u64,

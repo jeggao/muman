@@ -116,7 +116,7 @@ src/
   */tests.rs        a module's tests, when they outgrow it
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
-testdata/           tiny Opus, FLAC and PNG fixtures
+testdata/           tiny audio and picture fixtures
 assets/yt-dlp/      the plugins plugins.rs embeds
 xtask/              cargo xtask comments | docs
 packaging/          the Homebrew, Scoop and AUR entries each release fills in

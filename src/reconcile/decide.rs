@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
 use crate::manifest::{Edit, Manifest};
-use crate::resolve::{LyricsRef, Plan, Resolved};
+use crate::resolve::{CoverRef, LyricsRef, Plan, Resolved};
 use crate::settings::LyricsPlacement;
 use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
@@ -89,7 +89,7 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
         // A retag sets an Opus header's gain, but only a write puts back the one it had.
         && (a.opus_header().is_none() || b.opus_header().is_some())
         && a.audio == b.audio
-        && a.cover == b.cover
+        && cover_inside(a) == cover_inside(b)
         && lyrics_inside(a) == lyrics_inside(b)
         // MP4 chapters are ffmpeg's to write.
         && a.chapters == b.chapters
@@ -99,7 +99,13 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
 /// audio file is [`media_equal`] keeps them as they are.
 pub(super) fn beside_equal(a: &Plan, b: &Plan) -> bool {
     let beside = |p| lyrics_held(p).filter(|(l, _)| !l.files().is_empty());
-    beside(a) == beside(b)
+    let covers = |p: &Plan| p.cover.as_ref().and_then(|c| c.only(|p| p.file.is_some()));
+    beside(a) == beside(b) && covers(a) == covers(b)
+}
+
+/// What the song's file holds of its cover, where it goes inside it.
+fn cover_inside(plan: &Plan) -> Option<CoverRef> {
+    plan.cover.as_ref()?.only(|p| p.file.is_none())
 }
 
 /// The song's title and artists lyrics are cleaned by, where a rule
