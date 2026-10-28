@@ -890,25 +890,6 @@ fn the_header_names_every_table_and_copies_no_default() {
 }
 
 #[test]
-fn the_header_names_every_table_and_copies_no_default() {
-    for table in crate::settings::TABLES.iter().chain(&["providers"]) {
-        assert!(
-            HEADER.contains(&format!("[{table}")),
-            "[{table}] is not named"
-        );
-    }
-    assert!(HEADER.contains("[[hook]]"));
-    let set = regex::Regex::new(r#"([a-z_]+) = (\\?"[^"\\]+\\?"|[0-9][^ ,;.]*)"#).unwrap();
-    for c in set.captures_iter(HEADER) {
-        let line = format!("{} = {}", &c[1], c[2].replace('\\', ""));
-        assert!(
-            !NEW.lines().any(|l| l.trim() == line),
-            "the header copies the default `{line}`: link new.toml's instead"
-        );
-    }
-}
-
-#[test]
 fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     let dir = tempfile::tempdir().unwrap();
     write(
