@@ -23,7 +23,9 @@
 //!
 //! Who changes a source decides what a difference means. A file in the
 //! manual folder changes when you change it, so its song follows, and
-//! its record is written anew. What muman fetched changes only when it
+//! its record is written anew; so does a record a lookup asks about
+//! again for falling short, as untimed lyrics do, and keeps anew changed,
+//! as it asked to. What muman fetched changes only when it
 //! is fetched again, its file lost, and what a site serves then may not
 //! be what it served: a video re-encoded, its audio edited, another
 //! format preferred, its thumbnail, subtitles or title changed. Such a

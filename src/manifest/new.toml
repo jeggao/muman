@@ -245,9 +245,10 @@ runs = 3
 max_size = "2 GiB"
 
 # What each song looks up online, a table a provider. `until` lists what
-# a song asks the provider until it has, every one of them, or until it
-# found something; a provider that finds nothing is asked again after
-# `recheck`. `has:<tag>` holds for a
+# a song asks the provider until it has, every one of them: a provider
+# that finds nothing, or a record that lacks what the song still lacks,
+# is asked again after `recheck`, and a record found again unchanged
+# waits twice as long each time, up to 90 days. `has:<tag>` holds for a
 # tag a source or this file gives, not one muman fills in itself, as an
 # album artist taken from the artist. `skip` lists queries as `muman
 # list` takes them, one a string, as 'album:="Some Album"' or

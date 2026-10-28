@@ -15,11 +15,23 @@
 //! | Made another way | At once, unless it found a source the song lists |
 //! | Found nothing, or an instrumental | After the provider's `recheck` |
 //! | Failed | After an hour, doubling with each failure, up to a week |
+//! | Found a source the song lists that falls short | After `recheck`, doubling each time it is found again unchanged, up to 90 days |
 //! | Found a source, or declined | Never |
 //!
-//! A song that lists a source from a provider asks it nothing more, so a
-//! record that loses to another source never makes a lookup that would
-//! find it again.
+//! A source the song lists from the provider is judged by what it gives
+//! itself, not by what the song resolves to: it falls short when it
+//! lacks a condition of `until` the song lacks too. A cover that loses to
+//! a square one, or lyrics a pin passes over, never makes a lookup that
+//! would find the same record again. A record that falls short is asked
+//! about again in its provider's own way: LRCLIB is searched again, as a
+//! better record may have joined it; a MusicBrainz record or a Cover Art
+//! Archive cover is fetched again by its ID, which a search would find
+//! again; a YouTube video is never looked for again, a search costing a
+//! listing and downloads that find the same upload. A record asked about
+//! again replaces the stored copy when it differs, and its songs follow
+//! it; one another song's lookup finds stays as kept, so no song's record
+//! changes behind it. A record's wait counts from its song's newest
+//! lookup of the provider, whatever that found.
 //!
 //! A lookup a service refused for going too fast, after the retries
 //! [`crate::http::Service`] makes, or that reached no server, as when the
@@ -126,6 +138,10 @@ pub struct Due {
     pub song: usize,
     pub from: SourceKey,
     pub find: Provider,
+    /// The record the song lists from the provider, which falls short,
+    /// with how many times it was found again unchanged: fetched again by
+    /// its ID, or for LRCLIB searched for again.
+    pub again: Option<(SourceKey, u32)>,
 }
 
 /// How a run asks.
@@ -146,7 +162,7 @@ pub enum Verdict {
     /// Asked no more: declined, or found a source the song took out.
     Never,
     /// Nothing left to ask: the song has what `until` names (`None`), or
-    /// lists a source from the provider.
+    /// the source it lists from the provider gives all it can.
     Done(Option<SourceKey>),
     /// Left out by this `skip` query, or the song's own `lookups`.
     Skipped(String),
@@ -468,7 +484,7 @@ impl Asking<'_> {
         };
         let recheck = settings.recheck;
         if let Some(record) = of(&[p.yields()]) {
-            return Verdict::Done(Some(record));
+            return self.again(p, settings, from, record);
         }
         let r = self.resolved;
         let askable = match p {
@@ -500,6 +516,79 @@ impl Asking<'_> {
             song: self.n,
             from,
             find: p,
+            again: None,
+        })
+    }
+
+    /// What the song's lookup of `p` comes to when it lists `record`, a
+    /// source from it, asked from `from`: done when the record its newest
+    /// lookup found, else `record`, gives what it can, else asked about
+    /// again in the provider's own way, when that lookup's record says.
+    fn again(
+        &self,
+        p: Provider,
+        settings: &crate::provider::Settings,
+        from: SourceKey,
+        record: SourceKey,
+    ) -> Verdict {
+        if matches!(
+            p,
+            Provider::YouTube | Provider::YouTubeMusic | Provider::AcoustId
+        ) {
+            return Verdict::Done(Some(record));
+        }
+        let facts = &self.state.facts;
+        let finds: &[Provider] = if p == Provider::MusicBrainz {
+            &[Provider::MusicBrainz, Provider::AcoustId]
+        } else {
+            &[p]
+        };
+        let last = self.records.newest(&self.song.sources, finds);
+        let record = match last.map(|l| &l.outcome) {
+            Some(Outcome::Found(k))
+                if self.song.has(k) && Provider::of(k, facts.get(k)) == Some(p.yields()) =>
+            {
+                k.clone()
+            }
+            _ => record,
+        };
+        // A record not measured yet is judged once the round measures it.
+        let Some(kept) = facts.get(&record) else {
+            return Verdict::Done(Some(record));
+        };
+        let own = songs::source_view(&record, Some(kept));
+        let short = settings
+            .until
+            .iter()
+            .any(|c| !c.holds(self.view) && !c.holds(&own));
+        if !short {
+            return Verdict::Done(Some(record));
+        }
+        if p == Provider::Lrclib && self.query().is_none() {
+            return Verdict::CannotAsk("the song has no title, artist or length");
+        }
+        let found = Outcome::Found(record.clone());
+        let at = match last {
+            None => Some(0),
+            Some(l) if l.outcome == found => Some(l.short_again_at(settings.recheck)),
+            Some(l) => l.again_at(settings.recheck, &|k| self.song.has(k)),
+        };
+        if !self.ask.rematch {
+            match at {
+                None => return Verdict::Never,
+                Some(at) if self.now < at => return Verdict::Later(at),
+                Some(_) => {}
+            }
+        }
+        Verdict::Due(Due {
+            song: self.n,
+            from,
+            find: p,
+            again: Some((
+                record,
+                last.filter(|l| l.outcome == found)
+                    .map_or(0, |l| l.unchanged),
+            )),
         })
     }
 
@@ -627,6 +716,9 @@ struct Asked<'a> {
     query: Option<&'a Query>,
     cover: Option<&'a coverart::Query>,
     print: Option<&'a acoustid::Query>,
+    /// The album a MusicBrainz record asked about again named when kept,
+    /// so it is fetched on the same release.
+    album: Option<&'a str>,
 }
 
 fn look<R: Runner>(
@@ -671,10 +763,16 @@ fn look<R: Runner>(
             Found::Instrumental(_) => Hit::Instrumental,
             Found::Nothing => Hit::Nothing,
         },
-        Provider::MusicBrainz => match clients.musicbrainz.find(query()?)? {
-            Some(r) => Hit::Tags(Box::new(r)),
-            None => Hit::Nothing,
-        },
+        Provider::MusicBrainz => {
+            let found = match &d.again {
+                Some((key, _)) => {
+                    let id = key.id().and_then(Mbid::parse).context("not a record ID")?;
+                    clients.musicbrainz.by_id(&id, asked.album)?
+                }
+                None => clients.musicbrainz.find(query()?)?,
+            };
+            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
+        }
         Provider::AcoustId => {
             let q = asked
                 .print
@@ -686,11 +784,16 @@ fn look<R: Runner>(
             found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
         }
         Provider::CoverArt => {
-            let cover = asked.cover.context("the song names no album")?;
-            match clients.coverart().find(cover)? {
-                Some(c) => Hit::Cover(Box::new(c)),
-                None => Hit::Nothing,
-            }
+            let found = match &d.again {
+                Some((key, _)) => {
+                    let id = key.id().and_then(Mbid::parse).context("not a record ID")?;
+                    clients.coverart().by_id(&id)?
+                }
+                None => clients
+                    .coverart()
+                    .find(asked.cover.context("the song names no album")?)?,
+            };
+            found.map_or(Hit::Nothing, |c| Hit::Cover(Box::new(c)))
         }
         Provider::Manual => Hit::Nothing,
     })
@@ -883,16 +986,26 @@ pub fn run<R: Runner, W: Write>(
                 .map(|d| {
                     resolved
                         .get(&d.song)
-                        .filter(|_| p == Provider::CoverArt)
+                        .filter(|_| p == Provider::CoverArt && d.again.is_none())
                         .and_then(|r| cover_query_of(r))
                 })
                 .collect();
-            // One lookup an album: a later song of it takes the first's.
+            // One lookup an album, or a cover asked about again: a later song
+            // of it takes the first's.
+            let shared: Vec<Option<(Option<&coverart::Query>, Option<&SourceKey>)>> = group
+                .iter()
+                .zip(&covers)
+                .map(|(d, q)| {
+                    let again = d.again.as_ref().map(|(k, _)| k);
+                    (p == Provider::CoverArt && (q.is_some() || again.is_some()))
+                        .then_some((q.as_ref(), again))
+                })
+                .collect();
             let first: Vec<usize> = (0..group.len())
                 .map(|i| {
-                    covers[..i]
+                    shared[..i]
                         .iter()
-                        .position(|q| q.is_some() && *q == covers[i])
+                        .position(|q| q.is_some() && *q == shared[i])
                         .unwrap_or(i)
                 })
                 .collect();
@@ -913,10 +1026,18 @@ pub fn run<R: Runner, W: Write>(
                 let print = r
                     .filter(|_| p == Provider::AcoustId)
                     .and_then(|r| print_query_of(r, &state.facts));
+                let album = d
+                    .again
+                    .as_ref()
+                    .and_then(|(key, _)| state.facts.get(key))
+                    .and_then(|f| f.tags.get(&Field::Album))
+                    .and_then(|o| o.values.first())
+                    .map(String::as_str);
                 let asked = Asked {
                     query: query.as_ref(),
                     cover: covers[i].as_ref(),
                     print: print.as_ref(),
+                    album,
                 };
                 let hit = look(
                     runner,
@@ -949,6 +1070,9 @@ pub fn run<R: Runner, W: Write>(
                 && !hit.as_ref().is_err_and(|e| http::put_off(e).is_some())
         });
         let mut replaced = Vec::new();
+        // Records asked about again and kept anew this round: the songs
+        // listing them follow what they hold now.
+        let mut renewed: BTreeSet<SourceKey> = BTreeSet::new();
         let mut joined = 0_usize;
         let mut put_off: BTreeMap<Provider, (usize, String)> = BTreeMap::new();
         for (d, hit) in hits {
@@ -963,6 +1087,7 @@ pub fn run<R: Runner, W: Write>(
                 put_off.entry(d.find).or_insert((0, why.to_string())).0 += 1;
                 continue;
             }
+            let mut unchanged = 0;
             let outcome = match hit {
                 // No yt-dlp fails every lookup alike; the run stops and
                 // says so, rather than putting each song off for a week.
@@ -989,7 +1114,15 @@ pub fn run<R: Runner, W: Write>(
                         site: LRCLIB.to_string(),
                         id: record.id.to_string(),
                     };
-                    if !store.has(&key) {
+                    let json = serde_json::to_vec_pretty(&record)?;
+                    let kept = dirs.lrclib().join(format!("{}.json", record.id));
+                    let found = Fetched {
+                        key: &key,
+                        missing: !store.has(&key),
+                        kept: &kept,
+                        bytes: &json,
+                    };
+                    if found.take(d.again.as_ref(), &mut renewed, &mut unchanged) {
                         lrclib::keep(&dirs.lrclib(), &record)?;
                     }
                     if !manifest.songs[d.song].has(&key) {
@@ -1012,7 +1145,15 @@ pub fn run<R: Runner, W: Write>(
                         site: MUSICBRAINZ.to_string(),
                         id: record.id.to_string(),
                     };
-                    if !store.has(&key) {
+                    let json = serde_json::to_vec_pretty(&record)?;
+                    let kept = musicbrainz::path_of(&dirs.musicbrainz(), &record.id);
+                    let found = Fetched {
+                        key: &key,
+                        missing: !store.has(&key),
+                        kept: &kept,
+                        bytes: &json,
+                    };
+                    if found.take(d.again.as_ref(), &mut renewed, &mut unchanged) {
                         musicbrainz::keep(&dirs.musicbrainz(), &record)?;
                     }
                     if !manifest.songs[d.song].has(&key) {
@@ -1040,7 +1181,14 @@ pub fn run<R: Runner, W: Write>(
                         id: cover.id().to_string(),
                     };
                     let folder = dirs.kept(COVERART);
-                    if !store.has(&key) && !coverart::path_of(&folder, &cover).exists() {
+                    let kept = coverart::path_of(&folder, &cover);
+                    let found = Fetched {
+                        key: &key,
+                        missing: !store.has(&key) && !kept.exists(),
+                        kept: &kept,
+                        bytes: cover.bytes(),
+                    };
+                    if found.take(d.again.as_ref(), &mut renewed, &mut unchanged) {
                         coverart::keep(&folder, &cover)?;
                     }
                     if !manifest.songs[d.song].has(&key) {
@@ -1126,7 +1274,12 @@ pub fn run<R: Runner, W: Write>(
                     }
                 }
             };
-            records.push(Looked::now(d.from.clone(), d.find, outcome));
+            let mut looked = Looked::now(d.from.clone(), d.find, outcome);
+            looked.unchanged = unchanged;
+            records.push(looked);
+        }
+        for key in renewed {
+            manifest.edit(Edit::Unhold(key));
         }
         manifest.save()?;
         State::keep_lookups(home, &records, &replaced)?;
@@ -1159,6 +1312,42 @@ pub fn run<R: Runner, W: Write>(
         )?;
     }
     Ok(ok)
+}
+
+/// A record a lookup found: its key, whether the store lacks it, where
+/// its copy is kept and what that copy would hold now.
+struct Fetched<'a> {
+    key: &'a SourceKey,
+    missing: bool,
+    kept: &'a Path,
+    bytes: &'a [u8],
+}
+
+impl Fetched<'_> {
+    /// Whether to keep it: when the store lacks it, or when the lookup
+    /// asked about it again (`again`) and it holds otherwise than the copy
+    /// kept, once a round, `renewed` gaining it. A record another lookup
+    /// found stays as kept, so no song's record changes behind it.
+    /// `unchanged` counts on when it was asked about again and held the
+    /// same.
+    fn take(
+        &self,
+        again: Option<&(SourceKey, u32)>,
+        renewed: &mut BTreeSet<SourceKey>,
+        unchanged: &mut u32,
+    ) -> bool {
+        let Some((_, n)) = again.filter(|(k, _)| k == self.key) else {
+            return self.missing;
+        };
+        let first = !renewed.contains(self.key);
+        let changed = !first || std::fs::read(self.kept).map_or(true, |kept| kept != self.bytes);
+        if changed {
+            renewed.insert(self.key.clone());
+        } else {
+            *unchanged = n + 1;
+        }
+        self.missing || (changed && first)
+    }
 }
 
 /// What [`refetch`] made of the records gone from the store.

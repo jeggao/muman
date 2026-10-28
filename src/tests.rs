@@ -3196,6 +3196,49 @@ const RECORD: &str = r#"{"id": 7, "trackName": "Song", "artistName": "Artist", "
     "duration": 200.5, "syncedLyrics": "[00:01.00] la la\n[00:30.00] la"}"#;
 
 #[test]
+fn an_untimed_record_is_asked_about_again_and_kept_anew_once_timed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let untimed = r#"{"id": 7, "trackName": "Song", "artistName": "Artist", "albumName": "Record",
+        "duration": 200.5, "plainLyrics": "la la\nla"}"#;
+    let first = Server::default().answer("/api/get?", untimed);
+    let (ok, text) = s.run_against(&first, &["sync"]);
+    assert!(
+        ok && text.contains("untimed lyrics from LRCLIB, lrclib:7"),
+        "{text}"
+    );
+    let home = s.dir.path().join("home");
+    let looked = |state: &State| {
+        state
+            .lookups
+            .iter()
+            .find(|l| l.find == "lrclib")
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(looked(&State::load(&home).unwrap()).unchanged, 0);
+
+    let same = Server::default().answer("/api/get?", untimed);
+    let (ok, text) = s.run_against(&same, &["sync", "--rematch"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        looked(&State::load(&home).unwrap()).unchanged,
+        1,
+        "found again unchanged: it waits longer"
+    );
+
+    let timed = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&timed, &["sync", "--rematch"]);
+    assert!(ok, "{text}");
+    assert_eq!(looked(&State::load(&home).unwrap()).unchanged, 0);
+    let lrc = std::fs::read_to_string(s.dir.path().join("lib/Artist/Record/02 Song.lrc")).unwrap();
+    assert!(
+        lrc.contains("[00:01.00]"),
+        "the stored copy took its timing: {lrc}"
+    );
+}
+
+#[test]
 fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
