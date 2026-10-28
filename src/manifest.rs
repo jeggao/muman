@@ -132,15 +132,16 @@ const HEADER: &str = "\
 #             lists it again; delete the entry to let it back.
 #   Lookups:  a song looks other sources up by [[trigger]] (from, find,
 #             when), replacing the defaults; [providers.<name>] sets
-#             enabled, concurrency, recheck = \"30 days\", per_run, and
-#             the url of lrclib, musicbrainz, acoustid and coverart.
+#             enabled, concurrency, recheck, per_run, and the url of
+#             lrclib, musicbrainz, acoustid and coverart.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
 #   Settings: [library], [lyrics], [audio], [loudness], [cover],
-#             [ytdlp], [history] and [sites.*] lay out and name the
-#             library, set encoding, loudness, how [audio.pick] and
-#             [cover.pick] rank sources, and fetching, size `undo` and
-#             describe the sites fetched from; sizes, bitrates, times
+#             [ytdlp], [torrent], [tools], [history] and [sites.*] lay
+#             out and name the library, set encoding, loudness, how
+#             [audio.pick] and [cover.pick] rank sources, fetching and
+#             the programs run, size `undo` and describe the sites
+#             fetched from; sizes, bitrates, times
 #             and shares take a unit, as \"2 GiB\" or \"1 %\". `edition`
 #             names the settings' names and defaults the file was written
 #             to: muman renames old names itself, and `muman sync

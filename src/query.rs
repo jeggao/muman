@@ -14,6 +14,14 @@
 //! accents are ignored throughout, as is how a name was composed: `cafe`
 //! matches "Café", written in either Unicode form.
 //!
+//! `lyrics:` is yes, none, timed or untimed, `cover:` yes, none, sharp
+//! or small, `from:<provider>` holds when a source of the song is from
+//! that provider, a torrent's file from `manual`, and `has:<tag>` when a
+//! source or the song list gives the tag: an album artist muman takes
+//! from the artist, or an album named for a single's title, is muman's
+//! own and no given tag. Each compares its value whole, so `lyrics:timed`
+//! never matches "untimed" nor `from:youtube` "youtube-music".
+//!
 //! A term is a key when what comes before its colon is no field's name
 //! and a site or scheme some key in the song list uses, or one
 //! [`crate::sites::Sites`] names, so `youtube.com:<id>` names a key
@@ -22,7 +30,7 @@
 //! yet, its sources not measured, offers its own `tags` and the tags of
 //! its first measured source, so a query still finds it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use std::path::Path;
@@ -31,16 +39,21 @@ use anyhow::{Context, Result, bail};
 use regex::{Regex, RegexBuilder};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::manifest::{Manifest, Removed};
+use crate::facts::Facts;
+use crate::manifest::{Manifest, Removed, Song};
+use crate::provider::Provider;
 use crate::reconcile;
+use crate::resolve::Resolved;
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::tags::{self, Field};
 
 /// Fields that are no tag: what the song is made of and written as.
-const DERIVED: [&str; 5] = ["key", "path", "format", "cover", "lyrics"];
+const DERIVED: [&str; 7] = ["key", "path", "format", "cover", "lyrics", "from", "has"];
 
 /// What a query reads of one song.
+// Each is a fact of its own a query reads.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct View {
     pub keys: Vec<SourceKey>,
@@ -51,6 +64,15 @@ pub struct View {
     pub format: Option<String>,
     pub cover: bool,
     pub lyrics: bool,
+    /// Whether its cover is measured to have less detail than
+    /// [`crate::quality::SOFT_COVER`].
+    pub soft_cover: bool,
+    /// Whether its lyrics carry times.
+    pub timed: bool,
+    /// The providers its sources are from.
+    pub from: Vec<Provider>,
+    /// The Vorbis names of the tags a source or the song list gives it.
+    pub given: Vec<String>,
 }
 
 impl View {
@@ -70,6 +92,8 @@ impl View {
             "format" => self.format.iter().cloned().collect(),
             "cover" => yes_no(self.cover),
             "lyrics" => yes_no(self.lyrics),
+            "from" => self.from.iter().map(ToString::to_string).collect(),
+            "has" => self.given.iter().map(|k| k.to_ascii_lowercase()).collect(),
             // As the path template's `year`: a date's first four digits.
             "year" => self
                 .values("date")
@@ -120,45 +144,133 @@ pub fn resolved_views(
     manifest: &Manifest,
     state: &State,
     library: &Path,
-) -> Result<Vec<(View, Option<crate::resolve::Resolved>)>> {
+) -> Result<Vec<(View, Option<Resolved>)>> {
     let (mut planned, _) = reconcile::plan(manifest, state, library, None, &mut std::io::sink())?;
     crate::limit::as_written(manifest, state, &mut planned);
-    let mut views: Vec<View> = manifest
-        .songs
-        .iter()
-        .map(|song| {
-            let mut tags: Vec<(String, Vec<String>)> = song
-                .tags
-                .iter()
-                .map(|(k, v)| (tags::vorbis_key(k), v.clone()))
-                .collect();
-            let offers = song.sources.iter().find_map(|k| state.facts.get(k));
-            for field in Field::ALL {
-                let offered = offers.and_then(|f| f.tags.get(&field));
-                if let Some(offer) = offered
-                    && !tags.iter().any(|(k, _)| k == field.vorbis())
-                {
-                    tags.push((field.vorbis().to_string(), offer.values.clone()));
-                }
-            }
-            View {
-                keys: song.sources.clone(),
-                tags,
-                ..View::default()
-            }
-        })
-        .collect();
-    let mut plans: Vec<Option<crate::resolve::Resolved>> = vec![None; views.len()];
+    let mut plans: Vec<Option<Resolved>> = vec![None; manifest.songs.len()];
     for (n, r) in planned {
-        let view = &mut views[n];
-        view.tags.clone_from(&r.plan.tags);
-        view.path = Some(reconcile::path_of(&r));
-        view.format = Some(r.plan.format.extension().to_string());
-        view.cover = r.plan.cover.is_some();
-        view.lyrics = r.plan.lyrics.is_some();
         plans[n] = Some(r);
     }
-    Ok(views.into_iter().zip(plans).collect())
+    Ok(manifest
+        .songs
+        .iter()
+        .zip(plans)
+        .map(|(song, r)| (view_of(song, r.as_ref(), &state.facts), r))
+        .collect())
+}
+
+/// One song as a query reads it, from its plan where it resolves. A song
+/// that does not resolve yet, its sources not measured, offers its own
+/// tags and those of its first measured source.
+#[must_use]
+pub fn view_of(
+    song: &Song,
+    resolved: Option<&Resolved>,
+    facts: &BTreeMap<SourceKey, Facts>,
+) -> View {
+    let from: BTreeSet<Provider> = song
+        .sources
+        .iter()
+        .filter_map(|k| Provider::of(k, facts.get(k)))
+        .collect();
+    let from = from.into_iter().collect();
+    let Some(r) = resolved else {
+        let mut tags: Vec<(String, Vec<String>)> = song
+            .tags
+            .iter()
+            .map(|(k, v)| (tags::vorbis_key(k), v.clone()))
+            .collect();
+        let offers = song.sources.iter().find_map(|k| facts.get(k));
+        for field in Field::ALL {
+            let offered = offers.and_then(|f| f.tags.get(&field));
+            if let Some(offer) = offered
+                && !tags.iter().any(|(k, _)| k == field.vorbis())
+            {
+                tags.push((field.vorbis().to_string(), offer.values.clone()));
+            }
+        }
+        let given = tags.iter().map(|(k, _)| k.clone()).collect();
+        return View {
+            keys: song.sources.clone(),
+            tags,
+            from,
+            given,
+            ..View::default()
+        };
+    };
+    let timed = r.plan.lyrics.as_ref().is_some_and(|l| {
+        facts
+            .get(&l.key)
+            .and_then(|f| f.lyrics.iter().find(|x| x.at == l.at))
+            .is_some_and(|x| x.timing.is_some())
+    });
+    let soft_cover = r.plan.cover.as_ref().is_some_and(|c| {
+        facts
+            .get(&c.key)
+            .and_then(|f| f.covers.iter().find(|x| x.at == c.at))
+            .and_then(|x| x.quality.as_ref())
+            .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
+    });
+    let given = r
+        .plan
+        .tags
+        .iter()
+        .map(|(k, _)| k)
+        .filter(|k| {
+            !r.why
+                .tags
+                .iter()
+                .any(|t| &t.key == *k && crate::resolve::derived(&t.from))
+        })
+        .cloned()
+        .collect();
+    View {
+        keys: song.sources.clone(),
+        tags: r.plan.tags.clone(),
+        path: Some(reconcile::path_of(r)),
+        format: Some(r.plan.format.extension().to_string()),
+        cover: r.plan.cover.is_some(),
+        lyrics: r.plan.lyrics.is_some(),
+        soft_cover,
+        timed,
+        from,
+        given,
+    }
+}
+
+/// One source alone as a query reads it: what its own facts hold, as a
+/// lookup's record is judged by.
+#[must_use]
+pub fn source_view(key: &SourceKey, facts: Option<&Facts>) -> View {
+    let tags: Vec<(String, Vec<String>)> = facts
+        .map(|f| {
+            Field::ALL
+                .iter()
+                .filter_map(|field| {
+                    let offer = f.tags.get(field)?;
+                    Some((field.vorbis().to_string(), offer.values.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let covers = facts.map_or(&[][..], |f| f.covers.as_slice());
+    let lyrics = facts.map_or(&[][..], |f| f.lyrics.as_slice());
+    View {
+        keys: vec![key.clone()],
+        given: tags.iter().map(|(k, _)| k.clone()).collect(),
+        tags,
+        cover: !covers.is_empty(),
+        soft_cover: !covers.is_empty()
+            && covers.iter().all(|c| {
+                c.quality
+                    .as_ref()
+                    .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
+            }),
+        lyrics: !lyrics.is_empty(),
+        timed: lyrics.iter().any(|l| l.timing.is_some()),
+        from: Provider::of(key, facts).into_iter().collect(),
+        ..View::default()
+    }
 }
 
 /// A removed song as a query reads it: its keys, and its note as its
@@ -202,6 +314,28 @@ enum Test {
     Contains(String, String),
     Equals(String, String),
     Matches(String, Regex),
+    /// A closed field's value, compared whole.
+    Is(Closed),
+}
+
+/// What a closed field's term asks of a song.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Closed {
+    Lyrics(Have),
+    Cover(Have),
+    From(Provider),
+    /// A tag, by its Vorbis name, that a source or the song list gives.
+    Has(String),
+}
+
+/// How much of its lyrics or cover a song has: `Better` timed lyrics or a
+/// sharp cover, `Worse` untimed lyrics or a small cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Have {
+    Some,
+    None,
+    Better,
+    Worse,
 }
 
 #[derive(Debug, Clone)]
@@ -253,8 +387,17 @@ impl Query {
                         scheme.to_ascii_lowercase()
                     ))?)
                 }
+                Some((field, rest)) if closed_field(field) && !rest.starts_with(':') => {
+                    let text = rest.strip_prefix('=').unwrap_or(rest);
+                    Test::Is(
+                        Closed::parse(field, unquoted(text)).with_context(|| format!("`{raw}`"))?,
+                    )
+                }
                 Some((field, rest)) => {
                     let field = field.to_string();
+                    if ["from", "has"].contains(&field.to_ascii_lowercase().as_str()) {
+                        bail!("`{raw}`: {field} takes a name, not a pattern");
+                    }
                     if let Some(pattern) = rest.strip_prefix(':') {
                         let re = RegexBuilder::new(pattern)
                             .case_insensitive(true)
@@ -266,11 +409,6 @@ impl Query {
                             Some(text) => (true, fold(unquoted(text))),
                             None => (false, fold(unquoted(rest))),
                         };
-                        let yes_no =
-                            ["cover", "lyrics"].contains(&field.to_ascii_lowercase().as_str());
-                        if yes_no && text != "yes" && text != "none" {
-                            bail!("`{raw}`: {field} is yes or none");
-                        }
                         if exact {
                             Test::Equals(field, text)
                         } else {
@@ -419,8 +557,93 @@ impl Test {
                 .values(f)
                 .iter()
                 .any(|v| re.is_match(&v.nfc().collect::<String>())),
+            Self::Is(c) => c.holds(view),
         }
     }
+}
+
+/// Whether `field` takes one of a few values, compared whole.
+fn closed_field(field: &str) -> bool {
+    ["lyrics", "cover", "from", "has"].contains(&field.to_ascii_lowercase().as_str())
+}
+
+impl Closed {
+    /// The term `field:text` of a closed field.
+    pub fn parse(field: &str, text: &str) -> Result<Self> {
+        let have = |what: &str, better: &str, worse: &str| {
+            Ok(match fold(text).as_str() {
+                "yes" => Have::Some,
+                "none" => Have::None,
+                t if t == better => Have::Better,
+                t if t == worse => Have::Worse,
+                _ => bail!("{what} is yes, none, {better} or {worse}"),
+            })
+        };
+        Ok(match field.to_ascii_lowercase().as_str() {
+            "lyrics" => Self::Lyrics(have("lyrics", "timed", "untimed")?),
+            "cover" => Self::Cover(have("cover", "sharp", "small")?),
+            "from" => {
+                let p = Provider::named(&text.to_ascii_lowercase())?;
+                if p == Provider::AcoustId {
+                    bail!("no source is from acoustid; its finds are from musicbrainz");
+                }
+                Self::From(p)
+            }
+            "has" if text.trim().is_empty() => bail!("has names no tag"),
+            "has" => Self::Has(tags::vorbis_key(text.trim())),
+            _ => bail!("`{field}` is no closed field"),
+        })
+    }
+
+    /// Whether `view` meets it.
+    #[must_use]
+    pub fn holds(&self, view: &View) -> bool {
+        let have = |h: Have, some: bool, better: bool| match h {
+            Have::Some => some,
+            Have::None => !some,
+            Have::Better => some && better,
+            Have::Worse => some && !better,
+        };
+        match self {
+            Self::Lyrics(h) => have(*h, view.lyrics, view.timed),
+            Self::Cover(h) => have(*h, view.cover, !view.soft_cover),
+            Self::From(p) => view.from.contains(p),
+            Self::Has(tag) => view.given.iter().any(|k| k == tag),
+        }
+    }
+}
+
+impl std::fmt::Display for Closed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let have = |h: &Have, better: &'static str, worse: &'static str| match h {
+            Have::Some => "yes",
+            Have::None => "none",
+            Have::Better => better,
+            Have::Worse => worse,
+        };
+        match self {
+            Self::Lyrics(h) => write!(f, "lyrics:{}", have(h, "timed", "untimed")),
+            Self::Cover(h) => write!(f, "cover:{}", have(h, "sharp", "small")),
+            Self::From(p) => write!(f, "from:{p}"),
+            Self::Has(tag) => {
+                let name = Field::named(tag)
+                    .and_then(|x| x.aliases().first().copied())
+                    .map_or_else(|| tag.to_ascii_lowercase(), str::to_string);
+                write!(f, "has:{name}")
+            }
+        }
+    }
+}
+
+/// A query written as one string, as the song list's settings hold one:
+/// split into terms as a shell would, so `album:="The Glass Orchards"` is
+/// one term. An empty one, which would match every song, is refused.
+pub fn parse_text(text: &str, extractors: &BTreeSet<String>) -> Result<Query> {
+    let terms = shell_words::split(text).with_context(|| format!("`{text}`"))?;
+    if terms.is_empty() {
+        bail!("an empty query would match every song");
+    }
+    Query::parse_terms(&terms, extractors)
 }
 
 /// The key schemes a query treats as keys: `manual`, every site, alias
@@ -493,6 +716,7 @@ mod tests {
             format: Some("opus".into()),
             cover: true,
             lyrics: false,
+            ..View::default()
         }
     }
 
@@ -562,6 +786,50 @@ mod tests {
         assert!(
             e.downcast_ref::<crate::change::Refused>().is_some(),
             "{e:#}"
+        );
+    }
+
+    #[test]
+    fn closed_fields_compare_their_values_whole() {
+        let mut v = view("Tide", "Ada Quill", "youtube.com:aaaaaaaaaaa");
+        v.lyrics = true;
+        v.timed = false;
+        v.soft_cover = true;
+        v.from = vec![Provider::YouTubeMusic];
+        v.given = vec!["TITLE".into(), "TRACKNUMBER".into()];
+        assert!(query(&["lyrics:untimed", "^lyrics:timed", "lyrics:yes"]).matches(&v));
+        assert!(query(&["cover:small", "^cover:sharp", "cover:=yes"]).matches(&v));
+        assert!(query(&["from:youtube-music", "^from:youtube"]).matches(&v));
+        assert!(query(&["has:track", "has:TITLE", "^has:album"]).matches(&v));
+        v.cover = false;
+        assert!(query(&["cover:none", "^cover:small", "^cover:sharp"]).matches(&v));
+        let none = BTreeSet::new();
+        for bad in [
+            "from:acoustid",
+            "from:nowhere",
+            "has:",
+            "cover:big",
+            "from::you",
+        ] {
+            assert!(Query::parse(&[bad.to_string()], &none).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_query_written_as_text_keeps_quoted_words_together() {
+        let schemes = ["manual".to_string()].into();
+        let q = parse_text(r#"album:="The Glass Orchards" ^genre:ambient"#, &schemes).unwrap();
+        let mut v = view("Tide", "Ada Quill", "manual:a.flac");
+        v.tags
+            .push(("ALBUM".into(), vec!["The Glass Orchards".into()]));
+        assert!(q.matches(&v));
+        assert!(
+            parse_text("  ", &schemes).is_err(),
+            "an empty query matches every song"
+        );
+        assert_eq!(
+            Closed::parse("has", "album_artist").unwrap().to_string(),
+            "has:album_artist"
         );
     }
 

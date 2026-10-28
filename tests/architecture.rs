@@ -2,10 +2,11 @@
 //! are changed, which state lives for the whole process, where sites are
 //! named, which loop fits songs into a size, where audio is mixed, where
 //! a file beside a song is named, where ffmpeg is given a file to read,
-//! where what the user gives is walked and copied, and where text is
-//! written to a terminal. Each rule names the one
-//! place a thing is done; code that does it anywhere else fails here
-//! until the rule, and the reason beside it, is changed on purpose.
+//! where what the user gives is walked and copied, where a provider is
+//! asked and named, and where text is written to a terminal. Each rule
+//! names the one place a thing is done; code that does it anywhere else
+//! fails here until the rule, and the reason beside it, is changed on
+//! purpose.
 //!
 //! Only code that ships is read: a file's inline `mod tests` and the
 //! `tests.rs` and `testing.rs` files are left out.
@@ -585,7 +586,14 @@ fn the_reasons_name_files_that_exist() {
     for (file, ..) in CLEANS.iter().chain(&RENAMES) {
         assert!(all.contains_key(*file), "{file}");
     }
-    for (file, _) in STATICS.iter().chain(RESHAPES).chain(WALKS).chain(COPIES) {
+    for (file, _) in STATICS
+        .iter()
+        .chain(RESHAPES)
+        .chain(WALKS)
+        .chain(COPIES)
+        .chain(ASKS)
+        .chain(PROVIDER_NAMES)
+    {
         assert!(all.contains_key(*file), "{file}");
     }
 }
@@ -609,6 +617,68 @@ fn a_runs_own_files_are_made_in_its_scratch_folder() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
         for line in lines_with(&text, &["tempfile::Builder", "tempfile_in(", "tempdir_in("]) {
+            if !allowed.contains(&file.as_str()) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Where a provider's service or YouTube's search is asked, and why
+/// there: anywhere else would ask without `Config::on`, the song's own
+/// `lookups` or `skip`, and `enabled = false` is a privacy switch.
+const ASKS: &[(&str, &str)] = &[
+    (
+        "lookup.rs",
+        "every lookup and every record fetched again, each by its verdict or its provider on",
+    ),
+    (
+        "acquire.rs",
+        "add's matching, made only while youtube-music is on, and the searches lookup.rs asks for",
+    ),
+];
+
+#[test]
+fn a_provider_is_asked_only_where_its_switch_is_read() {
+    let allowed: Vec<&str> = ASKS.iter().map(|(f, _)| *f).collect();
+    let asks = [
+        "lrclib::Client {",
+        "musicbrainz::Client {",
+        "acoustid::Client {",
+        "coverart::Client {",
+        "acquire::lookup(",
+        "acquire::reverse_lookup(",
+    ];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &asks) {
+            if !allowed.contains(&file.as_str()) {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Where a provider's name is spelled out, and why: anywhere else names
+/// it through `Provider::named` or the provider's constant, so a provider
+/// renamed or added is renamed or added everywhere.
+const PROVIDER_NAMES: &[(&str, &str)] = &[("provider.rs", "the names themselves")];
+
+#[test]
+fn a_provider_s_name_is_spelled_in_one_place() {
+    let allowed: Vec<&str> = PROVIDER_NAMES.iter().map(|(f, _)| *f).collect();
+    let names = [
+        "\"youtube-music\"",
+        "\"lrclib\"",
+        "\"musicbrainz\"",
+        "\"acoustid\"",
+        "\"coverart\"",
+    ];
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        for line in lines_with(&text, &names) {
             if !allowed.contains(&file.as_str()) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }

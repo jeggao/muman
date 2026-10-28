@@ -1640,6 +1640,14 @@ pub const SINGLE: &str = "a single, named for its title";
 /// artist's own source.
 const FIRST_ARTIST: &str = "the first artist of ";
 
+/// Whether a tag from `from` is one muman fills in itself, which no
+/// source nor the song list gives: an album named for a single's title,
+/// or an album artist taken from the artist.
+#[must_use]
+pub fn derived(from: &str) -> bool {
+    from == SINGLE || from.starts_with(FIRST_ARTIST)
+}
+
 /// Take the MusicBrainz recording IDs of `release`, the source the
 /// release fields came from, where it names another recording than
 /// `fields` hold: a release's IDs name one recording on it, so the IDs

@@ -188,7 +188,7 @@ impl Field {
 
     /// Its other names, lower-cased: the common spellings a song list may
     /// use, and the names ffprobe reports for MP3 and MP4 files.
-    fn aliases(self) -> &'static [&'static str] {
+    pub(crate) fn aliases(self) -> &'static [&'static str] {
         self.spec().aliases
     }
 
