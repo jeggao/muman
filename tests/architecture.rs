@@ -664,7 +664,13 @@ fn a_provider_is_asked_only_where_its_switch_is_read() {
 /// Where a provider's name is spelled out, and why: anywhere else names
 /// it through `Provider::named` or the provider's constant, so a provider
 /// renamed or added is renamed or added everywhere.
-const PROVIDER_NAMES: &[(&str, &str)] = &[("provider.rs", "the names themselves")];
+const PROVIDER_NAMES: &[(&str, &str)] = &[
+    ("provider.rs", "the names themselves"),
+    (
+        "migrate.rs",
+        "the triggers edition 7 ran unwritten, as files of that edition named them",
+    ),
+];
 
 #[test]
 fn a_provider_s_name_is_spelled_in_one_place() {

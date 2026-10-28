@@ -66,6 +66,22 @@ pub const TABLES: [&str; 10] = [
     "sites",
 ];
 
+/// The tables `new.toml` writes that [`fill`] keeps written out in every
+/// song list: the settings' and the providers' (`crate::provider`).
+pub const WRITTEN: [&str; 11] = [
+    "library",
+    "lyrics",
+    "audio",
+    "loudness",
+    "cover",
+    "ytdlp",
+    "torrent",
+    "tools",
+    "history",
+    "sites",
+    "providers",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -1367,7 +1383,7 @@ pub(crate) fn defaults() -> DocumentMut {
 pub fn fill(doc: &mut DocumentMut, editions: &Editions) -> bool {
     let defaults = defaults();
     let mut changed = crate::migrate::rename_all(doc, editions).is_ok_and(|r| !r.is_empty());
-    for name in TABLES {
+    for name in WRITTEN {
         let Some(default) = defaults.get(name).and_then(Item::as_table) else {
             continue;
         };

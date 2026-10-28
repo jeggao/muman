@@ -3236,9 +3236,10 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     std::fs::remove_file(s.dir.path().join("home/sources/lrclib/7.lrc")).unwrap();
     let list = s.dir.path().join("home").join(crate::dirs::MANIFEST);
     let listed = std::fs::read_to_string(&list).unwrap();
+    let off = "[providers.lrclib]\nenabled = false";
     std::fs::write(
         &list,
-        format!("{listed}\n[providers.lrclib]\nenabled = false\n"),
+        listed.replace("[providers.lrclib]\nenabled = true", off),
     )
     .unwrap();
     let off = Server::default().answer("/api/get/7", RECORD);
@@ -3509,14 +3510,39 @@ fn a_song_on_no_album_finds_its_album_on_musicbrainz_once() {
 }
 
 #[test]
-fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
+fn a_song_that_has_what_until_names_asks_nothing_of_musicbrainz() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[providers.acoustid]\nuntil = \"has:album\"\n\
+         [providers.musicbrainz]\nuntil = [\"has:album\"]\n",
+    )
+    .unwrap();
+    let server = Server::default();
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        !server
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/ws/2/recording")),
+        "{:?}",
+        server.asked
+    );
+}
+
+#[test]
+fn a_song_on_an_album_lacking_its_date_and_track_asks_musicbrainz() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     let server = Server::default();
     let (ok, text) = s.run_against(&server, &["sync"]);
     assert!(ok, "{text}");
     assert!(
-        !server
+        server
             .asked
             .lock()
             .unwrap()
@@ -3857,8 +3883,9 @@ fn an_export_asks_no_trust_to_copy_and_asks_it_to_encode() {
     let (s, fake) = exported_home("200.0");
     let songs = s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
-    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
-    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    let url = "url = \"https://api.acoustid.org\"\n";
+    let own = format!("{url}key = \"k0000000\"\n");
+    std::fs::write(&songs, listed.replace(url, &own)).unwrap();
     s.trusting(&fake, &["--trust", "sync"], None).unwrap();
     State::keep_trusted(&s.dir.path().join("home"), &BTreeMap::new()).unwrap();
     let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
@@ -4009,8 +4036,9 @@ fn export_redacts_the_song_list_when_asked_and_leaves_it_as_it_is() {
     let (s, fake) = exported_home("200.0");
     let songs = s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
-    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
-    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    let url = "url = \"https://api.acoustid.org\"\n";
+    let own = format!("{url}key = \"k0000000\"\n");
+    std::fs::write(&songs, listed.replace(url, &own)).unwrap();
     assert!(s.run(&fake, &["--trust", "sync"]).0);
     let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
     let (ok, text) = s.run(&fake, &["export", "--redact", "-o", &zip]);

@@ -9,10 +9,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **Each provider says what a song asks it `until`.** `[providers.<name>]`
+  lists conditions a song looks the provider up until it has, all of
+  them: `lyrics:timed`, `cover:yes`, `has:date`, `from:musicbrainz`.
+  Every provider's table is written in the song list at its defaults, so
+  one setting changes one thing and later defaults still reach the rest.
+- **`skip` leaves songs out of lookups by query.** A provider's `skip`,
+  or `[providers] skip` for all of them, lists queries as `list` reads
+  them, such as `'album:="Some Album"'` or `"from:manual"`.
+- **A song turns its own lookups off** with `lookups = false`, or one
+  provider's with `lookups.<provider> = false`.
 - **Queries read `from:<provider>`, `has:<tag>`, `lyrics:timed` and
   `untimed`, and `cover:sharp` and `small`.** `from:` names a provider a
   song's source is from, `has:` a tag a source or the song list gives
   rather than one muman fills in; each compares its value whole.
+
+### Changed
+
+- **`[[trigger]]` is gone.** The song list's triggers are rewritten as
+  `until` and `skip` on the next write; one as the built-in leaves its
+  provider at today's default, and a provider no trigger found skips
+  every song. The edition rises to 8.
+- **MusicBrainz and AcoustID ask until a song has its album, album
+  artist, date, track, disc and ISRC**, not only an album, so songs with
+  partial tags are looked up too; a backlog drains over runs by
+  `per_run`.
+
+### Fixed
+
+- **A song with `lyrics = false`, or its lyrics or cover pinned, asked
+  LRCLIB, YouTube or the Cover Art Archive** for what it would never
+  take.
 
 ## [0.8.0] - 2026-10-28
 

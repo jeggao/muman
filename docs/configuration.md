@@ -160,7 +160,7 @@ the next time muman writes one; list an extractor only for a site whose
 pages are its own, since a source it fetched before is named by its page.
 
 The song list's own tables — `[tags.clean.*]` and `[lyrics.clean.*]` (cleaning),
-`[providers.*]`, `[[trigger]]` and `[[hook]]` — are described in the [guide](guide.md) and in [making the
+`[providers.*]` and `[[hook]]` — are described in the [guide](guide.md) and in [making the
 library](library.md).
 
 A setting that changes what a song file holds, such as a bitrate, a

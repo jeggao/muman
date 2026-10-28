@@ -170,6 +170,42 @@ fn a_tag_set_by_hand_is_read_as_its_field_holds_it() {
 }
 
 #[test]
+fn a_song_turns_its_lookups_off_whole_or_by_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\nlookups = false\n\
+         [[song]]\nsources = [\"youtube.com:bbbbbbbbbbb\"]\nlookups.coverart = false\n\
+         [[song]]\nsources = [\"youtube.com:ccccccccccc\"]\n",
+    );
+    let m = Manifest::load(dir.path()).unwrap();
+    let off: Vec<_> = m.songs.iter().map(|s| &s.lookups_off).collect();
+    assert_eq!(
+        off,
+        [
+            &LookupsOff::All,
+            &LookupsOff::Some(vec![Provider::CoverArt]),
+            &LookupsOff::None
+        ]
+    );
+    assert!(off[1].covers(Provider::CoverArt) && !off[1].covers(Provider::Lrclib));
+    for bad in [
+        "lookups = true",
+        "lookups.lrclib = true",
+        "lookups.manual = false",
+        "lookups.spotify = false",
+        "lookups = \"no\"",
+    ] {
+        write(
+            dir.path(),
+            &format!("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n{bad}\n"),
+        );
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains("lookups"), "{bad}: {e:#}");
+    }
+}
+
+#[test]
 fn a_pin_outside_the_sources_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(
@@ -770,7 +806,7 @@ fn the_new_song_list_sets_every_default_as_the_code_has_it() {
     // The file is the reference the docs point to, and the defaults an
     // older list is filled from: it must not drift from the code.
     let mut doc: DocumentMut = NEW.parse().unwrap();
-    for table in crate::settings::TABLES {
+    for table in crate::settings::WRITTEN {
         assert!(doc.contains_key(table), "{table} is not shown");
     }
     assert_eq!(
@@ -778,10 +814,60 @@ fn the_new_song_list_sets_every_default_as_the_code_has_it() {
         crate::settings::Settings::default()
     );
     assert_eq!(
+        crate::provider::read(&doc).unwrap(),
+        crate::provider::Config::default()
+    );
+    for p in Provider::ALL.into_iter().filter(|p| p.findable()) {
+        let table = doc["providers"][p.name()].as_table().unwrap();
+        for key in p.keys() {
+            assert!(
+                table.contains_key(key) || NEW.contains(&format!("# {key} = ")),
+                "[providers.{p}] {key} is not shown"
+            );
+        }
+    }
+    assert_eq!(
         doc.get("edition").and_then(Item::as_integer),
         Some(crate::settings::EDITION)
     );
     assert!(!crate::settings::fill(&mut doc, &crate::settings::EDITIONS));
+}
+
+/// The top-level keys new.toml writes nothing under, and why.
+const UNWRITTEN: [(&str, &str); 7] = [
+    ("song", "the songs are the list's own"),
+    ("album", "the albums are the list's own"),
+    ("torrents", "the torrents are the list's own"),
+    ("removed", "what was removed is the list's own"),
+    ("hook", "no hook runs unless the list names one"),
+    (
+        "tags",
+        "the cleaning switches are written from the rules the code holds",
+    ),
+    (
+        "defaults",
+        "a name gone since edition 5, read to be renamed",
+    ),
+];
+
+#[test]
+fn every_top_level_key_is_written_in_new_toml_and_filled_back() {
+    let doc: DocumentMut = NEW.parse().unwrap();
+    for key in KEYS.iter().chain(&crate::settings::TABLES) {
+        assert!(
+            doc.contains_key(key) || UNWRITTEN.iter().any(|(k, _)| k == key),
+            "`{key}` is neither written in new.toml nor said to be data"
+        );
+    }
+    for (key, _) in doc.iter().filter(|(_, i)| i.is_table()) {
+        let mut lacking = doc.clone();
+        lacking.remove(key);
+        crate::settings::fill(&mut lacking, &crate::settings::EDITIONS);
+        assert!(
+            lacking.contains_key(key),
+            "fill does not write [{key}] back"
+        );
+    }
 }
 
 #[test]
