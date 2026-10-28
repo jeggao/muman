@@ -305,6 +305,8 @@ Examples:
                      One folder of songs, named in ASCII
   --set loudness.mode=audio
                      Each song's gain applied to its samples
+  --set 'cover.out=[{ to = \"file\", scope = \"folder\", name = \"cover\" }]'
+                     Each album's cover as a file in its folder, not in its songs
 A song changed since muman wrote it, or whose sources are gone, is
 written as the library holds it, and said.";
 
@@ -586,9 +588,11 @@ pub enum Command {
         #[arg(long)]
         redact: bool,
 
-        /// A setting of `[library]`, `[audio]` or `[loudness]` for the export
-        /// alone, such as `audio.mp3_bitrate=192kb/s`; repeatable, and set
-        /// after the flags above. VALUE is TOML, or else text.
+        /// A setting of `[library]`, `[audio]` or `[loudness]`, `lyrics.out`,
+        /// `cover.out` or a cleaning rule, as `tags.clean.tidy.spacing`, for
+        /// the export alone, such as `audio.mp3_bitrate=192kb/s`;
+        /// repeatable, and set after the flags above. VALUE is TOML, or
+        /// else text.
         #[arg(long = "set", value_name = "KEY=VALUE", value_parser = crate::export::setting)]
         set: Vec<crate::settings::Override>,
     },

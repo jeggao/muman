@@ -277,7 +277,7 @@ impl<'a> Resolver<'a> {
             on_disk,
             alignments: &self.state.alignments,
             lyrics: &settings.lyrics,
-            clean: &self.manifest.clean,
+            clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             albums: &self.albums,
             naming: &self.naming,
             audio: &settings.audio,

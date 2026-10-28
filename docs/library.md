@@ -326,15 +326,18 @@ The zip's `songs.toml` keeps the song list's commands, which whoever runs
 muman on it is [asked to trust](configuration.md#commands-servers-and-secrets).
 
 The library's settings may be changed for the export alone: any setting
-of `[library]`, `[audio]` and `[loudness]` with `--set table.key=value`,
-and the commonest with `--codec`, `--template` and `--lyrics`. The
+of `[library]`, `[audio]` and `[loudness]`, `lyrics.out`, `cover.out`
+and each cleaning rule, as `tags.clean.tidy.spacing=false`, with `--set
+table.key=value`, and the commonest with `--codec`, `--template` and
+`--lyrics`. The
 export then holds the library a sync under those settings would write:
 each song the change leaves alone is copied, and every other is made
 again from its sources. A song changed since muman wrote it, or whose
 sources are gone, goes in as the library holds it, and the export says
 so and exits with 4. Where the library lives and its `max_size` are not
-the export's to change, nor `[audio.pick]`, nor loudness when the song
-list's `[loudness] mode` measures none.
+the export's to change, nor how sources are ranked, nor which lyrics a
+song takes, nor loudness when the song list's `[loudness] mode` measures
+none.
 
 `--max-size` caps the export, such as `--max-size 32GiB` for a card, as
 `[library] max_size` caps the library; in a folder each file counts in

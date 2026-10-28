@@ -4133,6 +4133,46 @@ fn export_copies_each_song_whose_plan_the_settings_given_leave_alone() {
 }
 
 #[test]
+fn export_writes_the_covers_and_cleans_as_set() {
+    let (s, _) = exported_home("200.0");
+    let zip = s.dir.path().join("out.zip");
+    let fake = Fake::default().probe(".flac", FLAC);
+    let folder = "cover.out=[{ to = \"file\", scope = \"folder\", name = \"cover\" }]";
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "-o", &zip.to_string_lossy(), "--set", folder],
+    );
+    assert!(ok, "{text}");
+    let entries = unzip(&zip);
+    assert_eq!(
+        entries["library/Artist/Record/cover.jpg"],
+        crate::testing::PIXEL_JPEG,
+        "{text}"
+    );
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    assert_ne!(
+        entries["library/Artist/Record/02 Song.flac"],
+        std::fs::read(&song).unwrap(),
+        "no cover inside: {text}"
+    );
+
+    let zip = s.dir.path().join("cleaned.zip");
+    let fake = Fake::default().probe(".flac", FLAC);
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--set",
+            "lyrics.clean.tidy.markup=false",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(!fake.calls().is_empty(), "made anew, not copied: {text}");
+}
+
+#[test]
 fn export_embeds_lyrics_when_asked() {
     let (s, fake) = exported_home("0.05");
     let zip = s.dir.path().join("out.zip");

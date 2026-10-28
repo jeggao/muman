@@ -22,6 +22,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   unless `mixed = "majority"` gives it the cover of the album most of
   its songs are on. A file of your own at that name is left alone, and
   the file moves, goes and comes back with `undo` as the songs do.
+- **`export --set` reaches where lyrics and covers go and the cleaning
+  rules:** `lyrics.out`, `cover.out`, and each rule as
+  `tags.clean.<tier>.<rule>` or `lyrics.clean.<tier>.<rule>`, true or
+  false. Ranking and which lyrics a song takes stay the song list's.
 - **Lyrics as WebVTT, SubRip or plain text.** A `[[lyrics.out]]` of
   `format = "vtt"` or `"srt"` writes timed lyrics as subtitle cues, word
   times kept in WebVTT, and `"txt"` as plain lines, in a file or the

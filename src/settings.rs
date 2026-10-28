@@ -79,6 +79,10 @@ pub struct Settings {
     pub tools: Tools,
     pub history: History,
     pub sites: crate::sites::Sites,
+    /// The cleaning rules switched over the song list's for an export
+    /// alone ([`crate::export`]); none, the song list's own.
+    #[serde(skip)]
+    pub clean: Option<crate::clean::Settings>,
 }
 
 /// The library's place and each song's path in it.
