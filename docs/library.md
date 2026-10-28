@@ -170,39 +170,49 @@ A song looks for sources it lacks. Each source comes from a provider:
 | `acoustid` | The same MusicBrainz records, found on an AcoustID server | The fingerprint and length of the song's audio, preferring a recording named as the song is; off while `musicbrainz` is, which it fetches each recording from |
 | `coverart` | The front cover of the song's album, from the Cover Art Archive | The album's MusicBrainz release group or release ID, else its title and album artist searched on MusicBrainz while `musicbrainz` is on; made after the song's `acoustid` and `musicbrainz` lookups due that run, so it asks for the release they found |
 
-A trigger makes a song with a source from any provider in `from`, and
-none from `find`, look `find` up when `when` holds: `always`,
-`no-lyrics`, `no-timed-lyrics`, `no-album` (neither a source nor the
-song list names an album) or `small-cover` (no cover, or one with too
-little detail to look sharp, as `info` counts). `no-lyrics` and
-`no-timed-lyrics` hold for no song while `[lyrics] out = []`, nor
-`small-cover` while `[cover] out = []`. The built-in triggers:
+Each provider a song can look up has a `[providers.<name>]` table, every
+key written in [new.toml](../src/manifest/new.toml) at its default; set
+any of them and the rest keep theirs. A song asks a provider until it
+has what the provider's `until` lists, every condition of it:
 
-| From | Finds | When |
-|---|---|---|
-| `youtube` | `youtube-music` | `always` |
-| `youtube-music` | `youtube` | `no-timed-lyrics` |
-| `manual`, `youtube`, `youtube-music` | `lrclib` | `no-timed-lyrics` |
-| `manual`, `youtube`, `youtube-music` | `acoustid` | `no-album` |
-| `manual`, `youtube`, `youtube-music` | `musicbrainz` | `no-album` |
-| `manual`, `youtube`, `youtube-music` | `coverart` | `small-cover` |
+| Condition | Holds when the song has |
+|---|---|
+| `lyrics:yes`, `lyrics:timed` | Lyrics, or lyrics whose lines carry times |
+| `cover:yes`, `cover:sharp` | A cover, or one with detail enough to look sharp, as `info` counts |
+| `has:<tag>` | The tag from a source or the song list; an album artist muman takes from the artist, or an album named for a single's title, does not count |
+| `from:<provider>` | A source from the provider: it asks until the provider found something |
 
-Any `[[trigger]]` in the song list replaces all of them, and `--offline`
-makes no lookup. A `[providers.<name>]` table sets `enabled`,
-`concurrency` (lookups at once), `recheck` (how long a lookup that found
-nothing waits, as `"30 days"`), `per_run` (the most one run makes, `0`
-for no limit), for `lrclib`, `musicbrainz`, `acoustid` and `coverart`,
-`url`, another server, such as a mirror, and for `acoustid`, `key`, the
-application key it is asked with, muman's own unless you set one:
+Each provider takes what it can give, and the song list is refused
+with the conditions it takes named otherwise: `lrclib` and `youtube`
+lyrics, `coverart` a cover, `acoustid` and `musicbrainz` any tag a
+MusicBrainz record holds, and each `from:` itself. Lyrics are never
+sought while `[lyrics] out = []` or for a song with `lyrics` pinned or
+`false`, nor covers while `[cover] out = []` or for a song with its
+`cover` pinned.
+
+`skip` lists queries, as [`list`](songs.md#queries) reads them, one a
+string; a song any of them matches asks the provider nothing, and
+`[providers] skip` leaves songs out of every provider. A song sets
+`lookups = false` to ask no provider, or `lookups.<provider> = false`
+to ask that one nothing. `--offline` makes no lookup, and `enabled =
+false` asks a service nothing at all, not even a record it found
+before. `concurrency` is how many lookups run at once, `recheck` how
+long one waits to be made again, `per_run` the most one run makes, `0`
+for no limit, `url`, for `lrclib`, `musicbrainz`, `acoustid` and
+`coverart`, another server, such as a mirror, and `key` the
+application key AcoustID is asked with, muman's own unless you set one:
 
 ```toml
-[[trigger]]
-from = ["manual"]
-find = "lrclib"
-when = "no-lyrics"
+# Covers only for songs that have none, and none for a hand-tagged album.
+[providers.coverart]
+until = ["cover:yes"]
 
-[providers.youtube]
-enabled = false
+[providers]
+skip = ['album:="The Glass Orchards"']
+
+# Fingerprints only of what was fetched, never of a file of your own.
+[providers.acoustid]
+skip = ["from:manual"]
 ```
 
 | Last lookup | Made again |
@@ -211,13 +221,28 @@ enabled = false
 | Made by an older method | At once, unless it found a source the song lists |
 | Found nothing, or an instrumental | After the provider's `recheck` |
 | Failed | After an hour, doubling with each failure, up to a week |
+| Found a source the song lists that falls short | After `recheck`, doubling each time it is found again unchanged, up to 90 days |
 | Found a source, or declined | Never |
 
-`sync --rematch` makes every lookup at once, whatever its record says,
-but a song with a source from a provider still asks that provider
-nothing: one whose found source was taken out of it asks again. What
-one round finds can trigger the next, as an upload's release then finds
-the release's lyrics. An LRCLIB record fits when its length is within 2 s of the
+A source the song lists from a provider falls short when it lacks a
+condition of `until` that the song lacks too, as an untimed LRCLIB
+record does while the song has no timed lyrics from elsewhere. A record
+that gives what it can, as a sharp cover the song's square one beats,
+is never asked about again. LRCLIB is searched again, as a better
+record may have joined it; a MusicBrainz record or a Cover Art Archive
+cover is fetched again by its ID; a YouTube video is never looked for
+again. A record found again in another form takes the place of the one
+kept, and its songs are built anew from it.
+
+`sync --rematch` makes every lookup a song still wants at once,
+whatever its record says. What one round finds can make the next due,
+as an upload's release then finds the release's lyrics; a sync makes up
+to three rounds, each lookup once. `sync --until-done` makes every
+lookup due in one run: past `per_run`, over as many rounds as finds
+start, and asking again at once what failed, at each service's own
+pace. `muman status <query>` says for each song it shows why each
+lookup is made, waits or is not, and `info` counts them.
+An LRCLIB record fits when its length is within 2 s of the
 song's and its names hold the song's, compared by letters and digits in
 any width; a record with words wins over one marked instrumental, then
 one named exactly the song's title over one holding it, as `Rain (Live)`
@@ -235,8 +260,8 @@ from its remixes and live takes; of its releases, the best ranked, then
 the earliest. Its tags
 are ranked with every other source's, as [tags](#how-the-best-of-each-is-picked)
 are: a value it agrees on with another source wins over one alone. To
-look every song up, write the built-in triggers out with `when =
-"always"` for `acoustid` and `musicbrainz`.
+look every song up once, set `until = ["from:musicbrainz"]` for
+`acoustid` and `musicbrainz`.
 
 A song whose audio has a fingerprint asks AcoustID before it searches
 MusicBrainz by name, so a file with wrong tags, or none, still finds its
@@ -249,14 +274,13 @@ submitted, then one on a release that is no compilation, live album or
 soundtrack. The recording is then fetched from MusicBrainz by its ID,
 its release picked as a search picks one. The song's search by name
 waits for AcoustID and runs in the same `sync` only when AcoustID finds
-nothing. To send no fingerprints, set `enabled = false` under
+nothing; a song that lists a MusicBrainz record is never searched for
+by name. To send no fingerprints, set `enabled = false` under
 `[providers.acoustid]`.
 
 A cover found joins every song of its album, which asks for it once
 between them, and is picked over the songs' own pictures only by the
-measures any cover is. To take covers only where a song has none, write
-the built-in triggers out with `when = "small-cover"` changed for
-`coverart`.
+measures any cover is.
 
 muman asks MusicBrainz at most once a second, as MusicBrainz asks of
 every client, AcoustID at most three times a second, as AcoustID asks,

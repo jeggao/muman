@@ -1,4 +1,5 @@
 use super::*;
+use crate::reconcile::Planned;
 
 const DAY: u64 = 24 * 3600;
 const NOW: u64 = 100 * DAY;
@@ -27,7 +28,12 @@ fn setup(body: &str, measured: &[(&str, bool)]) -> (tempfile::TempDir, Manifest,
 }
 
 fn finds(manifest: &Manifest, state: &State, force: bool) -> Vec<(SourceKey, Provider)> {
-    due(manifest, state, &Vec::new(), NOW, force)
+    let ask = Ask {
+        rematch: force,
+        persist: false,
+    };
+    due(manifest, state, &Vec::new(), NOW, ask)
+        .unwrap()
         .into_iter()
         .map(|d| (d.from, d.find))
         .collect()
@@ -78,6 +84,7 @@ fn a_lookup_is_made_again_only_when_due() {
         method: method(Provider::YouTubeMusic).into(),
         at,
         outcome,
+        unchanged: 0,
     };
     s.lookups = vec![looked(NOW - DAY, Outcome::Nothing)];
     assert!(finds(&m, &s, false).is_empty(), "found nothing a day ago");
@@ -161,7 +168,8 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
 }
 
 fn found(manifest: &Manifest, state: &State, planned: &Planned) -> Vec<Provider> {
-    due(manifest, state, planned, NOW, false)
+    due(manifest, state, planned, NOW, Ask::default())
+        .unwrap()
         .into_iter()
         .map(|d| d.find)
         .collect()
@@ -190,6 +198,7 @@ fn musicbrainz_waits_for_acoustid() {
         method: method(Provider::AcoustId).into(),
         at: NOW,
         outcome: Outcome::Nothing,
+        unchanged: 0,
     }];
     assert_eq!(
         found(&m, &s, &p),
@@ -216,6 +225,7 @@ fn the_cover_waits_for_the_record_that_names_its_release() {
         method: method(find).into(),
         at: NOW,
         outcome: Outcome::Nothing,
+        unchanged: 0,
     };
     s.lookups = vec![nothing(Provider::AcoustId)];
     assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::MusicBrainz]);
@@ -242,6 +252,7 @@ fn what_no_output_writes_is_looked_up_for_no_song() {
         method: method(Provider::MusicBrainz).into(),
         at: NOW,
         outcome: Outcome::Nothing,
+        unchanged: 0,
     }];
     assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::CoverArt]);
     m.settings.lyrics.out.clear();
@@ -264,6 +275,7 @@ fn due_of(n: u8, find: Provider) -> Due {
         song: usize::from(n),
         from: yt(&format!("vid0000000{n}")),
         find,
+        again: None,
     }
 }
 
@@ -340,6 +352,10 @@ fn the_docs_say_when_a_lookup_is_made_again_as_it_is() {
                 "Failed",
                 "After an hour, doubling with each failure, up to a week"
             ),
+            (
+                "Found a source the song lists that falls short",
+                "After `recheck`, doubling each time it is found again unchanged, up to 90 days"
+            ),
             ("Found a source, or declined", "Never"),
         ],
         "a row changed: change the check below with it"
@@ -370,7 +386,217 @@ fn the_docs_say_when_a_lookup_is_made_again_as_it_is() {
     assert!(!due(&at(failed(1), 3599), false) && due(&at(failed(1), 3600), false));
     assert!(!due(&at(failed(2), 7199), false) && due(&at(failed(2), 7200), false));
     assert!(due(&at(failed(30), week), false), "up to a week");
+    let mut short = at(found.clone(), 0);
+    let week = std::time::Duration::from_secs(7 * DAY);
+    let waits: Vec<u64> = (0..6)
+        .map(|n| {
+            short.unchanged = n;
+            (short.short_again_at(week) - short.at) / DAY
+        })
+        .collect();
+    assert_eq!(waits, [7, 14, 28, 56, 90, 90], "doubling, up to 90 days");
     for outcome in [found, Outcome::Declined] {
         assert!(!due(&at(outcome, 99 * DAY), false), "never");
     }
+}
+
+/// A song of a file of the user's own, named and on an album, listing an
+/// LRCLIB record measured as holding lyrics `timed` or not.
+fn with_lyrics(timed: bool) -> (tempfile::TempDir, Manifest, State, Planned, SourceKey) {
+    let tags = [
+        NAMED[0],
+        NAMED[1],
+        (Field::Album, "Rooms of Salt"),
+        (Field::AlbumArtist, "Paper Comets"),
+    ];
+    let (d, mut m, mut s, p) = own(false, &tags);
+    let record = SourceKey::parse("lrclib:7").unwrap();
+    m.songs[0].sources.push(record.clone());
+    let mut facts = Facts::unreadable("1".into());
+    facts.lyrics = vec![crate::facts::LyricsFacts {
+        at: crate::facts::LyricsAt::File,
+        language: crate::lyrics::Language::Codes(vec!["en".into()]),
+        timing: timed.then_some(crate::lyrics::Timing {
+            lines: 20,
+            first_ms: 10_000,
+            last_ms: 180_000,
+        }),
+        stated_ms: None,
+        digest: None,
+        sings: Some(true),
+    }];
+    s.facts.insert(record.clone(), facts);
+    // Its MusicBrainz and cover lookups are not what these tests ask.
+    m.providers
+        .providers
+        .get_mut(&Provider::AcoustId)
+        .unwrap()
+        .enabled = false;
+    m.providers
+        .providers
+        .get_mut(&Provider::CoverArt)
+        .unwrap()
+        .enabled = false;
+    (d, m, s, p, record)
+}
+
+fn lrclib_verdict(m: &Manifest, s: &State, p: &Planned, now: u64) -> Verdict {
+    verdicts(m, s, p, now, Ask::default())
+        .unwrap()
+        .into_iter()
+        .find(|(_, q, _)| *q == Provider::Lrclib)
+        .unwrap()
+        .2
+}
+
+#[test]
+fn a_record_that_falls_short_is_asked_about_again_and_one_that_does_not_is_done() {
+    let (_d, m, s, p, record) = with_lyrics(true);
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Done(Some(record.clone())),
+        "a timed record gives what it can, whatever the song resolves to"
+    );
+    let (_d, m, mut s, p, record_untimed) = with_lyrics(false);
+    assert_eq!(record, record_untimed);
+    let Verdict::Due(d) = lrclib_verdict(&m, &s, &p, NOW) else {
+        panic!("an untimed record never looked up from this song is asked about at once");
+    };
+    assert_eq!(d.again, Some((record.clone(), 0)));
+    let mut looked = Looked::now(
+        SourceKey::parse("manual:a.flac").unwrap(),
+        Provider::Lrclib,
+        Outcome::Found(record.clone()),
+    );
+    looked.at = NOW - 8 * DAY;
+    looked.unchanged = 1;
+    s.lookups = vec![looked];
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Later(NOW + 6 * DAY),
+        "found again unchanged once: two weeks"
+    );
+    let Verdict::Due(d) = lrclib_verdict(&m, &s, &p, NOW + 6 * DAY) else {
+        panic!("due after the wait");
+    };
+    assert_eq!(d.again, Some((record, 1)));
+}
+
+#[test]
+fn skips_a_song_s_own_lookups_and_its_pins_leave_a_provider_unasked() {
+    let (_d, mut m, s, p, _) = with_lyrics(false);
+    assert!(matches!(lrclib_verdict(&m, &s, &p, NOW), Verdict::Due(_)));
+    m.providers.skip = vec!["album:=\"Rooms of Salt\"".into()];
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped("[providers] skip 'album:=\"Rooms of Salt\"'".into())
+    );
+    m.providers.skip.clear();
+    m.providers
+        .providers
+        .get_mut(&Provider::Lrclib)
+        .unwrap()
+        .skip = vec!["from:manual".into()];
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+    m.providers
+        .providers
+        .get_mut(&Provider::Lrclib)
+        .unwrap()
+        .skip
+        .clear();
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::Some(vec![Provider::Lrclib]);
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::All;
+    assert_eq!(due(&m, &s, &p, NOW, Ask::default()).unwrap(), []);
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::None;
+    m.songs[0].lyrics = Some(crate::manifest::LyricsPin::None);
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Unwritten,
+        "lyrics = false asks for none"
+    );
+}
+
+#[test]
+fn a_skip_naming_a_field_no_song_has_is_refused() {
+    let (_d, mut m, s, p, _) = with_lyrics(false);
+    m.providers.skip = vec!["^gnre:ambient".into()];
+    assert!(due(&m, &s, &p, NOW, Ask::default()).is_err());
+}
+
+#[test]
+fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
+    let tags = [NAMED[0], NAMED[1]];
+    let (_d, mut m, mut s, p) = own(true, &tags);
+    let record = SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap();
+    m.songs[0].sources.push(record.clone());
+    let mut facts = Facts::unreadable("1".into());
+    facts.tags = crate::tags::from_record(&crate::musicbrainz::Record {
+        id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
+        title: "Lantern Weather".into(),
+        artists: vec!["Paper Comets".into()],
+        artist_ids: Vec::new(),
+        isrcs: Vec::new(),
+        length_ms: None,
+        release: None,
+        original_date: None,
+        languages: Vec::new(),
+    });
+    s.facts.insert(record.clone(), facts);
+    let mine: Vec<(Provider, Verdict)> = verdicts(&m, &s, &p, NOW, Ask::default())
+        .unwrap()
+        .into_iter()
+        .map(|(_, q, v)| (q, v))
+        .filter(|(q, _)| matches!(q, Provider::AcoustId | Provider::MusicBrainz))
+        .collect();
+    assert_eq!(
+        mine[0],
+        (Provider::AcoustId, Verdict::Done(Some(record.clone())))
+    );
+    let Verdict::Due(d) = &mine[1].1 else {
+        panic!("a record on no release falls short: {mine:?}");
+    };
+    assert_eq!(d.again, Some((record, 0)));
+}
+
+#[test]
+fn until_done_asks_again_at_once_what_failed() {
+    let (_d, m, mut s, p) = own(false, &NAMED);
+    let mut failed = Looked::now(
+        SourceKey::parse("manual:a.flac").unwrap(),
+        Provider::Lrclib,
+        Outcome::Failed {
+            count: 3,
+            error: "x".into(),
+        },
+    );
+    failed.at = NOW;
+    s.lookups = vec![failed];
+    let lrclib = |ask| {
+        due(&m, &s, &p, NOW, ask)
+            .unwrap()
+            .into_iter()
+            .any(|d| d.find == Provider::Lrclib)
+    };
+    assert!(!lrclib(Ask::default()));
+    assert!(lrclib(Ask {
+        rematch: false,
+        persist: true
+    }));
+}
+
+#[test]
+fn a_verdict_says_when_and_why() {
+    assert_eq!(Verdict::Later(NOW).to_string(), "again on 1970-04-11");
+    assert_eq!(date_of(1_793_750_400), "2026-11-04");
+    assert_eq!(
+        Verdict::Waits(Provider::AcoustId).to_string(),
+        "waits for acoustid"
+    );
 }

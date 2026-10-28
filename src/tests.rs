@@ -2160,6 +2160,33 @@ fn status_info_and_check_report_on_stdout() {
     }
 }
 
+#[test]
+fn status_of_a_song_by_name_says_why_each_lookup_is_made_or_not() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let list = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(
+        &list,
+        listed.replace(
+            "until = [\"lyrics:timed\"]\nskip = []\nrecheck = \"7 days\"",
+            "until = [\"lyrics:timed\"]\nskip = [\"from:manual\"]\nrecheck = \"7 days\"",
+        ),
+    )
+    .unwrap();
+    let (_, report) = s.report(&flacs(), &["status", "a.flac"]);
+    assert!(report.contains("  lookups\n"), "{report}");
+    assert!(
+        report.contains("lrclib        skipped: [providers] skip 'from:manual'"),
+        "{report}"
+    );
+    assert!(
+        report.contains("youtube-music cannot ask: no YouTube upload to search from"),
+        "{report}"
+    );
+}
+
 impl Setup {
     /// What a command writes to stdout.
     fn report(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
@@ -3196,6 +3223,49 @@ const RECORD: &str = r#"{"id": 7, "trackName": "Song", "artistName": "Artist", "
     "duration": 200.5, "syncedLyrics": "[00:01.00] la la\n[00:30.00] la"}"#;
 
 #[test]
+fn an_untimed_record_is_asked_about_again_and_kept_anew_once_timed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let untimed = r#"{"id": 7, "trackName": "Song", "artistName": "Artist", "albumName": "Record",
+        "duration": 200.5, "plainLyrics": "la la\nla"}"#;
+    let first = Server::default().answer("/api/get?", untimed);
+    let (ok, text) = s.run_against(&first, &["sync"]);
+    assert!(
+        ok && text.contains("untimed lyrics from LRCLIB, lrclib:7"),
+        "{text}"
+    );
+    let home = s.dir.path().join("home");
+    let looked = |state: &State| {
+        state
+            .lookups
+            .iter()
+            .find(|l| l.find == "lrclib")
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(looked(&State::load(&home).unwrap()).unchanged, 0);
+
+    let same = Server::default().answer("/api/get?", untimed);
+    let (ok, text) = s.run_against(&same, &["sync", "--rematch"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        looked(&State::load(&home).unwrap()).unchanged,
+        1,
+        "found again unchanged: it waits longer"
+    );
+
+    let timed = Server::default().answer("/api/get?", RECORD);
+    let (ok, text) = s.run_against(&timed, &["sync", "--rematch"]);
+    assert!(ok, "{text}");
+    assert_eq!(looked(&State::load(&home).unwrap()).unchanged, 0);
+    let lrc = std::fs::read_to_string(s.dir.path().join("lib/Artist/Record/02 Song.lrc")).unwrap();
+    assert!(
+        lrc.contains("[00:01.00]"),
+        "the stored copy took its timing: {lrc}"
+    );
+}
+
+#[test]
 fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -3236,9 +3306,10 @@ fn a_song_of_your_own_finds_its_lyrics_on_lrclib_once() {
     std::fs::remove_file(s.dir.path().join("home/sources/lrclib/7.lrc")).unwrap();
     let list = s.dir.path().join("home").join(crate::dirs::MANIFEST);
     let listed = std::fs::read_to_string(&list).unwrap();
+    let off = "[providers.lrclib]\nenabled = false";
     std::fs::write(
         &list,
-        format!("{listed}\n[providers.lrclib]\nenabled = false\n"),
+        listed.replace("[providers.lrclib]\nenabled = true", off),
     )
     .unwrap();
     let off = Server::default().answer("/api/get/7", RECORD);
@@ -3509,14 +3580,39 @@ fn a_song_on_no_album_finds_its_album_on_musicbrainz_once() {
 }
 
 #[test]
-fn a_song_on_an_album_asks_nothing_of_musicbrainz() {
+fn a_song_that_has_what_until_names_asks_nothing_of_musicbrainz() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[providers.acoustid]\nuntil = \"has:album\"\n\
+         [providers.musicbrainz]\nuntil = [\"has:album\"]\n",
+    )
+    .unwrap();
+    let server = Server::default();
+    let (ok, text) = s.run_against(&server, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        !server
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/ws/2/recording")),
+        "{:?}",
+        server.asked
+    );
+}
+
+#[test]
+fn a_song_on_an_album_lacking_its_date_and_track_asks_musicbrainz() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     let server = Server::default();
     let (ok, text) = s.run_against(&server, &["sync"]);
     assert!(ok, "{text}");
     assert!(
-        !server
+        server
             .asked
             .lock()
             .unwrap()
@@ -3857,8 +3953,9 @@ fn an_export_asks_no_trust_to_copy_and_asks_it_to_encode() {
     let (s, fake) = exported_home("200.0");
     let songs = s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
-    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
-    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    let url = "url = \"https://api.acoustid.org\"\n";
+    let own = format!("{url}key = \"k0000000\"\n");
+    std::fs::write(&songs, listed.replace(url, &own)).unwrap();
     s.trusting(&fake, &["--trust", "sync"], None).unwrap();
     State::keep_trusted(&s.dir.path().join("home"), &BTreeMap::new()).unwrap();
     let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
@@ -3866,6 +3963,30 @@ fn an_export_asks_no_trust_to_copy_and_asks_it_to_encode() {
     let encoded = ["export", "-o", &zip, "--codec", "mp3"];
     let e = s.trusting(&fake, &encoded, None).unwrap_err();
     assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+}
+
+#[test]
+fn until_done_makes_every_lookup_due_in_one_run() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[providers.lrclib]\nper_run = 1\n",
+    )
+    .unwrap();
+    let server = Server::default();
+    let (ok, text) = s.run_against(&server, &["sync", "--until-done"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("wait for the next run"), "{text}");
+    let asked = server
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.contains("/api/search"))
+        .count();
+    assert_eq!(asked, 2, "both songs, past per_run");
 }
 
 #[test]
@@ -4009,8 +4130,9 @@ fn export_redacts_the_song_list_when_asked_and_leaves_it_as_it_is() {
     let (s, fake) = exported_home("200.0");
     let songs = s.dir.path().join("home/songs.toml");
     let listed = std::fs::read_to_string(&songs).unwrap();
-    let own = "\n[providers.acoustid]\nkey = \"k0000000\"\n";
-    std::fs::write(&songs, format!("{listed}{own}")).unwrap();
+    let url = "url = \"https://api.acoustid.org\"\n";
+    let own = format!("{url}key = \"k0000000\"\n");
+    std::fs::write(&songs, listed.replace(url, &own)).unwrap();
     assert!(s.run(&fake, &["--trust", "sync"]).0);
     let zip = s.dir.path().join("out.zip").to_string_lossy().into_owned();
     let (ok, text) = s.run(&fake, &["export", "--redact", "-o", &zip]);

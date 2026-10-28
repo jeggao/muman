@@ -7,6 +7,54 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Each provider says what a song asks it `until`.** `[providers.<name>]`
+  lists conditions a song looks the provider up until it has, all of
+  them: `lyrics:timed`, `cover:yes`, `has:date`, `from:musicbrainz`.
+  Every provider's table is written in the song list at its defaults, so
+  one setting changes one thing and later defaults still reach the rest.
+- **`skip` leaves songs out of lookups by query.** A provider's `skip`,
+  or `[providers] skip` for all of them, lists queries as `list` reads
+  them, such as `'album:="Some Album"'` or `"from:manual"`.
+- **A song turns its own lookups off** with `lookups = false`, or one
+  provider's with `lookups.<provider> = false`.
+- **`sync --until-done`** makes every lookup due in one run, past
+  `per_run`, over as many rounds as finds start, asking again at once
+  what failed and fetching again what failed to arrive.
+- **`status <query>` says why each lookup is made, waits or is not**,
+  song by song, and `info` counts lookups waiting, skipped or unable to
+  ask.
+- **Queries read `from:<provider>`, `has:<tag>`, `lyrics:timed` and
+  `untimed`, and `cover:sharp` and `small`.**
+
+### Changed
+
+- **`[[trigger]]` is gone.** The song list's triggers are rewritten as
+  `until` and `skip` on the next write; one as the built-in leaves its
+  provider at today's default, and a provider no trigger found is
+  turned off. The edition rises to 8.
+- **MusicBrainz and AcoustID ask until a song has its album, album
+  artist, date, track, disc and ISRC**, not only an album, so songs with
+  partial tags are looked up too; a backlog drains over runs by
+  `per_run`.
+- **A record that falls short is asked about again.** An untimed LRCLIB
+  record is searched for again, a MusicBrainz record on no release or a
+  soft cover fetched again by its ID, after `recheck` and twice as long
+  each time it comes back unchanged, up to 90 days. A record that gives
+  all it can is never asked about again, even when the song resolves to
+  another source's lyrics or cover.
+- **A song that lists a MusicBrainz record is never searched for by
+  name**, whichever lookup found it.
+
+### Fixed
+
+- **A song with `lyrics = false`, or its lyrics or cover pinned, asked
+  LRCLIB, YouTube or the Cover Art Archive** for what it would never
+  take.
+- **A record found again with other content was not kept**: the copy
+  first stored stayed, and a song pinned to its old content.
+
 ## [0.8.0] - 2026-10-28
 
 ### Added

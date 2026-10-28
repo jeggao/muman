@@ -66,6 +66,22 @@ pub const TABLES: [&str; 10] = [
     "sites",
 ];
 
+/// The tables `new.toml` writes that [`fill`] keeps written out in every
+/// song list: the settings' and the providers' (`crate::provider`).
+pub const WRITTEN: [&str; 11] = [
+    "library",
+    "lyrics",
+    "audio",
+    "loudness",
+    "cover",
+    "ytdlp",
+    "torrent",
+    "tools",
+    "history",
+    "sites",
+    "providers",
+];
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -1367,7 +1383,7 @@ pub(crate) fn defaults() -> DocumentMut {
 pub fn fill(doc: &mut DocumentMut, editions: &Editions) -> bool {
     let defaults = defaults();
     let mut changed = crate::migrate::rename_all(doc, editions).is_ok_and(|r| !r.is_empty());
-    for name in TABLES {
+    for name in WRITTEN {
         let Some(default) = defaults.get(name).and_then(Item::as_table) else {
             continue;
         };
@@ -1674,6 +1690,71 @@ const MOST_NAME_BYTES: usize = 255;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keys serde takes in the table at `path`, or in an entry of the
+    /// list of tables there when `listed`: read from the error a key it
+    /// takes nowhere meets, which names every one it does.
+    fn taken(path: &[&str], listed: bool) -> Vec<String> {
+        let text = match (path.split_last(), listed) {
+            (None, _) => "__probe__ = 0\n".to_string(),
+            (Some((last, head)), true) => {
+                format!("[{}]\n{last} = [{{ __probe__ = 0 }}]\n", head.join("."))
+            }
+            (Some(_), false) => format!("[{}]\n__probe__ = 0\n", path.join(".")),
+        };
+        let e = toml::from_str::<Settings>(&text)
+            .unwrap_err()
+            .message()
+            .to_string();
+        let (_, expected) = e
+            .split_once("expected")
+            .unwrap_or_else(|| panic!("{path:?}: {e}"));
+        expected
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(String::from)
+            .collect()
+    }
+
+    /// Each key the table at `path` takes that `written`, new.toml's, has
+    /// neither set nor hinted at as `# key = …`, as a setting with no
+    /// default is; the tables in it walked too.
+    fn unwritten(path: &[&str], listed: bool, written: &dyn toml_edit::TableLike) -> Vec<String> {
+        let mut missing = Vec::new();
+        for key in taken(path, listed) {
+            let at: Vec<&str> = path.iter().copied().chain([key.as_str()]).collect();
+            match written.get(&key) {
+                Some(toml_edit::Item::Table(t)) => missing.extend(unwritten(&at, false, t)),
+                Some(toml_edit::Item::ArrayOfTables(list)) => {
+                    for t in list {
+                        missing.extend(unwritten(&at, true, t));
+                    }
+                }
+                Some(_) => {}
+                None if crate::manifest::NEW.contains(&format!("# {key} = ")) => {}
+                None => missing.push(at.join(".")),
+            }
+        }
+        missing
+    }
+
+    #[test]
+    fn every_setting_the_code_takes_is_written_in_new_toml() {
+        assert_eq!(
+            taken(&[], false),
+            TABLES,
+            "a settings table the song list's reading leaves out"
+        );
+        let doc: DocumentMut = crate::manifest::NEW.parse().unwrap();
+        // `[sites]` is a map of sites, built from new.toml itself.
+        let missing: Vec<String> = TABLES
+            .iter()
+            .filter(|t| **t != "sites")
+            .flat_map(|t| unwritten(&[t], false, doc[t].as_table().unwrap()))
+            .collect();
+        assert_eq!(missing, Vec::<String>::new(), "set them in new.toml");
+    }
 
     #[test]
     fn a_type_error_names_no_rust_type() {

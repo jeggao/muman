@@ -381,13 +381,19 @@ pub enum Command {
     /// lookup due, write every song whose sources or tags changed, and
     /// delete what no song makes.
     Sync {
-        /// Make every lookup now, whatever an earlier one found, but none
-        /// on a provider the song has a source from already: an upload on
-        /// YouTube Music for its track, a track on YouTube for an upload
-        /// with subtitles, a song on LRCLIB for its lyrics, a song on
-        /// MusicBrainz for its album.
+        /// Make every lookup a song still wants now, whatever an earlier
+        /// one found: a song that has what a provider's `until` names, or
+        /// whose record from it gives all it can, asks it nothing.
         #[arg(long)]
         rematch: bool,
+
+        /// Keep going until the library is up to date: make every lookup
+        /// due, however many `per_run` allows and over as many rounds as
+        /// what one finds starts, ask again at once what failed, and fetch
+        /// again what failed to arrive, as --retry does. Each service is
+        /// still asked at its own pace.
+        #[arg(long)]
+        until_done: bool,
 
         /// Write every song again, changed or not, a library file changed
         /// since muman wrote it included.

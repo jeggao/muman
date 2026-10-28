@@ -11,7 +11,11 @@ fn renames() -> impl Iterator<Item = &'static Rename> {
         .flat_map(|e| e.steps)
         .filter_map(|s| match s {
             Step::Rename(r) => Some(r),
-            Step::Move(_) | Step::MoveTable(_) | Step::Reshape(_) | Step::Default(_) => None,
+            Step::Move(_)
+            | Step::MoveTable(_)
+            | Step::Reshape(_)
+            | Step::Rewrite(_)
+            | Step::Default(_) => None,
         })
 }
 
@@ -403,4 +407,143 @@ fn where_lyrics_went_reads_as_the_outputs_writing_them_there() {
     );
     let read = read(&doc("[library]\nlyrics = \"embedded\"\n")).unwrap();
     assert_eq!(read.lyrics.out.len(), 1, "read old, it is reshaped");
+}
+
+/// What `trigger` tables read as, as `[providers]` settings: each
+/// provider's table, as `key = value` lines.
+fn rewritten(triggers: &str) -> (Vec<String>, Vec<String>) {
+    let mut d = doc(&format!("version = 1\n{triggers}"));
+    let notes = rename_all(&mut d, &EDITIONS)
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(d.get("trigger").is_none(), "the list is gone");
+    let mut lines = Vec::new();
+    if let Some(providers) = d.get("providers").and_then(Item::as_table_like) {
+        for (name, t) in providers.iter() {
+            for (key, v) in t.as_table_like().unwrap().iter() {
+                lines.push(format!("{name}.{key} = {}", text(v.as_value().unwrap())));
+            }
+        }
+    }
+    crate::provider::read(&d).unwrap();
+    (lines, notes)
+}
+
+const BUILT_IN_TRIGGERS: &str = "
+[[trigger]]
+from = \"youtube\"
+find = \"youtube-music\"
+[[trigger]]
+from = [\"youtube-music\"]
+find = \"youtube\"
+when = \"no-timed-lyrics\"
+[[trigger]]
+from = [\"manual\", \"youtube\", \"youtube-music\"]
+find = \"lrclib\"
+when = \"no-timed-lyrics\"
+[[trigger]]
+from = [\"manual\", \"youtube\", \"youtube-music\"]
+find = \"acoustid\"
+when = \"no-album\"
+[[trigger]]
+from = [\"youtube-music\", \"youtube\", \"manual\"]
+find = \"musicbrainz\"
+when = \"no-album\"
+[[trigger]]
+from = [\"manual\", \"youtube\", \"youtube-music\"]
+find = \"coverart\"
+when = \"small-cover\"
+";
+
+#[test]
+fn the_built_in_triggers_written_out_leave_every_provider_at_its_default() {
+    let (lines, _) = rewritten(BUILT_IN_TRIGGERS);
+    assert_eq!(lines, Vec::<String>::new());
+}
+
+#[test]
+fn triggers_as_the_docs_advised_become_the_conditions_they_meant() {
+    let triggers = BUILT_IN_TRIGGERS
+        .replace(
+            "find = \"acoustid\"\nwhen = \"no-album\"",
+            "find = \"acoustid\"\nwhen = \"always\"",
+        )
+        .replace(
+            "find = \"musicbrainz\"\nwhen = \"no-album\"",
+            "find = \"musicbrainz\"",
+        )
+        .replace(
+            "from = [\"manual\", \"youtube\", \"youtube-music\"]\nfind = \"coverart\"",
+            "from = [\"manual\"]\nfind = \"coverart\"",
+        );
+    let (lines, notes) = rewritten(&triggers);
+    assert_eq!(
+        lines,
+        [
+            "acoustid.until = \"from:musicbrainz\"",
+            "musicbrainz.until = \"from:musicbrainz\"",
+            "coverart.skip = [\"^from:manual\"]",
+        ]
+    );
+    assert!(
+        notes[0].starts_with("[trigger] `find = \"acoustid\", when = \"always\"` is"),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn a_provider_no_trigger_finds_is_turned_off_and_a_condition_of_another_skips() {
+    let (lines, _) = rewritten(
+        "[[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"no-lyrics\"\n\
+         [[trigger]]\nfrom = [\"youtube\", \"manual\"]\nfind = \"coverart\"\nwhen = \"no-album\"\n\
+         [[trigger]]\nfrom = \"youtube\"\nfind = \"coverart\"\nwhen = \"always\"\n",
+    );
+    assert_eq!(
+        lines,
+        [
+            "youtube-music.enabled = false",
+            "youtube.enabled = false",
+            "lrclib.until = \"lyrics:yes\"",
+            "lrclib.skip = [\"^from:manual\"]",
+            "acoustid.enabled = false",
+            "musicbrainz.enabled = false",
+            "coverart.until = \"from:coverart\"",
+            "coverart.skip = [\"has:album\", \"^from:manual ^from:youtube\"]",
+        ]
+    );
+}
+
+#[test]
+fn a_trigger_list_beside_the_settings_it_becomes_is_refused() {
+    let mut d = doc("version = 1\n[providers.lrclib]\nuntil = \"lyrics:yes\"\n\
+         [[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"always\"\n");
+    assert!(rename_all(&mut d, &EDITIONS).is_err());
+    let mut d =
+        doc("version = 1\n[[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"often\"\n");
+    let e = rename_all(&mut d, &EDITIONS).unwrap_err();
+    assert!(format!("{e:#}").contains("no-timed-lyrics"), "{e:#}");
+}
+
+#[test]
+fn every_changed_default_is_found_stale_at_its_old_value() {
+    for edition in HISTORY {
+        for step in edition.steps {
+            let Step::Default(c) = step else {
+                continue;
+            };
+            let key = now_named(c.key, edition.number, &EDITIONS);
+            let path: Vec<&str> = key.split('.').collect();
+            let mut d: DocumentMut = crate::manifest::NEW.parse().unwrap();
+            *value_at_mut(&mut d, &path).unwrap_or_else(|| panic!("{key} is not in new.toml")) =
+                c.was.parse().unwrap();
+            d["edition"] = value(edition.number - 1);
+            assert!(
+                stale(&d, &EDITIONS).iter().any(|s| s.key == key),
+                "{key} at its old default {} is not found stale",
+                c.was
+            );
+        }
+    }
 }

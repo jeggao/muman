@@ -23,10 +23,15 @@ are all required, case and accents ignored, so `cafe` matches "Café":
 | `youtube.com:vid00000001` | The song listing that key |
 
 A field is any tag, or `key`, `path`, `format` (the file's extension:
-`opus`, `ogg`, `flac`, `mp3`, `m4a`),
-`cover` and `lyrics` (`yes`, `none`). A field that is no tag muman knows
-and that no song has is refused, so a misspelled one never matches
-nothing, or, negated, every song.
+`opus`, `ogg`, `flac`, `mp3`, `m4a`), `lyrics` (`yes`, `none`, `timed`
+or `untimed`), `cover` (`yes`, `none`, `sharp` or `small`, as `info`
+counts detail), `from` (a provider a source of the song is from, as
+`from:youtube-music`; a file of your own or a torrent's is `manual`)
+and `has` (a tag a source or the song list gives, as `has:date`; an
+album artist muman takes from the artist, or an album named for a
+single's title, is no given tag). Those four compare their value whole.
+A field that is no tag muman knows and that no song has is refused, so
+a misspelled one never matches nothing, or, negated, every song.
 
 ## Changing songs
 

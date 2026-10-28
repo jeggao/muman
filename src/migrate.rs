@@ -59,11 +59,13 @@ use std::fmt;
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value, value};
 
-use crate::settings::{TABLES, defaults};
+use crate::provider::Provider;
+use crate::query::{Closed, Have};
+use crate::settings::{WRITTEN, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 7;
+pub const EDITION: i64 = 8;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
@@ -122,6 +124,13 @@ pub const HISTORY: &[Edition] = &[
         number: 7,
         steps: &[reshaped("library", "lyrics", "lyrics", "out", lyrics_out)],
     },
+    Edition {
+        number: 8,
+        steps: &[Step::Rewrite(Rewrite {
+            old: "trigger",
+            convert: triggers,
+        })],
+    },
 ];
 
 /// The editions this muman knows.
@@ -150,7 +159,17 @@ pub enum Step {
     Move(Move),
     MoveTable(MoveTable),
     Reshape(Reshape),
+    Rewrite(Rewrite),
     Default(Change),
+}
+
+/// A top-level list of tables that is no setting any more, rewritten into
+/// the settings that do what it did.
+#[derive(Debug, Clone, Copy)]
+pub struct Rewrite {
+    pub old: &'static str,
+    /// The file with the list rewritten and taken out: what was written.
+    pub convert: fn(&mut DocumentMut) -> Result<Vec<Renamed>>,
 }
 
 /// A setting renamed, its value written anew.
@@ -318,6 +337,204 @@ fn mib(v: &Value) -> Option<Value> {
     })
 }
 
+/// A `[[trigger]]` as edition 7 read it: a song with a source from any
+/// of `from`, and none from `find`, looked `find` up while `when` held.
+struct Trigger {
+    from: Vec<Provider>,
+    find: Provider,
+    when: String,
+}
+
+/// The triggers edition 7 ran when a song list wrote none.
+const BUILT_IN: [(&[&str], &str, &str); 6] = [
+    (&["youtube"], "youtube-music", "always"),
+    (&["youtube-music"], "youtube", "no-timed-lyrics"),
+    (
+        &["manual", "youtube", "youtube-music"],
+        "lrclib",
+        "no-timed-lyrics",
+    ),
+    (
+        &["manual", "youtube", "youtube-music"],
+        "acoustid",
+        "no-album",
+    ),
+    (
+        &["manual", "youtube", "youtube-music"],
+        "musicbrainz",
+        "no-album",
+    ),
+    (
+        &["manual", "youtube", "youtube-music"],
+        "coverart",
+        "small-cover",
+    ),
+];
+
+/// The condition a `when` held for, as a query: `None` for `always`.
+fn condition(when: &str) -> Result<Option<Closed>> {
+    Ok(Some(match when {
+        "always" => return Ok(None),
+        "no-lyrics" => Closed::Lyrics(Have::Some),
+        "no-timed-lyrics" => Closed::Lyrics(Have::Better),
+        "no-album" => Closed::Has(crate::tags::Field::Album.vorbis().to_string()),
+        "small-cover" => Closed::Cover(Have::Better),
+        _ => bail!(
+            "`{when}` is no condition: always, no-lyrics, no-timed-lyrics, no-album, small-cover"
+        ),
+    }))
+}
+
+fn read_trigger(t: &Table, what: &str) -> Result<Trigger> {
+    let from = match t
+        .get("from")
+        .with_context(|| format!("{what} names no `from`"))?
+    {
+        Item::Value(Value::String(s)) => vec![Provider::named(s.value())?],
+        Item::Value(Value::Array(a)) => a
+            .iter()
+            .map(|v| Provider::named(v.as_str().unwrap_or_default()))
+            .collect::<Result<_>>()?,
+        _ => bail!("{what}: `from` must name a provider or a list of them"),
+    };
+    let find = t
+        .get("find")
+        .and_then(Item::as_str)
+        .with_context(|| format!("{what} names no `find`"))?;
+    let find = Provider::named(find)?;
+    if !find.findable() {
+        bail!("{what}: {find} cannot be looked up");
+    }
+    let when = match t.get("when") {
+        None => "always".to_string(),
+        Some(w) => w
+            .as_str()
+            .with_context(|| format!("{what}: `when` must be text"))?
+            .to_string(),
+    };
+    condition(&when).with_context(|| what.to_string())?;
+    Ok(Trigger { from, find, when })
+}
+
+/// What `mine`, the triggers finding `p`, set of `[providers.<p>]`, with
+/// how they are named in the notice.
+fn settings_of(p: Provider, mine: &[&Trigger]) -> Result<(String, Vec<(&'static str, Value)>)> {
+    let mut set: Vec<(&str, Value)> = Vec::new();
+    let Some(first) = mine.first() else {
+        set.push(("enabled", Value::from(false)));
+        return Ok((format!("no trigger finds {p}"), set));
+    };
+    let same: Vec<&&Trigger> = mine.iter().filter(|t| t.when == first.when).collect();
+    let mut from: Vec<Provider> = same.iter().flat_map(|t| t.from.clone()).collect();
+    from.sort();
+    from.dedup();
+    let mut said = format!("find = \"{p}\", when = \"{}\"", first.when);
+    if same.len() < mine.len() {
+        said = format!("{said}; its other triggers' conditions are dropped");
+    }
+    let built_in = BUILT_IN.iter().any(|(f, find, when)| {
+        *find == p.name()
+            && *when == first.when
+            && from.len() == f.len()
+            && from.iter().all(|q| f.contains(&q.name()))
+    });
+    if built_in {
+        return Ok((said, set));
+    }
+    let yields = Closed::From(p.yields());
+    let mut skip = Vec::new();
+    let until = match condition(&first.when)? {
+        Some(c) if p.gives(&c) => c,
+        Some(c) => {
+            skip.push(c.to_string());
+            yields
+        }
+        None => yields,
+    };
+    let own = [Provider::Manual, Provider::YouTube, Provider::YouTubeMusic];
+    if !own.iter().all(|q| from.contains(q))
+        && p != Provider::YouTubeMusic
+        && p != Provider::YouTube
+    {
+        let none: Vec<String> = from.iter().map(|q| format!("^from:{q}")).collect();
+        skip.push(none.join(" "));
+    }
+    if p.defaults().until != [until.clone()] {
+        set.push(("until", Value::from(until.to_string())));
+    }
+    if !skip.is_empty() {
+        set.push(("skip", skip.iter().map(String::as_str).collect()));
+    }
+    Ok((said, set))
+}
+
+/// `[[trigger]]` as `[providers.<name>]` settings: a provider each
+/// trigger found asks `until` what its `when` held for, or, for a
+/// condition of what another provider finds, until it found something,
+/// skipping songs that have what the condition asked for; a `from` that
+/// leaves out a source's provider skips the songs with none of `from`. A
+/// trigger as the built-in one writes nothing, so the provider takes
+/// today's default. A provider no trigger found was never looked up, and
+/// is turned off; of a provider several found, the first trigger's
+/// condition is kept.
+fn triggers(doc: &mut DocumentMut) -> Result<Vec<Renamed>> {
+    let Some(list) = doc.get("trigger") else {
+        return Ok(Vec::new());
+    };
+    let list = list
+        .as_array_of_tables()
+        .context("`trigger` must be a list of [[trigger]] tables")?;
+    let read: Vec<Trigger> = list
+        .iter()
+        .enumerate()
+        .map(|(n, t)| read_trigger(t, &format!("trigger {}", n + 1)))
+        .collect::<Result<_>>()?;
+    let mut written = Vec::new();
+    for p in crate::lookup::ORDER {
+        let mine: Vec<&Trigger> = read.iter().filter(|t| t.find == p).collect();
+        let (said, set) = settings_of(p, &mine)?;
+        if set.is_empty() {
+            continue;
+        }
+        let providers = doc
+            .entry("providers")
+            .or_insert_with(|| {
+                let mut t = Table::new();
+                t.set_implicit(true);
+                Item::Table(t)
+            })
+            .as_table_like_mut()
+            .context("`providers` must be a table")?;
+        let table = providers
+            .entry(p.name())
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_like_mut()
+            .with_context(|| format!("`providers.{p}` must be a table"))?;
+        for (key, _) in &set {
+            if table.contains_key(key) {
+                bail!(
+                    "[[trigger]] and [providers.{p}] `{key}` both say what {p} is asked; \
+                     keep [providers.{p}] and delete [[trigger]]"
+                );
+            }
+        }
+        let shown: Vec<String> = set
+            .iter()
+            .map(|(k, v)| format!("{k} = {}", text(v)))
+            .collect();
+        for (key, v) in set {
+            table.insert(key, Item::Value(v));
+        }
+        written.push(Renamed {
+            table: "trigger".to_string(),
+            old: Some(said),
+            new: format!("[providers.{p}] {}", shown.join(", ")),
+        });
+    }
+    doc.remove("trigger");
+    Ok(written)
+}
+
 /// One rename made: where, and the setting before and after.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Renamed {
@@ -405,7 +622,11 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
     let steps = editions.history.iter().flat_map(|e| e.steps);
     for r in steps.clone().filter_map(|s| match s {
         Step::Rename(r) => Some(r),
-        Step::Move(_) | Step::MoveTable(_) | Step::Reshape(_) | Step::Default(_) => None,
+        Step::Move(_)
+        | Step::MoveTable(_)
+        | Step::Reshape(_)
+        | Step::Rewrite(_)
+        | Step::Default(_) => None,
     }) {
         for (name, table) in tables_named(doc, r.table) {
             let Some(old) = table.get(r.old).and_then(Item::as_value) else {
@@ -441,7 +662,8 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
             Step::Move(m) => renamed.extend(move_setting(doc, m)?),
             Step::MoveTable(m) => renamed.extend(move_table(doc, m)?),
             Step::Reshape(r) => renamed.extend(reshape(doc, r)?),
-            Step::Rename(_) | Step::Default(_) => {}
+            Step::Rewrite(r) if doc.contains_key(r.old) => renamed.extend((r.convert)(doc)?),
+            Step::Rewrite(_) | Step::Rename(_) | Step::Default(_) => {}
         }
     }
     Ok(renamed)
@@ -823,12 +1045,18 @@ fn text(value: &Value) -> String {
 
 /// The settings a song list setting only `path` to `text` reads as, when
 /// it reads: what a value means however it is spelled.
-fn meaning(path: &[&str], text: &str) -> Option<crate::settings::Settings> {
+fn meaning(
+    path: &[&str],
+    text: &str,
+) -> Option<(crate::settings::Settings, crate::provider::Config)> {
     let (key, tables) = path.split_last()?;
     let doc: DocumentMut = format!("[{}]\n{key} = {text}\n", tables.join("."))
         .parse()
         .ok()?;
-    crate::settings::read(&doc).ok()
+    Some((
+        crate::settings::read(&doc).ok()?,
+        crate::provider::read(&doc).ok()?,
+    ))
 }
 
 /// Each setting of `doc` still at the default of the edition it names,
@@ -838,7 +1066,7 @@ pub fn stale(doc: &DocumentMut, editions: &Editions) -> Vec<Stale> {
     let file = edition_of(doc);
     let defaults = defaults();
     let mut keys = Vec::new();
-    for table in TABLES {
+    for table in WRITTEN {
         if let Some(t) = defaults.get(table).and_then(Item::as_table) {
             leaves(&[table], t, &mut keys);
         }

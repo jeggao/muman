@@ -108,7 +108,8 @@ Bring the library in line with the song list: fetch any missing source, add file
 
 **Options:**
 
-* `--rematch` — Make every lookup now, whatever an earlier one found, but none on a provider the song has a source from already: an upload on YouTube Music for its track, a track on YouTube for an upload with subtitles, a song on LRCLIB for its lyrics, a song on MusicBrainz for its album
+* `--rematch` — Make every lookup a song still wants now, whatever an earlier one found: a song that has what a provider's `until` names, or whose record from it gives all it can, asks it nothing
+* `--until-done` — Keep going until the library is up to date: make every lookup due, however many `per_run` allows and over as many rounds as what one finds starts, ask again at once what failed, and fetch again what failed to arrive, as --retry does. Each service is still asked at its own pace
 * `--force` — Write every song again, changed or not, a library file changed since muman wrote it included
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to
 * `--accept` — Take what each fetched source holds now, its audio, cover, lyrics or tags, where it differs from what its song was built from, as after a fetch again, and record it in the song list

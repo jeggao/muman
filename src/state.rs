@@ -157,6 +157,16 @@ pub struct Looked {
     /// Seconds since the Unix epoch.
     pub at: u64,
     pub outcome: Outcome,
+    /// How many times in a row it found again, unchanged, a record that
+    /// falls short of what the song asks.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unchanged: u32,
+}
+
+// serde's `skip_serializing_if` passes the field by reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,13 +193,24 @@ impl Looked {
             method: crate::lookup::method(find).to_string(),
             at: now_secs(),
             outcome,
+            unchanged: 0,
         }
     }
 
-    /// Whether it is due again: one that found nothing or an instrumental
-    /// after `recheck`, one that failed after an hour doubling with
-    /// each failure; one made another way at once, unless what it found
-    /// the song still lists, by `listed`.
+    /// When a lookup that found a record the song lists, which falls short
+    /// of what the song asks, is due again, in seconds since the Unix
+    /// epoch: after `recheck`, twice as long for each time it found the
+    /// record again unchanged, up to [`SHORT_MAX_WAIT_SECS`].
+    #[must_use]
+    pub fn short_again_at(&self, recheck: std::time::Duration) -> u64 {
+        let wait = recheck
+            .as_secs()
+            .saturating_mul(1 << self.unchanged.min(16))
+            .min(SHORT_MAX_WAIT_SECS.max(recheck.as_secs()));
+        self.at.saturating_add(wait)
+    }
+
+    /// Whether it is due again, by [`Self::again_at`].
     #[must_use]
     pub fn due(
         &self,
@@ -197,19 +218,36 @@ impl Looked {
         recheck: std::time::Duration,
         listed: &dyn Fn(&SourceKey) -> bool,
     ) -> bool {
+        self.again_at(recheck, listed).is_some_and(|at| now >= at)
+    }
+
+    /// When it is due again, in seconds since the Unix epoch, or never:
+    /// one that found nothing or an instrumental after `recheck`, one that
+    /// failed after an hour doubling with each failure; one made another
+    /// way at once, unless what it found the song still lists, by
+    /// `listed`.
+    #[must_use]
+    pub fn again_at(
+        &self,
+        recheck: std::time::Duration,
+        listed: &dyn Fn(&SourceKey) -> bool,
+    ) -> Option<u64> {
         let find = Provider::named(&self.find).ok();
         if find.is_none_or(|p| crate::lookup::method(p) != self.method) {
-            return !matches!(&self.outcome, Outcome::Found(k) if listed(k));
+            return (!matches!(&self.outcome, Outcome::Found(k) if listed(k))).then_some(0);
         }
-        let age = now.saturating_sub(self.at);
         match &self.outcome {
-            Outcome::Found(_) | Outcome::Declined => false,
-            Outcome::Nothing | Outcome::Instrumental => age >= recheck.as_secs(),
-            Outcome::Failed { count, .. } => {
-                age >= 3600_u64
-                    .saturating_mul(1 << count.saturating_sub(1).min(16))
-                    .min(MAX_WAIT_SECS)
+            Outcome::Found(_) | Outcome::Declined => None,
+            Outcome::Nothing | Outcome::Instrumental => {
+                Some(self.at.saturating_add(recheck.as_secs()))
             }
+            Outcome::Failed { count, .. } => Some(
+                self.at.saturating_add(
+                    3600_u64
+                        .saturating_mul(1 << count.saturating_sub(1).min(16))
+                        .min(MAX_WAIT_SECS),
+                ),
+            ),
         }
     }
 }
@@ -424,6 +462,11 @@ pub enum Step {
 
 /// The longest a failed fetch waits before it is tried again.
 const MAX_WAIT_SECS: u64 = 7 * 24 * 3600;
+
+/// The longest a record that falls short waits to be asked about again:
+/// long enough that one never improved costs a few requests a year, short
+/// enough that one fixed upstream reaches the library within a season.
+pub const SHORT_MAX_WAIT_SECS: u64 = 90 * 24 * 3600;
 
 /// Copies of a download fetched again, each found damaged or failing,
 /// after which muman stops asking until `sync --retry`.
@@ -771,6 +814,17 @@ impl State {
             .find(|l| &l.from == from && l.find == find.name())
     }
 
+    /// The newest lookup of any of `finds` made from any of `sources`: a
+    /// song's record of a provider, whichever of its sources it was made
+    /// from.
+    #[must_use]
+    pub fn newest(&self, sources: &[SourceKey], finds: &[Provider]) -> Option<&Looked> {
+        self.lookups
+            .iter()
+            .filter(|l| sources.contains(&l.from) && finds.iter().any(|p| l.find == p.name()))
+            .max_by_key(|l| l.at)
+    }
+
     /// Record lookups and the uploads releases replaced in the state file
     /// as it is now, under its lock: a failure counts on from the last.
     pub fn keep_lookups(
@@ -872,6 +926,7 @@ mod tests {
             method: method.into(),
             at: 0,
             outcome,
+            unchanged: 0,
         };
         let method = crate::lookup::method(Provider::Lrclib);
         let none = |_: &SourceKey| false;
