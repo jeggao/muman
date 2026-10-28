@@ -404,3 +404,25 @@ fn where_lyrics_went_reads_as_the_outputs_writing_them_there() {
     let read = read(&doc("[library]\nlyrics = \"embedded\"\n")).unwrap();
     assert_eq!(read.lyrics.out.len(), 1, "read old, it is reshaped");
 }
+
+#[test]
+fn every_changed_default_is_found_stale_at_its_old_value() {
+    for edition in HISTORY {
+        for step in edition.steps {
+            let Step::Default(c) = step else {
+                continue;
+            };
+            let key = now_named(c.key, edition.number, &EDITIONS);
+            let path: Vec<&str> = key.split('.').collect();
+            let mut d: DocumentMut = crate::manifest::NEW.parse().unwrap();
+            *value_at_mut(&mut d, &path).unwrap_or_else(|| panic!("{key} is not in new.toml")) =
+                c.was.parse().unwrap();
+            d["edition"] = value(edition.number - 1);
+            assert!(
+                stale(&d, &EDITIONS).iter().any(|s| s.key == key),
+                "{key} at its old default {} is not found stale",
+                c.was
+            );
+        }
+    }
+}

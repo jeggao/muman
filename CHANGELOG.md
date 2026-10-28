@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **Queries read `from:<provider>`, `has:<tag>`, `lyrics:timed` and
+  `untimed`, and `cover:sharp` and `small`.** `from:` names a provider a
+  song's source is from, `has:` a tag a source or the song list gives
+  rather than one muman fills in; each compares its value whole.
+
 ## [0.8.0] - 2026-10-28
 
 ### Added

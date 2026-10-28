@@ -317,7 +317,7 @@ pub const KEPT: [Kept; 3] = [
     Kept {
         extractor: LRCLIB,
         provider: Provider::Lrclib,
-        folder: "lrclib",
+        folder: LRCLIB,
         main: &["lrc"],
         beside: &["json"],
         kind: Kind::Lyrics,
@@ -326,7 +326,7 @@ pub const KEPT: [Kept; 3] = [
     Kept {
         extractor: MUSICBRAINZ,
         provider: Provider::MusicBrainz,
-        folder: "musicbrainz",
+        folder: MUSICBRAINZ,
         main: &["json"],
         beside: &[],
         kind: Kind::Tags,
@@ -335,7 +335,7 @@ pub const KEPT: [Kept; 3] = [
     Kept {
         extractor: COVERART,
         provider: Provider::CoverArt,
-        folder: "coverart",
+        folder: COVERART,
         main: &["jpg", "png", "webp"],
         beside: &[],
         kind: Kind::Image,

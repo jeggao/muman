@@ -175,8 +175,13 @@ step = 0.1
 # are on. `out = []` under [cover] writes none.
 [[cover.out]]
 to = "tag"
+scope = "song"
+suffix = ""
+name = ""
 format = "keep"
+# max_side = 1200
 quality = 90
+mixed = "none"
 
 [ytdlp]
 # What is kept of a video, as yt-dlp's --format; muman reads its
