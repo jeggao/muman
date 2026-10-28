@@ -2388,3 +2388,60 @@ fn an_excerpt_from_past_a_long_song_s_first_minute_never_beats_the_whole_song() 
     let (key, why) = chosen(&[("eeeeeeeeeee", excerpt), ("wwwwwwwwwww", whole)]);
     assert_eq!(key, SourceKey::youtube("wwwwwwwwwww"), "{why}");
 }
+
+#[test]
+fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
+    use crate::codec::Codec;
+    use crate::resolve::{AudioRef, Format, Plan, Resolved, TAGGING, Why, render_version};
+    let song = |stem: &str, id: &str| {
+        (
+            0,
+            Resolved {
+                plan: Plan {
+                    version: render_version(Codec::Opus),
+                    format: Format::Copy { codec: Codec::Opus },
+                    audio: AudioRef {
+                        key: SourceKey::youtube(id),
+                        rev: "r".into(),
+                        index: 0,
+                    },
+                    cover: None,
+                    lyrics: None,
+                    tags: Vec::new(),
+                    loudness: None,
+                    tagging: TAGGING,
+                    chapters: Vec::new(),
+                },
+                stem: PathBuf::from(stem),
+                why: Why::default(),
+            },
+        )
+    };
+    let library = crate::settings::Library::default();
+    let naming = crate::naming::Naming::new(&library, Path::new("lib")).unwrap();
+    // A translation beside a song as `.en.lrc`, its lyrics as `.lrc`.
+    let beside = |p: &Path| {
+        let stem = p.with_extension("");
+        ["en.lrc", "lrc"]
+            .iter()
+            .map(|s| PathBuf::from(format!("{}.{s}", stem.display())))
+            .collect()
+    };
+    let mut planned = vec![
+        song("Intro", "aaaaaaaaaaa"),
+        song("intro.en", "bbbbbbbbbbb"),
+    ];
+    plan::separate(&mut planned, &naming, &beside);
+    assert_eq!(planned[0].1.stem, PathBuf::from("Intro"));
+    assert_eq!(
+        planned[1].1.stem,
+        PathBuf::from("intro.en [bbbbbbbbbbb]"),
+        "its `.lrc` is the first song's `.en.lrc` on a filesystem blind to case"
+    );
+    let mut apart = vec![
+        song("Intro", "aaaaaaaaaaa"),
+        song("Outro.en", "bbbbbbbbbbb"),
+    ];
+    plan::separate(&mut apart, &naming, &beside);
+    assert_eq!(apart[1].1.stem, PathBuf::from("Outro.en"));
+}

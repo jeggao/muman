@@ -17,6 +17,11 @@
 //! points, and no joiner or variation selector is left dangling at its
 //! end. A cut that shifts, as a newer Unicode joins characters
 //! anew, moves the song's file to its new name.
+//!
+//! A file name keeps room for what follows a song's stem: the audio's
+//! extension, or a file beside it, as its `.lrc`, whichever is longest
+//! ([`Naming::with_tail`]); a tail longer than `.flac` makes every name
+//! that much shorter, so the songs whose names it cuts move.
 
 use std::path::{Path, PathBuf};
 
@@ -42,13 +47,28 @@ const LOOKALIKES: [(&str, &str); 9] = [
     ("|", "｜"),
 ];
 
-/// Room kept in a file name for a collision suffix and the extension.
+/// Room kept in a file name for a collision suffix and a tail as long as
+/// [`AUDIO_TAIL`].
 const SUFFIX_ROOM: usize = 24;
 
+/// The longest audio extension, `.flac`, `.opus`, with its dot.
+pub const AUDIO_TAIL: usize = ".flac".len();
+
+/// The longest temporary suffix a file is written or moved through.
+const TEMPORARY: usize = ".moving".len();
+
 /// The fewest bytes a name is cut to, past the room for its suffix: the
-/// least `[library] max_name_bytes` and `max_folder_bytes` may say.
+/// least `[library] max_name_bytes` and `max_folder_bytes` may say, with
+/// no tail longer than an audio extension ([`min_name_bytes`]).
 pub const MIN_NAME_BYTES: usize = 16 + SUFFIX_ROOM;
 pub const MIN_FOLDER_BYTES: usize = 16;
+
+/// The fewest bytes `[library] max_name_bytes` may say when the longest
+/// tail after a stem takes `tail` bytes.
+#[must_use]
+pub fn min_name_bytes(tail: usize) -> usize {
+    MIN_NAME_BYTES + tail.saturating_sub(AUDIO_TAIL)
+}
 
 /// The longest ID a path is told apart by.
 const ID_BYTES: usize = 64;
@@ -59,7 +79,11 @@ pub struct Naming {
     template: Template,
     replace: Vec<(String, String)>,
     restrict: Restrict,
-    max_name: usize,
+    /// `[library] max_name_bytes`.
+    max_name_bytes: usize,
+    /// The bytes after a stem: the longest audio extension or file beside
+    /// a song.
+    tail: usize,
     max_folder: usize,
     /// Characters the whole path may take after the library folder.
     room: Option<usize>,
@@ -106,7 +130,8 @@ impl Naming {
             template: Template::new(&settings.template)?,
             replace,
             restrict: settings.restrict,
-            max_name: settings.max_name_bytes.saturating_sub(SUFFIX_ROOM),
+            max_name_bytes: settings.max_name_bytes,
+            tail: AUDIO_TAIL,
             max_folder: settings.max_folder_bytes,
             room: settings
                 .max_path
@@ -115,6 +140,39 @@ impl Naming {
             unknown_album: settings.unknown_album.clone(),
             untitled: settings.untitled.clone(),
         })
+    }
+
+    /// This naming, keeping `tail` bytes after each stem rather than an
+    /// audio extension's, for files beside a song with longer suffixes.
+    #[must_use]
+    pub fn with_tail(self, tail: usize) -> Self {
+        Self {
+            tail: tail.max(AUDIO_TAIL),
+            ..self
+        }
+    }
+
+    /// The room a name keeps past its stem.
+    fn suffix_room(&self) -> usize {
+        SUFFIX_ROOM + self.tail - AUDIO_TAIL
+    }
+
+    /// The bytes a stem's file name may take.
+    fn max_name(&self) -> usize {
+        self.max_name_bytes.saturating_sub(self.suffix_room())
+    }
+
+    /// `stem` told apart by `id`, and by `n` when that is not enough, as
+    /// [`suffixed`] tells it apart under this naming's limits.
+    #[must_use]
+    pub fn suffixed(&self, stem: &Path, id: &str, n: u32) -> PathBuf {
+        suffixed(
+            stem,
+            id,
+            n,
+            (self.max_name_bytes, self.tail),
+            self.name_units(stem.parent()),
+        )
     }
 
     /// The UTF-16 units `max_path` leaves a file name in `folder`, a
@@ -186,21 +244,22 @@ impl Naming {
             .filter(|p| !p.is_empty())
             .collect();
         let Some(room) = self.room else {
-            return Ok(self.finish(&parts, name, self.max_name));
+            return Ok(self.finish(&parts, name, self.max_name()));
         };
         // Folders get an even share of what the path may take when
         // together they would leave the name too little.
-        let share = (room.saturating_sub(SUFFIX_ROOM) / (parts.len() + 1)).max(8);
+        let suffix_room = self.suffix_room();
+        let share = (room.saturating_sub(suffix_room) / (parts.len() + 1)).max(8);
         let length = |parts: &[String]| -> usize { parts.iter().map(|p| units(p) + 1).sum() };
-        if length(&parts) + share + SUFFIX_ROOM > room {
+        if length(&parts) + share + suffix_room > room {
             parts = parts
                 .iter()
                 .map(|p| self.component(&cut_units(p, share), self.max_folder))
                 .collect();
         }
-        let left = room.saturating_sub(length(&parts) + SUFFIX_ROOM).max(8);
-        let name = cut_units(&self.component(name, self.max_name), left);
-        Ok(self.finish(&parts, &name, self.max_name))
+        let left = room.saturating_sub(length(&parts) + suffix_room).max(8);
+        let name = cut_units(&self.component(name, self.max_name()), left);
+        Ok(self.finish(&parts, &name, self.max_name()))
     }
 
     /// The folders and the file name as one path, in NFC, as every path
@@ -320,13 +379,14 @@ fn number(text: &str) -> Option<u32> {
 /// `stem` told apart by `id`, and by `n` when that is not enough:
 /// `Song [id]`, `Song [id 2]`. The name is cut so the whole stays within
 /// `max_name` bytes, and `max_units` UTF-16 units where a `max_path`
-/// sets them, with room for the extension and a temporary suffix.
+/// sets them, with room for `tail` bytes after the stem and a temporary
+/// suffix.
 #[must_use]
 pub fn suffixed(
     stem: &Path,
     id: &str,
     n: u32,
-    max_name: usize,
+    (max_name, tail): (usize, usize),
     max_units: Option<usize>,
 ) -> PathBuf {
     let number = if n > 1 {
@@ -334,9 +394,9 @@ pub fn suffixed(
     } else {
         String::new()
     };
-    // The extension and `.moving`, the longest temporary suffix.
-    let room = max_name.saturating_sub(".flac.moving".len());
-    let units_room = max_units.map(|u| u.saturating_sub(".flac.moving".len()));
+    let after = tail.max(AUDIO_TAIL) + TEMPORARY;
+    let room = max_name.saturating_sub(after);
+    let units_room = max_units.map(|u| u.saturating_sub(after));
     // The ID cut too, so the name keeps a start of its own; a byte is at
     // most a unit.
     let id_room = room
@@ -608,7 +668,13 @@ mod tests {
     #[test]
     fn a_name_told_apart_stays_within_max_path() {
         let id = "a-long-source-file-name-made-up-to-tell-two-songs-apart";
-        let named = suffixed(Path::new("A/Same Title Here"), id, 2, 200, Some(32));
+        let named = suffixed(
+            Path::new("A/Same Title Here"),
+            id,
+            2,
+            (200, AUDIO_TAIL),
+            Some(32),
+        );
         let name = named.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("Same"), "{name}");
         assert!(units(name) + ".flac.moving".len() <= 32, "{name}");
@@ -618,7 +684,13 @@ mod tests {
     fn a_long_id_telling_names_apart_leaves_room_for_the_name() {
         let id = "i".repeat(80);
         for n in [1, 2, 12] {
-            let named = suffixed(Path::new("A/Lantern Weather"), &id, n, MIN_NAME_BYTES, None);
+            let named = suffixed(
+                Path::new("A/Lantern Weather"),
+                &id,
+                n,
+                (MIN_NAME_BYTES, AUDIO_TAIL),
+                None,
+            );
             let name = named.file_name().unwrap().to_str().unwrap();
             assert!(name.starts_with("Lantern"), "{name}");
             assert!(
@@ -651,11 +723,11 @@ mod tests {
     #[test]
     fn a_suffix_tells_two_songs_apart() {
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 1, 200, None),
+            suffixed(&path(&["A", "B", "Song"]), "id", 1, (200, AUDIO_TAIL), None),
             path(&["A", "B", "Song [id]"])
         );
         assert_eq!(
-            suffixed(&path(&["A", "B", "Song"]), "id", 2, 200, None),
+            suffixed(&path(&["A", "B", "Song"]), "id", 2, (200, AUDIO_TAIL), None),
             path(&["A", "B", "Song [id 2]"])
         );
     }
@@ -667,9 +739,23 @@ mod tests {
             .unwrap();
         let name = stem.file_name().unwrap().to_str().unwrap().len();
         assert!(name > 120 && name <= 200 - SUFFIX_ROOM, "{name}");
-        let long = suffixed(&stem, &"i".repeat(100), 3, 200, None);
+        let long = suffixed(&stem, &"i".repeat(100), 3, (200, AUDIO_TAIL), None);
         let total = long.file_name().unwrap().to_str().unwrap().len() + ".flac.moving".len();
         assert!(total <= 200, "{total}");
+    }
+
+    #[test]
+    fn a_longer_file_beside_a_song_shortens_every_name_as_much() {
+        let tail = ".zh-Hant.lrc".len();
+        let n = naming(&Library::default()).with_tail(tail);
+        let stem = n.stem(&tags("A", "B", &"t".repeat(300))).unwrap();
+        let name = stem.file_name().unwrap().to_str().unwrap().len();
+        assert_eq!(name, 200 - SUFFIX_ROOM - (tail - AUDIO_TAIL));
+        let told = n.suffixed(&stem, &"i".repeat(100), 3);
+        let total = told.file_name().unwrap().to_str().unwrap().len() + tail + ".moving".len();
+        assert!(total <= 200, "{total}");
+        assert_eq!(min_name_bytes(tail), MIN_NAME_BYTES + tail - AUDIO_TAIL);
+        assert_eq!(min_name_bytes(".lrc".len()), MIN_NAME_BYTES);
     }
 
     #[test]

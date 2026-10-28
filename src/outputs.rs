@@ -6,7 +6,11 @@
 //! song moved takes each to the same suffix at its new path. Every name a
 //! file beside a song is given, and every one a move gives it, comes from
 //! here: `tests/architecture.rs` holds every other module to deriving
-//! none. [`crate::state::Sidecar`] records one as it was written, with
+//! none. A suffix the song list gives is checked here too
+//! ([`check_suffix`]): a dot and plain text, no folder and nothing a
+//! filesystem refuses, so a file beside a song stays beside it, and a name
+//! never reaches past the library folder, as into the home's sources,
+//! where a sync would read it as one. [`crate::state::Sidecar`] records one as it was written, with
 //! its size, time and digest, as an audio file is recorded, so one changed
 //! since is the user's and neither written over nor removed.
 
@@ -75,6 +79,55 @@ pub fn moved(from: &Path, to: &Path, sidecar: &Path) -> PathBuf {
     beside(&to.with_extension(""), &suffix)
 }
 
+/// The most bytes a suffix the song list gives may take.
+pub const MOST_SUFFIX: usize = 24;
+
+/// Whether `suffix`, what follows a song's stem in a file beside it, as
+/// `.en` in `Song.en.lrc` or `.lrc` itself, names a file beside the song
+/// on every system: empty, or a dot and up to [`MOST_SUFFIX`] bytes in
+/// all of what any filesystem takes in a name. Why not, if not.
+pub fn check_suffix(suffix: &str) -> Result<(), String> {
+    if suffix.is_empty() {
+        return Ok(());
+    }
+    if !suffix.starts_with('.') {
+        return Err(format!("`{suffix}` must begin with a dot, as `.en`"));
+    }
+    plain(suffix)
+}
+
+/// Whether `name`, a file a folder of songs holds once, as `cover`, is
+/// one name of its own on every system, before its extension. Why not, if
+/// not.
+pub fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.starts_with('.') {
+        return Err(format!(
+            "`{name}` must name a file, not begin with a dot or be empty"
+        ));
+    }
+    if name.ends_with([' ', '.']) || crate::naming::reserved(name) {
+        return Err(format!("`{name}` is a name Windows refuses"));
+    }
+    plain(name)
+}
+
+/// `text` of nothing a name refuses on any system, within
+/// [`MOST_SUFFIX`] bytes.
+fn plain(text: &str) -> Result<(), String> {
+    if text.len() > MOST_SUFFIX {
+        return Err(format!(
+            "`{text}` is over {MOST_SUFFIX} bytes, the most a name keeps for it"
+        ));
+    }
+    if let Some(c) = text
+        .chars()
+        .find(|c| c.is_control() || "/\\:*?\"<>|".contains(*c))
+    {
+        return Err(format!("`{text}` holds {c:?}, which a file name cannot"));
+    }
+    Ok(())
+}
+
 /// `stem` with `suffix` after it.
 fn beside(stem: &Path, suffix: &str) -> PathBuf {
     let mut name = OsString::from(stem.as_os_str());
@@ -85,6 +138,29 @@ fn beside(stem: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_suffix_or_a_folder_s_file_is_one_plain_name() {
+        for good in ["", ".en", ".lrc", ".zh-Hant"] {
+            assert_eq!(check_suffix(good), Ok(()), "{good}");
+        }
+        for bad in [
+            "en",
+            "./x",
+            ".a/b",
+            ".a\\b",
+            ".a:b",
+            ".\u{7}",
+            &".x".repeat(13),
+        ] {
+            assert!(check_suffix(bad).is_err(), "{bad}");
+        }
+        assert_eq!(check_name("cover"), Ok(()));
+        assert_eq!(check_name("folder"), Ok(()));
+        for bad in ["", ".cover", "../cover", "a/b", "CON", "cover.", "cover "] {
+            assert!(check_name(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn a_file_beside_a_song_is_named_by_its_stem_and_moves_with_it() {

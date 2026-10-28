@@ -58,22 +58,47 @@ pub(crate) fn path_of(r: &Resolved) -> PathBuf {
 /// earlier song took is named with its audio's ID too, and numbered
 /// when that is taken as well, as two manual files of one name are. The
 /// names are the song list's alone, never how the library came to be,
-/// so one list builds one library.
-pub(super) fn separate(planned: &mut [(usize, Resolved)], naming: &Naming, max_name: usize) {
-    // By stem, not path: a FLAC song and an Opus song of one name would
-    // write the same `.lrc`.
-    let lower = |r: &Resolved| crate::relpath::folded(&r.stem);
+/// so one list builds one library. Each name is held as a filesystem
+/// blind to case folds it, by the song's stem, so a FLAC song and an Opus
+/// song of one name are told apart before either writes a `.lrc`, and by
+/// each file a song may write, so `Intro` and its `.en.lrc` never meet
+/// `Intro.en` and its `.lrc`. `beside` names the files a song at a path
+/// may write beside it.
+pub(super) fn separate(
+    planned: &mut [(usize, Resolved)],
+    naming: &Naming,
+    beside: &dyn Fn(&Path) -> Vec<PathBuf>,
+) {
+    use crate::relpath::folded;
+    let files = |r: &Resolved| -> Vec<String> {
+        let path = path_of(r);
+        let names = beside(&path);
+        std::iter::once(path)
+            .chain(names)
+            .map(|p| folded(&p))
+            .collect()
+    };
+    let mut stems: BTreeSet<String> = BTreeSet::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut hold = |r: &Resolved, stems: &mut BTreeSet<String>| {
+        let files = files(r);
+        let free = !stems.contains(&folded(&r.stem)) && files.iter().all(|f| !taken.contains(f));
+        if free {
+            stems.insert(folded(&r.stem));
+            taken.extend(files);
+        }
+        free
+    };
     for (_, r) in planned.iter_mut() {
-        if taken.insert(lower(r)) {
+        if hold(r, &mut stems) {
             continue;
         }
         let base = r.stem.clone();
         // A manual file's name may hold what a path must not.
         let id = naming.value(&r.plan.audio.key.short());
         for n in 1.. {
-            r.stem = naming::suffixed(&base, &id, n, max_name, naming.name_units(base.parent()));
-            if taken.insert(lower(r)) {
+            r.stem = naming.suffixed(&base, &id, n);
+            if hold(r, &mut stems) {
                 break;
             }
         }
@@ -297,7 +322,7 @@ pub(crate) fn resolve_songs(
     separate(
         &mut resolution.planned,
         &resolver.naming,
-        settings.library.max_name_bytes,
+        &crate::outputs::names,
     );
     Ok(resolution)
 }
