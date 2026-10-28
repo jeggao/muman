@@ -201,6 +201,9 @@ pub(super) fn resolve_all<W: Write>(
         let name = name_of(song, None, &state.facts);
         crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
     }
+    for line in crate::folder::said(&resolution.unplaced) {
+        crate::ui::info(out, &line)?;
+    }
     if let (Some(max), over @ 1..) = (settings.library.max_path, resolution.over_max_path) {
         crate::ui::warning(
             out,
@@ -225,6 +228,8 @@ pub(crate) struct Resolution {
     pub awaiting: Vec<usize>,
     /// How many songs' paths take more than `[library] max_path`.
     pub over_max_path: usize,
+    /// Each folder's cover file not written, and why.
+    pub unplaced: Vec<crate::folder::Unplaced>,
 }
 
 /// What resolving a song reads beside the song: the song list, the
@@ -303,6 +308,7 @@ pub(crate) fn resolve_songs(
         unresolved: Vec::new(),
         awaiting: Vec::new(),
         over_max_path: 0,
+        unplaced: Vec::new(),
     };
     for (n, song) in manifest.songs.iter().enumerate() {
         match resolve::resolve(&resolver.input(song, on_disk)) {
@@ -324,5 +330,7 @@ pub(crate) fn resolve_songs(
         &resolver.naming,
         &crate::outputs::planned,
     );
+    resolution.unplaced =
+        crate::folder::assign(&mut resolution.planned, &settings.cover, &state.facts);
     Ok(resolution)
 }

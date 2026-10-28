@@ -16,6 +16,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   written or removed alone, the song left as it is; `out = []` writes no
   cover, and LRCLIB and the Cover Art Archive are asked nothing for what
   no output writes.
+- **A folder's cover file.** A `[[cover.out]]` of `scope = "folder"`
+  writes the cover most of a folder's songs take as one file there, as
+  `cover.jpg`. A folder of several albums gets none and `sync` says so,
+  unless `mixed = "majority"` gives it the cover of the album most of
+  its songs are on. A file of your own at that name is left alone, and
+  the file moves, goes and comes back with `undo` as the songs do.
 - **Lyrics as WebVTT, SubRip or plain text.** A `[[lyrics.out]]` of
   `format = "vtt"` or `"srt"` writes timed lyrics as subtitle cues, word
   times kept in WebVTT, and `"txt"` as plain lines, in a file or the

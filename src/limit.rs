@@ -280,8 +280,9 @@ pub(crate) fn besides_audio(plan: &Plan) -> (u64, Vec<u64>) {
     let embedded = lyrics.filter(|l| l.tag()).map_or(0, |_| LYRICS_GUESS);
     let files = lyrics.map_or(0, |l| l.files().len());
     let pictures = cover.map_or(0, |c| c.files().len());
+    let folder = plan.folder.as_ref().map_or(0, |f| f.files().len());
     let mut beside = vec![LYRICS_GUESS; files];
-    beside.extend(vec![COVER_GUESS; pictures]);
+    beside.extend(vec![COVER_GUESS; pictures + folder]);
     (tags as u64 + inside + embedded + HEADERS, beside)
 }
 
@@ -686,6 +687,7 @@ mod tests {
     #[test]
     fn a_plan_s_key_changes_with_the_plan_and_the_tools() {
         let plan = |kbps| Plan {
+            folder: None,
             version: crate::resolve::render_version(Codec::Opus),
             format: Format::Encode {
                 codec: Codec::Opus,

@@ -24,7 +24,7 @@ use crate::source::SourceKey;
 use crate::state::{self, Sidecar, State, Written};
 use crate::store::{self, Located};
 
-use super::decide::{Doing, Intent, beside_equal, kept, moved_to};
+use super::decide::{Doing, Intent, beside_equal, folder_there, kept, moved_to};
 use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::prune;
@@ -52,6 +52,9 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
         what.push("cover");
     } else if old.cover != new.cover {
         what.push("muman's rendering");
+    }
+    if old.folder != new.folder {
+        what.push("folder cover");
     }
     let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
     let uncleaned = |p: &Plan| {
@@ -214,6 +217,11 @@ pub(super) fn apply<R: Runner, W: Write>(
         })
         .collect();
     let old = state.outputs.clone();
+    // A folder's file one song hands another is stale to neither.
+    let shared: BTreeSet<PathBuf> = planned
+        .iter()
+        .flat_map(|(_, r)| crate::outputs::folder_files(&path_of(r), &r.plan))
+        .collect();
     let due = due(planned, &doing);
     let (mut pending, claims) = before_writing(job, &due, state, ledger, force, out)?;
     say_left(&doing, out)?;
@@ -223,7 +231,7 @@ pub(super) fn apply<R: Runner, W: Write>(
         &due,
         &old,
         &state.facts,
-        &claims,
+        (&claims, &shared),
         (pending.as_mut(), ledger),
         out,
     )?;
@@ -300,7 +308,10 @@ fn before_writing<R: Runner, W: Write>(
         for ((n, r), retag) in due {
             let path = path_of(r);
             // A retag leaving the files beside the song as they are keeps them vouched for.
-            let sidecars = match old.get(&path).filter(|_| *retag && !beside_changes(old, r)) {
+            let sidecars = match old
+                .get(&path)
+                .filter(|_| *retag && !beside_changes(&job.dirs.library, old, r))
+            {
                 Some(w) => w.sidecars.clone(),
                 None => crate::outputs::touched(&path, &r.plan, old.get(&path))
                     .into_iter()
@@ -336,11 +347,13 @@ fn before_writing<R: Runner, W: Write>(
 }
 
 /// Whether the files `r`'s plan has beside the song differ from those
-/// `old` records at its path, so a song only retagged writes them anew.
-fn beside_changes(old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> bool {
+/// `old` records at its path, or a file of its folder's is gone, so a
+/// song only retagged writes them anew.
+fn beside_changes(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> bool {
     old.get(&path_of(r))
         .and_then(|w| w.plan.as_ref())
         .is_none_or(|p| !beside_equal(p, &r.plan))
+        || !folder_there(library, &path_of(r), &r.plan)
 }
 
 /// Say which songs' files a sync leaves alone, and why.
@@ -396,7 +409,7 @@ fn render_due<R: Runner, W: Write>(
     due: &[(&PlannedSong, bool)],
     old: &BTreeMap<PathBuf, Written>,
     facts: &BTreeMap<SourceKey, Facts>,
-    claims: &Claims,
+    (claims, shared): (&Claims, &BTreeSet<PathBuf>),
     (mut pending, ledger): (Option<&mut State>, &mut Ledger<'_>),
     out: &mut W,
 ) -> Result<Wrote> {
@@ -429,11 +442,12 @@ fn render_due<R: Runner, W: Write>(
         let planned = crate::outputs::planned(&path, &r.plan);
         let stale: Vec<PathBuf> = recorded
             .iter()
-            .filter(|s| !planned.contains(s))
+            .filter(|s| !planned.contains(s) && !shared.contains(*s))
             .cloned()
             .collect();
         if let Some((folder, made)) = placed.get(n) {
-            return render::place(folder, made, &dirs.library, claim, &stale);
+            let shared = crate::outputs::folder_files(&path, &r.plan);
+            return render::place(folder, made, &dirs.library, (claim, &shared), &stale);
         }
         let work = Sub::new(scratch, "render-")?;
         let render_job = render::Job {
@@ -447,7 +461,7 @@ fn render_due<R: Runner, W: Write>(
         };
         if *retag {
             let mut done = render::retag(&dirs.library, &path, &recorded, &r.plan, claim)?;
-            if beside_changes(old, r) {
+            if beside_changes(&dirs.library, old, r) {
                 let beside = render::beside(*runner, &render_job)?;
                 done.beside = beside.files;
                 done.problems.extend(beside.problems);
@@ -545,7 +559,7 @@ fn vouch<R: Runner, W: Write>(
     });
     let sidecars = match old
         .get(&done.audio)
-        .filter(|_| retag && !beside_changes(old, r))
+        .filter(|_| retag && !beside_changes(library, old, r))
     {
         Some(w) => w.sidecars.clone(),
         None => done

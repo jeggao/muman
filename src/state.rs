@@ -934,6 +934,7 @@ mod tests {
             ..crate::facts::AudioFacts::default()
         });
         let plan = crate::resolve::Plan {
+            folder: None,
             version: 1,
             format: crate::resolve::Format::Copy {
                 codec: crate::codec::Codec::Opus,
@@ -988,6 +989,7 @@ mod tests {
             SourceKey::parse("lrclib:7").unwrap(),
         );
         let plan = |audio: SourceKey| crate::resolve::Plan {
+            folder: None,
             version: 1,
             format: crate::resolve::Format::Copy {
                 codec: crate::codec::Codec::Opus,

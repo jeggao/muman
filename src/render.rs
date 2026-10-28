@@ -353,7 +353,13 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
     let audio_rel = with_extension(job.stem, plan.format.extension());
     let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, plan), cover_rels(job.stem, plan));
-    let rels: Vec<PathBuf> = lyrics_rels.iter().chain(&cover_rels).cloned().collect();
+    let folder_rels = folder_rels(job.stem, plan);
+    let rels: Vec<PathBuf> = lyrics_rels
+        .iter()
+        .chain(&cover_rels)
+        .chain(&folder_rels)
+        .cloned()
+        .collect();
     let audio_path = job.library.join(&audio_rel);
     let dir = audio_path.parent().unwrap_or(job.library);
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -379,7 +385,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut problems = Vec::new();
     let mut cover_outputs = Vec::new();
     let covers = match &plan.cover {
-        Some(c) => match cover_plans(
+        Some(c) if !c.places().is_empty() => match cover_plans(
             runner,
             c,
             c.places(),
@@ -394,6 +400,15 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 Vec::new()
             }
         },
+        _ => Vec::new(),
+    };
+    let folder_files = match &plan.folder {
+        Some(f) => {
+            folder_plans(runner, job, f, &mut inputs, &mut cover_outputs).unwrap_or_else(|e| {
+                problems.push(format!("no folder cover: {e:#}"));
+                Vec::new()
+            })
+        }
         None => Vec::new(),
     };
     let (inside, cover_files): (Vec<_>, Vec<_>) =
@@ -506,7 +521,14 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             failed,
             &mut problems,
         ));
-        stage_beside(&rels, &parts, &held)
+        held.resize(lyrics_rels.len() + cover_rels.len(), None);
+        held.extend(cover_bytes(
+            &folder_files,
+            &folder_rels,
+            failed,
+            &mut problems,
+        ));
+        stage_beside(job, (&rels, &parts), &held, &mut problems)
     })();
     let placed = staged.and_then(|written| {
         let beside = put_beside(job, &parts, &rels, &written)?;
@@ -549,6 +571,42 @@ fn cover_rels(stem: &Path, plan: &Plan) -> Vec<PathBuf> {
     })
 }
 
+/// The files of its folder's cover `plan` has the song at `stem` hold.
+fn folder_rels(stem: &Path, plan: &Plan) -> Vec<PathBuf> {
+    plan.folder.as_ref().map_or_else(Vec::new, |f| {
+        f.files()
+            .iter()
+            .filter_map(|p| crate::outputs::folder_file(stem, p))
+            .collect()
+    })
+}
+
+/// Plan the pictures of `folder`, the cover the song's folder holds, in
+/// a scratch folder of their own, as [`cover_plans`] plans a song's.
+fn folder_plans<R: Runner>(
+    runner: &R,
+    job: &Job<'_>,
+    folder: &CoverRef,
+    inputs: &mut Inputs,
+    outputs: &mut Vec<Output>,
+) -> Result<Vec<(CoverPlace, CoverPlan)>> {
+    let source = job
+        .sources
+        .get(&folder.key)
+        .ok_or_else(|| anyhow!("{} is not on disk", folder.key))?;
+    let scratch = job.scratch.join("folder");
+    fs::create_dir_all(&scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    cover_plans(
+        runner,
+        folder,
+        folder.places(),
+        source,
+        &scratch,
+        inputs,
+        outputs,
+    )
+}
+
 /// Why the output of `outputs` writing `path` failed, by `results`.
 fn failure(outputs: &[Output], results: &[Result<()>], path: &Path) -> Option<String> {
     outputs
@@ -569,17 +627,26 @@ fn contents(lyrics: &LyricsRef, text: &str) -> Vec<Option<Vec<u8>>> {
 }
 
 /// Each of `contents` staged at its file's `.part`, made anew: the files
-/// of `rels` staged.
+/// of `rels` staged. A folder's file at a name a file not muman's holds
+/// is left alone, said in `problems`.
 fn stage_beside(
-    rels: &[PathBuf],
-    parts: &[PathBuf],
+    job: &Job<'_>,
+    (rels, parts): (&[PathBuf], &[PathBuf]),
     contents: &[Option<Vec<u8>>],
+    problems: &mut Vec<String>,
 ) -> Result<Vec<PathBuf>> {
     let mut staged = Vec::new();
     for ((rel, part), content) in rels.iter().zip(parts).zip(contents) {
         let Some(content) = content else {
             continue;
         };
+        if left_alone(job, rel) {
+            problems.push(format!(
+                "{} left alone: not muman's",
+                crate::relpath::show(rel)
+            ));
+            continue;
+        }
         std::io::Write::write_all(&mut stage(part)?, content)
             .with_context(|| format!("writing {}", part.display()))?;
         staged.push(rel.clone());
@@ -605,11 +672,19 @@ fn put_beside(
         }
     }
     for gone in job.stale.iter().chain(rels) {
-        if !written.contains(gone) {
+        if !written.contains(gone) && !left_alone(job, gone) {
             crate::library::clear(job.library, gone, job.claim)?;
         }
     }
     Ok(beside)
+}
+
+/// Whether `rel` is a file of the song's folder, of `job`'s plan, that a
+/// file not muman's holds: the user's own cover, which the song leaves
+/// alone and is written beside. Any other such file fails the song.
+fn left_alone(job: &Job<'_>, rel: &Path) -> bool {
+    folder_rels(job.stem, job.plan).iter().any(|f| f == rel)
+        && !crate::library::may_change(job.library, rel, job.claim)
 }
 
 /// The most a FLAC metadata block holds, as its 24-bit length allows,
@@ -836,14 +911,17 @@ fn size_of(path: &Path) -> u64 {
 /// place in `library`, as rendering it there would have: the files beside
 /// it first, audio last, each through `.part`, and those of `stale` the
 /// last build left that it has none of now gone: over or in place of only
-/// the files `claim` holds.
+/// the files `claim` holds, a file of its `folder` at a name a file not
+/// muman's holds left alone, said.
 pub fn place(
     from: &Path,
     rendered: &Rendered,
     library: &Path,
-    claim: &[Owned],
+    (claim, folder): (&[Owned], &[PathBuf]),
     stale: &[PathBuf],
 ) -> Result<Rendered> {
+    let left_alone =
+        |rel: &PathBuf| folder.contains(rel) && !crate::library::may_change(library, rel, claim);
     let copy_in = |rel: &Path| -> Result<()> {
         let to = library.join(rel);
         if let Some(dir) = to.parent() {
@@ -862,16 +940,30 @@ pub fn place(
             })
             .with_context(|| format!("copying {} into the library", rel.display()))
     };
-    for (file, _) in &rendered.beside {
+    let (left, beside): (Vec<_>, Vec<_>) = rendered
+        .beside
+        .iter()
+        .cloned()
+        .partition(|(file, _)| left_alone(file));
+    for (file, _) in &beside {
         copy_in(file)?;
     }
     for gone in stale {
-        if !rendered.beside.iter().any(|(b, _)| b == gone) {
+        if !left_alone(gone) && !beside.iter().any(|(b, _)| b == gone) {
             crate::library::clear(library, gone, claim)?;
         }
     }
     copy_in(&rendered.audio)?;
-    Ok(rendered.clone())
+    let mut problems = rendered.problems.clone();
+    problems.extend(
+        left.iter()
+            .map(|(file, _)| format!("{} left alone: not muman's", crate::relpath::show(file))),
+    );
+    Ok(Rendered {
+        beside,
+        problems,
+        ..rendered.clone()
+    })
 }
 
 /// Plan the picture each of `places` takes: its own bytes where the
@@ -1080,6 +1172,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     let plan = job.plan;
     let mut problems = Vec::new();
     let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, plan), cover_rels(job.stem, plan));
+    let folder_rels = folder_rels(job.stem, plan);
     let mut held = match &plan.lyrics {
         Some(l) if !lyrics_rels.is_empty() => {
             let text = lyrics_text(runner, job, l)
@@ -1090,15 +1183,42 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         }
         _ => Vec::new(),
     };
+    held.resize(lyrics_rels.len(), None);
     if let Some(c) = plan.cover.as_ref().filter(|_| !cover_rels.is_empty()) {
-        match cover_files(runner, job, c, &cover_rels, &mut problems) {
+        match cover_files(
+            runner,
+            job,
+            c,
+            (c.files(), job.scratch),
+            &cover_rels,
+            &mut problems,
+        ) {
             Ok(bytes) => held.extend(bytes),
             Err(e) => problems.push(format!("no cover: {e:#}")),
         }
     }
-    let rels: Vec<PathBuf> = lyrics_rels.into_iter().chain(cover_rels).collect();
+    held.resize(lyrics_rels.len() + cover_rels.len(), None);
+    if let Some(f) = plan.folder.as_ref().filter(|_| !folder_rels.is_empty()) {
+        let scratch = job.scratch.join("folder");
+        match cover_files(
+            runner,
+            job,
+            f,
+            (f.files(), &scratch),
+            &folder_rels,
+            &mut problems,
+        ) {
+            Ok(bytes) => held.extend(bytes),
+            Err(e) => problems.push(format!("no folder cover: {e:#}")),
+        }
+    }
+    let rels: Vec<PathBuf> = lyrics_rels
+        .into_iter()
+        .chain(cover_rels)
+        .chain(folder_rels)
+        .collect();
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
-    let placed = stage_beside(&rels, &parts, &held)
+    let placed = stage_beside(job, (&rels, &parts), &held, &mut problems)
         .and_then(|written| put_beside(job, &parts, &rels, &written));
     match placed {
         Ok(files) => Ok(Beside { files, problems }),
@@ -1111,12 +1231,14 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     }
 }
 
-/// The bytes of `cover`'s files beside the song, `rels`, made from its
-/// source in a run of their own, as [`render`] makes them.
+/// The bytes of `cover`'s files `places`, `rels` in the library, made
+/// from its source in a run of their own in `scratch`, as [`render`]
+/// makes them.
 fn cover_files<R: Runner>(
     runner: &R,
     job: &Job<'_>,
     cover: &CoverRef,
+    (places, scratch): (Vec<CoverPlace>, &Path),
     rels: &[PathBuf],
     problems: &mut Vec<String>,
 ) -> Result<Vec<Option<Vec<u8>>>> {
@@ -1124,14 +1246,14 @@ fn cover_files<R: Runner>(
         .sources
         .get(&cover.key)
         .ok_or_else(|| anyhow!("{} is not on disk", cover.key))?;
-    fs::create_dir_all(job.scratch)?;
+    fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let (mut inputs, mut outputs) = (Inputs::default(), Vec::new());
     let files = cover_plans(
         runner,
         cover,
-        cover.files(),
+        places,
         source,
-        job.scratch,
+        scratch,
         &mut inputs,
         &mut outputs,
     )?;

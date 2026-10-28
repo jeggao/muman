@@ -282,7 +282,7 @@ Each request names muman and its repository in its user agent.
   written, moved or deleted, and for each song where each aspect comes
   from and why, and, under `[library] max_size`, which songs are
   written below their best format to fit; see
-  [configuration](configuration.md#library-size). A song a sync leaves
+  [audio](audio.md#library-size). A song a sync leaves
   as it is is only counted, unless `--all` is given. A query, as `list`
   reads it, shows each song it matches, up to date or not, and leaves
   out the files to remove or left unused, which are no song's. A

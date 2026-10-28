@@ -1759,10 +1759,13 @@ fn cover_out(
 ) -> crate::settings::CoverOut {
     crate::settings::CoverOut {
         to,
+        scope: crate::settings::Scope::Song,
         suffix: suffix.into(),
+        name: String::new(),
         format,
         max_side,
         quality: 80,
+        mixed: crate::settings::Mixed::None,
     }
 }
 
@@ -1966,6 +1969,7 @@ fn audio_wider_than_a_lossy_codec_is_mixed_before_it_is_encoded() {
 #[test]
 fn a_plan_stored_before_loudness_reads_as_one_with_none() {
     let plan = Plan {
+        folder: None,
         version: 3,
         format: Format::Copy { codec: Codec::Flac },
         audio: AudioRef {
@@ -1996,6 +2000,7 @@ fn a_plan_stored_before_loudness_reads_as_one_with_none() {
 fn a_plan_s_loudness_tags_follow_its_format() {
     use crate::loudness::{Apply, Gains, Level};
     let plan = Plan {
+        folder: None,
         version: 3,
         format: Format::Copy { codec: Codec::Flac },
         audio: AudioRef {
@@ -2066,6 +2071,7 @@ fn a_plan_s_loudness_tags_follow_its_format() {
 fn a_gain_a_format_applies_none_of_compares_as_tags() {
     use crate::loudness::{Apply, Gains, Level};
     let plan = |codec| Plan {
+        folder: None,
         version: render_version(codec),
         format: Format::Copy { codec },
         audio: AudioRef {
@@ -2116,6 +2122,7 @@ fn a_gain_a_format_applies_none_of_compares_as_tags() {
 fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
     use crate::loudness::{Apply, Gains, Level};
     let plan = |format| Plan {
+        folder: None,
         version: render_version(Codec::Opus),
         format,
         audio: AudioRef {

@@ -18,7 +18,7 @@ use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
 
 use super::damage::{damaged_since_built, split_drifts};
-use super::owned::{edited_since_written, foreign};
+use super::owned::{blocking, edited_since_written};
 use super::plan::{PlannedSong, path_of};
 use super::prune::{Pruned, prune_plan};
 
@@ -33,8 +33,18 @@ pub(super) fn current<'a>(
     let path = path_of(r);
     let written = old.get(&path)?;
     let present = library.join(&path).metadata().is_ok_and(|m| m.len() > 0)
-        && written.sidecar_paths().all(|s| library.join(s).exists());
+        && written.sidecar_paths().all(|s| library.join(s).exists())
+        && folder_there(library, &path, &r.plan);
     (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
+}
+
+/// Whether each file of its folder `plan` has the song at `path` hold is
+/// there, muman's or one of the user's it leaves alone: one gone is
+/// written again.
+pub(super) fn folder_there(library: &Path, path: &Path, plan: &Plan) -> bool {
+    crate::outputs::folder_files(path, plan)
+        .iter()
+        .all(|f| std::fs::symlink_metadata(library.join(f)).is_ok())
 }
 
 /// Which file the state records is each song's, one file to one song:
@@ -100,7 +110,7 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
 pub(super) fn beside_equal(a: &Plan, b: &Plan) -> bool {
     let beside = |p| lyrics_held(p).filter(|(l, _)| !l.files().is_empty());
     let covers = |p: &Plan| p.cover.as_ref().and_then(|c| c.only(|p| p.file.is_some()));
-    beside(a) == beside(b) && covers(a) == covers(b)
+    beside(a) == beside(b) && covers(a) == covers(b) && a.folder == b.folder
 }
 
 /// What the song's file holds of its cover, where it goes inside it.
@@ -329,11 +339,11 @@ pub(super) fn decide(
                 .is_some_and(|p| beside_equal(p, &r.plan));
             if file == Some(&path)
                 && same_media
-                && (beside || foreign(library, old, &path, &r.plan).is_empty())
+                && (beside || blocking(library, old, &path, &r.plan).is_empty())
             {
                 return Doing::Retag;
             }
-            if let Some(by) = foreign(library, old, &path, &r.plan).into_iter().next() {
+            if let Some(by) = blocking(library, old, &path, &r.plan).into_iter().next() {
                 // Its own file stays where it is rather than go for nothing.
                 return match file.filter(|_| present) {
                     Some(file) => Doing::Blocked {
@@ -374,7 +384,7 @@ fn movable(
         let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
         let retag = was.plan.as_ref() != Some(&r.plan);
         let gains = was.plan.as_ref().is_none_or(|p| !beside_equal(p, &r.plan))
-            && !foreign(library, old, &path, &r.plan).is_empty();
+            && !blocking(library, old, &path, &r.plan).is_empty();
         if same_media && !gains && !(retag && edited_since_written(library, old, from)) {
             moving.push((i, from.clone(), path, retag));
         }

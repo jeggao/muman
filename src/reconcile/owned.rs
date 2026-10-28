@@ -47,10 +47,27 @@ pub(super) fn foreign(
         .collect()
 }
 
+/// [`foreign`] files that keep the song from being written: all but its
+/// folder's, which a song leaves alone and is written beside
+/// ([`crate::folder`]).
+pub(super) fn blocking(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    path: &Path,
+    plan: &Plan,
+) -> Vec<PathBuf> {
+    let folder = crate::outputs::folder_files(path, plan);
+    foreign(library, old, path, plan)
+        .into_iter()
+        .filter(|f| !folder.contains(f))
+        .collect()
+}
+
 /// The files at a song's paths, its audio and those beside it, that
 /// writing it may write over or remove, each to be kept for `undo` first:
 /// muman's, under its name or one a filesystem blind to case takes for it,
-/// and, when `forced`, one of the user's own, taken over.
+/// and, when `forced`, one of the user's own, taken over, but never a
+/// folder's of the user's own.
 pub(super) fn claim(
     ledger: &Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
@@ -60,10 +77,11 @@ pub(super) fn claim(
 ) -> Vec<Owned> {
     let library = ledger.root();
     let foreign = foreign(library, old, path, plan);
+    let folder = crate::outputs::folder_files(path, plan);
     std::iter::once(path.to_path_buf())
         .chain(crate::outputs::touched(path, plan, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
-        .filter(|rel| forced || !foreign.contains(rel))
+        .filter(|rel| !foreign.contains(rel) || (forced && !folder.contains(rel)))
         .map(|rel| {
             ledger
                 .owned(old, &rel, true)

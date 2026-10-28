@@ -132,6 +132,7 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
     facts.duration = Some(240.0);
     facts.print = printed.then(|| crate::fingerprint::Print::new(vec![7; 100]).unwrap());
     let plan = crate::resolve::Plan {
+        folder: None,
         version: 1,
         format: crate::resolve::Format::Copy {
             codec: crate::codec::Codec::Flac,

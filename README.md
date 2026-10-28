@@ -164,7 +164,8 @@ Every flag is in the [command reference](docs/cli.md).
 - [Songs](docs/songs.md): queries, changing songs, duplicates.
 - [Configuration](docs/configuration.md): folders, programs, the
   settings in `songs.toml`, the path template and safe names.
-- [Audio](docs/audio.md): codecs, encoding and loudness.
+- [Audio](docs/audio.md): codecs, encoding, loudness and the size
+  limit.
 - [Command reference](docs/cli.md): every command and flag.
 - [Changelog](CHANGELOG.md).
 

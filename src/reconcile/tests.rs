@@ -2398,6 +2398,7 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
             0,
             Resolved {
                 plan: Plan {
+                    folder: None,
                     version: render_version(Codec::Opus),
                     format: Format::Copy { codec: Codec::Opus },
                     audio: AudioRef {

@@ -46,6 +46,7 @@ fn fixture() -> Fixture {
 
 fn plan(format: Format) -> Plan {
     Plan {
+        folder: None,
         version: render_version(format.codec()),
         format,
         audio: AudioRef {
