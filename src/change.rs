@@ -324,7 +324,7 @@ pub fn remove<W: Write>(
             } else {
                 "deletes"
             };
-            for file in std::iter::once(path).chain(&w.lyrics) {
+            for file in w.files(path) {
                 deleted += usize::from(!changed);
                 crate::ui::line(
                     out,

@@ -78,8 +78,8 @@ nothing. What a command does goes to stderr with its progress; what
 muman deletes only files `state.json` records as its own; anything else
 in the library folder is left alone: at a song's path, or its `.lrc`'s,
 it holds the song back until `sync --force`. A file whose size or time
-changed since muman wrote it, as a tagger rewrites it, is left with a
-warning until `sync --force`: a new path template still moves it, your
+changed since muman wrote it, a song's or its `.lrc`, as a tagger or an
+editor rewrites it, is left with a warning until `sync --force`: a new path template still moves it, your
 change with it, but a change to the song itself leaves it where it is,
 and `sync --force` writes the song again and deletes it, `undo` putting
 it back. A file whose time changed but whose bytes are still the ones

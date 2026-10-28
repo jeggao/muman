@@ -16,7 +16,7 @@ use super::owned::edited_since_written;
 /// What becomes of a file `old` lists that the outputs do not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Pruned {
-    /// Deleted, with its lyrics unless another output takes them.
+    /// Deleted, with each file beside it that another output takes not.
     Removed(Vec<PathBuf>),
     /// Kept, as a song it came from failed this run.
     KeptForFailed,
@@ -60,10 +60,10 @@ pub(super) fn prune_plan(
         {
             Pruned::LeftChanged
         } else {
-            // Another output's lyrics stay, whether the same name or one
-            // a filesystem blind to case takes for it.
-            let taken = |file: &PathBuf| {
-                outputs.values().filter_map(|w| w.lyrics.as_ref()).any(|l| {
+            // A file beside another output stays, whether the same name or
+            // one a filesystem blind to case takes for it.
+            let taken = |file: &Path| {
+                outputs.values().flat_map(Written::sidecar_paths).any(|l| {
                     l == file
                         || (crate::relpath::folded(l) == crate::relpath::folded(file)
                             && same_file::is_same_file(library.join(l), library.join(file))
@@ -71,10 +71,10 @@ pub(super) fn prune_plan(
                 })
             };
             Pruned::Removed(
-                std::iter::once(path)
-                    .chain(&written.lyrics)
+                written
+                    .files(path)
                     .filter(|file| !taken(file))
-                    .cloned()
+                    .map(Path::to_path_buf)
                     .collect(),
             )
         };

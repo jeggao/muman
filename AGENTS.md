@@ -93,6 +93,7 @@ src/
   codec.rs          output codecs: names, containers, ffmpeg arguments
   ogg.rs            the output gain an Opus file's header holds
   render.rs         one plan to library files
+  outputs.rs        the files beside a song: their names, and where a move takes them
   library.rs        the ledger: every move and removal in the library
   fit.rs            songs fitted into a size, least audible loss first
   limit.rs          the library kept under [library] max_size

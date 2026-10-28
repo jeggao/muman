@@ -300,6 +300,81 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
 }
 
 #[test]
+fn lyrics_changed_by_hand_are_neither_written_over_nor_removed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
+    let mended = "[00:01.00]Paper comets, mended\n";
+    std::fs::write(&lrc, mended).unwrap();
+    let (_, report) = s.report(&flacs(), &["check"]);
+    assert!(
+        report.contains("Changed since muman wrote it, so left alone: Artist/Record/02 Song.lrc"),
+        "{report}"
+    );
+
+    let list = s.dir.path().join("home/songs.toml");
+    let t = std::fs::read_to_string(&list).unwrap();
+    let at = t.find("[lyrics.clean.packaging]").expect(&t);
+    let off = format!(
+        "{}{}",
+        &t[..at],
+        t[at..].replacen("cues = true", "cues = false", 1)
+    );
+    std::fs::write(&list, off).unwrap();
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        text.contains("Artist/Record/02 Song.lrc is not muman's"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&lrc).unwrap(), mended);
+
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:Song.flac"]);
+    assert!(ok, "{text}");
+    assert!(!s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        mended,
+        "the user's now: {text}"
+    );
+}
+
+#[test]
+fn lyrics_copied_with_new_times_are_still_muman_s() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
+    filetime::set_file_mtime(&lrc, filetime::FileTime::from_unix_time(86_400, 0)).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let t = std::fs::read_to_string(&list).unwrap();
+    let at = t.find("[lyrics.clean.packaging]").expect(&t);
+    let off = format!(
+        "{}{}",
+        &t[..at],
+        t[at..].replacen("cues = true", "cues = false", 1)
+    );
+    std::fs::write(&list, off).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (lyric cleaning)"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n"
+    );
+}
+
+#[test]
 fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};

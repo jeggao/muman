@@ -1,9 +1,9 @@
 //! The architecture the code keeps, checked over its source: where files
 //! are changed, which state lives for the whole process, where sites are
-//! named, which loop fits songs into a size, where audio is mixed,
-//! where ffmpeg is given a file to read, where what the user gives is
-//! walked and copied, and where text is written to a terminal. Each
-//! rule names the one
+//! named, which loop fits songs into a size, where audio is mixed, where
+//! a file beside a song is named, where ffmpeg is given a file to read,
+//! where what the user gives is walked and copied, and where text is
+//! written to a terminal. Each rule names the one
 //! place a thing is done; code that does it anywhere else fails here
 //! until the rule, and the reason beside it, is changed on purpose.
 //!
@@ -455,14 +455,55 @@ fn lyrics_are_cleaned_for_a_library_file_only_as_its_plan_says() {
     );
 }
 
+/// Where a path is given another extension, and why there. A file beside
+/// a song is named from the song's path in `outputs.rs` alone, so every
+/// module that writes, moves, keeps or removes one names it alike.
+const RENAMES: [(&str, &str, &str); 2] = [
+    (
+        "facts.rs",
+        "with_extension(\"cue\")",
+        "finds the cue sheet beside a source",
+    ),
+    (
+        "attach.rs",
+        "with_extension(\"x\")",
+        "folds a song's stem as a file named by it folds",
+    ),
+];
+
+#[test]
+fn a_file_beside_a_song_is_named_in_one_place() {
+    let mut wrong = Vec::new();
+    for (file, text) in sources() {
+        if file == "outputs.rs" {
+            continue;
+        }
+        for line in lines_with(&text, &["with_extension(\""]) {
+            let kept = line.contains("with_extension(\"\")")
+                || RENAMES
+                    .iter()
+                    .any(|(f, needle, _)| *f == file && line.contains(needle));
+            if !kept {
+                wrong.push(format!("{file}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "a path is given an extension outside `outputs.rs`, so a file beside a \
+         song may be named two ways:\n{}",
+        wrong.join("\n")
+    );
+}
+
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
     for (file, ..) in MUTATIONS.iter().chain(WRITES) {
         assert!(all.contains_key(*file), "{file}");
     }
-    for (file, ..) in CLEANS {
-        assert!(all.contains_key(file), "{file}");
+    for (file, ..) in CLEANS.iter().chain(&RENAMES) {
+        assert!(all.contains_key(*file), "{file}");
     }
     for (file, _) in STATICS.iter().chain(RESHAPES).chain(WALKS).chain(COPIES) {
         assert!(all.contains_key(*file), "{file}");

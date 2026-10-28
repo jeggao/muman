@@ -234,7 +234,8 @@ struct Song {
     stem: PathBuf,
     /// Its file in the library, by its path there.
     path: PathBuf,
-    lyrics: Option<PathBuf>,
+    /// The files beside it in the library.
+    sidecars: Vec<PathBuf>,
     /// What its first rung is made from: its library file's plan, or
     /// the one the export's settings resolve it to.
     plan: Plan,
@@ -678,10 +679,11 @@ fn songs<W: Write>(
         let mut song = Song {
             stem: path.with_extension(""),
             path: path.clone(),
-            lyrics: written
-                .lyrics
-                .clone()
-                .filter(|l| dirs.library.join(l).is_file()),
+            sidecars: written
+                .sidecar_paths()
+                .filter(|l| dirs.library.join(l).is_file())
+                .cloned()
+                .collect(),
             plan: plan.clone(),
             anew: false,
             sources: located(store, plan).filter(|_| !changed),
@@ -739,13 +741,19 @@ fn songs<W: Write>(
     ))
 }
 
-/// A song's library file and lyrics, named in the zip by its stem.
+/// A song's library file and those beside it, named in the zip by its
+/// stem.
 fn held_entries(library: &Path, song: &Song) -> Vec<Entry> {
-    std::iter::once(&song.path)
-        .chain(&song.lyrics)
-        .map(|p| Entry {
+    let audio = named(&song.stem, &song.path);
+    let sidecars = song
+        .sidecars
+        .iter()
+        .map(|s| (s, crate::outputs::moved(&song.path, &audio, s)));
+    std::iter::once((&song.path, audio.clone()))
+        .chain(sidecars)
+        .map(|(p, name)| Entry {
             from: library.join(p),
-            name: name_in_zip(&named(&song.stem, p)),
+            name: name_in_zip(&name),
             made: false,
         })
         .collect()
@@ -1007,7 +1015,8 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
         let (extras, sidecar) = limit::besides_audio(&song.plan);
         let name = |ext: &str| name_in_zip(&named(&song.stem, Path::new(&format!("_.{ext}"))));
         let lyrics = if sidecar > 0 {
-            target.takes(&name("lrc"), sidecar)
+            let lrc = crate::outputs::lyrics_of_stem(&song.stem);
+            target.takes(&name_in_zip(&lrc), sidecar)
         } else {
             0
         };
@@ -1259,7 +1268,7 @@ mod tests {
                 Song {
                     stem: PathBuf::from(name),
                     path: PathBuf::from(format!("{name}.flac")),
-                    lyrics: None,
+                    sidecars: Vec::new(),
                     plan,
                     anew: false,
                     sources: None,

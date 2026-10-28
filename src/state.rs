@@ -13,6 +13,11 @@
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
 //! | `trusted` | Yes: the song list's commands and servers are asked about again ([`crate::trust`]) |
 //!
+//! Each file beside an output, as its lyrics, is recorded as the output
+//! is, by its size, time and digest ([`Sidecar`]), so one changed since is
+//! the user's alike; version 2 named it by its place alone, which keeps
+//! one it recorded so muman's.
+//!
 //! An output with no plan is one muman owns but cannot vouch for, as each
 //! a run records just before writing it, new or written over: a crash
 //! between the two leaves a file the next run writes again or deletes,
@@ -59,9 +64,12 @@ use crate::provider::Provider;
 use crate::resolve::Plan;
 use crate::source::SourceKey;
 
-/// The format written: 2 keys what yt-dlp fetched by its site, where 1
+/// The format written: 3 records each file beside an output as it was
+/// written, which version 2 named by its place alone, so a muman that
+/// knows only that place refuses it rather than take a file it does not
+/// name for the user's; 2 keys what yt-dlp fetched by its site, where 1
 /// keyed it by yt-dlp's extractor.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The first format to key what yt-dlp fetched by its site.
 const SITES: u32 = 2;
@@ -237,13 +245,14 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredWritten")]
 pub struct Written {
     /// The song's sources when it was written, which is how a song
     /// whose build failed is known to keep this file.
     pub sources: Vec<SourceKey>,
-    /// The lyrics written beside it.
-    #[serde(default, with = "crate::relpath::portable_opt")]
-    pub lyrics: Option<PathBuf>,
+    /// The files written beside it, as [`crate::outputs`] names them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidecars: Vec<Sidecar>,
     /// What it was made from; none for a file an earlier version wrote,
     /// or one a run was about to write.
     #[serde(default)]
@@ -256,6 +265,88 @@ pub struct Written {
     /// times, as a backup put back, is still the file muman wrote.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+}
+
+impl Written {
+    /// The paths of the files written beside it.
+    pub fn sidecar_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.sidecars.iter().map(|s| &s.path)
+    }
+
+    /// Its file at `path` and those beside it.
+    pub fn files<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a Path> {
+        std::iter::once(path).chain(self.sidecars.iter().map(|s| s.path.as_path()))
+    }
+}
+
+/// A file written beside an output, as its lyrics are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sidecar {
+    #[serde(with = "crate::relpath::portable")]
+    pub path: PathBuf,
+    /// Its size and modification time when written, as an output's; none
+    /// for one an earlier version recorded, muman's by its place alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<String>,
+    /// A digest of its bytes when written, as an output's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+impl Sidecar {
+    /// One at `path`, not yet vouched for.
+    #[must_use]
+    pub fn at(path: PathBuf) -> Self {
+        Self {
+            path,
+            stamp: None,
+            digest: None,
+        }
+    }
+
+    /// One at `path` in `library`, vouched for as it is now.
+    #[must_use]
+    pub fn vouched(library: &Path, path: PathBuf) -> Self {
+        let file = library.join(&path);
+        Self {
+            stamp: crate::store::stamp_text(&file),
+            digest: crate::facts::digest_file(&file),
+            path,
+        }
+    }
+}
+
+/// [`Written`] as any version wrote it: version 2 named its lyrics alone,
+/// by their place.
+#[derive(Deserialize)]
+struct StoredWritten {
+    sources: Vec<SourceKey>,
+    #[serde(default)]
+    sidecars: Vec<Sidecar>,
+    #[serde(default, with = "crate::relpath::portable_opt")]
+    lyrics: Option<PathBuf>,
+    #[serde(default)]
+    plan: Option<Plan>,
+    #[serde(default)]
+    stamp: Option<String>,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+impl From<StoredWritten> for Written {
+    fn from(w: StoredWritten) -> Self {
+        let mut sidecars = w.sidecars;
+        if let Some(lyrics) = w.lyrics.filter(|l| !sidecars.iter().any(|s| s.path == *l)) {
+            sidecars.push(Sidecar::at(lyrics));
+        }
+        Self {
+            sources: w.sources,
+            sidecars,
+            plan: w.plan,
+            stamp: w.stamp,
+            digest: w.digest,
+        }
+    }
 }
 
 /// What a plan renders to, as rendered once: its audio file and its
@@ -431,8 +522,10 @@ impl State {
                 .chain(state.facts.keys())
                 .filter_map(|k| Some((k.clone(), k.spelled_before()?)))
                 .collect();
-            state.version = VERSION;
         }
+        // Read, an earlier version's outputs are this one's: saved, they
+        // are of this version, which the earlier refuses.
+        state.version = VERSION;
         Ok(state)
     }
 
@@ -823,7 +916,7 @@ mod tests {
             "song.opus".into(),
             Written {
                 sources: vec![key.clone()],
-                lyrics: None,
+                sidecars: Vec::new(),
                 plan: Some(plan),
                 stamp: None,
                 digest: None,
@@ -919,7 +1012,7 @@ mod tests {
             "song.opus".into(),
             Written {
                 sources: vec![old.clone()],
-                lyrics: None,
+                sidecars: Vec::new(),
                 plan: None,
                 stamp: None,
                 digest: None,
@@ -1027,6 +1120,31 @@ mod tests {
         let state = State::load(dir.path()).unwrap();
         assert_eq!(state.outputs.len(), 1);
         assert!(state.alignments.is_empty() && state.facts.is_empty());
+    }
+
+    #[test]
+    fn lyrics_an_earlier_version_named_by_their_place_are_a_file_beside_their_song() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(STATE),
+            r#"{"version": 2,
+                "outputs": {"A/x.opus": {"sources": [], "lyrics": "A/x.lrc", "stamp": "1:1"}}}"#,
+        )
+        .unwrap();
+        let state = State::load(dir.path()).unwrap();
+        assert_eq!(
+            state.outputs[Path::new("A/x.opus")].sidecars,
+            [Sidecar::at("A/x.lrc".into())],
+            "muman's by its place, as before"
+        );
+        state.save(dir.path()).unwrap();
+        let saved = std::fs::read_to_string(dir.path().join(STATE)).unwrap();
+        assert!(saved.contains("\"version\": 3"), "{saved}");
+        assert!(
+            saved.contains("\"sidecars\"") && !saved.contains("\"lyrics\""),
+            "{saved}"
+        );
+        assert_eq!(State::load(dir.path()).unwrap().outputs, state.outputs);
     }
 
     #[test]

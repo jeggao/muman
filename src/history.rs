@@ -677,15 +677,17 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
         let Some(mut written) = before.get(&m.from).cloned() else {
             continue;
         };
-        if let Some(to) = written.lyrics.as_ref().and_then(|l| went.get(l)) {
-            written.lyrics = Some((*to).clone());
-        } else if let Some(left) = written.lyrics.clone().filter(|l| library.join(l).exists()) {
-            // Stopped between the audio and its lyrics: the lyrics follow now.
-            let to = m.to.with_extension("lrc");
-            if !library.join(&to).exists()
-                && atomic::rename(&library.join(&left), &library.join(&to)).is_ok()
-            {
-                written.lyrics = Some(to);
+        for sidecar in &mut written.sidecars {
+            if let Some(to) = went.get(&sidecar.path) {
+                sidecar.path = (*to).clone();
+            } else if library.join(&sidecar.path).exists() {
+                // Stopped between the audio and the files beside it: they follow now.
+                let to = crate::outputs::moved(&m.from, &m.to, &sidecar.path);
+                if !library.join(&to).exists()
+                    && atomic::rename(&library.join(&sidecar.path), &library.join(&to)).is_ok()
+                {
+                    sidecar.path = to;
+                }
             }
         }
         followed.insert(m.to.clone(), written);
@@ -784,20 +786,26 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     if record.complete && !record.undoing {
         let mut state = state.clone();
         crate::reconcile::vouch_for_copies(&dirs.library, &mut state);
-        let owned: BTreeSet<&PathBuf> = state
+        let beside: BTreeMap<&PathBuf, &crate::state::Sidecar> = state
             .outputs
-            .iter()
-            .flat_map(|(p, w)| std::iter::once(p).chain(&w.lyrics))
+            .values()
+            .flat_map(|w| &w.sidecars)
+            .map(|s| (&s.path, s))
             .collect();
         for rel in &record.touched {
             if !dirs.library.join(rel).exists() {
                 continue;
             }
-            let why = if !owned.contains(rel) {
-                "is not muman's"
-            } else if crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel) {
-                "changed since muman wrote it"
+            let changed = "changed since muman wrote it";
+            let why = if state.outputs.contains_key(rel) {
+                crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel)
+                    .then_some(changed)
+            } else if let Some(s) = beside.get(rel) {
+                (!crate::reconcile::sidecar_as_written(&dirs.library, s)).then_some(changed)
             } else {
+                Some("is not muman's")
+            };
+            let Some(why) = why else {
                 continue;
             };
             return Err(crate::change::Refused(format!(
@@ -948,20 +956,22 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     }
     let left: Vec<PathBuf> = record.moves.iter().map(|m| m.to.clone()).collect();
     crate::library::remove_empty_folders(&dirs.library, &left);
-    // Lyrics the run wrote beside a song it had before are recorded by
+    // Files the run wrote beside a song it had before are recorded by
     // nothing once its record is put back, so they go now.
     for (rel, now) in &state.outputs {
-        let Some(lyrics) = &now.lyrics else { continue };
-        let before = record.outputs.get(rel).and_then(|b| b.lyrics.as_ref());
-        let path = dirs.library.join(lyrics);
-        if record.outputs.contains_key(rel)
-            && before != Some(lyrics)
-            && !record.kept.contains(lyrics)
-            && path.exists()
-        {
-            atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
-            changed.removed += 1;
-            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(lyrics)))?;
+        let Some(before) = record.outputs.get(rel) else {
+            continue;
+        };
+        for sidecar in now.sidecar_paths() {
+            let path = dirs.library.join(sidecar);
+            if !before.sidecar_paths().any(|b| b == sidecar)
+                && !record.kept.contains(sidecar)
+                && path.exists()
+            {
+                atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+                changed.removed += 1;
+                crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(sidecar)))?;
+            }
         }
     }
     state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library);
@@ -1110,7 +1120,7 @@ mod tests {
     fn written() -> Written {
         Written {
             sources: Vec::new(),
-            lyrics: None,
+            sidecars: Vec::new(),
             plan: None,
             stamp: Some("1:1".into()),
             digest: None,

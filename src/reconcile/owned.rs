@@ -9,15 +9,16 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::library::{Ledger, Owned};
-use crate::state::{State, Written};
+use crate::state::{Sidecar, State, Written};
 use crate::store;
 
-/// The files at a song's path, its audio or its lyrics, that muman did
+/// The files at a song's path, its audio or one beside it, that muman did
 /// not write: a file of the user's own a sync must not write over or
-/// remove, a `.lrc` beside a song muman wrote among them, and a link,
-/// whether or not it leads anywhere. A file that is one muman wrote under
-/// a name differing only in case, as a filesystem blind to case reports,
-/// is muman's.
+/// remove, a `.lrc` beside a song muman wrote among them, one muman wrote
+/// beside a song and the user changed since, and a link, whether or not
+/// it leads anywhere. A file that is one muman wrote under a name
+/// differing only in case, as a filesystem blind to case reports, is
+/// muman's.
 pub(super) fn foreign(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
@@ -26,25 +27,28 @@ pub(super) fn foreign(
     use crate::relpath::folded;
     let owned = |rel: &Path| {
         let fold = folded(rel);
+        let is = |o: &Path| {
+            o == rel
+                || (folded(o) == fold
+                    && same_file::is_same_file(library.join(o), library.join(rel)).unwrap_or(false))
+        };
         old.iter().any(|(p, w)| {
-            std::iter::once(p).chain(&w.lyrics).any(|o| {
-                o == rel
-                    || (folded(o) == fold
-                        && same_file::is_same_file(library.join(o), library.join(rel))
-                            .unwrap_or(false))
-            })
+            is(p)
+                || w.sidecars
+                    .iter()
+                    .any(|s| is(&s.path) && sidecar_as_written(library, s))
         })
     };
-    [path.to_path_buf(), path.with_extension("lrc")]
-        .into_iter()
+    std::iter::once(path.to_path_buf())
+        .chain(crate::outputs::names(path))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok() && !owned(rel))
         .collect()
 }
 
-/// The files at a song's paths, its audio and its lyrics, that writing it
-/// may write over or remove, each to be kept for `undo` first: muman's,
-/// under its name or one a filesystem blind to case takes for it, and,
-/// when `forced`, one of the user's own, taken over.
+/// The files at a song's paths, its audio and those beside it, that
+/// writing it may write over or remove, each to be kept for `undo` first:
+/// muman's, under its name or one a filesystem blind to case takes for it,
+/// and, when `forced`, one of the user's own, taken over.
 pub(super) fn claim(
     ledger: &Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
@@ -53,8 +57,8 @@ pub(super) fn claim(
 ) -> Vec<Owned> {
     let library = ledger.root();
     let foreign = foreign(library, old, path);
-    [path.to_path_buf(), path.with_extension("lrc")]
-        .into_iter()
+    std::iter::once(path.to_path_buf())
+        .chain(crate::outputs::names(path))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
         .filter(|rel| forced || !foreign.contains(rel))
         .map(|rel| {
@@ -118,7 +122,27 @@ pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
         if let AsWritten::Copied(now) = as_written(&library.join(path), written) {
             written.stamp = Some(now);
         }
+        for sidecar in &mut written.sidecars {
+            if let AsWritten::Copied(now) = sidecar_written(library, sidecar) {
+                sidecar.stamp = Some(now);
+            }
+        }
     }
+}
+
+/// Whether a file beside an output is as muman wrote it, by its size and
+/// time or its bytes; one an earlier version recorded by its place alone
+/// is.
+pub(crate) fn sidecar_as_written(library: &Path, sidecar: &Sidecar) -> bool {
+    sidecar.stamp.is_none() || !matches!(sidecar_written(library, sidecar), AsWritten::Not)
+}
+
+fn sidecar_written(library: &Path, sidecar: &Sidecar) -> AsWritten {
+    stamped(
+        &library.join(&sidecar.path),
+        sidecar.stamp.as_ref(),
+        sidecar.digest.as_ref(),
+    )
 }
 
 /// Whether a file is as muman wrote it.
@@ -133,13 +157,18 @@ pub(super) enum AsWritten {
 
 /// Whether `file` is as `written` records muman wrote it.
 pub(super) fn as_written(file: &Path, written: &Written) -> AsWritten {
-    let (Some(was), Some(now)) = (&written.stamp, store::stamp_text(file)) else {
+    stamped(file, written.stamp.as_ref(), written.digest.as_ref())
+}
+
+/// Whether `file` is as its stamp and digest, as written, say.
+fn stamped(file: &Path, stamp: Option<&String>, digest: Option<&String>) -> AsWritten {
+    let (Some(was), Some(now)) = (stamp, store::stamp_text(file)) else {
         return AsWritten::Not;
     };
     if now == *was {
         return AsWritten::Same;
     }
-    match &written.digest {
+    match digest {
         Some(digest) if crate::facts::digest_file(file).as_ref() == Some(digest) => {
             AsWritten::Copied(now)
         }
@@ -165,6 +194,18 @@ pub(crate) fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -
             AsWritten::Not => false,
         },
     );
+    for written in outputs.values_mut() {
+        written
+            .sidecars
+            .retain_mut(|s| match sidecar_written(library, s) {
+                AsWritten::Copied(now) => {
+                    s.stamp = Some(now);
+                    true
+                }
+                AsWritten::Same => true,
+                AsWritten::Not => s.stamp.is_none(),
+            });
+    }
     (outputs.len(), before - outputs.len())
 }
 

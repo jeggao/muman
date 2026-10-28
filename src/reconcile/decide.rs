@@ -14,7 +14,7 @@ use crate::held::Drift;
 use crate::manifest::{Edit, Manifest};
 use crate::resolve::{LyricsRef, Plan, Resolved};
 use crate::source::SourceKey;
-use crate::state::{State, Written};
+use crate::state::{Sidecar, State, Written};
 
 use super::damage::{damaged_since_built, split_drifts};
 use super::owned::{edited_since_written, foreign};
@@ -22,8 +22,8 @@ use super::plan::{PlannedSong, path_of};
 use super::prune::{Pruned, prune_plan};
 
 /// What `old` records of the song's file, when that file is the song as
-/// it would be written now: its plan, its file there and not empty, its
-/// lyrics there.
+/// it would be written now: its plan, its file there and not empty, each
+/// file beside it there.
 pub(super) fn current<'a>(
     library: &Path,
     old: &'a BTreeMap<PathBuf, Written>,
@@ -32,10 +32,7 @@ pub(super) fn current<'a>(
     let path = path_of(r);
     let written = old.get(&path)?;
     let present = library.join(&path).metadata().is_ok_and(|m| m.len() > 0)
-        && written
-            .lyrics
-            .as_ref()
-            .is_none_or(|l| library.join(l).exists());
+        && written.sidecar_paths().all(|s| library.join(s).exists());
     (present && written.plan.as_ref() == Some(&r.plan)).then_some(written)
 }
 
@@ -237,7 +234,7 @@ pub(super) fn decide(
         };
         let was = &old[from];
         let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
-            && was.lyrics.as_ref().is_none_or(|l| library.join(l).exists());
+            && was.sidecar_paths().all(|s| library.join(s).exists());
         let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
         let retag = was.plan.as_ref() != Some(&r.plan);
         if same_media && !(retag && edited_since_written(library, old, from)) {
@@ -246,11 +243,7 @@ pub(super) fn decide(
     }
     // Made in rounds: a move lands only where nothing is, or where a move
     // already chosen leaves, so the order chosen is an order they can run.
-    let lyrics_of = |p: &Path| p.with_extension("lrc");
-    let recorded: BTreeSet<&Path> = old
-        .iter()
-        .flat_map(|(p, w)| std::iter::once(p.as_path()).chain(w.lyrics.as_deref()))
-        .collect();
+    let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
     let mut held: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
     let free = |held: &BTreeSet<String>, p: &Path| {
         !held.contains(&folded(p)) && (recorded.contains(p) || !library.join(p).exists())
@@ -259,16 +252,19 @@ pub(super) fn decide(
     loop {
         let before = moving.len();
         moving.retain(|(i, from, to, retag)| {
-            let lyrics = old[from].lyrics.as_deref();
+            let beside: Vec<(&Path, PathBuf)> = old[from]
+                .sidecar_paths()
+                .map(|s| (s.as_path(), crate::outputs::moved(from, to, s)))
+                .collect();
             let fits = |from: &Path, to: &Path| own_place(library, from, to) || free(&held, to);
-            if !fits(from, to) || lyrics.is_some_and(|l| !fits(l, &lyrics_of(to))) {
+            if !fits(from, to) || beside.iter().any(|(a, b)| !fits(a, b)) {
                 return true;
             }
             held.remove(&folded(from));
             held.insert(folded(to));
-            if let Some(l) = lyrics {
-                held.remove(&folded(l));
-                held.insert(folded(&lyrics_of(to)));
+            for (a, b) in &beside {
+                held.remove(&folded(a));
+                held.insert(folded(b));
             }
             decided[*i] = Some(Doing::Move {
                 from: from.clone(),
@@ -294,9 +290,7 @@ pub(super) fn decide(
             let was = file.and_then(|f| old.get(f));
             let present = file.is_some_and(|f| {
                 library.join(f).metadata().is_ok_and(|m| m.len() > 0)
-                    && was
-                        .and_then(|w| w.lyrics.as_ref())
-                        .is_none_or(|l| library.join(l).exists())
+                    && was.is_none_or(|w| w.sidecar_paths().all(|s| library.join(s).exists()))
             });
             let same_media = present
                 && was
@@ -381,7 +375,7 @@ pub(super) fn intend(
     let mut relocated = old.clone();
     for (from, to) in &moves {
         if let Some(written) = relocated.remove(from) {
-            relocated.insert(to.clone(), moved_to(written, to));
+            relocated.insert(to.clone(), moved_to(written, from, to));
         }
     }
     let arrived: Vec<Doing> = decided
@@ -398,7 +392,10 @@ pub(super) fn intend(
             let path = path_of(r);
             let written = Written {
                 sources: manifest.songs[*n].sources.clone(),
-                lyrics: r.plan.lyrics.as_ref().map(|_| path.with_extension("lrc")),
+                sidecars: crate::outputs::planned(&path, &r.plan)
+                    .into_iter()
+                    .map(Sidecar::at)
+                    .collect(),
                 plan: Some(r.plan.clone()),
                 stamp: None,
                 digest: None,
@@ -416,10 +413,12 @@ pub(super) fn intend(
     }
 }
 
-/// What `written` records once its file has moved to `to`, its lyrics
-/// beside it.
-pub(super) fn moved_to(mut written: Written, to: &Path) -> Written {
-    written.lyrics = written.lyrics.map(|_| to.with_extension("lrc"));
+/// What `written` records once its file has moved from `from` to `to`,
+/// each file beside it with it.
+pub(super) fn moved_to(mut written: Written, from: &Path, to: &Path) -> Written {
+    for sidecar in &mut written.sidecars {
+        sidecar.path = crate::outputs::moved(from, to, &sidecar.path);
+    }
     written
 }
 

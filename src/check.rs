@@ -72,7 +72,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
     let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
     for (path, written) in &state.outputs {
         owned.insert(path.clone());
-        owned.extend(written.lyrics.iter().cloned());
+        owned.extend(written.sidecar_paths().cloned());
         let file = library.join(path);
         match std::fs::metadata(&file) {
             Err(_) => problem(
@@ -90,18 +90,21 @@ pub fn check<R: Runner, W: Write, D: Write>(
                 ),
             )?,
             Ok(_)
-                if written
-                    .lyrics
-                    .as_ref()
-                    .is_some_and(|l| written.plan.is_some() && !library.join(l).exists()) =>
+                if written.plan.is_some()
+                    && written.sidecar_paths().any(|s| !library.join(s).exists()) =>
             {
-                problem(
-                    report,
-                    format!(
-                        "Lyrics missing, `sync` writes them again: {}",
-                        crate::relpath::show(path)
-                    ),
-                )?;
+                for missing in written
+                    .sidecar_paths()
+                    .filter(|s| !library.join(s).exists())
+                {
+                    problem(
+                        report,
+                        format!(
+                            "Missing beside its song, `sync` writes it again: {}",
+                            crate::relpath::show(missing)
+                        ),
+                    )?;
+                }
             }
             Ok(_) if written.plan.is_none() && busy => {}
             Ok(_) if written.plan.is_none() => problem(
@@ -116,12 +119,17 @@ pub fn check<R: Runner, W: Write, D: Write>(
                     .stamp
                     .as_ref()
                     .is_some_and(|s| store::stamp_text(&file).as_ref() != Some(s));
-                if changed {
+                let beside = written
+                    .sidecars
+                    .iter()
+                    .filter(|s| !crate::reconcile::sidecar_as_written(library, s))
+                    .map(|s| &s.path);
+                for changed in std::iter::once(path).filter(|_| changed).chain(beside) {
                     problem(
                         report,
                         format!(
                             "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
-                            crate::relpath::show(path)
+                            crate::relpath::show(changed)
                         ),
                     )?;
                 }
@@ -565,7 +573,7 @@ mod tests {
         let mut state = State::default();
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
-            lyrics: None,
+            sidecars: Vec::new(),
             plan: Some(crate::resolve::Plan {
                 version: crate::resolve::render_version(crate::codec::Codec::Opus),
                 format: crate::resolve::Format::Copy {
@@ -594,7 +602,7 @@ mod tests {
         state.outputs.insert("A/gone.opus".into(), written(None));
         std::fs::write(dirs.library.join("A/sung.opus"), "x").unwrap();
         let sung = Written {
-            lyrics: Some("A/sung.lrc".into()),
+            sidecars: vec![crate::state::Sidecar::at("A/sung.lrc".into())],
             ..written(store::stamp_text(&dirs.library.join("A/sung.opus")))
         };
         state.outputs.insert("A/sung.opus".into(), sung);
@@ -629,7 +637,7 @@ mod tests {
         assert!(!text.contains(".hidden"), "{text}");
         assert!(text.contains("Left by an interrupted run"), "{text}");
         assert!(
-            text.contains("Lyrics missing, `sync` writes them again: A/sung.opus"),
+            text.contains("Missing beside its song, `sync` writes it again: A/sung.lrc"),
             "{text}"
         );
 
