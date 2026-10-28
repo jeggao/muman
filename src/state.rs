@@ -349,14 +349,54 @@ impl From<StoredWritten> for Written {
     }
 }
 
-/// What a plan renders to, as rendered once: its audio file and its
-/// lyrics file, in bytes, before any hook.
+/// What a plan renders to, as rendered once: its audio file and each file
+/// beside it, in bytes, before any hook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredMeasured")]
 pub struct Measured {
     /// The plan's audio source, which keeps the entry while it is listed.
     pub source: SourceKey,
     pub audio: u64,
-    pub lyrics: u64,
+    /// Each file beside it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beside: Vec<u64>,
+}
+
+impl Measured {
+    /// What it takes in whole blocks of `block` bytes, file by file.
+    #[must_use]
+    pub fn blocks(&self, block: u64) -> u64 {
+        std::iter::once(self.audio)
+            .chain(self.beside.iter().copied())
+            .map(|bytes| crate::limit::blocks(bytes, block))
+            .sum()
+    }
+}
+
+/// [`Measured`] as any version wrote it: version 2 kept its lyrics file's
+/// size alone, 0 for none.
+#[derive(Deserialize)]
+struct StoredMeasured {
+    source: SourceKey,
+    audio: u64,
+    #[serde(default)]
+    beside: Vec<u64>,
+    #[serde(default)]
+    lyrics: u64,
+}
+
+impl From<StoredMeasured> for Measured {
+    fn from(m: StoredMeasured) -> Self {
+        let mut beside = m.beside;
+        if m.lyrics > 0 && beside.is_empty() {
+            beside.push(m.lyrics);
+        }
+        Self {
+            source: m.source,
+            audio: m.audio,
+            beside,
+        }
+    }
 }
 
 /// A step that failed for a source: what it was, how often, when last.

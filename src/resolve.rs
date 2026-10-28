@@ -127,7 +127,7 @@ use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
-use crate::settings::{Audio, CoverPick, LyricsPlacement, Prefer};
+use crate::settings::{Audio, CoverPick, LyricsPlacement, Prefer, To};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
@@ -369,7 +369,13 @@ pub struct LyricsRef {
     /// correction in the shift is shortened too, by a millisecond or two.
     #[serde(default)]
     pub stretch_ppm: i64,
+    /// Whether they go inside the song, and, unless [`Self::files`] names
+    /// the files, whether in a `.lrc` beside it, as `[library] lyrics` said
+    /// before `[[lyrics.out]]` did: a plan of those outputs reads as it did.
     pub placement: LyricsPlacement,
+    /// The files beside the song they go to, where `placement` cannot say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<LyricsFile>>,
     /// The ISO 639-2 code of the language their source names them in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -392,6 +398,49 @@ impl LyricsRef {
             ..self.clone()
         }
     }
+
+    /// Whether they go inside the song.
+    #[must_use]
+    pub fn tag(&self) -> bool {
+        self.placement.embedded()
+    }
+
+    /// The files beside the song they go to.
+    #[must_use]
+    pub fn files(&self) -> Vec<LyricsFile> {
+        match &self.files {
+            Some(files) => files.clone(),
+            None if self.placement.sidecar() => vec![LyricsFile::default()],
+            None => Vec::new(),
+        }
+    }
+
+    /// Where lyrics going inside the song, or not, and to `files` are
+    /// written, as `placement` and `files` say it: `files` only where
+    /// `placement` cannot.
+    #[must_use]
+    pub fn placed(tag: bool, files: Vec<LyricsFile>) -> (LyricsPlacement, Option<Vec<LyricsFile>>) {
+        let placement = match (tag, files.is_empty()) {
+            (true, true) => LyricsPlacement::Embedded,
+            (true, false) => LyricsPlacement::Both,
+            (false, _) => LyricsPlacement::Sidecar,
+        };
+        let plain = files.is_empty() || files == [LyricsFile::default()];
+        (
+            placement,
+            (!plain || !tag && files.is_empty()).then_some(files),
+        )
+    }
+}
+
+/// A file of lyrics beside a song, as a `[[lyrics.out]]` names it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LyricsFile {
+    /// What follows the song's own name, before the extension.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suffix: String,
+    #[serde(default)]
+    pub format: crate::settings::LyricsFormat,
 }
 
 /// Everything a library file is made from. Stored beside each output and
@@ -624,7 +673,6 @@ pub struct Input<'a> {
     pub naming: &'a Naming,
     pub audio: &'a Audio,
     pub cover: &'a CoverPick,
-    pub placement: LyricsPlacement,
     /// Whether a comment its sources' tags carry is written.
     pub source_comments: bool,
 }
@@ -1126,6 +1174,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     }
                 ),
             };
+            let (placement, files) = lyrics_outputs(&input.lyrics.out, l.timing.is_some());
             let why = match role {
                 Some(Role::Original) | None => timing,
                 Some(Role::Romanization) => format!("a romanization, {timing}"),
@@ -1139,7 +1188,8 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     at: l.at.clone(),
                     shift_ms: offset - input.song.lyrics_offset_ms,
                     stretch_ppm,
-                    placement: input.placement,
+                    placement,
+                    files,
                     language: l.language.langs().first().map(Lang::iso639_2),
                     clean_off: clean::lyrics::off(input.clean),
                     cleaning: clean::lyrics::EDITION,
@@ -1148,7 +1198,27 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
             ));
         }
     }
-    best.map(|(_, l, w)| (l, w))
+    // Lyrics no output takes are written nowhere.
+    best.filter(|(_, l, _)| l.tag() || !l.files().is_empty())
+        .map(|(_, l, w)| (l, w))
+}
+
+/// Where lyrics `timed` or not go, as the `[[lyrics.out]]` taking them
+/// say, in a plan's terms ([`LyricsRef::placed`]).
+fn lyrics_outputs(
+    outs: &[crate::settings::LyricsOut],
+    timed: bool,
+) -> (LyricsPlacement, Option<Vec<LyricsFile>>) {
+    let outs = outs.iter().filter(|o| o.when.takes(timed));
+    let tag = outs.clone().any(|o| o.to == To::Tag);
+    let files = outs
+        .filter(|o| o.to == To::File)
+        .map(|o| LyricsFile {
+            suffix: o.suffix.clone(),
+            format: o.format,
+        })
+        .collect();
+    LyricsRef::placed(tag, files)
 }
 
 /// What one source offers for a field, as cleaned.

@@ -2420,7 +2420,7 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
     let library = crate::settings::Library::default();
     let naming = crate::naming::Naming::new(&library, Path::new("lib")).unwrap();
     // A translation beside a song as `.en.lrc`, its lyrics as `.lrc`.
-    let beside = |p: &Path| {
+    let beside = |p: &Path, _: &Plan| {
         let stem = p.with_extension("");
         ["en.lrc", "lrc"]
             .iter()

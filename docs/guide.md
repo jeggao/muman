@@ -75,20 +75,20 @@ with its `text`, so that a program reads every line; `none` writes
 nothing. What a command does goes to stderr with its progress; what
 `status`, `list`, `info`, `check` and `duplicates` report goes to stdout.
 
-muman deletes only files `state.json` records as its own; anything else
-in the library folder is left alone: at a song's path, or its `.lrc`'s,
-it holds the song back until `sync --force`. A file whose size or time
-changed since muman wrote it, a song's or its `.lrc`, as a tagger or an
-editor rewrites it, is left with a warning until `sync --force`: a new path template still moves it, your
-change with it, but a change to the song itself leaves it where it is,
-and `sync --force` writes the song again and deletes it, `undo` putting
-it back. A file whose time changed but whose bytes are still the ones
-written, as a backup put back or a copy made without its times, is
-muman's still; one whose size and time are as written but whose bytes
-are not, as a tagger set to keep files' times leaves it, is changed too,
-found as the file is about to be written over or removed. Each file is
-written under a temporary name and renamed into place, so a player never
-sees half a track. Library paths in messages use `/` on every system.
+muman deletes only files `state.json` records as its own, and leaves
+anything else in the library folder alone: one at a song's path, or
+where the song writes beside it, holds the song back until
+`sync --force`. A file changed since muman wrote it, as a tagger or an
+editor leaves a song or its `.lrc`, stays with a warning until
+`sync --force`: a new template still moves it, your change with it, but
+a change to the song leaves it where it is, and `sync --force` writes
+the song again and deletes it, `undo` putting it back. A file is muman's
+by its size and time, else by its bytes, as a backup put back or a copy
+without its times keeps them; one whose bytes changed under its size and
+time, as a tagger keeping times leaves it, is changed too, found as it
+is about to be written over or removed. Each file is written under a
+temporary name and renamed into place, so a player never sees half a
+track. Library paths in messages use `/` on every system.
 
 ## The song list
 

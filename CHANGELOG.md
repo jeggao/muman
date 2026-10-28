@@ -9,6 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[[lyrics.out]]` says where lyrics go.** Each is a file beside the
+  song, named by a suffix of your own, as `Song.en.lrc`, or the lyrics
+  tag inside it, and may take only timed or only untimed lyrics.
+  `[library] lyrics` reads as the outputs it named, and the next `sync`
+  writes them so; `out = []` writes no lyrics.
 - **`set` with a query alone changes a song step by step:** each field
   with the value written and where it came from, what each source
   offers, a value typed from the one written and checked as it is
@@ -58,6 +63,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song's lyrics alone, as a cleaning switch or `lyrics_offset`, writes
   its `.lrc` again and leaves its audio file as it is, encoded or not,
   where the lyrics are not inside it.
+- **A file of yours beside a song holds it back only where muman would
+  write.** A `.lrc` of your own beside a song with no lyrics, or at a
+  name no `[[lyrics.out]]` gives, is left alone and lets the song be
+  written.
 - **Lyrics you change by hand are yours.** A `.lrc` muman wrote and
   you changed since is neither written over nor deleted until
   `sync --force`, as a song file you changed is not; `check` names it.

@@ -90,7 +90,7 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
         && (a.opus_header().is_none() || b.opus_header().is_some())
         && a.audio == b.audio
         && a.cover == b.cover
-        && lyrics_held(a, LyricsPlacement::embedded) == lyrics_held(b, LyricsPlacement::embedded)
+        && lyrics_inside(a) == lyrics_inside(b)
         // MP4 chapters are ffmpeg's to write.
         && a.chapters == b.chapters
 }
@@ -98,23 +98,30 @@ pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
 /// Whether two plans write the same files beside a song: so a song whose
 /// audio file is [`media_equal`] keeps them as they are.
 pub(super) fn beside_equal(a: &Plan, b: &Plan) -> bool {
-    lyrics_held(a, LyricsPlacement::sidecar) == lyrics_held(b, LyricsPlacement::sidecar)
+    let beside = |p| lyrics_held(p).filter(|(l, _)| !l.files().is_empty());
+    beside(a) == beside(b)
 }
 
 /// The song's title and artists lyrics are cleaned by, where a rule
 /// reads them.
 type Names<'a> = Option<(Option<&'a str>, Vec<&'a str>)>;
 
-/// What a file of `plan` holds of its lyrics where `placed` says they
-/// go, inside the song or beside it: their lines, and the names they are
-/// cleaned by.
-fn lyrics_held(plan: &Plan, placed: fn(LyricsPlacement) -> bool) -> Option<(LyricsRef, Names<'_>)> {
-    let lyrics = plan.lyrics.as_ref().filter(|l| placed(l.placement))?;
-    let lines = LyricsRef {
+/// What the song's file holds of its lyrics, where they go inside it.
+fn lyrics_inside(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
+    plan.lyrics.as_ref().filter(|l| l.tag())?;
+    lyrics_held(plan).map(|(l, names)| (LyricsRef { files: None, ..l }, names))
+}
+
+/// What a file of `plan` holds of its lyrics, wherever they go: their
+/// lines, the files they go to, and the names they are cleaned by.
+fn lyrics_held(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
+    let lyrics = plan.lyrics.as_ref()?;
+    let held = LyricsRef {
         placement: LyricsPlacement::Both,
+        files: Some(lyrics.files()),
         ..lyrics.lines()
     };
-    Some((lines, crate::render::lyrics_names(plan)))
+    Some((held, crate::render::lyrics_names(plan)))
 }
 
 /// What a sync does with one song, decided for every song before any is
@@ -246,25 +253,7 @@ pub(super) fn decide(
         return vec![Doing::Write; planned.len()];
     }
     let mut decided = settled(planned, files, old, library, holding);
-    // Each song that could move, by what it would take and leave.
-    let mut moving: Vec<(usize, PathBuf, PathBuf, bool)> = Vec::new();
-    for (i, (n, r)) in planned.iter().enumerate() {
-        if decided[i].is_some() {
-            continue;
-        }
-        let path = path_of(r);
-        let Some(from) = files.get(n).filter(|f| **f != path) else {
-            continue;
-        };
-        let was = &old[from];
-        let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
-            && was.sidecar_paths().all(|s| library.join(s).exists());
-        let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
-        let retag = was.plan.as_ref() != Some(&r.plan);
-        if same_media && !(retag && edited_since_written(library, old, from)) {
-            moving.push((i, from.clone(), path, retag));
-        }
-    }
+    let mut moving = movable(planned, &decided, files, old, library);
     // Made in rounds: a move lands only where nothing is, or where a move
     // already chosen leaves, so the order chosen is an order they can run.
     let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
@@ -327,11 +316,18 @@ pub(super) fn decide(
             if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
-            // Its tags are written into its own file alone.
-            if file == Some(&path) && same_media {
+            // Its tags are written into its own file alone, and the files
+            // beside it that differ where no file of the user's is in their way.
+            let beside = was
+                .and_then(|w| w.plan.as_ref())
+                .is_some_and(|p| beside_equal(p, &r.plan));
+            if file == Some(&path)
+                && same_media
+                && (beside || foreign(library, old, &path, &r.plan).is_empty())
+            {
                 return Doing::Retag;
             }
-            if let Some(by) = foreign(library, old, &path).into_iter().next() {
+            if let Some(by) = foreign(library, old, &path, &r.plan).into_iter().next() {
                 // Its own file stays where it is rather than go for nothing.
                 return match file.filter(|_| present) {
                     Some(file) => Doing::Blocked {
@@ -344,6 +340,40 @@ pub(super) fn decide(
             Doing::Write
         })
         .collect()
+}
+
+/// Each of `planned` not `decided` that could move to its path, by what
+/// it would take and leave and whether its tags change: its file of the
+/// same media, there, not changed since written where its tags change,
+/// and no file of the user's at a name it gains beside it.
+fn movable(
+    planned: &[PlannedSong],
+    decided: &[Option<Doing>],
+    files: &BTreeMap<usize, PathBuf>,
+    old: &BTreeMap<PathBuf, Written>,
+    library: &Path,
+) -> Vec<(usize, PathBuf, PathBuf, bool)> {
+    let mut moving = Vec::new();
+    for (i, (n, r)) in planned.iter().enumerate() {
+        if decided[i].is_some() {
+            continue;
+        }
+        let path = path_of(r);
+        let Some(from) = files.get(n).filter(|f| **f != path) else {
+            continue;
+        };
+        let was = &old[from];
+        let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
+            && was.sidecar_paths().all(|s| library.join(s).exists());
+        let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
+        let retag = was.plan.as_ref() != Some(&r.plan);
+        let gains = was.plan.as_ref().is_none_or(|p| !beside_equal(p, &r.plan))
+            && !foreign(library, old, &path, &r.plan).is_empty();
+        if same_media && !gains && !(retag && edited_since_written(library, old, from)) {
+            moving.push((i, from.clone(), path, retag));
+        }
+    }
+    moving
 }
 
 /// Whether moving `from` to `to` only changes the case of its name, and

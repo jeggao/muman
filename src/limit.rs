@@ -266,23 +266,22 @@ pub(crate) fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64
     (bytes, bytes * sigma)
 }
 
-/// What a song's file is guessed to hold besides its audio, and its
-/// lyrics file to take, from its plan.
-pub(crate) fn besides_audio(plan: &Plan) -> (u64, u64) {
+/// What a song's file is guessed to hold besides its audio, and each file
+/// beside it to take, from its plan.
+pub(crate) fn besides_audio(plan: &Plan) -> (u64, Vec<u64>) {
     let tags: usize = plan
         .tags
         .iter()
         .flat_map(|(k, values)| values.iter().map(move |v| k.len() + v.len() + 8))
         .sum();
     let cover = plan.cover.as_ref().map_or(0, |_| COVER_GUESS);
-    let placement = plan.lyrics.as_ref().map(|l| l.placement);
-    let embedded = placement
-        .filter(|p| p.embedded())
-        .map_or(0, |_| LYRICS_GUESS);
-    let sidecar = placement
-        .filter(|p| p.sidecar())
-        .map_or(0, |_| LYRICS_GUESS);
-    (tags as u64 + cover + embedded + HEADERS, sidecar)
+    let lyrics = plan.lyrics.as_ref();
+    let embedded = lyrics.filter(|l| l.tag()).map_or(0, |_| LYRICS_GUESS);
+    let files = lyrics.map_or(0, |l| l.files().len());
+    (
+        tags as u64 + cover + embedded + HEADERS,
+        vec![LYRICS_GUESS; files],
+    )
 }
 
 fn ladder(
@@ -301,7 +300,8 @@ fn ladder(
         .map_or_else(|| plan.audio.key.to_string(), ToString::to_string);
     let facts = state.facts.get(&plan.audio.key);
     let seconds = facts.and_then(Facts::length).filter(|d| *d > 0.0);
-    let (extras, lyrics) = besides_audio(plan);
+    let (extras, beside) = besides_audio(plan);
+    let beside: u64 = beside.iter().map(|bytes| blocks(*bytes, block)).sum();
     let choice = |format: Format, loss: f64| -> Choice {
         let (audio, sigma) = match (facts, seconds) {
             (Some(f), Some(s)) => estimate(format, f, s),
@@ -316,7 +316,7 @@ fn ladder(
             was_key: was.filter(|w| *w != plan_key),
             legacy_key: legacy_key(tools, &plan),
             plan_key,
-            estimate: blocks(audio as u64 + extras, block) + blocks(lyrics, block),
+            estimate: blocks(audio as u64 + extras, block) + beside,
             sigma,
             loss,
         }
@@ -390,8 +390,7 @@ impl Learnt {
             let rung = &ladders[i].rungs[c];
             match state.sizes.get(&rung.plan_key) {
                 Some(m) => {
-                    let bytes = blocks(m.audio, block) + blocks(m.lyrics, block);
-                    self.known.insert(rung.plan_key.clone(), bytes);
+                    self.known.insert(rung.plan_key.clone(), m.blocks(block));
                 }
                 None => due.push((i, c)),
             }
@@ -419,6 +418,7 @@ impl Learnt {
                     sources: at.sources,
                     scratch: &folder.join("work"),
                     claim: &[],
+                    stale: &[],
                 },
             );
             (folder.join("library"), done)
@@ -429,12 +429,12 @@ impl Learnt {
                 continue;
             };
             self.rendered += 1;
-            let bytes = blocks(done.audio_bytes, block) + blocks(done.lyrics_bytes, block);
+            let bytes = blocks(done.audio_bytes, block) + done.beside_blocks(block);
             self.known.insert(key.clone(), bytes);
             let measured = Measured {
                 source: planned[i].1.plan.audio.key.clone(),
                 audio: done.audio_bytes,
-                lyrics: done.lyrics_bytes,
+                beside: done.beside.iter().map(|(_, bytes)| *bytes).collect(),
             };
             state.sizes.insert(key, measured);
             self.made.insert((planned[i].0, c), (folder, done));

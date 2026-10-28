@@ -9,20 +9,22 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::library::{Ledger, Owned};
+use crate::resolve::Plan;
 use crate::state::{Sidecar, State, Written};
 use crate::store;
 
-/// The files at a song's path, its audio or one beside it, that muman did
-/// not write: a file of the user's own a sync must not write over or
-/// remove, a `.lrc` beside a song muman wrote among them, one muman wrote
-/// beside a song and the user changed since, and a link, whether or not
-/// it leads anywhere. A file that is one muman wrote under a name
-/// differing only in case, as a filesystem blind to case reports, is
-/// muman's.
+/// The files at a song's path, its audio or one beside it `plan` writes
+/// or its last build left, that muman did not write: a file of the
+/// user's own a sync must not write over or remove, a `.lrc` beside a song
+/// muman wrote among them, one muman wrote beside a song and the user
+/// changed since, and a link, whether or not it leads anywhere. A file
+/// that is one muman wrote under a name differing only in case, as a
+/// filesystem blind to case reports, is muman's.
 pub(super) fn foreign(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
+    plan: &Plan,
 ) -> Vec<PathBuf> {
     use crate::relpath::folded;
     let owned = |rel: &Path| {
@@ -40,7 +42,7 @@ pub(super) fn foreign(
         })
     };
     std::iter::once(path.to_path_buf())
-        .chain(crate::outputs::names(path))
+        .chain(crate::outputs::touched(path, plan, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok() && !owned(rel))
         .collect()
 }
@@ -53,12 +55,13 @@ pub(super) fn claim(
     ledger: &Ledger<'_>,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
+    plan: &Plan,
     forced: bool,
 ) -> Vec<Owned> {
     let library = ledger.root();
-    let foreign = foreign(library, old, path);
+    let foreign = foreign(library, old, path, plan);
     std::iter::once(path.to_path_buf())
-        .chain(crate::outputs::names(path))
+        .chain(crate::outputs::touched(path, plan, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
         .filter(|rel| forced || !foreign.contains(rel))
         .map(|rel| {
