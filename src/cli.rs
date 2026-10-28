@@ -381,11 +381,9 @@ pub enum Command {
     /// lookup due, write every song whose sources or tags changed, and
     /// delete what no song makes.
     Sync {
-        /// Make every lookup now, whatever an earlier one found, but none
-        /// on a provider the song has a source from already: an upload on
-        /// YouTube Music for its track, a track on YouTube for an upload
-        /// with subtitles, a song on LRCLIB for its lyrics, a song on
-        /// MusicBrainz for its album.
+        /// Make every lookup a song still wants now, whatever an earlier
+        /// one found: a song that has what a provider's `until` names, or
+        /// whose record from it gives all it can, asks it nothing.
         #[arg(long)]
         rematch: bool,
 

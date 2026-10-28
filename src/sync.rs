@@ -81,7 +81,10 @@ pub(crate) fn run<R: Runner, W: Write>(
             loose: false,
         };
         list(runner, dirs, proposals, &how, prompter, out)?;
-        ok &= look_up(job, runner, http, request.rematch, &BTreeSet::new(), out)?;
+        let ask = lookup::Ask {
+            rematch: request.rematch,
+        };
+        ok &= look_up(job, runner, http, ask, &BTreeSet::new(), out)?;
         let opts = Options {
             force: request.force,
             retry: request.retry,
@@ -99,7 +102,7 @@ pub(crate) fn look_up<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     http: &(dyn HttpTransport + Sync),
-    force: bool,
+    ask: lookup::Ask,
     declined: &BTreeSet<SourceKey>,
     out: &mut W,
 ) -> Result<bool> {
@@ -108,7 +111,7 @@ pub(crate) fn look_up<R: Runner, W: Write>(
     }
     let (ok, ()) = network(job, runner, out, |acquire| {
         Ok((
-            lookup::run(acquire, &job.dirs, http, &job.throttles, force, declined)?,
+            lookup::run(acquire, &job.dirs, http, &job.throttles, ask, declined)?,
             (),
         ))
     })?;

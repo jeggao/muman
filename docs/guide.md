@@ -115,6 +115,7 @@ tags.genre = ""
 | `album`, `track` | The `[[album]]` the song is on and its place there |
 | `audio`, `cover`, `lyrics` | A pin: that aspect from that source, whatever the measures say; `lyrics = false` for none |
 | `lyrics_offset` | Moves the lyrics later, on top of the offset measured, as `"120 ms"`; a negative time moves them earlier |
+| `lookups` | `false` to look nothing up for the song, or `lookups.<provider> = false` to ask one provider nothing ([lookups](library.md#lookups-and-providers)) |
 | `tags.<name>` | Tags set over what the sources offer; an empty value sets nothing |
 | `held."<key>"` | What a source held when the song was built, written by muman: [a source that changes](#a-source-that-changes) |
 | `[[album]]` | A YouTube Music album added whole, with its `tags.<name>` over what its tracks offer |
@@ -195,9 +196,8 @@ MP4 chapters, as `CHAPTER000` and `CHAPTER000NAME` comments in FLAC, Ogg
 and Opus, and as `CTOC` and `CHAP` frames in MP3; WavPack holds none. A
 source of one chapter has none to keep.
 
-The file also holds the settings tables of
-[configuration](configuration.md), `[tags.clean.*]` and `[lyrics.clean.*]` ([cleaning](library.md#cleaning)),
-and the `[providers.*]`, `[[trigger]]` and `[[hook]]` tables below.
+The file also holds the settings tables of [configuration](configuration.md), `[tags.clean.*]` and `[lyrics.clean.*]`
+([cleaning](library.md#cleaning)), `[providers.*]` ([lookups](library.md#lookups-and-providers)) and the `[[hook]]` tables below.
 muman edits it in place: comments, order and keys it does not know
 survive every write, and two runs at once keep each other's songs. A
 key that does not parse, a file two songs list, or a pin to a source the

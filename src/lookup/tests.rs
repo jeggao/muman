@@ -1,4 +1,5 @@
 use super::*;
+use crate::reconcile::Planned;
 
 const DAY: u64 = 24 * 3600;
 const NOW: u64 = 100 * DAY;
@@ -27,7 +28,9 @@ fn setup(body: &str, measured: &[(&str, bool)]) -> (tempfile::TempDir, Manifest,
 }
 
 fn finds(manifest: &Manifest, state: &State, force: bool) -> Vec<(SourceKey, Provider)> {
-    due(manifest, state, &Vec::new(), NOW, force)
+    let ask = Ask { rematch: force };
+    due(manifest, state, &Vec::new(), NOW, ask)
+        .unwrap()
         .into_iter()
         .map(|d| (d.from, d.find))
         .collect()
@@ -161,7 +164,8 @@ fn own(printed: bool, tags: &[(Field, &str)]) -> (tempfile::TempDir, Manifest, S
 }
 
 fn found(manifest: &Manifest, state: &State, planned: &Planned) -> Vec<Provider> {
-    due(manifest, state, planned, NOW, false)
+    due(manifest, state, planned, NOW, Ask::default())
+        .unwrap()
         .into_iter()
         .map(|d| d.find)
         .collect()
@@ -373,4 +377,112 @@ fn the_docs_say_when_a_lookup_is_made_again_as_it_is() {
     for outcome in [found, Outcome::Declined] {
         assert!(!due(&at(outcome, 99 * DAY), false), "never");
     }
+}
+
+/// A song of a file of the user's own, named and on an album, that only
+/// LRCLIB is asked of.
+fn named() -> (tempfile::TempDir, Manifest, State, Planned) {
+    let tags = [
+        NAMED[0],
+        NAMED[1],
+        (Field::Album, "Rooms of Salt"),
+        (Field::AlbumArtist, "Paper Comets"),
+    ];
+    let (d, mut m, s, p) = own(false, &tags);
+    m.providers
+        .providers
+        .get_mut(&Provider::AcoustId)
+        .unwrap()
+        .enabled = false;
+    m.providers
+        .providers
+        .get_mut(&Provider::CoverArt)
+        .unwrap()
+        .enabled = false;
+    (d, m, s, p)
+}
+
+fn lrclib_verdict(m: &Manifest, s: &State, p: &Planned, now: u64) -> Verdict {
+    verdicts(m, s, p, now, Ask::default())
+        .unwrap()
+        .into_iter()
+        .find(|(_, q, _)| *q == Provider::Lrclib)
+        .unwrap()
+        .2
+}
+
+#[test]
+fn skips_a_song_s_own_lookups_and_its_pins_leave_a_provider_unasked() {
+    let (_d, mut m, s, p) = named();
+    assert!(matches!(lrclib_verdict(&m, &s, &p, NOW), Verdict::Due(_)));
+    m.providers.skip = vec!["album:=\"Rooms of Salt\"".into()];
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped("[providers] skip 'album:=\"Rooms of Salt\"'".into())
+    );
+    m.providers.skip.clear();
+    m.providers
+        .providers
+        .get_mut(&Provider::Lrclib)
+        .unwrap()
+        .skip = vec!["from:manual".into()];
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+    m.providers
+        .providers
+        .get_mut(&Provider::Lrclib)
+        .unwrap()
+        .skip
+        .clear();
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::Some(vec![Provider::Lrclib]);
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::All;
+    assert_eq!(due(&m, &s, &p, NOW, Ask::default()).unwrap(), []);
+    m.songs[0].lookups_off = crate::manifest::LookupsOff::None;
+    m.songs[0].lyrics = Some(crate::manifest::LyricsPin::None);
+    assert_eq!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Unwritten,
+        "lyrics = false asks for none"
+    );
+}
+
+#[test]
+fn a_skip_naming_a_tag_no_song_has_yet_skips_none_and_key_skips_all() {
+    let (_d, mut m, s, p) = named();
+    m.providers.skip = vec!["mood:calm".into()];
+    assert!(matches!(lrclib_verdict(&m, &s, &p, NOW), Verdict::Due(_)));
+    m.providers.skip = vec!["key::.".into()];
+    assert!(matches!(
+        lrclib_verdict(&m, &s, &p, NOW),
+        Verdict::Skipped(_)
+    ));
+}
+
+#[test]
+fn a_lookup_made_this_run_is_waited_for_no_more() {
+    let (_d, m, s, p) = own(true, &NAMED);
+    let from = SourceKey::parse("manual:a.flac").unwrap();
+    let found = |asked: &BTreeSet<(SourceKey, Provider)>| -> Vec<Provider> {
+        due_in(&m, &s, &p, Ask::default(), asked)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.find)
+            .collect()
+    };
+    assert_eq!(
+        found(&BTreeSet::new()),
+        [Provider::Lrclib, Provider::AcoustId]
+    );
+    let asked = [(from.clone(), Provider::AcoustId), (from, Provider::Lrclib)].into();
+    assert_eq!(
+        found(&asked),
+        [Provider::MusicBrainz],
+        "AcoustID failed this run: search by name"
+    );
 }

@@ -1,17 +1,21 @@
-//! Where sources come from, and which a song looks for: each provider's
-//! settings, and the triggers by which a song with a source from one
-//! looks another up, as `[providers.*]` and `[[trigger]]` in the song
-//! list set them over the defaults.
+//! Where sources come from, and what a song looks for: each provider's
+//! settings, as `[providers.*]` in the song list sets them over the
+//! defaults `new.toml` writes.
+//!
+//! A song asks a provider `until` it has what the provider's conditions
+//! name, every one: each is a closed query term ([`Closed`]) the provider
+//! can be judged to give by what it finds ([`Provider::gives`]), so a
+//! provider is never asked for what it cannot answer.
+//! `skip` lists queries naming songs it leaves out, `[providers] skip`
+//! those every provider does. Each key is read alone over its default,
+//! so a song list that sets one keeps every other default, and a later
+//! one reaches it. A YouTube provider is looked up from a YouTube video
+//! alone, so a file of the user's own never searches YouTube.
 //!
 //! `youtube` and `youtube-music` share one site, `youtube.com:<id>`: a
 //! video is a release when its info names a track or its channel is an
 //! artist's " - Topic", read with its tags, so no key changes when a
 //! video is told apart. A video not measured yet is neither.
-//!
-//! Any `[[trigger]]` replaces every default trigger rather than adding to
-//! them, so the triggers in the file are the whole of what runs. A YouTube
-//! provider is looked up from a YouTube video alone, so a file of the
-//! user's own never searches YouTube.
 //!
 //! `acoustid` finds MusicBrainz records by a song's fingerprint, so what
 //! it finds is a `musicbrainz:` source ([`Provider::yields`]): a song with
@@ -32,7 +36,9 @@ use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::facts::Facts;
+use crate::query::{Closed, Have};
 use crate::source::{SourceKey, YOUTUBE};
+use crate::tags::{Field, RECORD_FIELDS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Provider {
@@ -152,7 +158,71 @@ impl Provider {
                 Self::Manual | Self::YouTube | Self::YouTubeMusic => None,
             },
             key: (self == Self::AcoustId).then(|| crate::acoustid::KEY.to_string()),
+            until: match self {
+                Self::Manual => Vec::new(),
+                Self::YouTubeMusic => vec![Closed::From(Self::YouTubeMusic)],
+                Self::YouTube | Self::Lrclib => vec![Closed::Lyrics(Have::Better)],
+                Self::AcoustId | Self::MusicBrainz => [
+                    Field::Album,
+                    Field::AlbumArtist,
+                    Field::Date,
+                    Field::Track,
+                    Field::Disc,
+                    Field::Isrc,
+                ]
+                .map(|f| Closed::Has(f.vorbis().to_string()))
+                .into(),
+                Self::CoverArt => vec![Closed::Cover(Have::Better)],
+            },
+            skip: Vec::new(),
         }
+    }
+
+    /// Whether a song may ask this provider until it meets `c`: whether
+    /// what the provider finds can be judged to give it.
+    #[must_use]
+    pub fn gives(self, c: &Closed) -> bool {
+        let found = |h: &Have| matches!(h, Have::Some | Have::Better);
+        match (self, c) {
+            (Self::YouTube | Self::Lrclib, Closed::Lyrics(h))
+            | (Self::CoverArt, Closed::Cover(h)) => found(h),
+            (Self::AcoustId | Self::MusicBrainz, Closed::Has(tag)) => {
+                RECORD_FIELDS.iter().any(|f| f.vorbis() == tag)
+            }
+            (p, Closed::From(q)) => p.findable() && *q == p.yields(),
+            _ => false,
+        }
+    }
+
+    /// The conditions [`Self::gives`] takes, for a message.
+    #[must_use]
+    pub fn conditions(self) -> String {
+        let mut all: Vec<String> = [Have::Better, Have::Some]
+            .into_iter()
+            .flat_map(|h| [Closed::Lyrics(h), Closed::Cover(h)])
+            .chain(Self::ALL.map(Closed::From))
+            .chain(RECORD_FIELDS.map(|f| Closed::Has(f.vorbis().to_string())))
+            .filter(|c| self.gives(c))
+            .map(|c| c.to_string())
+            .collect();
+        all.dedup();
+        all.join(", ")
+    }
+
+    /// The keys its `[providers.*]` table takes.
+    #[must_use]
+    pub fn keys(self) -> Vec<&'static str> {
+        let mut keys = vec!["enabled", "concurrency", "recheck", "per_run"];
+        if self.findable() {
+            keys.extend(["until", "skip"]);
+        }
+        if self.served() {
+            keys.push("url");
+        }
+        if self == Self::AcoustId {
+            keys.push("key");
+        }
+        keys
     }
 
     /// Whether its sources are records muman keeps from a lookup, which
@@ -204,96 +274,28 @@ pub struct Settings {
     pub url: Option<String>,
     /// The application key AcoustID is asked with.
     pub key: Option<String>,
+    /// What a song asks this provider until it has, every one of them.
+    pub until: Vec<Closed>,
+    /// Queries, as written, naming songs that ask this provider nothing.
+    pub skip: Vec<String>,
 }
 
-/// When a trigger looks a song up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum When {
-    Always,
-    /// The song has no lyrics.
-    NoLyrics,
-    /// The song has no timed lyrics.
-    NoTimedLyrics,
-    /// No source names the song's album, nor does the song list.
-    NoAlbum,
-    /// The song has no cover, or one with less detail than
-    /// [`crate::quality::SOFT_COVER`].
-    SmallCover,
-}
-
-impl When {
-    fn named(name: &str) -> Result<Self> {
-        Ok(match name {
-            "always" => Self::Always,
-            "no-lyrics" => Self::NoLyrics,
-            "no-timed-lyrics" => Self::NoTimedLyrics,
-            "no-album" => Self::NoAlbum,
-            "small-cover" => Self::SmallCover,
-            _ => bail!(
-                "`{name}` is no condition: always, no-lyrics, no-timed-lyrics, no-album, small-cover"
-            ),
-        })
-    }
-}
-
-/// A song with a source from any of `from`, and none from `find`, looks
-/// `find` up when the condition holds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Trigger {
-    pub from: Vec<Provider>,
-    pub find: Provider,
-    pub when: When,
-}
-
-/// What a song list sets of providers and triggers, over the defaults.
+/// What a song list sets of providers, over the defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub providers: BTreeMap<Provider, Settings>,
-    pub triggers: Vec<Trigger>,
+    /// Queries, as written, naming songs that ask no provider anything.
+    pub skip: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        use Provider::{AcoustId, CoverArt, Lrclib, Manual, MusicBrainz, YouTube, YouTubeMusic};
         Self {
             providers: Provider::ALL
                 .into_iter()
                 .map(|p| (p, p.defaults()))
                 .collect(),
-            triggers: vec![
-                Trigger {
-                    from: vec![YouTube],
-                    find: YouTubeMusic,
-                    when: When::Always,
-                },
-                Trigger {
-                    from: vec![YouTubeMusic],
-                    find: YouTube,
-                    when: When::NoTimedLyrics,
-                },
-                Trigger {
-                    from: vec![Manual, YouTube, YouTubeMusic],
-                    find: Lrclib,
-                    when: When::NoTimedLyrics,
-                },
-                // A release or a tagged file offers what a record would, and at
-                // a request a second, 3600 songs looked up take an hour.
-                Trigger {
-                    from: vec![Manual, YouTube, YouTubeMusic],
-                    find: AcoustId,
-                    when: When::NoAlbum,
-                },
-                Trigger {
-                    from: vec![Manual, YouTube, YouTubeMusic],
-                    find: MusicBrainz,
-                    when: When::NoAlbum,
-                },
-                Trigger {
-                    from: vec![Manual, YouTube, YouTubeMusic],
-                    find: CoverArt,
-                    when: When::SmallCover,
-                },
-            ],
+            skip: Vec::new(),
         }
     }
 }
@@ -312,26 +314,80 @@ impl Config {
         self.settings(p).enabled && self.settings(p.yields()).enabled
     }
 
-    /// The triggers whose provider looked up is [`Self::on`].
-    pub fn active(&self) -> impl Iterator<Item = &Trigger> {
-        self.triggers.iter().filter(|t| self.on(t.find))
+    /// The queries naming songs that ask `p` nothing: `[providers] skip`
+    /// and the provider's own.
+    pub fn skips(&self, p: Provider) -> impl Iterator<Item = &str> {
+        self.skip
+            .iter()
+            .chain(&self.settings(p).skip)
+            .map(String::as_str)
     }
 }
 
-fn names(item: &Item, what: &str) -> Result<Vec<Provider>> {
-    match item {
-        Item::Value(Value::String(s)) => Ok(vec![Provider::named(s.value())?]),
+/// The conditions `until` names: one, or a list of them, each a closed
+/// field's term `p` can be judged to give.
+fn read_until(p: Provider, item: &Item, what: &str) -> Result<Vec<Closed>> {
+    let texts: Vec<&str> = match item {
+        Item::Value(Value::String(s)) => vec![s.value().as_str()],
         Item::Value(Value::Array(a)) => a
             .iter()
             .map(|v| {
-                Provider::named(
-                    v.as_str()
-                        .with_context(|| format!("{what}: names a provider"))?,
-                )
+                v.as_str()
+                    .with_context(|| format!("{what}: `until` lists conditions, as \"has:album\""))
             })
-            .collect(),
-        _ => bail!("{what} must name a provider or a list of them"),
+            .collect::<Result<_>>()?,
+        _ => bail!("{what}: `until` must be a condition or a list of them"),
+    };
+    if texts.is_empty() {
+        bail!(
+            "{what}: `until` lists no condition, so no song would ever ask; \
+             set `enabled = false` to ask {p} nothing"
+        );
     }
+    let mut until = Vec::new();
+    for text in texts {
+        let text = text.trim();
+        let c = (|| {
+            if text.starts_with('^') {
+                bail!("a song asks until it has something, so no condition is negated");
+            }
+            let (field, value) = text
+                .split_once(':')
+                .context("a condition is a field and a value, as \"has:album\"")?;
+            let c = Closed::parse(field, value.strip_prefix('=').unwrap_or(value))?;
+            if !p.gives(&c) {
+                bail!("{p} cannot give it; it takes {}", p.conditions());
+            }
+            if until.contains(&c) {
+                bail!("it is listed twice");
+            }
+            Ok(c)
+        })()
+        .with_context(|| format!("{what}: `until`: `{text}`"))?;
+        until.push(c);
+    }
+    Ok(until)
+}
+
+/// The queries a `skip` lists, each checked to read as one.
+fn read_skip(item: &Item, what: &str) -> Result<Vec<String>> {
+    let list = item
+        .as_array()
+        .with_context(|| format!("{what} must be a list of queries"))?;
+    let schemes: std::collections::BTreeSet<String> = ["manual".to_string()]
+        .into_iter()
+        .chain(crate::sites::built_in().schemes().map(str::to_string))
+        .collect();
+    list.iter()
+        .map(|v| {
+            let text = v.as_str().with_context(|| {
+                format!("{what}: each entry is a query, as 'album:=\"Some Album\"'")
+            })?;
+            crate::query::parse_text(text, &schemes)
+                .map_err(|e| anyhow::anyhow!("{what}: `{text}`: {e:#}"))?;
+            Ok(text.to_string())
+        })
+        .collect()
 }
 
 fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
@@ -377,6 +433,11 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
                         .map_err(|e| anyhow::anyhow!("{what}: `url`: {e}"))?,
                 );
             }
+            "until" | "skip" if !p.findable() => {
+                bail!("{what}: `{key}`: {p} is never looked up");
+            }
+            "until" => s.until = read_until(p, item, &what)?,
+            "skip" => s.skip = read_skip(item, &format!("{what} skip"))?,
             "key" if p == Provider::AcoustId => {
                 let k = item
                     .as_str()
@@ -385,14 +446,13 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
                     .with_context(|| format!("{what}: `key` must be an application key"))?;
                 s.key = Some(k.to_string());
             }
-            _ => bail!("{what}: `{key}` is no setting"),
+            _ => bail!("{what}: `{key}` is no setting: {}", p.keys().join(", ")),
         }
     }
     Ok(s)
 }
 
-/// The providers and triggers a song list sets; the defaults where it
-/// sets none. Any `[[trigger]]` replaces every default trigger.
+/// The providers a song list sets; the defaults where it sets none.
 pub fn read(doc: &DocumentMut) -> Result<Config> {
     let mut config = Config::default();
     if let Some(item) = doc.get("providers") {
@@ -400,53 +460,15 @@ pub fn read(doc: &DocumentMut) -> Result<Config> {
             .as_table()
             .context("`providers` must be a table of [providers.<name>] tables")?;
         for (name, item) in table {
+            if name == "skip" {
+                config.skip = read_skip(item, "[providers] skip")?;
+                continue;
+            }
             let p = Provider::named(name)?;
             let t = item
                 .as_table()
                 .with_context(|| format!("`providers.{name}` must be a table"))?;
             config.providers.insert(p, read_settings(p, t)?);
-        }
-    }
-    if let Some(item) = doc.get("trigger") {
-        let list = item
-            .as_array_of_tables()
-            .context("`trigger` must be a list of [[trigger]] tables")?;
-        config.triggers.clear();
-        for (n, t) in list.iter().enumerate() {
-            let what = format!("trigger {}", n + 1);
-            let from = names(
-                t.get("from")
-                    .with_context(|| format!("{what} names no `from`"))?,
-                &what,
-            )?;
-            let find = t
-                .get("find")
-                .and_then(Item::as_str)
-                .with_context(|| format!("{what} names no `find`"))?;
-            let find = Provider::named(find)?;
-            if from.contains(&Provider::AcoustId) {
-                bail!("{what}: no source is from acoustid; its finds are from musicbrainz");
-            }
-            if !find.findable() {
-                bail!("{what}: {find} cannot be looked up");
-            }
-            let youtube = [Provider::YouTube, Provider::YouTubeMusic];
-            if youtube.contains(&find) && from.iter().any(|p| !youtube.contains(p)) {
-                bail!("{what}: {find} is looked up from a YouTube video alone");
-            }
-            let when = match t.get("when") {
-                None => When::Always,
-                Some(w) => When::named(
-                    w.as_str()
-                        .with_context(|| format!("{what}: `when` must be text"))?,
-                )?,
-            };
-            for (key, _) in t {
-                if !["from", "find", "when"].contains(&key) {
-                    bail!("{what}: `{key}` is no setting");
-                }
-            }
-            config.triggers.push(Trigger { from, find, when });
         }
     }
     Ok(config)
@@ -472,36 +494,30 @@ mod tests {
             c.settings(Provider::YouTubeMusic).recheck,
             crate::units::Time::days(14).duration()
         );
-        let lrclib = c
-            .triggers
-            .iter()
-            .find(|t| t.find == Provider::Lrclib)
-            .unwrap();
-        assert!(lrclib.from.contains(&Provider::Manual));
-        assert!(
-            !c.triggers.iter().any(|t| t.from.contains(&Provider::Manual)
-                && [Provider::YouTube, Provider::YouTubeMusic].contains(&t.find)),
-            "a file of the user's own looks nothing up on YouTube"
+        assert_eq!(
+            c.settings(Provider::Lrclib).until,
+            [Closed::Lyrics(Have::Better)]
         );
+        assert_eq!(c.settings(Provider::MusicBrainz).until.len(), 6);
+        assert_eq!(c.skip, Vec::<String>::new());
         let mb = c.settings(Provider::MusicBrainz);
         assert_eq!(mb.url.as_deref(), Some("https://musicbrainz.org"));
         assert_eq!(mb.concurrency, 1);
         assert_eq!(mb.key, None);
         let acoustid = c.settings(Provider::AcoustId);
         assert_eq!(acoustid.key.as_deref(), Some(crate::acoustid::KEY));
-        let order: Vec<Provider> = c.triggers.iter().map(|t| t.find).collect();
-        let at = |p| order.iter().position(|f| *f == p).unwrap();
-        assert!(at(Provider::AcoustId) < at(Provider::MusicBrainz));
     }
 
     #[test]
-    fn tables_set_over_the_defaults_and_triggers_replace_them() {
+    fn tables_set_over_the_defaults_key_by_key() {
         let c = config(
             "[providers.lrclib]\nrecheck = \"3 days\"\nurl = \"lrclib.example:8080\"\n\
              [providers.youtube-music]\nenabled = false\n\
              [providers.musicbrainz]\nurl = \"https://mb.example/\"\n\
              [providers.acoustid]\nkey = \"0wnK3y\"\nurl = \"https://aid.example\"\n\
-             [[trigger]]\nfrom = \"manual\"\nfind = \"lrclib\"\nwhen = \"no-lyrics\"\n",
+             until = [\"has:album\", \"has:label\"]\n\
+             [providers.coverart]\nuntil = \"cover:yes\"\nskip = [\"from:manual\"]\n\
+             [providers]\nskip = ['album:=\"The Glass Orchards\"']\n",
         )
         .unwrap();
         assert_eq!(
@@ -517,8 +533,21 @@ mod tests {
         let acoustid = c.settings(Provider::AcoustId);
         assert_eq!(acoustid.key.as_deref(), Some("0wnK3y"));
         assert_eq!(acoustid.url.as_deref(), Some("https://aid.example"));
-        assert_eq!(c.triggers.len(), 1);
-        assert_eq!(c.triggers[0].when, When::NoLyrics);
+        assert_eq!(
+            acoustid.until,
+            [Closed::Has("ALBUM".into()), Closed::Has("LABEL".into())]
+        );
+        assert_eq!(
+            c.settings(Provider::MusicBrainz).until,
+            Provider::MusicBrainz.defaults().until,
+            "a provider's own `until` alone"
+        );
+        let cover = c.settings(Provider::CoverArt);
+        assert_eq!(cover.until, [Closed::Cover(Have::Some)]);
+        assert_eq!(
+            c.skips(Provider::CoverArt).collect::<Vec<_>>(),
+            ["album:=\"The Glass Orchards\"", "from:manual"]
+        );
         assert!(!c.settings(Provider::YouTubeMusic).enabled);
     }
 
@@ -528,10 +557,6 @@ mod tests {
         assert!(c.settings(Provider::AcoustId).enabled);
         assert!(!c.on(Provider::AcoustId) && !c.on(Provider::MusicBrainz));
         assert!(c.on(Provider::CoverArt) && c.on(Provider::Lrclib));
-        assert!(
-            c.active()
-                .all(|t| ![Provider::AcoustId, Provider::MusicBrainz].contains(&t.find))
-        );
     }
 
     #[test]
@@ -541,12 +566,26 @@ mod tests {
         assert!(config("[providers.youtube]\nurl = \"yt.example\"\n").is_err());
         assert!(config("[providers.musicbrainz]\nkey = \"k\"\n").is_err());
         assert!(config("[providers.acoustid]\nkey = \" \"\n").is_err());
-        assert!(config("[[trigger]]\nfrom = \"acoustid\"\nfind = \"lrclib\"\n").is_err());
-        assert!(config("[[trigger]]\nfrom = \"youtube\"\nfind = \"manual\"\n").is_err());
-        assert!(config("[[trigger]]\nfrom = \"manual\"\nfind = \"youtube-music\"\n").is_err());
+        for until in [
+            "[]",
+            "\"has:date\"",
+            "\"^lyrics:timed\"",
+            "\"lyrics:none\"",
+            "\"from:musicbrainz\"",
+            "[\"lyrics:timed\", \"lyrics:timed\"]",
+            "\"timed\"",
+        ] {
+            let e = config(&format!("[providers.lrclib]\nuntil = {until}\n")).unwrap_err();
+            assert!(format!("{e:#}").contains("until"), "{until}: {e:#}");
+        }
+        let e = config("[providers.lrclib]\nuntil = \"has:date\"\n").unwrap_err();
         assert!(
-            config("[[trigger]]\nfrom = \"youtube\"\nfind = \"lrclib\"\nwhen = \"often\"\n")
-                .is_err()
+            format!("{e:#}").contains("lyrics:timed, lyrics:yes, from:lrclib"),
+            "the error names what lrclib takes: {e:#}"
         );
+        assert!(config("[providers.musicbrainz]\nuntil = \"has:genre\"\n").is_err());
+        assert!(config("[providers.manual]\nuntil = \"from:manual\"\n").is_err());
+        assert!(config("[providers]\nskip = [\"\"]\n").is_err());
+        assert!(config("[providers.lrclib]\nskip = \"genre:ambient\"\n").is_err());
     }
 }

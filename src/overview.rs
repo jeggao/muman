@@ -374,9 +374,15 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
         unplanned.add(song);
     }
     group(out, c.verbose, "Cannot be made", &unplanned)?;
+    let due = lookup::due(
+        &c.manifest,
+        &c.state,
+        &c.planned,
+        state::now_secs(),
+        lookup::Ask::default(),
+    )?;
     for p in lookup::ORDER {
         let mut wanted = Group::default();
-        let due = lookup::due(&c.manifest, &c.state, &c.planned, state::now_secs(), false);
         for d in due.iter().filter(|d| d.find == p) {
             wanted.add(&reconcile::name_of(
                 &c.manifest.songs[d.song],

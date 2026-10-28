@@ -39,7 +39,7 @@ use crate::source::{SourceKey, id_of};
 use crate::store::{Kind, Store};
 use crate::sync::{Listing, list, look_up, network, record};
 use crate::ui::Prompter;
-use crate::{atomic, attach, change, download, ffmpeg, info, probe, store, ui};
+use crate::{atomic, attach, change, download, ffmpeg, info, lookup, probe, store, ui};
 
 /// What `add` was given.
 #[derive(Debug, Clone, Copy)]
@@ -153,7 +153,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         left_out = attached.left_out;
         unread.extend(attached.unread);
         give_tags(dirs, &attached.songs, &how, listed, out)?;
-        ok &= look_up(job, runner, http, false, &declined, out)?;
+        ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
         ok &= crate::reconcile_now(job, runner, Options::default(), Some(&mut run), out)?;
         Ok(ok)
     })();
