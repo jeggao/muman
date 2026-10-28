@@ -329,6 +329,9 @@ pub enum Edit {
         key: SourceKey,
         held: crate::held::Held,
     },
+    /// What `key` held forgotten by every song listing it, so each is
+    /// built from what it holds now: a record a lookup kept anew.
+    Unhold(SourceKey),
 }
 
 /// What an edited song became.
@@ -1498,6 +1501,18 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         Edit::Respell { from, to } => {
             let (from, to) = (from.to_string(), to.to_string());
             respell(doc, &|k| (k == from).then(|| to.clone()));
+        }
+        Edit::Unhold(key) => {
+            let text = key.to_string();
+            for song in doc
+                .get_mut("song")
+                .and_then(Item::as_array_of_tables_mut)
+                .into_iter()
+                .flat_map(|l| l.iter_mut())
+                .filter(|t| listed_keys(t).contains(&text))
+            {
+                crate::held::unset(song, key);
+            }
         }
         Edit::Hold { song, key, held } => {
             let (named, text) = (song.to_string(), key.to_string());

@@ -34,12 +34,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   artist, date, track, disc and ISRC**, not only an album, so songs with
   partial tags are looked up too; a backlog drains over runs by
   `per_run`.
+- **A record that falls short is asked about again.** An untimed LRCLIB
+  record is searched for again, a MusicBrainz record on no release or a
+  soft cover fetched again by its ID, after `recheck` and twice as long
+  each time it comes back unchanged, up to 90 days. A record that gives
+  all it can is never asked about again, even when the song resolves to
+  another source's lyrics or cover.
 
 ### Fixed
 
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.
+- **A record found again with other content was not kept**: the copy
+  first stored stayed, and a song pinned to its old content.
 
 ## [0.8.0] - 2026-10-28
 

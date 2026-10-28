@@ -5,7 +5,8 @@
 //! A song asks a provider `until` it has what the provider's conditions
 //! name, every one: each is a closed query term ([`Closed`]) the provider
 //! can be judged to give by what it finds ([`Provider::gives`]), so a
-//! provider is never asked for what it cannot answer.
+//! provider is never asked for what it cannot answer, and a record it
+//! found is judged by itself rather than by what its song resolves to.
 //! `skip` lists queries naming songs it leaves out, `[providers] skip`
 //! those every provider does. Each key is read alone over its default,
 //! so a song list that sets one keeps every other default, and a later

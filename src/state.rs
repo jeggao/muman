@@ -157,6 +157,16 @@ pub struct Looked {
     /// Seconds since the Unix epoch.
     pub at: u64,
     pub outcome: Outcome,
+    /// How many times in a row it found again, unchanged, a record that
+    /// falls short of what the song asks.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unchanged: u32,
+}
+
+// serde's `skip_serializing_if` passes the field by reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,7 +193,21 @@ impl Looked {
             method: crate::lookup::method(find).to_string(),
             at: now_secs(),
             outcome,
+            unchanged: 0,
         }
+    }
+
+    /// When a lookup that found a record the song lists, which falls short
+    /// of what the song asks, is due again, in seconds since the Unix
+    /// epoch: after `recheck`, twice as long for each time it found the
+    /// record again unchanged, up to [`SHORT_MAX_WAIT_SECS`].
+    #[must_use]
+    pub fn short_again_at(&self, recheck: std::time::Duration) -> u64 {
+        let wait = recheck
+            .as_secs()
+            .saturating_mul(1 << self.unchanged.min(16))
+            .min(SHORT_MAX_WAIT_SECS.max(recheck.as_secs()));
+        self.at.saturating_add(wait)
     }
 
     /// Whether it is due again, by [`Self::again_at`].
@@ -438,6 +462,11 @@ pub enum Step {
 
 /// The longest a failed fetch waits before it is tried again.
 const MAX_WAIT_SECS: u64 = 7 * 24 * 3600;
+
+/// The longest a record that falls short waits to be asked about again:
+/// long enough that one never improved costs a few requests a year, short
+/// enough that one fixed upstream reaches the library within a season.
+pub const SHORT_MAX_WAIT_SECS: u64 = 90 * 24 * 3600;
 
 /// Copies of a download fetched again, each found damaged or failing,
 /// after which muman stops asking until `sync --retry`.
@@ -886,6 +915,7 @@ mod tests {
             method: method.into(),
             at: 0,
             outcome,
+            unchanged: 0,
         };
         let method = crate::lookup::method(Provider::Lrclib);
         let none = |_: &SourceKey| false;

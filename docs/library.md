@@ -221,10 +221,19 @@ skip = ["from:manual"]
 | Made by an older method | At once, unless it found a source the song lists |
 | Found nothing, or an instrumental | After the provider's `recheck` |
 | Failed | After an hour, doubling with each failure, up to a week |
+| Found a source the song lists that falls short | After `recheck`, doubling each time it is found again unchanged, up to 90 days |
 | Found a source, or declined | Never |
 
-A song that lists a source from a provider asks it nothing more, and a
-MusicBrainz record counts for AcoustID too.
+A source the song lists from a provider falls short when it lacks a
+condition of `until` that the song lacks too, as an untimed LRCLIB
+record does while the song has no timed lyrics from elsewhere. A record
+that gives what it can, as a sharp cover the song's square one beats,
+is never asked about again. LRCLIB is searched again, as a better
+record may have joined it; a MusicBrainz record or a Cover Art Archive
+cover is fetched again by its ID; a YouTube video is never looked for
+again. A record asked about again that comes back in another form takes
+the place of the one kept, and its songs are built anew from it; one
+another song's lookup finds stays as kept.
 
 `sync --rematch` makes every lookup a song still wants at once,
 whatever its record says. What one round finds can make the next due,
