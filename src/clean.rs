@@ -1,6 +1,6 @@
 //! What cleaning takes out of the tags a source offers: what a store or
 //! an uploader wrapped around the song's name, read by rules in a fixed
-//! order. Each rule is a switch in the song list's `[clean.<tier>]`, its
+//! order. Each rule is a switch in the song list's `[tags.clean.<tier>]`, its
 //! tier saying how far it may stray from the value it was given.
 //!
 //! Cleaning is what lets `Song (Album Version)` agree with `Song`, and a
@@ -9,7 +9,7 @@
 //! release before cleaning, and all did after, romanization aside.
 //!
 //! Lyrics have rules of their own, in [`lyrics`], switched under
-//! `[clean.lyrics.<tier>]` in the same tiers.
+//! `[lyrics.clean.<tier>]` in the same tiers.
 //!
 //! Offers are cleaned at each resolve, never when read: the raw offers
 //! stay in the state, so changing a rule or a switch needs nothing read
@@ -183,7 +183,8 @@ pub fn switches() -> impl Iterator<Item = (&'static str, &'static str)> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     off: BTreeSet<&'static str>,
-    /// Keys under `[clean]` naming no rule, as written.
+    /// Keys under `[tags.clean]` and `[lyrics.clean]` naming no rule, as
+    /// written.
     pub unknown: Vec<String>,
 }
 

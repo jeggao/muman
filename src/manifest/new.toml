@@ -1,5 +1,5 @@
 version = 1
-edition = 5
+edition = 6
 
 # Settings, each written at its default; change any. A size, bitrate,
 # time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
@@ -84,6 +84,33 @@ mp3_bitrate = "320 kb/s"
 layouts = ["any"]
 downmix = ["stereo"]
 
+# How the best audio of a song's sources is picked. Each measure scores
+# a source in whole steps; the steps times the weight are summed, and
+# the lowest sum wins. `enabled = false` or `weight = 0` ignores a
+# measure. The weights below rank by each measure in turn, top first.
+[audio.pick.purity]
+# Sound beyond the song, such as a video's intro, and the song an
+# excerpt lacks, in steps of `step`.
+enabled = true
+weight = 10000
+step = "2 s"
+[audio.pick.stereo]
+# One step for mono: the channels' energy no gain or lag between them
+# explains is at most `incoherence`.
+enabled = true
+weight = 5000
+incoherence = "1 %"
+[audio.pick.bandwidth]
+# Where a lowpass cuts the audio off, a step per `step` lower.
+enabled = true
+weight = 10
+step = "500 Hz"
+[audio.pick.clipping]
+# A step for each share of clipped samples reached.
+enabled = true
+weight = 1
+cutoffs = ["0.1 %", "1 %"]
+
 [loudness]
 # How each song is levelled to `target`, measured as EBU R128 measures:
 # "tags" writes ReplayGain 2.0 gains and peaks that players apply, as
@@ -103,44 +130,20 @@ scope = "album"
 # at or under this; a lowering one never is.
 ceiling = "-1 dB"
 
-# How the best of a song's sources is picked. Each measure scores a
-# source in whole steps; the steps times the weight are summed, and the
-# lowest sum wins. `enabled = false` or `weight = 0` ignores a measure.
-# The weights below rank by each measure in turn, top first.
-[quality.purity]
-# Sound beyond the song, such as a video's intro, and the song an
-# excerpt lacks, in steps of `step`.
-enabled = true
-weight = 10000
-step = "2 s"
-[quality.stereo]
-# One step for mono: the channels' energy no gain or lag between them
-# explains is at most `incoherence`.
-enabled = true
-weight = 5000
-incoherence = "1 %"
-[quality.bandwidth]
-# Where a lowpass cuts the audio off, a step per `step` lower.
-enabled = true
-weight = 10
-step = "500 Hz"
-[quality.clipping]
-# A step for each share of clipped samples reached.
-enabled = true
-weight = 1
-cutoffs = ["0.1 %", "1 %"]
-[quality.square]
+# How the best cover of a song's sources is picked, scored as
+# [audio.pick] scores audio.
+[cover.pick.square]
 # One step for a cover that is not square within `tolerance`, the log
 # of its sides' ratio.
 enabled = true
 weight = 10000
 tolerance = 0.03
-[quality.resolution]
+[cover.pick.resolution]
 # A cover's detail, a step per `step` less resolution.
 enabled = true
 weight = 20
 step = "10 %"
-[quality.blockiness]
+[cover.pick.blockiness]
 # A cover's JPEG block artifacts, a step per `step`, ten at most.
 enabled = true
 weight = 1

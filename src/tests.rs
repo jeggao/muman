@@ -193,7 +193,7 @@ fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
 
     let list = s.dir.path().join("home/songs.toml");
     let t = std::fs::read_to_string(&list).unwrap();
-    let at = t.find("[clean.lyrics.packaging]").expect(&t);
+    let at = t.find("[lyrics.clean.packaging]").expect(&t);
     let off = format!(
         "{}{}",
         &t[..at],
@@ -266,6 +266,37 @@ fn a_song_retitled_cleans_its_lyrics_by_its_new_title() {
     );
     assert!(ok, "{text}");
     assert!(text.contains("Updated (lyric cleaning, tags)"), "{text}");
+}
+
+#[test]
+fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let now = std::fs::read_to_string(&list).unwrap();
+    let old = now
+        .replace(
+            &format!("edition = {}", crate::migrate::EDITION),
+            "edition = 5",
+        )
+        .replace("[audio.pick.", "[quality.")
+        .replace("[cover.pick.", "[quality.")
+        .replace("[lyrics.clean.", "[clean.lyrics.")
+        .replace("[tags.clean.", "[clean.");
+    assert!(old.contains("[clean.lyrics.tidy]"), "{old}");
+    std::fs::write(&list, &old).unwrap();
+
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Renamed in the song list: [quality.purity] is [audio.pick.purity] now"),
+        "{text}"
+    );
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), now);
 }
 
 #[test]

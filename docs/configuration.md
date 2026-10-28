@@ -86,9 +86,9 @@ the space optional:
 |---|---|---|
 | Size | `"32 GiB"`, `"700 MB"`, `"4K"` | `[library] max_size`, `block_size`, `[history] max_size` |
 | Bitrate | `"160 kb/s"`, `"160 kbps"`, `"160k"` | `[audio] *_bitrate` |
-| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[quality.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, a song's `lyrics_offset` |
-| Frequency | `"500 Hz"`, `"1.5 kHz"` | `[quality.bandwidth] step` |
-| Share | `"1 %"`, or `0.01` | `[quality.stereo] incoherence`, `[quality.clipping] cutoffs`, `[quality.resolution] step` |
+| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[audio.pick.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, a song's `lyrics_offset` |
+| Frequency | `"500 Hz"`, `"1.5 kHz"` | `[audio.pick.bandwidth] step` |
+| Share | `"1 %"`, or `0.01` | `[audio.pick.stereo] incoherence`, `[audio.pick.clipping] cutoffs`, `[cover.pick.resolution] step` |
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
@@ -103,7 +103,9 @@ defaults the file was written to. A song list of an earlier edition
 reads as the current one: a setting named the old way, such as
 `opus_kbps = 160`, reads as its new name and unit, `opus_bitrate =
 "160 kb/s"`, and the next `sync` writes it so, its comments kept;
-`status` and `check` name each one meanwhile. Naming a setting both
+`status` and `check` name each one meanwhile; a table moved whole, as
+`[quality.purity]` to `[audio.pick.purity]`, keeps its settings, its
+comments and its place in the file. Naming a setting both
 ways is an error. When a later muman changes a default, `sync`,
 `status` and `check` name each setting still at the old one, however
 it is spelled, and `muman sync --update-defaults` moves those to the
@@ -117,8 +119,9 @@ know.
 | `[library]` | The library folder, the path template, how names are made safe, length limits, fallback names, where lyrics go, whether sources' comments are written, the most the library may take |
 | [`[lyrics]`](#which-lyrics-a-song-takes) | The languages you read, and which lyrics a song takes first: the original, a romanization or a translation, timed or untimed |
 | [`[audio]`](audio.md#codecs) | The codecs copied as they are, what the rest is encoded to, each encoder's bitrate, the lowest bitrate a size limit lowers to |
+| [`[audio.pick.*]`](#how-sources-are-ranked) | How audio sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
 | [`[loudness]`](audio.md#loudness) | How songs are levelled: where the gain goes, the loudness aimed at, which peaks count, album or track gain, the highest peak a gain may raise a song to |
-| `[quality.*]` | How sources are ranked: each measure switched on or off, its weight, and its steps and cutoffs |
+| [`[cover.pick.*]`](#how-sources-are-ranked) | How covers are ranked, as `[audio.pick.*]` ranks audio |
 | `[ytdlp]` | yt-dlp's format, subtitle languages, fragments, muman's yt-dlp plugins, the arguments every run takes, each extractor's arguments, how long partial downloads are kept |
 | `[torrent]` | The arguments every aria2c run takes, how long a fetch waits with nothing arriving, how long a fetched torrent is seeded, how long partial fetches are kept |
 | `[tools.*]` | The ffmpeg, ffprobe, yt-dlp and aria2c muman runs, and whether each one's version is checked |
@@ -156,7 +159,7 @@ and fetched again from the page its song records. Adding a site to `new.toml` ad
 the next time muman writes one; list an extractor only for a site whose
 pages are its own, since a source it fetched before is named by its page.
 
-The song list's own tables — `[clean.*]` (tag cleaning),
+The song list's own tables — `[tags.clean.*]` and `[lyrics.clean.*]` (cleaning),
 `[providers.*]`, `[[trigger]]` and `[[hook]]` — are described in the [guide](guide.md) and in [making the
 library](library.md).
 
@@ -256,21 +259,21 @@ after any `pt-BR`, and `ger`, `deu` and `de` are one language.
 ## How sources are ranked
 
 Each measure of [how the best of each is picked](library.md#how-the-best-of-each-is-picked)
-has a table under `[quality]`: `[quality.purity]`, `stereo`, `bandwidth`
-and `clipping` rank audio, `[quality.square]`, `resolution` and
-`blockiness` rank covers. In each, `enabled` and `weight` say whether and
+has a table under its aspect's `pick`: `[audio.pick.purity]`, `stereo`,
+`bandwidth` and `clipping` rank audio, `[cover.pick.square]`,
+`resolution` and `blockiness` rank covers. In each, `enabled` and `weight` say whether and
 how much it counts, and the other keys how it is cut into steps. A
 source's steps times their weights are summed, and the lowest sum wins.
 
 ```toml
 # Mono costs as much as 2.5 kHz of bandwidth: 50 against 10 for each
 # 500 Hz. Clipping counts for nothing.
-[quality.bandwidth]
+[audio.pick.bandwidth]
 weight = 10
 step = "500 Hz"
-[quality.stereo]
+[audio.pick.stereo]
 weight = 50
-[quality.clipping]
+[audio.pick.clipping]
 enabled = false
 ```
 

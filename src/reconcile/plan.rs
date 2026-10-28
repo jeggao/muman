@@ -250,7 +250,7 @@ impl<'a> Resolver<'a> {
             albums: &self.albums,
             naming: &self.naming,
             audio: &settings.audio,
-            quality: &settings.quality,
+            cover: &settings.cover.pick,
             placement: settings.library.lyrics,
             source_comments: settings.library.source_comments,
         }

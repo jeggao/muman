@@ -22,9 +22,9 @@ use, as 24 against 16 padded to 24, then the lower sample rate, which an
 upsample would only waste.
 
 The weights `songs.toml` starts with rank by each measure in turn, as
-the table lists them: each outweighs everything after it. `[quality]`
-in the song list switches a measure off, changes its weight, or changes
-the steps and cutoffs it is judged by; lower one weight and the
+the table lists them: each outweighs everything after it.
+`[audio.pick]` and `[cover.pick]` in the song list switch a measure off,
+change its weight, or change the steps and cutoffs it is judged by; lower one weight and the
 measures after it can make up for it. See
 [configuration](configuration.md#how-sources-are-ranked).
 
@@ -118,8 +118,8 @@ text are dropped from every value.
 Every tag a source offers is cleaned before ranking, so `Paper Comets
 (Album Version)` agrees with `Paper Comets`; lyrics are cleaned as a song
 is written. Tags set in a song's or an album's `tags.<name>` are never
-cleaned. Each rule is a switch under `[clean.<tier>]`, or
-`[clean.lyrics.<tier>]` for lyrics, listed by every write; `muman status`
+cleaned. Each rule is a switch under `[tags.clean.<tier>]`, or
+`[lyrics.clean.<tier>]` for lyrics, listed by every write; `muman status`
 names each rule that changed a tag as `<tier>.<key>`. Flipping a lyric
 switch writes every song with lyrics again, and a new title or artist
 writes a song whose lyrics are cleaned of its old ones again.
@@ -329,7 +329,7 @@ each song the change leaves alone is copied, and every other is made
 again from its sources. A song changed since muman wrote it, or whose
 sources are gone, goes in as the library holds it, and the export says
 so and exits with 4. Where the library lives and its `max_size` are not
-the export's to change, nor `[quality]`, nor loudness when the song
+the export's to change, nor `[audio.pick]`, nor loudness when the song
 list's `[loudness] mode` measures none.
 
 `--max-size` caps the export, such as `--max-size 32GiB` for a card, as

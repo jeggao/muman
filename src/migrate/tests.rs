@@ -11,7 +11,7 @@ fn renames() -> impl Iterator<Item = &'static Rename> {
         .flat_map(|e| e.steps)
         .filter_map(|s| match s {
             Step::Rename(r) => Some(r),
-            Step::Move(_) | Step::Default(_) => None,
+            Step::Move(_) | Step::MoveTable(_) | Step::Default(_) => None,
         })
 }
 
@@ -59,12 +59,13 @@ fn the_editions_count_up_to_the_current_one() {
     let new = defaults();
     assert_eq!(edition_of(&crate::manifest::NEW.parse().unwrap()), EDITION);
     for r in renames().filter(|r| !r.table.contains('*') && r.table != "song") {
-        let path: Vec<&str> = r.table.split('.').collect();
+        let table = now_named(r.table, FIRST, &EDITIONS);
+        let path: Vec<&str> = table.split('.').collect();
         let table = path
             .iter()
             .try_fold(new.as_item(), |item, key| item.get(key))
             .and_then(Item::as_table)
-            .unwrap_or_else(|| panic!("no [{}] in new.toml", r.table));
+            .unwrap_or_else(|| panic!("no [{table}] in new.toml"));
         assert!(!table.contains_key(r.old), "new.toml names `{}`", r.old);
         let commented = crate::manifest::NEW.contains(&format!("# {} = ", r.new));
         assert!(
@@ -79,7 +80,20 @@ fn the_editions_count_up_to_the_current_one() {
 fn every_old_name_reads_as_its_new_one_with_its_comments() {
     let mut d = doc(OLD);
     let renamed = rename_all(&mut d, &EDITIONS).unwrap();
-    assert_eq!(renamed.len(), renames().count(), "{renamed:?}");
+    let moved = [
+        "[quality.purity] is [audio.pick.purity] now",
+        "[quality.bandwidth] is [audio.pick.bandwidth] now",
+    ];
+    assert_eq!(
+        renamed.len(),
+        renames().count() + moved.len(),
+        "{renamed:?}"
+    );
+    let last: Vec<String> = renamed[renames().count()..]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(last, moved);
     let text = d.to_string();
     assert!(
         text.contains("# Mine.\nopus_bitrate = \"160 kb/s\" # kept\n"),
@@ -217,12 +231,13 @@ weight = 5
 [ytdlp]
 format = \"bestaudio\"
 ");
+    rename_all(&mut d, &EDITIONS).unwrap();
     let keys: Vec<String> = stale(&d, &EDITIONS).into_iter().map(|s| s.key).collect();
-    assert_eq!(keys, ["audio.codecs", "quality.stereo.weight"]);
+    assert_eq!(keys, ["audio.codecs", "audio.pick.stereo.weight"]);
     update(&mut d, &EDITIONS);
     let read = read(&d).unwrap();
     assert_eq!(read.audio.codecs, Settings::default().audio.codecs);
-    assert_eq!(read.quality.stereo.weight, 5000);
+    assert_eq!(read.audio.pick.stereo.weight, 5000);
     assert_eq!(read.ytdlp.format, "bestaudio", "set by hand");
     assert!(d.to_string().contains("\"flac\"] # as written"), "{d}");
     assert_eq!(edition_of(&d), EDITION);
@@ -287,4 +302,60 @@ fn the_lyrics_languages_move_to_their_own_table_with_their_comments() {
     let both = "[defaults]\nlyrics = [\"ja\"]\n[lyrics]\nread = [\"en\"]\n";
     let e = rename_all(&mut doc(both), &EDITIONS).unwrap_err();
     assert!(format!("{e:#}").contains("keep [lyrics] `read`"), "{e:#}");
+}
+
+#[test]
+fn a_table_moves_whole_with_its_comments_and_leaves_nothing_behind() {
+    let mut d = doc("edition = 5
+# Mine.
+[quality.stereo]
+weight = 0 # kept
+
+[clean.tidy]
+spacing = false
+
+[clean.lyrics.tidy]
+markup = false
+");
+    let moved = rename_all(&mut d, &EDITIONS).unwrap();
+    let said: Vec<String> = moved.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        said,
+        [
+            "[clean.lyrics] is [lyrics.clean] now",
+            "[clean] is [tags.clean] now",
+            "[quality.stereo] is [audio.pick.stereo] now",
+        ]
+    );
+    let text = d.to_string();
+    assert!(
+        text.contains("# Mine.\n[audio.pick.stereo]\nweight = 0 # kept\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[tags.clean.tidy]\nspacing = false\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("[lyrics.clean.tidy]\nmarkup = false\n"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("[quality") && !text.contains("[clean"),
+        "{text}"
+    );
+    assert!(
+        rename_all(&mut d, &EDITIONS).unwrap().is_empty(),
+        "once is all"
+    );
+    assert_eq!(d.to_string(), text);
+
+    let both = "[quality.stereo]\nweight = 0\n[audio.pick.stereo]\nweight = 1\n";
+    let e = rename_all(&mut doc(both), &EDITIONS).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("keep [audio.pick.stereo]"),
+        "{e:#}"
+    );
+    let e = rename_all(&mut doc("quality = { stereo = 1 }\n"), &EDITIONS).unwrap_err();
+    assert!(format!("{e:#}").contains("must be a table"), "{e:#}");
 }

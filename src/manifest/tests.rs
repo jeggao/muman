@@ -538,8 +538,9 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
     m.save().unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
-    assert!(at("[lyrics]") < at("[clean.tidy]"), "{t}");
-    assert!(at("[clean.guesswork]") < at("\n[[song]]"), "{t}");
+    assert!(at("[lyrics]") < at("[tags.clean.tidy]"), "{t}");
+    assert!(at("[tags.clean.guesswork]") < at("\n[[song]]"), "{t}");
+    assert!(!t.contains("[clean."), "moved under [tags]: {t}");
     assert!(t.contains("remaster = false # mine"), "{t}");
     assert!(t.contains("# Spacing and punctuation only"), "{t}");
     for (tier, key) in clean::switches() {
@@ -563,14 +564,18 @@ fn every_lyric_cleaning_switch_is_listed_after_the_tags_and_read_back() {
     let mut m = Manifest::load(dir.path()).unwrap();
     assert!(!m.clean.is_on("lyrics.packaging.credits"));
     assert!(m.clean.is_on("lyrics.tidy.markup"));
-    assert_eq!(m.clean.unknown, ["clean.lyrics.odd.x"]);
+    assert_eq!(m.clean.unknown, ["lyrics.clean.odd.x"]);
     m.save().unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
-    assert!(at("[clean.guesswork]") < at("[clean.lyrics.tidy]"), "{t}");
-    assert!(at("[clean.lyrics.tidy]") < at("\n[[song]]"), "{t}");
-    assert!(t.contains("credits = false # mine"), "{t}");
-    let lyrics = &t[at("[clean.lyrics.tidy]")..];
+    assert!(at("[lyrics]") < at("[lyrics.clean.tidy]"), "{t}");
+    assert!(at("[lyrics.clean.tidy]") < at("\n[[song]]"), "{t}");
+    assert!(
+        t.contains("[lyrics.clean.packaging]\ncredits = false # mine"),
+        "{t}"
+    );
+    assert!(!t.contains("[clean."), "moved under [lyrics]: {t}");
+    let lyrics = &t[at("[lyrics.clean.tidy]")..];
     for (tier, key) in clean::lyrics::switches() {
         assert!(
             lyrics.contains(&format!("{key} = ")),
@@ -595,18 +600,24 @@ fn a_new_list_lists_its_cleaning_switches_before_its_songs() {
     });
     m.save().unwrap();
     let t = text(dir.path());
+    let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+    assert!(at("[sites.") < at("[lyrics.clean.tidy]"), "{t}");
     assert!(
-        t.find("[clean.tidy]").unwrap() < t.find("\n[[song]]").unwrap(),
+        at("[lyrics.clean.guesswork]") < at("[tags.clean.tidy]"),
         "{t}"
     );
+    assert!(at("[tags.clean.guesswork]") < at("\n[[song]]"), "{t}");
 }
 
 #[test]
 fn a_cleaning_switch_must_be_true_or_false() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "[clean.tidy]\nspacing = \"no\"\n");
+    write(dir.path(), "[tags.clean.tidy]\nspacing = \"no\"\n");
     let e = Manifest::load(dir.path()).unwrap_err();
-    assert!(format!("{e:#}").contains("clean.tidy.spacing"), "{e:#}");
+    assert!(
+        format!("{e:#}").contains("tags.clean.tidy.spacing"),
+        "{e:#}"
+    );
 }
 
 #[test]
@@ -614,10 +625,13 @@ fn an_unknown_cleaning_switch_is_kept_and_reported() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
-        "[clean.tidy]\nspaceing = false\n\n[clean.other]\nx = true\n",
+        "[tags.clean.tidy]\nspaceing = false\n\n[tags.clean.other]\nx = true\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
-    assert_eq!(m.clean.unknown, ["clean.tidy.spaceing", "clean.other.x"]);
+    assert_eq!(
+        m.clean.unknown,
+        ["tags.clean.tidy.spaceing", "tags.clean.other.x"]
+    );
     assert!(m.clean.is_on("tidy.spacing"));
     m.save().unwrap();
     assert!(text(dir.path()).contains("spaceing = false"));

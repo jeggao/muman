@@ -9,6 +9,7 @@
 //! |---|---|---|
 //! | [`Step::Rename`] | On every read, in memory, and on every write, for good | By its shape: the old name is there |
 //! | [`Step::Move`] | As a rename | By its shape: the old name is in its old table |
+//! | [`Step::MoveTable`] | As a rename | By its shape: the old table is there |
 //! | [`Step::Default`] | By `sync --update-defaults`, when asked | By its edition, and a value that reads as the old default |
 //!
 //! A rename loses nothing, so it is made without asking, and is found by
@@ -19,7 +20,9 @@
 //! name is gone after the first. A file naming a setting by both names
 //! is refused, as neither can be told the one meant. A move is a rename
 //! into another table, its value kept as it is; the table it leaves is
-//! dropped once it holds nothing.
+//! dropped once it holds nothing. A table moved whole, as `[quality.purity]`
+//! to `[audio.pick.purity]`, keeps its settings, its comments and its place
+//! in the file, so only its header changes.
 //!
 //! A changed default is offered, not made: a default written out looks
 //! like a value chosen. A setting still at an edition's old default, read
@@ -56,7 +59,7 @@ use crate::settings::{TABLES, defaults};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
-pub const EDITION: i64 = 5;
+pub const EDITION: i64 = 6;
 
 /// The edition of a song list that names none: those written before
 /// editions were.
@@ -97,6 +100,20 @@ pub const HISTORY: &[Edition] = &[
         number: 5,
         steps: &[moved("defaults", "lyrics", "lyrics", "read")],
     },
+    Edition {
+        number: 6,
+        steps: &[
+            moved_table("clean.lyrics", "lyrics.clean"),
+            moved_table("clean", "tags.clean"),
+            moved_table("quality.purity", "audio.pick.purity"),
+            moved_table("quality.stereo", "audio.pick.stereo"),
+            moved_table("quality.bandwidth", "audio.pick.bandwidth"),
+            moved_table("quality.clipping", "audio.pick.clipping"),
+            moved_table("quality.square", "cover.pick.square"),
+            moved_table("quality.resolution", "cover.pick.resolution"),
+            moved_table("quality.blockiness", "cover.pick.blockiness"),
+        ],
+    },
 ];
 
 /// The editions this muman knows.
@@ -123,6 +140,7 @@ pub struct Edition {
 pub enum Step {
     Rename(Rename),
     Move(Move),
+    MoveTable(MoveTable),
     Default(Change),
 }
 
@@ -150,10 +168,20 @@ pub struct Move {
     pub new: &'static str,
 }
 
+/// A table moved whole, its settings and the tables in it as they were.
+#[derive(Debug, Clone, Copy)]
+pub struct MoveTable {
+    /// Its path before and after, as `quality.purity` and
+    /// `audio.pick.purity`.
+    pub from: &'static str,
+    pub to: &'static str,
+}
+
 /// A default changed.
 #[derive(Debug, Clone, Copy)]
 pub struct Change {
-    /// The key as `audio.opus_bitrate` or `quality.stereo.weight`.
+    /// The key as its edition named it, as `audio.opus_bitrate` or
+    /// `quality.stereo.weight`; a later [`MoveTable`] moves it.
     pub key: &'static str,
     /// Its default in the edition before, as TOML.
     pub was: &'static str,
@@ -175,6 +203,10 @@ const fn rename(
 
 const fn moved(from: &'static str, old: &'static str, to: &'static str, new: &'static str) -> Step {
     Step::Move(Move { from, old, to, new })
+}
+
+const fn moved_table(from: &'static str, to: &'static str) -> Step {
+    Step::MoveTable(MoveTable { from, to })
 }
 
 const fn changed(key: &'static str, was: &'static str) -> Step {
@@ -213,13 +245,18 @@ fn mib(v: &Value) -> Option<Value> {
 pub struct Renamed {
     /// The table as `audio`, `providers.lrclib` or `song 3`.
     pub table: String,
-    pub old: String,
+    /// The setting as it was; none for the table moved whole.
+    pub old: Option<String>,
+    /// The setting as it is, or the table's path.
     pub new: String,
 }
 
 impl fmt::Display for Renamed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] `{}` is `{}` now", self.table, self.old, self.new)
+        match &self.old {
+            Some(old) => write!(f, "[{}] `{old}` is `{}` now", self.table, self.new),
+            None => write!(f, "[{}] is [{}] now", self.table, self.new),
+        }
     }
 }
 
@@ -290,7 +327,7 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
     let steps = editions.history.iter().flat_map(|e| e.steps);
     for r in steps.clone().filter_map(|s| match s {
         Step::Rename(r) => Some(r),
-        Step::Move(_) | Step::Default(_) => None,
+        Step::Move(_) | Step::MoveTable(_) | Step::Default(_) => None,
     }) {
         for (name, table) in tables_named(doc, r.table) {
             let Some(old) = table.get(r.old).and_then(Item::as_value) else {
@@ -315,17 +352,18 @@ pub fn rename_all(doc: &mut DocumentMut, editions: &Editions) -> Result<Vec<Rena
             *new.decor_mut() = old.decor().clone();
             renamed.push(Renamed {
                 table: name,
-                old: format!("{} = {}", r.old, text(old)),
+                old: Some(format!("{} = {}", r.old, text(old))),
                 new: format!("{} = {}", r.new, text(&new)),
             });
             replace_key(table, r.old, r.new, &Item::Value(new));
         }
     }
-    for m in steps.filter_map(|s| match s {
-        Step::Move(m) => Some(m),
-        Step::Rename(_) | Step::Default(_) => None,
-    }) {
-        renamed.extend(move_setting(doc, m)?);
+    for step in steps {
+        match step {
+            Step::Move(m) => renamed.extend(move_setting(doc, m)?),
+            Step::MoveTable(m) => renamed.extend(move_table(doc, m)?),
+            Step::Rename(_) | Step::Default(_) => {}
+        }
     }
     Ok(renamed)
 }
@@ -363,7 +401,7 @@ fn move_setting(doc: &mut DocumentMut, m: &Move) -> Result<Option<Renamed>> {
     }
     let moved = Renamed {
         table: m.from.to_string(),
-        old: format!("{} = {}", m.old, text(old)),
+        old: Some(format!("{} = {}", m.old, text(old))),
         new: format!("[{}] {} = {}", m.to, m.new, text(old)),
     };
     if let Some(from) = doc.get_mut(m.from).and_then(Item::as_table_like_mut) {
@@ -382,6 +420,76 @@ fn move_setting(doc: &mut DocumentMut, m: &Move) -> Result<Option<Renamed>> {
         *k.leaf_decor_mut() = key.leaf_decor().clone();
     }
     Ok(Some(moved))
+}
+
+/// `m` made in `doc`, the table keeping its settings, comments and place:
+/// what moved. The tables it leaves empty are dropped, and those it goes
+/// under are made, holding nothing of their own.
+fn move_table(doc: &mut DocumentMut, m: &MoveTable) -> Result<Option<Renamed>> {
+    let from: Vec<&str> = m.from.split('.').collect();
+    let to: Vec<&str> = m.to.split('.').collect();
+    let (Some((name, above)), Some((new, under))) = (from.split_last(), to.split_last()) else {
+        return Ok(None);
+    };
+    let Some((key, item)) = table_at(doc, above)
+        .and_then(|t| t.get_key_value(name))
+        .map(|(k, i)| (k.clone(), i.clone()))
+    else {
+        return Ok(None);
+    };
+    if !item.is_table_like() {
+        bail!("[{}] must be a table; set [{}] instead", m.from, m.to);
+    }
+    if table_at(doc, under).is_some_and(|t| t.contains_key(new)) {
+        bail!(
+            "[{}] and [{}], its new place, are both set; keep [{}]",
+            m.from,
+            m.to,
+            m.to
+        );
+    }
+    if let Some(t) = table_at(doc, above) {
+        t.remove(name);
+    }
+    for depth in (1..=above.len()).rev() {
+        if !table_at(doc, &above[..depth]).is_some_and(|t| t.is_empty()) {
+            break;
+        }
+        if let Some(t) = table_at(doc, &above[..depth - 1]) {
+            t.remove(above[depth - 1]);
+        }
+    }
+    let mut parent: &mut dyn TableLike = doc.as_table_mut();
+    for part in under {
+        parent = parent
+            .entry(part)
+            .or_insert_with(|| {
+                let mut t = Table::new();
+                t.set_implicit(true);
+                Item::Table(t)
+            })
+            .as_table_like_mut()
+            .with_context(|| format!("[{}] must be a table", m.to))?;
+    }
+    parent.insert(new, item);
+    if let Some(mut k) = parent.key_mut(new) {
+        *k.leaf_decor_mut() = key.leaf_decor().clone();
+        *k.dotted_decor_mut() = key.dotted_decor().clone();
+    }
+    Ok(Some(Renamed {
+        table: m.from.to_string(),
+        old: None,
+        new: m.to.to_string(),
+    }))
+}
+
+/// The table at `path` in `doc`, the root at none. Unlike
+/// [`Item::get_mut`], it adds no key it finds missing.
+fn table_at<'a>(doc: &'a mut DocumentMut, path: &[&str]) -> Option<&'a mut dyn TableLike> {
+    path.iter()
+        .try_fold(doc.as_table_mut() as &mut dyn TableLike, |table, key| {
+            table.get_mut(key)?.as_table_like_mut()
+        })
 }
 
 /// `table` with `old` replaced by `new`, holding `item`, in its place
@@ -442,15 +550,65 @@ pub fn stale_warnings(stale: &[Stale]) -> Vec<String> {
     lines
 }
 
-/// The tables a setting was moved out of.
+/// The top-level tables a setting or a table was moved out of.
 pub(crate) fn moved_from() -> impl Iterator<Item = &'static str> {
     HISTORY
         .iter()
         .flat_map(|e| e.steps)
         .filter_map(|s| match s {
             Step::Move(m) => Some(m.from),
+            Step::MoveTable(m) => m.from.split('.').next(),
             _ => None,
         })
+}
+
+/// What a table every known table was moved out of still holds, which
+/// no setting is, said as an error: as `[quality.typo]`, once its
+/// measures went to `[audio.pick]` and `[cover.pick]`.
+pub(crate) fn left_behind(doc: &DocumentMut) -> Option<String> {
+    let moves: Vec<&MoveTable> = HISTORY
+        .iter()
+        .flat_map(|e| e.steps)
+        .filter_map(|s| match s {
+            Step::MoveTable(m) => Some(m),
+            _ => None,
+        })
+        .collect();
+    moves.iter().find_map(|m| {
+        let root = m.from.split('.').next()?;
+        let (key, _) = doc.get(root)?.as_table_like()?.iter().next()?;
+        let mut went: Vec<String> = moves
+            .iter()
+            .filter(|n| n.from.split('.').next() == Some(root))
+            .map(|n| format!("[{}]", n.to.rsplit_once('.').map_or(n.to, |(t, _)| t)))
+            .collect();
+        went.dedup();
+        Some(format!(
+            "[{root}.{key}] is no setting: what [{root}] held is under {} now",
+            went.join(" and ")
+        ))
+    })
+}
+
+/// `key`, or a table's path, as edition `number` named it, as the
+/// editions after it name it: under each table moved whole since.
+fn now_named(key: &str, number: i64, editions: &Editions) -> String {
+    let mut key = key.to_string();
+    for step in editions
+        .history
+        .iter()
+        .filter(|e| e.number > number)
+        .flat_map(|e| e.steps)
+    {
+        if let Step::MoveTable(m) = step
+            && let Some(rest) = key
+                .strip_prefix(m.from)
+                .filter(|r| r.is_empty() || r.starts_with('.'))
+        {
+            key = format!("{}{rest}", m.to);
+        }
+    }
+    key
 }
 
 /// The names a setting called `new` now had in earlier editions.
@@ -537,9 +695,9 @@ pub fn stale(doc: &DocumentMut, editions: &Editions) -> Vec<Stale> {
             .history
             .iter()
             .filter(|e| e.number > file)
-            .flat_map(|e| e.steps)
-            .find_map(|s| match s {
-                Step::Default(c) if c.key == key => Some(c),
+            .flat_map(|e| e.steps.iter().map(move |s| (e.number, s)))
+            .find_map(|(number, s)| match s {
+                Step::Default(c) if now_named(c.key, number, editions) == key => Some(c),
                 _ => None,
             })
         else {
