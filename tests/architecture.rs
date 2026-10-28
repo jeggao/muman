@@ -81,9 +81,10 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "render.rs",
-        6,
+        7,
         "a song's new files staged beside their paths, whatever was at a staged \
-         name removed first, and those staged files removed when the song fails",
+         name removed first, and those staged files removed when the song fails \
+         or the files beside it, written again alone, cannot be put in place",
     ),
     (
         "history.rs",
@@ -707,8 +708,9 @@ const WRITES: &[(&str, usize, &str)] = &[
     ("ogg.rs", 1, "an Opus header's page, in its file"),
     (
         "render.rs",
-        2,
-        "a song's bytes and its lyrics, in their files",
+        3,
+        "a song's bytes and its lyrics, in their files, the lyrics again when \
+         they alone are written",
     ),
 ];
 

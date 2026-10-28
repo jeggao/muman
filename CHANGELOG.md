@@ -54,6 +54,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Lyrics beside a song are written again alone.** A change to a
+  song's lyrics alone, as a cleaning switch or `lyrics_offset`, writes
+  its `.lrc` again and leaves its audio file as it is, encoded or not,
+  where the lyrics are not inside it.
 - **Lyrics you change by hand are yours.** A `.lrc` muman wrote and
   you changed since is neither written over nor deleted until
   `sync --force`, as a song file you changed is not; `check` names it.

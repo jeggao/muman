@@ -121,8 +121,9 @@ is written. Tags set in a song's or an album's `tags.<name>` are never
 cleaned. Each rule is a switch under `[tags.clean.<tier>]`, or
 `[lyrics.clean.<tier>]` for lyrics, listed by every write; `muman status`
 names each rule that changed a tag as `<tier>.<key>`. Flipping a lyric
-switch writes every song with lyrics again, and a new title or artist
-writes a song whose lyrics are cleaned of its old ones again.
+switch writes every song's lyrics again, and a new title or artist those
+of a song cleaned of its old ones: lyrics beside a song alone, its file
+retagged and left as it is.
 
 | Tier | Its tag rules | Its lyric rules |
 |---|---|---|

@@ -62,8 +62,10 @@
 //! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
 //! file, the tag writers every other's beside the tags.
 //!
-//! A song whose plan changed in its tags alone is tagged again in place,
-//! with the cover and the lyrics its file holds, read as each container
+//! A song whose plan changed in its tags alone is tagged again in place
+//! ([`retag`]), and the files beside it written again where they changed
+//! ([`beside`]), as a build writes them, with the cover and the lyrics its
+//! file holds, read as each container
 //! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
 //! `Cover Art (Front)` is read itself. Every file written is read back as
 //! a source's tags are, and a field or a cover it does not hold as
@@ -836,6 +838,79 @@ fn lyrics_context<'p>(plan: &'p Plan, lyrics: &LyricsRef) -> clean::lyrics::Cont
         artists: values("ARTIST").chain(values("ARTISTS")).collect(),
         subtitle: matches!(lyrics.at, LyricsAt::Stream { .. }),
     }
+}
+
+/// What [`beside`] wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Beside {
+    /// The lyrics' path in the library, where the plan has them beside.
+    pub lyrics: Option<PathBuf>,
+    pub lyrics_bytes: u64,
+    /// What could not be written, each said once.
+    pub problems: Vec<String>,
+}
+
+/// Write the files `job`'s plan has beside the song, its lyrics, from
+/// their sources, as [`render`] writes them, leaving the song's audio
+/// file as it is: for a song whose file holds what it would be written
+/// with, its tags aside, as [`retag`] writes them. A lyrics file the plan
+/// has none of goes, as the last build's would.
+pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
+    let plan = job.plan;
+    let lyrics_rel = crate::outputs::lyrics_of_stem(job.stem);
+    let lyrics_path = job.library.join(&lyrics_rel);
+    let mut problems = Vec::new();
+    let text = match plan.lyrics.as_ref().filter(|l| l.placement.sidecar()) {
+        Some(l) => lyrics_text(runner, job, l)
+            .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let Some(text) = text else {
+        crate::library::clear(job.library, &lyrics_rel, job.claim)?;
+        return Ok(Beside {
+            lyrics: None,
+            lyrics_bytes: 0,
+            problems,
+        });
+    };
+    let staged = part(&lyrics_path);
+    let written = std::io::Write::write_all(&mut stage(&staged)?, text.as_bytes())
+        .with_context(|| format!("writing {}", staged.display()))
+        .and_then(|()| crate::library::put(job.library, &staged, &lyrics_rel, job.claim));
+    if let Err(e) = written {
+        let _ = fs::remove_file(&staged);
+        return Err(e);
+    }
+    Ok(Beside {
+        lyrics_bytes: size_of(&lyrics_path),
+        lyrics: Some(lyrics_rel),
+        problems,
+    })
+}
+
+/// The text of `lyrics` as `job`'s plan writes them, read from their
+/// source, a subtitle stream through ffmpeg alone; none when no line is.
+fn lyrics_text<R: Runner>(runner: &R, job: &Job<'_>, lyrics: &LyricsRef) -> Result<Option<String>> {
+    let source = job
+        .sources
+        .get(&lyrics.key)
+        .ok_or_else(|| anyhow!("{} is not on disk", lyrics.key))?;
+    fs::create_dir_all(job.scratch)?;
+    let ctx = lyrics_context(job.plan, lyrics);
+    let raw = job.scratch.join("lyrics.lrc");
+    let (mut inputs, mut outputs) = (Inputs::default(), Vec::new());
+    let mut text = lyrics_plan(lyrics, &ctx, source, &raw, &mut inputs, &mut outputs)?;
+    if text.is_none() {
+        let paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
+        for result in ffmpeg::run_outputs(runner, &paths, &outputs) {
+            result?;
+        }
+        let read = fs::read(&raw).with_context(|| format!("reading {}", raw.display()))?;
+        text = Some(cleaned(&lyrics::decode(&read), lyrics, &ctx));
+    }
+    Ok(text.filter(|t| t.lines().any(|l| !l.trim().is_empty())))
 }
 
 /// `text` cleaned as the plan's lyrics say, then moved to the audio.
