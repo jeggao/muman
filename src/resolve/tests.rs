@@ -1717,6 +1717,120 @@ fn timing_ranks_where_prefer_lists_it() {
 }
 
 #[test]
+fn the_song_s_own_lyrics_in_a_language_read_beat_a_translation_into_another() {
+    let key = yt("vid00000001");
+    let mut f = audio("opus", 200.0);
+    lyrics(&mut f, LyricsAt::Stream { index: 2 }, "zh-Hans", 30);
+    lyrics(&mut f, LyricsAt::Stream { index: 3 }, "en-GB", 30);
+    lyrics(&mut f, LyricsAt::Stream { index: 4 }, "ja", 30);
+    let reading = crate::settings::Lyrics {
+        read: ["en", "zh"].iter().filter_map(|l| Lang::parse(l)).collect(),
+        ..english()
+    };
+    let taken = |f: &Facts| {
+        let facts = BTreeMap::from([(key.clone(), f.clone())]);
+        let s = song(std::slice::from_ref(&key));
+        run_reading(&s, &facts, &[], &AUDIO, &COVER, &reading)
+            .plan
+            .lyrics
+            .map(|l| l.at)
+    };
+    let stream = |index: u32| Some(LyricsAt::Stream { index });
+
+    tag(&mut f, Field::Language, &["eng"], true);
+    assert_eq!(taken(&f), stream(3), "sung in English");
+    tag(&mut f, Field::Language, &["zho"], true);
+    assert_eq!(taken(&f), stream(2), "sung in Chinese");
+    tag(&mut f, Field::Language, &["jpn"], true);
+    assert_eq!(
+        taken(&f),
+        stream(3),
+        "a translation into the language read first"
+    );
+
+    let lrc = manual("song.lrc");
+    let mut file = Facts::unreadable("rev-lrc".into());
+    file.lyrics.push(LyricsFacts {
+        language: Language::Unstated,
+        ..f.lyrics[1].clone()
+    });
+    f.lyrics.truncate(1);
+    tag(&mut f, Field::Language, &["eng"], true);
+    let facts = BTreeMap::from([(key.clone(), f), (lrc.clone(), file)]);
+    let s = song(&[key, lrc]);
+    let r = run_reading(&s, &facts, &[], &AUDIO, &COVER, &reading);
+    assert_eq!(
+        r.plan.lyrics.map(|l| l.key),
+        Some(manual("song.lrc")),
+        "lyrics that say nothing are the song's own"
+    );
+}
+
+/// The `LANGUAGE` a song's tags resolve to.
+fn language_of(facts: &BTreeMap<SourceKey, Facts>) -> Option<Vec<String>> {
+    let s = song(&facts.keys().cloned().collect::<Vec<_>>());
+    run(&s, facts, &[])
+        .plan
+        .tags
+        .into_iter()
+        .find(|(k, _)| k == "LANGUAGE")
+        .map(|(_, v)| v)
+}
+
+#[test]
+fn an_upload_s_language_is_taken_only_where_the_song_s_text_may_be_in_it() {
+    let key = yt("vid00000001");
+    let mut f = audio("opus", 200.0);
+    tag(&mut f, Field::Title, &["ルララリの夜"], true);
+    tag(&mut f, Field::Language, &["kor"], false);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    assert_eq!(language_of(&facts), None, "kana is no Korean");
+
+    tag(&mut f, Field::Language, &["jpn"], false);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    assert_eq!(language_of(&facts), Some(vec!["jpn".into()]));
+
+    tag(&mut f, Field::Title, &["Glass Orchard"], true);
+    tag(&mut f, Field::Language, &["kor"], false);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    assert_eq!(
+        language_of(&facts),
+        Some(vec!["kor".into()]),
+        "a romanized title says nothing"
+    );
+    tag(
+        &mut f,
+        Field::Title,
+        &["Glass Orchard (feat. 星野キリ)"],
+        true,
+    );
+    tag(&mut f, Field::Language, &["eng"], false);
+    let facts = BTreeMap::from([(key.clone(), f.clone())]);
+    assert_eq!(
+        language_of(&facts),
+        Some(vec!["eng".into()]),
+        "a featured artist's name is theirs"
+    );
+    tag(&mut f, Field::Language, &["kor"], false);
+
+    let release = manual("release");
+    let mut r = Facts::unreadable("rev-release".into());
+    tag(&mut r, Field::Title, &["Glass Orchard"], true);
+    tag(&mut r, Field::Album, &["Lantern Weather"], true);
+    tag(&mut r, Field::Script, &["Jpan"], true);
+    let facts = BTreeMap::from([(key.clone(), f.clone()), (release.clone(), r.clone())]);
+    assert_eq!(language_of(&facts), None, "a release in Japanese script");
+
+    tag(&mut r, Field::Language, &["zho"], true);
+    let facts = BTreeMap::from([(key, f), (release, r)]);
+    assert_eq!(
+        language_of(&facts),
+        Some(vec!["zho".into()]),
+        "a work's language is a record of the song"
+    );
+}
+
+#[test]
 fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
     let key = manual("x");
     let mut f = audio("flac", 1.0);

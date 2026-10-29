@@ -49,6 +49,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song sung in a language you read took a translation into another
+  one you read** when `prefer` puts `"translation"` first: an English
+  song read in `["en", "zh"]` took its Chinese subtitles over its
+  English ones. The original in a language `read` names counts as
+  readable as a translation.
+- **A song took the language an uploader set for their channel**: a
+  song titled in kana, or on a release in Japanese script, was tagged
+  Korean or Chinese from YouTube's audio language. A language read off
+  an upload is taken only where the song's title and its release's
+  script could be in it.
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.

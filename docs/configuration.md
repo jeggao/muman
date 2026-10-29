@@ -225,7 +225,10 @@ Lyrics have one of three roles, by their language and the one the song
 is sung in, its `language` tag: one set by hand, else a MusicBrainz
 work's lyrics language, a file's own tag, the language YouTube says a
 video's audio is in, or that of the audio file's own lyrics tag; never
-a subtitle's, which may be a translation. Lyrics in that language are
+a subtitle's, which may be a translation. YouTube's language is the
+one its uploader set, so it is taken only where the song's title and
+the script its release names could be in it: a title in kana is
+Japanese, never Korean or Chinese. Lyrics in the language sung are
 the original; in its Latin letters, as `ja-Latn` for a song sung in
 `ja`, a romanization; in a language `[lyrics] read` names, a
 translation. A translation into a language `read` does not name is
@@ -246,7 +249,11 @@ prefer = ["original", "romanization", "timed"]
 ```
 
 Put `"timed"` first to take timed lyrics of any role before untimed
-ones. Of lyrics `prefer` ranks alike, those in the language `read` names
+ones. A translation is preferred so you can read the lyrics, so the
+original in a language `read` names counts as one too: with `"translation"`
+first and `"original"` after it, a song sung in a language you read
+takes its own lyrics, and one sung in another a translation. Of lyrics
+`prefer` ranks alike, those in the language `read` names
 first win, then the surest to be the chosen audio's recording. Where the
 language sung is not known, no lyrics' role is, so the roles rank all
 lyrics alike, and only lyrics in a language `read` names are taken; a

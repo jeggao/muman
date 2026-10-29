@@ -14,8 +14,9 @@
 //! - Cover: square content, then effective resolution, then fewest
 //!   block artifacts; borders a video frame adds are cropped off.
 //! - Lyrics: by `[lyrics] prefer`, their role and whether timed, then
-//!   in the language read first, from a source whose audio is the same
-//!   recording as the chosen audio, covering most of it.
+//!   in the language read first, originals in none after those in one,
+//!   from a source whose audio is the same recording as the chosen
+//!   audio, covering most of it.
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so an album never
@@ -72,13 +73,28 @@
 //! tag from what its sources offer: a work's lyrics languages on
 //! MusicBrainz, a file's own tag, the language YouTube says a video's
 //! audio is in; else the language the audio file's own lyrics tag
-//! names. Lyrics in it are the song's own ([`crate::lang::Role`]); in
-//! its Latin letters, where it is written in others, a romanization; in
+//! names. A language read off an upload, as YouTube's, is the default
+//! its uploader set, often the channel's own language rather than the
+//! song's: measured on a library of about two thousand songs, five of the
+//! ninety languages YouTube gave were Korean, Chinese or Thai for a song
+//! titled in kana or released in Japanese script. Such a language is
+//! taken only where the song's text could be in it, its title's letters
+//! but a featured artist's and the script its release names
+//! ([`crate::lang::Writing`]); a structured one is a record of the song
+//! and is taken as it is.
+//!
+//! Lyrics in the language sung are the song's own
+//! ([`crate::lang::Role`]); in its Latin letters, where it is written in
+//! others, a romanization; in
 //! another language, a translation, taken only into a language
 //! `[lyrics] read` names. `[lyrics] prefer` lists the roles and timing
 //! in the order a listener ranks them, each deciding only between lyrics
 //! the ones before it rank alike, so one listener may put a translation
-//! first and another timing; a role it leaves out is never taken. Lyrics
+//! first and another timing; a role it leaves out is never taken. A
+//! translation is preferred so the listener can read the lyrics, so the
+//! song's own in a language read count as one too: ranked only by role,
+//! a song sung in English would take its Chinese translation from a
+//! listener who reads both. Lyrics
 //! that say nothing of their language, as LRCLIB's and a `.lrc` file's,
 //! are taken as the song's own. Where the language sung is not known, no
 //! lyrics' role is, so the roles rank them alike, and only lyrics in a
@@ -121,7 +137,7 @@ use crate::clean::{self, Albums, Settings};
 use crate::codec::{Adapt, Chain, Codec, Container, Layout};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
-use crate::lang::{Fit, Lang, Role};
+use crate::lang::{Fit, Lang, Role, Writing};
 use crate::loudness::Gains;
 use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Song};
@@ -1122,53 +1138,84 @@ fn own_lyrics_language(facts: &Facts) -> Option<Lang> {
         .next()
 }
 
-/// What lyrics in `language` are to a song sung in `sung`, if that is
-/// known, and where they rank by `read`, the languages the listener
-/// reads: `None` for lyrics this song does not take. Where the language
-/// sung is not known, a file's own lyrics tag in no language read ranks
-/// after every language read rather than not at all: a subtitle is one of
-/// many a site offers, but a file's own lyrics are what someone chose to
-/// keep. A translation is taken only into a language read.
-fn lyrics_fit(
-    sung: &[Lang],
-    read: &[Lang],
-    language: &Language,
-    at: &LyricsAt,
-) -> Option<(Option<Role>, i64)> {
+/// How lyrics fit a song and its listener.
+struct Fitting {
+    /// What they are to the song, where the language it is sung in is known.
+    role: Option<Role>,
+    /// Whether they are the song's own lyrics in a language read, which
+    /// a listener reads as well as any translation.
+    read_original: bool,
+    /// Where they rank by the languages read, least first.
+    rank: i64,
+}
+
+/// How lyrics in `language` fit a song sung in `sung`, if that is known,
+/// and a listener who reads `read`: `None` for lyrics this song does not
+/// take. Where the language sung is not known, a file's own lyrics tag in
+/// no language read ranks after every language read rather than not at
+/// all: a subtitle is one of many a site offers, but a file's own lyrics
+/// are what someone chose to keep. A translation is taken only into a
+/// language read; the song's own lyrics in no language read rank after
+/// those in one.
+fn lyrics_fit(sung: &[Lang], read: &[Lang], language: &Language, at: &LyricsAt) -> Option<Fitting> {
     let wide = |n: usize| i64::try_from(n).unwrap_or(UNKNOWN);
-    let read_rank = || {
+    let unread = wide(read.len()) * 2;
+    let read_rank = |language: &Language| {
         lyrics::preference(read, language).map(|(n, fit)| wide(n) * 2 + i64::from(fit == Fit::Near))
     };
     if sung.is_empty() {
-        let kept = (*at == LyricsAt::Tag && !read.is_empty()).then(|| wide(read.len()) * 2);
-        return Some((None, read_rank().or(kept)?));
+        let kept = (*at == LyricsAt::Tag && !read.is_empty()).then_some(unread);
+        return Some(Fitting {
+            role: None,
+            read_original: false,
+            rank: read_rank(language).or(kept)?,
+        });
     }
     // Lyrics that say nothing of their language are taken as the song's.
-    if *language == Language::Unstated {
-        return Some((Some(Role::Original), 0));
-    }
-    let role = language
-        .langs()
-        .iter()
-        .flat_map(|l| sung.iter().map(|s| l.role(s)))
-        .min()?;
+    let (role, rank) = if *language == Language::Unstated {
+        let codes = sung.iter().map(ToString::to_string).collect();
+        (Role::Original, read_rank(&Language::Codes(codes)))
+    } else {
+        let role = language
+            .langs()
+            .iter()
+            .flat_map(|l| sung.iter().map(|s| l.role(s)))
+            .min()?;
+        (role, read_rank(language))
+    };
     match role {
-        Role::Original | Role::Romanization => Some((Some(role), 0)),
-        Role::Translation => Some((Some(role), read_rank()?)),
+        Role::Original => Some(Fitting {
+            role: Some(role),
+            read_original: rank.is_some(),
+            rank: rank.unwrap_or(unread),
+        }),
+        Role::Romanization => Some(Fitting {
+            role: Some(role),
+            read_original: false,
+            rank: 0,
+        }),
+        Role::Translation => Some(Fitting {
+            role: Some(role),
+            read_original: false,
+            rank: rank?,
+        }),
     }
 }
 
-/// Where lyrics of `role` and `timed` or not rank by `prefer`, a place
-/// for each entry: 0 where they have its trait, else 1. Lyrics whose role
+/// Where lyrics fitting as `fit` and `timed` or not rank by `prefer`, a
+/// place for each entry: 0 where they have its trait, else 1. A
+/// translation is preferred so the listener can read the lyrics, so the
+/// song's own in a language read have its trait too. Lyrics whose role
 /// is not known have every role's trait alike.
-fn preferred(prefer: &[Prefer], role: Option<Role>, timed: bool) -> Vec<i64> {
+fn preferred(prefer: &[Prefer], fit: &Fitting, timed: bool) -> Vec<i64> {
     prefer
         .iter()
         .map(|p| {
             let has = match (p, p.role()) {
                 (Prefer::Timed, _) => timed,
                 (Prefer::Untimed, _) => !timed,
-                (_, wanted) => role.is_none() || role == wanted,
+                (Prefer::Translation, _) if fit.read_original => true,
+                (_, wanted) => fit.role.is_none() || fit.role == wanted,
             };
             i64::from(!has)
         })
@@ -1366,10 +1413,10 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
             let read = &input.lyrics.read;
-            let Some((role, preference)) = lyrics_fit(sung, read, &l.language, &l.at) else {
+            let Some(fit) = lyrics_fit(sung, read, &l.language, &l.at) else {
                 continue;
             };
-            if role.is_some_and(|r| !input.lyrics.takes(r)) {
+            if fit.role.is_some_and(|r| !input.lyrics.takes(r)) {
                 continue;
             }
             let confidence = match l.stated_ms {
@@ -1389,9 +1436,9 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     0
                 }
             });
-            let mut rank: Rank = preferred(&input.lyrics.prefer, role, l.timing.is_some());
+            let mut rank: Rank = preferred(&input.lyrics.prefer, &fit, l.timing.is_some());
             rank.extend([
-                preference,
+                fit.rank,
                 -((confidence * 20.0).floor() as i64),
                 -coverage,
                 i64::try_from(n).unwrap_or(UNKNOWN),
@@ -1413,7 +1460,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
             };
             let (placement, files, inside, end_ms) =
                 lyrics_outputs(input, audio, l.timing.is_some());
-            let why = match role {
+            let why = match fit.role {
                 Some(Role::Original) | None => timing,
                 Some(Role::Romanization) => format!("a romanization, {timing}"),
                 Some(Role::Translation) => format!("a translation, {timing}"),
@@ -1679,6 +1726,42 @@ fn recording_of_release(
     }
 }
 
+/// What the song's own text is written in: its title's letters, less the
+/// featured artists it credits, whose names are theirs and not the
+/// song's, and the script its release names.
+fn writing(fields: &BTreeMap<Field, Slot>) -> Writing {
+    let values = |field: Field| fields.get(&field).into_iter().flat_map(|s| &s.values);
+    let title = values(Field::Title).map(|t| Writing::of_text(clean::without_credits(t)));
+    let script = values(Field::Script).map(|c| Writing::of_code(c));
+    title.chain(script).fold(Writing::default(), Writing::and)
+}
+
+/// Whether the language `key` offers may be the one the song is sung in,
+/// written as `writing`. A language read off an upload is the default
+/// its uploader set, as often a channel's own language as the song's, so
+/// it is taken only where the song's text could be in it; a structured
+/// one, as a work's lyrics languages, is a record of the song itself.
+fn language_fits(
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    key: &SourceKey,
+    writing: &Writing,
+) -> bool {
+    candidates
+        .get(&Field::Language)
+        .into_iter()
+        .flatten()
+        .filter(|c| c.key == key)
+        .all(|c| {
+            let langs: Vec<Lang> = c
+                .offer
+                .values
+                .iter()
+                .filter_map(|v| Lang::parse(v))
+                .collect();
+            c.offer.structured || langs.is_empty() || writing.fits(&langs)
+        })
+}
+
 /// A tag as it will be written, and where it came from.
 #[derive(Clone)]
 struct Slot {
@@ -1777,7 +1860,7 @@ fn resolve_tags(
     let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
     let any = |_: &SourceKey| true;
-    for field in Field::of(Scope::Recording) {
+    for field in Field::of(Scope::Recording).filter(|f| *f != Field::Language) {
         if let Some(c) = best_offer(&candidates, field, &any) {
             fields.insert(field, Slot::of(c));
         }
@@ -1822,6 +1905,11 @@ fn resolve_tags(
     }
     if let Some(album) = release.filter(|a| named_so(a.key)) {
         recording_of_release(&mut fields, &candidates, album.key);
+    }
+    let writing = writing(&fields);
+    let sung_so = |key: &SourceKey| language_fits(&candidates, key, &writing);
+    if let Some(c) = best_offer(&candidates, Field::Language, &sung_so) {
+        fields.insert(Field::Language, Slot::of(c));
     }
     let heard = |k: &SourceKey| !mixed && k == audio;
     let album_heard = |k: &SourceKey| heard(k) && release.is_some_and(|r| r.key == audio);
