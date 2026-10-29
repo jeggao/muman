@@ -1,11 +1,12 @@
 # muman
 
 muman (Music Manager) builds a music library the way a compiler builds a
-program. You write `songs.toml`, a list of the songs you want. Each song
-names its sources, the copies it can be made from: a YouTube upload, its
-release on YouTube Music, a CD you ripped, a track in a torrent.
-`muman sync` is the build, and the library is its output. Change the
-list and sync again, and muman rebuilds only the songs that changed.
+program. You write `songs.toml`, a declarative list of the songs you
+want, and muman works out how to get them. Each song names its sources,
+the copies it can be made from: a YouTube upload, its release on YouTube
+Music, a CD you ripped, a track in a torrent. `muman sync` is the build,
+and the library is its output. Change the list and sync again, and muman
+rebuilds only the songs that changed.
 
 Copies of one song are seldom equal, so muman measures what each really
 holds: a music video's intro counts against it, a FLAC made from an MP3
@@ -15,7 +16,8 @@ lyrics and tags among its sources. A collector with three copies of a
 record does the same, keeping the cleanest disc, the sharpest sleeve and
 the only lyric sheet.
 
-muman never deletes or writes over a file it did not write.
+The build is deterministic: one list and its sources make one library on
+any machine. It never deletes or writes over a file it did not write.
 
 ## What it does
 
@@ -59,10 +61,8 @@ muman never deletes or writes over a file it did not write.
   are the last.
 - **Damage is found, not copied.** A download cut short, or with holes,
   ranks below a whole copy, and muman fetches it again.
-- **One song list makes one library.** The same list and sources pick
-  the same songs, at the same paths, on any machine. Names are safe on
-  Linux, macOS, Windows and phones, so a library copies between them
-  unchanged.
+- **A library copies between systems unchanged.** Its names are safe on
+  Linux, macOS, Windows and phones.
 - **A song list runs nothing until you trust it.** Settings that run a
   program or reach another server, as hooks and yt-dlp arguments do,
   wait for your yes, so a list someone hands you runs nothing unseen.
