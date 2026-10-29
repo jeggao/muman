@@ -1,25 +1,29 @@
 # muman
 
-muman (Music Manager) builds a music library from a song list you can
-read and edit. Each song in the list names its sources, every copy it
-may be made from: a YouTube upload, its release on YouTube Music, a
-file you ripped, a track in a torrent. muman measures every source and
-writes the song once, from the best audio, cover, lyrics and tags among
-them. It never deletes or writes over a file it did not write.
+muman (Music Manager) builds a music library the way a compiler builds a
+program. You write `songs.toml`, a declarative list of the songs you
+want, and muman works out how to get them. Each song names its sources,
+the copies it can be made from: a YouTube upload, its release on YouTube
+Music, a CD you ripped, a track in a torrent. `muman sync` is the build,
+and the library is its output. Change the list and sync again, and muman
+rebuilds only the songs that changed.
+
+Copies of one song are seldom equal, so muman measures what each really
+holds: a music video's intro counts against it, a FLAC made from an MP3
+measures as narrow as the MP3, and mono copied into two channels counts
+as mono. Then it writes each song once, from the best audio, cover,
+lyrics and tags among its sources. A collector with three copies of a
+record does the same, keeping the cleanest disc, the sharpest sleeve and
+the only lyric sheet.
+
+The build is deterministic: one list and its sources make one library on
+any machine. It never deletes or writes over a file it did not write.
 
 ## What it does
 
-- **The song list is the library's source.** `songs.toml` lists every
-  song, its sources and the tags you set. Edit it, or change songs with
-  `muman set`, then run `muman sync`: muman writes, moves, rewrites or
-  removes songs until the library matches the list.
-- **Each part of a song comes from the source that measures best.**
-  muman ranks audio by what it holds, never by where it came from: a
-  music video's intro counts against it, a FLAC transcoded from an MP3
-  measures as narrow as the MP3, and mono copied into two channels
-  counts as mono. It crops a cover out of a video frame's bars and ranks
-  it by the detail it really holds, so an upscale gains nothing. Timed
-  lyrics from another source are shifted to fit the audio chosen.
+- **Covers and lyrics are measured too.** muman crops a cover out of a
+  video frame's bars and ranks it by the detail it holds, so an upscale
+  gains nothing. It shifts timed lyrics to fit the audio chosen.
 - **It copies before it encodes.** muman copies audio in a codec you
   allow packet for packet. A new tag goes into the file in place, a new
   path template moves files, and loudness goes into ReplayGain tags or
@@ -57,10 +61,8 @@ them. It never deletes or writes over a file it did not write.
   are the last.
 - **Damage is found, not copied.** A download cut short, or with holes,
   ranks below a whole copy, and muman fetches it again.
-- **One song list makes one library.** The same list and sources pick
-  the same songs, at the same paths, on any machine. Names are safe on
-  Linux, macOS, Windows and phones, so a library copies between them
-  unchanged.
+- **A library copies between systems unchanged.** Its names are safe on
+  Linux, macOS, Windows and phones.
 - **A song list runs nothing until you trust it.** Settings that run a
   program or reach another server, as hooks and yt-dlp arguments do,
   wait for your yes, so a list someone hands you runs nothing unseen.
