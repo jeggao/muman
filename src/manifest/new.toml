@@ -51,7 +51,8 @@ read = ["en"]
 # What lyrics a song takes, best first; lyrics rank by the first of these
 # that tells them apart. "original" is in the language the song is sung
 # in, "romanization" in its Latin letters, "translation" in a language
-# you read; one left out is never taken. "timed" or "untimed" prefers
+# you read, as the original is when you read it; one left out is never
+# taken. "timed" or "untimed" prefers
 # lyrics whose lines carry times, or those whose lines do not.
 prefer = ["translation", "original", "romanization", "timed"]
 

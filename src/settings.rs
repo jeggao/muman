@@ -1327,7 +1327,8 @@ pub enum Prefer {
     Original,
     /// In that language's Latin letters, where it is written in others.
     Romanization,
-    /// In a language the listener reads, other than the one sung.
+    /// In a language the listener reads, other than the one sung; the
+    /// song's own lyrics in a language read have this trait too.
     Translation,
     /// Their lines carry times.
     Timed,

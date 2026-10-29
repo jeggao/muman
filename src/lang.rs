@@ -29,11 +29,21 @@
 //!
 //! The codes that name no language, `und`, `mul`, `mis` and `zxx`, are no
 //! [`Lang`]: they match nothing.
+//!
+//! A text's [`Writing`], the scripts of its letters or those a script
+//! code names, tells which languages it may be in: Japanese is written in
+//! Han and kana, Chinese in Han alone and Korean in Hangul and Han, so a
+//! title in kana is no Chinese and no Korean. Latin says nothing, as any
+//! language may be romanized, and neither do the characters every script
+//! shares. A language whose script is not known may be in any writing.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use icu_locale::subtags::{Language, Script, script};
 use icu_locale::{LanguageIdentifier, Locale, LocaleCanonicalizer, LocaleExpander};
+use icu_properties::props::Script as Letters;
+use icu_properties::{CodePointMapData, PropertyParser};
 
 /// A language, as a canonical BCP 47 tag of a language and, where
 /// given, a script and a region.
@@ -135,6 +145,70 @@ impl Lang {
         } else {
             Role::Original
         }
+    }
+}
+
+/// The scripts a text is written in, as Unicode names a letter's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Writing(BTreeSet<Letters>);
+
+impl Writing {
+    /// What the letters of `text` are written in.
+    #[must_use]
+    pub fn of_text(text: &str) -> Self {
+        let map = CodePointMapData::<Letters>::new();
+        Self(text.chars().map(|c| map.get(c)).collect())
+    }
+
+    /// What an ISO 15924 code names, as a release's `SCRIPT` tag holds
+    /// one: `Jpan` is Han and kana, `Kore` Hangul and Han, `Hans` and
+    /// `Hant` Han. A code naming no script Unicode knows, as `Qaaa`,
+    /// says nothing.
+    #[must_use]
+    pub fn of_code(code: &str) -> Self {
+        let scripts = match code.trim() {
+            "Jpan" => vec![Letters::Han, Letters::Hiragana, Letters::Katakana],
+            "Kore" => vec![Letters::Hangul, Letters::Han],
+            "Hans" | "Hant" => vec![Letters::Han],
+            "Hanb" => vec![Letters::Han, Letters::Bopomofo],
+            "Hrkt" => vec![Letters::Hiragana, Letters::Katakana],
+            "Jamo" => vec![Letters::Hangul],
+            code => PropertyParser::<Letters>::new()
+                .get_strict(code)
+                .into_iter()
+                .collect(),
+        };
+        Self(scripts.into_iter().collect())
+    }
+
+    /// This writing and `other`'s together.
+    #[must_use]
+    pub fn and(mut self, other: Self) -> Self {
+        self.0.extend(other.0);
+        self
+    }
+
+    /// Whether a text so written may be in `langs`, together: each of its
+    /// scripts that says anything is one they are written in.
+    #[must_use]
+    pub fn fits(&self, langs: &[Lang]) -> bool {
+        let mut theirs = BTreeSet::new();
+        for lang in langs {
+            match lang.script() {
+                Some(s) => theirs.extend(Self::of_code(s.as_str()).0),
+                None => return true,
+            }
+        }
+        let silent = [
+            Letters::Latin,
+            Letters::Common,
+            Letters::Inherited,
+            Letters::Unknown,
+        ];
+        self.0
+            .iter()
+            .filter(|s| !silent.contains(s))
+            .all(|s| theirs.contains(s))
     }
 }
 
@@ -424,5 +498,43 @@ mod tests {
         assert_eq!(role("en", "ja"), Role::Translation);
         assert_eq!(role("zh-Hant", "zh"), Role::Original);
         assert_eq!(role("en-GB", "en"), Role::Original);
+    }
+
+    #[test]
+    fn a_text_s_letters_say_which_languages_it_may_be_in() {
+        let fits = |text: &str, l: &str| Writing::of_text(text).fits(&[lang(l)]);
+        assert!(fits("ルララリの夜", "ja"));
+        assert!(!fits("ルララリの夜", "zh"));
+        assert!(!fits("ルララリの夜", "ko"));
+        assert!(!fits("ルララリの夜", "th"));
+        assert!(fits("灯籠の天気", "ja"));
+        assert!(fits("灯籠天気", "zh-Hant"));
+        assert!(fits("灯籠天気", "ja"), "Han alone may be Japanese");
+        assert!(fits("등불 날씨", "ko"));
+        assert!(!fits("등불 날씨", "ja"));
+        assert!(fits("Glass Orchard", "ja"), "romanized");
+        assert!(fits("ノート (Lantern Mix)", "ja"));
+        assert!(!fits("ノート", "en"));
+        assert!(fits("ノート", "qaa"), "a language of no known script");
+        assert!(Writing::of_text("ノート 夜").fits(&[lang("en"), lang("ja")]));
+    }
+
+    #[test]
+    fn a_script_code_names_the_scripts_its_texts_hold() {
+        let fits = |code: &str, l: &str| Writing::of_code(code).fits(&[lang(l)]);
+        assert!(fits("Jpan", "ja"));
+        assert!(!fits("Jpan", "zh"));
+        assert!(!fits("Kore", "ja"));
+        assert!(fits("Hant", "zh"));
+        assert!(fits("Hani", "ja"));
+        assert!(fits("Cyrl", "ru"));
+        assert!(!fits("Cyrl", "en"));
+        assert!(fits("Latn", "ko"));
+        assert!(fits("Qaaa", "ko"), "several scripts say nothing");
+        assert!(
+            Writing::of_code("Latn")
+                .and(Writing::of_text("ルララリの夜"))
+                .fits(&[lang("ja")])
+        );
     }
 }
