@@ -20,7 +20,10 @@
 //! them (`write_flac_blocks`), so the file is written once: `lofty`
 //! writes a tag of another length by moving every byte of audio after it,
 //! a second copy of the song. A cover past the room goes through `lofty`
-//! all the same. Ogg, MP3, MP4 and WavPack are `lofty`'s to write.
+//! all the same. Ogg, MP3, MP4 and WavPack are `lofty`'s to write. In an
+//! MP4 it keeps the room a shrunken tag leaves as a `free` atom, and fills
+//! it on the next write, so a retag would write other bytes than a build;
+//! that room is removed (`drop_mp4_padding`).
 //!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
@@ -1398,7 +1401,108 @@ fn write_tags(
         Container::Mp4 => ilst_of(tags, picture).save_to(&mut file, WriteOptions::default()),
         Container::WavPack => ape_tag(tags, picture).save_to(&mut file, WriteOptions::default()),
     };
-    written.with_context(|| format!("writing tags to {}", path.display()))
+    written.with_context(|| format!("writing tags to {}", path.display()))?;
+    if codec.container() == Container::Mp4 {
+        drop_mp4_padding(&mut file)
+            .with_context(|| format!("writing tags to {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Remove the `free` atoms in an MP4's `moov.udta.meta`, the room
+/// `lofty` leaves where a tag shrank and fills on the next write, so the
+/// file's bytes do not follow its history. Only where `moov` ends the
+/// file, as ffmpeg's `ipod` muxer writes it: no chunk offset then points
+/// past what moves.
+fn drop_mp4_padding(file: &mut fs::File) -> std::io::Result<()> {
+    use std::io::{Read as _, Write as _};
+
+    let len = file.metadata()?.len();
+    let mut at = 0;
+    let mut header = [0_u8; 8];
+    let moov_size = loop {
+        if at + 8 > len {
+            return Ok(());
+        }
+        file.seek(SeekFrom::Start(at))?;
+        file.read_exact(&mut header)?;
+        let size = u64::from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]));
+        if size < 8 {
+            return Ok(());
+        }
+        if &header[4..] == b"moov" {
+            break size;
+        }
+        at += size;
+    };
+    if at + moov_size != len {
+        return Ok(());
+    }
+    let mut moov = vec![0; usize::try_from(moov_size).map_err(std::io::Error::other)?];
+    file.seek(SeekFrom::Start(at))?;
+    file.read_exact(&mut moov)?;
+    let Some(udta) = child_atom(&moov, 0, 8, *b"udta") else {
+        return Ok(());
+    };
+    let Some(meta) = child_atom(&moov, udta, 8, *b"meta") else {
+        return Ok(());
+    };
+    let frees: Vec<(usize, usize)> = atoms(&moov, meta, 12)
+        .filter(|&(.., kind)| kind == *b"free")
+        .map(|(start, size, _)| (start, size))
+        .collect();
+    if frees.is_empty() {
+        return Ok(());
+    }
+    let removed: usize = frees.iter().map(|(_, size)| size).sum();
+    for &(start, size) in frees.iter().rev() {
+        moov.drain(start..start + size);
+    }
+    for parent in [0, udta, meta] {
+        let size = atom_size(&moov, parent) - removed;
+        let size = u32::try_from(size).map_err(std::io::Error::other)?;
+        moov[parent..parent + 4].copy_from_slice(&size.to_be_bytes());
+    }
+    file.seek(SeekFrom::Start(at))?;
+    file.write_all(&moov)?;
+    file.set_len(at + moov.len() as u64)
+}
+
+/// The 32-bit size of the atom starting at `start` in `bytes`.
+fn atom_size(bytes: &[u8], start: usize) -> usize {
+    let size: [u8; 4] = bytes[start..start + 4].try_into().unwrap_or_default();
+    u32::from_be_bytes(size) as usize
+}
+
+/// The atoms inside the one at `parent` in `bytes`, its children starting
+/// `skip` bytes in, each as its start, size and type; they stop at one
+/// whose size does not fit inside it.
+fn atoms(
+    bytes: &[u8],
+    parent: usize,
+    skip: usize,
+) -> impl Iterator<Item = (usize, usize, [u8; 4])> {
+    let end = (parent + atom_size(bytes, parent)).min(bytes.len());
+    let mut at = parent + skip;
+    std::iter::from_fn(move || {
+        let kind: [u8; 4] = bytes.get(at + 4..at + 8)?.try_into().ok()?;
+        let size = atom_size(bytes, at);
+        if size < 8 || at + size > end {
+            return None;
+        }
+        let atom = (at, size, kind);
+        at += size;
+        Some(atom)
+    })
+}
+
+/// Where the first atom of type `kind` inside the one at `parent` starts.
+fn child_atom(bytes: &[u8], parent: usize, skip: usize, kind: [u8; 4]) -> Option<usize> {
+    atoms(bytes, parent, skip)
+        .find(|(_, _, k)| *k == kind)
+        .map(|(start, ..)| start)
 }
 
 /// Bytes ffmpeg leaves as padding in a FLAC's metadata beyond its cover,
