@@ -332,7 +332,11 @@ from the kept metainfo, else from the torrent's hash and recorded
 trackers. A file no song lists is never fetched again. A failed fetch
 waits as a video's does. A file found [damaged](#damaged-sources), or
 holding other audio than its song was built from, is fetched again
-too, and only its pieces that fail their check are downloaded.
+too, and only its pieces that fail their check are downloaded. A
+damaged file whose every piece checks holds the torrent's own bytes,
+so every peer's copy is damaged too. muman says so and does not fetch
+it again, not even with `sync --retry`, until the file changes. A
+piece reaching into a file muman does not keep is checked by one fetch.
 
 Each file is kept in the torrent's folder at its path in the torrent,
 with what Windows refuses in a name replaced by a lookalike. Where two
@@ -425,9 +429,11 @@ of damage:
 A cut-off source is encoded rather than copied, so its song ends
 cleanly. A source missing audio ranks below any whole copy of the
 recording. A damaged download is fetched again, at once and then less
-often, up to five times or until `sync --retry`. The whole copy it
-brings is taken without `--accept`, since nobody chose the damage. A
-damaged file of your own is named and left for you to replace.
+often, up to five times or until `sync --retry`. A torrent's file is
+not when the torrent itself holds the damage ([torrents](#torrents)).
+The whole copy a fetch brings is taken without `--accept`, since
+nobody chose the damage. A damaged file of your own is named and left
+for you to replace.
 
 When a source's audio changed and the new audio is damaged, muman does
 not follow it. The song keeps its file and fails, with exit code 4,

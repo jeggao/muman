@@ -161,6 +161,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     out.write_all(&said)?;
     let mut ok = true;
     let mut failed = Vec::new();
+    let mut same = Vec::new();
     let mut error = None;
     match fetched {
         Ok((fine, f)) => {
@@ -171,13 +172,14 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     }
     match torrents {
         Ok(f) => {
-            ok &= f.is_empty();
-            failed.extend(f);
+            ok &= f.failed.is_empty();
+            failed.extend(f.failed);
+            same = f.same;
         }
         Err(e) => error = error.or(Some(e)),
     }
     if let Some(e) = error {
-        record_fetches(job, &mut state, failed)?;
+        record_fetches(job, &mut state, failed, &same, out)?;
         return Err(e);
     }
     let records = lookup::refetch(
@@ -217,13 +219,20 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
     failed.extend(records.failed);
-    record_fetches(job, &mut state, failed)?;
+    record_fetches(job, &mut state, failed, &same, out)?;
     Ok(ok)
 }
 
-/// Record each of `failed` that did not arrive, and clear the failure of
-/// each that the store now holds.
-fn record_fetches(job: &Job, state: &mut State, failed: Vec<(SourceKey, String)>) -> Result<()> {
+/// Record each of `failed` that did not arrive, and each of `same`, a
+/// torrent's file fetched back as the store held it, as one no fetch
+/// mends, saying so; and clear the failure of each the store now holds.
+fn record_fetches<W: Write>(
+    job: &Job,
+    state: &mut State,
+    failed: Vec<(SourceKey, String)>,
+    same: &[SourceKey],
+    out: &mut W,
+) -> Result<()> {
     let store = Store::scan(&job.dirs)?;
     let arrived: Vec<SourceKey> = state
         .failures
@@ -234,7 +243,11 @@ fn record_fetches(job: &Job, state: &mut State, failed: Vec<(SourceKey, String)>
     for key in &arrived {
         state.clear_failure(key);
     }
-    if !failed.is_empty() || !arrived.is_empty() {
+    if !failed.is_empty() || !arrived.is_empty() || !same.is_empty() {
+        for key in same {
+            let rev = store.locate(key).map(|l| l.rev());
+            crate::reconcile::as_its_torrent(state, key, rev, out)?;
+        }
         for (key, error) in failed {
             // A damaged download that did not come again counts against
             // its tries, and keeps the damaged copy's revision.
@@ -269,8 +282,10 @@ pub(crate) struct Due {
 /// What a sync fetches of what `manifest` lists, the store holding
 /// `store`, `failures` recorded, at `now`: a source yt-dlp fetched with an
 /// address to fetch it again from, or a torrent's file, missing from the
-/// store or damaged there; one whose fetch failed lately waits, as one
-/// fetched again too often no longer comes, unless `retry`.
+/// store or damaged there and noted to be fetched again; one whose fetch
+/// failed lately waits, as one fetched again too often no longer comes,
+/// unless `retry`. A torrent's file no fetch mends is not fetched while
+/// the store holds it, `retry` or not.
 pub(crate) fn due(
     manifest: &Manifest,
     store: &Store,

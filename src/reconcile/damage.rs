@@ -1,6 +1,15 @@
 //! Sources holding otherwise than their songs were built from: damaged
 //! copies noted to be fetched again, and the songs held as built until
 //! `--accept`.
+//!
+//! A torrent's hash names every byte of its files, so a damaged file
+//! whose every piece checks against the metainfo is damaged on every
+//! peer alike, as a rip of a broken file leaves a torrent: fetching it
+//! again brings the same bytes. It is noted as one no fetch mends
+//! ([`Step::Mend`]), `--retry` or not, until its file changes. Where a
+//! piece cannot be checked, as one reaching into a log no song brings,
+//! it is fetched again; when aria2c, every piece checked, brings back
+//! the bytes the store holds, the fetch notes it the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -51,8 +60,15 @@ pub(super) fn whole_again(d: &Drift, state: &State) -> bool {
 /// Note each fetched source found damaged, a torrent's file among them,
 /// to be fetched again: once for each damaged copy, counted by its
 /// revision; and let go of the note, and of the audio recorded for it,
-/// once a whole copy is measured and its song's record names it.
-pub(super) fn note_damage(manifest: &Manifest, store: &Store, state: &mut State) {
+/// once a whole copy is measured and its song's record names it. A
+/// torrent's file holding every byte its torrent names is noted as no
+/// fetch mends it, and said.
+pub(super) fn note_damage<W: Write>(
+    manifest: &Manifest,
+    store: &Store,
+    state: &mut State,
+    out: &mut W,
+) -> Result<()> {
     let sites = &manifest.settings.sites;
     for key in manifest.keys() {
         let fetched = matches!(key, SourceKey::Remote { .. } | SourceKey::Torrent(_));
@@ -66,18 +82,26 @@ pub(super) fn note_damage(manifest: &Manifest, store: &Store, state: &mut State)
         let Some(facts) = state.facts.get(&key).filter(|f| f.holds_for(&rev)) else {
             continue;
         };
+        let failure = state.failures.get(&key);
+        if failure.is_some_and(|f| f.step == Step::Mend && f.rev.as_deref() == Some(rev.as_str())) {
+            continue;
+        }
         let held = manifest.song_with(&key).and_then(|s| s.held.get(&key));
         let fetchable = matches!(key, SourceKey::Torrent(_))
             || sites.fetch_url(&key).is_some()
             || held.and_then(|h| h.url.as_ref()).is_some();
-        let refetching = state
-            .failures
-            .get(&key)
+        let refetching = failure
             .filter(|f| f.step == Step::Refetch)
             .map(|f| f.rev.clone());
         match facts.damage() {
             Some(damage) if fetchable => {
                 if refetching.is_some_and(|r| r.as_deref() == Some(rev.as_str())) {
+                    continue;
+                }
+                if let SourceKey::Torrent(t) = &key
+                    && store.as_torrent(t)
+                {
+                    as_its_torrent(state, &key, Some(rev), out)?;
                     continue;
                 }
                 let audio = crate::held::Held::now(&key, facts, sites).and_then(|h| h.audio);
@@ -113,6 +137,25 @@ pub(super) fn note_damage(manifest: &Manifest, store: &Store, state: &mut State)
             }
         }
     }
+    Ok(())
+}
+
+/// Note that `key`, a torrent's file at `rev`, holds every byte its
+/// torrent names, as each peer's copy does, so it is not fetched again
+/// until it changes, and say so.
+pub(crate) fn as_its_torrent<W: Write>(
+    state: &mut State,
+    key: &SourceKey,
+    rev: Option<String>,
+    out: &mut W,
+) -> Result<()> {
+    let said = format!(
+        "{key} holds its torrent's own bytes, every piece checking, so no peer has another \
+         copy: it is not fetched again"
+    );
+    crate::ui::warning(out, &said)?;
+    state.record_failure(key, Step::Mend, rev, said);
+    Ok(())
 }
 
 /// Say what each source holding otherwise than its song was built
@@ -222,6 +265,6 @@ pub(crate) fn note_damaged<R: Runner, W: Write>(
         &mut how,
         out,
     )?;
-    note_damage(&manifest, &store, &mut state);
+    note_damage(&manifest, &store, &mut state, out)?;
     persist(&dirs.home, &state, false, &lock)
 }
