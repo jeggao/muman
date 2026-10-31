@@ -194,13 +194,16 @@ fn noise_bytes(seed: u64) -> Vec<u8> {
         .collect()
 }
 
-/// A gray picture with detail at every pixel.
-fn pgm(w: u32, h: u32, seed: u64) -> Vec<u8> {
-    let mut out = format!("P5\n{w} {h}\n255\n").into_bytes();
+/// An opaque gray picture with detail at every pixel, as a PAM.
+fn pam(w: u32, h: u32, seed: u64) -> Vec<u8> {
+    let mut out = format!(
+        "P7\nWIDTH {w}\nHEIGHT {h}\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n"
+    )
+    .into_bytes();
     out.extend(
         words((w * h) as usize, seed)
             .into_iter()
-            .map(|v| (v >> 24) as u8),
+            .flat_map(|v| [(v >> 24) as u8, u8::MAX]),
     );
     out
 }
@@ -291,12 +294,12 @@ impl Fake {
                 .clone()
                 .unwrap_or_else(|| "[00:01.00]line\n[00:30.00]more\n".into())
                 .into_bytes(),
-            "image2" if args[..at].iter().any(|a| a == "pgm") => {
+            "image2" if args[..at].iter().any(|a| a == "pam") => {
                 let (w, h) = find(&self.pictures, &input).copied().unwrap_or((64, 64));
                 let seed = find(&self.looks, &input)
                     .copied()
                     .unwrap_or_else(|| seed_of_path(&input));
-                pgm(w, h, seed)
+                pam(w, h, seed)
             }
             "image2" if encoder("copy") => self.copied_picture(&input, map).to_vec(),
             "image2" if encoder("mjpeg") => PIXEL_JPEG.to_vec(),

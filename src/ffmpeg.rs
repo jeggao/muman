@@ -285,37 +285,40 @@ pub fn run_piped<R: Runner>(
     (results, alone)
 }
 
-/// A binary graymap, as `-c:v pgm` writes it: its width, height and
-/// 8-bit pixels; `None` for anything else.
+/// A gray picture with its alpha, as `-pix_fmt ya8 -c:v pam` writes it:
+/// its width, height and a gray and an alpha byte per pixel; `None` for
+/// anything else.
 #[must_use]
-pub fn read_pgm(bytes: &[u8]) -> Option<(u32, u32, &[u8])> {
-    let mut fields = Vec::new();
-    let mut at = 0;
-    while fields.len() < 4 {
-        while bytes.get(at)?.is_ascii_whitespace() {
-            at += 1;
-        }
-        if bytes[at] == b'#' {
-            while *bytes.get(at)? != b'\n' {
-                at += 1;
-            }
-            continue;
-        }
-        let start = at;
-        while !bytes.get(at)?.is_ascii_whitespace() {
-            at += 1;
-        }
-        fields.push(std::str::from_utf8(&bytes[start..at]).ok()?);
-    }
-    let (w, h): (u32, u32) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
-    if fields[0] != "P5" || fields[3] != "255" {
+pub fn read_pam(bytes: &[u8]) -> Option<(u32, u32, &[u8])> {
+    const END: &[u8] = b"\nENDHDR\n";
+    let header_end = bytes.windows(END.len()).take(256).position(|w| w == END)?;
+    let header = std::str::from_utf8(&bytes[..header_end]).ok()?;
+    let mut lines = header.lines();
+    if lines.next()? != "P7" {
         return None;
     }
-    let pixels = bytes.get(at + 1..)?;
+    let (mut w, mut h, mut depth, mut maxval, mut tuple) = (None, None, None, None, None);
+    for line in lines {
+        let (key, value) = line.split_once(' ')?;
+        match key {
+            "WIDTH" => w = value.parse::<u32>().ok(),
+            "HEIGHT" => h = value.parse::<u32>().ok(),
+            "DEPTH" => depth = Some(value),
+            "MAXVAL" => maxval = Some(value),
+            "TUPLTYPE" => tuple = Some(value),
+            _ => return None,
+        }
+    }
+    let (w, h) = (w?, h?);
+    if (depth, maxval, tuple) != (Some("2"), Some("255"), Some("GRAYSCALE_ALPHA")) {
+        return None;
+    }
+    let pixels = bytes.get(header_end + END.len()..)?;
     let size = usize::try_from(w)
         .ok()?
-        .checked_mul(usize::try_from(h).ok()?)?;
-    (pixels.len() >= size).then_some((w, h, pixels))
+        .checked_mul(usize::try_from(h).ok()?)?
+        .checked_mul(2)?;
+    pixels.get(..size).map(|pixels| (w, h, pixels))
 }
 
 #[cfg(test)]
@@ -323,13 +326,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_graymap_header_gives_its_size() {
-        let mut pgm = b"P5\n# made by ffmpeg\n3 2\n255\n".to_vec();
-        pgm.extend([1, 2, 3, 4, 5, 6]);
-        assert_eq!(read_pgm(&pgm), Some((3, 2, &[1, 2, 3, 4, 5, 6][..])));
-        assert_eq!(read_pgm(b"P6\n1 1\n255\nxyz"), None);
-        assert_eq!(read_pgm(b"P5\n4 4\n255\n12"), None, "too few pixels");
-        assert_eq!(read_pgm(b"P5\n4294967295 4294967295\n255\n12"), None);
+    fn a_gray_and_alpha_header_gives_its_size() {
+        let header =
+            "P7\nWIDTH 3\nHEIGHT 1\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n";
+        let mut pam = header.as_bytes().to_vec();
+        pam.extend([1, 255, 2, 0, 3, 128]);
+        assert_eq!(read_pam(&pam), Some((3, 1, &[1, 255, 2, 0, 3, 128][..])));
+        assert_eq!(read_pam(&pam[..pam.len() - 1]), None, "too few pixels");
+        let gray = header.replace("DEPTH 2", "DEPTH 1");
+        assert_eq!(read_pam(format!("{gray}xyz").as_bytes()), None);
+        let huge = header.replace("WIDTH 3", "WIDTH 4294967295");
+        assert_eq!(read_pam(format!("{huge}12").as_bytes()), None);
+        assert_eq!(read_pam(b"P5\n3 1\n255\n123"), None);
     }
 
     #[test]

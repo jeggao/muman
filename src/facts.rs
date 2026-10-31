@@ -40,7 +40,7 @@
 //! learn it when their tags are read again, by [`retag`].
 //!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
-//! hashes of the graymap its quality is measured from, so a picture
+//! hashes of the gray pixels its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
 //! or by another `picture::METHOD`, have their pictures looked at again
 //! by [`look`], which decodes the pictures alone, and only when a picture
@@ -70,23 +70,25 @@ use crate::tags::{self, Offers};
 /// The measures facts are made by; facts made by others are made again.
 #[must_use]
 pub fn method() -> String {
-    format!(
-        "{}+{}+{}",
-        quality::METHOD,
-        fingerprint::METHOD,
-        probe::METHOD
-    )
+    measured_by(quality::METHOD)
+}
+
+/// [`method`] with the measures of `quality` in place of
+/// `quality::METHOD`.
+fn measured_by(quality: &str) -> String {
+    format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
+}
+
+/// [`method`] before transparent pictures were laid over mid-gray: facts
+/// it made hold, unless a picture had no detail.
+fn before_alpha() -> String {
+    measured_by(quality::BEFORE_ALPHA)
 }
 
 /// [`method`] before excerpts that fell silent were taken again: facts it
-/// made hold, unless they found no sound.
+/// made hold, unless they found no sound, or a picture no detail.
 fn before_sound() -> String {
-    format!(
-        "{}+{}+{}",
-        quality::BEFORE_SOUND,
-        fingerprint::METHOD,
-        probe::METHOD
-    )
+    measured_by(quality::BEFORE_SOUND)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,7 +175,17 @@ impl Facts {
         // Facts recorded before revisions held change times hold while
         // the sizes and modification times do, as they did then.
         let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
-        same && (self.method == method() || self.method == before_sound() && !self.soundless())
+        same && (self.method == method()
+            || self.method == before_alpha() && !self.detailless()
+            || self.method == before_sound() && !self.soundless() && !self.detailless())
+    }
+
+    /// Whether a picture measured no detail, as one drawn in its alpha did
+    /// before [`quality::flatten`].
+    fn detailless(&self) -> bool {
+        self.covers
+            .iter()
+            .any(|c| c.quality.is_some_and(|q| q.effective == 0))
     }
 
     /// Whether its audio measured no sound to judge.
@@ -757,19 +769,20 @@ fn mimetype_of(path: &Path) -> String {
     .to_string()
 }
 
-fn measure_image(pgm: &Path) -> (Option<ImageQuality>, Option<Look>) {
-    const HEADER: u64 = 64;
-    let small = std::fs::metadata(pgm).is_ok_and(|m| m.len() <= quality::MOST_PIXELS + HEADER);
-    let Some(bytes) = small.then(|| std::fs::read(pgm).ok()).flatten() else {
+fn measure_image(pam: &Path) -> (Option<ImageQuality>, Option<Look>) {
+    const HEADER: u64 = 128;
+    let small = std::fs::metadata(pam).is_ok_and(|m| m.len() <= 2 * quality::MOST_PIXELS + HEADER);
+    let Some(bytes) = small.then(|| std::fs::read(pam).ok()).flatten() else {
         return (None, None);
     };
-    let Some((w, h, pixels)) = ffmpeg::read_pgm(&bytes)
+    let Some((w, h, pairs)) = ffmpeg::read_pam(&bytes)
         .filter(|(w, h, _)| u64::from(*w) * u64::from(*h) <= quality::MOST_PIXELS)
     else {
         return (None, None);
     };
-    let quality = quality::image(pixels, w, h);
-    let look = quality.and_then(|q| picture::look(pixels, w, h, q.content));
+    let pixels = quality::flatten(pairs);
+    let quality = quality::image(&pixels, w, h);
+    let look = quality.and_then(|q| picture::look(&pixels, w, h, q.content));
     (quality, look)
 }
 
@@ -779,7 +792,7 @@ fn image_file<R: Runner>(
     located: &Located,
     scratch: &Path,
 ) -> (Option<ImageQuality>, Option<Look>) {
-    let out = scratch.join("file.pgm");
+    let out = scratch.join("file.pam");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
     let input = Input::new(quality::whole_pictures(), &located.path);
     let ok = ffmpeg::run(runner, &[input], &outputs);
@@ -790,7 +803,7 @@ fn image_file<R: Runner>(
 }
 
 /// The outputs writing each picture `probed` holds, and those dumped
-/// from its attachments into `scratch`, as graymaps, each input it
+/// from its attachments into `scratch`, in gray, each input it
 /// needs added to `inputs`; where ffprobe found no picture in `path`,
 /// those of its MP4 `covr` atom.
 fn cover_outputs(
@@ -804,7 +817,7 @@ fn cover_outputs(
         outputs.push((
             Output::new(
                 quality::gray_output(0, &p.index.to_string()),
-                &scratch.join(format!("pic{}.pgm", p.index)),
+                &scratch.join(format!("pic{}.pam", p.index)),
             ),
             CoverAt::Picture { index: p.index },
             p.mimetype.clone(),
@@ -820,7 +833,7 @@ fn cover_outputs(
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
-                &scratch.join(format!("att{}.pgm", a.ordinal)),
+                &scratch.join(format!("att{}.pam", a.ordinal)),
             ),
             CoverAt::Attachment { ordinal: a.ordinal },
             crate::picture::sniff_file(&dumped).map_or_else(|| a.mimetype.clone(), str::to_string),
@@ -850,7 +863,7 @@ fn cover_outputs(
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
-                &scratch.join(format!("atom{index}.pgm")),
+                &scratch.join(format!("atom{index}.pam")),
             ),
             CoverAt::Atom { index },
             picture::sniff(&bytes).unwrap_or("image/jpeg").to_string(),
@@ -860,7 +873,7 @@ fn cover_outputs(
     outputs
 }
 
-/// The run writing the `n`th picture beside a manual file as a graymap;
+/// The run writing the `n`th picture beside a manual file in gray;
 /// each has one of its own, since an ffmpeg that cannot open one input
 /// fails every output.
 fn sidecar_cover<R: Runner>(
@@ -871,7 +884,7 @@ fn sidecar_cover<R: Runner>(
 ) -> (Output, Result<()>) {
     let output = Output::new(
         quality::gray_output(0, "v:0"),
-        &scratch.join(format!("side{n}.pgm")),
+        &scratch.join(format!("side{n}.pam")),
     );
     let input = Input::new(quality::whole_pictures(), cover);
     let result = ffmpeg::run(runner, &[input], std::slice::from_ref(&output))
