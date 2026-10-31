@@ -49,6 +49,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A sync stopped within its first 30 seconds of writing wrote every
+  song again on the next run**, as a small library's whole sync could
+  be. Each song written is now saved as written, unless saving takes
+  more than a twentieth of the time writing runs.
 - **A song sung in a language you read took a translation into another
   one you read** when `prefer` puts `"translation"` first: an English
   song read in `["en", "zh"]` took its Chinese subtitles over its

@@ -1,6 +1,16 @@
 //! A sync's intent carried out: songs' files moved to their new paths,
 //! each song written or tagged again, what changed in each said, and the
 //! library folder's time set after a change.
+//!
+//! Every song due is saved as about to be written before any is, and
+//! each as written once it is, so a run stopped partway writes again only
+//! what it had not saved. A save follows a song written once the time
+//! since the last is [`SAVES_APART`] times what that save took, and at
+//! most [`Writing::every`]: saving then costs writing about a twentieth
+//! of its time, whatever the size of the state, and a small one is saved
+//! after every song. With saves a fixed 30 s apart alone, a run stopped
+//! within its first 30 s, all of a small library's writing, wrote every
+//! song again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -29,6 +39,9 @@ use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::prune;
 use super::{NAMED, Sub};
+
+/// How many times the last save took writing runs before the next.
+const SAVES_APART: u32 = 20;
 
 /// What differs between two plans, in words.
 pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
@@ -159,7 +172,7 @@ pub(super) struct Writing<'a, R: Runner> {
     pub fitted: Option<&'a limit::Fitted>,
     /// The run's scratch folder, which each render takes a folder of.
     pub scratch: &'a Path,
-    /// How long writing runs between saves of what it wrote.
+    /// The longest writing runs between saves of what it wrote.
     pub every: Duration,
 }
 
@@ -431,6 +444,7 @@ fn render_due<R: Runner, W: Write>(
         failed_at: Vec::new(),
     };
     let mut kept_at = Instant::now();
+    let mut save_took = Duration::ZERO;
     let writing = progress::step("Writing", Some(due.len() as u64));
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
@@ -481,10 +495,12 @@ fn render_due<R: Runner, W: Write>(
                     wrote.learned.extend(learned);
                     if let Some(pending) = pending.as_deref_mut() {
                         pending.outputs.insert(done.audio.clone(), vouched.clone());
-                        if kept_at.elapsed() >= *every {
+                        if kept_at.elapsed() >= (save_took * SAVES_APART).min(*every) {
+                            let saving = Instant::now();
                             pending.save(&dirs.home)?;
                             ledger.checkpoint()?;
                             kept_at = Instant::now();
+                            save_took = kept_at - saving;
                         }
                     }
                     wrote.outputs.insert(done.audio, vouched);
