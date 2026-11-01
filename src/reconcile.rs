@@ -41,7 +41,7 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{Located, Store};
 
-pub(crate) use self::damage::note_damaged;
+pub(crate) use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
 pub(crate) use self::decide::{Doing, Foreseen, files_of, foresee};
@@ -230,7 +230,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         persist(home, &state, opts.dry_run, &lock)?;
     }
     if !opts.dry_run {
-        note_damage(&manifest, &store, &mut state);
+        note_damage(&manifest, &store, &mut state, out)?;
     }
     let renames = sites_found(&manifest, &state);
     for (from, to) in &renames {

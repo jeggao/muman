@@ -2134,6 +2134,145 @@ fn a_damaged_torrent_file_is_repaired_from_its_peers_and_taken() {
     assert!(!state.failures.contains_key(&key) && state.damaged.is_empty());
 }
 
+/// A home whose one song is `Paper Comets.flac` of the torrent of
+/// `files`, each named with its bytes, in one piece hashed as its peers
+/// hold it; the store keeps the song file alone, and a fake measures it
+/// missing audio. Its key, its file, and the fake.
+fn damaged_at_source(s: &Setup, files: &[(&str, &[u8])]) -> (SourceKey, PathBuf, Fake) {
+    use sha1::Digest as _;
+    let mut list = String::new();
+    for (name, bytes) in files {
+        let _ = write!(
+            list,
+            "d6:lengthi{}e4:pathl{}:{name}ee",
+            bytes.len(),
+            name.len()
+        );
+    }
+    let mut bytes =
+        format!("d4:infod5:filesl{list}e4:name15:Lantern Weather12:piece lengthi16384e6:pieces20:")
+            .into_bytes();
+    let all: Vec<u8> = files.iter().flat_map(|(_, b)| b.iter().copied()).collect();
+    bytes.extend(sha1::Sha1::digest(all));
+    bytes.extend(b"ee");
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let key = SourceKey::parse(&format!("torrent:{hash}/Paper Comets.flac")).unwrap();
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 4\n\
+             [providers.lrclib]\nenabled = false\n\
+             [providers.acoustid]\nenabled = false\n\
+             [providers.musicbrainz]\nenabled = false\n\
+             [providers.coverart]\nenabled = false\n\
+             [[song]]\nsources = [\"{key}\"]\n"
+        ),
+    );
+    let torrents = s.dir.path().join("home/sources/torrent");
+    std::fs::create_dir_all(torrents.join(&hash)).unwrap();
+    std::fs::write(torrents.join(format!("{hash}.torrent")), &bytes).unwrap();
+    let file = torrents.join(&hash).join("Paper Comets.flac");
+    std::fs::write(&file, files[0].1).unwrap();
+    // Three seconds lost from its middle, as a rip of a broken file holds.
+    let mut holed = "#tb 0: 1/1000\n".to_string();
+    for n in (0..100).filter(|n| !(20..70).contains(n)) {
+        let pts = n * 60;
+        let _ = writeln!(holed, "0, {pts}, {pts}, 60, 300, 0x0");
+    }
+    let fake = Fake {
+        timelines: vec![("Paper Comets".into(), holed)],
+        hashes: vec![("Paper Comets".into(), 1)],
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    (key, file, fake)
+}
+
+fn aria2c_runs(fake: &Fake) -> usize {
+    fake.calls().iter().filter(|c| c[0] == "aria2c").count()
+}
+
+#[test]
+fn a_damaged_torrent_file_its_torrent_holds_so_is_not_fetched_even_on_retry() {
+    let s = Setup::new();
+    let (key, _, fake) = damaged_at_source(&s, &[("Paper Comets.flac", b"a copy with holes")]);
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("lacks"), "{text}");
+    assert_eq!(
+        text.matches("holds its torrent's own bytes, every piece checking")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert!(!text.contains("Fetching"), "{text}");
+    let step = || {
+        let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+        state.failures.get(&key).map(|f| f.step)
+    };
+    assert_eq!(step(), Some(crate::state::Step::Mend), "{text}");
+
+    for retry in [&["sync", "--retry"][..], &["sync", "--until-done"]] {
+        let (_, text) = s.run(&fake, retry);
+        assert!(!text.contains("Fetching"), "{text}");
+        assert!(!text.contains("own bytes"), "said once: {text}");
+    }
+    assert_eq!(aria2c_runs(&fake), 0);
+    assert_eq!(step(), Some(crate::state::Step::Mend));
+}
+
+#[test]
+fn a_damaged_torrent_file_fetched_back_as_it_was_is_not_fetched_again() {
+    let s = Setup::new();
+    // The piece reaches into the notes, which no song brings, so the
+    // store alone cannot check it.
+    let (key, file, fake) = damaged_at_source(
+        &s,
+        &[
+            ("Paper Comets.flac", b"a copy with holes"),
+            ("notes.nfo", b"notes"),
+        ],
+    );
+    let (_, text) = s.run(&fake, &["sync", "--offline"]);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Refetch),
+        "{text}"
+    );
+    let before = std::fs::metadata(&file).unwrap().modified().unwrap();
+
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(
+        text.contains("Fetching 1 damaged torrent file(s) again"),
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("holds its torrent's own bytes, every piece checking")
+            .count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(aria2c_runs(&fake), 1);
+    assert_eq!(std::fs::read(&file).unwrap(), b"a copy with holes");
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().modified().unwrap(),
+        before,
+        "left as it was, so not measured again"
+    );
+
+    let (_, text) = s.run(&fake, &["sync", "--retry"]);
+    assert!(!text.contains("Fetching"), "{text}");
+    assert_eq!(aria2c_runs(&fake), 1);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Mend)
+    );
+}
+
 #[test]
 fn status_changes_nothing() {
     let s = Setup::new();

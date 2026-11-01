@@ -75,6 +75,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   detail**, so it lost to any other picture. Transparent pixels are now
   measured over mid-gray; sources with such a cover are measured again
   on the next sync.
+- **A torrent's file damaged in the torrent itself was fetched again**
+  five times, and on every `sync --retry` or `--until-done`, though
+  each peer holds the same damaged bytes. A damaged file whose every
+  piece checks against the torrent, or that a fetch brings back
+  unchanged, is said to be so and not fetched again until it changes.
 
 ## [0.8.0] - 2026-10-28
 

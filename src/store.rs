@@ -681,6 +681,28 @@ impl Store {
         self.torrents.contains_key(hash)
     }
 
+    /// Whether the file of `key` holds every byte its torrent names, each
+    /// piece it spans checking against the kept metainfo: not where that
+    /// is gone, or a piece reaches into a file the store lacks, as a log
+    /// or a scan beside a song is.
+    #[must_use]
+    pub fn as_torrent(&self, key: &TorrentKey) -> bool {
+        let root = &self.torrent_root;
+        let meta = std::fs::read(metainfo_path(root, key.hash()))
+            .ok()
+            .and_then(|bytes| Metainfo::read(&bytes).ok())
+            .filter(|m| m.hash() == key.hash());
+        let Some(meta) = meta else {
+            return false;
+        };
+        let at =
+            |f: &crate::torrent::File| torrent_path(root, &TorrentKey::new(key.hash(), &f.path));
+        meta.files
+            .iter()
+            .find(|f| crate::relpath::normalized(&f.path) == key.path())
+            .is_some_and(|file| crate::torrent::checks(&meta, file, at))
+    }
+
     /// The file of the fetched source `key`: at its place, else in the
     /// layout before, by its ID.
     fn fetched_file(&self, key: &SourceKey) -> Option<&PathBuf> {

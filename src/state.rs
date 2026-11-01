@@ -458,6 +458,11 @@ pub enum Step {
     Fetch,
     /// Fetching it again, its copy found damaged.
     Refetch,
+    /// Mending a torrent's damaged file, which cannot be done: it holds
+    /// every byte its torrent names, so each peer's copy is damaged
+    /// alike. It is not fetched, `--retry` or not; the file changing, and
+    /// measured again, starts over.
+    Mend,
 }
 
 /// The longest a failed fetch waits before it is tried again.
@@ -476,7 +481,7 @@ impl Failure {
     /// Whether the step is due again: a measure when the file changed, a
     /// fetch once an hour has passed, doubling with each failure; a
     /// damaged download's first fetch again at once, the next as a failed
-    /// fetch's, and none after [`REFETCH_TRIES`].
+    /// fetch's, and none after [`REFETCH_TRIES`]; a mend never.
     #[must_use]
     pub fn due(&self, rev: Option<&str>, now: u64) -> bool {
         let wait = |failed: u32| {
@@ -492,6 +497,7 @@ impl Failure {
                     || self.count <= REFETCH_TRIES
                         && now.saturating_sub(self.last) >= wait(self.count - 1)
             }
+            Step::Mend => false,
         }
     }
 }

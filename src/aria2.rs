@@ -103,7 +103,12 @@
 //! then less often ([`crate::state::Failure::due`]). Its damaged copy, and
 //! the files sharing a piece with it, are copied in as a download taken
 //! up is, so aria2c fetches only the pieces that do not check; the whole
-//! copy then takes the damaged one's place.
+//! copy then takes the damaged one's place. A file whose every piece
+//! checks holds its torrent's own bytes, damaged on every peer alike, and
+//! is not fetched at all ([`crate::state::Step::Mend`]). Where a piece
+//! reaches into a file the store lacks, aria2c's check settles it: a file
+//! it brings back as the store holds it, byte for byte, is left as it
+//! was and noted the same way.
 //!
 //! A fetch with no byte arriving for `[torrent] stall` stops, aria2c
 //! reporting it unfinished, as a torrent no peer seeds leaves it; it is
@@ -130,7 +135,7 @@ use anyhow::{Context, Result, bail, ensure};
 use crate::manifest::Manifest;
 use crate::runner::{Line, Runner};
 use crate::settings::Torrent;
-use crate::source::SourceKey;
+use crate::source::{SourceKey, TorrentKey};
 use crate::torrent::{File, Magnet, Metainfo};
 
 /// Where aria2c runs and how.
@@ -768,6 +773,9 @@ pub fn metainfo_of<R: Runner, W: Write>(
 pub struct Fetched {
     /// The key of each file placed in the store.
     pub arrived: Vec<SourceKey>,
+    /// Of `arrived`, each whose bytes the store held already, left as it
+    /// was: a damaged copy fetched again that its torrent holds so.
+    pub same: Vec<SourceKey>,
     /// Why the fetch did not bring every file, where it did not.
     pub failure: Option<Failure>,
 }
@@ -833,8 +841,8 @@ pub fn fetch_all<R: Runner, W: Write>(
             place(out, places, &wanted[n])?
         } else {
             Fetched {
-                arrived: place_checked(places, &wanted[n]),
                 failure: Some(failure(places, ended, &errors, failed)),
+                ..place_checked(places, &wanted[n])
             }
         };
     }
@@ -846,7 +854,7 @@ pub fn fetch_all<R: Runner, W: Write>(
 fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Result<Fetched> {
     let meta = wanted.meta;
     let dir = places.partial.join(meta.hash());
-    let mut arrived = Vec::new();
+    let mut fetched = Fetched::default();
     let mut unplaced = Vec::new();
     for file in &wanted.files {
         let from = dir.join(index_path(file));
@@ -860,24 +868,63 @@ fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Res
             )?;
             continue;
         }
-        match crate::store::place_torrent(places.store, &key, &from) {
-            Ok(_) => arrived.push(SourceKey::Torrent(key)),
-            Err(e) => unplaced.push(format!("{e:#}")),
+        if let Err(e) = put(places, key, &from, &mut fetched) {
+            unplaced.push(format!("{e:#}"));
         }
     }
     // A file the store could not take stays to be placed by a later run.
     if unplaced.is_empty() {
         let _ = std::fs::remove_dir_all(&dir);
     }
-    Ok(Fetched {
-        arrived,
-        failure: (!unplaced.is_empty()).then_some(Failure::Unplaced(unplaced)),
-    })
+    fetched.failure = (!unplaced.is_empty()).then_some(Failure::Unplaced(unplaced));
+    Ok(fetched)
+}
+
+/// Place the file at `from` at `key`'s place, adding it to `fetched`'s
+/// arrivals, unless the store holds the same bytes there already: that
+/// file is left as it was, so it is not measured again.
+fn put(places: &Places<'_>, key: TorrentKey, from: &Path, fetched: &mut Fetched) -> Result<()> {
+    if same_bytes(from, &crate::store::torrent_path(places.store, &key)) {
+        fetched.same.push(SourceKey::Torrent(key.clone()));
+    } else {
+        crate::store::place_torrent(places.store, &key, from)?;
+    }
+    fetched.arrived.push(SourceKey::Torrent(key));
+    Ok(())
+}
+
+/// Whether the files at `a` and `b` hold the same bytes, read a chunk at
+/// a time.
+fn same_bytes(a: &Path, b: &Path) -> bool {
+    use std::io::Read as _;
+    const CHUNK: usize = 1 << 16;
+    let open = |p: &Path| {
+        let file = std::fs::File::open(p).ok()?;
+        let len = file.metadata().ok()?.len();
+        Some((file, len))
+    };
+    let (Some((mut a, len)), Some((mut b, other))) = (open(a), open(b)) else {
+        return false;
+    };
+    if len != other {
+        return false;
+    }
+    let (mut x, mut y) = (vec![0; CHUNK], vec![0; CHUNK]);
+    let mut left = len;
+    while left > 0 {
+        let take = usize::try_from(left).map_or(CHUNK, |n| n.min(CHUNK));
+        let read = a.read_exact(&mut x[..take]).is_ok() && b.read_exact(&mut y[..take]).is_ok();
+        if !read || x[..take] != y[..take] {
+            return false;
+        }
+        left -= take as u64;
+    }
+    true
 }
 
 /// Place each file of `wanted` an unfinished fetch wrote whole, every
 /// piece of it checking, at its key's place, the rest left to resume.
-fn place_checked(places: &Places<'_>, wanted: &Wanted<'_>) -> Vec<SourceKey> {
+fn place_checked(places: &Places<'_>, wanted: &Wanted<'_>) -> Fetched {
     let meta = wanted.meta;
     let dir = places.partial.join(meta.hash());
     let at = |f: &File| dir.join(index_path(f));
@@ -887,15 +934,13 @@ fn place_checked(places: &Places<'_>, wanted: &Wanted<'_>) -> Vec<SourceKey> {
         .copied()
         .filter(|f| crate::torrent::checks(meta, f, at))
         .collect();
-    let mut arrived = Vec::new();
+    let mut fetched = Fetched::default();
     for file in whole {
-        if let SourceKey::Torrent(key) = meta.key(file)
-            && crate::store::place_torrent(places.store, &key, &at(file)).is_ok()
-        {
-            arrived.push(SourceKey::Torrent(key));
+        if let SourceKey::Torrent(key) = meta.key(file) {
+            let _ = put(places, key, &at(file), &mut fetched);
         }
     }
-    arrived
+    fetched
 }
 
 /// Fetch `files` of `meta`, whose metainfo the store keeps, and place each
@@ -1028,17 +1073,26 @@ pub(crate) fn due<W: Write>(
     Ok(by_hash)
 }
 
+/// What a sync's fetch of torrent files again ended in.
+#[derive(Debug, Default)]
+pub struct Refetched {
+    /// Each key that did not arrive, with why.
+    pub failed: Vec<(SourceKey, String)>,
+    /// Each key fetched back as the store held it, every piece checked: a
+    /// damaged copy its torrent holds so.
+    pub same: Vec<SourceKey>,
+}
+
 /// Fetch the files `by_hash` names of each torrent again, with the
 /// lyrics and pictures a listed song file of it brings: a run for the
-/// metainfo the store lost, then one for every torrent's files. Each
-/// key that did not arrive, with why.
+/// metainfo the store lost, then one for every torrent's files.
 pub fn fetch_due<R: Runner, W: Write>(
     runner: &R,
     out: &mut W,
     places: &Places<'_>,
     manifest: &Manifest,
     by_hash: &BTreeMap<String, Vec<SourceKey>>,
-) -> Result<Vec<(SourceKey, String)>> {
+) -> Result<Refetched> {
     let mut failed = Vec::new();
     let lost: Vec<(&String, Magnet)> = by_hash
         .keys()
@@ -1073,10 +1127,15 @@ pub fn fetch_due<R: Runner, W: Write>(
         Err(e) => {
             let keys: Vec<SourceKey> = asking.into_iter().flatten().cloned().collect();
             fail(out, &mut failed, &keys, &format!("{e:#}"))?;
-            return Ok(failed);
+            return Ok(Refetched {
+                failed,
+                same: Vec::new(),
+            });
         }
     };
+    let mut same = Vec::new();
     for (keys, fetched) in asking.into_iter().zip(fetched) {
+        same.extend(fetched.same.into_iter().filter(|k| keys.contains(k)));
         if let Some(why) = fetched.failure {
             let lost: Vec<SourceKey> = keys
                 .iter()
@@ -1090,7 +1149,7 @@ pub fn fetch_due<R: Runner, W: Write>(
             failed.push((key.clone(), "aria2c did not finish it".to_string()));
         }
     }
-    Ok(failed)
+    Ok(Refetched { failed, same })
 }
 
 /// Say each of `keys` could not be fetched again, for `why`, and add it
