@@ -579,7 +579,6 @@ fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
     }));
     let every_song = Options {
         force: true,
-        checkpoint: Some(Duration::ZERO),
         ..Options::default()
     };
     let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

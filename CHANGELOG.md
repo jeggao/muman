@@ -49,6 +49,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A sync stopped within its first 30 seconds of writing wrote every
+  song again on the next run**, as a small library's whole sync could
+  be. Each song written is now saved as written, unless saving takes
+  more than a twentieth of the time writing runs.
 - **A song sung in a language you read took a translation into another
   one you read** when `prefer` puts `"translation"` first: an English
   song read in `["en", "zh"]` took its Chinese subtitles over its
@@ -59,6 +63,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   Korean or Chinese from YouTube's audio language. A language read off
   an upload is taken only where the song's title and its release's
   script could be in it.
+- **An M4A whose tags were changed to shorter ones kept the room they
+  left**, so its bytes differed from the same song written anew, and
+  depended on every edit before. The room is now removed.
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.
