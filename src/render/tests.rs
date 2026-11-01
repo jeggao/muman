@@ -965,6 +965,20 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             retagged == built(&q).0,
             "{format:?}: a retag writes what a build would"
         );
+        q.tags[0] = ("TITLE".into(), vec!["Comets".into()]);
+        retag(
+            &library,
+            &r.audio,
+            &names(&r),
+            &q,
+            &[Ledger::taken(&r.audio)],
+        )
+        .unwrap();
+        let shorter = fs::read(library.join(&r.audio)).unwrap();
+        assert!(
+            shorter == built(&q).0,
+            "{format:?}: a retag to shorter tags writes what a build would"
+        );
     }
 }
 
