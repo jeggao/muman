@@ -55,7 +55,8 @@
 //! A picture with little contrast (a spread under 6 gray levels at
 //! 32×32) hashes like every other such picture, so it is never more than
 //! Unsure. Hashes are of gray pixels, so two colourings of one design are
-//! one design, and a transparent field hashes as the colour it hides.
+//! one design, and a transparent field hashes as the mid-gray
+//! [`quality::flatten`] lays it over.
 //!
 //! The DCT's cosines come from `f64::cos`, whose last bit may differ
 //! between platforms; the dead zone keeps such a difference from flipping
@@ -68,7 +69,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::quality::{self, Rect};
 
 /// Names how pictures are hashed. A look taken by another is taken again.
-pub const METHOD: &str = "picture/2";
+pub const METHOD: &str = "picture/3";
 
 const SIDE: usize = 32;
 const LOW: usize = 8;

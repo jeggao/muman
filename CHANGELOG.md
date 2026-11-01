@@ -71,6 +71,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   take.
 - **A record found again with other content was not kept**: the copy
   first stored stayed, and a song pinned to its old content.
+- **A cover drawn only in its transparency measured as having no
+  detail**, so it lost to any other picture. Transparent pixels are now
+  measured over mid-gray; sources with such a cover are measured again
+  on the next sync.
 
 ## [0.8.0] - 2026-10-28
 

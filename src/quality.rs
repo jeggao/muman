@@ -28,7 +28,8 @@
 //!   them. Float lossless audio holds samples past full scale unclipped, so
 //!   in it only runs just under its own peak count.
 //!
-//! A picture is measured in gray, and only up to [`MOST_PIXELS`]: a
+//! A picture is measured in gray, laid over mid-gray where it is
+//! transparent, as [`flatten`] says, and only up to [`MOST_PIXELS`]: a
 //! larger one is no picture, as one that does not decode is. A picture
 //! is a few bytes a pixel to measure, in memory and time, and a PNG of
 //! one color compresses its pixels a thousandfold: a 167 KB one of
@@ -68,7 +69,10 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/8";
+pub const METHOD: &str = "quality/9";
+/// The method before transparent pictures were laid over mid-gray: what
+/// it measured holds, unless a picture had no detail.
+pub const BEFORE_ALPHA: &str = "quality/8";
 /// The method before excerpts that all fell silent were placed again in
 /// what sounds: what it measured holds, unless it found no sound.
 pub const BEFORE_SOUND: &str = "quality/7";
@@ -339,7 +343,9 @@ pub fn whole_pictures() -> Vec<OsString> {
 pub const MOST_PIXELS: u64 = 8192 * 8192;
 
 /// The ffmpeg output options that write one frame of the picture
-/// `input:stream` as a binary graymap, which carries its own size.
+/// `input:stream` in gray with its alpha, as a PAM, which carries its
+/// own size. Its gray bytes are those `-pix_fmt gray` writes: ffmpeg
+/// drops the alpha, and with it all a picture drawn in its alpha shows.
 #[must_use]
 pub fn gray_output(input: usize, stream: &str) -> Vec<OsString> {
     [
@@ -348,15 +354,36 @@ pub fn gray_output(input: usize, stream: &str) -> Vec<OsString> {
         "-frames:v".to_string(),
         "1".to_string(),
         "-pix_fmt".to_string(),
-        "gray".to_string(),
+        "ya8".to_string(),
         "-c:v".to_string(),
-        "pgm".to_string(),
+        "pam".to_string(),
         "-f".to_string(),
         "image2".to_string(),
     ]
     .into_iter()
     .map(OsString::from)
     .collect()
+}
+
+/// What a transparent pixel is laid over: mid-gray, which a drawing of
+/// any shade but its own shows against, where black hides a dark logo and
+/// white a light one, as a player's background may.
+pub const BACKDROP: u32 = 128;
+
+/// The gray pixels of `pairs`, a gray and an alpha byte each, laid over
+/// [`BACKDROP`]. An opaque pixel keeps its gray exactly, so a picture
+/// with no transparency measures as its gray alone.
+#[must_use]
+pub fn flatten(pairs: &[u8]) -> Vec<u8> {
+    let (pairs, _) = pairs.as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|&[gray, alpha]| {
+            let (gray, alpha) = (u32::from(gray), u32::from(alpha));
+            let mixed = (gray * alpha + BACKDROP * (255 - alpha) + 127) / 255;
+            u8::try_from(mixed).unwrap_or(u8::MAX)
+        })
+        .collect()
 }
 
 /// One measured segment's samples, each channel's in turn.
@@ -1391,6 +1418,16 @@ mod tests {
     fn a_flat_picture_has_no_effective_resolution() {
         let q = image(&vec![90_u8; 64 * 64], 64, 64).unwrap();
         assert_eq!(q.effective, 0);
+    }
+
+    #[test]
+    fn a_picture_drawn_in_its_alpha_keeps_its_detail() {
+        let art = gray(&picture(256));
+        let black_in_alpha: Vec<u8> = art.iter().flat_map(|&a| [0, a]).collect();
+        let q = image(&flatten(&black_in_alpha), 256, 256).unwrap();
+        assert_eq!(q.effective, 256, "{q:?}");
+        let opaque: Vec<u8> = art.iter().flat_map(|&g| [g, 255]).collect();
+        assert_eq!(flatten(&opaque), art);
     }
 
     #[test]
