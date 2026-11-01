@@ -71,9 +71,6 @@ pub struct Options {
     pub retry: bool,
     /// How long a dropped-in file waits after arriving.
     pub settling: Duration,
-    /// How long writing runs between saves of what it wrote; unset, as
-    /// long as measuring runs between its saves.
-    pub checkpoint: Option<Duration>,
     /// Take what each fetched source holds now where it differs from
     /// what its song was built from.
     pub accept: bool,
@@ -473,7 +470,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         placed: &placed,
         fitted: fitted.as_ref(),
         scratch: temp.path(),
-        every: opts.checkpoint.unwrap_or(CHECKPOINT),
+        every: CHECKPOINT,
     };
     let applied = apply(
         &job,
