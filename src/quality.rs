@@ -375,10 +375,11 @@ pub const BACKDROP: u32 = 128;
 /// with no transparency measures as its gray alone.
 #[must_use]
 pub fn flatten(pairs: &[u8]) -> Vec<u8> {
+    let (pairs, _) = pairs.as_chunks::<2>();
     pairs
-        .chunks_exact(2)
-        .map(|p| {
-            let (gray, alpha) = (u32::from(p[0]), u32::from(p[1]));
+        .iter()
+        .map(|&[gray, alpha]| {
+            let (gray, alpha) = (u32::from(gray), u32::from(alpha));
             let mixed = (gray * alpha + BACKDROP * (255 - alpha) + 127) / 255;
             u8::try_from(mixed).unwrap_or(u8::MAX)
         })
