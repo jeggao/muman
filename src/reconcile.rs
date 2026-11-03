@@ -187,7 +187,12 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .as_deref()
         .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
     {
-        crate::history::follow_moves(home, &dirs.library, &mut state);
+        let moves = if opts.dry_run {
+            crate::history::Moves::Foresee
+        } else {
+            crate::history::Moves::Follow
+        };
+        crate::history::follow_moves(home, &dirs.library, &mut state, moves);
     }
     let store = Store::scan(dirs)?;
     if opts.dry_run {

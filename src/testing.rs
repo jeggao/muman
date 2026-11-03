@@ -545,6 +545,75 @@ impl Drop for Kill {
     }
 }
 
+/// A library a test guards, and how many [`crate::atomic::Lock::library`]
+/// hold it now.
+#[derive(Debug)]
+struct Guarded {
+    root: PathBuf,
+    held: usize,
+}
+
+/// The libraries guarded, a test's each.
+static GUARDED: Mutex<Vec<Guarded>> = Mutex::new(Vec::new());
+
+/// `path` resolved as [`change_point`] resolves the files it is given,
+/// though it may not be made yet.
+fn resolved(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| {
+        path.parent()
+            .and_then(|p| dunce::canonicalize(p).ok())
+            .map_or_else(
+                || path.to_path_buf(),
+                |p| p.join(path.file_name().unwrap_or_default()),
+            )
+    })
+}
+
+/// Where a library is guarded; dropped, it is not.
+#[derive(Debug)]
+pub struct Guard {
+    root: PathBuf,
+}
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        GUARDED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|g| g.root != self.root);
+    }
+}
+
+/// Fail a change of a file in `library` made while no
+/// [`crate::atomic::Lock::library`] holds it, at the change.
+#[must_use]
+pub fn guard_library(library: &Path) -> Guard {
+    let root = resolved(library);
+    GUARDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(Guarded {
+            root: root.clone(),
+            held: 0,
+        });
+    Guard { root }
+}
+
+/// The library lock on `library` taken, or let go.
+pub fn library_held(library: &Path, taken: bool) {
+    let root = resolved(library);
+    let mut guarded = GUARDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(g) = guarded.iter_mut().find(|g| g.root == root) {
+        g.held = if taken {
+            g.held + 1
+        } else {
+            g.held.saturating_sub(1)
+        };
+    }
+}
+
 /// A link at `at` to `to`, a folder's link if `to` is a folder; `false`
 /// where the system refuses one, as Windows does outside developer mode.
 pub fn link(to: &Path, at: &Path) -> bool {
@@ -597,6 +666,16 @@ pub fn change_point(path: &Path) {
             || path.to_path_buf(),
             |p| p.join(path.file_name().unwrap_or_default()),
         );
+    let unlocked = GUARDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|g| g.held == 0 && path.starts_with(&g.root));
+    assert!(
+        !unlocked,
+        "{} changed while no lock held its library",
+        path.display()
+    );
     let killed = {
         let mut armed = ARMED
             .lock()
