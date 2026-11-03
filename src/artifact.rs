@@ -290,6 +290,27 @@ impl<'a> Parts<'a> {
             .or_else(|| self.lyric_files().next().map(|f| &f.text))
     }
 
+    /// The places of the song's cover: inside it, then each file beside.
+    pub(crate) fn covers(&self) -> impl Iterator<Item = &CoverPart<'a>> {
+        self.cover.iter().chain(self.cover_files())
+    }
+
+    /// The files of the song's cover beside it.
+    pub(crate) fn cover_files(&self) -> impl Iterator<Item = &CoverPart<'a>> {
+        self.beside.iter().filter_map(|b| match b {
+            Beside::Cover(c) => Some(c),
+            Beside::Lyrics(_) | Beside::Folder(_) => None,
+        })
+    }
+
+    /// The files of its folder's cover the song holds.
+    pub(crate) fn folder_files(&self) -> impl Iterator<Item = &CoverPart<'a>> {
+        self.beside.iter().filter_map(|b| match b {
+            Beside::Folder(c) => Some(c),
+            Beside::Lyrics(_) | Beside::Cover(_) => None,
+        })
+    }
+
     /// The files of lyrics beside the song.
     pub(crate) fn lyric_files(&self) -> impl Iterator<Item = &LyricsFilePart<'a>> {
         self.beside.iter().filter_map(|b| match b {
