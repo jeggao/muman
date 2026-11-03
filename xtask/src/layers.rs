@@ -105,6 +105,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
         &[
             "state",
             "resolve",
+            "artifact",
             "reconcile",
             "render",
             "limit",

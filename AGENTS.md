@@ -89,6 +89,7 @@ src/
   fingerprint.rs    Chromaprint prints and their comparison
   align.rs          audio comparison by loudness envelopes
   resolve.rs        one song's facts to the plan it is written from
+  artifact.rs       the part of a plan each library file is made from
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
   lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
   lyrics.rs         subtitle languages, LRC cleaning and timing
@@ -130,8 +131,7 @@ packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, songs.md, configuration.md, audio.md, cli.md (generated)
 ```
 
-Start from a module's `//!` docs: they hold its design and the reasons
-for its constants.
+A module's `//!` docs hold its design and the reasons for its constants.
 
 ## Commands
 
