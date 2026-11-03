@@ -13,7 +13,7 @@ use crate::facts::{CoverAt, LyricsAt};
 use crate::library::{Ledger, Owned};
 use crate::quality::Rect;
 use crate::resolve::{AudioRef, LyricsFile, render_version};
-use crate::resolve::{CoverPlace, CoverRef, ImageFormat};
+use crate::resolve::{CoverPlace, CoverRef, ImageFormat, LyricsRef, Plan};
 use crate::store::Kind;
 use crate::testing::Fake;
 
@@ -108,7 +108,7 @@ fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result
     render(
         fake,
         &Job {
-            plan,
+            parts: &crate::artifact::parts(plan),
             stem: Path::new("A/Record/Song"),
             library: &f.dir.path().join("lib"),
             sources: &f.sources,
@@ -178,8 +178,8 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     let whole = fs::read(&lrc).unwrap();
     let claim = [Ledger::taken(Path::new("A/Record/Song.lrc"))];
     let scratch = f.dir.path().join("scratch-beside");
-    let job = |plan| Job {
-        plan,
+    let job = |parts| Job {
+        parts,
         stem: Path::new("A/Record/Song"),
         library: &lib,
         sources: &f.sources,
@@ -188,7 +188,8 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
         stale: &[],
     };
     let fake = Fake::default();
-    let alone = beside(&fake, &job(&p)).unwrap();
+    let made = crate::artifact::parts(&p);
+    let alone = beside(&fake, &job(&made)).unwrap();
     assert_eq!(alone.files, built.beside);
     assert_eq!(fs::read(&lrc).unwrap(), whole, "as a build writes them");
     assert!(!fake.ran("copy"), "the audio left alone");
@@ -198,11 +199,12 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     let mut embedded = p.clone();
     embedded.lyrics.as_mut().unwrap().placement = LyricsPlacement::Embedded;
     let stale = [PathBuf::from("A/Record/Song.lrc")];
+    let inside = crate::artifact::parts(&embedded);
     let none = beside(
         &Fake::default(),
         &Job {
             stale: &stale,
-            ..job(&embedded)
+            ..job(&inside)
         },
     )
     .unwrap();
@@ -371,7 +373,7 @@ fn a_cover_file_written_alone_is_the_one_a_build_writes() {
     let alone = beside(
         &fake,
         &Job {
-            plan: &p,
+            parts: &crate::artifact::parts(&p),
             stem: Path::new("A/Record/Song"),
             library: &lib,
             sources: &f.sources,
@@ -864,7 +866,7 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
             &library,
             &first.audio,
             &names(&first),
-            &p,
+            &crate::artifact::parts(&p),
             &[Ledger::taken(&first.audio)],
         )
         .unwrap();
@@ -961,7 +963,7 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             &library,
             &r.audio,
             &names(&r),
-            &q,
+            &crate::artifact::parts(&q),
             &[Ledger::taken(&r.audio)],
         )
         .unwrap();
@@ -975,7 +977,7 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             &library,
             &r.audio,
             &names(&r),
-            &q,
+            &crate::artifact::parts(&q),
             &[Ledger::taken(&r.audio)],
         )
         .unwrap();
@@ -1672,7 +1674,13 @@ fn each_version_rises_with_what_it_makes() {
             let p = plan(format);
             for chapters in [None, Some(1)] {
                 for reserve in [None, Some(8192)] {
-                    let output = audio_output(&p, 0, chapters, reserve, Path::new("song.part"));
+                    let output = audio_output(
+                        &crate::artifact::parts(&p).audio,
+                        0,
+                        chapters,
+                        reserve,
+                        Path::new("song.part"),
+                    );
                     digest.debug(&output.args);
                 }
             }

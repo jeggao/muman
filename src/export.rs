@@ -1165,10 +1165,11 @@ fn encode<R: Runner>(
         song.plan.with_format(format)
     };
     let library = scratch.join("library");
+    let parts = crate::artifact::parts(&plan);
     let rendered = render::render(
         runner,
         &render::Job {
-            plan: &plan,
+            parts: &parts,
             stem: &song.stem,
             library: &library,
             sources,
