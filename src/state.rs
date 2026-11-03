@@ -734,6 +734,23 @@ impl State {
         stub(home)
     }
 
+    /// Write the state in `home` to `out` as JSON, in the shape
+    /// `state.json` held it, changing nothing: a `state.json` an earlier
+    /// muman left is read, not brought over.
+    pub fn dump(home: &Path, out: &mut impl std::io::Write) -> Result<()> {
+        let file = home.join(crate::dirs::STATE);
+        let state = match std::fs::read(&file) {
+            Ok(text) if !exists(home) && text != STUB => json::read(&file, &text)?,
+            _ if exists(home) => db::Db::open(home, BUSY_WAIT)?.snapshot()?.0,
+            _ => Self {
+                version: VERSION,
+                ..Self::default()
+            },
+        };
+        let text = serde_json::to_string_pretty(&state).context("writing the state")?;
+        Ok(crate::ui::line(out, &text)?)
+    }
+
     /// Record `trusted` as [`Self::trusted`] under the folder's lock,
     /// every other row left as the store holds it.
     pub fn keep_trusted(home: &Path, trusted: &BTreeMap<String, String>) -> Result<()> {

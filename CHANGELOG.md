@@ -7,6 +7,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`info --state`** prints what muman keeps of the library and its
+  sources as JSON, in the shape `state.json` held, now that it is kept
+  in `state.db`.
+
 ### Changed
 
 - **The state is kept in `state.db`**, a SQLite store, in place of

@@ -642,7 +642,13 @@ pub enum Command {
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,
     /// missing or soft covers, missing lyrics or tags. Reads only what
     /// earlier runs recorded; `--verbose` names every song counted.
-    Info,
+    Info {
+        /// Print what muman keeps of the library and its sources instead,
+        /// as JSON: the files it wrote and what each was made from, and
+        /// what it measured.
+        #[arg(long)]
+        state: bool,
+    },
     /// Write a script that completes muman's commands, flags and values
     /// in a shell, for the shell to load.
     #[command(after_help = COMPLETIONS_HELP)]

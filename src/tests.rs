@@ -3470,6 +3470,34 @@ fn a_run_an_earlier_muman_recorded_whole_is_undone() {
 }
 
 #[test]
+fn info_prints_the_state_as_json_and_changes_nothing() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let home = s.dir.path().join("home");
+    let written = crate::state::written_at(&home);
+    let (ok, text) = s.report(&flacs(), &["info", "--state"]);
+    assert!(ok, "{text}");
+    let dumped: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        dumped["outputs"]
+            .as_object()
+            .unwrap()
+            .contains_key("Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert_eq!(crate::state::written_at(&home), written);
+
+    // A home an earlier muman left is read as it is.
+    let state = crate::state::State::load(&home).unwrap();
+    crate::testing::put_old_state(&home, serde_json::to_string(&state).unwrap().as_bytes());
+    let mut again = Vec::new();
+    crate::state::State::dump(&home, &mut again).unwrap();
+    assert_eq!(String::from_utf8(again).unwrap(), text);
+    assert!(!crate::state::exists(&home), "nothing brought over");
+}
+
+#[test]
 fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

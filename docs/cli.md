@@ -422,7 +422,11 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
-**Usage:** `muman info`
+**Usage:** `muman info [OPTIONS]`
+
+**Options:**
+
+* `--state` — Print what muman keeps of the library and its sources instead, as JSON: the files it wrote and what each was made from, and what it measured
 
 
 
