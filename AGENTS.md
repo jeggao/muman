@@ -121,7 +121,7 @@ tests/              the smoke test, yt-dlp and aria2c given muman's command
 testdata/           tiny audio and picture fixtures; editions/, the song list
                     each earlier edition wrote for a new home
 assets/yt-dlp/      the plugins plugins.rs embeds
-xtask/              cargo xtask comments | docs
+xtask/              cargo xtask comments | commits | docs | layers
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, songs.md, configuration.md, audio.md, cli.md (generated)
 ```
@@ -139,11 +139,15 @@ cargo fmt --all
 cargo xtask comments
 cargo xtask commits --diff-base origin/main
 cargo xtask docs
+cargo xtask layers
 cargo test --test smoke -- --ignored
 ```
 
 `cargo xtask docs` regenerates [docs/cli.md](docs/cli.md) and checks
-links and the changelog; `--check` only checks, as CI does. The smoke
+links and the changelog; `--check` only checks, as CI does. `cargo
+xtask layers` checks that no module names one of a higher layer than
+its own but as `xtask/src/layers.rs` lists; `--report` prints the
+upward references and the cycles. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
 line muman builds, against a file served from the test itself, and
@@ -154,13 +158,13 @@ against real recordings and sites are made by hand.
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke,
 yt-dlp and torrent tests on Linux, macOS and Windows, plus rustfmt,
 rustdoc, the minimum Rust version, `cargo xtask comments` (with `--diff-base` on pull
-requests), `cargo xtask commits`, `cargo xtask docs --check` and
-cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names, and
-`nix flake check` on Linux and macOS. A pull request that changes only
-Markdown and `docs/` builds and tests nothing, and one runs `nix flake
-check` only when it changes the flake, `nix/`, `Cargo.toml`,
-`Cargo.lock` or `ci.yml`; every push to main runs every check, and only
-main saves the Rust caches. Each
+requests), `cargo xtask commits`, `cargo xtask docs --check`,
+`cargo xtask layers` and cargo-deny, all on the Rust `RUST_TOOLCHAIN` in
+`ci.yml` names, and `nix flake check` on Linux and macOS. A pull request
+that changes only Markdown and `docs/` builds and tests nothing, and one
+runs `nix flake check` only when it changes the flake, `nix/`,
+`Cargo.toml`, `Cargo.lock` or `ci.yml`; every push to main runs every
+check, and only main saves the Rust caches. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
@@ -241,7 +245,7 @@ that package manager is skipped.
 | How queries, changing songs or duplicates behave for a user | [docs/songs.md](docs/songs.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
 | A measure, renderer or writer changes what it makes, or a dependency bump changes a digest | Raise its version constant and record the digest its test prints, or, for a bump that leaves saved results valid, re-record the digest and say why |
-| A module added, removed or renamed | The layout above |
+| A module added, removed or renamed | The layout above, and its layer in `xtask/src/layers.rs` |
 | A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md), in a pull request of their own; the merge tags and publishes it |
 
 ## Commits and pull requests
