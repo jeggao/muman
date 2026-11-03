@@ -402,16 +402,16 @@ fn ffmpeg_reads_a_file_only_as_its_input_says() {
 /// Where ffmpeg is told to encode a picture, and why there.
 const PICTURES: [(&str, &str); 2] = [
     (
-        "render.rs",
+        "render/cover.rs",
         "the covers written into the library, each with `PICTURE_ARGS`",
     ),
     ("quality.rs", "a graymap measured, never written"),
 ];
 
 /// A picture written into the library is the same bytes on every
-/// processor, as far as ffmpeg can make it: each encoder `render.rs`
-/// names follows `PICTURE_ARGS` in its function, and no other module
-/// encodes one.
+/// processor, as far as ffmpeg can make it: each encoder
+/// `render/cover.rs` names follows `PICTURE_ARGS` in its function, and no
+/// other module encodes one.
 #[test]
 fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
     let mut wrong = Vec::new();
@@ -427,14 +427,14 @@ fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
                 .rposition(|l| l.trim_start().starts_with("fn ") || l.contains(" fn "))
                 .unwrap_or(0);
             let exact = lines[start..n].iter().any(|l| l.contains("PICTURE_ARGS"));
-            if !allowed || (file == "render.rs" && !exact) {
+            if !allowed || (file == "render/cover.rs" && !exact) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }
         }
     }
     assert!(
         wrong.is_empty(),
-        "encode a picture in `render.rs`, after `PICTURE_ARGS`:\n{}",
+        "encode a picture in `render/cover.rs`, after `PICTURE_ARGS`:\n{}",
         wrong.join("\n")
     );
 }
