@@ -2418,3 +2418,52 @@ fn artists_offered_as_their_credit_are_listed_from_that_source() {
         "the first credited, not the whole credit"
     );
 }
+
+/// A plan whose cover, inside the song and for its folder, is `key`'s
+/// attachment named `rev`.
+fn folder_cover(key: &SourceKey, rev: &str) -> Plan {
+    let cover = CoverRef {
+        key: key.clone(),
+        rev: rev.into(),
+        at: CoverAt::Attachment { ordinal: 1 },
+        mimetype: "image/jpeg".into(),
+        crop: None,
+        made: None,
+        out: None,
+    };
+    Plan {
+        version: 1,
+        format: Format::Copy { codec: Codec::Opus },
+        audio: AudioRef {
+            key: key.clone(),
+            rev: rev.into(),
+            index: 1,
+        },
+        cover: Some(cover.clone()),
+        lyrics: None,
+        tags: Vec::new(),
+        loudness: None,
+        tagging: TAGGING,
+        chapters: Vec::new(),
+        folder: Some(cover),
+    }
+}
+
+#[test]
+fn a_folder_s_cover_is_renamed_and_respelled_as_the_song_s() {
+    let (key, other) = (yt("aaaaaaaaaaa"), yt("bbbbbbbbbbb"));
+    let mut from = Facts::unreadable("10:20".into());
+    cover(
+        &mut from,
+        CoverAt::Attachment { ordinal: 1 },
+        image(1, 1, full(1, 1), 1),
+    );
+    let mut to = from.clone();
+    to.covers[0].digest = Some("c0ffee".into());
+    let renamed = folder_cover(&key, "10:20").renamed(&key, &from, &to);
+    assert_eq!(renamed.cover.unwrap().rev, "c0ffee");
+    assert_eq!(renamed.folder.unwrap().rev, "c0ffee");
+
+    let respelled = folder_cover(&key, "10:20").respelled(&|k| (*k == key).then(|| other.clone()));
+    assert_eq!(respelled, folder_cover(&other, "10:20"));
+}

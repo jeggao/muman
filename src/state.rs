@@ -1120,6 +1120,56 @@ mod tests {
         assert_eq!(state.respelled.get(&new), Some(&old));
     }
 
+    #[test]
+    fn respelling_a_plan_names_every_key_the_state_renames() {
+        let (old, new) = (
+            SourceKey::parse("funkwhale:abc").unwrap(),
+            SourceKey::parse("tunes.example:abc").unwrap(),
+        );
+        let cover = |key: &SourceKey| crate::resolve::CoverRef {
+            key: key.clone(),
+            rev: "1:2".into(),
+            at: crate::facts::CoverAt::Attachment { ordinal: 1 },
+            mimetype: "image/jpeg".into(),
+            crop: None,
+            made: None,
+            out: None,
+        };
+        let plan = |key: &SourceKey| crate::resolve::Plan {
+            version: 1,
+            format: crate::resolve::Format::Copy {
+                codec: crate::codec::Codec::Opus,
+            },
+            audio: crate::resolve::AudioRef {
+                key: key.clone(),
+                rev: "1:2".into(),
+                index: 1,
+            },
+            cover: Some(cover(key)),
+            lyrics: None,
+            tags: Vec::new(),
+            loudness: None,
+            tagging: crate::resolve::TAGGING,
+            chapters: Vec::new(),
+            folder: Some(cover(key)),
+        };
+        let mut state = State::default();
+        state.outputs.insert(
+            "song.opus".into(),
+            Written {
+                sources: vec![old.clone()],
+                sidecars: Vec::new(),
+                plan: Some(plan(&old)),
+                stamp: None,
+                digest: None,
+            },
+        );
+        state.rekey(&[(old.clone(), new.clone())].into()).unwrap();
+        let kept = state.outputs[Path::new("song.opus")].plan.clone().unwrap();
+        assert_eq!(kept, plan(&new));
+        assert_eq!(state.as_before(&kept), plan(&old));
+    }
+
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {
         let start = offset_ms.max(0);
         let end = a_ms.min(b_ms + offset_ms);

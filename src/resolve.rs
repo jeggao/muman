@@ -758,7 +758,11 @@ impl Plan {
         if plan.audio.key == *key && plan.audio.rev == from.audio_rev() {
             plan.audio.rev = to.audio_rev();
         }
-        if let Some(c) = plan.cover.as_mut().filter(|c| c.key == *key) {
+        for c in [plan.cover.as_mut(), plan.folder.as_mut()]
+            .into_iter()
+            .flatten()
+            .filter(|c| c.key == *key)
+        {
             let was = from.covers.iter().find(|f| f.at == c.at);
             let now = to.covers.iter().find(|f| f.at == c.at);
             if let (Some(was), Some(now)) = (was, now)
@@ -790,7 +794,10 @@ impl Plan {
             }
         };
         name(&mut plan.audio.key);
-        if let Some(c) = plan.cover.as_mut() {
+        for c in [plan.cover.as_mut(), plan.folder.as_mut()]
+            .into_iter()
+            .flatten()
+        {
             name(&mut c.key);
         }
         if let Some(l) = plan.lyrics.as_mut() {
