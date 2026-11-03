@@ -480,7 +480,7 @@ fn a_plan_changes_format_with_its_renderer_version() {
 /// lyrics are cleaned only to be measured or matched.
 const CLEANS: [(&str, &str, &str); 5] = [
     (
-        "render.rs",
+        "render/lyrics.rs",
         "lyrics::clean(",
         "writes a song's lyrics as its plan's `clean_off` and `cleaning` say",
     ),
@@ -573,7 +573,7 @@ fn a_file_beside_a_song_is_named_in_one_place() {
 fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "cues.rs" || file == "render.rs" {
+        if file == "cues.rs" || file == "render/lyrics.rs" {
             continue;
         }
         for line in lines_with(&text, &["cues::write("]) {
@@ -582,7 +582,7 @@ fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
     }
     assert!(
         wrong.is_empty(),
-        "lyrics are written in a format outside `render.rs`, which writes them as \
+        "lyrics are written in a format outside `render/lyrics.rs`, which writes them as \
          a plan's outputs say, so a library file could hold what no plan names:\n{}",
         wrong.join("\n")
     );
