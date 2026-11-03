@@ -551,7 +551,14 @@ pub fn reconcile_into<R: Runner, W: Write>(
         let values: Vec<(&str, &str)> = std::iter::once(("library", library.as_ref()))
             .chain(counts.iter().map(|(name, n)| (*name, n.as_str())))
             .collect();
-        hooks::run(runner, &manifest.hooks, hooks::Event::Changed, &values, out)?;
+        hooks::run(
+            runner,
+            home,
+            &manifest.hooks,
+            hooks::Event::Changed,
+            &values,
+            out,
+        )?;
     }
     Ok(ok)
 }

@@ -560,6 +560,7 @@ fn vouch<R: Runner, W: Write>(
     let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
     hooks::run(
         job.runner,
+        &job.dirs.home,
         &job.manifest.hooks,
         hooks::Event::Written,
         &values,

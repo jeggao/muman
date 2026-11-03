@@ -474,4 +474,5 @@ shell (`sh -c`, `pwsh -Command`, `cmd /c`) must read `"$MUMAN_PATH"`:
 a placeholder inside it, where a title could run as code, is refused. A
 batch file (`.bat`, `.cmd`) gets the variables only. A hook's output
 shows as `hook:`, and a hook that fails is warned of but fails nothing.
-`status` runs no hook.
+`status` runs no hook. A muman a hook runs on its run's home or library
+stops with exit code 5 rather than wait on that run's locks.

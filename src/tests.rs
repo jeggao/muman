@@ -5243,12 +5243,14 @@ fn each_command_is_classified_as_it_runs() {
         edits_list,
         gated,
         ffmpeg,
+        locks: true,
         steps,
     };
+    let free = |t: Traits| Traits { locks: false, ..t };
     let table: [(&[&str], Traits); 21] = [
         (&["add", "manual:a.flac"], is(true, true, true, true, SYNC)),
         (&["sync"], is(true, true, true, true, SYNC)),
-        (&["list"], is(false, false, false, false, &[])),
+        (&["list"], free(is(false, false, false, false, &[]))),
         (&["remove", "a"], is(true, true, true, true, CHANGE)),
         (&["restore", "a"], is(true, true, true, true, RESTORE)),
         (&["set", "a", "title=b"], is(true, true, true, true, CHANGE)),
@@ -5285,7 +5287,7 @@ fn each_command_is_classified_as_it_runs() {
         ),
         (
             &["duplicates"],
-            is(false, false, false, false, &["Comparing prints"]),
+            free(is(false, false, false, false, &["Comparing prints"])),
         ),
         (
             &["duplicates", "--resolve"],
@@ -5298,11 +5300,20 @@ fn each_command_is_classified_as_it_runs() {
         (&["info"], is(false, false, true, false, &[])),
         (
             &["completions", "bash"],
-            is(false, false, false, false, &[]),
+            free(is(false, false, false, false, &[])),
         ),
     ];
     for (args, expected) in table {
-        assert_eq!(traits(&cli(args).command), expected, "{args:?}");
+        let t = traits(&cli(args).command);
+        assert_eq!(t, expected, "{args:?}");
+        assert!(
+            !t.edits_list || t.apart,
+            "{args:?}: what edits the list keeps apart"
+        );
+        assert!(
+            !(t.gated || t.apart) || t.locks,
+            "{args:?}: what runs or writes locks"
+        );
     }
     let named: std::collections::BTreeSet<&str> = table.iter().map(|(a, _)| a[0]).collect();
     for sub in cli::command().get_subcommands() {
@@ -5312,6 +5323,82 @@ fn each_command_is_classified_as_it_runs() {
             sub.get_name()
         );
     }
+}
+
+#[test]
+fn a_hook_cannot_run_muman_on_the_home_or_library_of_its_run() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let go = |args: &[&str], hooked: Hooked| {
+        let mut job = s.job(args);
+        job.hooked = Some(hooked);
+        let mut out = Vec::new();
+        let done = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        );
+        (done, String::from_utf8(out).unwrap())
+    };
+    let own = Hooked {
+        home: s.dir.path().join("home"),
+        library: Some(s.dir.path().join("lib")),
+    };
+    let before = library_of(&s);
+    for args in [&["sync"][..], &["status"], &["undo", "-y"], &["info"]] {
+        let e = go(args, own.clone()).0.unwrap_err();
+        assert!(
+            e.downcast_ref::<change::Refused>().is_some(),
+            "{args:?}: {e:#}"
+        );
+        assert!(
+            format!("{e:#}").contains("the home of the run"),
+            "{args:?}: {e:#}"
+        );
+    }
+    assert_eq!(library_of(&s), before);
+    let (listed, _) = go(&["list"], own.clone());
+    assert!(listed.unwrap());
+
+    let elsewhere = Hooked {
+        home: s.dir.path().join("other"),
+        ..own.clone()
+    };
+    let e = go(&["sync"], elsewhere).0.unwrap_err();
+    assert!(format!("{e:#}").contains("--library"), "{e:#}");
+    let apart = Hooked {
+        home: s.dir.path().join("other"),
+        library: Some(s.dir.path().join("other-lib")),
+    };
+    let (synced, text) = go(&["sync"], apart);
+    assert!(synced.unwrap(), "{text}");
+}
+
+#[test]
+fn a_hooked_run_is_read_from_its_variables_alone() {
+    let vars = |set: &'static [(&str, &str)]| {
+        move |name: &str| {
+            set.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    };
+    assert_eq!(hooked_from(&vars(&[("MUMAN_LIBRARY", "lib")])), None);
+    assert_eq!(
+        hooked_from(&vars(&[
+            ("MUMAN_HOOK_HOME", "home"),
+            ("MUMAN_LIBRARY", "lib")
+        ])),
+        Some(Hooked {
+            home: "home".into(),
+            library: Some("lib".into()),
+        })
+    );
 }
 
 #[test]

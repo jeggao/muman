@@ -23,6 +23,12 @@
 //! `{rel}` is the song's path in the library led by `./`, with `/` on
 //! every system as [`crate::relpath`] writes it, so a path beginning
 //! with `-` is never read as an option.
+//!
+//! The run that starts a hook holds its home's lock and its library's
+//! until the hook ends, so a muman the hook runs there would wait on
+//! them forever. Every hook is given [`HOOK_HOME`], and a run that finds
+//! it refuses to lock that home, or the `MUMAN_LIBRARY` it inherits
+//! under another home ([`crate::Hooked`]).
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -97,9 +103,15 @@ pub fn read(doc: &DocumentMut) -> Result<Vec<Hook>> {
     Ok(hooks)
 }
 
-/// Run each hook for `event` with its placeholders filled in.
+/// The variable a hook is given its run's home in, so a muman it runs
+/// knows the locks that run holds.
+pub const HOOK_HOME: &str = "MUMAN_HOOK_HOME";
+
+/// Run each hook for `event` of a run on `home` with its placeholders
+/// filled in.
 pub fn run<R: Runner, W: Write>(
     runner: &R,
+    home: &Path,
     hooks: &[Hook],
     event: Event,
     values: &[(&str, &str)],
@@ -113,6 +125,7 @@ pub fn run<R: Runner, W: Write>(
                 (*v).to_string(),
             )
         })
+        .chain([(HOOK_HOME.to_string(), home.to_string_lossy().into_owned())])
         .collect();
     for hook in hooks.iter().filter(|h| h.on == event) {
         let placeholders = hook
@@ -291,7 +304,15 @@ mod tests {
         let values = written_values(library, &rel);
         assert_eq!(values[1].1, "./A/b.opus");
         let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        run(&fake, &hooks, Event::Written, &values, &mut out).unwrap();
+        run(
+            &fake,
+            Path::new("home"),
+            &hooks,
+            Event::Written,
+            &values,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(
             fake.calls(),
             [vec![
@@ -299,6 +320,64 @@ mod tests {
                 library.join(&rel).to_string_lossy().into_owned()
             ]]
         );
+    }
+
+    /// Records the variables each command it runs is given.
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<Vec<(String, String)>>>);
+
+    impl Runner for Recording {
+        fn run(&self, _: &[OsString]) -> Result<()> {
+            Ok(())
+        }
+
+        fn output(&self, _: &[OsString]) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+
+        fn stream(&self, _: &[OsString], _: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn stream_env(
+            &self,
+            _: &[OsString],
+            env: &[(String, String)],
+            _: &mut dyn FnMut(Line<'_>),
+        ) -> Result<bool> {
+            self.0.lock().unwrap().push(env.to_vec());
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn every_hook_is_given_its_run_s_home_and_library() {
+        let doc: DocumentMut = "[[hook]]\non = \"written\"\nrun = [\"tagger\"]\n\
+            [[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n"
+            .parse()
+            .unwrap();
+        let hooks = read(&doc).unwrap();
+        let recording = Recording::default();
+        let values = written_values(Path::new("lib"), Path::new("a.opus"));
+        let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        for event in [Event::Written, Event::Changed] {
+            run(
+                &recording,
+                Path::new("home"),
+                &hooks,
+                event,
+                &values,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        }
+        let given = recording.0.into_inner().unwrap();
+        assert_eq!(given.len(), 2);
+        for env in given {
+            let var = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+            assert_eq!(var(HOOK_HOME), Some("home"));
+            assert_eq!(var("MUMAN_LIBRARY"), Some("lib"));
+        }
     }
 
     #[test]
@@ -321,6 +400,7 @@ mod tests {
         let mut out = Vec::new();
         run(
             &fake,
+            Path::new("home"),
             &read(&doc).unwrap(),
             Event::Written,
             &[("path", "x")],
