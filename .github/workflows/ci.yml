@@ -81,6 +81,21 @@ jobs:
       - if: env.CODE == 'true'
         run: cargo test --workspace --locked
 
+  # The random runs of src/tests/convergence.rs at 64 cases, about nine
+  # minutes: on each push to main, so no pull request waits on them.
+  convergence:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --lib --locked many_random_runs -- --ignored
+
   smoke:
     name: smoke (${{ matrix.os }})
     needs: changes

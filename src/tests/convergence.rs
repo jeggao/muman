@@ -284,7 +284,7 @@ fn random_runs_leave_the_library_one_sync_builds() {
 }
 
 #[test]
-#[ignore = "slow: more cases of the test above"]
+#[ignore = "slow: more cases of the test above, run on each push to main"]
 fn many_random_runs_leave_the_library_one_sync_builds() {
     run_cases(64);
 }
