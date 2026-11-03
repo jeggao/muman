@@ -45,10 +45,14 @@
 //! week. A failure ends when the step succeeds: a step that runs without
 //! the run's lock, as fetching and lookups do, keeps only what it
 //! measured since it loaded the state ([`State::since`]) through
-//! [`State::keep_measures`], which merges that into the file as it is
-//! now by one rule. So a failure one step cleared is cleared on disk too,
-//! and a fact, failure or comparison another process recorded meanwhile
-//! stays rather than being written over by the copy the step loaded.
+//! [`State::keep_measures`], which merges that into the store's caches
+//! as they are now by one rule, in one transaction that writes them
+//! alone. So a failure one step cleared is cleared on disk too, a fact,
+//! failure or comparison another process recorded meanwhile stays rather
+//! than being written over by the copy the step loaded, and what the
+//! library holds is written only by the run holding its lock: a fact
+//! naming a source's parts anew is kept as a renaming, which every load
+//! applies to the kept plans until a whole save writes them renamed.
 //!
 //! A cache entry an earlier version wrote in another shape is dropped and
 //! made again; only `outputs` failing to parse refuses the file, since
@@ -909,11 +913,13 @@ impl State {
             .respelled(&|k| self.respelled.get(k).cloned())
     }
 
-    /// Take `measured`'s facts and failures over these: a fact replaces
-    /// the one kept, a failure `measured` cleared is cleared, and one it
-    /// recorded replaces the one kept. Plans are named as
-    /// [`State::rebase`] names them.
-    pub fn merge_caches(&mut self, measured: &Caches) {
+    /// Take every cache `measured` holds over these: a fact replaces the
+    /// one kept, a failure `measured` cleared is cleared and one it
+    /// recorded replaces the one kept, and comparisons and sizes are
+    /// recorded by their keys. Returns the renamings a fact made, as
+    /// [`State::rebase`] makes them.
+    pub(crate) fn merge_measured(&mut self, measured: &Caches) -> Vec<(SourceKey, Facts, Facts)> {
+        let before = self.rebased.len();
         for (key, facts) in &measured.facts {
             if let Some(old) = self.facts.get(key).filter(|f| *f != facts).cloned() {
                 self.rebase(key, &old, facts);
@@ -926,6 +932,15 @@ impl State {
         for (key, failure) in &measured.failures {
             self.failures.insert(key.clone(), failure.clone());
         }
+        for aligned in &measured.alignments {
+            self.record_alignment(aligned.clone());
+        }
+        for mix in &measured.mixes {
+            self.record_mix(mix.clone());
+        }
+        self.sizes
+            .extend(measured.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.rebased.split_off(before)
     }
 
     /// The lookup of `find` made from `from`.
@@ -1028,24 +1043,16 @@ impl State {
         }
     }
 
-    /// Merge every cache `measured` holds into the state file as it is
-    /// now, for a caller already holding its lock: facts and failures by
-    /// [`Self::merge_caches`], alignments and sizes by key. What the
-    /// library holds, `outputs` and `library`, is left as it is, but for
-    /// the names its plans give their sources.
+    /// Keep every cache `measured` holds in the store as it is now, for a
+    /// caller already holding its lock, by `merge_measured`, in
+    /// one transaction that writes the caches alone: what the library
+    /// holds is left to the run that holds its lock, which writes the
+    /// names a fact gives its source's parts anew into the plans.
     pub fn keep_caches(home: &Path, measured: &Caches, _lock: &atomic::Lock) -> Result<()> {
-        let mut state = Self::load(home)?;
-        state.merge_caches(measured);
-        for aligned in &measured.alignments {
-            state.record_alignment(aligned.clone());
-        }
-        for mix in &measured.mixes {
-            state.record_mix(mix.clone());
-        }
-        state
-            .sizes
-            .extend(measured.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
-        state.save(home)
+        bring_over(home)?;
+        std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
+        db::Db::open(home, BUSY_WAIT)?.keep(measured)?;
+        stub(home)
     }
 
     pub fn record_alignment(&mut self, aligned: Aligned) {
@@ -1248,6 +1255,24 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(plan.audio.rev, "0123456789abcdef0123456789abcdef");
+
+        // The step wrote its caches alone: the kept row still names the
+        // old rev, renamed on every load until a whole save writes it.
+        let row = |name: &str| {
+            let db = rusqlite::Connection::open(dir.path().join(db::FILE)).unwrap();
+            let count: i64 = db
+                .query_row(&format!("SELECT count(*) FROM {name}"), [], |r| r.get(0))
+                .unwrap();
+            let output: String = db
+                .query_row("SELECT row FROM outputs", [], |r| r.get(0))
+                .unwrap();
+            (count, output.contains("0123456789abcdef"))
+        };
+        assert_eq!(row("renamings"), (1, false));
+        after.save(dir.path()).unwrap();
+        assert_eq!(row("renamings"), (0, true), "written renamed, and cleared");
+        let again = State::load(dir.path()).unwrap();
+        assert_eq!(again.outputs, after.outputs);
     }
 
     #[test]
