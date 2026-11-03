@@ -131,6 +131,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.
+- **A cover larger than 8192 × 8192 pixels is measured again** where an
+  earlier muman measured it, as this one does not, so it is judged as
+  one found now is.
 - **A record found again with other content was not kept**: the copy
   first stored stayed, and a song pinned to its old content.
 - **A cover drawn only in its transparency measured as having no

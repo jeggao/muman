@@ -71,10 +71,12 @@ pub const SOFT_COVER: u32 = 500;
 /// are measured again, so changing anything below means changing this.
 pub const METHOD: &str = "quality/9";
 /// The method before transparent pictures were laid over mid-gray: what
-/// it measured holds, unless a picture had no detail.
+/// it measured holds, unless a picture had no detail or was larger than
+/// [`MOST_PIXELS`], which it measured.
 pub const BEFORE_ALPHA: &str = "quality/8";
 /// The method before excerpts that all fell silent were placed again in
-/// what sounds: what it measured holds, unless it found no sound.
+/// what sounds: what it measured holds, unless it found no sound, or a
+/// picture as [`BEFORE_ALPHA`]'s does not hold.
 pub const BEFORE_SOUND: &str = "quality/7";
 
 /// Seconds of audio measured at each of [`SEGMENTS`].
