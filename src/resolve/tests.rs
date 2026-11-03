@@ -2496,3 +2496,101 @@ fn lyrics_of_the_first_writing_are_stored_as_before_it_was_named() {
     assert_eq!(json["writing"], 2);
     assert_eq!(serde_json::from_value::<LyricsRef>(json).unwrap(), later);
 }
+
+/// Every format a plan can be stored in, with what a format can add.
+fn every_format() -> Vec<Format> {
+    let mut formats: Vec<Format> = Codec::ALL
+        .into_iter()
+        .flat_map(|codec| {
+            [
+                Format::Copy { codec },
+                Format::Encode {
+                    codec,
+                    kbps: (!codec.is_lossless()).then_some(192),
+                    adapt: None,
+                    mix: None,
+                },
+            ]
+        })
+        .collect();
+    formats.extend([
+        Format::Encode {
+            codec: Codec::Opus,
+            kbps: Some(256),
+            adapt: Some(Adapt::Discrete),
+            mix: Some(Layout::STEREO),
+        },
+        Format::Encode {
+            codec: Codec::WavPack,
+            kbps: None,
+            adapt: Some(Adapt::Depth(24)),
+            mix: None,
+        },
+    ]);
+    formats
+}
+
+/// Digests of the stored form and the plan key of a plan with every part
+/// in [`every_format`], as the last release kept them.
+const KEPT: (&str, &str) = (
+    "f48552a03d01f143fc70fadd7ad88cca45b226816e44932aa532a490457963b7",
+    "f0c53be224c1c015f40deddba00ccbeb2c48b5c723538fc9633e8843a36ec20b",
+);
+
+#[test]
+fn a_plan_is_stored_and_keyed_as_the_last_release_kept() {
+    let (mut stored, mut keyed) = (
+        crate::testing::Digest::default(),
+        crate::testing::Digest::default(),
+    );
+    for format in every_format() {
+        let plan = crate::testing::every_part(format);
+        let json = serde_json::to_string(&plan).unwrap();
+        let read: Plan = serde_json::from_str(&json).unwrap();
+        assert!(read == plan, "{format:?} reads back as stored");
+        assert_eq!(serde_json::to_string(&read).unwrap(), json, "{format:?}");
+        stored.text(&json);
+        keyed.text(&crate::limit::plan_key("tools", &plan));
+    }
+    assert_eq!(
+        (stored.hex().as_str(), keyed.hex().as_str()),
+        KEPT,
+        "a plan is stored or keyed otherwise than the last release kept it, \
+         so every song would be written or measured again: if that is meant, \
+         say so in the CHANGELOG and record these"
+    );
+}
+
+#[test]
+fn each_part_of_a_plan_changes_what_is_stored_and_the_audio_s_the_key() {
+    let base = crate::testing::every_part(Format::Encode {
+        codec: Codec::Opus,
+        kbps: Some(192),
+        adapt: None,
+        mix: None,
+    });
+    let json = serde_json::to_string(&base).unwrap();
+    let key = crate::limit::plan_key("tools", &base);
+    let mut kept = Vec::new();
+    for (name, change) in crate::testing::mutations() {
+        let mut plan = base.clone();
+        change(&mut plan);
+        assert_ne!(serde_json::to_string(&plan).unwrap(), json, "{name}");
+        assert!(plan != base, "{name} is part of what a plan compares");
+        if crate::limit::plan_key("tools", &plan) == key {
+            kept.push(name);
+        }
+    }
+    // The key is of what the audio is made from: the tags and the gains
+    // tags carry leave it.
+    assert_eq!(
+        kept,
+        [
+            "tags",
+            "tags.order",
+            "loudness.track",
+            "loudness.album",
+            "loudness.opus_gain"
+        ]
+    );
+}
