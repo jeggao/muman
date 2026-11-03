@@ -6,13 +6,14 @@ use lofty::mpeg::MpegFile;
 use lofty::ogg::{OpusFile, VorbisFile};
 use lofty::tag::Accessor;
 
+use super::cover::*;
 use super::*;
 use crate::codec::Codec;
-use crate::facts::LyricsAt;
+use crate::facts::{CoverAt, LyricsAt};
 use crate::library::{Ledger, Owned};
 use crate::quality::Rect;
-use crate::resolve::CoverRef;
 use crate::resolve::{AudioRef, LyricsFile, render_version};
+use crate::resolve::{CoverPlace, CoverRef, ImageFormat};
 use crate::store::Kind;
 use crate::testing::Fake;
 
