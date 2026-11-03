@@ -101,6 +101,8 @@ pub struct Tags<'a> {
     pub album_artist: Option<&'a str>,
     pub genre: Option<&'a str>,
     pub date: Option<&'a str>,
+    /// The date its album was first released, as `ORIGINALDATE` holds it.
+    pub original_date: Option<&'a str>,
     pub track: Option<&'a str>,
     pub disc: Option<&'a str>,
     pub composer: Option<&'a str>,
@@ -210,13 +212,21 @@ impl Naming {
         let disc = tags.disc.and_then(number);
         let artists: Vec<String> = tags.artists.iter().map(|a| self.value(a)).collect();
         let date = safe(tags.date);
+        let year = |d: &str| {
+            d.chars()
+                .take(4)
+                .filter(char::is_ascii_digit)
+                .collect::<String>()
+        };
+        let first = year(&safe(tags.original_date));
         let fields = Fields {
             title: or(safe(tags.title), &self.untitled),
             artist: artists.first().cloned().unwrap_or_default(),
             album: or(safe(tags.album), &self.unknown_album),
             album_artist: or(safe(tags.album_artist), &self.unknown_artist),
             genre: safe(tags.genre),
-            year: date.chars().take(4).filter(char::is_ascii_digit).collect(),
+            year: year(&date),
+            original_year: if first.is_empty() { year(&date) } else { first },
             date,
             // Disc 1 keeps the plain number, so an album on one disc never
             // moves when a later edition adds a second.
@@ -604,6 +614,23 @@ mod tests {
                 .unwrap(),
             path(&["Unknown Artist", "Unknown Album", "Untitled"])
         );
+    }
+
+    #[test]
+    fn the_original_year_is_the_album_s_first_else_the_song_s_own() {
+        let custom = Library {
+            template: "{{ original_year }} {{ year }}/{{ title }}".into(),
+            ..Library::default()
+        };
+        let n = naming(&custom);
+        let mut t = Tags {
+            date: Some("2010-11-16"),
+            original_date: Some("1971-03-02"),
+            ..tags("x", "y", "Song")
+        };
+        assert_eq!(n.stem(&t).unwrap(), path(&["1971 2010", "Song"]));
+        t.original_date = None;
+        assert_eq!(n.stem(&t).unwrap(), path(&["2010 2010", "Song"]));
     }
 
     #[test]

@@ -213,6 +213,7 @@ fn run_reading(
         audio,
         cover,
         source_comments: false,
+        pick: None,
     })
     .unwrap()
 }
@@ -312,6 +313,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         audio: &AUDIO,
         cover: &COVER,
         source_comments: false,
+        pick: None,
     })
     .unwrap();
     assert_eq!(
@@ -574,6 +576,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         audio: &AUDIO,
         cover: &COVER,
         source_comments: false,
+        pick: None,
     })
     .unwrap();
     assert_eq!(r.stem, PathBuf::from("Hoshi7ne/Song ⧸ Wren/Song ⧸ Wren"));
@@ -643,6 +646,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         audio: &AUDIO,
         cover: &COVER,
         source_comments: false,
+        pick: None,
     })
     .unwrap();
     let artist = r.plan.tags.iter().find(|(k, _)| k == "ARTIST").unwrap();
@@ -748,6 +752,7 @@ fn hand_set_tags_and_the_album_win_last() {
         audio: &AUDIO,
         cover: &COVER,
         source_comments: false,
+        pick: None,
     })
     .unwrap();
     let get = |k: &str| {
@@ -1221,6 +1226,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             audio: &AUDIO,
             cover: &COVER,
             source_comments: false,
+            pick: None,
         })
         .is_err()
     );
@@ -1857,6 +1863,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             audio: &AUDIO,
             cover: &COVER,
             source_comments,
+            pick: None,
         })
         .unwrap()
         .plan
@@ -2292,6 +2299,84 @@ fn written(r: &Resolved, field: Field) -> Option<&[String]> {
         .iter()
         .find(|(k, _)| k == field.vorbis())
         .map(|(_, v)| v.as_slice())
+}
+
+#[test]
+fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over() {
+    let (upload, record) = (
+        yt("vid00000001"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+    );
+    let mut a = audio("opus", 20.0);
+    tag(&mut a, Field::Title, &["Lantern Weather"], true);
+    tag(&mut a, Field::Artist, &["Marlo Venn"], true);
+    let mut m = Facts::unreadable("m".into());
+    tag(&mut m, Field::Title, &["Lantern Weather"], true);
+    tag(&mut m, Field::Album, &["Rooms of Salt"], true);
+    tag(&mut m, Field::Date, &["1972"], true);
+    tag(&mut m, Field::Track, &["3"], true);
+    let mut edition = Offers::new();
+    for (field, value) in [(Field::Album, "Rooms of Salt"), (Field::Date, "1971-03-02")] {
+        edition.insert(
+            field,
+            Offer {
+                values: vec![value.to_string()],
+                structured: true,
+            },
+        );
+    }
+    m.editions = vec![edition];
+    let facts = BTreeMap::from([(upload.clone(), a), (record.clone(), m)]);
+    let song = Song {
+        sources: vec![upload, record.clone()],
+        ..Song::default()
+    };
+    let pick = crate::album::Pick {
+        edition: Some((record.clone(), 0)),
+        agreed: vec![crate::album::Agreed {
+            field: Field::Label,
+            values: vec!["Harbor Lights".into()],
+            from: "musicbrainz:x, as 2 of its album's 3 songs have it".into(),
+        }],
+    };
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        ..Input {
+            song: &song,
+            album: None,
+            facts: &facts,
+            on_disk: None,
+            alignments: &[],
+            lyrics: &english(),
+            clean: &Settings::default(),
+            typography: clean::Typography::default(),
+            albums: &Albums::default(),
+            naming: &NAMING,
+            audio: &AUDIO,
+            cover: &COVER,
+            source_comments: false,
+            pick: None,
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        written(&r, Field::Date),
+        Some(&["1971-03-02".to_string()][..])
+    );
+    assert_eq!(
+        written(&r, Field::Track),
+        None,
+        "the edition names no track"
+    );
+    assert_eq!(
+        written(&r, Field::Label),
+        Some(&["Harbor Lights".to_string()][..])
+    );
+    let without = run(&song, &facts, &[]);
+    assert_eq!(
+        written(&without, Field::Date),
+        Some(&["1972".to_string()][..])
+    );
 }
 
 #[test]

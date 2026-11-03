@@ -363,6 +363,7 @@ fn a_record_is_kept_and_read_back() {
         isrcs: Vec::new(),
         length_ms: Some(354_000),
         release: None,
+        editions: Vec::new(),
         original_date: Some("2001-05-03".into()),
         languages: vec!["eng".into()],
     };
@@ -433,13 +434,28 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
     );
 }
 
+/// `release` moved into the release group `group`.
+fn in_group(release: &str, n: u32, group: &str) -> String {
+    release.replace(
+        &format!(r#""release-group": {{"id": "{REL}{n}""#),
+        &format!(r#""release-group": {{"id": "{group}""#),
+    )
+}
+
 #[test]
-fn a_record_keeps_its_credit_and_its_comment() {
+fn a_record_keeps_its_credit_its_comment_and_its_album_s_other_editions() {
+    let group = format!("{REL}0");
     let body = search(&[recording(
         1,
         "Lantern Weather",
         354_000,
-        &release(1, "Rooms of Salt", "Album", "", "1991"),
+        &[
+            in_group(&release(1, "Rooms of Salt", "Album", "", "1991"), 1, &group),
+            in_group(&release(2, "Rooms of Salt", "Album", "", "2003"), 2, &group),
+            in_group(&release(2, "Rooms of Salt", "Album", "", "2003"), 2, &group),
+            release(3, "Best of the Comets", "Album", r#""Compilation""#, "2001"),
+        ]
+        .join(","),
     )
     .replace(r#""score""#, r#""disambiguation": "mono mix", "score""#)]);
     let server = Server::default().answer("/ws/2/recording?", &body);
@@ -447,6 +463,13 @@ fn a_record_keeps_its_credit_and_its_comment() {
     let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
     assert_eq!(record.credit, "Paper Comets & Ada Quill");
     assert_eq!(record.comment, "mono mix");
+    assert_eq!(record.release.unwrap().id, format!("{REL}1"));
+    let editions: Vec<&str> = record.editions.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(
+        editions,
+        [format!("{REL}2")],
+        "each once, of its group alone"
+    );
 }
 
 #[test]

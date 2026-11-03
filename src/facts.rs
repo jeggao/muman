@@ -102,6 +102,10 @@ pub struct Facts {
     pub covers: Vec<CoverFacts>,
     pub lyrics: Vec<LyricsFacts>,
     pub tags: Offers,
+    /// What a MusicBrainz record offers on each other edition of its
+    /// album, in place of its release's fields ([`tags::editions`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<Offers>,
     /// The `tags::METHOD` the tags were read by.
     #[serde(default)]
     pub tags_method: String,
@@ -312,6 +316,7 @@ impl Facts {
             covers: Vec::new(),
             lyrics: Vec::new(),
             tags: Offers::new(),
+            editions: Vec::new(),
             tags_method: tags::METHOD.to_string(),
             release: false,
             chapters: Vec::new(),
@@ -571,7 +576,9 @@ pub fn gather<R: Runner>(
             });
         }
         Kind::Tags => {
-            facts.tags = tags::from_record(&crate::musicbrainz::read(&located.path)?);
+            let record = crate::musicbrainz::read(&located.path)?;
+            facts.tags = tags::from_record(&record);
+            facts.editions = tags::editions(&record);
             facts.tags_digest = digest_file(&located.path);
         }
         Kind::Media => media(runner, located, scratch, wanted, &mut facts)?,
@@ -583,6 +590,7 @@ pub fn gather<R: Runner>(
 #[derive(Debug, Default)]
 pub struct Reread {
     pub tags: Offers,
+    pub editions: Vec<Offers>,
     pub release: bool,
     pub chapters: Vec<Chapter>,
     /// The lyrics its tags hold.
@@ -599,6 +607,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
             let record = crate::musicbrainz::read(&located.path)?;
             return Ok(Reread {
                 tags: tags::from_record(&record),
+                editions: tags::editions(&record),
                 ..Reread::default()
             });
         }
@@ -612,6 +621,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
         release: info.as_ref().is_some_and(VideoInfo::is_release),
         chapters: probed.chapters,
         lyrics: tag_lyrics(located),
+        ..Reread::default()
     })
 }
 

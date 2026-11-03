@@ -44,6 +44,7 @@ These bind every change, by a person or an agent.
 src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   add.rs, sync.rs   the add and sync commands, and the network steps they share
+  album.rs          the songs of one album made to agree: one edition, spelling, release
   cli.rs            the command line (clap derive), exit codes
   settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
                     [torrent], [tools], [history], [sites]

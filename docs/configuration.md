@@ -407,6 +407,7 @@ without the extension. `/` in the template separates folders.
 | `album`, `album_artist` | The album and its artist, or the fallback names |
 | `genre`, `composer` | The genre and the composer, or empty |
 | `date`, `year` | The date as tagged, and its first four digits |
+| `original_year` | The year the album was first released, from `ORIGINALDATE`, else `year`: one folder for every edition of an album |
 | `track`, `disc` | The track and disc numbers, or none |
 | `disc_track` | `03 ` on a first disc, `2-03 ` on a later one, nothing without a track number |
 | `bpm`, `key` | The tempo and the musical key, or empty |

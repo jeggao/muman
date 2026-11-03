@@ -615,6 +615,7 @@ fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
         isrcs: Vec::new(),
         length_ms: None,
         release: None,
+        editions: Vec::new(),
         original_date: None,
         languages: Vec::new(),
     });

@@ -6,6 +6,7 @@
 //! | `title`, `album`, `album_artist`, `genre`, `date` | The resolved tag, or the fallback name for a missing title, album or album artist |
 //! | `artist`, `artists` | The first artist, and every artist as a list |
 //! | `year` | The first four digits of `date`, or empty |
+//! | `original_year` | The year its album was first released, by `ORIGINALDATE`, else `year`: one for every edition of an album |
 //! | `track`, `disc` | The track and disc numbers, or none, which writes nothing |
 //! | `disc_track` | `"03 "` on a first disc, `"2-03 "` on a later one, `""` without a track |
 //! | `composer`, `bpm`, `key` | The composer, the tempo and the musical key, or empty |
@@ -34,6 +35,7 @@ pub struct Fields {
     pub genre: String,
     pub date: String,
     pub year: String,
+    pub original_year: String,
     pub track: Option<u32>,
     pub disc: Option<u32>,
     pub disc_track: String,
