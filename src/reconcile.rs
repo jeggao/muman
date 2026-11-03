@@ -548,6 +548,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .alignments
         .retain(|a| audio.contains(&a.revs.0) && audio.contains(&a.revs.1));
     state.mixes.retain(|m| audio.contains(&m.audio));
+    if let Some(run) = run.as_deref_mut() {
+        run.outputs_after(home, &state.outputs)?;
+    }
     state.save(home)?;
     for edit in edits {
         manifest.edit(edit);

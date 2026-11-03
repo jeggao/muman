@@ -3389,6 +3389,86 @@ fn undo_puts_a_removed_song_back() {
     );
 }
 
+/// The record of the latest run, as `run.json` holds it, and its path.
+fn latest_record(s: &Setup) -> (PathBuf, serde_json::Value) {
+    let history = s.dir.path().join("home/history");
+    let last = std::fs::read_dir(&history)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("run.json").exists())
+        .max()
+        .unwrap();
+    let file = last.join("run.json");
+    let text = std::fs::read(&file).unwrap();
+    (file, serde_json::from_slice(&text).unwrap())
+}
+
+#[test]
+fn a_run_records_the_songs_it_changed_alone_and_undoes_them() {
+    let s = Setup::new();
+    for name in ["a", "b", "c"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    s.run(&flacs(), &["sync"]);
+    let synced = library_of(&s);
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:b.flac", "album=Lanternfall"],
+    );
+    assert!(ok, "{text}");
+    let (_, record) = latest_record(&s);
+    assert_eq!(record["version"], 2);
+    assert!(record.get("outputs").is_none(), "{record}");
+    let before = record["before"].as_object().unwrap();
+    assert_eq!(
+        before.len(),
+        2,
+        "b where it was and where it goes: {record}"
+    );
+    assert_eq!(
+        before.values().filter(|w| w.is_null()).count(),
+        1,
+        "the new path held nothing: {record}"
+    );
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Up to date: 3 song(s)") && !text.contains("not muman's"),
+        "each song is muman's as before: {text}"
+    );
+    assert_eq!(library_of(&s), synced);
+}
+
+#[test]
+fn a_run_an_earlier_muman_recorded_whole_is_undone() {
+    let s = Setup::new();
+    for name in ["a", "b"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    s.run(&flacs(), &["sync"]);
+    let synced = library_of(&s);
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(s.dir.path().join("home/state.json")).unwrap())
+            .unwrap();
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    // As version 1 wrote it: every output as the run began.
+    let (file, mut record) = latest_record(&s);
+    let fields = record.as_object_mut().unwrap();
+    fields.remove("before");
+    fields.insert("version".into(), 1.into());
+    fields.insert("outputs".into(), state["outputs"].clone());
+    std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok && text.contains("Put back"), "{text}");
+    assert!(
+        text.contains("Up to date: 2 song(s)"),
+        "the song put back is muman's again: {text}"
+    );
+    assert_eq!(library_of(&s), synced);
+}
+
 #[test]
 fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
     let s = Setup::new();

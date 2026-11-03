@@ -358,6 +358,12 @@ fn before_writing<R: Runner, W: Write>(
         }
         // Recorded ahead of a new file as of one written over, so a run
         // stopped among them is undone, the hand edit it applied with it.
+        ledger.changing(
+            pending
+                .outputs
+                .keys()
+                .filter(|p| old.get(*p) != pending.outputs.get(*p)),
+        );
         ledger.checkpoint()?;
         pending.save(&job.dirs.home)?;
     }

@@ -1,8 +1,8 @@
 //! Each run that changes the song list or the library, kept so `undo`
-//! can put both back: the song list before and after, the outputs
-//! before, the library files it replaced or removed, as many as a budget
-//! of bytes allows, and the files it moved. A file not kept is written
-//! again from its sources instead.
+//! can put both back: the song list before and after, the outputs it
+//! changed as they were, the library files it replaced or removed, as
+//! many as a budget of bytes allows, and the files it moved. A file not
+//! kept is written again from its sources instead.
 //!
 //! Every library write lands as a new file renamed into place, so a hard
 //! link to the old one keeps its bytes; a file is linked where the
@@ -74,6 +74,13 @@
 //! owner made of their home's permissions is theirs to change.
 //!
 //! `run.json` carries a `version`; a record without one is of version 1.
+//! Version 2 keeps each output the run changed as it was, none for one it
+//! added, noted as the ledger moves, writes over or removes a file, as a
+//! sync records ahead the songs it is about to write, and as it saves
+//! outputs it changed otherwise; read, the outputs as the run began are
+//! the outputs now with those put back. Version 1 kept every output, which
+//! grew with the library; its records are undone as before, and an
+//! earlier muman cannot read version 2's.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -90,7 +97,7 @@ use crate::state::{State, Written};
 use crate::store;
 
 const RECORD: &str = "run.json";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 fn version_one() -> u32 {
     VERSION
@@ -126,8 +133,25 @@ struct Record {
     undone: bool,
     songs_before: Option<String>,
     songs_after: Option<String>,
-    #[serde(with = "crate::relpath::portable_keys")]
+    /// The outputs as the run began, whole, as version 1 kept them.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "crate::relpath::portable_keys"
+    )]
     outputs: BTreeMap<PathBuf, Written>,
+    /// Each output the run changed as it was before, none for one it
+    /// added: version 2's.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "crate::relpath::portable_keys"
+    )]
+    before: BTreeMap<PathBuf, Option<Written>>,
+    /// The outputs as the run began, whole: version 1's, or version 2's
+    /// made from the outputs now and those it changed.
+    #[serde(skip)]
+    was: BTreeMap<PathBuf, Written>,
     /// Library files the run replaced or removed.
     #[serde(with = "crate::relpath::portable_keys")]
     touched: BTreeSet<PathBuf>,
@@ -162,6 +186,8 @@ pub struct Run {
     dir: PathBuf,
     record: Record,
     outputs_known: bool,
+    /// The outputs the run changed or is about to.
+    changing: BTreeSet<PathBuf>,
     /// The other kept runs, oldest first, with the bytes each keeps.
     others: Vec<(PathBuf, u64)>,
     /// The song list's `[history]` as the run began, a hand edit since
@@ -349,10 +375,11 @@ impl Run {
                 version: VERSION,
                 complete: false,
                 songs_before,
-                outputs,
+                was: outputs,
                 ..Record::default()
             },
             outputs_known: false,
+            changing: BTreeSet::new(),
             others,
             limits,
             lost: false,
@@ -387,9 +414,37 @@ impl Run {
     /// The outputs as they were before the run wrote or removed any.
     pub fn outputs_before(&mut self, outputs: &BTreeMap<PathBuf, Written>) {
         if !self.outputs_known {
-            self.record.outputs.clone_from(outputs);
+            self.record.was.clone_from(outputs);
             self.outputs_known = true;
         }
+    }
+
+    /// Note that the run is about to change the output at `rel`, before
+    /// the state that changes it is saved.
+    pub fn changing(&mut self, rel: &Path) {
+        self.changing.insert(rel.to_path_buf());
+    }
+
+    /// Note each output `outputs`, about to be saved, holds otherwise than
+    /// the run began with, and write the record ahead when one was not
+    /// noted yet.
+    pub fn outputs_after(
+        &mut self,
+        home: &Path,
+        outputs: &BTreeMap<PathBuf, Written>,
+    ) -> Result<()> {
+        let was = &self.record.was;
+        let unnoted: Vec<PathBuf> = was
+            .keys()
+            .chain(outputs.keys())
+            .filter(|rel| was.get(*rel) != outputs.get(*rel) && !self.changing.contains(*rel))
+            .cloned()
+            .collect();
+        if unnoted.is_empty() {
+            return Ok(());
+        }
+        self.changing.extend(unnoted);
+        self.checkpoint(home)
     }
 
     /// Keep a library file the run is about to replace or remove: linked
@@ -420,6 +475,7 @@ impl Run {
         let Ok(meta) = std::fs::metadata(&from) else {
             return Ok(());
         };
+        self.changing.insert(rel.to_path_buf());
         if !self.record.touched.insert(rel.to_path_buf()) {
             return Ok(());
         }
@@ -444,7 +500,7 @@ impl Run {
             self.record.bytes += meta.len();
             self.record.kept.insert(rel.to_path_buf());
             // A copy with new times, its bytes muman's, is no change.
-            let outputs = &self.record.outputs;
+            let outputs = &self.record.was;
             let changed = crate::reconcile::changed_since_written(library, outputs, rel)
                 && outputs.get(rel).is_some_and(|w| {
                     w.digest.is_none() || crate::facts::digest_file(&from) != w.digest
@@ -458,6 +514,7 @@ impl Run {
 
     /// Record that the run is moving a library file, before it does.
     pub fn moving(&mut self, from: &Path, to: &Path) {
+        self.changing.extend([from.to_path_buf(), to.to_path_buf()]);
         self.record.moves.push(Moved {
             from: from.to_path_buf(),
             to: to.to_path_buf(),
@@ -500,7 +557,12 @@ impl Run {
         Ok(())
     }
 
-    fn write(&self) -> Result<()> {
+    fn write(&mut self) -> Result<()> {
+        self.record.before = self
+            .changing
+            .iter()
+            .map(|rel| (rel.clone(), self.record.was.get(rel).cloned()))
+            .collect();
         if let Some(history) = self.dir.parent() {
             atomic::private_dir(history)?;
         }
@@ -511,7 +573,10 @@ impl Run {
 
     /// Write the record when the run changed the song list or the
     /// library, and let go of runs beyond the `[history]` count and of
-    /// folders without a record.
+    /// folders without a record. The record keeps each output the state
+    /// now holds otherwise than the run began with, whatever noted it. A
+    /// run that only wrote new songs still changed the library; one that
+    /// left the same outputs, if newly vouched for, did not.
     pub fn finish(mut self, home: &Path) -> Result<()> {
         let _lock = atomic::Lock::folder(home)?;
         if let Some(undone) = self.finishes.as_ref().filter(|_| self.synced) {
@@ -522,11 +587,23 @@ impl Run {
         if self.lost {
             return Ok(());
         }
+        let mut same_outputs = false;
+        if let Ok(now) = State::load(home) {
+            let was = &self.record.was;
+            same_outputs = was.keys().eq(now.outputs.keys());
+            let changed: Vec<PathBuf> = was
+                .keys()
+                .chain(now.outputs.keys())
+                .filter(|rel| was.get(*rel) != now.outputs.get(*rel))
+                .cloned()
+                .collect();
+            self.changing.extend(changed);
+        }
         if self.record.touched.is_empty()
             && self.record.moves.is_empty()
             && self.record.copied.is_empty()
             && self.record.songs_after == self.record.songs_before
-            && self.record.outputs_equal_current(home)
+            && same_outputs
         {
             let _ = std::fs::remove_dir_all(&self.dir);
             return Ok(());
@@ -601,12 +678,24 @@ fn let_go(dir: &Path) -> Result<()> {
 }
 
 impl Record {
-    /// Whether the outputs the run began with are the outputs now: a
-    /// run that only wrote new songs still changed the library.
-    fn outputs_equal_current(&self, home: &Path) -> bool {
-        State::load(home).is_ok_and(|s| {
-            s.outputs.keys().collect::<Vec<_>>() == self.outputs.keys().collect::<Vec<_>>()
-        })
+    /// The record `text` holds, its outputs as the run began made whole
+    /// from `now`, the outputs as they are, where it keeps only those the
+    /// run changed.
+    fn read(text: &[u8], now: &BTreeMap<PathBuf, Written>) -> serde_json::Result<Self> {
+        let mut record: Self = serde_json::from_slice(text)?;
+        record.was = if record.version < 2 {
+            record.outputs.clone()
+        } else {
+            let mut was = now.clone();
+            for (rel, before) in &record.before {
+                match before {
+                    Some(w) => was.insert(rel.clone(), w.clone()),
+                    None => was.remove(rel),
+                };
+            }
+            was
+        };
+        Ok(record)
     }
 }
 
@@ -658,7 +747,7 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
     };
     let Some(record) = std::fs::read(dir.join(RECORD))
         .ok()
-        .and_then(|t| serde_json::from_slice::<Record>(&t).ok())
+        .and_then(|t| Record::read(&t, &state.outputs).ok())
     else {
         return 0;
     };
@@ -675,7 +764,7 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
     let songs: Vec<&Moved> = made
         .iter()
         .copied()
-        .filter(|m| record.outputs.contains_key(&m.from))
+        .filter(|m| record.was.contains_key(&m.from))
         .collect();
     let into: BTreeSet<&PathBuf> = songs.iter().map(|m| &m.to).collect();
     let left: Vec<&PathBuf> = songs
@@ -771,7 +860,8 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
 /// library folder.
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     let home = &dirs.home;
-    let (dir, record) = latest(home)?;
+    let state = State::load(home)?;
+    let (dir, record) = latest(home, &state.outputs)?;
     let songs = songs_text(home)?;
     // An undo of a home's first run leaves a song list listing nothing.
     let before = record
@@ -786,7 +876,6 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         ))
         .into());
     }
-    let state = State::load(home)?;
     if !state
         .library
         .as_deref()
@@ -867,7 +956,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     let added = state
         .outputs
         .into_keys()
-        .filter(|p| !record.outputs.contains_key(p) && !moved.contains(p))
+        .filter(|p| !record.was.contains_key(p) && !moved.contains(p))
         .count();
     if added > 0 {
         lines.push(format!("Remove {added} file(s) the run added"));
@@ -875,13 +964,13 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     Ok(UndoPlan { dir, record, lines })
 }
 
-fn latest(home: &Path) -> Result<(PathBuf, Record)> {
+fn latest(home: &Path, now: &BTreeMap<PathBuf, Written>) -> Result<(PathBuf, Record)> {
     let Some(dir) = runs(home)?.pop() else {
         return Err(crate::change::Refused("There is no run to undo".into()).into());
     };
     let text = std::fs::read(dir.join(RECORD))
         .with_context(|| format!("reading {}", dir.join(RECORD).display()))?;
-    let record: Record = serde_json::from_slice(&text)
+    let record = Record::read(&text, now)
         .with_context(|| format!("{} cannot be read", dir.join(RECORD).display()))?;
     Ok((dir, record))
 }
@@ -975,7 +1064,7 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
     // Files the run wrote beside a song it had before are recorded by
     // nothing once its record is put back, so they go now.
     for (rel, now) in &state.outputs {
-        let Some(before) = record.outputs.get(rel) else {
+        let Some(before) = record.was.get(rel) else {
             continue;
         };
         for sidecar in now.sidecar_paths() {
@@ -1091,11 +1180,7 @@ fn outputs_put_back(
         outputs.remove(&m.to);
     }
     // A file put back that was no output before is the user's again.
-    for rel in record
-        .kept
-        .iter()
-        .filter(|r| !record.outputs.contains_key(*r))
-    {
+    for rel in record.kept.iter().filter(|r| !record.was.contains_key(*r)) {
         outputs.remove(rel);
     }
     // A file moved back holds what the run wrote over it where it went,
@@ -1106,7 +1191,7 @@ fn outputs_put_back(
         .filter(|m| record.touched.contains(&m.to) && !record.kept.contains(&m.to))
         .map(|m| &m.from)
         .collect();
-    for (rel, before) in &record.outputs {
+    for (rel, before) in &record.was {
         let mut written = before.clone();
         if record.kept.contains(rel) {
             // One changed since written keeps the stamp it no longer matches.
@@ -1636,7 +1721,7 @@ mod tests {
         state.save(&d.home).unwrap();
         run.finish(&d.home).unwrap();
 
-        let (at, mut record) = latest(&d.home).unwrap();
+        let (at, mut record) = latest(&d.home, &State::load(&d.home).unwrap().outputs).unwrap();
         record.undoing = true;
         atomic::write(
             &at,
