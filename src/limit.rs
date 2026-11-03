@@ -23,13 +23,15 @@
 //! block_size` blocks, and two standard deviations of the estimates
 //! still in the sum are kept free.
 //!
-//! Real sizes are kept in `state.json` by [`plan_key`], the plan's media
-//! and the ffmpeg version together, and taken from there instead of rendering
-//! again, but only when the passes above ask for that rung: sizes known
-//! from before never steer the passes, so a home measured over many runs
-//! fits exactly as a new one would, only with less rendering. A song
-//! rendered to be measured is moved into the library rather than rendered
-//! twice. Sizes are taken before any hook runs.
+//! Real sizes are kept in `state.db` by [`plan_key`], the plan's media
+//! and the ffmpeg version together, and taken from there instead of
+//! rendering again, but only when the passes above ask for that rung:
+//! sizes known from before never steer the passes, so a home measured
+//! over many runs fits exactly as a new one would, only with less
+//! rendering. A song rendered to be measured is moved into the library
+//! rather than rendered twice. A song a change only tags again takes the
+//! size of the plan its file was written from until it is written and
+//! measured. Sizes are taken before any hook runs.
 //!
 //! **Too little room.** When even the songs' lowest rungs, measured,
 //! cannot fit, songs are left out, the last listed first, until the rest
@@ -197,6 +199,12 @@ struct Choice {
     was_key: Option<String>,
     /// The key its plan had before keys named media alone.
     legacy_key: String,
+    /// The key of the plan a file of its song was written from, where
+    /// writing this one over it only tags it again, where that differs:
+    /// the tags and lyrics inside move a size by what their text does,
+    /// which whole blocks mostly hide, and the size is measured again once
+    /// the song is written.
+    kept_key: Option<String>,
     estimate: u64,
     sigma: f64,
     loss: f64,
@@ -287,10 +295,21 @@ fn ladder(
         let renamed = !state.rebased.is_empty() || !state.respelled.is_empty();
         let was = renamed.then(|| plan_key(tools, &state.as_before(&plan)));
         let plan_key = plan_key(tools, &plan);
+        let kept_key = written
+            .get(&plan.audio)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, w)| w.plan.as_ref())
+            .find(|old| {
+                let redo = crate::artifact::redo(old, &plan);
+                !redo.build && !redo.beside
+            })
+            .map(|old| self::plan_key(tools, old));
         Choice {
             format,
             was_key: was.filter(|w| *w != plan_key),
             legacy_key: legacy_key(tools, &plan),
+            kept_key: kept_key.filter(|k| *k != plan_key),
             plan_key,
             estimate: blocks(audio as u64 + extras, block) + beside,
             sigma,
@@ -513,7 +532,11 @@ pub fn fit_library<R: Runner, W: Write>(
             continue;
         }
         let was = rung.was_key.as_ref().and_then(|k| state.sizes.get(k));
-        if let Some(was) = was.or_else(|| state.sizes.get(&rung.legacy_key)) {
+        let kept = || rung.kept_key.as_ref().and_then(|k| state.sizes.get(k));
+        if let Some(was) = was
+            .or_else(kept)
+            .or_else(|| state.sizes.get(&rung.legacy_key))
+        {
             state.sizes.insert(rung.plan_key.clone(), was.clone());
         }
     }
