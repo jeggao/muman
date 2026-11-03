@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **A run's record keeps only the songs it changed**, not every song
+  muman wrote, so the home's history stays small in a large library. A
+  run an earlier muman recorded is still undone; an earlier muman cannot
+  undo a run this one recorded.
+
 ## [0.9.0] - 2026-11-03
 
 ### Added

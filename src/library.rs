@@ -94,6 +94,15 @@ impl<'a> Ledger<'a> {
         self.root
     }
 
+    /// Note that the run is about to change the outputs at `rels`.
+    pub fn changing<'p>(&mut self, rels: impl IntoIterator<Item = &'p PathBuf>) {
+        if let Some(run) = self.run.as_deref_mut() {
+            for rel in rels {
+                run.changing(rel);
+            }
+        }
+    }
+
     /// Write the run's record as it stands.
     pub fn checkpoint(&mut self) -> Result<()> {
         match self.run.as_deref_mut() {
