@@ -383,7 +383,10 @@ pub enum Command {
     Sync {
         /// Make every lookup a song still wants now, whatever an earlier
         /// one found: a song that has what a provider's `until` names, or
-        /// whose record from it gives all it can, asks it nothing.
+        /// whose record from it gives all it can, asks it nothing, but
+        /// every MusicBrainz record a song lists is fetched again by its
+        /// ID, and AcoustID asked again for one it found, its find now in
+        /// that record's place.
         #[arg(long)]
         rematch: bool,
 

@@ -108,7 +108,7 @@ Bring the library in line with the song list: fetch any missing source, add file
 
 **Options:**
 
-* `--rematch` — Make every lookup a song still wants now, whatever an earlier one found: a song that has what a provider's `until` names, or whose record from it gives all it can, asks it nothing
+* `--rematch` — Make every lookup a song still wants now, whatever an earlier one found: a song that has what a provider's `until` names, or whose record from it gives all it can, asks it nothing, but every MusicBrainz record a song lists is fetched again by its ID, and AcoustID asked again for one it found, its find now in that record's place
 * `--until-done` — Keep going until the library is up to date: make every lookup due, however many `per_run` allows and over as many rounds as what one finds starts, ask again at once what failed, and fetch again what failed to arrive, as --retry does. Each service is still asked at its own pace
 * `--force` — Write every song again, changed or not, a library file changed since muman wrote it included
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to

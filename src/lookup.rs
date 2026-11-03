@@ -66,6 +66,13 @@
 //! failed, so one run leaves nothing due; it still makes each lookup once
 //! a run, at each service's pace.
 //!
+//! `sync --rematch` also renews what a song's MusicBrainz record was
+//! found by, however full the song is: a record AcoustID found is asked
+//! of AcoustID again, whose find takes its place in that song alone,
+//! another song sharing it keeping it, and goes when AcoustID now names
+//! none; any other is fetched again by its ID. So records kept by an
+//! earlier muman, or picked by an earlier ranking, catch up in one run.
+//!
 //! A YouTube Music track found later is fetched beside its upload and
 //! joins the song; the upload stays a source when the two are one
 //! recording, else the track takes its key. An LRCLIB or MusicBrainz
@@ -515,14 +522,18 @@ impl Asking<'_> {
         {
             return Verdict::Unwritten;
         }
-        if settings.until.iter().all(|c| c.holds(self.view)) {
-            return Verdict::Done(None);
-        }
         let kinds: Vec<(&SourceKey, Provider)> = song
             .sources
             .iter()
             .filter_map(|k| Some((k, Provider::of(k, facts.get(k))?)))
             .collect();
+        // Rematched, a record from MusicBrainz is fetched again however full.
+        let renews = self.ask.rematch
+            && matches!(p, Provider::MusicBrainz | Provider::AcoustId)
+            && kinds.iter().any(|(_, q)| *q == p.yields());
+        if !renews && settings.until.iter().all(|c| c.holds(self.view)) {
+            return Verdict::Done(None);
+        }
         let of = |wanted: &[Provider]| {
             kinds
                 .iter()
@@ -592,6 +603,18 @@ impl Asking<'_> {
         from: SourceKey,
         record: SourceKey,
     ) -> Verdict {
+        let by_print = self
+            .records
+            .newest(&self.song.sources, &[Provider::AcoustId])
+            .is_some_and(|l| l.outcome == Outcome::Found(record.clone()));
+        if p == Provider::AcoustId && self.ask.rematch && by_print {
+            return Verdict::Due(Due {
+                song: self.n,
+                from,
+                find: p,
+                again: Some((record, 0)),
+            });
+        }
         if matches!(
             p,
             Provider::YouTube | Provider::YouTubeMusic | Provider::AcoustId
@@ -622,7 +645,8 @@ impl Asking<'_> {
             .until
             .iter()
             .any(|c| !c.holds(self.view) && !c.holds(&own));
-        if !short {
+        let refetched = self.ask.rematch && p == Provider::MusicBrainz && !by_print;
+        if !short && !refetched {
             return Verdict::Done(Some(record));
         }
         if p == Provider::Lrclib && self.query().is_none() {
@@ -1181,7 +1205,23 @@ pub fn run<R: Runner, W: Write>(
                         error: format!("{e:#}"),
                     }
                 }
-                Ok(Hit::Nothing) => Outcome::Nothing,
+                Ok(Hit::Nothing) => {
+                    // A record AcoustID found before that it now names no more goes.
+                    if let Some((old, _)) =
+                        d.again.as_ref().filter(|_| d.find == Provider::AcoustId)
+                    {
+                        crate::ui::info(
+                            acquire.out,
+                            &format!("{name}: AcoustID no longer names {old}, which goes"),
+                        )?;
+                        manifest.edit(Edit::Supersede {
+                            song: d.from.clone(),
+                            old: old.clone(),
+                            new: None,
+                        });
+                    }
+                    Outcome::Nothing
+                }
                 Ok(Hit::Instrumental) => {
                     crate::ui::info(acquire.out, &format!("{name}: an instrumental, by LRCLIB"))?;
                     Outcome::Instrumental
@@ -1233,16 +1273,35 @@ pub fn run<R: Runner, W: Write>(
                     if found.take(d.again.as_ref(), &mut renewed, &mut unchanged) {
                         musicbrainz::keep(&dirs.musicbrainz(), &record)?;
                     }
-                    if !manifest.songs[d.song].has(&key) {
-                        let on = record
-                            .release
-                            .as_ref()
-                            .map_or_else(String::new, |r| format!(", on {}", r.title));
-                        let by = if d.find == Provider::AcoustId {
-                            " by its fingerprint on AcoustID"
-                        } else {
-                            ""
-                        };
+                    let on = record
+                        .release
+                        .as_ref()
+                        .map_or_else(String::new, |r| format!(", on {}", r.title));
+                    let by = if d.find == Provider::AcoustId {
+                        " by its fingerprint on AcoustID"
+                    } else {
+                        ""
+                    };
+                    let superseded = d
+                        .again
+                        .as_ref()
+                        .map(|(old, _)| old)
+                        .filter(|old| d.find == Provider::AcoustId && **old != key);
+                    if let Some(old) = superseded {
+                        crate::ui::info(
+                            acquire.out,
+                            &format!(
+                                "{name}: tags from MusicBrainz{by}, {key}{on}, in place of {old}"
+                            ),
+                        )?;
+                        manifest.edit(Edit::Supersede {
+                            song: d.from.clone(),
+                            old: old.clone(),
+                            new: Some(key.clone()),
+                        });
+                        acquire.known.insert(key.clone());
+                        joined += 1;
+                    } else if !manifest.songs[d.song].has(&key) {
                         crate::ui::info(
                             acquire.out,
                             &format!("{name}: tags from MusicBrainz{by}, {key}{on}"),

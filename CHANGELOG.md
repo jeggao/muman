@@ -35,6 +35,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   songs of one release share its date, label and IDs, so an album split
   into folders by edition, by `’` and `'`, or by one file's date comes
   together. A mono mix on a mono edition keeps that edition.
+- **`sync --rematch` renews every MusicBrainz record**: it fetches each
+  record a song lists again by its ID, however full the song, and asks
+  AcoustID again for its own finds, its new find taking the old record's
+  place in that song and a record it no longer names going. One run
+  brings records kept by an earlier muman up to date.
 - **`original_year` in the path template**, the year the album was
   first released, puts every edition of an album in one folder.
 - **`status <query>` says why each lookup is made, waits or is not**,

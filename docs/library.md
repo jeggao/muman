@@ -335,6 +335,8 @@ over one alone. Artists credited together are written as MusicBrainz
 joins them, `Marlo Venn & The Glass Orchards`, and listed one by one in
 `ARTISTS`. To look every song up once, set `until =
 ["from:musicbrainz"]` for `acoustid` and `musicbrainz`.
+`sync --rematch` fetches every record again and asks AcoustID again for
+its own finds, replacing them: run it once after upgrading.
 
 ### Cover Art Archive
 
