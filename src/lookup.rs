@@ -975,12 +975,13 @@ pub fn run<R: Runner, W: Write>(
         }
         let mut manifest = Manifest::load(home)?;
         let mut state = State::load(home)?;
+        let mut loaded = state.caches();
         let store = Store::scan(dirs)?;
         let scratch = acquire.temp().join(format!("lookup-{round}"));
         let mut how = Measuring {
             retry: false,
             say_unread: false,
-            checkpoint: &mut |s: &State| State::keep_measures(home, s),
+            checkpoint: &mut |s: &State| s.keep_since(home, &mut loaded),
             analyses: crate::analysis::wanted(&manifest.settings.loudness),
         };
         reconcile::measure(

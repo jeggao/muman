@@ -124,6 +124,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **An M4A whose tags were changed to shorter ones kept the room they
   left**, so its bytes differed from the same song written anew, and
   depended on every edit before. The room is now removed.
+- **Fetching and lookups no longer write stale measurements back**: a
+  step that runs while another muman measures keeps only what it
+  measured itself, so what the other recorded meanwhile stays, and a
+  failure the other cleared is not put back.
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.
