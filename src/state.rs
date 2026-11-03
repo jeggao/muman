@@ -519,7 +519,15 @@ pub struct Mix {
     pub source: SourceKey,
     pub audio: String,
     pub layout: Layout,
+    /// The [`crate::codec::MIXING`] it was mixed by.
+    #[serde(default = "first_mixing")]
+    pub filter: u32,
     pub analysis: Analysis,
+}
+
+/// The mixing of a mix recorded before mixes named theirs.
+fn first_mixing() -> u32 {
+    1
 }
 
 /// One comparison of two sources' audio, `a` against `b`.
@@ -749,7 +757,12 @@ impl State {
     pub fn mix(&self, source: &SourceKey, audio: &str, layout: Layout) -> Option<&Analysis> {
         self.mixes
             .iter()
-            .find(|m| &m.source == source && m.audio == audio && m.layout == layout)
+            .find(|m| {
+                &m.source == source
+                    && m.audio == audio
+                    && m.layout == layout
+                    && m.filter == crate::codec::MIXING
+            })
             .map(|m| &m.analysis)
     }
 
@@ -1303,6 +1316,34 @@ mod tests {
         let kept = state.outputs[Path::new("song.opus")].plan.clone().unwrap();
         assert_eq!(kept, plan(&new));
         assert_eq!(state.as_before(&kept), plan(&old));
+    }
+
+    #[test]
+    fn a_mix_is_found_only_as_the_filter_it_was_mixed_by_makes_it() {
+        let key = SourceKey::youtube("aaaaaaaaaaa");
+        let layout = Layout::STEREO;
+        let mut state = State::default();
+        let saved = serde_json::json!({
+            "source": key.to_string(), "audio": "1:2", "layout": "stereo", "analysis": {},
+        });
+        state.mixes.push(serde_json::from_value(saved).unwrap());
+        assert_eq!(
+            state.mixes[0].filter, 1,
+            "recorded before mixes named theirs"
+        );
+        assert!(state.mix(&key, "1:2", layout).is_some());
+
+        state.mixes[0].filter = crate::codec::MIXING + 1;
+        assert!(state.mix(&key, "1:2", layout).is_none(), "another filter's");
+        state.record_mix(Mix {
+            source: key.clone(),
+            audio: "1:2".into(),
+            layout,
+            filter: crate::codec::MIXING,
+            analysis: Analysis::default(),
+        });
+        assert_eq!(state.mixes.len(), 1, "the old filter's goes");
+        assert!(state.mix(&key, "1:2", layout).is_some());
     }
 
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {

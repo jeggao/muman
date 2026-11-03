@@ -140,6 +140,12 @@ const LAYOUTS: [(&str, u32); 35] = [
     ("downmix", 2),
 ];
 
+/// How [`mix_filter`] mixes, raised whenever what it makes of a layout
+/// changes, so a mix measured by the old filter is measured again. The
+/// filter is also among the encode's arguments, so such a change raises
+/// `render_version` too, for each codec it mixes for.
+pub const MIXING: u32 = 1;
+
 /// The filter that mixes audio into `layout`, scaled so no sum of
 /// channels passes full scale.
 #[must_use]
@@ -588,6 +594,24 @@ impl fmt::Display for Codec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What [`mix_filter`] makes of every layout, with [`MIXING`]. A
+    /// change to either changes it: raise [`MIXING`], then record the new
+    /// digest here.
+    const WRITTEN: (&str, &str) = (
+        "1",
+        "8e5367da636e184cebb52b21efc7f75b1ad399373fd12d0c5a0d5d3d98f96d3a",
+    );
+
+    #[test]
+    fn the_mixing_rises_with_what_the_filter_makes() {
+        let mut digest = crate::testing::Digest::default();
+        for (name, _) in LAYOUTS {
+            let layout = Layout::named(name).unwrap();
+            digest.text(&mix_filter(layout));
+        }
+        crate::testing::check(WRITTEN, &MIXING.to_string(), &digest.hex());
+    }
 
     #[test]
     fn every_codec_is_found_by_the_name_ffprobe_gives_it() {
