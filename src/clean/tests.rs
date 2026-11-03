@@ -21,27 +21,30 @@ fn run(
         names: &names,
         albums: &albums,
         offers: &offers,
+        typography: Typography::default(),
     };
     clean(field, &offer(values, structured), &ctx, settings)
 }
 
-/// An upload's title, cleaned with every rule, its song crediting
-/// `credited`.
-fn upload(title: &str, credited: &[&str]) -> String {
-    run(
-        Field::Title,
-        &[title],
-        false,
-        credited,
-        &Settings::default(),
-    )
-    .values
-    .join("|")
+/// Every rule on but `tidy.typography`, which tests of its own cover, so
+/// the others' tests read their values as written.
+fn as_written() -> Settings {
+    let mut settings = Settings::default();
+    settings.set("tidy.typography", false);
+    settings
 }
 
-/// A field kept for it, cleaned with every rule.
+/// An upload's title, cleaned with every rule but `tidy.typography`, its
+/// song crediting `credited`.
+fn upload(title: &str, credited: &[&str]) -> String {
+    run(Field::Title, &[title], false, credited, &as_written())
+        .values
+        .join("|")
+}
+
+/// A field kept for it, cleaned with every rule but `tidy.typography`.
 fn kept(field: Field, value: &str) -> Vec<String> {
-    run(field, &[value], true, &[], &Settings::default()).values
+    run(field, &[value], true, &[], &as_written()).values
 }
 
 fn bare(s: &str) -> String {
@@ -499,6 +502,7 @@ fn an_album_named_as_the_artist_gives_way_to_its_owner() {
         names: &[],
         albums: &albums,
         offers: &mine,
+        typography: Typography::default(),
     };
     let artist = |v: &str| {
         clean(
@@ -582,6 +586,124 @@ fn every_switch_belongs_to_a_tier() {
             .iter()
             .all(|(tier, _)| TIERS.iter().any(|(t, _)| t == tier))
     );
+}
+
+/// A field kept for it, cleaned with every rule `settings` leaves on and
+/// punctuation written as `typography` says.
+fn typed(field: Field, value: &str, typography: Typography, settings: &Settings) -> Cleaned {
+    let (albums, offers) = (Albums::default(), Offers::new());
+    let ctx = Context {
+        names: &[],
+        albums: &albums,
+        offers: &offers,
+        typography,
+    };
+    clean(field, &offer(&[value], true), &ctx, settings)
+}
+
+#[test]
+fn a_release_and_an_upload_spell_punctuation_alike() {
+    let each = |value: &str, typography| {
+        typed(Field::Title, value, typography, &Settings::default()).values
+    };
+    for (release, upload, typographic, ascii) in [
+        (
+            "Rollin’ Down the Hale‐Orchard Road",
+            "Rollin' Down the Hale-Orchard Road",
+            "Rollin’ Down the Hale‐Orchard Road",
+            "Rollin' Down the Hale-Orchard Road",
+        ),
+        (
+            "The ‘Paper’ Comets",
+            "The 'Paper' Comets",
+            "The ‘Paper’ Comets",
+            "The 'Paper' Comets",
+        ),
+        (
+            "Ada “Lantern” Quill",
+            "Ada \"Lantern\" Quill",
+            "Ada “Lantern” Quill",
+            "Ada \"Lantern\" Quill",
+        ),
+        (
+            "Marlo\u{2011}Venn",
+            "Marlo-Venn",
+            "Marlo\u{2010}Venn",
+            "Marlo-Venn",
+        ),
+    ] {
+        for value in [release, upload] {
+            assert_eq!(
+                each(value, Typography::Typographic),
+                [typographic],
+                "{value}"
+            );
+            assert_eq!(each(value, Typography::Ascii), [ascii], "{value}");
+        }
+    }
+}
+
+#[test]
+fn an_apostrophe_opening_a_word_reads_by_what_follows() {
+    let each = |value: &str| {
+        typed(
+            Field::Title,
+            value,
+            Typography::Typographic,
+            &Settings::default(),
+        )
+        .values
+    };
+    assert_eq!(each("'Til the Lanterns Fade"), ["’Til the Lanterns Fade"]);
+    assert_eq!(each("‘Til the Lanterns Fade"), ["’Til the Lanterns Fade"]);
+    assert_eq!(each("Paper Comets '79"), ["Paper Comets ’79"]);
+    assert_eq!(each("Rock 'n' Roll Comets"), ["Rock ’n’ Roll Comets"]);
+    assert_eq!(
+        each("Paper ('Glass') Orchards"),
+        ["Paper (‘Glass’) Orchards"]
+    );
+    assert_eq!(each("'Glass Orchards"), ["’Glass Orchards"]);
+    assert_eq!(each("\"Glass\" (\"Orchards\")"), ["“Glass” (“Orchards”)"]);
+}
+
+#[test]
+fn typography_leaves_dashes_and_numbers_alone() {
+    for typography in [Typography::Typographic, Typography::Ascii] {
+        for value in [
+            "Lantern Sessions 1971–1975",
+            "Lantern Sessions 1971-1975",
+            "Paper Comets — Live",
+            "Side A - Side B",
+            "4-3",
+        ] {
+            let c = typed(Field::Album, value, typography, &Settings::default());
+            assert_eq!(c.values, [value], "{typography:?}");
+            assert_eq!(c.rules, Vec::<&str>::new());
+        }
+    }
+}
+
+#[test]
+fn typography_writes_every_name_and_stops_when_switched_off() {
+    for field in [
+        Field::Artist,
+        Field::AlbumArtist,
+        Field::Album,
+        Field::Genre,
+    ] {
+        let c = typed(
+            field,
+            "Rock ’n’ Hale‐Orchard",
+            Typography::Ascii,
+            &Settings::default(),
+        );
+        assert_eq!(c.values, ["Rock 'n' Hale-Orchard"], "{field:?}");
+        assert_eq!(c.rules, ["tidy.typography"]);
+    }
+    let mut off = Settings::default();
+    assert!(off.set("tidy.typography", false));
+    let c = typed(Field::Title, "Rollin’ Comets", Typography::Ascii, &off);
+    assert_eq!(c.values, ["Rollin’ Comets"]);
 }
 
 #[test]

@@ -6,8 +6,8 @@
 //!
 //! These live in the song list rather than in a per-user file so that
 //! one list renders one library, the same on every machine. The tables
-//! are `[library]`, `[lyrics]`, `[audio]`, `[loudness]`
-//! ([`crate::loudness`]), `[cover]`, `[ytdlp]`, `[torrent]`
+//! are `[library]`, `[tags]` ([`crate::clean`]), `[lyrics]`, `[audio]`,
+//! `[loudness]` ([`crate::loudness`]), `[cover]`, `[ytdlp]`, `[torrent]`
 //! ([`crate::aria2`]), `[tools]` ([`crate::tools`]), `[history]` and
 //! `[sites]` ([`crate::sites`]). A
 //! key these tables do not know is an error naming it, so a misspelled
@@ -61,15 +61,16 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 10] = [
-    "library", "lyrics", "audio", "loudness", "cover", "ytdlp", "torrent", "tools", "history",
-    "sites",
+pub const TABLES: [&str; 11] = [
+    "library", "tags", "lyrics", "audio", "loudness", "cover", "ytdlp", "torrent", "tools",
+    "history", "sites",
 ];
 
 /// The tables `new.toml` writes that [`fill`] keeps written out in every
 /// song list: the settings' and the providers' (`crate::provider`).
-pub const WRITTEN: [&str; 11] = [
+pub const WRITTEN: [&str; 12] = [
     "library",
+    "tags",
     "lyrics",
     "audio",
     "loudness",
@@ -86,6 +87,7 @@ pub const WRITTEN: [&str; 11] = [
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub library: Library,
+    pub tags: Tags,
     pub lyrics: Lyrics,
     pub audio: Audio,
     pub loudness: Loudness,
@@ -1230,6 +1232,13 @@ impl From<WrittenTools> for Tools {
     }
 }
 
+/// How the tags sources offer are written once cleaned.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tags {
+    pub typography: crate::clean::Typography,
+}
+
 /// Which lyrics a song takes, by their language: see [`crate::resolve`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1548,9 +1557,11 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         bail!("{left}");
     }
     only.retain(|table, _| TABLES.contains(&table));
-    // Its cleaning switches are the song list's own, read with `[tags.clean]`.
-    if let Some(lyrics) = only.get_mut("lyrics").and_then(Item::as_table_like_mut) {
-        lyrics.remove("clean");
+    // Their cleaning switches are the song list's own, read apart.
+    for aspect in ["tags", "lyrics"] {
+        if let Some(table) = only.get_mut(aspect).and_then(Item::as_table_like_mut) {
+            table.remove("clean");
+        }
     }
     for o in overrides {
         let table = only

@@ -19,6 +19,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   them, such as `'album:="Some Album"'` or `"from:manual"`.
 - **A song turns its own lookups off** with `lookups = false`, or one
   provider's with `lookups.<provider> = false`.
+- **Quotes, apostrophes and hyphens in tags are spelled one way.** The
+  cleaning rule `tidy.typography` writes `’`, `“ ”` and the hyphen `‐` in
+  titles, artists, albums and genres, as MusicBrainz does, so a release
+  and an upload spell a song alike; `[tags] typography = "ascii"` writes
+  `'`, `"` and `-` instead. En and em dashes stay as written. The next
+  `sync` writes again each song whose tags this changes.
 - **`sync --until-done`** makes every lookup due in one run, past
   `per_run`, over as many rounds as finds start, asking again at once
   what failed and fetching again what failed to arrive.

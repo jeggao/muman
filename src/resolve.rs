@@ -841,6 +841,7 @@ pub struct Input<'a> {
     /// Which lyrics are taken, and in what order.
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
+    pub typography: clean::Typography,
     /// Every album the library holds, for cleaning.
     pub albums: &'a Albums,
     pub naming: &'a Naming,
@@ -1591,6 +1592,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             names: &names,
             albums: input.albums,
             offers: &facts.tags,
+            typography: input.typography,
         };
         for (field, raw) in &facts.tags {
             if *field == Field::Comment && !input.source_comments {

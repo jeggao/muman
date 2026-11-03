@@ -1122,3 +1122,27 @@ fn an_album_s_tags_are_set_unless_the_album_changed_meanwhile() {
     };
     assert!(m.trial(&[none]).is_err());
 }
+
+#[test]
+fn an_older_list_gains_its_tags_settings_just_above_their_switches() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "edition = 8\n\n[library]\nblock_size = \"4 KiB\"\n\n[tags.clean.tidy]\nspacing = false # mine\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    m.save().unwrap();
+    let t = text(dir.path());
+    let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+    assert!(
+        t.contains("# How the rule tidy.typography writes"),
+        "with new.toml's comment: {t}"
+    );
+    assert!(at("[sites.") < at("[tags]\n"), "{t}");
+    assert!(
+        at("typography = \"typographic\"") < at("[tags.clean.tidy]"),
+        "{t}"
+    );
+    assert!(t.contains("spacing = false # mine"), "{t}");
+    assert!(at("[tags.clean.guesswork]") < at("\n[[song]]"), "{t}");
+}

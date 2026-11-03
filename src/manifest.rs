@@ -136,9 +136,10 @@ const HEADER: &str = "\
 #             lookups.<provider> = false to ask that one nothing.
 #   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
 #             ({path}), \"changed\" once a run wrote or removed any.
-#   Settings: [library], [lyrics], [audio], [loudness], [cover],
-#             [ytdlp], [torrent], [tools], [history] and [sites.*] lay
-#             out and name the library, set encoding, loudness, how
+#   Settings: [library], [tags], [lyrics], [audio], [loudness],
+#             [cover], [ytdlp], [torrent], [tools], [history] and
+#             [sites.*] lay out and name the library, spell quotes and
+#             hyphens in tags, set encoding, loudness, how
 #             [audio.pick] and [cover.pick] rank sources, fetching and
 #             the programs run, size `undo` and describe the sites
 #             fetched from; sizes, bitrates, times
@@ -1865,19 +1866,20 @@ fn clean_template(doc: &mut DocumentMut) -> bool {
     let position = after.map(|p| p + 1);
     let root = doc.as_table_mut();
     let mut changed = false;
-    if !root.contains_key("tags") {
-        let mut t = Table::new();
-        t.set_implicit(true);
-        t.set_position(position);
-        root.insert("tags", Item::Table(t));
-        changed = true;
+    // A `[tags]` that only held its tiers until `fill` gave it a setting
+    // goes just above them.
+    if let Some(tags) = root.get_mut("tags").and_then(Item::as_table_mut)
+        && tags.position().is_none()
+    {
+        tags.set_position(position);
     }
-    // Of tables placed alike, the one first in key order prints first, so
-    // `tags`, made new or moved from `[clean]`, goes up beside the settings.
+    // Of tables placed alike, the one first in key order prints first, and
+    // one placed nowhere takes the place before it; so `tags` goes after the
+    // settings, and the songs after its tiers.
     let rank = |k: &str| match k {
         "version" | "edition" => 0,
-        k if crate::settings::WRITTEN.contains(&k) => 1,
         "tags" => 2,
+        k if crate::settings::WRITTEN.contains(&k) => 1,
         _ => 3,
     };
     root.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
