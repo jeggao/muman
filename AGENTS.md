@@ -154,7 +154,12 @@ CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke,
 yt-dlp and torrent tests on Linux, macOS and Windows, plus rustfmt,
 rustdoc, the minimum Rust version, `cargo xtask comments` (with `--diff-base` on pull
 requests), `cargo xtask commits`, `cargo xtask docs --check` and
-cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
+cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names, and
+`nix flake check` on Linux and macOS. A pull request that changes only
+Markdown and `docs/` builds and tests nothing, and one runs `nix flake
+check` only when it changes the flake, `nix/`, `Cargo.toml`,
+`Cargo.lock` or `ci.yml`; every push to main runs every check, and only
+main saves the Rust caches. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
