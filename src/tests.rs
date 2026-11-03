@@ -344,6 +344,61 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
 }
 
 #[test]
+fn a_song_list_an_early_edition_wrote_syncs_and_undoes_to_its_own_values() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    let old = format!(
+        "{}\n[[song]]\nsources = [\"manual:Song.flac\"]\n",
+        include_str!("../testdata/editions/2.toml")
+    );
+    let list = s.dir.path().join("home/songs.toml");
+    s.written("home/songs.toml", &old);
+    let (ok, text) = s.run(&flacs(), &["sync", "--update-defaults"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Added"), "{text}");
+    let now = std::fs::read_to_string(&list).unwrap();
+    let doc: toml_edit::DocumentMut = now.parse().unwrap();
+    assert_eq!(
+        doc["version"].as_integer(),
+        Some(1),
+        "a list of one song of one's own is written in the format every muman reads"
+    );
+    assert_eq!(
+        doc["edition"].as_integer(),
+        Some(crate::migrate::EDITION),
+        "{now}"
+    );
+    assert_eq!(
+        Manifest::load(&s.dir.path().join("home"))
+            .unwrap()
+            .songs
+            .len(),
+        1
+    );
+
+    let (ok, again) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{again}");
+    assert!(!again.contains("Renamed in the song list"), "{again}");
+    for verb in ["Added", "Updated", "Written again", "Moved", "Removed"] {
+        assert!(!again.contains(verb), "a second sync changed: {again}");
+    }
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), now);
+
+    // The list goes back to edition 2's values; the sync after the undo
+    // gives its settings their new names, as every write of the list does,
+    // and keeps the values, which only --update-defaults raises.
+    let (ok, undone) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{undone}");
+    let back: toml_edit::DocumentMut = std::fs::read_to_string(&list).unwrap().parse().unwrap();
+    assert_eq!(back["edition"].as_integer(), Some(2), "{undone}");
+    assert_eq!(
+        back["audio"]["codecs"].to_string().trim(),
+        r#"["opus", "flac"]"#
+    );
+    assert!(back.get("quality").is_none(), "renamed: {back}");
+}
+
+#[test]
 fn lyrics_changed_by_hand_are_neither_written_over_nor_removed() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");
