@@ -186,22 +186,7 @@ pub const KNOWN: &[(&str, &str)] = &[
 pub const TEST_KNOWN: &[(&str, &str)] = &[("music", "settings"), ("template", "settings")];
 
 /// The upward references only doc links make.
-pub const DOC_KNOWN: &[(&str, &str)] = &[
-    ("analysis", "reconcile"),
-    ("analysis", "render"),
-    ("analysis", "resolve"),
-    ("aria2", "state"),
-    ("chapters", "resolve"),
-    ("given", "aria2"),
-    ("hooks", "lib"),
-    ("musicbrainz", "album"),
-    ("settings", "export"),
-    ("settings", "limit"),
-    ("settings", "resolve"),
-    ("source", "reconcile"),
-    ("state", "trust"),
-    ("tags", "render"),
-];
+pub const DOC_KNOWN: &[(&str, &str)] = &[];
 
 /// Files that are tests as a whole, not a module's code.
 const TEST_FILES: [&str; 2] = ["tests.rs", "testing.rs"];

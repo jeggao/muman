@@ -23,7 +23,7 @@
 //! for the recording and for its release; the recording's comment, which
 //! names a mix; and the other releases of its release's group that hold
 //! it, the album's other editions, so the songs of one album can be put
-//! on one of them ([`crate::album`]). An edition keeps what a search
+//! on one of them (`album`). An edition keeps what a search
 //! answers of it and the group's first release, not what only a lookup
 //! of the release answers: that is one request a release, and an album
 //! has hundreds.

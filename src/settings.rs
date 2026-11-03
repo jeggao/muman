@@ -98,7 +98,7 @@ pub struct Settings {
     pub history: History,
     pub sites: crate::sites::Sites,
     /// The cleaning rules switched over the song list's for an export
-    /// alone ([`crate::export`]); none, the song list's own.
+    /// alone (`export`); none, the song list's own.
     #[serde(skip)]
     pub clean: Option<crate::clean::Settings>,
 }
@@ -136,7 +136,7 @@ pub struct Library {
     /// for players that rescan only when it is newer than their last scan.
     pub touch_root: bool,
     /// The most the files muman writes may take; songs are encoded at
-    /// lower bitrates to fit. See [`crate::limit`].
+    /// lower bitrates to fit. See `limit`.
     pub max_size: Option<Size>,
     /// Each file counts as taking a whole number of these, the
     /// filesystem's allocation unit.
@@ -211,7 +211,7 @@ pub enum Restrict {
 
 /// Where a plan's lyrics are written, as `[library] lyrics` said before
 /// `[[lyrics.out]]` did, and as a plan of its outputs still says it
-/// ([`crate::resolve::LyricsRef`]).
+/// (`resolve::LyricsRef`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LyricsPlacement {
@@ -593,7 +593,7 @@ pub enum GainScope {
 /// times its weight, summed, and the lowest wins. A measure switched off,
 /// or weighing 0, counts for nothing; one that could not be taken ranks a
 /// source after every one it was taken on. Audio scored alike is told
-/// apart as [`crate::resolve`] says; the last ties go to the source
+/// apart as `resolve` says; the last ties go to the source
 /// listed first.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1239,7 +1239,7 @@ pub struct Tags {
     pub typography: crate::clean::Typography,
 }
 
-/// Which lyrics a song takes, by their language: see [`crate::resolve`].
+/// Which lyrics a song takes, by their language: see `resolve`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Lyrics {

@@ -3,7 +3,7 @@
 //! from chapter to chapter within it.
 //!
 //! ffprobe reads them from any container ([`crate::probe`]); a song's
-//! [`crate::resolve::Plan`] holds its audio's, and each container is
+//! `resolve::Plan` holds its audio's, and each container is
 //! given them in its own form:
 //!
 //! | Container | Chapters |

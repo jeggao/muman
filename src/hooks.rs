@@ -28,7 +28,7 @@
 //! until the hook ends, so a muman the hook runs there would wait on
 //! them forever. Every hook is given [`HOOK_HOME`], and a run that finds
 //! it refuses to lock that home, or the `MUMAN_LIBRARY` it inherits
-//! under another home ([`crate::Hooked`]).
+//! under another home (`Hooked`).
 
 use std::ffi::OsString;
 use std::io::Write;
