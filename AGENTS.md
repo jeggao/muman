@@ -118,7 +118,8 @@ src/
   */tests.rs        a module's tests, when they outgrow it
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
-testdata/           tiny audio and picture fixtures
+testdata/           tiny audio and picture fixtures; editions/, the song list
+                    each earlier edition wrote for a new home
 assets/yt-dlp/      the plugins plugins.rs embeds
 xtask/              cargo xtask comments | docs
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
@@ -233,7 +234,7 @@ that package manager is skipped.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` and the `new.toml` it replaces as `testdata/editions/<N>.toml` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
 | How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |

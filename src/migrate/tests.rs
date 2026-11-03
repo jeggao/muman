@@ -547,3 +547,60 @@ fn every_changed_default_is_found_stale_at_its_old_value() {
         }
     }
 }
+
+/// The song list each earlier edition wrote for a new home: its
+/// `new.toml` as it last stood, comments and blank lines taken out.
+const WRITTEN_BEFORE: [&str; 7] = [
+    include_str!("../../testdata/editions/1.toml"),
+    include_str!("../../testdata/editions/2.toml"),
+    include_str!("../../testdata/editions/3.toml"),
+    include_str!("../../testdata/editions/4.toml"),
+    include_str!("../../testdata/editions/5.toml"),
+    include_str!("../../testdata/editions/6.toml"),
+    include_str!("../../testdata/editions/7.toml"),
+];
+
+/// The first edition's song list as a muman before editions wrote it.
+fn unstamped() -> String {
+    WRITTEN_BEFORE[0].replace(&format!("edition = {FIRST}\n"), "")
+}
+
+/// `d` written as `sync --update-defaults` writes it: renamed, its old
+/// defaults moved, and what it lacks filled in.
+fn synced(d: &mut DocumentMut) {
+    rename_all(d, &EDITIONS).unwrap();
+    update(d, &EDITIONS);
+    crate::settings::fill(d, &EDITIONS);
+}
+
+#[test]
+fn every_earlier_edition_has_the_song_list_it_wrote() {
+    let editions: Vec<i64> = WRITTEN_BEFORE.iter().map(|t| edition_of(&doc(t))).collect();
+    assert_eq!(editions, (FIRST..EDITION).collect::<Vec<_>>());
+    let unstamped = doc(&unstamped());
+    assert!(unstamped.get("edition").is_none(), "{unstamped}");
+    assert_eq!(edition_of(&unstamped), FIRST);
+}
+
+#[test]
+fn the_song_list_of_every_edition_reads_as_the_current_one() {
+    let written = WRITTEN_BEFORE
+        .iter()
+        .map(|t| (edition_of(&doc(t)).to_string(), (*t).to_string()));
+    for (was, text) in written.chain([("unstamped".to_string(), unstamped())]) {
+        let mut d = doc(&text);
+        synced(&mut d);
+        assert_eq!(edition_of(&d), EDITION, "edition {was}: {d}");
+        assert_eq!(stale(&d, &EDITIONS), [], "edition {was}");
+        assert_eq!(left_behind(&d), None, "edition {was}");
+        assert_eq!(read(&d).unwrap(), Settings::default(), "edition {was}");
+        assert_eq!(
+            crate::provider::read(&d).unwrap(),
+            crate::provider::Config::default(),
+            "edition {was}"
+        );
+        let once = d.to_string();
+        synced(&mut d);
+        assert_eq!(d.to_string(), once, "edition {was}: twice changes nothing");
+    }
+}

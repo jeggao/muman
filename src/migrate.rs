@@ -50,9 +50,13 @@
 //! To change a setting's name, unit or default: add an [`Edition`] to
 //! [`HISTORY`], numbered one above the last, with a step for each change,
 //! and raise [`EDITION`] to it; write the new name or default in
-//! `new.toml`. The tests check that the editions count up from 2, that
-//! every renamed setting's new name is in `new.toml` and no old name is,
-//! and that a file holding every old name reads as its renamed self.
+//! `new.toml`, and keep the `new.toml` it replaces, its comments and blank
+//! lines taken out, as `testdata/editions/<N>.toml`, `N` the edition it
+//! wrote. The tests check that the editions count up from 2, that every
+//! renamed setting's new name is in `new.toml` and no old name is, that a
+//! file holding every old name reads as its renamed self, and that a song
+//! list of every edition, synced with `--update-defaults`, reads as the
+//! current one: its settings the defaults, nothing stale or left behind.
 
 use std::fmt;
 

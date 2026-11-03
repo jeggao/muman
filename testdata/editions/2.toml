@@ -1,0 +1,100 @@
+version = 1
+edition = 2
+[library]
+template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
+restrict = "windows"
+replace = {}
+max_name_bytes = 200
+max_folder_bytes = 120
+unknown_artist = "Unknown Artist"
+unknown_album = "Unknown Album"
+untitled = "Untitled"
+lyrics = "sidecar"
+touch_root = false
+block_size = "4 KiB"
+[audio]
+codecs = ["opus", "flac"]
+lossy = "opus"
+lossless = "flac"
+opus_bitrate = "160 kb/s"
+opus_surround_bitrate = "256 kb/s"
+vorbis_bitrate = "192 kb/s"
+aac_bitrate = "256 kb/s"
+mp3_bitrate = "320 kb/s"
+layouts = ["any"]
+downmix = ["stereo"]
+[loudness]
+mode = "tags"
+target = "-18 LUFS"
+true_peak = true
+scope = "album"
+ceiling = "-1 dB"
+[quality.purity]
+enabled = true
+weight = 10000
+step = "2 s"
+[quality.bandwidth]
+enabled = true
+weight = 10
+step = "500 Hz"
+[quality.stereo]
+enabled = true
+weight = 5
+incoherence = "1 %"
+[quality.clipping]
+enabled = true
+weight = 1
+cutoffs = ["0.1 %", "1 %"]
+[quality.square]
+enabled = true
+weight = 10000
+tolerance = 0.03
+[quality.resolution]
+enabled = true
+weight = 20
+step = "10 %"
+[quality.blockiness]
+enabled = true
+weight = 1
+step = 0.1
+[ytdlp]
+format = "bv*+ba/b"
+sub_langs = "all,-live_chat"
+concurrent_fragments = 4
+plugins = true
+args = []
+keep_partial = "14 days"
+[history]
+runs = 3
+max_size = "2 GiB"
+[sites."youtube.com"]
+extractors = { youtube = "", youtubetab = "playlist/" }
+kinds = [
+    { prefix = "", id = "^[A-Za-z0-9_-]{11}$", fetch = "https://www.youtube.com/watch?v={id}" },
+    { prefix = "playlist/", id = "^[A-Za-z0-9_-]+$", fetch = "https://www.youtube.com/playlist?list={id}" },
+]
+[sites."archive.org"]
+extractors = { archiveorg = "" }
+kinds = [{ prefix = "", fetch = "https://archive.org/details/{id}" }]
+[sites."soundcloud.com"]
+extractors = { soundcloud = "" }
+[sites."bandcamp.com"]
+extractors = { bandcamp = "" }
+[sites."vimeo.com"]
+extractors = { vimeo = "" }
+[sites."dailymotion.com"]
+extractors = { dailymotion = "" }
+[sites."mixcloud.com"]
+extractors = { mixcloud = "" }
+[sites."audiomack.com"]
+extractors = { audiomack = "" }
+[sites."nicovideo.jp"]
+extractors = { niconico = "" }
+[sites."bilibili.com"]
+extractors = { bilibili = "" }
+[sites."x.com"]
+extractors = { twitter = "" }
+[sites."tiktok.com"]
+extractors = { tiktok = "" }
+[defaults]
+lyrics = ["en"]
