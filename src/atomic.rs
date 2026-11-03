@@ -20,6 +20,13 @@
 //! parent's permissions, which for the default home and the temporary
 //! folder are the user's own profile's.
 //!
+//! A write stopped before its rename, by a kill or a Ctrl-C, leaves
+//! its part, `.<name>.<six characters>.part`, beside the file.
+//! [`Lock::folder`] sweeps the settled ones from its folder once it holds
+//! it, and a run sweeps its history's run folders as it begins
+//! ([`clear_parts`]). A part beside a file a link leads to outside the
+//! home stays.
+//!
 //! On Windows a file open in a player, the search indexer or a virus
 //! scanner cannot be replaced or deleted for a moment: the call fails
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
@@ -133,10 +140,15 @@ fn write_as(dir: &Path, name: &Name, bytes: &[u8], private: bool) -> Result<()> 
             part.as_file().set_permissions(meta.permissions())?;
         }
         part.as_file().sync_all()?;
-        let path = part.into_temp_path();
+        // Kept, so a test's kill leaves it as a real kill does, for
+        // clear_parts.
+        let path = part.into_temp_path().keep().map_err(|e| e.error)?;
         #[cfg(test)]
         crate::testing::change_point(&file);
-        retry(|| std::fs::rename(&path, &file))?;
+        if let Err(e) = retry(|| std::fs::rename(&path, &file)) {
+            drop(tempfile::TempPath::try_from_path(path));
+            return Err(e);
+        }
         // The rename itself is durable only once its folder is synced;
         // Windows cannot open a folder for that and journals renames.
         #[cfg(unix)]
@@ -278,7 +290,9 @@ impl Lock {
     /// Say so on stderr when another run holds it, then wait.
     pub fn folder(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        Self::at(&dir.join(LOCK_FILE), dir)
+        let lock = Self::at(&dir.join(LOCK_FILE), dir)?;
+        clear_parts(dir);
+        Ok(lock)
     }
 
     /// The lock a command that changes the home holds from first to last,
@@ -414,6 +428,31 @@ impl Scratch {
     }
 }
 
+/// Remove the files [`write()`] left in `dir` when stopped before it
+/// renamed them into place, as by a kill or a Ctrl-C: `.<name>.<six
+/// characters>.part`, settled as a scratch folder is, so one being
+/// written now stays.
+pub fn clear_parts(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let part = name
+            .to_str()
+            .and_then(|n| n.strip_prefix('.')?.strip_suffix(".part"))
+            .and_then(|n| n.rsplit_once('.'))
+            .is_some_and(|(of, random)| !of.is_empty() && random.len() == 6);
+        let settled = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > SCRATCH_SETTLED));
+        if part && settled && entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Remove the scratch folders in `parent` no run holds.
 fn clear_scratch(parent: &Path) {
     let Ok(entries) = std::fs::read_dir(parent) else {
@@ -464,6 +503,28 @@ mod tests {
         let gone = held.path().to_path_buf();
         drop(held);
         assert!(!gone.exists());
+    }
+
+    #[test]
+    fn a_part_left_behind_is_removed_and_a_fresh_one_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let earlier = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let make = |name: &str, old: bool| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "half").unwrap();
+            if old {
+                filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(earlier))
+                    .unwrap();
+            }
+            path
+        };
+        let left = make(".state.json.a1B2c3.part", true);
+        let fresh = make(".songs.toml.d4E5f6.part", false);
+        let other = make(".notes.part", true);
+        let mine = make("state.json", true);
+        drop(Lock::folder(dir.path()).unwrap());
+        assert!(!left.exists());
+        assert!(fresh.exists() && other.exists() && mine.exists());
     }
 
     #[cfg(unix)]

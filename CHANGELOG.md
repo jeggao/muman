@@ -111,6 +111,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song read in `["en", "zh"]` took its Chinese subtitles over its
   English ones. The original in a language `read` names counts as
   readable as a translation.
+- **A run stopped by Ctrl-C leaves no part files in the home**: the
+  `.state.json`, `.songs.toml` and run record parts a stopped write
+  left are removed by the next run.
 - **A song took the language an uploader set for their channel**: a
   song titled in kana, or on a release in Japanese script, was tagged
   Korean or Chinese from YouTube's audio language. A language read off
