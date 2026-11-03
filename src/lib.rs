@@ -5,6 +5,7 @@
 pub mod acoustid;
 pub mod acquire;
 pub mod add;
+pub mod album;
 pub mod align;
 pub mod analysis;
 pub mod aria2;

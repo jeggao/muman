@@ -284,6 +284,7 @@ impl<'a> Resolver<'a> {
             audio: &settings.audio,
             cover: &settings.cover,
             source_comments: settings.library.source_comments,
+            pick: None,
         }
     }
 
@@ -291,6 +292,50 @@ impl<'a> Resolver<'a> {
     pub(crate) fn resolve(&self, song: &Song) -> Result<Resolved> {
         resolve::resolve(&self.input(song, None))
     }
+}
+
+/// Resolve again each song of an album its songs disagree on, first on the
+/// edition most of them share, then with what they agree on
+/// ([`crate::album`]).
+fn agree_on_albums(
+    planned: &mut Planned,
+    resolver: &Resolver<'_>,
+    manifest: &Manifest,
+    state: &State,
+    on_disk: Option<&BTreeSet<SourceKey>>,
+) {
+    let mut picks: BTreeMap<usize, crate::album::Pick> =
+        crate::album::editions(planned, &manifest.songs, &state.facts)
+            .into_iter()
+            .map(|(n, edition)| {
+                let pick = crate::album::Pick {
+                    edition: Some(edition),
+                    agreed: Vec::new(),
+                };
+                (n, pick)
+            })
+            .collect();
+    let again = |planned: &mut Planned,
+                 picks: &BTreeMap<usize, crate::album::Pick>,
+                 of: &BTreeSet<usize>| {
+        for (n, r) in planned.iter_mut().filter(|(n, _)| of.contains(n)) {
+            let input = Input {
+                pick: picks.get(n),
+                ..resolver.input(&manifest.songs[*n], on_disk)
+            };
+            if let Ok(again) = resolve::resolve(&input) {
+                *r = again;
+            }
+        }
+    };
+    let moved: BTreeSet<usize> = picks.keys().copied().collect();
+    again(planned, &picks, &moved);
+    let agreed = crate::album::agree(planned);
+    let settled: BTreeSet<usize> = agreed.keys().copied().collect();
+    for (n, values) in agreed {
+        picks.entry(n).or_default().agreed = values;
+    }
+    again(planned, &picks, &settled);
 }
 
 /// Resolve every song under `settings`, each with a path of its own,
@@ -320,6 +365,7 @@ pub(crate) fn resolve_songs(
             Err(e) => resolution.unresolved.push((n, e)),
         }
     }
+    agree_on_albums(&mut resolution.planned, &resolver, manifest, state, on_disk);
     if let Some(max) = settings.library.max_path {
         resolution.over_max_path = (resolution.planned.iter())
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)

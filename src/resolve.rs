@@ -19,9 +19,9 @@
 //!   audio, covering most of it.
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone; the
-//!   release fields come together from one source so an album never
-//!   splits. Each field's [`tags::Scope`] says which it is. A
-//!   recording's ISRC and MusicBrainz IDs come only from a source that
+//!   release fields come together from one source so a song's release
+//!   never mixes with another's. Each field's [`tags::Scope`] says which
+//!   it is. A recording's ISRC and MusicBrainz IDs come only from a source that
 //!   titles it as the song is titled, so a record of another recording,
 //!   its names outvoted, lends the song none; where the release's source
 //!   is one and names its recording, its recording IDs are the song's,
@@ -107,8 +107,10 @@
 //!
 //! The release fields, album, album artist, track, disc, date, totals,
 //! country and release IDs, come from the one source whose album ranks
-//! best, so an album's tracks never split across folders and a release's
-//! MusicBrainz IDs never mix with another's. Of albums that rank alike,
+//! best, so a release's MusicBrainz IDs never mix with another's; the
+//! songs of one album are then made to agree, on one edition, one
+//! spelling and one release's fields ([`crate::album`]), each resolved
+//! again with what it takes from them ([`Input::pick`]). Of albums that rank alike,
 //! the source holding the most release fields wins before the order of
 //! `sources`, as a release's own record over an upload that names its
 //! album alone. With no album, the song is a single named for its final
@@ -849,6 +851,9 @@ pub struct Input<'a> {
     pub cover: &'a crate::settings::Cover,
     /// Whether a comment its sources' tags carry is written.
     pub source_comments: bool,
+    /// What the song takes from the other songs of its album
+    /// ([`crate::album`]); none when resolved alone.
+    pub pick: Option<&'a crate::album::Pick>,
 }
 
 impl Input<'_> {
@@ -944,6 +949,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         album_artist: get(Field::AlbumArtist),
         genre: get(Field::Genre),
         date: get(Field::Date),
+        original_date: get(Field::OriginalDate),
         track: get(Field::Track),
         disc: get(Field::Disc),
         composer: get(Field::Composer),
@@ -1600,7 +1606,16 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             offers: &facts.tags,
             typography: input.typography,
         };
-        for (field, raw) in &facts.tags {
+        let edition = input
+            .pick
+            .and_then(|p| p.edition.as_ref())
+            .filter(|(k, _)| k == key)
+            .and_then(|(_, at)| facts.editions.get(*at));
+        let own = facts
+            .tags
+            .iter()
+            .filter(|(field, _)| edition.is_none() || field.scope() != Scope::Release);
+        for (field, raw) in own.chain(edition.into_iter().flatten()) {
             if *field == Field::Comment && !input.source_comments {
                 continue;
             }
@@ -1651,6 +1666,20 @@ fn best_album<'c, 'a>(
         std::cmp::Reverse(holds(key))
     })
     .filter(|c| c.offer.structured)
+}
+
+/// The album of the source the release fields come whole from: the one
+/// giving the edition its album's songs share, else the best album.
+fn release_of<'c, 'a>(
+    input: &Input<'_>,
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+) -> Option<&'c Candidate<'a>> {
+    match input.pick.and_then(|p| p.edition.as_ref()) {
+        Some((key, _)) => candidates
+            .get(&Field::Album)
+            .and_then(|all| all.iter().find(|c| c.key == key)),
+        None => best_album(candidates),
+    }
 }
 
 /// [`best_offer`], with offers that rank alike ranked by `then`, least
@@ -1786,6 +1815,14 @@ impl Slot {
             cleaned: c.cleaned.clone(),
         }
     }
+
+    fn agreed(a: &crate::album::Agreed) -> Self {
+        Self {
+            values: a.values.clone(),
+            from: a.from.clone(),
+            cleaned: Vec::new(),
+        }
+    }
 }
 
 /// What the tags of a song, from its sources and its song list merged,
@@ -1889,8 +1926,7 @@ fn resolve_tags(
             fields.insert(field, Slot::of(c));
         }
     }
-    // The release fields come whole from the source with the best album.
-    let release = best_album(&candidates);
+    let release = release_of(input, &candidates);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
             if let Some(c) = best_offer(&candidates, field, &|k| k == album.key) {
@@ -1937,6 +1973,9 @@ fn resolve_tags(
         fields.insert(Field::Date, Slot::of(c));
     }
     let mut artists = joined_artists(&mut fields);
+    for agreed in input.pick.iter().flat_map(|p| &p.agreed) {
+        fields.insert(agreed.field, Slot::agreed(agreed));
+    }
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()

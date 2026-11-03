@@ -110,9 +110,19 @@ Each field describes either the recording or the release.
   that titles the recording as the song is titled.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
-  album ranks best. So an album never splits across folders, and one
-  release's IDs never mix with another's. Of albums that rank alike,
-  the source with more of the release's fields wins.
+  album ranks best. So one release's IDs never mix with another's. Of
+  albums that rank alike, the source with more of the release's fields
+  wins.
+
+Then the songs of one album agree: a MusicBrainz release group, else
+an album artist and album alike but for case and punctuation, in one
+year. Songs on several releases of it take the one most can be on, as
+releases rank below; a mono mix on a mono edition keeps its own. An
+album spelled two ways, as `On The Border` and `On the Border`, is
+spelled as most of its songs spell it, and songs on one release share
+its date, label and IDs. A tag set by hand never changes nor counts.
+`original_year` puts every edition in one folder
+([configuration](configuration.md#the-path-template)).
 
 A song on no album is a single, named for its title. ReplayGain's gains
 and peaks are measured from the audio itself ([loudness](audio.md#loudness)).

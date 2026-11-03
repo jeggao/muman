@@ -20,8 +20,13 @@
 //!
 //! A record keeps the artists credited together joined as the credit
 //! joins them, by its join phrases, as `Marlo Venn & The Glass Orchards`,
-//! for the recording and for its release, and the recording's comment,
-//! which names a mix.
+//! for the recording and for its release; the recording's comment, which
+//! names a mix; and the other releases of its release's group that hold
+//! it, the album's other editions, so the songs of one album can be put
+//! on one of them ([`crate::album`]). An edition keeps what a search
+//! answers of it and the group's first release, not what only a lookup
+//! of the release answers: that is one request a release, and an album
+//! has hundreds.
 //!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
@@ -163,6 +168,11 @@ pub struct Record {
     pub length_ms: Option<u64>,
     #[serde(default)]
     pub release: Option<Release>,
+    /// The other releases of `release`'s group that hold the recording:
+    /// the album's other editions, without what only a lookup of a release
+    /// answers but the group's first release.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub editions: Vec<Release>,
     /// The date of the recording's first release, `YYYY-MM-DD` or less.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_date: Option<String>,
@@ -587,7 +597,7 @@ pub fn other_mix(comment: &str, mono: Option<bool>) -> bool {
 
 /// An earlier year first, then the fuller date, as `1975-11-21` before
 /// `1975`, then the earlier; one stated before none.
-fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
+pub(crate) fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
     let d = date.unwrap_or_default();
     (
         date.is_none(),
@@ -612,6 +622,20 @@ impl Recording {
             && same(&self.title, &q.title)
             && (same(&names(&self.credit).join(" "), artist)
                 || same(&credited(&self.credit), artist))
+    }
+
+    /// The other releases of `best`'s group, each once.
+    fn editions(&self, best: &Found) -> Vec<Release> {
+        let group = |f: &Found| f.group.as_ref().and_then(|g| g.id.clone());
+        let mut seen = vec![best.id.as_str()];
+        let mut editions = Vec::new();
+        for f in &self.releases {
+            if group(f).is_some() && group(f) == group(best) && !seen.contains(&f.id.as_str()) {
+                seen.push(&f.id);
+                editions.push(f.release());
+            }
+        }
+        editions
     }
 
     /// Its best release for a song on `album`.
@@ -660,6 +684,7 @@ impl Recording {
             isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
             length_ms: self.length,
             release: best.map(Found::release),
+            editions: best.map(|b| self.editions(b)).unwrap_or_default(),
             original_date: self
                 .first_release_date
                 .as_ref()
@@ -754,6 +779,10 @@ impl Client<'_> {
             looked
         };
         release.details = details.unwrap_or_default();
+        let first = release.details.original_date.clone();
+        for edition in &mut record.editions {
+            edition.details.original_date.clone_from(&first);
+        }
         Ok(())
     }
 

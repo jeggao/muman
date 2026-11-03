@@ -229,6 +229,7 @@ pub(super) fn retag<R: Runner, W: Write>(
             Ok(read) => {
                 if let Some(f) = state.facts.get_mut(&located.key) {
                     f.tags = read.tags;
+                    f.editions = read.editions;
                     f.release = read.release;
                     f.chapters = read.chapters;
                     f.tags_method = tags::METHOD.to_string();

@@ -28,6 +28,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`sync --until-done`** makes every lookup due in one run, past
   `per_run`, over as many rounds as finds start, asking again at once
   what failed and fetching again what failed to arrive.
+- **The songs of one album agree.** Where an album's songs are on
+  several MusicBrainz releases of it, they take the one most of them can
+  be on; an album or album artist spelled two ways, as `On The Border`
+  and `On the Border`, is spelled as most of its songs spell it; and the
+  songs of one release share its date, label and IDs, so an album split
+  into folders by edition, by `’` and `'`, or by one file's date comes
+  together. A mono mix on a mono edition keeps that edition.
+- **`original_year` in the path template**, the year the album was
+  first released, puts every edition of an album in one folder.
 - **`status <query>` says why each lookup is made, waits or is not**,
   song by song, and `info` counts lookups waiting, skipped or unable to
   ask.

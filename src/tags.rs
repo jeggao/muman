@@ -1346,7 +1346,6 @@ pub const RECORD_FIELDS: [Field; 27] = [
 #[must_use]
 pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
-    let number = |n: Option<u32>| n.map(|n| n.to_string()).into_iter().collect();
     let mut o = Offers::new();
     offer(&mut o, Field::Title, vec![record.title.clone()], true);
     if record.credit.is_empty() {
@@ -1370,63 +1369,7 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     );
     offer(&mut o, Field::Language, record.languages.clone(), true);
     if let Some(r) = &record.release {
-        offer(&mut o, Field::Album, vec![r.title.clone()], true);
-        let artists = if r.credit.is_empty() {
-            r.artists.clone()
-        } else {
-            vec![r.credit.clone()]
-        };
-        offer(&mut o, Field::AlbumArtist, artists, true);
-        offer(&mut o, Field::Track, number(r.track), true);
-        offer(&mut o, Field::Disc, number(r.disc), true);
-        offer(&mut o, Field::Date, one(r.date.as_ref()), true);
-        offer(&mut o, Field::TrackTotal, number(r.tracks), true);
-        offer(&mut o, Field::ReleaseCountry, one(r.country.as_ref()), true);
-        offer(&mut o, Field::MusicBrainzAlbumId, vec![r.id.clone()], true);
-        offer(
-            &mut o,
-            Field::MusicBrainzReleaseGroupId,
-            one(r.group_id.as_ref()),
-            true,
-        );
-        offer(
-            &mut o,
-            Field::MusicBrainzReleaseTrackId,
-            one(r.track_id.as_ref()),
-            true,
-        );
-        offer(
-            &mut o,
-            Field::MusicBrainzAlbumArtistId,
-            r.artist_ids.clone(),
-            true,
-        );
-        // Picard writes a release's status and types in lower case.
-        let lower = |v: &String| v.to_lowercase();
-        offer(
-            &mut o,
-            Field::ReleaseStatus,
-            r.status.iter().map(lower).collect(),
-            true,
-        );
-        offer(
-            &mut o,
-            Field::ReleaseType,
-            r.types.iter().map(lower).collect(),
-            true,
-        );
-        offer(&mut o, Field::Media, one(r.media.as_ref()), true);
-        let d = &r.details;
-        offer(&mut o, Field::Label, d.labels.clone(), true);
-        offer(
-            &mut o,
-            Field::CatalogNumber,
-            d.catalog_numbers.clone(),
-            true,
-        );
-        offer(&mut o, Field::Barcode, one(d.barcode.as_ref()), true);
-        offer(&mut o, Field::Asin, one(d.asin.as_ref()), true);
-        offer(&mut o, Field::Script, one(d.script.as_ref()), true);
+        offer_release(&mut o, r);
     }
     // The release group's first release, as Picard writes it, else the
     // recording's, for a record kept before its release told it.
@@ -1441,6 +1384,85 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
         true,
     );
     o
+}
+
+/// What each of a record's editions offers in place of its release's
+/// fields, as [`from_record`] offers them.
+#[must_use]
+pub fn editions(record: &crate::musicbrainz::Record) -> Vec<Offers> {
+    record
+        .editions
+        .iter()
+        .map(|r| {
+            let mut o = Offers::new();
+            offer_release(&mut o, r);
+            offer(
+                &mut o,
+                Field::OriginalDate,
+                r.details.original_date.iter().cloned().collect(),
+                true,
+            );
+            o
+        })
+        .collect()
+}
+
+/// The fields of a MusicBrainz release, offered into `o`.
+fn offer_release(o: &mut Offers, r: &crate::musicbrainz::Release) {
+    let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
+    let number = |n: Option<u32>| n.map(|n| n.to_string()).into_iter().collect();
+    offer(o, Field::Album, vec![r.title.clone()], true);
+    let artists = if r.credit.is_empty() {
+        r.artists.clone()
+    } else {
+        vec![r.credit.clone()]
+    };
+    offer(o, Field::AlbumArtist, artists, true);
+    offer(o, Field::Track, number(r.track), true);
+    offer(o, Field::Disc, number(r.disc), true);
+    offer(o, Field::Date, one(r.date.as_ref()), true);
+    offer(o, Field::TrackTotal, number(r.tracks), true);
+    offer(o, Field::ReleaseCountry, one(r.country.as_ref()), true);
+    offer(o, Field::MusicBrainzAlbumId, vec![r.id.clone()], true);
+    offer(
+        o,
+        Field::MusicBrainzReleaseGroupId,
+        one(r.group_id.as_ref()),
+        true,
+    );
+    offer(
+        o,
+        Field::MusicBrainzReleaseTrackId,
+        one(r.track_id.as_ref()),
+        true,
+    );
+    offer(
+        o,
+        Field::MusicBrainzAlbumArtistId,
+        r.artist_ids.clone(),
+        true,
+    );
+    // Picard writes a release's status and types in lower case.
+    let lower = |v: &String| v.to_lowercase();
+    offer(
+        o,
+        Field::ReleaseStatus,
+        r.status.iter().map(lower).collect(),
+        true,
+    );
+    offer(
+        o,
+        Field::ReleaseType,
+        r.types.iter().map(lower).collect(),
+        true,
+    );
+    offer(o, Field::Media, one(r.media.as_ref()), true);
+    let d = &r.details;
+    offer(o, Field::Label, d.labels.clone(), true);
+    offer(o, Field::CatalogNumber, d.catalog_numbers.clone(), true);
+    offer(o, Field::Barcode, one(d.barcode.as_ref()), true);
+    offer(o, Field::Asin, one(d.asin.as_ref()), true);
+    offer(o, Field::Script, one(d.script.as_ref()), true);
 }
 
 /// What a file's own tags offer, every one structured: someone set it.
@@ -2219,6 +2241,7 @@ mod tests {
             isrcs: Vec::new(),
             length_ms: None,
             release: None,
+            editions: Vec::new(),
             original_date: None,
             languages: Vec::new(),
         };
@@ -2263,6 +2286,7 @@ mod tests {
                     original_date: None,
                 },
             }),
+            editions: Vec::new(),
             original_date: Some("1999-02-01".into()),
             languages: vec!["jpn".into(), "zxx".into()],
         };
@@ -2337,6 +2361,7 @@ mod tests {
                 media: None,
                 details: crate::musicbrainz::Details::default(),
             }),
+            editions: Vec::new(),
             original_date: None,
             languages: Vec::new(),
         });
