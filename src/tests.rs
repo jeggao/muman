@@ -5203,6 +5203,117 @@ fn a_library_in_the_home_s_sources_is_refused() {
 }
 
 #[test]
+fn undo_and_purge_refuse_a_library_in_the_home_s_sources() {
+    let s = Setup::new();
+    for args in [["undo", "-y"], ["purge", "-y"]] {
+        let mut job = s.job(&args);
+        job.dirs.library = s.dir.path().join("home/sources/manual/lib");
+        let e = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("in the home's sources"),
+            "{args:?}: {e:#}"
+        );
+    }
+}
+
+#[test]
+fn each_command_is_classified_as_it_runs() {
+    const SYNC: &[&str] = &[
+        "Fetching",
+        "Measuring",
+        "Looking up",
+        "Comparing",
+        "Writing",
+    ];
+    const CHANGE: &[&str] = &["Measuring", "Comparing", "Writing"];
+    const RESTORE: &[&str] = &["Fetching", "Measuring", "Comparing", "Writing"];
+    const MERGE: &[&str] = &["Comparing prints", "Comparing", "Measuring", "Writing"];
+    const ZIP: &[&str] = &["Encoding", "Writing the zip"];
+    let is = |apart, edits_list, gated, ffmpeg, steps| Traits {
+        apart,
+        edits_list,
+        gated,
+        ffmpeg,
+        steps,
+    };
+    let table: [(&[&str], Traits); 21] = [
+        (&["add", "manual:a.flac"], is(true, true, true, true, SYNC)),
+        (&["sync"], is(true, true, true, true, SYNC)),
+        (&["list"], is(false, false, false, false, &[])),
+        (&["remove", "a"], is(true, true, true, true, CHANGE)),
+        (&["restore", "a"], is(true, true, true, true, RESTORE)),
+        (&["set", "a", "title=b"], is(true, true, true, true, CHANGE)),
+        (&["edit"], is(true, true, true, true, CHANGE)),
+        (&["undo"], is(true, false, false, true, CHANGE)),
+        (&["purge"], is(true, false, false, false, &[])),
+        (&["check"], is(false, false, false, false, &["Decoding"])),
+        (
+            &["check", "--decode"],
+            is(false, false, true, true, &["Decoding"]),
+        ),
+        (
+            &["check", "--upstream"],
+            is(false, false, true, false, &["Decoding"]),
+        ),
+        (
+            &["status"],
+            is(false, false, true, true, &["Measuring", "Comparing"]),
+        ),
+        (&["export"], is(false, false, false, false, ZIP)),
+        (
+            &["export", "--set", "audio.codecs=[\"opus\"]"],
+            is(false, false, true, true, ZIP),
+        ),
+        (
+            &["export", "--codec", "opus", "--folder"],
+            is(
+                false,
+                false,
+                true,
+                true,
+                &["Encoding", "Writing the folder"],
+            ),
+        ),
+        (
+            &["duplicates"],
+            is(false, false, false, false, &["Comparing prints"]),
+        ),
+        (
+            &["duplicates", "--resolve"],
+            is(true, true, true, true, MERGE),
+        ),
+        (
+            &["duplicates", "--merge", "twice"],
+            is(true, true, true, true, MERGE),
+        ),
+        (&["info"], is(false, false, true, false, &[])),
+        (
+            &["completions", "bash"],
+            is(false, false, false, false, &[]),
+        ),
+    ];
+    for (args, expected) in table {
+        assert_eq!(traits(&cli(args).command), expected, "{args:?}");
+    }
+    let named: std::collections::BTreeSet<&str> = table.iter().map(|(a, _)| a[0]).collect();
+    for sub in cli::command().get_subcommands() {
+        assert!(
+            named.contains(sub.get_name()),
+            "{} is in the table",
+            sub.get_name()
+        );
+    }
+}
+
+#[test]
 fn a_song_whose_new_path_holds_a_file_of_your_own_stays_where_it_was() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
