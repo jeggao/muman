@@ -64,6 +64,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   MusicBrainz comment names the other mix than the song's audio, as
   `original stereo album mix` for a mono file, ranks after the song's
   own.
+- **Artists credited together lost their join**: a MusicBrainz credit of
+  `Marlo Venn & The Glass Orchards` was written `Marlo Venn, The Glass
+  Orchards`, and its album filed under `Marlo Venn`. The artist and the
+  album artist are written as the credit joins them, each artist also
+  listed in `ARTISTS`.
 - **A sync stopped within its first 30 seconds of writing wrote every
   song again on the next run**, as a small library's whole sync could
   be. Each song written is now saved as written, unless saving takes

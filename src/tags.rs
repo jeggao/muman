@@ -1304,9 +1304,10 @@ pub fn from_info(info: &VideoInfo) -> Offers {
 
 /// Every field a MusicBrainz record can offer, as [`from_record`] does
 /// for one that names all it may.
-pub const RECORD_FIELDS: [Field; 26] = [
+pub const RECORD_FIELDS: [Field; 27] = [
     Field::Title,
     Field::Artist,
+    Field::Artists,
     Field::Isrc,
     Field::MusicBrainzTrackId,
     Field::MusicBrainzArtistId,
@@ -1338,14 +1339,22 @@ pub const RECORD_FIELDS: [Field; 26] = [
 /// its release's album, album
 /// artist, track, disc, date, track total, country, IDs, status, types
 /// and medium, and the labels, catalogue numbers, barcode, ASIN and
-/// script a lookup of the release answers.
+/// script a lookup of the release answers. Artists credited together are
+/// offered as the credit joins them, as `Marlo Venn & The Glass Orchards`,
+/// the artist and the album artist alike, and each also one by one as
+/// `ARTISTS`, as Picard writes them.
 #[must_use]
 pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
     let number = |n: Option<u32>| n.map(|n| n.to_string()).into_iter().collect();
     let mut o = Offers::new();
     offer(&mut o, Field::Title, vec![record.title.clone()], true);
-    offer(&mut o, Field::Artist, record.artists.clone(), true);
+    if record.credit.is_empty() {
+        offer(&mut o, Field::Artist, record.artists.clone(), true);
+    } else {
+        offer(&mut o, Field::Artist, vec![record.credit.clone()], true);
+        offer(&mut o, Field::Artists, record.artists.clone(), true);
+    }
     offer(&mut o, Field::Isrc, record.isrcs.clone(), true);
     offer(
         &mut o,
@@ -1362,7 +1371,12 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
     offer(&mut o, Field::Language, record.languages.clone(), true);
     if let Some(r) = &record.release {
         offer(&mut o, Field::Album, vec![r.title.clone()], true);
-        offer(&mut o, Field::AlbumArtist, r.artists.clone(), true);
+        let artists = if r.credit.is_empty() {
+            r.artists.clone()
+        } else {
+            vec![r.credit.clone()]
+        };
+        offer(&mut o, Field::AlbumArtist, artists, true);
         offer(&mut o, Field::Track, number(r.track), true);
         offer(&mut o, Field::Disc, number(r.disc), true);
         offer(&mut o, Field::Date, one(r.date.as_ref()), true);
@@ -2199,6 +2213,7 @@ mod tests {
             id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Esc\0ape\nTitle\u{202E}\u{1b}[2J".into(),
             artists: vec!["x".repeat(MAX_VALUE + 1), "Artist".into()],
+            credit: String::new(),
             artist_ids: Vec::new(),
             comment: String::new(),
             isrcs: Vec::new(),
@@ -2218,6 +2233,7 @@ mod tests {
             id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Song".into(),
             artists: vec!["A".into(), "B".into()],
+            credit: String::new(),
             artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],
             comment: String::new(),
             isrcs: vec!["XX0000000001".into()],
@@ -2226,6 +2242,7 @@ mod tests {
                 id: "00000000-0000-0000-0000-00000000000a".into(),
                 title: "Record".into(),
                 artists: vec!["A".into()],
+                credit: String::new(),
                 artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],
                 group_id: Some("00000000-0000-0000-0000-00000000000b".into()),
                 date: Some("2004".into()),
@@ -2251,6 +2268,7 @@ mod tests {
         };
         let o = from_record(&record);
         let mut whole = record.clone();
+        whole.credit = "A & B".into();
         if let Some(r) = whole.release.as_mut() {
             r.track_id = Some("00000000-0000-0000-0000-00000000000c".into());
             r.details.asin = Some("B000000001".into());
@@ -2288,6 +2306,52 @@ mod tests {
         assert!(!o.contains_key(&Field::MusicBrainzReleaseTrackId));
         assert!(o.values().all(|v| v.structured));
         assert_eq!(o.len(), 24);
+    }
+
+    #[test]
+    fn artists_credited_together_are_offered_as_the_credit_joins_them() {
+        let o = from_record(&crate::musicbrainz::Record {
+            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
+            title: "Song".into(),
+            artists: vec!["Marlo Venn".into(), "The Glass Orchards".into()],
+            credit: "Marlo Venn & The Glass Orchards".into(),
+            artist_ids: Vec::new(),
+            comment: String::new(),
+            isrcs: Vec::new(),
+            length_ms: None,
+            release: Some(crate::musicbrainz::Release {
+                id: "00000000-0000-0000-0000-00000000000a".into(),
+                title: "Record".into(),
+                artists: vec!["Marlo Venn".into(), "The Glass Orchards".into()],
+                credit: "Marlo Venn and The Glass Orchards".into(),
+                artist_ids: Vec::new(),
+                group_id: None,
+                date: None,
+                country: None,
+                track: None,
+                tracks: None,
+                track_id: None,
+                disc: None,
+                status: None,
+                types: Vec::new(),
+                media: None,
+                details: crate::musicbrainz::Details::default(),
+            }),
+            original_date: None,
+            languages: Vec::new(),
+        });
+        assert_eq!(
+            o[&Field::Artist].values,
+            ["Marlo Venn & The Glass Orchards"]
+        );
+        assert_eq!(
+            o[&Field::Artists].values,
+            ["Marlo Venn", "The Glass Orchards"]
+        );
+        assert_eq!(
+            o[&Field::AlbumArtist].values,
+            ["Marlo Venn and The Glass Orchards"]
+        );
     }
 
     #[test]

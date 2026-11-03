@@ -1571,8 +1571,12 @@ struct Candidate<'a> {
 /// Every source's offer for every field, cleaned against the names the
 /// song's sources and its hand-set tags credit.
 fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
-    let credited =
-        |name: &str| matches!(Field::named(name), Some(Field::Artist | Field::AlbumArtist));
+    let credited = |name: &str| {
+        matches!(
+            Field::named(name),
+            Some(Field::Artist | Field::Artists | Field::AlbumArtist)
+        )
+    };
     let hand_set = input
         .song
         .tags
@@ -1582,7 +1586,9 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         .flat_map(|(_, v)| v);
     let offered = input
         .present()
-        .flat_map(|(_, _, f)| [f.tags.get(&Field::Artist), f.tags.get(&Field::AlbumArtist)])
+        .flat_map(|(_, _, f)| {
+            [Field::Artist, Field::Artists, Field::AlbumArtist].map(|field| f.tags.get(&field))
+        })
         .flatten()
         .flat_map(|o| &o.values);
     let names = clean::names(offered.chain(hand_set).map(String::as_str));
@@ -1930,22 +1936,19 @@ fn resolve_tags(
     {
         fields.insert(Field::Date, Slot::of(c));
     }
-    let mut artists = Vec::new();
-    if let Some(artist) = fields.get_mut(&Field::Artist) {
-        artists.clone_from(&artist.values);
-        artist.values = vec![artist.values.join(", ")];
-    }
+    let mut artists = joined_artists(&mut fields);
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()
         .filter_map(|f| fields.remove(f).map(|s| (f.vorbis().to_string(), s)))
         .collect();
+    let offered = artist_of(&written);
     set_by_hand(input, &mut written);
     // Set by hand, the artists are what the song list says, a list or one.
-    if let Some((_, artist)) = written.iter().find(|(k, _)| k == Field::Artist.vorbis())
-        && artist.values != [artists.join(", ")]
+    if let Some(artist) = artist_of(&written)
+        && offered.as_ref() != Some(&artist)
     {
-        artists.clone_from(&artist.values);
+        artists = artist;
     }
     derive(&mut written, &artists);
     let why = written
@@ -1961,6 +1964,31 @@ fn resolve_tags(
         why,
         artists,
     )
+}
+
+/// The artists one by one, the artist joined as it is written: an
+/// artist offered as its credit joins them is listed by its source's
+/// `ARTISTS`.
+fn joined_artists(fields: &mut BTreeMap<Field, Slot>) -> Vec<String> {
+    let mut artists = Vec::new();
+    if let Some(artist) = fields.get_mut(&Field::Artist) {
+        artists.clone_from(&artist.values);
+        artist.values = vec![artist.values.join(", ")];
+    }
+    if let (Some(artist), Some(each)) = (fields.get(&Field::Artist), fields.get(&Field::Artists))
+        && artist.from == each.from
+    {
+        artists.clone_from(&each.values);
+    }
+    artists
+}
+
+/// The values of `written`'s artist.
+fn artist_of(written: &[(String, Slot)]) -> Option<Vec<String>> {
+    written
+        .iter()
+        .find(|(k, _)| k == Field::Artist.vorbis())
+        .map(|(_, s)| s.values.clone())
 }
 
 /// The album's tags and length, the song's place in it and the song's

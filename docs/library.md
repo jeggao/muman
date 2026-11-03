@@ -321,7 +321,9 @@ remixes and live takes. Of its releases, the best ranked wins, then
 the earliest. A song without a title, an artist or a measured length
 is not searched for by name. The record's tags are ranked with
 every other source's: a value it agrees on with another source wins
-over one alone. To look every song up once, set `until =
+over one alone. Artists credited together are written as MusicBrainz
+joins them, `Marlo Venn & The Glass Orchards`, and listed one by one in
+`ARTISTS`. To look every song up once, set `until =
 ["from:musicbrainz"]` for `acoustid` and `musicbrainz`.
 
 ### Cover Art Archive

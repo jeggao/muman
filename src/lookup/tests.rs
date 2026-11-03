@@ -609,6 +609,7 @@ fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
         id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
         title: "Lantern Weather".into(),
         artists: vec!["Paper Comets".into()],
+        credit: String::new(),
         artist_ids: Vec::new(),
         comment: String::new(),
         isrcs: Vec::new(),

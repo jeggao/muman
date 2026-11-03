@@ -133,6 +133,8 @@ struct Recording {
 struct Artist {
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    joinphrase: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,16 +168,21 @@ impl Recording {
             .title
             .as_deref()
             .and_then(|t| music::names_match(&self.title, t));
-        let credited = self
+        let names = self
             .artists
             .iter()
             .map(|a| a.name.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        let artist = q
-            .artist
-            .as_deref()
-            .and_then(|a| music::names_match(&credited, first_artist(a)));
+        let joined: String = self
+            .artists
+            .iter()
+            .map(|a| [a.name.as_str(), a.joinphrase.as_str()].concat())
+            .collect();
+        let artist = q.artist.as_deref().and_then(|a| {
+            music::names_match(&names, first_artist(a))
+                .or_else(|| music::names_match(&joined, first_artist(a)))
+        });
         (
             std::cmp::Reverse(title),
             self.timed(q.seconds),
