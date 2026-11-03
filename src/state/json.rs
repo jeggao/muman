@@ -1,8 +1,8 @@
-//! `state.json`, read and written. An earlier version's file reads as
-//! this one's: a cache entry of another shape is dropped, a file beside
-//! an output version 2 named by its place is recorded as one of this
-//! version's, and keys an extractor named are respelled by their site;
-//! saved, the state is of this version.
+//! `state.json`, as muman kept the state before `state.db`, read once to
+//! bring a home over. An earlier version's file reads as this one's: a
+//! cache entry of another shape is dropped, a file beside an output
+//! version 2 named by its place is recorded as one of this version's,
+//! and keys an extractor named are respelled by their site.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,88 +12,45 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 
 use super::{Measured, SITES, Sidecar, State, VERSION, Written};
-use crate::atomic;
+#[cfg(test)]
 use crate::dirs::STATE;
 use crate::resolve::Plan;
 use crate::source::SourceKey;
 
-impl State {
-    /// The state in `home`; an empty one when there is none yet.
-    pub fn load(home: &Path) -> Result<Self> {
-        let file = home.join(STATE);
-        let text = match std::fs::read(&file) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    version: VERSION,
-                    ..Self::default()
-                });
-            }
-            Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
-        };
-        let mut state: Self = serde_json::from_slice(&text).with_context(|| {
-            format!(
-                "{} cannot be read; move it aside to start over, which forgets which library files are muman's",
-                file.display()
-            )
-        })?;
-        if state.version > VERSION {
-            bail!(
-                "{} is format version {}, newer than this muman's {VERSION}",
-                file.display(),
-                state.version
-            );
-        }
-        if state.version < SITES {
-            let keys = state.outputs.values().flat_map(|w| &w.sources);
-            state.respelled = keys
-                .chain(state.facts.keys())
-                .filter_map(|k| Some((k.clone(), k.spelled_before()?)))
-                .collect();
-        }
-        // Read, an earlier version's outputs are this one's: saved, they
-        // are of this version, which the earlier refuses.
-        state.version = VERSION;
-        Ok(state)
+/// The state `text`, the `state.json` at `file`, holds, as any version
+/// wrote it.
+pub(super) fn read(file: &Path, text: &[u8]) -> Result<State> {
+    let mut state: State = serde_json::from_slice(text).with_context(|| {
+        format!(
+            "{} cannot be read; move it aside to start over, which forgets which library files are muman's",
+            file.display()
+        )
+    })?;
+    if state.version > VERSION {
+        bail!(
+            "{} is format version {}, newer than this muman's {VERSION}",
+            file.display(),
+            state.version
+        );
     }
+    if state.version < SITES {
+        let keys = state.outputs.values().flat_map(|w| &w.sources);
+        state.respelled = keys
+            .chain(state.facts.keys())
+            .filter_map(|k| Some((k.clone(), k.spelled_before()?)))
+            .collect();
+    }
+    state.version = VERSION;
+    Ok(state)
+}
 
-    pub fn save(&self, home: &Path) -> Result<()> {
-        let mut text = serde_json::to_vec_pretty(self).context("writing the state")?;
-        text.push(b'\n');
-        // A run that changed nothing leaves the home untouched.
-        if std::fs::read(home.join(STATE)).is_ok_and(|held| held == text) {
-            return Ok(());
-        }
-        atomic::write(home, &atomic::Name::new(STATE)?, &text)
-    }
-
-    /// Record `trusted` as [`Self::trusted`] under the folder's lock,
-    /// every other key left as the file holds it: a state an earlier
-    /// version wrote is brought up to this one by a run that reads it
-    /// whole, not here.
-    pub fn keep_trusted(home: &Path, trusted: &BTreeMap<String, String>) -> Result<()> {
-        let _lock = atomic::Lock::folder(home)?;
-        let file = home.join(STATE);
-        let mut held: serde_json::Value = match std::fs::read(&file) {
-            Ok(text) => serde_json::from_slice(&text)
-                .with_context(|| format!("{} cannot be read", file.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                serde_json::json!({ "version": VERSION })
-            }
-            Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
-        };
-        let keys = held
-            .as_object_mut()
-            .with_context(|| format!("{} holds no state", file.display()))?;
-        if trusted.is_empty() {
-            keys.remove("trusted");
-        } else {
-            keys.insert("trusted".into(), serde_json::to_value(trusted)?);
-        }
-        let mut text = serde_json::to_vec_pretty(&held).context("writing the state")?;
-        text.push(b'\n');
-        atomic::write(home, &atomic::Name::new(STATE)?, &text)
-    }
+/// Write `state` to `home`'s `state.json` as muman wrote it before the
+/// store, making a home an earlier muman left.
+#[cfg(test)]
+pub(crate) fn write(state: &State, home: &Path) -> Result<()> {
+    let mut text = serde_json::to_vec_pretty(state).context("writing the state")?;
+    text.push(b'\n');
+    crate::atomic::write(home, &crate::atomic::Name::new(STATE)?, &text)
 }
 
 /// A cache's entries, without any an earlier version wrote in another

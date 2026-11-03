@@ -94,7 +94,7 @@ impl Setup {
         .unwrap();
         let text = String::from_utf8(out).unwrap();
         let dirs = self.job(args).dirs;
-        if dirs.home.join(crate::dirs::STATE).exists()
+        if crate::state::exists(&dirs.home)
             && let Err(e) = crate::reconcile::invariant(&dirs)
         {
             panic!("{args:?}: {e}: {text}");
@@ -3448,8 +3448,8 @@ fn a_run_an_earlier_muman_recorded_whole_is_undone() {
     }
     s.run(&flacs(), &["sync"]);
     let synced = library_of(&s);
-    let state: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(s.dir.path().join("home/state.json")).unwrap())
+    let state =
+        serde_json::to_value(crate::state::State::load(&s.dir.path().join("home")).unwrap())
             .unwrap();
     let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
     assert!(ok, "{text}");
@@ -4481,7 +4481,7 @@ fn export_encodes_songs_lower_to_fit_and_leaves_the_library_alone() {
     let (s, fake) = exported_home("0.05");
     let whole = s.dir.path().join("whole.zip");
     s.run(&fake, &["export", "-o", &whole.to_string_lossy()]);
-    let state = std::fs::read(s.dir.path().join("home/state.json")).unwrap();
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
     let max = std::fs::metadata(&whole).unwrap().len() - 2000;
     let fitted = s.dir.path().join("fitted.zip");
     let (ok, text) = s.run(
@@ -4506,7 +4506,7 @@ fn export_encodes_songs_lower_to_fit_and_leaves_the_library_alone() {
     assert!(entries.contains_key("library/Artist/Record/02 Song.lrc"));
     assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
     assert_eq!(
-        std::fs::read(s.dir.path().join("home/state.json")).unwrap(),
+        crate::state::State::load(&s.dir.path().join("home")).unwrap(),
         state
     );
 }
@@ -4532,7 +4532,7 @@ fn export_into_too_little_room_says_what_it_needs() {
 #[test]
 fn export_writes_songs_in_the_codec_and_shape_given_and_leaves_the_library_alone() {
     let (s, fake) = exported_home("0.05");
-    let state = std::fs::read(s.dir.path().join("home/state.json")).unwrap();
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
     let zip = s.dir.path().join("out.zip");
     let (ok, text) = s.run(
         &fake,
@@ -4558,7 +4558,7 @@ fn export_writes_songs_in_the_codec_and_shape_given_and_leaves_the_library_alone
     );
     assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
     assert_eq!(
-        std::fs::read(s.dir.path().join("home/state.json")).unwrap(),
+        crate::state::State::load(&s.dir.path().join("home")).unwrap(),
         state
     );
 }

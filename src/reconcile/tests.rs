@@ -1800,7 +1800,7 @@ fn a_home_keyed_by_extractor_is_keyed_by_site_and_writes_no_song_again() {
     let songs = std::fs::read_to_string(h.dirs.manifest()).unwrap();
     std::fs::write(h.dirs.manifest(), songs.replace("youtube.com:", "youtube:")).unwrap();
     let old = by_extractor(state, &[("youtube.com", "youtube")]);
-    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+    crate::testing::put_old_state(&h.dirs.home, old.as_bytes());
 
     let fake = big_fetched();
     let (ok, text) = h.run(&fake, Options::default());
@@ -1848,7 +1848,7 @@ fn a_source_of_a_site_no_table_names_is_renamed_by_its_page() {
         State::load(&h.dirs.home).unwrap(),
         &[("tunes.example", "funkwhale")],
     );
-    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+    crate::testing::put_old_state(&h.dirs.home, old.as_bytes());
 
     let dry = h.status(&fake(), &[], false);
     assert!(dry.contains("Songs: 1 up to date"), "{dry}");
@@ -1895,7 +1895,7 @@ fn a_source_of_an_extractor_a_site_lists_reads_as_that_sites() {
         State::load(&h.dirs.home).unwrap(),
         &[("jamendo.com", "jamendo")],
     );
-    std::fs::write(h.dirs.home.join(crate::dirs::STATE), old).unwrap();
+    crate::testing::put_old_state(&h.dirs.home, old.as_bytes());
 
     let fake = fake();
     let (ok, text) = h.run(&fake, Options::default());

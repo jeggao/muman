@@ -52,8 +52,8 @@ src/
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
   manifest/new.toml a new home's song list, the reference for every setting
-  state.rs          state.json: files written, measures, comparisons
-  state/json.rs     state.json read, as any version wrote it, and written
+  state.rs          the state: files written, measures, comparisons
+  state/json.rs     state.json, as an earlier muman wrote it, read once
   state/db.rs       state.db, the store the state moves into: schema, transactions
   platform.rs       default folders per OS, path identity, arrival times
   dirs.rs           the home and the library folders, neither inside the other

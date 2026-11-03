@@ -15,7 +15,7 @@ is about:
 
 | Flag | Variable | Sets |
 |---|---|---|
-| `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
+| `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.db`, the sources and the run history |
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path` |
 | `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookup, no fetch, and URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows its progress: `auto`, `plain`, `json` or `none` ([progress](guide.md#progress-and-output)) |
@@ -229,7 +229,7 @@ addresses too, which a sync fetches from. Read a song list as you would
 a script before you run muman on it.
 
 muman runs none of these until you trust them. It keeps what you
-trusted in `state.json`, by each setting's value, not its spelling or
+trusted in its state, by each setting's value, not its spelling or
 comments. When a command could run a program, a hook or a request, and
 the song list holds such a setting you have not trusted as it is now,
 muman lists every one, marks the new and the changed, and asks once. A

@@ -16,7 +16,7 @@ use crate::ui::{Painted, Style};
 use anyhow::Result;
 
 use crate::codec::Codec;
-use crate::dirs::{Dirs, STATE};
+use crate::dirs::Dirs;
 use crate::facts::Facts;
 use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
@@ -456,9 +456,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     group(out, c.verbose, "Fetched, not listed", &unused)?;
     group(out, c.verbose, "Strays in sources", &strays)?;
     group(out, c.verbose, "Not muman's", &foreign(c)?)?;
-    if let Some(age) = std::fs::metadata(c.dirs.home.join(STATE))
-        .and_then(|m| m.modified())
-        .ok()
+    if let Some(age) = crate::state::written_at(&c.dirs.home)
         .and_then(|t| SystemTime::now().duration_since(t).ok())
     {
         row(

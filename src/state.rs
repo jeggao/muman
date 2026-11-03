@@ -1,9 +1,14 @@
-//! What muman keeps for itself in `state.json`: the library files it
-//! wrote and the plan each was written from, which is what lets it
+//! What muman keeps for itself in `state.db`: the library files
+//! it wrote and the plan each was written from, which is what lets it
 //! delete only its own files and rebuild only what changed, and caches
-//! of what it measured, which are safe to lose.
+//! of what it measured, which are safe to lose. A `state.json` an
+//! earlier muman kept is read once and brought into the store,
+//! then kept as `state.json.bak`; a stub of a newer format takes its
+//! place, so an earlier muman refuses the home rather than take every
+//! library file for the user's. Moving the `.bak` back, the store aside,
+//! goes back to the earlier muman, losing what ran since.
 //!
-//! | Key | Safe to lose |
+//! | Table | Safe to lose |
 //! |---|---|
 //! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
@@ -51,6 +56,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -64,10 +71,121 @@ use crate::provider::Provider;
 use crate::resolve::Plan;
 use crate::source::SourceKey;
 
-// The store the state moves into; nothing outside its tests uses it yet.
-#[cfg_attr(not(test), expect(dead_code))]
 mod db;
 mod json;
+
+/// How long a write waits for another process's transaction.
+const BUSY_WAIT: Duration = Duration::from_secs(60);
+
+/// What `state.json` holds once the state is in `state.db`: a format
+/// newer than any muman before the store reads, so one refuses the home
+/// rather than read it as holding no state.
+const STUB: &[u8] = b"{\"version\": 4, \"moved_to\": \"state.db\"}\n";
+
+/// Where `state.json` is kept once brought over.
+const BACKUP: &str = "state.json.bak";
+
+/// The store being made from `state.json`, before it is `state.db`.
+const IMPORTING: &str = "state.db.import";
+
+/// Whether `home` holds a state store.
+#[must_use]
+pub fn exists(home: &Path) -> bool {
+    home.join(db::FILE).exists()
+}
+
+/// When the store was last written, as its files' times say.
+#[must_use]
+pub fn written_at(home: &Path) -> Option<SystemTime> {
+    [db::FILE.to_string(), format!("{}-wal", db::FILE)]
+        .iter()
+        .filter_map(|name| {
+            std::fs::metadata(home.join(name))
+                .and_then(|m| m.modified())
+                .ok()
+        })
+        .max()
+}
+
+/// Bring `home`'s `state.json`, as any earlier muman wrote it, into
+/// `state.db`, once: the store is made beside it under another name and
+/// linked into place, so of two processes bringing it over the first
+/// alone makes it, and then the file is kept as `state.json.bak`, a stub
+/// in its place. A run stopped between the two finds the store and the
+/// file, and sets the file aside. Returns the state when it brought it
+/// over now, holding what an earlier version named a key, which only
+/// this process's run reads.
+fn bring_over(home: &Path) -> Result<Option<State>> {
+    let file = home.join(crate::dirs::STATE);
+    let text = match std::fs::read(&file) {
+        Ok(text) if text != STUB => text,
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Set aside by a run stopped before its stub.
+            if exists(home) && home.join(BACKUP).exists() {
+                stub(home)?;
+            }
+            return Ok(None);
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+    };
+    if exists(home) {
+        clear_import(home)?;
+        set_aside(home)?;
+        return Ok(None);
+    }
+    let mut state = json::read(&file, &text)?;
+    let importing = home.join(IMPORTING);
+    clear_import(home)?;
+    let mut loaded = db::Loaded::default();
+    db::Db::open_file(&importing, BUSY_WAIT)?.save_diff(&state, &mut loaded)?;
+    state.held = Held::new(loaded);
+    let store = home.join(db::FILE);
+    match atomic::link(&importing, &store) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            clear_import(home)?;
+            return Ok(None);
+        }
+        // A filesystem without hard links.
+        Err(_) if !store.exists() => atomic::rename(&importing, &store)
+            .with_context(|| format!("making {}", store.display()))?,
+        _ => {}
+    }
+    clear_import(home)?;
+    set_aside(home)?;
+    Ok(Some(state))
+}
+
+/// Remove a store being made from `state.json`, or its other name once
+/// it is `state.db`.
+fn clear_import(home: &Path) -> Result<()> {
+    for end in ["", "-wal", "-shm", "-journal"] {
+        let path = home.join(format!("{IMPORTING}{end}"));
+        match atomic::remove(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Keep `state.json` as `state.json.bak`, a stub in its place.
+fn set_aside(home: &Path) -> Result<()> {
+    let file = home.join(crate::dirs::STATE);
+    atomic::rename(&file, &home.join(BACKUP))
+        .with_context(|| format!("setting {} aside", file.display()))?;
+    stub(home)
+}
+
+/// Write the stub in `state.json`'s place, where there is none.
+fn stub(home: &Path) -> Result<()> {
+    if home.join(crate::dirs::STATE).exists() {
+        return Ok(());
+    }
+    atomic::write(home, &atomic::Name::new(crate::dirs::STATE)?, STUB)
+}
 
 /// The format written: 3 records each file beside an output as it was
 /// written, which version 2 named by its place alone, so a muman that
@@ -154,6 +272,54 @@ pub struct State {
     /// plan's real size is found under the name it was kept by.
     #[serde(skip)]
     pub(crate) respelled: BTreeMap<SourceKey, SourceKey>,
+    /// The rows of the store this was read from, so a save writes only
+    /// what differs.
+    #[serde(skip)]
+    pub(crate) held: Held,
+}
+
+/// What a state read from the store holds of its rows ([`db::Loaded`]);
+/// none for a state made in code, whose save deletes no row. Two states
+/// are equal whatever they hold.
+#[derive(Default)]
+pub(crate) struct Held(Mutex<db::Loaded>);
+
+impl Held {
+    fn new(loaded: db::Loaded) -> Self {
+        Self(Mutex::new(loaded))
+    }
+
+    fn get(&self) -> db::Loaded {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set(&self, loaded: db::Loaded) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
+    }
+}
+
+impl Clone for Held {
+    fn clone(&self) -> Self {
+        Self::new(self.get())
+    }
+}
+
+impl PartialEq for Held {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Held")
+    }
 }
 
 /// A lookup of `find` made from the source `from`.
@@ -539,6 +705,44 @@ impl Caches {
 }
 
 impl State {
+    /// The state in `home`; an empty one when there is none yet. A
+    /// `state.json` an earlier muman left is brought into `state.db`
+    /// first.
+    pub fn load(home: &Path) -> Result<Self> {
+        if let Some(imported) = bring_over(home)? {
+            return Ok(imported);
+        }
+        if !exists(home) {
+            return Ok(Self {
+                version: VERSION,
+                ..Self::default()
+            });
+        }
+        let (mut state, loaded) = db::Db::open(home, BUSY_WAIT)?.snapshot()?;
+        state.held = Held::new(loaded);
+        Ok(state)
+    }
+
+    /// Write what differs from what this was read from: a run that
+    /// changed nothing leaves the home untouched.
+    pub fn save(&self, home: &Path) -> Result<()> {
+        bring_over(home)?;
+        std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
+        let mut loaded = self.held.get();
+        db::Db::open(home, BUSY_WAIT)?.save_diff(self, &mut loaded)?;
+        self.held.set(loaded);
+        stub(home)
+    }
+
+    /// Record `trusted` as [`Self::trusted`] under the folder's lock,
+    /// every other row left as the store holds it.
+    pub fn keep_trusted(home: &Path, trusted: &BTreeMap<String, String>) -> Result<()> {
+        let _lock = atomic::Lock::folder(home)?;
+        let mut state = Self::load(home)?;
+        state.trusted.clone_from(trusted);
+        state.save(home)
+    }
+
     /// Name each key `renames` names anew, wherever this names it: a
     /// source an extractor's name keyed, renamed by its site.
     pub fn rekey(&mut self, renames: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {
@@ -574,6 +778,7 @@ impl State {
         now.cleared = std::mem::take(&mut self.cleared);
         now.rebased = std::mem::take(&mut self.rebased);
         now.respelled = std::mem::take(&mut self.respelled);
+        now.held = std::mem::take(&mut self.held);
         for (old, new) in renames {
             now.respelled.insert(new.clone(), old.clone());
         }
@@ -1208,6 +1413,82 @@ mod tests {
         assert_eq!(release.unmatched_ms(), 0);
     }
 
+    /// A state an earlier muman kept in `home`'s `state.json`.
+    fn old_home(home: &Path) -> State {
+        let mut old = State {
+            version: VERSION,
+            ..State::default()
+        };
+        old.replaced.insert(
+            SourceKey::youtube("uuuuuuuuuuu"),
+            SourceKey::youtube("ttttttttttt"),
+        );
+        old.listed
+            .push(SourceKey::Manual("Lantern Weather.flac".into()));
+        json::write(&old, home).unwrap();
+        old
+    }
+
+    #[test]
+    fn a_state_json_is_brought_over_once_kept_aside_and_stubbed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let old = old_home(home);
+        let text = std::fs::read(home.join(STATE)).unwrap();
+        let state = State::load(home).unwrap();
+        assert_eq!(
+            (&state.replaced, &state.listed),
+            (&old.replaced, &old.listed)
+        );
+        assert!(exists(home));
+        assert_eq!(std::fs::read(home.join(BACKUP)).unwrap(), text);
+        assert_eq!(std::fs::read(home.join(STATE)).unwrap(), STUB);
+        let e = json::read(&home.join(STATE), STUB).err().unwrap();
+        assert!(
+            format!("{e:#}").contains("newer than this muman's 3"),
+            "a muman of the json state refuses the home: {e:#}"
+        );
+        let again = State::load(home).unwrap();
+        assert_eq!(
+            (&again.replaced, &again.listed),
+            (&old.replaced, &old.listed)
+        );
+        assert_eq!(
+            std::fs::read(home.join(BACKUP)).unwrap(),
+            text,
+            "brought over once"
+        );
+    }
+
+    #[test]
+    fn a_state_json_brought_over_and_stopped_anywhere_ends_in_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        old_home(dir.path());
+        let counted = crate::testing::kill_at(dir.path(), usize::MAX);
+        State::load(dir.path()).unwrap();
+        let steps = counted.seen();
+        drop(counted);
+        assert!(steps > 3, "{steps}");
+        for at in 1..=steps {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path();
+            let old = old_home(home);
+            let kill = crate::testing::kill_at(home, at);
+            let stopped = std::panic::catch_unwind(|| State::load(home));
+            drop(kill);
+            assert!(stopped.is_err(), "stopped at step {at} of {steps}");
+            let state = State::load(home).unwrap();
+            assert_eq!(
+                (&state.replaced, &state.listed),
+                (&old.replaced, &old.listed),
+                "step {at}"
+            );
+            assert!(exists(home) && home.join(BACKUP).exists(), "step {at}");
+            assert_eq!(std::fs::read(home.join(STATE)).unwrap(), STUB, "step {at}");
+            assert!(!home.join(IMPORTING).exists(), "step {at}");
+        }
+    }
+
     #[test]
     fn a_missing_state_is_empty_and_a_saved_one_reads_back() {
         let dir = tempfile::tempdir().unwrap();
@@ -1220,7 +1501,7 @@ mod tests {
         state.record_alignment(aligned(0, 1.0, 1, 1));
         state.record_alignment(aligned(5, 1.0, 1, 1));
         state.save(dir.path()).unwrap();
-        let file = dir.path().join(STATE);
+        let file = dir.path().join(db::FILE);
         let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1 << 30);
         std::fs::File::options()
             .write(true)
@@ -1326,12 +1607,13 @@ mod tests {
             "muman's by its place, as before"
         );
         state.save(dir.path()).unwrap();
-        let saved = std::fs::read_to_string(dir.path().join(STATE)).unwrap();
-        assert!(saved.contains("\"version\": 3"), "{saved}");
         assert!(
-            saved.contains("\"sidecars\"") && !saved.contains("\"lyrics\""),
-            "{saved}"
+            std::fs::read_to_string(dir.path().join(BACKUP))
+                .unwrap()
+                .contains("\"lyrics\""),
+            "kept as it was"
         );
+        assert_eq!(std::fs::read(dir.path().join(STATE)).unwrap(), STUB);
         assert_eq!(State::load(dir.path()).unwrap().outputs, state.outputs);
     }
 

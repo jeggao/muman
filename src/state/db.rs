@@ -1,6 +1,6 @@
 //! The home's state store, `state.db`: one SQLite file the state is to
 //! move into from `state.json`, opened here, and written only through
-//! [`Db::write`]. Nothing reads or writes it yet.
+//! [`Db::write`].
 //!
 //! The store loads into the [`State`] every reader knows, in one
 //! snapshot ([`Db::snapshot`]), which remembers a digest of each row it
@@ -89,7 +89,12 @@ impl Db {
     /// The store in `home`, made with the tables of [`SCHEMA`] when there
     /// is none, a writer waiting up to `wait` for another's transaction.
     pub(crate) fn open(home: &Path, wait: Duration) -> Result<Self> {
-        let file = home.join(FILE);
+        Self::open_file(&home.join(FILE), wait)
+    }
+
+    /// The store at `file`, as [`Db::open`] opens one.
+    pub(crate) fn open_file(file: &Path, wait: Duration) -> Result<Self> {
+        let file = file.to_path_buf();
         let conn =
             Connection::open(&file).with_context(|| format!("opening {}", file.display()))?;
         conn.busy_timeout(wait)?;
@@ -254,10 +259,7 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
     let key = |k: &SourceKey| k.to_string();
     let mut meta = Vec::new();
     if let Some(library) = &state.library {
-        meta.push(Row::new(
-            vec!["library".into()],
-            Some(json(&crate::relpath::to_portable(library))?),
-        ));
+        meta.push(Row::new(vec!["library".into()], Some(json(library)?)));
     }
     let mut tables = vec![(&META, meta)];
     tables.push((
@@ -421,9 +423,7 @@ impl Db {
         };
         for row in parse(&META) {
             if row.keys[0] == "library" {
-                state.library = serde_json::from_str::<String>(&value(row))
-                    .ok()
-                    .and_then(|t| crate::relpath::recorded(&t).ok());
+                state.library = serde_json::from_str(&value(row)).ok();
             }
         }
         for row in parse(&OUTPUTS) {
