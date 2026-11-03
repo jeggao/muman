@@ -78,6 +78,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   print alone named a 29 s excerpt the full studio recording. A stated
   length within 10 s now ranks first, and a recording stating none needs
   two prints.
+- **A song holding its folder's cover is not written again** when facts
+  made again name its source's parts anew: the folder's cover is renamed
+  with the song's own. A source renamed by its site also finds its
+  measured size under `[library] max_size` again.
 - **A mono and a stereo rip took one recording**: a recording whose
   MusicBrainz comment names the other mix than the song's audio, as
   `original stereo album mix` for a mono file, ranks after the song's
