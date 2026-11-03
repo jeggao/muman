@@ -64,6 +64,9 @@ use crate::provider::Provider;
 use crate::resolve::Plan;
 use crate::source::SourceKey;
 
+// The store the state moves into; nothing outside its tests uses it yet.
+#[cfg_attr(not(test), expect(dead_code))]
+mod db;
 mod json;
 
 /// The format written: 3 records each file beside an output as it was
