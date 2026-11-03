@@ -1551,3 +1551,177 @@ fn a_key_tkey_cannot_hold_is_kept_as_its_vorbis_name() {
     assert_eq!(id3.get_user_text("INITIALKEY"), Some("8A"));
     assert_eq!(verify(&mp3, &tags, false), [] as [String; 0]);
 }
+
+/// What each codec's audio output is given to ffmpeg as, copied or
+/// encoded, with chapters or none and padding or none, under its
+/// [`render_version`]. Each row is a codec of [`Codec::ALL`], in order.
+const RENDERED: [(Codec, &str, &str); 7] = [
+    (
+        Codec::Opus,
+        "4",
+        "95430108217faecfba908f04013028208d9122f65b1bbe8dacc347fb0564f82f",
+    ),
+    (
+        Codec::Vorbis,
+        "3",
+        "27cc9524cf0bd59c2df0fc5fd603fbd138e7f53948fbe455e003898afacbb090",
+    ),
+    (
+        Codec::Aac,
+        "4",
+        "c50cfe5f3a541c799b1281a31ebbc15dfd91e2f488fb728af461a836a036ec8b",
+    ),
+    (
+        Codec::Mp3,
+        "3",
+        "30aa0d99f538ed72e0d151ef7557d5e8b84b29f24c1358b3b91f4fe68e008312",
+    ),
+    (
+        Codec::Flac,
+        "3",
+        "952b8c6d0e58c6a7397fb90c88876b2aa818f72ee456b59bed8cfaa0577a6b66",
+    ),
+    (
+        Codec::Alac,
+        "4",
+        "985b5d61aeaa3e101be2c9693a1bbe815dd437c8886c4002b356b3b04d60a7b7",
+    ),
+    (
+        Codec::WavPack,
+        "3",
+        "479e99bed225db3975d39a500d0982b723ed0e985d421f649ccd3619f2dac1e7",
+    ),
+];
+
+/// What a build of a song tagged with [`every_kind`] and holding its
+/// cover writes in each codec, under [`TAGGING`](crate::resolve::TAGGING):
+/// the tag writers, the FLAC blocks and the MP4 padding dropped. The
+/// audio is the fake runner's fixture, so a FLAC's STREAMINFO MD5, which
+/// stamps its arguments, is left out; what a real encoder makes of the
+/// audio, which can differ by processor, is no part of any row.
+const TAGGED: [(Codec, &str, &str); 7] = [
+    (
+        Codec::Opus,
+        "2",
+        "645090348b2b9da68f591a7632cf55d3b89f0b90208d07273268a615d655cd44",
+    ),
+    (
+        Codec::Vorbis,
+        "2",
+        "544df93442bacc53a68bde27987e28cb15aa3b26708abf0fbdcd0440db0b2d22",
+    ),
+    (
+        Codec::Aac,
+        "2",
+        "a53df280a7653c72c3654d9e69513eacbf2e8466c1077d1e25a156810b9c1053",
+    ),
+    (
+        Codec::Mp3,
+        "2",
+        "40c324fb8457c1f1e2d1db90fed1912e9b7126b73d59bb7b5de3dafaff04d285",
+    ),
+    (
+        Codec::Flac,
+        "2",
+        "dcd0f2a74fda2a783e883213a33fdf4785152f3912d291bf66d0e5ae20a0263d",
+    ),
+    (
+        Codec::Alac,
+        "2",
+        "a53df280a7653c72c3654d9e69513eacbf2e8466c1077d1e25a156810b9c1053",
+    ),
+    (
+        Codec::WavPack,
+        "2",
+        "87edcd4c59510a8c4bf0194b9502d2f918d51252cef795c2114dc5a422a5303e",
+    ),
+];
+
+/// What a picture is given to ffmpeg as in each format, cropped or not
+/// and scaled or not, under [`COVER_MAKING`].
+const COVERS: (&str, &str) = (
+    "1",
+    "c443a02286b2742c50b3e10143b89e881ef0f2ef58706bf930a9723fbdf07b26",
+);
+
+fn formats(codec: Codec) -> [Format; 2] {
+    let kbps = (!codec.is_lossless()).then_some(192);
+    [
+        Format::Copy { codec },
+        Format::Encode {
+            codec,
+            kbps,
+            adapt: None,
+            mix: None,
+        },
+    ]
+}
+
+#[test]
+fn each_version_rises_with_what_it_makes() {
+    let codecs = |rows: &[(Codec, &str, &str)]| rows.iter().map(|r| r.0).collect::<Vec<_>>();
+    assert_eq!(codecs(&RENDERED), Codec::ALL);
+    assert_eq!(codecs(&TAGGED), Codec::ALL);
+
+    for (codec, version, hex) in RENDERED {
+        let mut digest = crate::testing::Digest::default();
+        for format in formats(codec) {
+            let p = plan(format);
+            for chapters in [None, Some(1)] {
+                for reserve in [None, Some(8192)] {
+                    let output = audio_output(&p, 0, chapters, reserve, Path::new("song.part"));
+                    digest.debug(&output.args);
+                }
+            }
+        }
+        crate::testing::check(
+            (version, hex),
+            &render_version(codec).to_string(),
+            &digest.hex(),
+        );
+    }
+
+    for (codec, version, hex) in TAGGED {
+        let mut p = plan(formats(codec)[1]);
+        p.tags = every_kind();
+        let f = fixture();
+        let r = go(&Fake::default(), &f, &p).unwrap();
+        let mut bytes = fs::read(f.dir.path().join("lib").join(&r.audio)).unwrap();
+        if codec.container() == Container::Flac {
+            bytes[crate::testing::STREAMINFO_MD5].fill(0);
+        }
+        let mut digest = crate::testing::Digest::default();
+        digest.bytes(&bytes);
+        crate::testing::check(
+            (version, hex),
+            &crate::resolve::TAGGING.to_string(),
+            &digest.hex(),
+        );
+    }
+
+    let mut digest = crate::testing::Digest::default();
+    let crop = Rect {
+        x: 2,
+        y: 4,
+        width: 60,
+        height: 56,
+    };
+    for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Webp] {
+        for quality in [None, Some(1), Some(100)] {
+            for max_side in [None, Some(600)] {
+                for crop in [None, Some(crop)] {
+                    let place = CoverPlace {
+                        file: None,
+                        format,
+                        keep: false,
+                        max_side,
+                        quality,
+                    };
+                    let output = picture_output(1, "v:0", crop, &place, Path::new("cover.part"));
+                    digest.debug(&output.args);
+                }
+            }
+        }
+    }
+    crate::testing::check(COVERS, &COVER_MAKING.to_string(), &digest.hex());
+}

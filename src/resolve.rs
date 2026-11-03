@@ -152,6 +152,8 @@ use crate::tags::{self, Field, Offer, Scope};
 
 /// The renderer's version for plans in `codec`, raised whenever the bytes
 /// such a plan renders to change, so the songs in it are rendered again.
+/// A test pins each codec's to a digest of the arguments its audio is
+/// written with.
 #[must_use]
 pub fn render_version(codec: Codec) -> u32 {
     match codec {
@@ -657,7 +659,8 @@ pub struct Plan {
 
 /// How tags are written into a file, raised whenever the frames, atoms or
 /// items one plan's tags are written as change, so every song is tagged
-/// again, its audio left as it is.
+/// again, its audio left as it is. A test pins it to a digest of what a
+/// build writes in each codec.
 pub const TAGGING: u32 = 2;
 
 impl PartialEq for Plan {

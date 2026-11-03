@@ -39,7 +39,7 @@ pub const SILENCE_OPUS: &[u8] = include_bytes!("../testdata/silence.opus");
 pub const SILENCE_FLAC: &[u8] = include_bytes!("../testdata/silence.flac");
 /// Where a FLAC's STREAMINFO holds the MD5 of its audio: after `fLaC`,
 /// the block's header and 18 bytes of the block.
-const STREAMINFO_MD5: std::ops::Range<usize> = 26..42;
+pub const STREAMINFO_MD5: std::ops::Range<usize> = 26..42;
 pub const SILENCE_VORBIS: &[u8] = include_bytes!("../testdata/silence.ogg");
 pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
 pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
