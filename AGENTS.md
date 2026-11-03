@@ -115,6 +115,7 @@ src/
   hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
   testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
+  tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/

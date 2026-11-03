@@ -8,8 +8,9 @@
 //! fails here until the rule, and the reason beside it, is changed on
 //! purpose.
 //!
-//! Only code that ships is read: a file's inline `mod tests` and the
-//! `tests.rs` and `testing.rs` files are left out.
+//! Only code that ships is read: a file's inline `mod tests`, the
+//! `tests.rs` and `testing.rs` files, and the modules of `src/tests/` are
+//! left out.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +35,7 @@ fn sources() -> BTreeMap<String, String> {
         .into_iter()
         .filter(|p| {
             let name = p.file_name().unwrap().to_string_lossy();
-            name != "tests.rs" && name != "testing.rs"
+            name != "tests.rs" && name != "testing.rs" && !p.starts_with(src.join("tests"))
         })
         .map(|p| {
             let text = std::fs::read_to_string(&p).unwrap();
