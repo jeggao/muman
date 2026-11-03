@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
 ### Added
 
 - **Each provider says what a song asks it `until`.** `[providers.<name>]`
@@ -2038,7 +2040,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jeggao/muman/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jeggao/muman/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jeggao/muman/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jeggao/muman/compare/v0.5.1...v0.6.0
