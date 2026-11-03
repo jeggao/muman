@@ -246,7 +246,7 @@ pub(super) fn apply<R: Runner, W: Write>(
     // A folder's file one song hands another is stale to neither.
     let shared: BTreeSet<PathBuf> = planned
         .iter()
-        .flat_map(|(_, r)| crate::outputs::folder_files(&path_of(r), &r.plan))
+        .flat_map(|(_, r)| crate::artifact::parts(&r.plan).folder_files(&path_of(r)))
         .collect();
     let due = due(planned, &doing);
     let (mut pending, claims) = before_writing(job, &due, state, ledger, force, out)?;
@@ -339,7 +339,8 @@ fn before_writing<R: Runner, W: Write>(
                 .filter(|_| *retag && !beside_changes(&job.dirs.library, old, r))
             {
                 Some(w) => w.sidecars.clone(),
-                None => crate::outputs::touched(&path, &r.plan, old.get(&path))
+                None => crate::artifact::parts(&r.plan)
+                    .touched(&path, old.get(&path))
                     .into_iter()
                     .filter(|s| {
                         std::fs::symlink_metadata(job.dirs.library.join(s)).is_err()
@@ -472,18 +473,18 @@ fn render_due<R: Runner, W: Write>(
         let recorded: Vec<PathBuf> = old
             .get(&path)
             .map_or_else(Vec::new, |w| w.sidecar_paths().cloned().collect());
-        let planned = crate::outputs::planned(&path, &r.plan);
+        let parts = crate::artifact::parts(&r.plan);
+        let planned = parts.files(&path);
         let stale: Vec<PathBuf> = recorded
             .iter()
             .filter(|s| !planned.contains(s) && !shared.contains(*s))
             .cloned()
             .collect();
         if let Some((folder, made)) = placed.get(n) {
-            let shared = crate::outputs::folder_files(&path, &r.plan);
+            let shared = parts.folder_files(&path);
             return render::place(folder, made, &dirs.library, (claim, &shared), &stale);
         }
         let work = Sub::new(scratch, "render-")?;
-        let parts = crate::artifact::parts(&r.plan);
         let render_job = render::Job {
             parts: &parts,
             stem: &r.stem,

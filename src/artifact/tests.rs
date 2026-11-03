@@ -142,6 +142,8 @@ fn a_plan_s_parts_are_equal_where_the_plan_is() {
 /// The projections a sync decided by before these parts, as they were,
 /// to check the parts against.
 mod before {
+    use std::path::{Path, PathBuf};
+
     use crate::resolve::{CoverRef, LyricsRef, Plan};
     use crate::settings::LyricsPlacement;
 
@@ -181,6 +183,44 @@ mod before {
             ..lyrics.lines()
         };
         Some((held, lyrics_names(plan)))
+    }
+
+    pub(super) fn planned(audio: &Path, plan: &Plan) -> Vec<PathBuf> {
+        let stem = audio.with_extension("");
+        let lyrics = plan
+            .lyrics
+            .iter()
+            .flat_map(LyricsRef::files)
+            .map(|f| crate::outputs::lyrics_file(&stem, &f));
+        let covers = plan
+            .cover
+            .iter()
+            .flat_map(CoverRef::files)
+            .filter_map(|p| crate::outputs::cover_file(&stem, &p));
+        let folder = plan
+            .folder
+            .iter()
+            .flat_map(CoverRef::files)
+            .filter_map(|p| crate::outputs::folder_file(&stem, &p));
+        lyrics.chain(covers).chain(folder).collect()
+    }
+
+    pub(super) fn besides_audio(plan: &Plan) -> (u64, Vec<u64>) {
+        let tags: usize = plan
+            .tags
+            .iter()
+            .flat_map(|(k, values)| values.iter().map(move |v| k.len() + v.len() + 8))
+            .sum();
+        let cover = plan.cover.as_ref();
+        let inside = cover.and_then(CoverRef::inside).map_or(0, |_| 200 * 1024);
+        let lyrics = plan.lyrics.as_ref();
+        let embedded = lyrics.filter(|l| l.tag()).map_or(0, |_| 3 * 1024);
+        let files = lyrics.map_or(0, |l| l.files().len());
+        let pictures = cover.map_or(0, |c| c.files().len());
+        let folder = plan.folder.as_ref().map_or(0, |f| f.files().len());
+        let mut beside = vec![3 * 1024; files];
+        beside.extend(vec![200 * 1024; pictures + folder]);
+        (tags as u64 + inside + embedded + 4 * 1024, beside)
     }
 
     fn lyrics_names(plan: &Plan) -> Names<'_> {
@@ -278,11 +318,47 @@ fn a_cover_s_parts_name_its_places_inside_then_beside_and_the_folder_s_apart() {
         [None, Some(".front".to_string())]
     );
     assert_eq!(
-        places(made.cover_files().collect()),
+        places(made.covers_beside().collect()),
         [Some(".front".to_string())]
     );
     assert_eq!(
-        places(made.folder_files().collect()),
+        places(made.folder_covers().collect()),
         [Some("folder".to_string())]
     );
+}
+
+#[test]
+fn the_parts_name_and_guess_the_files_beside_as_the_plan_did() {
+    let audio = std::path::Path::new("Marlo Venn/The Glass Orchards/05 Lantern Weather.opus");
+    for format in [
+        Format::Copy { codec: Codec::Opus },
+        Format::Copy { codec: Codec::Flac },
+    ] {
+        let base = crate::testing::every_part(format);
+        for (name, change) in crate::testing::mutations() {
+            let mut plan = base.clone();
+            change(&mut plan);
+            let made = parts(&plan);
+            assert_eq!(
+                made.files(audio),
+                before::planned(audio, &plan),
+                "{format:?}: {name}"
+            );
+            assert_eq!(
+                made.guess(),
+                before::besides_audio(&plan),
+                "{format:?}: {name}"
+            );
+        }
+    }
+    let plan = opus();
+    let made = parts(&plan);
+    let folder = made.folder_files(audio);
+    assert_eq!(
+        folder,
+        [std::path::PathBuf::from(
+            "Marlo Venn/The Glass Orchards/folder.png"
+        )]
+    );
+    assert!(made.files(audio).ends_with(&folder));
 }

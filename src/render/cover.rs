@@ -122,14 +122,14 @@ pub(super) fn jpeg_scale(quality: u8) -> u32 {
 
 /// The files of the cover `made` has beside the song at `stem`.
 pub(super) fn cover_rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
-    made.cover_files()
+    made.covers_beside()
         .filter_map(|c| crate::outputs::cover_file(stem, &c.place))
         .collect()
 }
 
 /// The files of its folder's cover `made` has the song at `stem` hold.
 pub(super) fn folder_rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
-    made.folder_files()
+    made.folder_covers()
         .filter_map(|c| crate::outputs::folder_file(stem, &c.place))
         .collect()
 }

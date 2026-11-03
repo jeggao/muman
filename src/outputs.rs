@@ -1,7 +1,8 @@
-//! The files a song has beside its audio file in the library, and their
-//! names: its lyrics and its cover, in each file a `[[lyrics.out]]` or a
+//! The names of the files a song has beside its audio file in the
+//! library: its lyrics and its cover, in each file a `[[lyrics.out]]` or a
 //! `[[cover.out]]` names, and the cover file its folder holds once, where
-//! the song holds it for the folder ([`crate::folder`]).
+//! the song holds it for the folder ([`crate::folder`]). Which files a
+//! plan writes is its parts' to say (`artifact::Parts::files`).
 //!
 //! Each is named by the song's audio path without its extension and a
 //! suffix of its own, so the song's files read as one in a folder, and a
@@ -21,9 +22,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::resolve::{CoverPlace, CoverRef, LyricsFile, LyricsRef, Plan};
+use crate::resolve::{CoverPlace, LyricsFile};
 use crate::settings::{Settings, To};
-use crate::state::Written;
 
 /// The file of lyrics `file` beside the song whose path without its
 /// extension is `stem`, which may itself hold a dot: the suffix the
@@ -57,54 +57,6 @@ pub fn folder_file(stem: &Path, place: &CoverPlace) -> Option<PathBuf> {
     let name = place.file.as_ref()?;
     let folder = stem.parent().unwrap_or(Path::new(""));
     Some(folder.join(format!("{name}.{}", place.format.extension())))
-}
-
-/// The files `plan` writes beside the song whose audio file is at
-/// `audio`: its lyrics', its cover's, then its folder's.
-#[must_use]
-pub fn planned(audio: &Path, plan: &Plan) -> Vec<PathBuf> {
-    let stem = audio.with_extension("");
-    let lyrics = plan
-        .lyrics
-        .iter()
-        .flat_map(LyricsRef::files)
-        .map(|f| lyrics_file(&stem, &f));
-    let covers = plan
-        .cover
-        .iter()
-        .flat_map(CoverRef::files)
-        .filter_map(|p| cover_file(&stem, &p));
-    lyrics
-        .chain(covers)
-        .chain(folder_files(audio, plan))
-        .collect()
-}
-
-/// The files of its folder `plan` writes, for the song whose audio file
-/// is at `audio`.
-#[must_use]
-pub fn folder_files(audio: &Path, plan: &Plan) -> Vec<PathBuf> {
-    let stem = audio.with_extension("");
-    plan.folder
-        .iter()
-        .flat_map(CoverRef::files)
-        .filter_map(|p| folder_file(&stem, &p))
-        .collect()
-}
-
-/// The files beside the song at `audio` that writing it may write or
-/// clear: those `plan` writes, and those `recorded` there as its last
-/// build's. A file of the user's own at any other name is not the song's
-/// to touch.
-#[must_use]
-pub fn touched(audio: &Path, plan: &Plan, recorded: Option<&Written>) -> Vec<PathBuf> {
-    let mut files = planned(audio, plan);
-    for path in recorded.into_iter().flat_map(Written::sidecar_paths) {
-        if !files.contains(path) {
-            files.push(path.clone());
-        }
-    }
-    files
 }
 
 /// The bytes the longest tail after a song's stem takes: its audio's

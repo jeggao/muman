@@ -372,11 +372,9 @@ pub(crate) fn resolve_songs(
             .count();
     }
     crate::loudness::settle(&mut resolution.planned, state, settings);
-    separate(
-        &mut resolution.planned,
-        &resolver.naming,
-        &crate::outputs::planned,
-    );
+    separate(&mut resolution.planned, &resolver.naming, &|path, plan| {
+        crate::artifact::parts(plan).files(path)
+    });
     resolution.unplaced =
         crate::folder::assign(&mut resolution.planned, &settings.cover, &state.facts);
     Ok(resolution)

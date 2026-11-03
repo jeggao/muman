@@ -317,7 +317,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         },
         None => Vec::new(),
     };
-    let folder_files = match pictures(made.folder_files()) {
+    let folder_files = match pictures(made.folder_covers()) {
         Some((f, places)) => {
             folder_plans(runner, job, (f, places), &mut inputs, &mut cover_outputs).unwrap_or_else(
                 |e| {
@@ -801,7 +801,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         _ => Vec::new(),
     };
     held.resize(lyrics_rels.len(), None);
-    if let Some((c, places)) = pictures(made.cover_files()) {
+    if let Some((c, places)) = pictures(made.covers_beside()) {
         match cover_files(
             runner,
             job,
@@ -815,7 +815,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         }
     }
     held.resize(lyrics_rels.len() + cover_rels.len(), None);
-    if let Some((f, places)) = pictures(made.folder_files()) {
+    if let Some((f, places)) = pictures(made.folder_covers()) {
         let scratch = job.scratch.join("folder");
         match cover_files(
             runner,

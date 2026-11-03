@@ -42,7 +42,7 @@ pub(super) fn foreign(
         })
     };
     std::iter::once(path.to_path_buf())
-        .chain(crate::outputs::touched(path, plan, old.get(path)))
+        .chain(crate::artifact::parts(plan).touched(path, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok() && !owned(rel))
         .collect()
 }
@@ -56,7 +56,7 @@ pub(super) fn blocking(
     path: &Path,
     plan: &Plan,
 ) -> Vec<PathBuf> {
-    let folder = crate::outputs::folder_files(path, plan);
+    let folder = crate::artifact::parts(plan).folder_files(path);
     foreign(library, old, path, plan)
         .into_iter()
         .filter(|f| !folder.contains(f))
@@ -77,9 +77,10 @@ pub(super) fn claim(
 ) -> Vec<Owned> {
     let library = ledger.root();
     let foreign = foreign(library, old, path, plan);
-    let folder = crate::outputs::folder_files(path, plan);
+    let made = crate::artifact::parts(plan);
+    let folder = made.folder_files(path);
     std::iter::once(path.to_path_buf())
-        .chain(crate::outputs::touched(path, plan, old.get(path)))
+        .chain(made.touched(path, old.get(path)))
         .filter(|rel| std::fs::symlink_metadata(library.join(rel)).is_ok())
         .filter(|rel| !foreign.contains(rel) || (forced && !folder.contains(rel)))
         .map(|rel| {

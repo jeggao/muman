@@ -14,13 +14,20 @@
 //! ([`LyricText::names`]), so a retitled song's lyrics are told apart;
 //! [`crate::render`] cleans and writes lyrics from these parts alone. A
 //! cover's `made` counts only where a place encodes it, as
-//! [`CoverRef::only`] keeps it. The files beside come in the order
-//! [`crate::outputs::planned`] names them: lyrics, covers, folder covers.
+//! [`CoverRef::only`] keeps it.
+//!
+//! Every file a plan writes beside a song is named, guessed at in size and
+//! told shared or not here, in one order: lyrics, covers, folder covers
+//! ([`Parts::files`]). Its name comes from [`crate::outputs`], and the
+//! files a sync may write or clear for a song are these and those its last
+//! build left ([`Parts::touched`]).
 //!
 //! A sync decides by [`redo`] whether a song is built again, tagged
 //! again, and has the files beside it written again; whether it is kept
 //! is still the whole plan's to say. The parts are checked against the
 //! plan they come from, over every part a plan holds.
+
+use std::path::{Path, PathBuf};
 
 use crate::chapters::Chapter;
 use crate::codec::{Chain, Container};
@@ -29,6 +36,7 @@ use crate::loudness::Gains;
 use crate::quality::Rect;
 use crate::resolve::{AudioRef, CoverPlace, CoverRef, Format, LyricsFile, LyricsRef, Plan};
 use crate::source::SourceKey;
+use crate::state::Written;
 
 /// Every part of `plan`.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +132,42 @@ pub(crate) enum Beside<'a> {
     Cover(CoverPart<'a>),
     Folder(CoverPart<'a>),
 }
+
+impl Beside<'_> {
+    /// Where the file is, beside the song whose audio file is at `audio`,
+    /// as [`crate::outputs`] names it.
+    #[must_use]
+    pub(crate) fn path(&self, audio: &Path) -> Option<PathBuf> {
+        let stem = audio.with_extension("");
+        match self {
+            Self::Lyrics(l) => Some(crate::outputs::lyrics_file(&stem, &l.file)),
+            Self::Cover(c) => crate::outputs::cover_file(&stem, &c.place),
+            Self::Folder(c) => crate::outputs::folder_file(&stem, &c.place),
+        }
+    }
+
+    /// Whether other songs of the folder may hold it too: a folder's cover.
+    #[must_use]
+    pub(crate) fn shared(&self) -> bool {
+        matches!(self, Self::Folder(_))
+    }
+
+    /// What it is guessed to take before it is written.
+    #[must_use]
+    pub(crate) fn guess(&self) -> u64 {
+        match self {
+            Self::Lyrics(_) => LYRICS_GUESS,
+            Self::Cover(_) | Self::Folder(_) => COVER_GUESS,
+        }
+    }
+}
+
+/// Bytes a file holds besides its stream, cover and tags.
+const HEADERS: u64 = 4 * 1024;
+/// The cover guessed for a song: a 1000 px JPEG.
+const COVER_GUESS: u64 = 200 * 1024;
+/// Lyrics guessed for a song that has them.
+const LYRICS_GUESS: u64 = 3 * 1024;
 
 /// What a plan's parts that differ from an old plan's write again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -292,11 +336,11 @@ impl<'a> Parts<'a> {
 
     /// The places of the song's cover: inside it, then each file beside.
     pub(crate) fn covers(&self) -> impl Iterator<Item = &CoverPart<'a>> {
-        self.cover.iter().chain(self.cover_files())
+        self.cover.iter().chain(self.covers_beside())
     }
 
     /// The files of the song's cover beside it.
-    pub(crate) fn cover_files(&self) -> impl Iterator<Item = &CoverPart<'a>> {
+    pub(crate) fn covers_beside(&self) -> impl Iterator<Item = &CoverPart<'a>> {
         self.beside.iter().filter_map(|b| match b {
             Beside::Cover(c) => Some(c),
             Beside::Lyrics(_) | Beside::Folder(_) => None,
@@ -304,11 +348,60 @@ impl<'a> Parts<'a> {
     }
 
     /// The files of its folder's cover the song holds.
-    pub(crate) fn folder_files(&self) -> impl Iterator<Item = &CoverPart<'a>> {
+    pub(crate) fn folder_covers(&self) -> impl Iterator<Item = &CoverPart<'a>> {
         self.beside.iter().filter_map(|b| match b {
             Beside::Folder(c) => Some(c),
             Beside::Lyrics(_) | Beside::Cover(_) => None,
         })
+    }
+
+    /// The files written beside the song whose audio file is at `audio`:
+    /// its lyrics', its cover's, then its folder's.
+    #[must_use]
+    pub(crate) fn files(&self, audio: &Path) -> Vec<PathBuf> {
+        self.beside.iter().filter_map(|b| b.path(audio)).collect()
+    }
+
+    /// The files of its folder the song whose audio file is at `audio`
+    /// holds, which other songs of the folder may hold too.
+    #[must_use]
+    pub(crate) fn folder_files(&self, audio: &Path) -> Vec<PathBuf> {
+        self.beside
+            .iter()
+            .filter(|b| b.shared())
+            .filter_map(|b| b.path(audio))
+            .collect()
+    }
+
+    /// The files beside the song at `audio` that writing it may write or
+    /// clear: those these parts write, and those `recorded` there as its
+    /// last build's. A file of the user's own at any other name is not
+    /// the song's to touch.
+    #[must_use]
+    pub(crate) fn touched(&self, audio: &Path, recorded: Option<&Written>) -> Vec<PathBuf> {
+        let mut files = self.files(audio);
+        for path in recorded.into_iter().flat_map(Written::sidecar_paths) {
+            if !files.contains(path) {
+                files.push(path.clone());
+            }
+        }
+        files
+    }
+
+    /// What the song's file is guessed to hold besides its audio, and
+    /// each file beside it to take, before any is written.
+    #[must_use]
+    pub(crate) fn guess(&self) -> (u64, Vec<u64>) {
+        let tags: usize = self
+            .tags
+            .tags
+            .iter()
+            .flat_map(|(k, values)| values.iter().map(move |v| k.len() + v.len() + 8))
+            .sum();
+        let cover = self.cover.as_ref().map_or(0, |_| COVER_GUESS);
+        let lyrics = self.lyrics.as_ref().map_or(0, |_| LYRICS_GUESS);
+        let beside = self.beside.iter().map(Beside::guess).collect();
+        (tags as u64 + cover + lyrics + HEADERS, beside)
     }
 
     /// The files of lyrics beside the song.
