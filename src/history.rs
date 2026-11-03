@@ -301,8 +301,11 @@ impl Run {
         );
         // As the last run left it, when one is kept: a hand edit since is
         // part of what this run applies, and undone with it.
-        let last = runs(home)
-            .ok()
+        let kept = runs(home).unwrap_or_default();
+        for dir in &kept {
+            atomic::clear_parts(dir);
+        }
+        let last = Some(kept)
             .and_then(|mut r| r.pop())
             .and_then(|dir| Some((head(&dir)?, dir)));
         let finishes = last

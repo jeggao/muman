@@ -5770,6 +5770,15 @@ fn library_of(s: &Setup) -> BTreeMap<PathBuf, Vec<u8>> {
         .collect()
 }
 
+/// The files a write stopped before its rename left in the home.
+fn parts_in(s: &Setup) -> Vec<PathBuf> {
+    crate::store::files_below(&s.dir.path().join("home"), usize::MAX, |_| true)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.extension().is_some_and(|e| e == "part"))
+        .collect()
+}
+
 /// What a run killed partway may leave, once recovered.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ends {
@@ -5836,7 +5845,13 @@ fn survives_a_kill_at_every_step(
             stopped_as,
             "status after step {at} moved nothing"
         );
+        // As old as a part a stopped run left long ago.
+        let earlier = SystemTime::now() - std::time::Duration::from_secs(3600);
+        for part in parts_in(&s) {
+            filetime::set_file_mtime(&part, filetime::FileTime::from_system_time(earlier)).unwrap();
+        }
         recover(&s);
+        assert_eq!(parts_in(&s), Vec::<PathBuf>::new(), "step {at}");
         let now = library_of(&s);
         let fine = now == after || (ends == Ends::WholeOrNone && now == before);
         let show = |lib: &BTreeMap<PathBuf, Vec<u8>>| {

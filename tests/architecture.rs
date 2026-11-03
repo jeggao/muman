@@ -71,8 +71,8 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
 const MUTATIONS: &[(&str, usize, &str)] = &[
     (
         "atomic.rs",
-        5,
-        "the primitives every other write goes through, scratch folders, and the library's lock file as it is let go",
+        6,
+        "the primitives every other write goes through, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
     ),
     (
         "library.rs",
