@@ -14,6 +14,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   run an earlier muman recorded is still undone; an earlier muman cannot
   undo a run this one recorded.
 
+### Fixed
+
+- **A command waits for an undo stopped partway.** An undo stopped
+  before it put the song list back left both copies of a song once a
+  sync ran; a command that changes the library or the song list now
+  refuses until `undo` finishes it.
+
 ## [0.9.0] - 2026-11-03
 
 ### Added

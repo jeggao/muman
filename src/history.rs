@@ -53,7 +53,11 @@
 //! undo stopped in that sync is still the latest run, which the next
 //! `undo` finishes rather than undo the run before it too, and `check`
 //! names. A run begun meanwhile begins from the song list put back, and
-//! one whose sync ends finishes the undo, letting go of the record. A purge
+//! one whose sync ends finishes the undo, letting go of the record. One
+//! stopped before it put the song list and the state back is finished
+//! by `undo` alone ([`undo_unfinished`]): a sync would leave what it put
+//! back beside what it had not yet removed, so a command that changes
+//! the library or the list refuses until then. A purge
 //! cannot be undone in full: a fetched source is fetched again by the
 //! next sync, and a file of the user's own is in the desktop's trash,
 //! which muman cannot take it back from on every platform. The run
@@ -716,6 +720,19 @@ pub fn undo_stopped(home: &Path) -> bool {
         .and_then(|mut r| r.pop())
         .and_then(|dir| head(&dir))
         .is_some_and(|h| h.undoing)
+}
+
+/// Whether the latest run kept is an undo stopped before it put the song
+/// list and the state back: only `undo` finishes it, as a sync would
+/// leave what it put back beside what it had not yet removed. One
+/// stopped later, in its sync, the next run's sync finishes.
+#[must_use]
+pub fn undo_unfinished(home: &Path) -> bool {
+    runs(home)
+        .ok()
+        .and_then(|mut r| r.pop())
+        .and_then(|dir| head(&dir))
+        .is_some_and(|h| h.undoing && !h.undone)
 }
 
 /// Whether [`follow_moves`] may move a file in the library.

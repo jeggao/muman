@@ -6178,6 +6178,42 @@ fn an_undo_killed_anywhere_is_finished_by_the_next_and_goes_no_further() {
 }
 
 #[test]
+fn a_change_waits_for_an_undo_stopped_before_it_put_the_library_back() {
+    let s = Setup::new();
+    two_songs(&s);
+    let synced = library_of(&s);
+    s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+    );
+    let home = s.dir.path().join("home");
+    // Stopped once its record says it is undoing, before it puts back a file.
+    let kill = crate::testing::kill_at(s.dir.path(), 2);
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_with(
+            &s.job(&["undo", "-y"]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    }));
+    drop(kill);
+    assert!(stopped.is_err());
+    assert!(crate::history::undo_unfinished(&home));
+    for args in [&["sync"][..], &["remove", "-y", "manual:b.flac"]] {
+        let e = s.refused(args);
+        assert!(e.contains("run `muman undo` to finish it"), "{args:?}: {e}");
+    }
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), synced);
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn check_names_an_undo_stopped_before_its_sync_ended() {
     let s = Setup::new();
     two_songs(&s);

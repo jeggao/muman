@@ -337,6 +337,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     progress::current().plan(traits.steps);
     if traits.apart {
         dirs.apart()?;
+        if !matches!(job.command, Command::Undo { .. }) && history::undo_unfinished(&dirs.home) {
+            return Err(change::Refused(
+                "An undo stopped partway has not put the library back yet; run `muman undo` to \
+                 finish it"
+                    .into(),
+            )
+            .into());
+        }
     }
     if traits.edits_list {
         crate::manifest::present(&dirs.home)?;
