@@ -502,6 +502,7 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
             source: located.key,
             audio: rev,
             layout,
+            filter: crate::codec::MIXING,
             analysis,
         });
     }
