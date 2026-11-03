@@ -357,6 +357,7 @@ fn a_record_is_kept_and_read_back() {
         id: mbid("1"),
         title: "Lantern Weather".into(),
         artists: vec!["Paper Comets".into()],
+        credit: String::new(),
         artist_ids: Vec::new(),
         comment: String::new(),
         isrcs: Vec::new(),
@@ -433,7 +434,7 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
 }
 
 #[test]
-fn a_record_keeps_its_comment() {
+fn a_record_keeps_its_credit_and_its_comment() {
     let body = search(&[recording(
         1,
         "Lantern Weather",
@@ -444,6 +445,7 @@ fn a_record_keeps_its_comment() {
     let server = Server::default().answer("/ws/2/recording?", &body);
     let throttle = Throttle::none();
     let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
+    assert_eq!(record.credit, "Paper Comets & Ada Quill");
     assert_eq!(record.comment, "mono mix");
 }
 

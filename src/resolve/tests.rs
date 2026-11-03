@@ -2285,3 +2285,51 @@ fn a_gain_of_nothing_in_a_header_or_the_samples_compares_as_tags() {
         encoded.with_loudness(gains(Apply::Tags))
     );
 }
+
+fn written(r: &Resolved, field: Field) -> Option<&[String]> {
+    r.plan
+        .tags
+        .iter()
+        .find(|(k, _)| k == field.vorbis())
+        .map(|(_, v)| v.as_slice())
+}
+
+#[test]
+fn artists_offered_as_their_credit_are_listed_from_that_source() {
+    let record = SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap();
+    let mut a = audio("opus", 20.0);
+    tag(&mut a, Field::Title, &["Lantern Weather"], true);
+    let mut m = Facts::unreadable("m".into());
+    tag(&mut m, Field::Title, &["Lantern Weather"], true);
+    tag(
+        &mut m,
+        Field::Artist,
+        &["Marlo Venn & The Glass Orchards"],
+        true,
+    );
+    tag(
+        &mut m,
+        Field::Artists,
+        &["Marlo Venn", "The Glass Orchards"],
+        true,
+    );
+    let facts = BTreeMap::from([(yt("vid00000001"), a), (record.clone(), m)]);
+    let song = Song {
+        sources: vec![yt("vid00000001"), record],
+        ..Song::default()
+    };
+    let r = run(&song, &facts, &[]);
+    assert_eq!(
+        written(&r, Field::Artist),
+        Some(&["Marlo Venn & The Glass Orchards".to_string()][..])
+    );
+    assert_eq!(
+        written(&r, Field::Artists),
+        Some(&["Marlo Venn".to_string(), "The Glass Orchards".to_string()][..])
+    );
+    assert_eq!(
+        written(&r, Field::AlbumArtist),
+        Some(&["Marlo Venn".to_string()][..]),
+        "the first credited, not the whole credit"
+    );
+}

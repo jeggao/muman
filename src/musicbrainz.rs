@@ -18,12 +18,16 @@
 //! these from when it is next fetched again. A recording's credits, its
 //! performers, producer and the like, are not asked for.
 //!
-//! A record keeps the recording's comment, which names a mix.
+//! A record keeps the artists credited together joined as the credit
+//! joins them, by its join phrases, as `Marlo Venn & The Glass Orchards`,
+//! for the recording and for its release, and the recording's comment,
+//! which names a mix.
 //!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
 //! when it is no video, it has that length, and its title and credited
-//! artists hold the song's, compared as LRCLIB's are. Each recording's
+//! artists, or their credit as joined, hold the song's, compared as
+//! LRCLIB's are. Each recording's
 //! releases rank by:
 //!
 //! 1. The song's album, when it has one.
@@ -143,6 +147,10 @@ pub struct Record {
     pub title: String,
     /// Each credited artist, as the recording credits them.
     pub artists: Vec<String>,
+    /// The artists joined as the recording credits them, by its join
+    /// phrases, as `Marlo Venn & The Glass Orchards`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub credit: String,
     /// The MBID of each credited artist.
     #[serde(default)]
     pub artist_ids: Vec<String>,
@@ -170,6 +178,9 @@ pub struct Release {
     pub id: String,
     pub title: String,
     pub artists: Vec<String>,
+    /// The artists joined as the release credits them, by its join phrases.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub credit: String,
     #[serde(default)]
     pub artist_ids: Vec<String>,
     /// The release group's MBID: the album, whichever its edition.
@@ -389,6 +400,9 @@ struct Credit {
     /// The name as credited here, which may differ from the artist's own.
     #[serde(default, deserialize_with = "or_default")]
     name: String,
+    /// What joins it to the next name, as ` & ` or ` feat. `.
+    #[serde(default, deserialize_with = "or_default")]
+    joinphrase: String,
     #[serde(default)]
     artist: Option<Artist>,
 }
@@ -460,6 +474,19 @@ fn names(credit: &[Credit]) -> Vec<String> {
         .collect()
 }
 
+/// The names of `credit` joined by its join phrases, when it credits more
+/// than one; empty otherwise, the one name being [`names`]'.
+fn credited(credit: &[Credit]) -> String {
+    if names(credit).len() < 2 {
+        return String::new();
+    }
+    let joined: String = credit
+        .iter()
+        .map(|c| [c.name.trim(), c.joinphrase.as_str()].concat())
+        .collect();
+    joined.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn artist_ids(credit: &[Credit]) -> Vec<String> {
     credit
         .iter()
@@ -514,6 +541,7 @@ impl Found {
             id: self.id.clone(),
             title: self.title.trim().to_string(),
             artists: names(&self.credit),
+            credit: credited(&self.credit),
             artist_ids: artist_ids(&self.credit),
             group_id: text(self.group.as_ref().and_then(|g| g.id.as_ref())),
             date: self.date().map(str::to_string),
@@ -577,12 +605,13 @@ impl Recording {
     }
 
     fn fits(&self, q: &Query) -> bool {
-        let credited = names(&self.credit).join(" ");
+        let artist = first_artist(&q.artist);
         is_mbid(&self.id)
             && !self.video
             && self.gap(q.seconds).is_some_and(|g| g <= MAX_GAP_S)
             && same(&self.title, &q.title)
-            && same(&credited, first_artist(&q.artist))
+            && (same(&names(&self.credit).join(" "), artist)
+                || same(&credited(&self.credit), artist))
     }
 
     /// Its best release for a song on `album`.
@@ -625,6 +654,7 @@ impl Recording {
             id: Mbid::parse(&self.id)?,
             title: self.title.trim().to_string(),
             artists: names(&self.credit),
+            credit: credited(&self.credit),
             artist_ids: artist_ids(&self.credit),
             comment: self.disambiguation.trim().to_string(),
             isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
