@@ -180,8 +180,20 @@ impl Facts {
         // the sizes and modification times do, as they did then.
         let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
         same && (self.method == method()
-            || self.method == before_alpha() && !self.detailless()
-            || self.method == before_sound() && !self.soundless() && !self.detailless())
+            || self.method == before_alpha() && !self.detailless() && !self.oversized()
+            || self.method == before_sound()
+                && !self.soundless()
+                && !self.detailless()
+                && !self.oversized())
+    }
+
+    /// Whether a picture measured is larger than [`quality::MOST_PIXELS`],
+    /// which methods before [`quality::METHOD`] measured and it does not.
+    fn oversized(&self) -> bool {
+        self.covers.iter().any(|c| {
+            c.quality
+                .is_some_and(|q| u64::from(q.width) * u64::from(q.height) > quality::MOST_PIXELS)
+        })
     }
 
     /// Whether a picture measured no detail, as one drawn in its alpha did

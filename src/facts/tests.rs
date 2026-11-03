@@ -277,6 +277,48 @@ fn facts_from_before_alpha_hold_unless_a_picture_had_no_detail() {
 }
 
 #[test]
+fn facts_of_older_measures_of_a_picture_past_the_largest_measured_do_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let picture = |side: u32| CoverFacts {
+        at: CoverAt::File,
+        mimetype: "image/png".into(),
+        quality: Some(ImageQuality {
+            width: side,
+            height: side,
+            content: quality::Rect {
+                x: 0,
+                y: 0,
+                width: side,
+                height: side,
+            },
+            effective: side,
+            blockiness: 0.0,
+        }),
+        digest: None,
+        look: None,
+        other: false,
+    };
+    for method in [before_alpha(), before_sound()] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.audio = Some(AudioFacts {
+            quality: Some(AudioQuality {
+                bandwidth_hz: 20_000.0,
+                incoherence: 0.5,
+                clipping: 0.0,
+                bits: 16,
+            }),
+            ..AudioFacts::default()
+        });
+        f.covers = vec![picture(4000)];
+        assert!(f.holds_for(&source.rev()), "{method}");
+        f.covers = vec![picture(9000)];
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
+}
+
+#[test]
 fn facts_round_trip_through_json() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
