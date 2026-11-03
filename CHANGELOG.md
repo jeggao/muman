@@ -22,6 +22,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   to an earlier muman, move `state.db` aside and `state.json.bak` back
   to `state.json`; what ran since is lost.
 
+- **A sync records each song in `state.db` as it writes it**, one
+  commit for one song, where it saved the whole state now and then. A
+  sync stopped partway writes again only the song it was writing.
+
 - **A run's record keeps only the songs it changed**, not every song
   muman wrote, so the home's history stays small in a large library. A
   run an earlier muman recorded is still undone; an earlier muman cannot
