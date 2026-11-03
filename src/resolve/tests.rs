@@ -2467,3 +2467,32 @@ fn a_folder_s_cover_is_renamed_and_respelled_as_the_song_s() {
     let respelled = folder_cover(&key, "10:20").respelled(&|k| (*k == key).then(|| other.clone()));
     assert_eq!(respelled, folder_cover(&other, "10:20"));
 }
+
+#[test]
+fn lyrics_of_the_first_writing_are_stored_as_before_it_was_named() {
+    let lyrics = LyricsRef {
+        key: yt("aaaaaaaaaaa"),
+        rev: "r".into(),
+        at: LyricsAt::File,
+        shift_ms: 0,
+        stretch_ppm: 0,
+        placement: LyricsPlacement::Sidecar,
+        files: None,
+        inside: None,
+        end_ms: None,
+        language: None,
+        clean_off: Vec::new(),
+        cleaning: crate::clean::lyrics::EDITION,
+        writing: 1,
+    };
+    let json = serde_json::to_value(&lyrics).unwrap();
+    assert!(json.get("writing").is_none(), "{json}");
+    assert_eq!(serde_json::from_value::<LyricsRef>(json).unwrap(), lyrics);
+    let later = LyricsRef {
+        writing: 2,
+        ..lyrics
+    };
+    let json = serde_json::to_value(&later).unwrap();
+    assert_eq!(json["writing"], 2);
+    assert_eq!(serde_json::from_value::<LyricsRef>(json).unwrap(), later);
+}

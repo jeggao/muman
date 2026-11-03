@@ -70,17 +70,27 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
         what.push("folder cover");
     }
     let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
-    let uncleaned = |p: &Plan| {
+    let unwritten = |p: &Plan| {
         p.lyrics.as_ref().map(|l| LyricsRef {
+            writing: 0,
+            ..l.lines()
+        })
+    };
+    let uncleaned = |p: &Plan| {
+        unwritten(p).map(|l| LyricsRef {
             clean_off: Vec::new(),
             cleaning: 0,
-            ..l.lines()
+            ..l
         })
     };
     if uncleaned(old) != uncleaned(new) {
         what.push("lyrics");
-    } else if lines(old) != lines(new) || render::lyrics_names(old) != render::lyrics_names(new) {
+    } else if unwritten(old) != unwritten(new)
+        || render::lyrics_names(old) != render::lyrics_names(new)
+    {
         what.push("lyric cleaning");
+    } else if lines(old) != lines(new) && !what.contains(&"muman's rendering") {
+        what.push("muman's rendering");
     }
     let other_tags = |p: &Plan| {
         p.tags

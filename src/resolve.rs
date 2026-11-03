@@ -530,6 +530,11 @@ pub struct LyricsRef {
     /// named one, so lyrics written then are cleaned again.
     #[serde(default)]
     pub cleaning: u32,
+    /// The [`lyrics::WRITING`] they are read, moved and written by. The
+    /// first is left out of a stored plan, so a plan stored before muman
+    /// named one reads as it, and its plan key is the one it had.
+    #[serde(default = "first_writing", skip_serializing_if = "is_first_writing")]
+    pub writing: u32,
 }
 
 impl LyricsRef {
@@ -603,6 +608,16 @@ impl Default for LyricsFile {
 
 fn yes() -> bool {
     true
+}
+
+fn first_writing() -> u32 {
+    1
+}
+
+// serde hands `skip_serializing_if` a reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
+fn is_first_writing(writing: &u32) -> bool {
+    *writing == first_writing()
 }
 
 // serde hands `skip_serializing_if` a reference.
@@ -1391,6 +1406,18 @@ pub(crate) const STATED_SPAN_MS: f64 = 4000.0;
 /// it never ranks over a subtitle of the same recording.
 const STATED_MAX: f64 = 0.9;
 
+/// How many tenths of audio `duration_ms` long lyrics of `timing` span;
+/// none for untimed lyrics.
+fn coverage(timing: Option<lyrics::Timing>, duration_ms: f64) -> i64 {
+    timing.map_or(0, |t| {
+        if duration_ms > 0.0 {
+            ((t.last_ms - t.first_ms) as f64 / duration_ms * 10.0).floor() as i64
+        } else {
+            0
+        }
+    })
+}
+
 /// The confidence lyrics stating a length are the chosen audio's.
 fn stated_confidence(stated_ms: i64, audio_ms: f64) -> f64 {
     let gap = (stated_ms as f64 - audio_ms).abs();
@@ -1443,18 +1470,11 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                 }
                 _ => confidence,
             };
-            let coverage = l.timing.map_or(0, |t| {
-                if duration_ms > 0.0 {
-                    ((t.last_ms - t.first_ms) as f64 / duration_ms * 10.0).floor() as i64
-                } else {
-                    0
-                }
-            });
             let mut rank: Rank = preferred(&input.lyrics.prefer, &fit, l.timing.is_some());
             rank.extend([
                 fit.rank,
                 -((confidence * 20.0).floor() as i64),
-                -coverage,
+                -coverage(l.timing, duration_ms),
                 i64::try_from(n).unwrap_or(UNKNOWN),
             ]);
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
@@ -1494,6 +1514,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
                     language: l.language.langs().first().map(Lang::iso639_2),
                     clean_off: clean::lyrics::off(input.clean),
                     cleaning: clean::lyrics::EDITION,
+                    writing: lyrics::WRITING,
                 },
                 why,
             ));

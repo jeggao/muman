@@ -76,6 +76,7 @@ fn plan(format: Format) -> Plan {
             language: None,
             clean_off: Vec::new(),
             cleaning: crate::clean::lyrics::EDITION,
+            writing: crate::lyrics::WRITING,
         }),
         tags: vec![
             ("TITLE".into(), vec!["Song".into()]),
@@ -806,6 +807,7 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
         language: None,
         clean_off: Vec::new(),
         cleaning: crate::clean::lyrics::EDITION,
+        writing: crate::lyrics::WRITING,
     });
     let fake = Fake::default();
     go(&fake, &f, &p).unwrap();

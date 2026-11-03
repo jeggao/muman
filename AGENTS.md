@@ -169,7 +169,7 @@ week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
 minor and patch bumps as one pull request, those of the crates the
-measures are made with as another, and each major alone;
+measures and lyrics are made with as another, and each major alone;
 `flake-update.yml` moves `flake.lock` the same way.
 
 ## Conventions
