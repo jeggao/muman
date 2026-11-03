@@ -63,8 +63,10 @@
 //! tag past that, its other items counted, so in every container a cover
 //! past what is left is made a JPEG at most 3000 pixels wide; FLAC embeds
 //! no lyrics past it. Lyrics are cleaned as the plan's lyric switches say
-//! ([`crate::clean::lyrics`]), knowing the song's title and artists, and
-//! moved by its offset; lyrics from a `.lrc` file need no ffmpeg at all.
+//! ([`crate::clean::lyrics`]) and moved by its offset, from their part
+//! (`artifact::LyricText`) alone: the cleaning knows the song's title and
+//! artists only where the part holds them, so no change it reads leaves
+//! the lyrics as they were. Lyrics from a `.lrc` file need no ffmpeg.
 //!
 //! The audio keeps its source's chapters, as [`crate::chapters`] writes
 //! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
@@ -107,6 +109,7 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
+use crate::artifact::{LyricText, Parts};
 use crate::chapters::Chapter;
 use crate::clean;
 use crate::codec::{Codec, Container};
@@ -355,8 +358,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             .get(key)
             .ok_or_else(|| anyhow!("{key} is not on disk"))
     };
+    let made = crate::artifact::parts(plan);
     let audio_rel = with_extension(job.stem, plan.format.extension());
-    let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, plan), cover_rels(job.stem, plan));
+    let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, &made), cover_rels(job.stem, plan));
     let folder_rels = folder_rels(job.stem, plan);
     let rels: Vec<PathBuf> = lyrics_rels
         .iter()
@@ -422,15 +426,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let mut outputs = vec![audio_output(plan, n, chapters, reserve, &audio_part)];
     outputs.append(&mut cover_outputs);
     let lyrics_raw = job.scratch.join("lyrics.lrc");
-    let lyrics_text = match &plan.lyrics {
-        Some(l) => match lyrics_plan(
-            l,
-            &lyrics_context(plan, l),
-            locate(&l.key)?,
-            &lyrics_raw,
-            &mut inputs,
-            &mut outputs,
-        ) {
+    let lyrics_text = match made.lyric_text() {
+        Some(l) => match lyrics_plan(l, locate(l.key)?, &lyrics_raw, &mut inputs, &mut outputs) {
             Ok(text) => Some(text),
             Err(e) => {
                 problems.push(format!("no lyrics: {e:#}"));
@@ -449,7 +446,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             return Err(anyhow!("{e}"));
         }
         let flac = plan.format.codec().container() == Container::Flac;
-        let text = match (&plan.lyrics, lyrics_text) {
+        let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
                 Some(e) => {
@@ -460,17 +457,16 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                     .map(|b| lyrics::decode(&b))
                     .map_err(|e| problems.push(format!("no lyrics: {e}")))
                     .ok()
-                    .map(|t| cleaned(&t, l, &lyrics_context(plan, l))),
+                    .map(|t| cleaned(&t, l)),
             },
             _ => None,
         }
         .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
         let mut tags = plan.tags.clone();
-        let inside = plan.lyrics.as_ref().filter(|l| l.tag()).zip(text.as_ref());
-        if let Some(text) = inside.and_then(|(l, text)| {
-            let form = l.inside.clone().unwrap_or_default();
-            crate::cues::write(text, form.format, form.words, None)
-        }) {
+        let inside = made.lyrics.as_ref().zip(text.as_ref());
+        if let Some(text) =
+            inside.and_then(|(l, text)| crate::cues::write(text, l.form.format, l.form.words, None))
+        {
             if flac && text.len() > FLAC_BLOCK {
                 problems.push(format!(
                     "lyrics not embedded: {} is more than a FLAC file's tags hold",
@@ -515,8 +511,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         }
         set_opus_header(&audio_part, plan)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
-        let mut held = match plan.lyrics.as_ref().zip(text) {
-            Some((l, text)) => contents(l, &text),
+        let mut held = match text {
+            Some(text) => contents(&made, &text),
             None => vec![None; lyrics_rels.len()],
         };
         held.extend(cover_bytes(
@@ -555,14 +551,11 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     }
 }
 
-/// The files of lyrics `plan` has beside the song at `stem`.
-fn lyrics_rels(stem: &Path, plan: &Plan) -> Vec<PathBuf> {
-    plan.lyrics.as_ref().map_or_else(Vec::new, |l| {
-        l.files()
-            .iter()
-            .map(|f| crate::outputs::lyrics_file(stem, f))
-            .collect()
-    })
+/// The files of lyrics `made` has beside the song at `stem`.
+fn lyrics_rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
+    made.lyric_files()
+        .map(|f| crate::outputs::lyrics_file(stem, &f.file))
+        .collect()
 }
 
 /// The files of the cover `plan` has beside the song at `stem`.
@@ -620,13 +613,13 @@ fn failure(outputs: &[Output], results: &[Result<()>], path: &Path) -> Option<St
         .and_then(|(_, r)| r.as_ref().err().map(|e| format!("{e:#}")))
 }
 
-/// What each file of `lyrics` beside the song holds, from their `text`
-/// as kept; none for one whose format takes no such lyrics.
-fn contents(lyrics: &LyricsRef, text: &str) -> Vec<Option<Vec<u8>>> {
-    lyrics
-        .files()
-        .iter()
-        .map(|f| crate::cues::write(text, f.format, f.words, lyrics.end_ms).map(String::into_bytes))
+/// What each file of lyrics `made` has beside the song holds, from
+/// their `text` as kept; none for one whose format takes no such lyrics.
+fn contents(made: &Parts<'_>, text: &str) -> Vec<Option<Vec<u8>>> {
+    made.lyric_files()
+        .map(|f| {
+            crate::cues::write(text, f.file.format, f.file.words, f.end_ms).map(String::into_bytes)
+        })
         .collect()
 }
 
@@ -1130,34 +1123,6 @@ fn cover_bytes(
         .collect()
 }
 
-/// The song's title and artists its lyrics are cleaned by, where a rule
-/// switched on reads them.
-pub(crate) fn lyrics_names(plan: &Plan) -> Option<(Option<&str>, Vec<&str>)> {
-    let lyrics = plan.lyrics.as_ref()?;
-    let reads = clean::lyrics::NAMED
-        .iter()
-        .any(|rule| !lyrics.clean_off.iter().any(|off| off == rule));
-    reads.then(|| {
-        let ctx = lyrics_context(plan, lyrics);
-        (ctx.title, ctx.artists)
-    })
-}
-
-/// What lyric cleaning knows of the song a plan writes.
-fn lyrics_context<'p>(plan: &'p Plan, lyrics: &LyricsRef) -> clean::lyrics::Context<'p> {
-    let values = |name: &'static str| {
-        plan.tags
-            .iter()
-            .filter(move |(k, _)| k == name)
-            .flat_map(|(_, v)| v.iter().map(String::as_str))
-    };
-    clean::lyrics::Context {
-        title: values("TITLE").next(),
-        artists: values("ARTIST").chain(values("ARTISTS")).collect(),
-        subtitle: matches!(lyrics.at, LyricsAt::Stream { .. }),
-    }
-}
-
 /// What [`beside`] wrote: each file beside the song, with what it takes
 /// in bytes, and what could not be written, each said once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1174,16 +1139,17 @@ pub struct Beside {
 /// [`render`] clears it.
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     let plan = job.plan;
+    let made = crate::artifact::parts(plan);
     let mut problems = Vec::new();
-    let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, plan), cover_rels(job.stem, plan));
+    let (lyrics_rels, cover_rels) = (lyrics_rels(job.stem, &made), cover_rels(job.stem, plan));
     let folder_rels = folder_rels(job.stem, plan);
-    let mut held = match &plan.lyrics {
+    let mut held = match made.lyric_text() {
         Some(l) if !lyrics_rels.is_empty() => {
             let text = lyrics_text(runner, job, l)
                 .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
                 .ok()
                 .flatten();
-            text.map_or_else(|| vec![None; lyrics_rels.len()], |t| contents(l, &t))
+            text.map_or_else(|| vec![None; lyrics_rels.len()], |t| contents(&made, &t))
         }
         _ => Vec::new(),
     };
@@ -1267,62 +1233,64 @@ fn cover_files<R: Runner>(
     Ok(cover_bytes(&files, rels, failed, problems))
 }
 
-/// The text of `lyrics` as `job`'s plan writes them, read from their
-/// source, a subtitle stream through ffmpeg alone; none when no line is.
-fn lyrics_text<R: Runner>(runner: &R, job: &Job<'_>, lyrics: &LyricsRef) -> Result<Option<String>> {
+/// The text `lyrics` make, read from their source, a subtitle stream
+/// through ffmpeg alone; none when no line is.
+fn lyrics_text<R: Runner>(
+    runner: &R,
+    job: &Job<'_>,
+    lyrics: &LyricText<'_>,
+) -> Result<Option<String>> {
     let source = job
         .sources
-        .get(&lyrics.key)
+        .get(lyrics.key)
         .ok_or_else(|| anyhow!("{} is not on disk", lyrics.key))?;
     fs::create_dir_all(job.scratch)?;
-    let ctx = lyrics_context(job.plan, lyrics);
     let raw = job.scratch.join("lyrics.lrc");
     let (mut inputs, mut outputs) = (Inputs::default(), Vec::new());
-    let mut text = lyrics_plan(lyrics, &ctx, source, &raw, &mut inputs, &mut outputs)?;
+    let mut text = lyrics_plan(lyrics, source, &raw, &mut inputs, &mut outputs)?;
     if text.is_none() {
         let paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
         for result in ffmpeg::run_outputs(runner, &paths, &outputs) {
             result?;
         }
         let read = fs::read(&raw).with_context(|| format!("reading {}", raw.display()))?;
-        text = Some(cleaned(&lyrics::decode(&read), lyrics, &ctx));
+        text = Some(cleaned(&lyrics::decode(&read), lyrics));
     }
     Ok(text.filter(|t| t.lines().any(|l| !l.trim().is_empty())))
 }
 
-/// `text` cleaned as the plan's lyrics say, then moved to the audio.
-fn cleaned(text: &str, lyrics: &LyricsRef, ctx: &clean::lyrics::Context<'_>) -> String {
-    let text = clean::lyrics::clean(text, ctx, &lyrics.clean_off).text;
+/// `text` cleaned as `lyrics` say, then moved to the audio.
+fn cleaned(text: &str, lyrics: &LyricText<'_>) -> String {
+    let text = clean::lyrics::clean(text, &lyrics.context(), lyrics.clean_off).text;
     lyrics::shift_lrc(&text, lyrics.shift_ms, lyrics.stretch_ppm)
 }
 
 /// Plan the lyrics: a file's text now, or a subtitle stream the run
 /// converts to `raw`, read once it ran (`None`).
 fn lyrics_plan(
-    lyrics: &LyricsRef,
-    ctx: &clean::lyrics::Context<'_>,
+    lyrics: &LyricText<'_>,
     source: &Located,
     raw: &Path,
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
 ) -> Result<Option<String>> {
-    if let LyricsAt::Stream { index } = &lyrics.at {
+    if let LyricsAt::Stream { index } = lyrics.at {
         let n = inputs.index(&source.path);
         let mut args: Vec<OsString> = vec!["-map".into(), format!("{n}:{index}").into()];
         args.extend(LRC_ARGS.iter().map(OsString::from));
         outputs.push(Output::new(args, raw));
         return Ok(None);
     }
-    let text = if lyrics.at == LyricsAt::Tag {
+    let text = if *lyrics.at == LyricsAt::Tag {
         crate::tags::lyrics_in(&source.path)
             .ok_or_else(|| anyhow!("the lyrics in {} are gone", source.path.display()))?
             .0
     } else {
-        let file = lyrics_file(&lyrics.at, source)
+        let file = lyrics_file(lyrics.at, source)
             .ok_or_else(|| anyhow!("the lyrics beside {} are gone", source.path.display()))?;
         lyrics::decode(&fs::read(&file).with_context(|| format!("reading {}", file.display()))?)
     };
-    Ok(Some(cleaned(&text, lyrics, ctx)))
+    Ok(Some(cleaned(&text, lyrics)))
 }
 
 /// The file lyrics at `at` of `source` are read from; none for a stream

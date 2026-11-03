@@ -11,7 +11,8 @@
 //! | each file beside ([`Beside`]) | the lyric and cover writers | writes that file again |
 //!
 //! A lyric file's text holds what its cleaning reads of the song's names
-//! ([`LyricText::names`]), so a retitled song's lyrics are told apart. A
+//! ([`LyricText::names`]), so a retitled song's lyrics are told apart;
+//! [`crate::render`] cleans and writes lyrics from these parts alone. A
 //! cover's `made` counts only where a place encodes it, as
 //! [`CoverRef::only`] keeps it. The files beside come in the order
 //! [`crate::outputs::planned`] names them: lyrics, covers, folder covers.
@@ -198,8 +199,28 @@ fn lyric_text<'a>(plan: &'a Plan, l: &'a LyricsRef) -> LyricText<'a> {
         clean_off: &l.clean_off,
         cleaning: l.cleaning,
         writing: l.writing,
-        names: crate::render::lyrics_names(plan),
+        names: names(plan, l),
     }
+}
+
+/// The song's title and artists `l` is cleaned by, where a rule switched
+/// on reads them.
+fn names<'a>(plan: &'a Plan, l: &LyricsRef) -> Option<(Option<&'a str>, Vec<&'a str>)> {
+    let reads = crate::clean::lyrics::NAMED
+        .iter()
+        .any(|rule| !l.clean_off.iter().any(|off| off == rule));
+    let values = |name: &'static str| {
+        plan.tags
+            .iter()
+            .filter(move |(k, _)| k == name)
+            .flat_map(|(_, v)| v.iter().map(String::as_str))
+    };
+    reads.then(|| {
+        (
+            values("TITLE").next(),
+            values("ARTIST").chain(values("ARTISTS")).collect(),
+        )
+    })
 }
 
 /// The places of `c` beside the song, or inside it.
@@ -245,7 +266,38 @@ impl AudioPart<'_> {
     }
 }
 
-impl Parts<'_> {
+impl LyricText<'_> {
+    /// What the lyrics' cleaning knows of the song: its names only where
+    /// a rule switched on reads them.
+    #[must_use]
+    pub(crate) fn context(&self) -> crate::clean::lyrics::Context<'_> {
+        let (title, artists) = self.names.clone().unwrap_or_default();
+        crate::clean::lyrics::Context {
+            title,
+            artists,
+            subtitle: matches!(self.at, LyricsAt::Stream { .. }),
+        }
+    }
+}
+
+impl<'a> Parts<'a> {
+    /// The text of the song's lyrics, where some file holds them.
+    #[must_use]
+    pub(crate) fn lyric_text(&self) -> Option<&LyricText<'a>> {
+        self.lyrics
+            .as_ref()
+            .map(|l| &l.text)
+            .or_else(|| self.lyric_files().next().map(|f| &f.text))
+    }
+
+    /// The files of lyrics beside the song.
+    pub(crate) fn lyric_files(&self) -> impl Iterator<Item = &LyricsFilePart<'a>> {
+        self.beside.iter().filter_map(|b| match b {
+            Beside::Lyrics(f) => Some(f),
+            Beside::Cover(_) | Beside::Folder(_) => None,
+        })
+    }
+
     /// What writing these parts over a song built as `old` writes again.
     #[must_use]
     pub(crate) fn redo_from(&self, old: &Parts<'_>) -> Redo {
