@@ -390,7 +390,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             };
             reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))
         }
-        Command::Info => {
+        Command::Info { state: true } => {
+            state::State::dump(&dirs.home, data)?;
+            Ok(true)
+        }
+        Command::Info { state: false } => {
             overview::info(dirs, job.verbose, data)?;
             let found: Vec<tools::Status> = tools::TOOLS
                 .iter()
@@ -795,7 +799,7 @@ pub(crate) fn traits(command: &Command) -> Traits {
             steps: &["Comparing prints"],
             ..reads
         },
-        Command::Info => Traits {
+        Command::Info { .. } => Traits {
             gated: true,
             ..reads
         },
