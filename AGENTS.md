@@ -98,7 +98,7 @@ src/
   naming.rs         safe names; template.rs, the path template
   codec.rs          output codecs: names, containers, ffmpeg arguments
   ogg.rs            the output gain an Opus file's header holds
-  render.rs         one plan to library files
+  render.rs         one plan to library files; render/lyrics.rs, its lyrics
   outputs.rs        the files beside a song: their names, and where a move takes them
   folder.rs         the cover file a folder holds once, and the song that holds it
   library.rs        the ledger: every move and removal in the library
