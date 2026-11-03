@@ -615,6 +615,44 @@ fn each_lyrics_output_writes_its_file_and_one_taken_out_takes_only_its_own() {
 }
 
 #[test]
+fn a_file_beside_added_is_written_alone_and_the_rest_left_as_they_are() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, "version = 1\n[[lyrics.out]]\nto = \"file\"\n").unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    let modified = |name: &str| {
+        std::fs::metadata(lib.join(name))
+            .unwrap()
+            .modified()
+            .unwrap()
+    };
+    let (song, lrc) = (modified("02 Song.flac"), modified("02 Song.lrc"));
+
+    let listed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(
+        &list,
+        format!("{listed}\n[[lyrics.out]]\nto = \"file\"\nformat = \"txt\"\n"),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(lib.join("02 Song.txt")).unwrap(),
+        "Paper comets\n",
+        "{text}"
+    );
+    assert_eq!(modified("02 Song.flac"), song, "the song's file left alone");
+    assert_eq!(modified("02 Song.lrc"), lrc, "its lyrics file left alone");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
 fn a_cover_file_added_or_taken_out_is_written_or_removed_alone() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");

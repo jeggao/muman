@@ -43,6 +43,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   cleaning switch, a new title the cleaning reads, or a new offset
   encoded or copied again every song holding its lyrics inside; it is
   now tagged again in place, as docs/library.md says.
+- **A file beside a song is written alone.** A `[[lyrics.out]]` or
+  `[[cover.out]]` file added or changed wrote again the song's file and
+  every file beside it; now only the files that changed are written.
 - **`max_size` measures no song a change only tags again.** Its size is
   taken from the plan its file was written from, where a new lyric
   cleaning, tagging or chapters rendered the song again to measure it.
