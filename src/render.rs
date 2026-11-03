@@ -266,7 +266,8 @@ fn kept(mimetype: &str) -> Option<ImageFormat> {
 }
 
 /// How a cover ffmpeg converts is made, raised whenever the bytes it
-/// converts to change: [`CoverRef::made`].
+/// converts to change: [`CoverRef::made`]. A test pins it to a digest of
+/// the arguments a picture is converted with.
 pub const COVER_MAKING: u32 = 1;
 
 /// The options every picture ffmpeg encodes is written with: swscale and
