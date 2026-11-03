@@ -210,7 +210,7 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     };
     let fake = Fake::default();
     let made = crate::artifact::parts(&p);
-    let alone = beside(&fake, &job(&made)).unwrap();
+    let alone = beside(&fake, &job(&made), &[]).unwrap();
     assert_eq!(alone.files, built.beside);
     assert_eq!(fs::read(&lrc).unwrap(), whole, "as a build writes them");
     assert!(!fake.ran("copy"), "the audio left alone");
@@ -227,6 +227,7 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
             stale: &stale,
             ..job(&inside)
         },
+        &[],
     )
     .unwrap();
     assert_eq!(none.files, []);
@@ -402,6 +403,7 @@ fn a_cover_file_written_alone_is_the_one_a_build_writes() {
             claim: &claim,
             stale: &[],
         },
+        &[],
     )
     .unwrap();
     assert!(alone.problems.is_empty(), "{:?}", alone.problems);

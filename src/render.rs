@@ -805,16 +805,18 @@ pub struct Beside {
 /// Write the files `job`'s plan has beside the song, its lyrics and its
 /// cover, from their sources, as [`render`] writes them, leaving the
 /// song's audio file as it is: for a song whose file holds what it would
-/// be written with, its tags aside, as `retag` writes them. A file the
-/// last build left beside it that the plan has none of goes, as
-/// [`render`] clears it.
-pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
+/// be written with, its tags aside, as `retag` writes them. Those of
+/// `keep`, as they would be written already, are left as they are, and
+/// nothing is made for them. A file the last build left beside it that
+/// the plan has none of goes, as [`render`] clears it.
+pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<Beside> {
     let made = job.parts;
     let mut problems = Vec::new();
     let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, made), cover_rels(job.stem, made));
     let folder_rels = folder_rels(job.stem, made);
+    let due = |rels: &[PathBuf]| rels.iter().any(|r| !keep.contains(r));
     let mut held = match made.lyric_text() {
-        Some(l) if !lyrics_rels.is_empty() => {
+        Some(l) if due(&lyrics_rels) => {
             let text = lyrics::text(runner, job, l)
                 .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
                 .ok()
@@ -827,7 +829,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         _ => Vec::new(),
     };
     held.resize(lyrics_rels.len(), None);
-    if let Some((c, places)) = pictures(made.covers_beside()) {
+    if let Some((c, places)) = pictures(made.covers_beside()).filter(|_| due(&cover_rels)) {
         match cover_files(
             runner,
             job,
@@ -841,7 +843,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         }
     }
     held.resize(lyrics_rels.len() + cover_rels.len(), None);
-    if let Some((f, places)) = pictures(made.folder_covers()) {
+    if let Some((f, places)) = pictures(made.folder_covers()).filter(|_| due(&folder_rels)) {
         let scratch = job.scratch.join("folder");
         match cover_files(
             runner,
@@ -855,11 +857,17 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
             Err(e) => problems.push(format!("no folder cover: {e:#}")),
         }
     }
-    let rels: Vec<PathBuf> = lyrics_rels
+    held.resize(
+        lyrics_rels.len() + cover_rels.len() + folder_rels.len(),
+        None,
+    );
+    let (rels, held): (Vec<PathBuf>, Vec<Option<Vec<u8>>>) = lyrics_rels
         .into_iter()
         .chain(cover_rels)
         .chain(folder_rels)
-        .collect();
+        .zip(held)
+        .filter(|(rel, _)| !keep.contains(rel))
+        .unzip();
     let parts: Vec<PathBuf> = rels.iter().map(|r| part(&job.library.join(r))).collect();
     let placed = stage_beside(job, (&rels, &parts), &held, &mut problems)
         .and_then(|written| put_beside(job, &parts, &rels, &written));

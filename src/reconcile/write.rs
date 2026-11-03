@@ -2,6 +2,11 @@
 //! each song written or tagged again, what changed in each said, and the
 //! library folder's time set after a change.
 //!
+//! A song tagged again is written no further than its parts reach: its
+//! file is tagged only where its tags or the lyrics inside changed, and
+//! of the files beside it only those whose part changed, or that are gone,
+//! are written; the rest keep the records they were written with.
+//!
 //! Every song due is saved as about to be written before any is, and
 //! each as written once it is, so a run stopped partway writes again only
 //! what it had not saved. A save follows a song written once the time
@@ -333,7 +338,18 @@ fn before_writing<R: Runner, W: Write>(
     if let Some(pending) = pending.as_mut() {
         for ((n, r), retag) in due {
             let path = path_of(r);
-            // A retag leaving the files beside the song as they are keeps them vouched for.
+            // A retag keeps vouched for the files beside the song it leaves as they are.
+            let kept = if *retag {
+                kept_beside(&job.dirs.library, old, r)
+            } else {
+                Vec::new()
+            };
+            let was = |s: &PathBuf| {
+                old.get(&path)
+                    .and_then(|w| w.sidecars.iter().find(|k| k.path == *s))
+                    .filter(|_| kept.contains(s))
+                    .cloned()
+            };
             let sidecars = match old
                 .get(&path)
                 .filter(|_| *retag && !beside_changes(&job.dirs.library, old, r))
@@ -345,8 +361,9 @@ fn before_writing<R: Runner, W: Write>(
                     .filter(|s| {
                         std::fs::symlink_metadata(job.dirs.library.join(s)).is_err()
                             || claims[n].iter().any(|o| o.path() == s)
+                            || kept.contains(s)
                     })
-                    .map(Sidecar::at)
+                    .map(|s| was(&s).unwrap_or_else(|| Sidecar::at(s)))
                     .collect(),
             };
             pending.outputs.insert(
@@ -379,6 +396,52 @@ fn before_writing<R: Runner, W: Write>(
     Ok((pending, claims))
 }
 
+/// Write `r`'s song, at `job`, as a retag over the file `old` records
+/// there, with `recorded` beside it: its tags written again only where
+/// they or the lyrics inside changed, the lyrics inside made anew where
+/// their part did, and only the files beside it that changed.
+fn retag_one<R: Runner>(
+    runner: &R,
+    job: &render::Job<'_>,
+    old: &BTreeMap<PathBuf, Written>,
+    r: &Resolved,
+    recorded: &[PathBuf],
+) -> Result<render::Rendered> {
+    let (library, parts) = (job.library, job.parts);
+    let path = path_of(r);
+    let was = old
+        .get(&path)
+        .and_then(|w| w.plan.as_ref())
+        .map(crate::artifact::parts);
+    let anew = was.as_ref().is_none_or(|p| p.lyrics != parts.lyrics);
+    let tags = was.as_ref().is_none_or(|p| parts.redo_from(p).retag);
+    let bytes = |p: &Path| std::fs::metadata(library.join(p)).map_or(0, |m| m.len());
+    let mut done = if tags {
+        render::retag(runner, job, (&path, recorded), anew)?
+    } else {
+        render::Rendered {
+            audio_bytes: bytes(&path),
+            audio: path.clone(),
+            beside: recorded.iter().map(|b| (b.clone(), bytes(b))).collect(),
+            problems: Vec::new(),
+        }
+    };
+    if beside_changes(library, old, r) {
+        let kept = kept_beside(library, old, r);
+        let beside = render::beside(runner, job, &kept)?;
+        done.beside = parts
+            .files(&path)
+            .into_iter()
+            .filter_map(|file| match beside.files.iter().find(|(p, _)| *p == file) {
+                Some(written) => Some(written.clone()),
+                None => kept.contains(&file).then(|| (file.clone(), bytes(&file))),
+            })
+            .collect();
+        done.problems.extend(beside.problems);
+    }
+    Ok(done)
+}
+
 /// Whether the files `r`'s plan has beside the song differ from those
 /// `old` records at its path, or a file of its folder's is gone, so a
 /// song only retagged writes them anew.
@@ -387,6 +450,26 @@ fn beside_changes(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved
         .and_then(|w| w.plan.as_ref())
         .is_none_or(|p| crate::artifact::redo(p, &r.plan).beside)
         || !folder_there(library, &path_of(r), &r.plan)
+}
+
+/// The files beside `r`'s song a retag leaves as they are: each its plan
+/// writes whose part is as in the plan the song's file was written from,
+/// recorded there as muman's, and there. A folder's file one song hands
+/// another is not its to keep.
+fn kept_beside(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> Vec<PathBuf> {
+    let path = path_of(r);
+    let Some((w, was)) = old.get(&path).and_then(|w| w.plan.as_ref().map(|p| (w, p))) else {
+        return Vec::new();
+    };
+    let before = crate::artifact::parts(was);
+    crate::artifact::parts(&r.plan)
+        .beside
+        .iter()
+        .filter(|b| before.beside.contains(b))
+        .filter_map(|b| b.path(&path))
+        .filter(|at| w.sidecar_paths().any(|s| s == at))
+        .filter(|at| std::fs::symlink_metadata(library.join(at)).is_ok())
+        .collect()
 }
 
 /// Say which songs' files a sync leaves alone, and why.
@@ -495,19 +578,7 @@ fn render_due<R: Runner, W: Write>(
             stale: &stale,
         };
         if *retag {
-            // Lyrics inside whose part changed are made anew; others are kept
-            // as the file holds them.
-            let anew = old
-                .get(&path)
-                .and_then(|w| w.plan.as_ref())
-                .is_none_or(|p| crate::artifact::parts(p).lyrics != parts.lyrics);
-            let mut done = render::retag(*runner, &render_job, (&path, &recorded), anew)?;
-            if beside_changes(&dirs.library, old, r) {
-                let beside = render::beside(*runner, &render_job)?;
-                done.beside = beside.files;
-                done.problems.extend(beside.problems);
-            }
-            return Ok(done);
+            return retag_one(*runner, &render_job, old, r, &recorded);
         }
         render::render(*runner, &render_job)
     };
@@ -601,6 +672,11 @@ fn vouch<R: Runner, W: Write>(
         };
         (limit::plan_key(&f.tools, &r.plan), measured)
     });
+    let kept = if retag {
+        kept_beside(library, old, r)
+    } else {
+        Vec::new()
+    };
     let sidecars = match old
         .get(&done.audio)
         .filter(|_| retag && !beside_changes(library, old, r))
@@ -609,7 +685,13 @@ fn vouch<R: Runner, W: Write>(
         None => done
             .beside
             .iter()
-            .map(|(path, _)| Sidecar::vouched(library, path.clone()))
+            .map(|(path, _)| {
+                old.get(&done.audio)
+                    .and_then(|w| w.sidecars.iter().find(|s| s.path == *path))
+                    .filter(|_| kept.contains(path))
+                    .cloned()
+                    .unwrap_or_else(|| Sidecar::vouched(library, path.clone()))
+            })
             .collect(),
     };
     let vouched = Written {
