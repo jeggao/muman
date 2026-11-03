@@ -215,11 +215,40 @@ fn key_at(root: &Path, file: &Path) -> Option<SourceKey> {
 /// ignores case holds another key's file there, of an ID differing from
 /// this one's only in case.
 pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
+    let to = place_by(root, key, from, How::Move)?;
+    Ok(to.unwrap_or_else(|| from.to_path_buf()))
+}
+
+/// [`place`], but `from` keeps its file: the key's place is a second name
+/// for it, made once however often this is called. None where the
+/// filesystem makes no second name, as FAT does not, for the caller to
+/// [`place`] it instead.
+pub fn link(root: &Path, key: &SourceKey, from: &Path) -> Result<Option<PathBuf>> {
+    place_by(root, key, from, How::Link)
+}
+
+/// Remove `from`, a fetched file in `root` whose key now has its own
+/// name for it ([`link`]).
+pub fn unplace(root: &Path, from: &Path) -> Result<()> {
+    if from.starts_with(root) {
+        crate::atomic::remove(from).with_context(|| format!("deleting {}", from.display()))?;
+    }
+    Ok(())
+}
+
+/// How [`place_by`] puts a file at its key's place.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum How {
+    Move,
+    Link,
+}
+
+fn place_by(root: &Path, key: &SourceKey, from: &Path, how: How) -> Result<Option<PathBuf>> {
     let ext = from.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
     let to =
         fetched_path(root, key, ext).with_context(|| format!("{key} is fetched by no site"))?;
     if to == from {
-        return Ok(to);
+        return Ok(Some(to));
     }
     let folder = to.parent().unwrap_or(root);
     std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
@@ -236,8 +265,19 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
             to.display()
         );
     }
-    crate::atomic::rename(from, &to)
-        .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+    match how {
+        How::Move => crate::atomic::rename(from, &to)
+            .with_context(|| format!("moving {} to {}", from.display(), to.display()))?,
+        How::Link if same_file::is_same_file(from, &to).unwrap_or(false) => {}
+        How::Link => {
+            if to.exists() {
+                crate::atomic::remove(&to).with_context(|| format!("deleting {}", to.display()))?;
+            }
+            if crate::atomic::link(from, &to).is_err() {
+                return Ok(None);
+            }
+        }
+    }
     for name in &names {
         let other = folder.join(name);
         if name != to_name
@@ -248,7 +288,7 @@ pub fn place(root: &Path, key: &SourceKey, from: &Path) -> Result<PathBuf> {
                 .with_context(|| format!("deleting {}", other.display()))?;
         }
     }
-    Ok(to)
+    Ok(Some(to))
 }
 
 /// A manual file this recent may still be copying in.
@@ -1337,6 +1377,32 @@ mod tests {
             .to_string_lossy();
         let cut_otherwise = root.join("archive.org").join(stem.replacen('a', "a/", 1));
         assert_eq!(key_at(&root, &cut_otherwise), None, "one place per key");
+    }
+
+    #[test]
+    fn a_file_linked_at_its_key_keeps_its_old_name_until_unplaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sources/yt-dlp");
+        let key = SourceKey::parse("jamendo.com:1234567").unwrap();
+        let old = touch(
+            dir.path(),
+            "sources/yt-dlp/licensing.jamendo.com/1234567.mkv",
+        );
+        let to = root.join("jamendo.com").join("1234567.mkv");
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(&to, "another file").unwrap();
+        let Some(linked) = link(&root, &key, &old).unwrap() else {
+            // A filesystem that makes no second name: the caller moves it.
+            return;
+        };
+        assert_eq!(linked, to);
+        assert!(
+            same_file::is_same_file(&old, &to).unwrap(),
+            "the one there replaced"
+        );
+        assert_eq!(link(&root, &key, &old).unwrap(), Some(to.clone()), "once");
+        unplace(&root, &old).unwrap();
+        assert!(!old.exists() && to.is_file());
     }
 
     #[test]

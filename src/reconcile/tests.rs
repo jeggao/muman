@@ -1946,6 +1946,62 @@ fn a_source_of_a_sites_alias_is_renamed_by_that_site_and_its_file_moved() {
 }
 
 #[test]
+fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
+    let fake = Fake::default().info(
+        "1234567",
+        r#"{"id": "1234567", "title": "Title 1234567", "uploader": "Chan", "format_id": "mp31",
+            "webpage_url": "https://licensing.jamendo.com/en/track/1234567/title"}"#,
+    );
+    let prepare = || {
+        let h = home();
+        let old = h
+            .dirs
+            .ytdlp()
+            .join("licensing.jamendo.com")
+            .join("1234567.mkv");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"1234567").unwrap();
+        h.songs("[[song]]\nsources = [\"licensing.jamendo.com:1234567\"]\n");
+        (h, old)
+    };
+    let (whole, _) = prepare();
+    let counted = crate::testing::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    whole.run(&fake, Options::default());
+    let steps = counted.seen();
+    drop(counted);
+    let (from, to) = (
+        SourceKey::parse("licensing.jamendo.com:1234567").unwrap(),
+        SourceKey::parse("jamendo.com:1234567").unwrap(),
+    );
+    for at in 1..=steps {
+        let (h, old) = prepare();
+        let kill = crate::testing::kill_at(h.dirs.home.parent().unwrap(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reconcile(&fake, &h.dirs, Options::default(), None, &mut Vec::new())
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (ok, text) = h.run(&fake, Options::default());
+        assert!(ok && !text.contains("Failed"), "step {at}: {text}");
+        let new = h.dirs.ytdlp().join("jamendo.com").join("1234567.mkv");
+        assert_eq!(std::fs::read(&new).unwrap(), b"1234567", "step {at}");
+        assert_eq!(
+            Manifest::load(&h.dirs.home).unwrap().keys(),
+            [to.clone()].into()
+        );
+        let state = State::load(&h.dirs.home).unwrap();
+        assert!(
+            state.facts.contains_key(&to) && !state.facts.contains_key(&from),
+            "step {at}"
+        );
+        assert!(
+            !old.exists() || same_file::is_same_file(&old, &new).unwrap(),
+            "step {at}: the old name, if left, is the same file"
+        );
+    }
+}
+
+#[test]
 fn a_library_that_is_a_file_is_refused_before_the_old_one_is_forgotten() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("lib");

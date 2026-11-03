@@ -1,5 +1,14 @@
 //! Sources whose keys change before a sync plans: keys renamed by the
 //! site they came from, and manual files followed to where they moved.
+//!
+//! A key a site renames keeps its fetched file through the rename: the
+//! file takes a second name at the new key's place, then the state and
+//! then the song list name the new key, and only then does the old name
+//! go. A run stopped between any two finds the file under the key the
+//! list names, so it is not fetched again; stopped after the state, it
+//! measures that one source again, and after the list, it leaves the
+//! old name, which `purge` lists. A filesystem that makes no second
+//! name, as FAT, moves the file after the state instead.
 
 use std::collections::BTreeMap;
 use std::io::Write;

@@ -71,8 +71,8 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
 const MUTATIONS: &[(&str, usize, &str)] = &[
     (
         "atomic.rs",
-        6,
-        "the primitives every other write goes through, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
+        7,
+        "the primitives every other write goes through, a second name for a file, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
     ),
     (
         "library.rs",
@@ -94,10 +94,12 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "store.rs",
-        4,
+        7,
         "an upload its release replaced, deleted from the sources; a file \
          fetched moved to its key's place, replacing the key's other; a \
-         torrent's file aria2c finished moved to its key's place",
+         file a site renamed named at its new key's place, replacing \
+         another there, and its old name removed once the list names the \
+         new; a torrent's file aria2c finished moved to its key's place",
     ),
     (
         "aria2.rs",
@@ -155,6 +157,7 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
     let calls = [
         "atomic::remove(",
         "atomic::rename(",
+        "atomic::link(",
         "fs::remove_file(",
         "fs::rename(",
         "fs::copy(",
