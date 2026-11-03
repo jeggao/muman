@@ -97,7 +97,9 @@ list is undone with the run that applied it.
 A run stopped partway, by a crash or Ctrl-C, can be undone, and so can
 an undo stopped partway. An undo ends with a sync, and until that sync
 is done the undo stays the latest run: the next `undo` finishes it and
-goes no further back, and `check` names it.
+goes no further back, and `check` names it. An undo stopped before it
+put the song list back is finished by `undo` alone: until then a command
+that changes the library or the song list refuses, and says so.
 
 `undo` refuses when the song list changed since the run. After `remove
 --purge`, it refuses until you take back from the trash the files it
