@@ -39,6 +39,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   inside wrote every lyric file beside a song again, and now builds only
   the song. A chapter changed in a song other than an MP4 tags it again
   instead of building it.
+- **Lyrics inside a song are tagged into it, not built again.** A lyric
+  cleaning switch, a new title the cleaning reads, or a new offset
+  encoded or copied again every song holding its lyrics inside; it is
+  now tagged again in place, as docs/library.md says.
 
 ## [0.9.0] - 2026-11-03
 

@@ -49,6 +49,7 @@ const fn and(a: Redo, b: Redo) -> Redo {
 #[test]
 fn each_change_lands_in_the_part_that_writes_it() {
     let both = and(B, F);
+    let lyric = and(T, F);
     let expected: Vec<(&str, Redo)> = vec![
         ("version", B),
         ("format", B),
@@ -63,23 +64,24 @@ fn each_change_lands_in_the_part_that_writes_it() {
         ("cover.made", both),
         // The file beside's place alone.
         ("cover.out", F),
-        ("lyrics", and(both, T)),
-        ("lyrics.rev", both),
-        ("lyrics.at", both),
-        ("lyrics.shift_ms", both),
-        ("lyrics.stretch_ppm", both),
+        // The lyrics inside are the tags', and so a retag's.
+        ("lyrics", lyric),
+        ("lyrics.rev", lyric),
+        ("lyrics.at", lyric),
+        ("lyrics.shift_ms", lyric),
+        ("lyrics.stretch_ppm", lyric),
         // The files beside are named, so only the lyrics inside go.
-        ("lyrics.placement", B),
+        ("lyrics.placement", T),
         ("lyrics.files", F),
-        ("lyrics.inside", B),
+        ("lyrics.inside", T),
         // A file of cues' end, which the lyrics inside never read.
         ("lyrics.end_ms", F),
         ("lyrics.language", T),
-        ("lyrics.clean_off", both),
-        ("lyrics.cleaning", both),
-        ("lyrics.writing", both),
+        ("lyrics.clean_off", lyric),
+        ("lyrics.cleaning", lyric),
+        ("lyrics.writing", lyric),
         // The title, which the lyrics' cleaning reads.
-        ("tags", and(both, T)),
+        ("tags", lyric),
         ("tags.order", T),
         ("loudness", T),
         ("loudness.track", T),
@@ -140,7 +142,8 @@ fn a_plan_s_parts_are_equal_where_the_plan_is() {
 }
 
 /// The projections a sync decided by before these parts, as they were,
-/// to check the parts against.
+/// to check the parts against: `media_equal` without the lyrics inside,
+/// which a retag now writes.
 mod before {
     use std::path::{Path, PathBuf};
 
@@ -156,7 +159,6 @@ mod before {
             && (a.opus_header().is_none() || b.opus_header().is_some())
             && a.audio == b.audio
             && cover_inside(a) == cover_inside(b)
-            && lyrics_inside(a) == lyrics_inside(b)
             && a.chapters == b.chapters
     }
 
@@ -168,11 +170,6 @@ mod before {
 
     fn cover_inside(plan: &Plan) -> Option<CoverRef> {
         plan.cover.as_ref()?.only(|p| p.file.is_none())
-    }
-
-    fn lyrics_inside(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
-        plan.lyrics.as_ref().filter(|l| l.tag())?;
-        lyrics_held(plan).map(|(l, names)| (LyricsRef { files: None, ..l }, names))
     }
 
     fn lyrics_held(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
@@ -270,16 +267,12 @@ fn the_parts_decide_as_the_projections_they_replace_but_where_named() {
     }
     let expected = vec![
         // The form of the lyrics inside, which no file beside reads.
-        (Codec::Opus, "lyrics.inside", true, false),
-        // A file of cues' end, which the lyrics inside never read.
-        (Codec::Opus, "lyrics.end_ms", false, true),
+        (Codec::Opus, "lyrics.inside", false, false),
         // Chapters, which Opus and FLAC hold in their tags.
         (Codec::Opus, "chapters", false, false),
-        (Codec::Flac, "lyrics.inside", true, false),
-        (Codec::Flac, "lyrics.end_ms", false, true),
+        (Codec::Flac, "lyrics.inside", false, false),
         (Codec::Flac, "chapters", false, false),
-        (Codec::Aac, "lyrics.inside", true, false),
-        (Codec::Aac, "lyrics.end_ms", false, true),
+        (Codec::Aac, "lyrics.inside", false, false),
     ];
     assert_eq!(differ, expected);
 }
