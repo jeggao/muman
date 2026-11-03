@@ -296,6 +296,13 @@ impl Held {
             .clone()
     }
 
+    fn with<T>(&self, f: impl FnOnce(&mut db::Loaded) -> T) -> T {
+        f(&mut self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
     fn set(&self, loaded: db::Loaded) {
         *self
             .0
@@ -732,6 +739,14 @@ impl State {
         db::Db::open(home, BUSY_WAIT)?.save_diff(self, &mut loaded)?;
         self.held.set(loaded);
         stub(home)
+    }
+
+    /// Save the output at `path` alone, in a commit of its own: a song
+    /// written is recorded as it is, at a cost that does not grow with
+    /// the state, as a whole save's does.
+    pub fn save_output(&self, home: &Path, path: &Path) -> Result<()> {
+        let mut db = db::Db::open(home, BUSY_WAIT)?;
+        self.held.with(|loaded| db.save_output(self, path, loaded))
     }
 
     /// Write the state in `home` to `out` as JSON, in the shape

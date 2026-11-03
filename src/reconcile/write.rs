@@ -8,19 +8,14 @@
 //! are written; the rest keep the records they were written with.
 //!
 //! Every song due is saved as about to be written before any is, and
-//! each as written once it is, so a run stopped partway writes again only
-//! what it had not saved. A save follows a song written once the time
-//! since the last is [`SAVES_APART`] times what that save took, and at
-//! most [`Writing::every`]: saving then costs writing about a twentieth
-//! of its time, whatever the size of the state, and a small one is saved
-//! after every song. With saves a fixed 30 s apart alone, a run stopped
-//! within its first 30 s, all of a small library's writing, wrote every
-//! song again.
+//! each as written once it is, in a commit of its own that writes its
+//! row alone ([`crate::state::State::save_output`]): a run stopped
+//! partway writes again only the song it was writing, and the commit
+//! costs the same whatever the size of the state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
@@ -44,9 +39,6 @@ use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::prune;
 use super::{NAMED, Sub};
-
-/// How many times the last save took writing runs before the next.
-const SAVES_APART: u32 = 20;
 
 /// What differs between two plans, in words.
 pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
@@ -190,8 +182,6 @@ pub(super) struct Writing<'a, R: Runner> {
     pub fitted: Option<&'a limit::Fitted>,
     /// The run's scratch folder, which each render takes a folder of.
     pub scratch: &'a Path,
-    /// The longest writing runs between saves of what it wrote.
-    pub every: Duration,
 }
 
 /// What carrying out an intent did.
@@ -263,7 +253,7 @@ pub(super) fn apply<R: Runner, W: Write>(
         &old,
         &state.facts,
         (&claims, &shared),
-        (pending.as_mut(), ledger),
+        pending.as_mut(),
         out,
     )?;
     failed.extend(wrote.failed.iter().cloned());
@@ -526,7 +516,7 @@ fn render_due<R: Runner, W: Write>(
     old: &BTreeMap<PathBuf, Written>,
     facts: &BTreeMap<SourceKey, Facts>,
     (claims, shared): (&Claims, &BTreeSet<PathBuf>),
-    (mut pending, ledger): (Option<&mut State>, &mut Ledger<'_>),
+    mut pending: Option<&mut State>,
     out: &mut W,
 ) -> Result<Wrote> {
     let Writing {
@@ -536,7 +526,6 @@ fn render_due<R: Runner, W: Write>(
         located,
         placed,
         scratch,
-        every,
         ..
     } = job;
     let mut wrote = Wrote {
@@ -546,8 +535,6 @@ fn render_due<R: Runner, W: Write>(
         failed: BTreeSet::new(),
         failed_at: Vec::new(),
     };
-    let mut kept_at = Instant::now();
-    let mut save_took = Duration::ZERO;
     let writing = progress::step("Writing", Some(due.len() as u64));
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let _working = writing.working(&progress::label(&r.stem));
@@ -593,13 +580,7 @@ fn render_due<R: Runner, W: Write>(
                     wrote.learned.extend(learned);
                     if let Some(pending) = pending.as_deref_mut() {
                         pending.outputs.insert(done.audio.clone(), vouched.clone());
-                        if kept_at.elapsed() >= (save_took * SAVES_APART).min(*every) {
-                            let saving = Instant::now();
-                            pending.save(&dirs.home)?;
-                            ledger.checkpoint()?;
-                            kept_at = Instant::now();
-                            save_took = kept_at - saving;
-                        }
+                        pending.save_output(&dirs.home, &done.audio)?;
                     }
                     wrote.outputs.insert(done.audio, vouched);
                 }

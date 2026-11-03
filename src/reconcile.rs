@@ -83,7 +83,7 @@ pub struct Options {
 /// a lost state file makes every song such a one.
 const NAMED: usize = 10;
 
-/// How long measuring or writing runs between saves of what it did.
+/// How long measuring runs between saves of what it measured.
 const CHECKPOINT: Duration = Duration::from_secs(30);
 
 /// One source's folder under the run's scratch, gone when its step is:
@@ -488,7 +488,6 @@ pub fn reconcile_into<R: Runner, W: Write>(
         placed: &placed,
         fitted: fitted.as_ref(),
         scratch: temp.path(),
-        every: CHECKPOINT,
     };
     let applied = apply(
         &job,

@@ -508,40 +508,13 @@ impl Db {
         }
         self.write(|tx| {
             for (table, row, digest) in &upserts {
-                let mut columns: Vec<&str> = table.keys.to_vec();
-                let mut values: Vec<rusqlite::types::Value> =
-                    row.keys.iter().map(|k| k.clone().into()).collect();
-                if let Some(column) = table.value {
-                    columns.push(column);
-                    values.push(row.value.clone().unwrap_or_default().into());
-                }
-                if table.digest {
-                    columns.push("digest");
-                    values.push(digest.to_vec().into());
-                }
-                let marks = vec!["?"; columns.len()].join(", ");
-                tx.execute(
-                    &format!(
-                        "INSERT OR REPLACE INTO {} ({}) VALUES ({marks})",
-                        table.name,
-                        columns.join(", ")
-                    ),
-                    rusqlite::params_from_iter(values),
-                )?;
+                put_row(tx, table, row, digest)?;
             }
             for (name, key) in &gone {
                 let Some(table) = TABLES_OF_STATE.iter().find(|t| t.name == *name) else {
                     continue;
                 };
-                let matching: Vec<String> = table.keys.iter().map(|k| format!("{k} = ?")).collect();
-                tx.execute(
-                    &format!(
-                        "DELETE FROM {} WHERE {}",
-                        table.name,
-                        matching.join(" AND ")
-                    ),
-                    rusqlite::params_from_iter(key.split('\0')),
-                )?;
+                delete_row(tx, table, key)?;
             }
             Ok(())
         })?;
@@ -553,6 +526,78 @@ impl Db {
         }
         Ok(true)
     }
+
+    /// Write `state`'s output at `path` alone, or delete it where the
+    /// state holds none, in a commit of its own, as [`Db::save_diff`]
+    /// writes it among the rest: so a song written is recorded as it is,
+    /// at a cost that does not grow with the library.
+    pub(crate) fn save_output(
+        &mut self,
+        state: &State,
+        path: &Path,
+        loaded: &mut Loaded,
+    ) -> Result<()> {
+        let key = crate::relpath::to_portable(path);
+        let row = match state.outputs.get(path) {
+            Some(w) => Some(Row::new(vec![key.clone()], Some(json(w)?))),
+            None => None,
+        };
+        let held = (OUTPUTS.name, key.clone());
+        match &row {
+            Some(row) if loaded.0.get(&held) == Some(&row.digest()) => return Ok(()),
+            None if !loaded.0.contains_key(&held) => return Ok(()),
+            _ => {}
+        }
+        self.write(|tx| match &row {
+            Some(row) => put_row(tx, &OUTPUTS, row, &row.digest()),
+            None => delete_row(tx, &OUTPUTS, &key),
+        })?;
+        match row {
+            Some(row) => loaded.0.insert(held, row.digest()),
+            None => loaded.0.remove(&held),
+        };
+        Ok(())
+    }
+}
+
+/// Write `row` into `table`, over the row of its key.
+fn put_row(tx: &Transaction<'_>, table: &Table, row: &Row, digest: &[u8; 16]) -> Result<()> {
+    let mut columns: Vec<&str> = table.keys.to_vec();
+    let mut values: Vec<rusqlite::types::Value> =
+        row.keys.iter().map(|k| k.clone().into()).collect();
+    if let Some(column) = table.value {
+        columns.push(column);
+        values.push(row.value.clone().unwrap_or_default().into());
+    }
+    if table.digest {
+        columns.push("digest");
+        values.push(digest.to_vec().into());
+    }
+    let marks = vec!["?"; columns.len()].join(", ");
+    tx.execute(
+        &format!(
+            "INSERT OR REPLACE INTO {} ({}) VALUES ({marks})",
+            table.name,
+            columns.join(", ")
+        ),
+        rusqlite::params_from_iter(values),
+    )?;
+    Ok(())
+}
+
+/// Delete the row of `table` whose key is `key`, its columns joined by a
+/// NUL.
+fn delete_row(tx: &Transaction<'_>, table: &Table, key: &str) -> Result<()> {
+    let matching: Vec<String> = table.keys.iter().map(|k| format!("{k} = ?")).collect();
+    tx.execute(
+        &format!(
+            "DELETE FROM {} WHERE {}",
+            table.name,
+            matching.join(" AND ")
+        ),
+        rusqlite::params_from_iter(key.split('\0')),
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -726,6 +771,41 @@ mod tests {
             "nothing differs"
         );
         assert_eq!(db.conn.total_changes(), before);
+    }
+
+    #[test]
+    fn an_output_saved_alone_writes_its_row_and_a_whole_save_after_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        db.save_diff(&every_row(), &mut Loaded::default()).unwrap();
+        let (mut state, mut loaded) = db.snapshot().unwrap();
+        let path = PathBuf::from("Marlo Venn/Harbor Lights/02 Paper Comets.flac");
+        let mut written = state.outputs.values().next().unwrap().clone();
+        written.stamp = Some("10:40".into());
+        state.outputs.insert(path.clone(), written);
+        state.facts.clear();
+
+        let before = db.conn.total_changes();
+        db.save_output(&state, &path, &mut loaded).unwrap();
+        assert_eq!(db.conn.total_changes() - before, 1, "its row alone");
+        db.save_output(&state, &path, &mut loaded).unwrap();
+        assert_eq!(db.conn.total_changes() - before, 1, "as it was, nothing");
+        let (back, _) = db.snapshot().unwrap();
+        assert_eq!(back.outputs, state.outputs);
+        assert!(!back.facts.is_empty(), "the facts left as they were");
+
+        state.outputs.remove(&path);
+        db.save_output(&state, &path, &mut loaded).unwrap();
+        assert_eq!(db.conn.total_changes() - before, 2, "its row deleted");
+        let (back, _) = db.snapshot().unwrap();
+        assert_eq!(back.outputs, state.outputs);
+        let before = db.conn.total_changes();
+        assert!(db.save_diff(&state, &mut loaded).unwrap(), "the facts go");
+        assert_eq!(
+            db.conn.total_changes() - before,
+            u64::try_from(every_row().facts.len()).unwrap(),
+            "the output's row not written twice"
+        );
     }
 
     #[test]
