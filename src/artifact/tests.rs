@@ -180,7 +180,26 @@ mod before {
             files: Some(lyrics.files()),
             ..lyrics.lines()
         };
-        Some((held, crate::render::lyrics_names(plan)))
+        Some((held, lyrics_names(plan)))
+    }
+
+    fn lyrics_names(plan: &Plan) -> Names<'_> {
+        let lyrics = plan.lyrics.as_ref()?;
+        let reads = crate::clean::lyrics::NAMED
+            .iter()
+            .any(|rule| !lyrics.clean_off.iter().any(|off| off == rule));
+        let values = |name: &'static str| {
+            plan.tags
+                .iter()
+                .filter(move |(k, _)| k == name)
+                .flat_map(|(_, v)| v.iter().map(String::as_str))
+        };
+        reads.then(|| {
+            (
+                values("TITLE").next(),
+                values("ARTIST").chain(values("ARTISTS")).collect(),
+            )
+        })
     }
 }
 
@@ -223,4 +242,23 @@ fn the_parts_decide_as_the_projections_they_replace_but_where_named() {
         (Codec::Aac, "lyrics.end_ms", false, true),
     ];
     assert_eq!(differ, expected);
+}
+
+#[test]
+fn the_lyrics_are_cleaned_by_the_names_their_part_holds() {
+    let base = opus();
+    let made = parts(&base);
+    let named = made.lyric_text().unwrap().context();
+    assert_eq!(named.title, Some("Lantern Weather"));
+    assert_eq!(named.artists, ["Marlo Venn", "Kiri Hoshino"]);
+    assert!(!named.subtitle);
+    let mut plan = base.clone();
+    let lyrics = plan.lyrics.as_mut().unwrap();
+    lyrics.clean_off = crate::clean::lyrics::NAMED.map(String::from).to_vec();
+    lyrics.at = LyricsAt::Stream { index: 2 };
+    let made = parts(&plan);
+    let unnamed = made.lyric_text().unwrap().context();
+    assert_eq!(unnamed.title, None);
+    assert_eq!(unnamed.artists, Vec::<&str>::new());
+    assert!(unnamed.subtitle);
 }

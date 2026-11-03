@@ -70,6 +70,11 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
         what.push("folder cover");
     }
     let lines = |p: &Plan| p.lyrics.as_ref().map(LyricsRef::lines);
+    let names = |p| {
+        crate::artifact::parts(p)
+            .lyric_text()
+            .map(|t| t.names.clone())
+    };
     let unwritten = |p: &Plan| {
         p.lyrics.as_ref().map(|l| LyricsRef {
             writing: 0,
@@ -85,9 +90,7 @@ pub(super) fn changes(old: &Plan, new: &Plan) -> Vec<&'static str> {
     };
     if uncleaned(old) != uncleaned(new) {
         what.push("lyrics");
-    } else if unwritten(old) != unwritten(new)
-        || render::lyrics_names(old) != render::lyrics_names(new)
-    {
+    } else if unwritten(old) != unwritten(new) || names(old) != names(new) {
         what.push("lyric cleaning");
     } else if lines(old) != lines(new) && !what.contains(&"muman's rendering") {
         what.push("muman's rendering");
