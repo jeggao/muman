@@ -25,7 +25,7 @@
 //! read, and is written so; one of any other extractor, or of a domain a
 //! site lists as an alias, reads as it was, a source like any other,
 //! until a sync renames it by the song list's `[sites]` and the page it
-//! recorded ([`crate::reconcile`]). [`SourceKey::spelled_before`] gives
+//! recorded (`reconcile`). [`SourceKey::spelled_before`] gives
 //! the old name back, for what an earlier muman keyed by it.
 
 use std::fmt;

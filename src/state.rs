@@ -11,7 +11,7 @@
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
-//! | `trusted` | Yes: the song list's commands and servers are asked about again ([`crate::trust`]) |
+//! | `trusted` | Yes: the song list's commands and servers are asked about again (`trust`) |
 //!
 //! Each file beside an output, as its lyrics, is recorded as the output
 //! is, by its size, time and digest ([`Sidecar`]), so one changed since is
@@ -127,7 +127,7 @@ pub struct State {
     )]
     pub damaged: BTreeMap<SourceKey, String>,
     /// What the user trusted of the song list's commands and servers: a
-    /// digest of each by its name ([`crate::trust`]).
+    /// digest of each by its name (`trust`).
     #[serde(
         default,
         deserialize_with = "lenient_map",

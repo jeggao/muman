@@ -29,13 +29,13 @@
 //!    analyzer sees them, beside what the packets and the stream say
 //!    ([`integrity::Found`]); every source takes it, whatever the
 //!    settings, and a mix, which holds no other packets, none.
-//! 1. **Album pooling**, in [`crate::reconcile`]'s planning: songs are
+//! 1. **Album pooling**, in `reconcile`'s planning: songs are
 //!    grouped by album once, and loudness pools its songs' blocks over
 //!    each group, as an album's loudness range or dynamic range would.
-//! 1. **Derivation**, in [`crate::resolve::Plan`]: what a song should get
+//! 1. **Derivation**, in `resolve::Plan`: what a song should get
 //!    is held as whole numbers, and its tags, lossless edits and filters
 //!    are derived from them and the format it is written in.
-//! 1. **Output**, in [`crate::render`] and [`crate::codec`]: tags a retag
+//! 1. **Output**, in `render` and [`crate::codec`]: tags a retag
 //!    rewrites; lossless edits after muxing, such as the Opus header's
 //!    gain, which a retag makes too; and filters on the samples, which
 //!    only an encode can apply.

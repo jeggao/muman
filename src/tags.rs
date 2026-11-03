@@ -1468,7 +1468,7 @@ fn offer_release(o: &mut Offers, r: &crate::musicbrainz::Release) {
 /// What a file's own tags offer, every one structured: someone set it.
 /// A file's tags by their Vorbis comment names, each with every value
 /// it holds, as `lofty` reads them: the format's own frames and atoms
-/// named as muman writes them ([`crate::render`]), and a comment given
+/// named as muman writes them (`render`), and a comment given
 /// twice, as two `TITLE`s, kept as two values where ffprobe joins them
 /// with `;`. The file's main tag first; another, as an `ID3v1` beside an
 /// `ID3v2`, adds only names the first lacks. `None` for a file `lofty`

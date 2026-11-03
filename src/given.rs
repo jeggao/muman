@@ -18,7 +18,7 @@
 //! without end. A file given brings its sidecars from its own folder,
 //! which bounds them as a folder given bounds its files, and the folder
 //! `add --from` names bounds what a torrent is taken up from
-//! ([`crate::aria2::take_up`]).
+//! (`aria2::take_up`).
 //!
 //! Only regular files are read: a pipe or a device would hold a copy up
 //! forever or never end it, and a socket holds nothing.

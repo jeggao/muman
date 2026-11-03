@@ -100,12 +100,12 @@
 //! A listed file found damaged, cut off or missing audio as a disk or a
 //! copy leaves it, or holding other audio than its song was built from,
 //! which a torrent's file never may, is fetched again as a damaged download is, at once and
-//! then less often ([`crate::state::Failure::due`]). Its damaged copy, and
+//! then less often (`state::Failure::due`). Its damaged copy, and
 //! the files sharing a piece with it, are copied in as a download taken
 //! up is, so aria2c fetches only the pieces that do not check; the whole
 //! copy then takes the damaged one's place. A file whose every piece
 //! checks holds its torrent's own bytes, damaged on every peer alike, and
-//! is not fetched at all ([`crate::state::Step::Mend`]). Where a piece
+//! is not fetched at all (`state::Step::Mend`). Where a piece
 //! reaches into a file the store lacks, aria2c's check settles it: a file
 //! it brings back as the store holds it, byte for byte, is left as it
 //! was and noted the same way.
