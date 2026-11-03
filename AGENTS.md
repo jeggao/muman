@@ -34,9 +34,10 @@ These bind every change, by a person or an agent.
 1. **No pushes to `main`.** Changes go through a pull request, and CI
    must pass on all three platforms.
 1. **The rules here and the style guides change only when asked.**
-   Propose a rule change in the pull request instead. The layout and
-   the checklist below describe the code and change with it, in the
-   same commit; `cargo xtask docs` fails on a module the layout lacks.
+   Propose a rule change in the pull request instead. The layout, the
+   checklist and the files and formats the conventions name describe
+   the code and change with it, in the same commit; what a convention
+   asks does not. `cargo xtask docs` fails on a module the layout lacks.
 
 ## Layout
 
@@ -197,8 +198,8 @@ measures and lyrics are made with as another, and each major alone;
   a step to a new edition in `migrate::HISTORY`, raising
   `migrate::EDITION`. A setting that changes a written file must change the
   song's `Plan`.
-- **Formats:** `songs.toml` and `state.json` carry a `version`; changing
-  what an existing key means is a new version, adding a key is not.
+- **Formats:** `songs.toml` carries a `version`, `state.db` a schema in
+  `user_version`; a changed meaning is a new version, a new key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the
   workspace, the three cast lints off, as `Cargo.toml` says why.
   `#[expect]` one lint narrowly, with the reason in a `//` comment
