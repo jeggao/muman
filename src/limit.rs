@@ -411,10 +411,11 @@ impl Learnt {
             let (n, r) = &planned[*i];
             let plan = r.plan.with_format(ladders[*i].rungs[*c].format);
             let folder = at.scratch.join(format!("{n}-{c}"));
+            let parts = crate::artifact::parts(&plan);
             let done = render::render(
                 runner,
                 &render::Job {
-                    plan: &plan,
+                    parts: &parts,
                     stem: &r.stem,
                     library: &folder.join("library"),
                     sources: at.sources,

@@ -1,6 +1,9 @@
 //! One song written to the library from its plan: the audio copied or
 //! encoded and tagged, and its cover and lyrics inside it and in the
-//! files beside it its plan names.
+//! files beside it its plan names. Each file is made from its parts of
+//! the plan alone ([`Job`] carries them): the audio from the audio part,
+//! the tags from the tag part, so no change a writer reads leaves what it
+//! wrote as it was.
 //!
 //! Every file is written as `<name>.part` and renamed into place, the
 //! audio last, so a player scanning the library never sees half a track.
@@ -73,7 +76,7 @@
 //! file, the tag writers every other's beside the tags.
 //!
 //! A song whose plan changed in its tags alone is tagged again in place
-//! ([`retag`]), and the files beside it written again where they changed
+//! (`retag`), and the files beside it written again where they changed
 //! ([`beside`]), as a build writes them, with the cover and the lyrics its
 //! file holds, read as each container
 //! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
@@ -109,11 +112,12 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
+use crate::artifact::{AudioPart, Parts};
 use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::ffmpeg::{self, Output};
 use crate::library::Owned;
-use crate::resolve::{Format, LyricsRef, Plan};
+use crate::resolve::Format;
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::store::Located;
@@ -130,7 +134,8 @@ pub(crate) use lyrics::lyrics_file;
 
 #[derive(Debug)]
 pub struct Job<'a> {
-    pub plan: &'a Plan,
+    /// The parts of the song's plan, which alone its files are made from.
+    pub(crate) parts: &'a Parts<'a>,
     /// The song's path in the library, without its extension.
     pub stem: &'a Path,
     pub library: &'a Path,
@@ -218,14 +223,14 @@ impl Inputs {
 /// keeps their titles only where the global and stream metadata alone
 /// are dropped.
 fn audio_output(
-    plan: &Plan,
+    audio: &AudioPart<'_>,
     input: usize,
     chapters: Option<usize>,
     reserve: Option<u64>,
     path: &Path,
 ) -> Output {
-    let format = plan.format;
-    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", plan.audio.index)];
+    let format = audio.format;
+    let mut args: Vec<String> = vec!["-map".into(), format!("{input}:{}", audio.source.index)];
     if let Some(reserve) = reserve {
         args.extend(["-metadata_header_padding".into(), reserve.to_string()]);
     }
@@ -236,7 +241,7 @@ fn audio_output(
             kbps,
             adapt,
             mix,
-        } => codec.encoder_args(kbps, adapt, mix, plan.chain()),
+        } => codec.encoder_args(kbps, adapt, mix, audio.chain),
     });
     match chapters {
         Some(n) => args.extend([
@@ -256,16 +261,15 @@ fn audio_output(
 // The steps read in the order they run; split up, the order would be in the call sites.
 #[expect(clippy::too_many_lines)]
 pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
-    let plan = job.plan;
+    let made = job.parts;
     let locate = |key: &SourceKey| {
         job.sources
             .get(key)
             .ok_or_else(|| anyhow!("{key} is not on disk"))
     };
-    let made = crate::artifact::parts(plan);
-    let audio_rel = with_extension(job.stem, plan.format.extension());
-    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, &made));
-    let folder_rels = folder_rels(job.stem, &made);
+    let audio_rel = with_extension(job.stem, made.audio.format.extension());
+    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, made), cover_rels(job.stem, made));
+    let folder_rels = folder_rels(job.stem, made);
     let rels: Vec<PathBuf> = lyrics_rels
         .iter()
         .chain(&cover_rels)
@@ -280,19 +284,18 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     fs::create_dir_all(job.scratch)?;
 
     let mut inputs = Inputs::default();
-    let source = locate(&plan.audio.key)?;
+    let source = locate(&made.audio.source.key)?;
     let n = inputs.index(&source.path);
-    let chapters = if plan.format.codec().container() == Container::Mp4 && !plan.chapters.is_empty()
-    {
+    let chapters = if made.audio.mp4_chapters.is_empty() {
+        None
+    } else {
         let name = crate::atomic::Name::new("chapters.ffmeta".to_string())?;
         crate::atomic::write(
             job.scratch,
             &name,
-            crate::chapters::ffmetadata(&plan.chapters).as_bytes(),
+            crate::chapters::ffmetadata(made.audio.mp4_chapters).as_bytes(),
         )?;
         Some(inputs.index(&job.scratch.join(name.as_str())))
-    } else {
-        None
     };
     let mut problems = Vec::new();
     let mut cover_outputs = Vec::new();
@@ -328,8 +331,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let (inside, cover_files): (Vec<_>, Vec<_>) =
         covers.into_iter().partition(|(p, _)| p.file.is_none());
     let cover = inside.into_iter().next().map(|(_, c)| c);
-    let reserve = flac_reserve(plan, cover.as_ref());
-    let mut outputs = vec![audio_output(plan, n, chapters, reserve, &audio_part)];
+    let reserve = flac_reserve(made.audio.format, cover.as_ref());
+    let mut outputs = vec![audio_output(&made.audio, n, chapters, reserve, &audio_part)];
     outputs.append(&mut cover_outputs);
     let lyrics_raw = job.scratch.join("lyrics.lrc");
     let lyrics_text = match made.lyric_text() {
@@ -352,7 +355,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
         }
-        let flac = plan.format.codec().container() == Container::Flac;
+        let flac = made.audio.format.codec().container() == Container::Flac;
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -368,8 +371,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
             _ => None,
         }
         .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
-        let mut tags = plan.tags.clone();
-        if let Some(text) = text.as_deref().and_then(|t| lyrics::inside(&made, t)) {
+        let mut tags = made.tags.tags.to_vec();
+        if let Some(text) = text.as_deref().and_then(|t| lyrics::inside(made, t)) {
             if flac && text.len() > FLAC_BLOCK {
                 problems.push(format!(
                     "lyrics not embedded: {} is more than a FLAC file's tags hold",
@@ -379,7 +382,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 tags.push(("LYRICS".to_string(), vec![text.clone()]));
             }
         }
-        let room = cover_room(plan.format.codec().container(), &tags);
+        let room = cover_room(made.audio.format.codec().container(), &tags);
         let picture = cover.and_then(|c| {
             let read = match failed(&c.path).filter(|_| c.by_run) {
                 Some(e) => Err(anyhow!("{e}")),
@@ -390,32 +393,27 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 .ok()
         });
         // A cover the tags cannot hold costs the song only its cover.
-        if let Err(e) = write_tags(
-            &audio_part,
-            plan.format,
-            &tags,
-            plan.lyrics_language(),
-            picture.clone(),
-            &plan.chapters,
-        ) {
+        let write = |picture| {
+            write_tags(
+                &audio_part,
+                made.audio.format,
+                &tags,
+                made.tags.language,
+                picture,
+                made.tags.chapters,
+            )
+        };
+        if let Err(e) = write(picture.clone()) {
             if picture.is_none() {
                 return Err(e);
             }
             problems.push(format!("no cover: {e:#}"));
-            let language = plan.lyrics_language();
-            write_tags(
-                &audio_part,
-                plan.format,
-                &tags,
-                language,
-                None,
-                &plan.chapters,
-            )?;
+            write(None)?;
         }
-        set_opus_header(&audio_part, plan)?;
+        set_opus_header(&audio_part, made.tags.opus_header)?;
         problems.extend(verify(&audio_part, &tags, picture.is_some()));
         let mut held = match text {
-            Some(text) => lyrics::contents(&made, &text),
+            Some(text) => lyrics::contents(made, &text),
             None => vec![None; lyrics_rels.len()],
         };
         held.extend(cover_bytes(
@@ -520,9 +518,7 @@ fn put_beside(
 /// file not muman's holds: the user's own cover, which the song leaves
 /// alone and is written beside. Any other such file fails the song.
 fn left_alone(job: &Job<'_>, rel: &Path) -> bool {
-    folder_rels(job.stem, &crate::artifact::parts(job.plan))
-        .iter()
-        .any(|f| f == rel)
+    folder_rels(job.stem, job.parts).iter().any(|f| f == rel)
         && !crate::library::may_change(job.library, rel, job.claim)
 }
 
@@ -556,11 +552,11 @@ fn cover_room(container: Container, tags: &[(String, Vec<String>)]) -> usize {
 /// that file holds: what [`render`] would write, without decoding or
 /// encoding anything. Through `.part`, as [`render`] writes, put over the
 /// file `claim` holds.
-pub fn retag(
+pub(crate) fn retag(
     library: &Path,
     audio: &Path,
     beside: &[PathBuf],
-    plan: &Plan,
+    made: &Parts<'_>,
     claim: &[Owned],
 ) -> Result<Rendered> {
     use lofty::file::TaggedFileExt;
@@ -590,8 +586,8 @@ pub fn retag(
                     .cloned()
             })
             .or_else(|| ape_cover(&path));
-        let mut tags = plan.tags.clone();
-        let embedded = plan.lyrics.as_ref().is_some_and(LyricsRef::tag);
+        let mut tags = made.tags.tags.to_vec();
+        let embedded = made.lyrics.is_some();
         if let Some(text) = tag
             .and_then(|t| {
                 t.get_string(ItemKey::Lyrics)
@@ -602,16 +598,15 @@ pub fn retag(
             tags.push(("LYRICS".to_string(), vec![text.to_string()]));
         }
         let covered = picture.is_some();
-        let language = plan.lyrics_language();
         write_tags(
             &staged,
-            plan.format,
+            made.audio.format,
             &tags,
-            language,
+            made.tags.language,
             picture,
-            &plan.chapters,
+            made.tags.chapters,
         )?;
-        set_opus_header(&staged, plan)?;
+        set_opus_header(&staged, made.tags.opus_header)?;
         Ok(verify(&staged, &tags, covered))
     })();
     let problems = match result {
@@ -695,10 +690,10 @@ fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<Str
     problems
 }
 
-/// The gain `plan` gives its Opus header, set in `path` once its tags
-/// are written, as [`crate::ogg`] sets it.
-fn set_opus_header(path: &Path, plan: &Plan) -> Result<()> {
-    let Some(gain) = plan.opus_header() else {
+/// The `gain` an Opus header holds, set in `path` once its tags are
+/// written, as [`crate::ogg`] sets it.
+fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
+    let Some(gain) = gain else {
         return Ok(());
     };
     let mut file = OpenOptions::new()
@@ -784,15 +779,14 @@ pub struct Beside {
 /// Write the files `job`'s plan has beside the song, its lyrics and its
 /// cover, from their sources, as [`render`] writes them, leaving the
 /// song's audio file as it is: for a song whose file holds what it would
-/// be written with, its tags aside, as [`retag`] writes them. A file the
+/// be written with, its tags aside, as `retag` writes them. A file the
 /// last build left beside it that the plan has none of goes, as
 /// [`render`] clears it.
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
-    let plan = job.plan;
-    let made = crate::artifact::parts(plan);
+    let made = job.parts;
     let mut problems = Vec::new();
-    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, &made));
-    let folder_rels = folder_rels(job.stem, &made);
+    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, made), cover_rels(job.stem, made));
+    let folder_rels = folder_rels(job.stem, made);
     let mut held = match made.lyric_text() {
         Some(l) if !lyrics_rels.is_empty() => {
             let text = lyrics::text(runner, job, l)
@@ -801,7 +795,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
                 .flatten();
             text.map_or_else(
                 || vec![None; lyrics_rels.len()],
-                |t| lyrics::contents(&made, &t),
+                |t| lyrics::contents(made, &t),
             )
         }
         _ => Vec::new(),
@@ -1016,8 +1010,8 @@ const FLAC_PICTURE: u8 = 6;
 
 /// The padding a FLAC output is written with, so its tags and cover are
 /// written into it in place; none for another container.
-fn flac_reserve(plan: &Plan, cover: Option<&CoverPlan>) -> Option<u64> {
-    (plan.format.codec().container() == Container::Flac).then(|| {
+fn flac_reserve(format: Format, cover: Option<&CoverPlan>) -> Option<u64> {
+    (format.codec().container() == Container::Flac).then(|| {
         let cover = cover.map_or(0, |c| {
             if c.by_run {
                 FLAC_COVER_RESERVE

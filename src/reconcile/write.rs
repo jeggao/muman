@@ -483,8 +483,9 @@ fn render_due<R: Runner, W: Write>(
             return render::place(folder, made, &dirs.library, (claim, &shared), &stale);
         }
         let work = Sub::new(scratch, "render-")?;
+        let parts = crate::artifact::parts(&r.plan);
         let render_job = render::Job {
-            plan: &r.plan,
+            parts: &parts,
             stem: &r.stem,
             library: &dirs.library,
             sources: located,
@@ -493,7 +494,7 @@ fn render_due<R: Runner, W: Write>(
             stale: &stale,
         };
         if *retag {
-            let mut done = render::retag(&dirs.library, &path, &recorded, &r.plan, claim)?;
+            let mut done = render::retag(&dirs.library, &path, &recorded, &parts, claim)?;
             if beside_changes(&dirs.library, old, r) {
                 let beside = render::beside(*runner, &render_job)?;
                 done.beside = beside.files;
