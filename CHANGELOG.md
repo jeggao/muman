@@ -86,6 +86,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   MusicBrainz comment names the other mix than the song's audio, as
   `original stereo album mix` for a mono file, ranks after the song's
   own.
+- **`undo` and `purge` refuse a library inside the home** as every other
+  command that changes the library does, rather than writing a library
+  muman would read back as sources.
 - **Artists credited together lost their join**: a MusicBrainz credit of
   `Marlo Venn & The Glass Orchards` was written `Marlo Venn, The Glass
   Orchards`, and its album filed under `Marlo Venn`. The artist and the

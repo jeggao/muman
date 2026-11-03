@@ -308,22 +308,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     data: &mut D,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    progress::current().plan(steps_of(&job.command));
-    let writes = matches!(
-        job.command,
-        Command::Add { .. }
-            | Command::Sync { .. }
-            | Command::Remove { .. }
-            | Command::Restore { .. }
-            | Command::Set { .. }
-            | Command::Edit { .. }
-    ) || merges(&job.command);
-    if writes {
+    let traits = traits(&job.command);
+    progress::current().plan(traits.steps);
+    if traits.apart {
         dirs.apart()?;
+    }
+    if traits.edits_list {
         crate::manifest::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
-    if trust::gated(&job.command) {
+    if traits.gated {
         let held = trust::held_in(&dirs.home)?;
         if !trust::gate(
             &dirs.home,
@@ -337,7 +331,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     }
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
-    if needs_ffmpeg(&job.command) {
+    if traits.ffmpeg {
         runner.require("ffmpeg")?;
         runner.require("ffprobe")?;
     }
@@ -629,37 +623,31 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
     reconcile::reconcile(runner, &job.dirs, opts, run, out)
 }
 
-/// Whether `command` may run ffmpeg or ffprobe: an export only when it
-/// encodes, `check` only when it decodes.
-pub(crate) fn needs_ffmpeg(command: &Command) -> bool {
-    match command {
-        Command::Info
-        | Command::List { .. }
-        | Command::Purge { .. }
-        | Command::Completions { .. } => false,
-        Command::Duplicates { .. } => merges(command),
-        Command::Check { decode, .. } => *decode,
-        Command::Export {
-            max_size,
-            codec,
-            template,
-            lyrics,
-            set,
-            ..
-        } => {
-            max_size.is_some()
-                || codec.is_some()
-                || template.is_some()
-                || lyrics.is_some()
-                || !set.is_empty()
-        }
-        _ => true,
-    }
+/// What [`run_with`] must know of a command before running it.
+// Each bool is one question run_with asks of every command.
+#[expect(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Traits {
+    /// It changes the library, the home's sources or the song list, so
+    /// the library and the home must lie apart ([`Dirs::apart`]).
+    pub apart: bool,
+    /// It writes the song list: the list must be there while the library
+    /// holds songs, and each setting it renames is said first.
+    pub edits_list: bool,
+    /// It may run a tool, a hook or a request on the song list's
+    /// settings, so asks first ([`trust`]). `undo` asks apart, about the
+    /// list it puts back.
+    pub gated: bool,
+    /// It may run ffmpeg or ffprobe: an export only when it encodes,
+    /// `check` only when it decodes.
+    pub ffmpeg: bool,
+    /// The long steps it may take, in the order it takes them, which
+    /// number them as it goes.
+    pub steps: &'static [&'static str],
 }
 
-/// The long steps a command may take, in the order it takes them, which
-/// number them as it goes.
-fn steps_of(command: &Command) -> &'static [&'static str] {
+/// What `command` is, one arm per command, so a new command says each.
+pub(crate) fn traits(command: &Command) -> Traits {
     const SYNC: &[&str] = &[
         "Fetching",
         "Measuring",
@@ -667,31 +655,85 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         "Comparing",
         "Writing",
     ];
+    const CHANGE: &[&str] = &["Measuring", "Comparing", "Writing"];
+    let edits = |steps| Traits {
+        apart: true,
+        edits_list: true,
+        gated: true,
+        ffmpeg: true,
+        steps,
+    };
+    let reads = Traits {
+        apart: false,
+        edits_list: false,
+        gated: false,
+        ffmpeg: false,
+        steps: &[],
+    };
     match command {
-        Command::Add { .. } | Command::Sync { .. } => SYNC,
-        Command::Restore { .. } => &["Fetching", "Measuring", "Comparing", "Writing"],
-        Command::Remove { .. }
-        | Command::Set { .. }
-        | Command::Edit { .. }
-        | Command::Undo { .. } => &["Measuring", "Comparing", "Writing"],
-        Command::Status { .. } => &["Measuring", "Comparing"],
-        Command::Check { .. } => &["Decoding"],
-        Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
-        Command::Export { .. } => &["Encoding", "Writing the zip"],
-        Command::Duplicates { .. } if merges(command) => {
-            &["Comparing prints", "Comparing", "Measuring", "Writing"]
+        Command::Add { .. } | Command::Sync { .. } => edits(SYNC),
+        Command::Restore { .. } => edits(&["Fetching", "Measuring", "Comparing", "Writing"]),
+        Command::Remove { .. } | Command::Set { .. } | Command::Edit { .. } => edits(CHANGE),
+        Command::Undo { .. } => Traits {
+            apart: true,
+            ffmpeg: true,
+            steps: CHANGE,
+            ..reads
+        },
+        Command::Purge { .. } => Traits {
+            apart: true,
+            ..reads
+        },
+        Command::Status { .. } => Traits {
+            gated: true,
+            ffmpeg: true,
+            steps: &["Measuring", "Comparing"],
+            ..reads
+        },
+        Command::Check { decode, upstream } => Traits {
+            gated: *decode || *upstream,
+            ffmpeg: *decode,
+            steps: &["Decoding"],
+            ..reads
+        },
+        Command::Export {
+            folder,
+            max_size,
+            codec,
+            template,
+            lyrics,
+            set,
+            ..
+        } => {
+            let encodes = max_size.is_some()
+                || codec.is_some()
+                || template.is_some()
+                || lyrics.is_some()
+                || !set.is_empty();
+            Traits {
+                gated: encodes,
+                ffmpeg: encodes,
+                steps: if *folder {
+                    &["Encoding", "Writing the folder"]
+                } else {
+                    &["Encoding", "Writing the zip"]
+                },
+                ..reads
+            }
         }
-        Command::Duplicates { .. } => &["Comparing prints"],
-        Command::List { .. }
-        | Command::Info
-        | Command::Purge { .. }
-        | Command::Completions { .. } => &[],
+        Command::Duplicates { resolve, merge, .. } if *resolve || merge.is_some() => {
+            edits(&["Comparing prints", "Comparing", "Measuring", "Writing"])
+        }
+        Command::Duplicates { .. } => Traits {
+            steps: &["Comparing prints"],
+            ..reads
+        },
+        Command::Info => Traits {
+            gated: true,
+            ..reads
+        },
+        Command::List { .. } | Command::Completions { .. } => reads,
     }
-}
-
-/// Whether `command` is a `duplicates` that merges, rather than lists.
-pub(crate) fn merges(command: &Command) -> bool {
-    matches!(command, Command::Duplicates { resolve, merge, .. } if *resolve || merge.is_some())
 }
 
 /// Finish `run` whatever became of its command, so one that stopped on

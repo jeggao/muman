@@ -39,8 +39,8 @@
 //! values are shown escaped, so neither a control character nor a
 //! bidirectional mark can hide part of one.
 //!
-//! Every command that may run a tool, a hook or a request asks first
-//! ([`gated`]). `undo` asks about the list it puts back, before putting
+//! Every command that may run a tool, a hook or a request asks first, as
+//! its traits in [`crate::run_with`] say. `undo` asks about the list it puts back, before putting
 //! it back. `list`, `duplicates`, `purge` and `completions` read only
 //! what muman recorded and run nothing; nor does `check` without
 //! `--decode` or `--upstream`, nor an export that encodes nothing, which
@@ -57,7 +57,6 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use crate::cli::Command;
 use crate::hooks::Event;
 use crate::migrate::{HISTORY, Step};
 use crate::provider::Provider;
@@ -90,23 +89,6 @@ impl Held {
             shown: format!("a key of {} characters", value.chars().count()),
             name,
         }
-    }
-}
-
-/// Whether `command` may run a tool, a hook or a request on the song
-/// list's settings, and so asks first. `undo` asks apart, about the list
-/// it puts back.
-#[must_use]
-pub fn gated(command: &Command) -> bool {
-    match command {
-        Command::Duplicates { .. } => crate::merges(command),
-        Command::List { .. }
-        | Command::Purge { .. }
-        | Command::Completions { .. }
-        | Command::Undo { .. } => false,
-        Command::Check { decode, upstream } => *decode || *upstream,
-        Command::Export { .. } => crate::needs_ffmpeg(command),
-        _ => true,
     }
 }
 
