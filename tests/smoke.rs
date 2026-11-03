@@ -874,3 +874,86 @@ fn a_signal_stops_muman_and_every_program_it_started() {
         "aria2c outlived muman"
     );
 }
+
+/// Every file under `dir`, by its path from it, with its bytes.
+fn files_of(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = Vec::new();
+    walk(dir, &mut found);
+    found
+        .into_iter()
+        .map(|p| {
+            let bytes = std::fs::read(&p).unwrap();
+            (p.strip_prefix(dir).unwrap().to_path_buf(), bytes)
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs ffmpeg and ffprobe"]
+fn a_library_changed_step_by_step_is_the_one_built_at_once() {
+    let h = Home::new();
+    let first = h.song("first.flac", 1, "Lantern Weather");
+    let other = h.song("other.flac", 2, "Low Orchard");
+    let added = h.muman(&[
+        "add",
+        "-y",
+        first.to_str().unwrap(),
+        other.to_str().unwrap(),
+    ]);
+    assert!(added.status.success(), "{}", text(&added));
+    let songs = h.root.join("home").join("songs.toml");
+    let edit = |from: &str, to: &str| {
+        let list = std::fs::read_to_string(&songs).unwrap();
+        assert!(list.contains(from), "{from}");
+        std::fs::write(&songs, list.replacen(from, to, 1)).unwrap();
+        let synced = h.muman(&["sync"]);
+        assert!(synced.status.success(), "{}", text(&synced));
+    };
+    for args in [
+        &["set", "-y", "title:Orchard", "title=Low Orchard Road"][..],
+        &["remove", "-y", "title:Lantern"],
+        &["restore", "-y", "title:Lantern"],
+    ] {
+        let done = h.muman(args);
+        assert!(done.status.success(), "{}", text(&done));
+    }
+    edit(
+        "template = \"{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}\"",
+        "template = \"{{ artist }} - {{ title }}\"",
+    );
+    edit("lossless = \"flac\"", "lossless = \"wavpack\"");
+    edit(
+        "codecs = [\"opus\", \"vorbis\", \"aac\", \"mp3\", \"flac\"]",
+        "codecs = [\"opus\", \"vorbis\", \"aac\", \"mp3\"]",
+    );
+    edit("mode = \"tags\"", "mode = \"audio\"");
+    let stepped = files_of(&h.root.join("library"));
+    assert_eq!(
+        stepped
+            .keys()
+            .filter(|p| p.extension().is_some_and(|e| e == "wv"))
+            .count(),
+        2,
+        "{:?}",
+        stepped.keys()
+    );
+
+    let fresh = Home::new();
+    let sources = files_of(&h.root.join("home").join("sources"));
+    for (rel, bytes) in &sources {
+        let to = fresh.root.join("home").join("sources").join(rel);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(&to, bytes).unwrap();
+    }
+    std::fs::copy(&songs, fresh.root.join("home").join("songs.toml")).unwrap();
+    let built = fresh.muman(&["sync"]);
+    assert!(built.status.success(), "{}", text(&built));
+    let at_once = files_of(&fresh.root.join("library"));
+    assert_eq!(
+        stepped.keys().collect::<Vec<_>>(),
+        at_once.keys().collect::<Vec<_>>()
+    );
+    for (rel, bytes) in &stepped {
+        assert!(&at_once[rel] == bytes, "{} differs", rel.display());
+    }
+}
