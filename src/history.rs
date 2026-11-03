@@ -42,7 +42,8 @@
 //! one ended rather than record the other's change as its own. The song
 //! list a run leaves is the one it last read or wrote, as its sync
 //! reports it ([`Run::saw`]), so a hand edit made while it ran, which it
-//! never read, is the next run's. `undo`
+//! never read, is the next run's. `undo` holds the library's lock while
+//! it puts files back, as a sync does while it writes them, and
 //! refuses when the song list changed after the run, by hand or
 //! otherwise, rather than lose those changes. It marks the record
 //! `undoing` before it changes anything and skips each step already
@@ -625,6 +626,13 @@ pub fn undo_stopped(home: &Path) -> bool {
         .is_some_and(|h| h.undoing)
 }
 
+/// Whether [`follow_moves`] may move a file in the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Moves {
+    Follow,
+    Foresee,
+}
+
 /// The outputs a run stopped partway left where they were: each file it
 /// moved before the state could say so follows to where it went, with
 /// its lyrics if they went too, so the next run knows it as muman's.
@@ -636,7 +644,12 @@ pub fn undo_stopped(home: &Path) -> bool {
 /// another's old place. They are followed all at once, from the outputs
 /// as the run began, and only when the state still says so: the paths
 /// they left that no move went into are still listed.
-pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
+///
+/// A file beside a song that stayed where it was moves after the song
+/// under [`Moves::Follow`]; under [`Moves::Foresee`], as a dry run
+/// reads, it stays and is recorded where it is, so nothing in the
+/// library changes.
+pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves) -> usize {
     let Some(dir) = runs(home).ok().and_then(|mut r| r.pop()) else {
         return 0;
     };
@@ -680,7 +693,7 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State) -> usize {
         for sidecar in &mut written.sidecars {
             if let Some(to) = went.get(&sidecar.path) {
                 sidecar.path = (*to).clone();
-            } else if library.join(&sidecar.path).exists() {
+            } else if moves == Moves::Follow && library.join(&sidecar.path).exists() {
                 // Stopped between the audio and the files beside it: they follow now.
                 let to = crate::outputs::moved(&m.from, &m.to, &sidecar.path);
                 if !library.join(&to).exists()
@@ -1423,12 +1436,58 @@ mod tests {
         std::fs::create_dir_all(d.library.join("B")).unwrap();
         std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
         drop(run);
-        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 1);
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            1
+        );
         assert_eq!(
             state.outputs.keys().collect::<Vec<_>>(),
             [Path::new("B/x.opus")]
         );
-        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 0);
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            0
+        );
+    }
+
+    #[test]
+    fn a_file_beside_a_song_follows_it_but_only_when_not_foreseen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, mut state) = library(dir.path());
+        std::fs::write(d.library.join("A/x.lrc"), "lyrics").unwrap();
+        let lrc = crate::state::Sidecar {
+            path: "A/x.lrc".into(),
+            stamp: None,
+            digest: None,
+        };
+        state
+            .outputs
+            .get_mut(Path::new("A/x.opus"))
+            .unwrap()
+            .sidecars = vec![lrc];
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.moving(Path::new("A/x.opus"), Path::new("B/x.opus"));
+        run.checkpoint(&d.home).unwrap();
+        std::fs::create_dir_all(d.library.join("B")).unwrap();
+        std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
+        drop(run);
+        let sidecar = |s: &State| s.outputs[Path::new("B/x.opus")].sidecars[0].path.clone();
+
+        let mut foreseen = state.clone();
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut foreseen, Moves::Foresee),
+            1
+        );
+        assert_eq!(sidecar(&foreseen), Path::new("A/x.lrc"));
+        assert!(d.library.join("A/x.lrc").exists(), "nothing moved");
+
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            1
+        );
+        assert_eq!(sidecar(&state), Path::new("B/x.lrc"));
+        assert!(d.library.join("B/x.lrc").exists());
     }
 
     #[test]
@@ -1453,7 +1512,10 @@ mod tests {
         std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
         std::fs::rename(d.library.join("A/y.opus"), d.library.join("A/x.opus")).unwrap();
         drop(run);
-        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 2);
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            2
+        );
         assert_eq!(
             state.outputs[Path::new("B/x.opus")].stamp.as_deref(),
             Some("1:1")
@@ -1465,7 +1527,7 @@ mod tests {
         assert!(!state.outputs.contains_key(Path::new("A/y.opus")));
         let saved = state.outputs.clone();
         assert_eq!(
-            follow_moves(&d.home, &d.library, &mut state),
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
             0,
             "said so already"
         );
@@ -1486,7 +1548,10 @@ mod tests {
         std::fs::create_dir_all(d.library.join("B")).unwrap();
         std::fs::rename(d.library.join("A/x.opus"), d.library.join("B/x.opus")).unwrap();
         drop(run);
-        assert_eq!(follow_moves(&d.home, &d.library, &mut state), 1);
+        assert_eq!(
+            follow_moves(&d.home, &d.library, &mut state, Moves::Follow),
+            1
+        );
         assert_eq!(
             state.outputs.keys().collect::<Vec<_>>(),
             [Path::new("A/y.opus"), Path::new("B/x.opus")]

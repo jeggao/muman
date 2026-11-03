@@ -25,9 +25,12 @@
 //! with a sharing violation. [`rename`] and [`remove`] retry those for a
 //! few seconds before giving up; elsewhere they fail at once.
 //!
-//! The library's lock is kept out of the library, in a folder of the
-//! user's own under their cache folder ([`crate::platform::locks`]), made
-//! private on Unix. Not in the system's temporary folder, where its
+//! A sync and an undo hold the library's lock while they change the
+//! library, after the home's; nothing else changes it, and a dry run
+//! such as `status` changes nothing in it. The lock is kept out of the
+//! library, in a folder of the user's own under their cache folder
+//! ([`crate::platform::locks`]), made private on Unix. Not in the
+//! system's temporary folder, where its
 //! name, the digest of the library's path, is known to every user:
 //! another could make it first as a link, so that opening it made or
 //! emptied a file of their choosing, or hold it locked, so that every run
@@ -225,10 +228,17 @@ pub struct Lock {
     /// The lock file, removed as the lock is let go; a lock in a folder
     /// of its own keeps its file.
     removed: Option<PathBuf>,
+    /// The library a test guards that this locks.
+    #[cfg(test)]
+    library: Option<PathBuf>,
 }
 
 impl Drop for Lock {
     fn drop(&mut self) {
+        #[cfg(test)]
+        if let Some(library) = &self.library {
+            crate::testing::library_held(library, false);
+        }
         // Before the file closes, which lets the lock go.
         if let Some(path) = &self.removed {
             let _ = std::fs::remove_file(path);
@@ -310,6 +320,11 @@ impl Lock {
                 && held == named
             {
                 lock.removed = Some(path);
+                #[cfg(test)]
+                {
+                    crate::testing::library_held(&resolved, true);
+                    lock.library = Some(resolved);
+                }
                 return Ok(lock);
             }
         }
@@ -333,6 +348,8 @@ impl Lock {
         let locked = |file| Self {
             file,
             removed: None,
+            #[cfg(test)]
+            library: None,
         };
         match file.try_lock() {
             Ok(()) => return Ok(locked(file)),

@@ -94,6 +94,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   Orchards`, and its album filed under `Marlo Venn`. The artist and the
   album artist are written as the credit joins them, each artist also
   listed in `ARTISTS`.
+- **`undo` keeps other homes out of the library** while it puts files
+  back, as a sync does, and **`status` moves no file**: after a run
+  stopped partway, the files beside a moved song stay where they are
+  until the next sync moves them.
 - **A sync stopped within its first 30 seconds of writing wrote every
   song again on the next run**, as a small library's whole sync could
   be. Each song written is now saved as written, unless saving takes

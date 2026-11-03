@@ -82,6 +82,7 @@ impl Setup {
 
     fn run(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
         let mut out = Vec::new();
+        let _guard = crate::testing::guard_library(&self.job(args).dirs.library);
         let ok = run_with(
             &self.job(args),
             fake,
@@ -5732,6 +5733,22 @@ fn survives_a_kill_at_every_step(
             stopped.is_err(),
             "{command:?} not stopped at step {at} of {steps}"
         );
+        let stopped_as = library_of(&s);
+        let guard = crate::testing::guard_library(&s.dir.path().join("lib"));
+        let _ = run_with(
+            &s.job(&["status"]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+        drop(guard);
+        assert_eq!(
+            library_of(&s),
+            stopped_as,
+            "status after step {at} moved nothing"
+        );
         recover(&s);
         let now = library_of(&s);
         let fine = now == after || (ends == Ends::WholeOrNone && now == before);
@@ -5772,6 +5789,24 @@ fn sync_again(s: &Setup) {
 fn a_sync_moving_songs_to_a_new_template_survives_a_kill_anywhere() {
     let retemplated = |s: &Setup| {
         two_songs(s);
+        let songs = s.dir.path().join("home/songs.toml");
+        let listed = std::fs::read_to_string(&songs).unwrap();
+        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+        std::fs::write(
+            &songs,
+            listed.replace(&default, "template = \"{{ album }}/{{ title }}\""),
+        )
+        .unwrap();
+    };
+    survives_a_kill_at_every_step(&retemplated, &["sync"], &sync_again, Ends::Whole);
+}
+
+#[test]
+fn a_sync_moving_songs_and_their_lyrics_to_a_new_template_survives_a_kill_anywhere() {
+    let retemplated = |s: &Setup| {
+        s.file("home/sources/manual/a.flac");
+        s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+        s.run(&flacs(), &["sync"]);
         let songs = s.dir.path().join("home/songs.toml");
         let listed = std::fs::read_to_string(&songs).unwrap();
         let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);

@@ -474,6 +474,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let _runs = Lock::runs(&dirs.home)?;
             let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
+                let _library = Lock::library(&dirs.library)?;
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(
