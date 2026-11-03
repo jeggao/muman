@@ -2501,3 +2501,48 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
     plan::separate(&mut apart, &naming, &beside);
     assert_eq!(apart[1].1.stem, PathBuf::from("Outro.en"));
 }
+
+#[test]
+fn a_source_holding_audio_compared_before_is_not_compared_again() {
+    let h = home();
+    for id in ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"] {
+        h.fetched(id);
+    }
+    // The third upload is the second's audio, packet for packet.
+    let fake = || Fake {
+        hashes: vec![
+            ("aaaaaaaaaaa".into(), 1),
+            ("bbbbbbbbbbb".into(), 2),
+            ("ccccccccccc".into(), 2),
+        ],
+        pcm: vec![
+            ("aaaaaaaaaaa".into(), pcm(&levels(600, 1))),
+            ("bbbbbbbbbbb".into(), pcm(&levels(600, 2))),
+            ("ccccccccccc".into(), pcm(&levels(600, 2))),
+        ],
+        ..infos(&["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"])
+    };
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:bbbbbbbbbbb\"]\n");
+    let (ok, text) = h.run(&fake(), Options::default());
+    assert!(ok && text.contains("Comparing"), "{text}");
+    let compared = State::load(&h.dirs.home).unwrap().alignments;
+    assert!(!compared.is_empty(), "{text}");
+
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"youtube.com:ccccccccccc\"]\n");
+    let (ok, text) = h.run(&fake(), Options::default());
+    assert!(ok, "{text}");
+    assert!(!text.contains("Comparing"), "{text}");
+    let kept = State::load(&h.dirs.home).unwrap().alignments;
+    assert_eq!(
+        kept.iter().map(|a| &a.revs).collect::<Vec<_>>(),
+        compared.iter().map(|a| &a.revs).collect::<Vec<_>>(),
+        "kept while a listed source holds its audio"
+    );
+
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    assert!(h.run(&fake(), Options::default()).0);
+    assert!(
+        State::load(&h.dirs.home).unwrap().alignments.is_empty(),
+        "gone once no source kept holds its audio"
+    );
+}

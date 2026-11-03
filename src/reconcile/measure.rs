@@ -483,7 +483,7 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
             let layout = crate::resolve::Format::encoded(audio, &settings.audio).mix()?;
             let rev = f.audio_rev();
             let unmixed = state
-                .mix(&l.key, &rev, layout)
+                .mix(&rev, layout)
                 .is_none_or(|a| !a.stale(&wanted).is_empty());
             unmixed.then(|| (l, audio.clone(), rev, layout))
         })
@@ -525,10 +525,7 @@ pub(crate) fn compare<R: Runner, W: Write>(
         .filter(|(a, b)| store.has(a) && store.has(b))
         .filter_map(|(a, b)| {
             let revs = (rev(&a)?, rev(&b)?);
-            state
-                .alignment(&a, &b, &revs)
-                .is_none()
-                .then_some((a, b, revs))
+            state.alignment(&revs).is_none().then_some((a, b, revs))
         })
         .collect();
     if due.is_empty() {

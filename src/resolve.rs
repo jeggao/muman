@@ -889,7 +889,7 @@ impl Input<'_> {
         );
         self.alignments
             .iter()
-            .find(|x| &x.a == a && &x.b == b && x.revs == revs && x.method == crate::align::METHOD)
+            .find(|x| x.revs == revs && x.method == crate::align::METHOD)
     }
 
     /// The song's sources on disk, in the song list's order.

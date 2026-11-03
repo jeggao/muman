@@ -89,12 +89,17 @@ pub struct State {
     /// fetches nothing.
     #[serde(default, deserialize_with = "json::lenient_map")]
     pub replaced: BTreeMap<SourceKey, SourceKey>,
+    /// Comparisons of two sources' audio, found by the audio they
+    /// compared, whichever sources hold it now: one of each pair of audio,
+    /// and one of each pair of sources, at their newest audio.
     #[serde(default, deserialize_with = "json::lenient_list")]
     pub alignments: Vec<Aligned>,
     #[serde(default, deserialize_with = "json::lenient_map")]
     pub facts: BTreeMap<SourceKey, Facts>,
     /// What a source's audio holds once mixed into another layout, as a
-    /// song is written mixed.
+    /// song is written mixed, found by the audio, whichever source holds
+    /// it now: one of each audio in a layout, and one of each source's,
+    /// at its newest audio.
     #[serde(
         default,
         deserialize_with = "json::lenient_list",
@@ -575,34 +580,25 @@ impl State {
 
     /// The comparison of `a` against `b` at these revisions, if made.
     #[must_use]
-    pub fn alignment(
-        &self,
-        a: &SourceKey,
-        b: &SourceKey,
-        revs: &(String, String),
-    ) -> Option<&Aligned> {
+    pub fn alignment(&self, revs: &(String, String)) -> Option<&Aligned> {
         self.alignments
             .iter()
-            .find(|x| &x.a == a && &x.b == b && x.method == align::METHOD && &x.revs == revs)
+            .find(|x| x.method == align::METHOD && &x.revs == revs)
     }
 
-    /// What the audio `audio` of `source` holds mixed into `layout`.
+    /// What the audio `audio` holds mixed into `layout`, whichever source
+    /// holds it.
     #[must_use]
-    pub fn mix(&self, source: &SourceKey, audio: &str, layout: Layout) -> Option<&Analysis> {
+    pub fn mix(&self, audio: &str, layout: Layout) -> Option<&Analysis> {
         self.mixes
             .iter()
-            .find(|m| {
-                &m.source == source
-                    && m.audio == audio
-                    && m.layout == layout
-                    && m.filter == crate::codec::MIXING
-            })
+            .find(|m| m.audio == audio && m.layout == layout && m.filter == crate::codec::MIXING)
             .map(|m| &m.analysis)
     }
 
     pub fn record_mix(&mut self, mix: Mix) {
         self.mixes
-            .retain(|m| !(m.source == mix.source && m.layout == mix.layout));
+            .retain(|m| m.layout != mix.layout || (m.audio != mix.audio && m.source != mix.source));
         self.mixes.push(mix);
     }
 
@@ -653,10 +649,10 @@ impl State {
         }
         let (was, now) = (old.audio_rev(), new.audio_rev());
         for a in &mut self.alignments {
-            if a.a == *key && a.revs.0 == was {
+            if a.revs.0 == was {
                 a.revs.0.clone_from(&now);
             }
-            if a.b == *key && a.revs.1 == was {
+            if a.revs.1 == was {
                 a.revs.1.clone_from(&now);
             }
         }
@@ -814,7 +810,7 @@ impl State {
 
     pub fn record_alignment(&mut self, aligned: Aligned) {
         self.alignments
-            .retain(|x| !(x.a == aligned.a && x.b == aligned.b));
+            .retain(|x| x.revs != aligned.revs && !(x.a == aligned.a && x.b == aligned.b));
         self.alignments.push(aligned);
     }
 }
@@ -1166,10 +1162,10 @@ mod tests {
             state.mixes[0].filter, 1,
             "recorded before mixes named theirs"
         );
-        assert!(state.mix(&key, "1:2", layout).is_some());
+        assert!(state.mix("1:2", layout).is_some());
 
         state.mixes[0].filter = crate::codec::MIXING + 1;
-        assert!(state.mix(&key, "1:2", layout).is_none(), "another filter's");
+        assert!(state.mix("1:2", layout).is_none(), "another filter's");
         state.record_mix(Mix {
             source: key.clone(),
             audio: "1:2".into(),
@@ -1178,7 +1174,7 @@ mod tests {
             analysis: Analysis::default(),
         });
         assert_eq!(state.mixes.len(), 1, "the old filter's goes");
-        assert!(state.mix(&key, "1:2", layout).is_some());
+        assert!(state.mix("1:2", layout).is_some());
     }
 
     fn aligned(offset_ms: i64, coverage: f64, a_ms: i64, b_ms: i64) -> Aligned {
@@ -1243,20 +1239,56 @@ mod tests {
             "a comparison made again replaces the old"
         );
         let revs = ("1".to_string(), "2".to_string());
+        assert_eq!(back.alignment(&revs).unwrap().offset_ms, 5);
+        assert!(back.alignment(&("1".into(), "3".into())).is_none());
+    }
+
+    #[test]
+    fn a_comparison_or_a_mix_is_found_by_its_audio_whichever_source_holds_it() {
+        let mut state = State::default();
+        state.record_alignment(aligned(5, 1.0, 1, 1));
+        let copy = Aligned {
+            a: SourceKey::Manual("Lantern Weather.flac".into()),
+            ..aligned(5, 1.0, 1, 1)
+        };
         assert_eq!(
-            back.alignment(&state.alignments[0].a, &state.alignments[0].b, &revs)
-                .unwrap()
-                .offset_ms,
-            5
+            state.alignment(&copy.revs).unwrap().offset_ms,
+            5,
+            "another source holding the same audio"
         );
-        assert!(
-            back.alignment(
-                &state.alignments[0].a,
-                &state.alignments[0].b,
-                &("1".into(), "3".into())
-            )
-            .is_none()
+        state.record_alignment(Aligned {
+            revs: ("1".into(), "3".into()),
+            ..aligned(9, 1.0, 1, 1)
+        });
+        assert_eq!(
+            state.alignments.len(),
+            1,
+            "the pair's comparison at new audio replaces the old"
         );
+        state.record_alignment(Aligned {
+            revs: ("1".into(), "3".into()),
+            ..copy
+        });
+        assert_eq!(state.alignments.len(), 1, "one comparison of that audio");
+
+        let mix = |source: SourceKey, audio: &str| Mix {
+            source,
+            audio: audio.into(),
+            layout: Layout::STEREO,
+            filter: crate::codec::MIXING,
+            analysis: Analysis::default(),
+        };
+        state.record_mix(mix(SourceKey::youtube("aaaaaaaaaaa"), "1:2"));
+        assert!(state.mix("1:2", Layout::STEREO).is_some());
+        state.record_mix(mix(SourceKey::Manual("Lantern Weather.flac".into()), "1:2"));
+        assert_eq!(state.mixes.len(), 1, "one mix of that audio");
+        state.record_mix(mix(SourceKey::Manual("Lantern Weather.flac".into()), "1:3"));
+        assert_eq!(
+            state.mixes.len(),
+            1,
+            "the source's mix of new audio replaces it"
+        );
+        assert!(state.mix("1:2", Layout::STEREO).is_none());
     }
 
     #[test]
