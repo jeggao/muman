@@ -226,6 +226,13 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     retry(|| std::fs::rename(from, to))
 }
 
+/// `std::fs::hard_link`, a second name `to` for the file at `from`.
+pub fn link(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    crate::testing::change_point(to);
+    std::fs::hard_link(from, to)
+}
+
 /// `std::fs::remove_file`, waiting out a held file.
 pub fn remove(path: &Path) -> io::Result<()> {
     #[cfg(test)]

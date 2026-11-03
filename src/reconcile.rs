@@ -247,6 +247,25 @@ pub fn reconcile_into<R: Runner, W: Write>(
         crate::ui::info(out, &line)?;
     }
     if !opts.dry_run && !renames.is_empty() {
+        // In the order the keys module's docs give, so a run stopped
+        // anywhere keeps the file.
+        let ytdlp = dirs.ytdlp();
+        let mut linked = Vec::new();
+        let mut unlinked = Vec::new();
+        for (from, to) in &renames {
+            let at = store.locate(from).map(|l| l.path);
+            if let Some(at) = at.filter(|p| p.starts_with(&ytdlp)) {
+                match crate::store::link(&ytdlp, to, &at)? {
+                    Some(_) => linked.push(at),
+                    None => unlinked.push((to, at)),
+                }
+            }
+        }
+        state.rekey(&renames)?;
+        state.save(home)?;
+        for (to, at) in unlinked {
+            crate::store::place(&ytdlp, to, &at)?;
+        }
         for (from, to) in &renames {
             manifest.edit(Edit::Respell {
                 from: from.clone(),
@@ -257,14 +276,8 @@ pub fn reconcile_into<R: Runner, W: Write>(
         if let Some(run) = run.as_deref_mut() {
             run.saw(&manifest);
         }
-        state.rekey(&renames)?;
-        state.save(home)?;
-        // Its file goes to its new key's place, so it is not fetched again.
-        for (from, to) in &renames {
-            let at = store.locate(from).map(|l| l.path);
-            if let Some(at) = at.filter(|p| p.starts_with(dirs.ytdlp())) {
-                crate::store::place(&dirs.ytdlp(), to, &at)?;
-            }
+        for at in linked {
+            crate::store::unplace(&ytdlp, &at)?;
         }
     }
     let store = if renames.is_empty() || opts.dry_run {

@@ -119,6 +119,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   Korean or Chinese from YouTube's audio language. A language read off
   an upload is taken only where the song's title and its release's
   script could be in it.
+- **A sync stopped while renaming a source by its site finishes the
+  rename** rather than downloading the source again.
 - **An M4A whose tags were changed to shorter ones kept the room they
   left**, so its bytes differed from the same song written anew, and
   depended on every edit before. The room is now removed.
