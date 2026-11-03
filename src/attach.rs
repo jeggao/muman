@@ -1244,6 +1244,7 @@ pub fn attach<R: Runner, W: Write>(
     }
     let mut manifest = Manifest::load(&dirs.home)?;
     let mut state = State::load(&dirs.home)?;
+    let mut base = state.caches();
     let store = Store::scan(dirs)?;
     let listed = manifest.keys();
     let temp = crate::atomic::Scratch::new()?;
@@ -1252,7 +1253,7 @@ pub fn attach<R: Runner, W: Write>(
         let mut measuring = reconcile::Measuring {
             retry: false,
             say_unread: false,
-            checkpoint: &mut |s: &State| State::keep_measures(home, s),
+            checkpoint: &mut |s: &State| s.keep_since(home, &mut base),
             analyses: crate::analysis::wanted(&manifest.settings.loudness),
         };
         reconcile::measure(
@@ -1268,7 +1269,7 @@ pub fn attach<R: Runner, W: Write>(
     if paths.iter().any(|(_, w)| *w == What::Picture)
         && reconcile::look(runner, &store, &listed, &mut state, temp.path(), out)?
     {
-        State::keep_measures(&dirs.home, &state)?;
+        state.keep_since(&dirs.home, &mut base)?;
     }
     let mut cands = candidates(&manifest, &state, &store, dirs)?;
     let extractors = query::extractors(&manifest);

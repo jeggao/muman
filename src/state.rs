@@ -38,10 +38,12 @@
 //! each of its files' size and modification time, changes; one that could
 //! not be fetched again waits an hour, doubling with each failure up to a
 //! week. A failure ends when the step succeeds: a step that runs without
-//! the run's lock, as fetching and lookups do, keeps what it measured
-//! through [`State::keep_measures`], which merges it into the file as it
-//! is now by one rule, so a failure one step cleared is cleared on disk
-//! too and one another process recorded meanwhile stays.
+//! the run's lock, as fetching and lookups do, keeps only what it
+//! measured since it loaded the state ([`State::since`]) through
+//! [`State::keep_measures`], which merges that into the file as it is
+//! now by one rule. So a failure one step cleared is cleared on disk too,
+//! and a fact, failure or comparison another process recorded meanwhile
+//! stays rather than being written over by the copy the step loaded.
 //!
 //! A cache entry an earlier version wrote in another shape is dropped and
 //! made again; only `outputs` failing to parse refuses the file, since
@@ -578,6 +580,37 @@ impl Aligned {
     }
 }
 
+/// The caches of a state, apart from what the library holds: what a step
+/// without the run's lock measures and keeps ([`State::keep_measures`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Caches {
+    pub facts: BTreeMap<SourceKey, Facts>,
+    pub failures: BTreeMap<SourceKey, Failure>,
+    /// The failures cleared, which a merge clears on disk too.
+    pub cleared: BTreeSet<SourceKey>,
+    pub alignments: Vec<Aligned>,
+    pub mixes: Vec<Mix>,
+    pub sizes: BTreeMap<String, Measured>,
+}
+
+impl Caches {
+    /// These as they are once `delta`, a [`State::since`] of them, is
+    /// kept.
+    pub fn absorb(&mut self, delta: &Self) {
+        self.facts
+            .extend(delta.facts.iter().map(|(k, v)| (k.clone(), v.clone())));
+        for key in &delta.cleared {
+            self.failures.remove(key);
+        }
+        self.failures
+            .extend(delta.failures.iter().map(|(k, v)| (k.clone(), v.clone())));
+        self.alignments.extend(delta.alignments.iter().cloned());
+        self.mixes.extend(delta.mixes.iter().cloned());
+        self.sizes
+            .extend(delta.sizes.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+}
+
 impl State {
     /// The state in `home`; an empty one when there is none yet.
     pub fn load(home: &Path) -> Result<Self> {
@@ -797,7 +830,7 @@ impl State {
     /// the one kept, a failure `measured` cleared is cleared, and one it
     /// recorded replaces the one kept. Plans are named as
     /// [`State::rebase`] names them.
-    pub fn merge_caches(&mut self, measured: &Self) {
+    pub fn merge_caches(&mut self, measured: &Caches) {
         for (key, facts) in &measured.facts {
             if let Some(old) = self.facts.get(key).filter(|f| *f != facts).cloned() {
                 self.rebase(key, &old, facts);
@@ -852,11 +885,64 @@ impl State {
         state.save(home)
     }
 
-    /// Merge what `measured` holds of facts and failures into the state
-    /// file as it is now, under its lock, by [`Self::merge_caches`].
-    pub fn keep_measures(home: &Path, measured: &Self) -> Result<()> {
+    /// Merge `measured` into the state file as it is now, under its lock,
+    /// by [`Self::keep_caches`].
+    pub fn keep_measures(home: &Path, measured: &Caches) -> Result<()> {
         let lock = atomic::Lock::folder(home)?;
         Self::keep_caches(home, measured, &lock)
+    }
+
+    /// Keep what this measured since `base` by [`Self::keep_measures`],
+    /// and move `base` on past it, so the next keep holds only what is
+    /// measured after.
+    pub fn keep_since(&self, home: &Path, base: &mut Caches) -> Result<()> {
+        let delta = self.since(base);
+        Self::keep_measures(home, &delta)?;
+        base.absorb(&delta);
+        Ok(())
+    }
+
+    /// The caches this holds, for [`Self::since`].
+    #[must_use]
+    pub fn caches(&self) -> Caches {
+        Caches {
+            facts: self.facts.clone(),
+            failures: self.failures.clone(),
+            cleared: self.cleared.clone(),
+            alignments: self.alignments.clone(),
+            mixes: self.mixes.clone(),
+            sizes: self.sizes.clone(),
+        }
+    }
+
+    /// What this holds of the caches that `base`, its caches as they
+    /// were, does not: each entry added or changed since, and each
+    /// failure gone since, as cleared.
+    #[must_use]
+    pub fn since(&self, base: &Caches) -> Caches {
+        fn changed<K: Ord + Clone, V: PartialEq + Clone>(
+            now: &BTreeMap<K, V>,
+            was: &BTreeMap<K, V>,
+        ) -> BTreeMap<K, V> {
+            now.iter()
+                .filter(|(k, v)| was.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        }
+        fn added<T: PartialEq + Clone>(now: &[T], was: &[T]) -> Vec<T> {
+            now.iter().filter(|x| !was.contains(x)).cloned().collect()
+        }
+        Caches {
+            facts: changed(&self.facts, &base.facts),
+            failures: changed(&self.failures, &base.failures),
+            cleared: (base.failures.keys())
+                .filter(|k| !self.failures.contains_key(*k))
+                .cloned()
+                .collect(),
+            alignments: added(&self.alignments, &base.alignments),
+            mixes: added(&self.mixes, &base.mixes),
+            sizes: changed(&self.sizes, &base.sizes),
+        }
     }
 
     /// Merge every cache `measured` holds into the state file as it is
@@ -864,7 +950,7 @@ impl State {
     /// [`Self::merge_caches`], alignments and sizes by key. What the
     /// library holds, `outputs` and `library`, is left as it is, but for
     /// the names its plans give their sources.
-    pub fn keep_caches(home: &Path, measured: &Self, _lock: &atomic::Lock) -> Result<()> {
+    pub fn keep_caches(home: &Path, measured: &Caches, _lock: &atomic::Lock) -> Result<()> {
         let mut state = Self::load(home)?;
         state.merge_caches(measured);
         for aligned in &measured.alignments {
@@ -959,16 +1045,64 @@ mod tests {
         disk.record_failure(&b, Step::Measure, Some("1".into()), "unreadable".into());
         disk.save(dir.path()).unwrap();
         let mut measured = State::load(dir.path()).unwrap();
+        let mut base = measured.caches();
         measured.clear_failure(&a);
         let mut meanwhile = State::load(dir.path()).unwrap();
         meanwhile.record_failure(&c, Step::Fetch, None, "gone too".into());
         meanwhile.save(dir.path()).unwrap();
-        State::keep_measures(dir.path(), &measured).unwrap();
+        measured.keep_since(dir.path(), &mut base).unwrap();
         let after = State::load(dir.path()).unwrap();
         assert_eq!(
             after.failures.keys().collect::<Vec<_>>(),
             [&b, &c],
             "a's success clears it; b and c stay"
+        );
+    }
+
+    #[test]
+    fn a_step_keeps_what_it_measured_and_not_the_state_it_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (k, j, l) = (
+            SourceKey::youtube("aaaaaaaaaaa"),
+            SourceKey::youtube("bbbbbbbbbbb"),
+            SourceKey::youtube("ccccccccccc"),
+        );
+        let mut disk = State::default();
+        disk.facts
+            .insert(k.clone(), Facts::unreadable("1:1".into()));
+        disk.save(dir.path()).unwrap();
+        let mut step = State::load(dir.path()).unwrap();
+        let mut base = step.caches();
+        assert_eq!(step.since(&base), Caches::default(), "nothing measured yet");
+
+        let mut meanwhile = State::load(dir.path()).unwrap();
+        meanwhile
+            .facts
+            .insert(k.clone(), Facts::unreadable("2:2".into()));
+        meanwhile.record_failure(&j, Step::Fetch, None, "gone".into());
+        meanwhile.record_alignment(aligned(0, 1.0, 1000, 1000));
+        meanwhile.save(dir.path()).unwrap();
+
+        step.facts
+            .insert(l.clone(), Facts::unreadable("3:3".into()));
+        step.keep_since(dir.path(), &mut base).unwrap();
+        let after = State::load(dir.path()).unwrap();
+        assert_eq!(after.facts[&k].rev, "2:2", "measured meanwhile, not loaded");
+        assert_eq!(after.facts[&l].rev, "3:3");
+        assert!(after.failures.contains_key(&j));
+        assert_eq!(after.alignments.len(), 1);
+
+        step.facts
+            .insert(l.clone(), Facts::unreadable("4:4".into()));
+        let mut later = State::load(dir.path()).unwrap();
+        later.clear_failure(&j);
+        later.save(dir.path()).unwrap();
+        step.keep_since(dir.path(), &mut base).unwrap();
+        let after = State::load(dir.path()).unwrap();
+        assert_eq!(after.facts[&l].rev, "4:4");
+        assert!(
+            !after.failures.contains_key(&j),
+            "a failure the step never saw is not put back"
         );
     }
 
@@ -1015,10 +1149,11 @@ mod tests {
         );
         disk.save(dir.path()).unwrap();
         let mut measured = State::load(dir.path()).unwrap();
+        let mut base = measured.caches();
         let mut new = old;
         new.audio.as_mut().unwrap().digest = Some("0123456789abcdef0123456789abcdef".into());
         measured.facts.insert(key, new);
-        State::keep_measures(dir.path(), &measured).unwrap();
+        measured.keep_since(dir.path(), &mut base).unwrap();
         let after = State::load(dir.path()).unwrap();
         let plan = after
             .outputs

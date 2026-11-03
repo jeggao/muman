@@ -136,6 +136,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         return Ok(true);
     }
     let mut state = State::load(&job.dirs.home)?;
+    let base = state.caches();
     let root = job.dirs.torrent();
     let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
     let places = crate::aria2::Places {
@@ -179,7 +180,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         Err(e) => error = error.or(Some(e)),
     }
     if let Some(e) = error {
-        record_fetches(job, &mut state, failed, &same, out)?;
+        record_fetches(job, &mut state, &base, failed, &same, out)?;
         return Err(e);
     }
     let records = lookup::refetch(
@@ -219,7 +220,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
     failed.extend(records.failed);
-    record_fetches(job, &mut state, failed, &same, out)?;
+    record_fetches(job, &mut state, &base, failed, &same, out)?;
     Ok(ok)
 }
 
@@ -229,6 +230,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
 fn record_fetches<W: Write>(
     job: &Job,
     state: &mut State,
+    base: &state::Caches,
     failed: Vec<(SourceKey, String)>,
     same: &[SourceKey],
     out: &mut W,
@@ -257,7 +259,7 @@ fn record_fetches<W: Write>(
             };
             state.record_failure(&key, step, rev, error);
         }
-        State::keep_measures(&job.dirs.home, state)?;
+        State::keep_measures(&job.dirs.home, &state.since(base))?;
     }
     Ok(())
 }

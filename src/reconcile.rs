@@ -113,7 +113,7 @@ impl Sub {
 /// library holds.
 fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()> {
     if dry_run {
-        State::keep_caches(home, state, lock)
+        State::keep_caches(home, &state.caches(), lock)
     } else {
         state.save(home)
     }

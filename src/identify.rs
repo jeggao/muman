@@ -90,6 +90,7 @@ pub fn identify<R: Runner, W: Write>(
     let manifest = Manifest::load(&dirs.home)?;
     let listed = manifest.keys();
     let mut state = State::load(&dirs.home)?;
+    let mut base = state.caches();
     if mode != Mode::New {
         let store = Store::scan(dirs)?;
         let wanted: BTreeSet<SourceKey> = listed
@@ -102,7 +103,7 @@ pub fn identify<R: Runner, W: Write>(
         let mut how = reconcile::Measuring {
             retry: false,
             say_unread: false,
-            checkpoint: &mut |s: &State| State::keep_measures(home, s),
+            checkpoint: &mut |s: &State| s.keep_since(home, &mut base),
             analyses: crate::analysis::wanted(&manifest.settings.loudness),
         };
         reconcile::measure(
