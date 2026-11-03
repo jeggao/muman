@@ -54,6 +54,7 @@ src/
   manifest/new.toml a new home's song list, the reference for every setting
   state.rs          state.json: files written, measures, comparisons
   state/json.rs     state.json read, as any version wrote it, and written
+  state/db.rs       state.db, the store the state moves into: schema, transactions
   platform.rs       default folders per OS, path identity, arrival times
   dirs.rs           the home and the library folders, neither inside the other
   relpath.rs        recorded paths, written with / and in NFC
