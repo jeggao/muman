@@ -47,11 +47,12 @@
 //! as RFC 7845 tells its players to read them.
 //!
 //! The cover is a front-cover picture inside the song and a picture in
-//! each file of it beside the song, as its plan's places say: kept, a
-//! JPEG or PNG without borders as its own bytes, a file's only where they
-//! are its format; any other made by ffmpeg in the place's format, cropped
-//! to the content inside a video frame's bars and scaled down to its
-//! longest side, places alike sharing one picture. A picture ffmpeg
+//! each file of it beside the song, as its parts' places say, made from
+//! their part (`artifact::CoverPart`) alone: kept, a JPEG or PNG without
+//! borders as its own bytes, a file's only where they are its format; any
+//! other made by ffmpeg in the place's format, cropped to the content
+//! inside a video frame's bars and scaled down to its longest side,
+//! places alike sharing one picture. A picture ffmpeg
 //! encodes takes [`PICTURE_ARGS`], so a JPEG or PNG is the same bytes on
 //! every processor: measured on ffmpeg 6.1 against `-cpuflags 0`,
 //! swscale's conversion and the JPEG encoder's DCT round otherwise on a
@@ -108,13 +109,14 @@ use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
+use crate::artifact::{CoverPart, CoverSource, Parts};
 use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::facts::CoverAt;
 use crate::ffmpeg::{self, Output};
 use crate::library::Owned;
 use crate::quality::Rect;
-use crate::resolve::{CoverPlace, CoverRef, Format, ImageFormat, LyricsRef, Plan};
+use crate::resolve::{CoverPlace, Format, ImageFormat, LyricsRef, Plan};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::store::Located;
@@ -269,8 +271,8 @@ fn kept(mimetype: &str) -> Option<ImageFormat> {
 }
 
 /// How a cover ffmpeg converts is made, raised whenever the bytes it
-/// converts to change: [`CoverRef::made`]. A test pins it to a digest of
-/// the arguments a picture is converted with.
+/// converts to change: [`crate::resolve::CoverRef::made`]. A test pins it
+/// to a digest of the arguments a picture is converted with.
 pub const COVER_MAKING: u32 = 1;
 
 /// The options every picture ffmpeg encodes is written with: swscale and
@@ -360,8 +362,8 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
     let made = crate::artifact::parts(plan);
     let audio_rel = with_extension(job.stem, plan.format.extension());
-    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, plan));
-    let folder_rels = folder_rels(job.stem, plan);
+    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, &made));
+    let folder_rels = folder_rels(job.stem, &made);
     let rels: Vec<PathBuf> = lyrics_rels
         .iter()
         .chain(&cover_rels)
@@ -392,12 +394,12 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     };
     let mut problems = Vec::new();
     let mut cover_outputs = Vec::new();
-    let covers = match &plan.cover {
-        Some(c) if !c.places().is_empty() => match cover_plans(
+    let covers = match pictures(made.covers()) {
+        Some((c, places)) => match cover_plans(
             runner,
             c,
-            c.places(),
-            locate(&c.key)?,
+            places,
+            locate(c.key)?,
             job.scratch,
             &mut inputs,
             &mut cover_outputs,
@@ -408,14 +410,16 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 Vec::new()
             }
         },
-        _ => Vec::new(),
+        None => Vec::new(),
     };
-    let folder_files = match &plan.folder {
-        Some(f) => {
-            folder_plans(runner, job, f, &mut inputs, &mut cover_outputs).unwrap_or_else(|e| {
-                problems.push(format!("no folder cover: {e:#}"));
-                Vec::new()
-            })
+    let folder_files = match pictures(made.folder_files()) {
+        Some((f, places)) => {
+            folder_plans(runner, job, (f, places), &mut inputs, &mut cover_outputs).unwrap_or_else(
+                |e| {
+                    problems.push(format!("no folder cover: {e:#}"));
+                    Vec::new()
+                },
+            )
         }
         None => Vec::new(),
     };
@@ -548,50 +552,52 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     }
 }
 
-/// The files of the cover `plan` has beside the song at `stem`.
-fn cover_rels(stem: &Path, plan: &Plan) -> Vec<PathBuf> {
-    plan.cover.as_ref().map_or_else(Vec::new, |c| {
-        c.files()
-            .iter()
-            .filter_map(|p| crate::outputs::cover_file(stem, p))
-            .collect()
-    })
+/// The files of the cover `made` has beside the song at `stem`.
+fn cover_rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
+    made.cover_files()
+        .filter_map(|c| crate::outputs::cover_file(stem, &c.place))
+        .collect()
 }
 
-/// The files of its folder's cover `plan` has the song at `stem` hold.
-fn folder_rels(stem: &Path, plan: &Plan) -> Vec<PathBuf> {
-    plan.folder.as_ref().map_or_else(Vec::new, |f| {
-        f.files()
-            .iter()
-            .filter_map(|p| crate::outputs::folder_file(stem, p))
-            .collect()
-    })
+/// The files of its folder's cover `made` has the song at `stem` hold.
+fn folder_rels(stem: &Path, made: &Parts<'_>) -> Vec<PathBuf> {
+    made.folder_files()
+        .filter_map(|c| crate::outputs::folder_file(stem, &c.place))
+        .collect()
 }
 
-/// Plan the pictures of `folder`, the cover the song's folder holds, in
-/// a scratch folder of their own, as [`cover_plans`] plans a song's.
+/// The picture `parts` are made from, and each place it goes; none
+/// where it goes nowhere. The parts of one cover share its source.
+fn pictures<'p, 'a: 'p>(
+    parts: impl Iterator<Item = &'p CoverPart<'a>>,
+) -> Option<(&'p CoverSource<'a>, Vec<CoverPlace>)> {
+    let mut source = None;
+    let places = parts
+        .map(|c| {
+            source.get_or_insert(&c.source);
+            c.place.clone()
+        })
+        .collect();
+    source.map(|s| (s, places))
+}
+
+/// Plan the pictures of `folder`, the cover the song's folder holds, at
+/// `places`, in a scratch folder of their own, as [`cover_plans`] plans
+/// a song's.
 fn folder_plans<R: Runner>(
     runner: &R,
     job: &Job<'_>,
-    folder: &CoverRef,
+    (folder, places): (&CoverSource<'_>, Vec<CoverPlace>),
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
 ) -> Result<Vec<(CoverPlace, CoverPlan)>> {
     let source = job
         .sources
-        .get(&folder.key)
+        .get(folder.key)
         .ok_or_else(|| anyhow!("{} is not on disk", folder.key))?;
     let scratch = job.scratch.join("folder");
     fs::create_dir_all(&scratch).with_context(|| format!("creating {}", scratch.display()))?;
-    cover_plans(
-        runner,
-        folder,
-        folder.places(),
-        source,
-        &scratch,
-        inputs,
-        outputs,
-    )
+    cover_plans(runner, folder, places, source, &scratch, inputs, outputs)
 }
 
 /// Why the output of `outputs` writing `path` failed, by `results`.
@@ -660,7 +666,9 @@ fn put_beside(
 /// file not muman's holds: the user's own cover, which the song leaves
 /// alone and is written beside. Any other such file fails the song.
 fn left_alone(job: &Job<'_>, rel: &Path) -> bool {
-    folder_rels(job.stem, job.plan).iter().any(|f| f == rel)
+    folder_rels(job.stem, &crate::artifact::parts(job.plan))
+        .iter()
+        .any(|f| f == rel)
         && !crate::library::may_change(job.library, rel, job.claim)
 }
 
@@ -949,23 +957,23 @@ pub fn place(
 /// alike sharing one.
 fn cover_plans<R: Runner>(
     runner: &R,
-    cover: &CoverRef,
+    cover: &CoverSource<'_>,
     places: Vec<CoverPlace>,
     source: &Located,
     scratch: &Path,
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
 ) -> Result<Vec<(CoverPlace, CoverPlan)>> {
-    let file = picture_file(runner, &cover.at, source, scratch)?;
+    let file = picture_file(runner, cover.at, source, scratch)?;
     // A file's bytes say what it is, whatever its name or its container
     // says: a PNG named `.jpg` is kept as PNG, and a WebP converted.
     let own = match &file {
-        Some(f) => crate::picture::sniff_file(f).map_or_else(|| kept(&cover.mimetype), kept),
-        None => kept(&cover.mimetype),
+        Some(f) => crate::picture::sniff_file(f).map_or_else(|| kept(cover.mimetype), kept),
+        None => kept(cover.mimetype),
     }
     .filter(|_| cover.crop.is_none());
     let from = file.clone().unwrap_or_else(|| source.path.clone());
-    let stream = match &cover.at {
+    let stream = match cover.at {
         CoverAt::Picture { index } => index.to_string(),
         _ => "v:0".to_string(),
     };
@@ -1121,8 +1129,8 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
     let plan = job.plan;
     let made = crate::artifact::parts(plan);
     let mut problems = Vec::new();
-    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, plan));
-    let folder_rels = folder_rels(job.stem, plan);
+    let (lyrics_rels, cover_rels) = (lyrics::rels(job.stem, &made), cover_rels(job.stem, &made));
+    let folder_rels = folder_rels(job.stem, &made);
     let mut held = match made.lyric_text() {
         Some(l) if !lyrics_rels.is_empty() => {
             let text = lyrics::text(runner, job, l)
@@ -1137,12 +1145,12 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         _ => Vec::new(),
     };
     held.resize(lyrics_rels.len(), None);
-    if let Some(c) = plan.cover.as_ref().filter(|_| !cover_rels.is_empty()) {
+    if let Some((c, places)) = pictures(made.cover_files()) {
         match cover_files(
             runner,
             job,
             c,
-            (c.files(), job.scratch),
+            (places, job.scratch),
             &cover_rels,
             &mut problems,
         ) {
@@ -1151,13 +1159,13 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
         }
     }
     held.resize(lyrics_rels.len() + cover_rels.len(), None);
-    if let Some(f) = plan.folder.as_ref().filter(|_| !folder_rels.is_empty()) {
+    if let Some((f, places)) = pictures(made.folder_files()) {
         let scratch = job.scratch.join("folder");
         match cover_files(
             runner,
             job,
             f,
-            (f.files(), &scratch),
+            (places, &scratch),
             &folder_rels,
             &mut problems,
         ) {
@@ -1190,14 +1198,14 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Beside> {
 fn cover_files<R: Runner>(
     runner: &R,
     job: &Job<'_>,
-    cover: &CoverRef,
+    cover: &CoverSource<'_>,
     (places, scratch): (Vec<CoverPlace>, &Path),
     rels: &[PathBuf],
     problems: &mut Vec<String>,
 ) -> Result<Vec<Option<Vec<u8>>>> {
     let source = job
         .sources
-        .get(&cover.key)
+        .get(cover.key)
         .ok_or_else(|| anyhow!("{} is not on disk", cover.key))?;
     fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let (mut inputs, mut outputs) = (Inputs::default(), Vec::new());

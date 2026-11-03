@@ -11,6 +11,7 @@ use crate::codec::Codec;
 use crate::facts::LyricsAt;
 use crate::library::{Ledger, Owned};
 use crate::quality::Rect;
+use crate::resolve::CoverRef;
 use crate::resolve::{AudioRef, LyricsFile, render_version};
 use crate::store::Kind;
 use crate::testing::Fake;

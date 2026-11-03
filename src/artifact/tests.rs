@@ -262,3 +262,27 @@ fn the_lyrics_are_cleaned_by_the_names_their_part_holds() {
     assert_eq!(unnamed.artists, Vec::<&str>::new());
     assert!(unnamed.subtitle);
 }
+
+#[test]
+fn a_cover_s_parts_name_its_places_inside_then_beside_and_the_folder_s_apart() {
+    let plan = opus();
+    let made = parts(&plan);
+    let places = |covers: Vec<&CoverPart<'_>>| {
+        covers
+            .into_iter()
+            .map(|c| c.place.file.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        places(made.covers().collect()),
+        [None, Some(".front".to_string())]
+    );
+    assert_eq!(
+        places(made.cover_files().collect()),
+        [Some(".front".to_string())]
+    );
+    assert_eq!(
+        places(made.folder_files().collect()),
+        [Some("folder".to_string())]
+    );
+}
