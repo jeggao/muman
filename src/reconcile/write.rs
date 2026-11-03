@@ -34,7 +34,7 @@ use crate::source::SourceKey;
 use crate::state::{self, Sidecar, State, Written};
 use crate::store::{self, Located};
 
-use super::decide::{Doing, Intent, beside_equal, folder_there, kept, moved_to};
+use super::decide::{Doing, Intent, folder_there, kept, moved_to};
 use super::owned::{claim, edited_since_written};
 use super::plan::{Planned, PlannedSong, name_of, path_of};
 use super::prune::prune;
@@ -381,7 +381,7 @@ fn before_writing<R: Runner, W: Write>(
 fn beside_changes(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -> bool {
     old.get(&path_of(r))
         .and_then(|w| w.plan.as_ref())
-        .is_none_or(|p| !beside_equal(p, &r.plan))
+        .is_none_or(|p| crate::artifact::redo(p, &r.plan).beside)
         || !folder_there(library, &path_of(r), &r.plan)
 }
 

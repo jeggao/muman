@@ -9,9 +9,6 @@ pub mod album;
 pub mod align;
 pub mod analysis;
 pub mod aria2;
-// The parts plans are to be compared and rendered by; only their tests
-// read them yet.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) mod artifact;
 pub mod atomic;
 pub mod attach;

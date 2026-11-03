@@ -33,6 +33,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   before it put the song list back left both copies of a song once a
   sync ran; a command that changes the library or the song list now
   refuses until `undo` finishes it.
+- **A sync writes again only the files a change reaches.** A file of
+  cues added to `[[lyrics.out]]` built again every song with its lyrics
+  inside; it is now only written beside them. The form of the lyrics
+  inside wrote every lyric file beside a song again, and now builds only
+  the song. A chapter changed in a song other than an MP4 tags it again
+  instead of building it.
 
 ## [0.9.0] - 2026-11-03
 
