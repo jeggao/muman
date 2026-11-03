@@ -1190,6 +1190,34 @@ fn sizes_measured_under_another_limit_change_no_choice() {
 }
 
 #[test]
+fn a_song_only_retagged_keeps_its_measured_size() {
+    let settings = "[library]\nmax_size = \"10 MB\"\n[[lyrics.out]]\nto = \"tag\"\n";
+    let h = flac_home(settings);
+    std::fs::write(
+        h.dirs.manual().join("Song.lrc"),
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n",
+    )
+    .unwrap();
+    let (ok, text) = h.run(&big_flac(), Options::default());
+    assert!(ok, "{text}");
+    assert!(h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
+    h.songs(&format!(
+        "{settings}[lyrics.clean.packaging]\ncues = false\n\
+         [[song]]\nsources = [\"manual:Song.flac\"]\n"
+    ));
+    let fake = big_flac();
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let encodes = fake
+        .calls()
+        .iter()
+        .filter(|c| c.iter().any(|a| a == "libopus"))
+        .count();
+    assert_eq!(encodes, 0, "measured as it was, and only tagged: {text}");
+    assert!(h.lib("Artist/Record/02 Song.opus").exists(), "{text}");
+}
+
+#[test]
 fn a_song_rendered_to_be_measured_is_moved_into_place_not_rendered_again() {
     let h = flac_home("[library]\nmax_size = \"10 MB\"\n");
     let fake = big_flac();
