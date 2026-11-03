@@ -16,8 +16,10 @@
 //! [`CoverRef::only`] keeps it. The files beside come in the order
 //! [`crate::outputs::planned`] names them: lyrics, covers, folder covers.
 //!
-//! Nothing decides by these parts yet: they are checked against the plan
-//! they come from, over every part a plan holds.
+//! A sync decides by [`redo`] whether a song is built again, tagged
+//! again, and has the files beside it written again; whether it is kept
+//! is still the whole plan's to say. The parts are checked against the
+//! plan they come from, over every part a plan holds.
 
 use crate::chapters::Chapter;
 use crate::codec::{Chain, Container};
@@ -221,6 +223,12 @@ fn cover_part(c: &CoverRef, place: CoverPlace) -> CoverPart<'_> {
         made: c.made.filter(|_| c.encodes(&place)),
         place,
     }
+}
+
+/// What writing `new` over a song built as `old` writes again.
+#[must_use]
+pub(crate) fn redo(old: &Plan, new: &Plan) -> Redo {
+    parts(new).redo_from(&parts(old))
 }
 
 impl AudioPart<'_> {

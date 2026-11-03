@@ -862,6 +862,37 @@ fn lyrics_are_written_as_cues_and_plain_text_each_in_its_file() {
 }
 
 #[test]
+fn a_file_of_cues_added_writes_no_song_whose_lyrics_are_inside_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let outs = "version = 1\n[[lyrics.out]]\nto = \"tag\"\n[[lyrics.out]]\nto = \"file\"\n";
+    std::fs::write(&list, outs).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    std::fs::write(
+        &list,
+        format!("{listed}\n[[lyrics.out]]\nto = \"file\"\nformat = \"srt\"\n"),
+    )
+    .unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib/Artist/Record");
+    let srt = std::fs::read_to_string(lib.join("02 Song.srt")).unwrap();
+    assert!(srt.starts_with("1\n00:00:01,000 --> "), "{srt}");
+    assert!(
+        !fake.calls().iter().any(|c| c.iter().any(|a| a == "-c:a")),
+        "{text}"
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
 fn a_song_file_s_own_lyrics_tag_is_its_lyrics() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};

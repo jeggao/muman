@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
 use crate::manifest::{Edit, Manifest};
-use crate::resolve::{CoverRef, LyricsRef, Plan, Resolved};
-use crate::settings::LyricsPlacement;
+use crate::resolve::{Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
 
@@ -84,60 +83,6 @@ pub(crate) fn files_of(
         }
     }
     files
-}
-
-/// Whether two plans make the same audio file but for its tags: the same
-/// audio, cover and lyrics within it, so a file of one is a file of the
-/// other with its tags written again, and the files beside it written
-/// anew where [`beside_equal`] says they differ. Lyrics cleaned by the
-/// song's names are cleaned anew under other names, so a song retitled is
-/// written again, as it would be made from the start.
-pub(super) fn media_equal(a: &Plan, b: &Plan) -> bool {
-    a.version == b.version
-        && a.format == b.format
-        && a.chain() == b.chain()
-        // A retag sets an Opus header's gain, but only a write puts back the one it had.
-        && (a.opus_header().is_none() || b.opus_header().is_some())
-        && a.audio == b.audio
-        && cover_inside(a) == cover_inside(b)
-        && lyrics_inside(a) == lyrics_inside(b)
-        // MP4 chapters are ffmpeg's to write.
-        && a.chapters == b.chapters
-}
-
-/// Whether two plans write the same files beside a song: so a song whose
-/// audio file is [`media_equal`] keeps them as they are.
-pub(super) fn beside_equal(a: &Plan, b: &Plan) -> bool {
-    let beside = |p| lyrics_held(p).filter(|(l, _)| !l.files().is_empty());
-    let covers = |p: &Plan| p.cover.as_ref().and_then(|c| c.only(|p| p.file.is_some()));
-    beside(a) == beside(b) && covers(a) == covers(b) && a.folder == b.folder
-}
-
-/// What the song's file holds of its cover, where it goes inside it.
-fn cover_inside(plan: &Plan) -> Option<CoverRef> {
-    plan.cover.as_ref()?.only(|p| p.file.is_none())
-}
-
-/// The song's title and artists lyrics are cleaned by, where a rule
-/// reads them.
-type Names<'a> = Option<(Option<&'a str>, Vec<&'a str>)>;
-
-/// What the song's file holds of its lyrics, where they go inside it.
-fn lyrics_inside(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
-    plan.lyrics.as_ref().filter(|l| l.tag())?;
-    lyrics_held(plan).map(|(l, names)| (LyricsRef { files: None, ..l }, names))
-}
-
-/// What a file of `plan` holds of its lyrics, wherever they go: their
-/// lines, the files they go to, and the names they are cleaned by.
-fn lyrics_held(plan: &Plan) -> Option<(LyricsRef, Names<'_>)> {
-    let lyrics = plan.lyrics.as_ref()?;
-    let held = LyricsRef {
-        placement: LyricsPlacement::Both,
-        files: Some(lyrics.files()),
-        ..lyrics.lines()
-    };
-    Some((held, crate::render::lyrics_names(plan)))
 }
 
 /// What a sync does with one song, decided for every song before any is
@@ -321,10 +266,10 @@ pub(super) fn decide(
                 library.join(f).metadata().is_ok_and(|m| m.len() > 0)
                     && was.is_none_or(|w| w.sidecar_paths().all(|s| library.join(s).exists()))
             });
-            let same_media = present
-                && was
-                    .and_then(|w| w.plan.as_ref())
-                    .is_some_and(|p| media_equal(p, &r.plan));
+            let redo = was
+                .and_then(|w| w.plan.as_ref())
+                .map(|p| crate::artifact::redo(p, &r.plan));
+            let same_media = present && redo.is_some_and(|d| !d.build);
             if let Some(file) = file.filter(|f| edited_since_written(library, old, f)) {
                 return Doing::Guard { file: file.clone() };
             }
@@ -334,9 +279,7 @@ pub(super) fn decide(
             }
             // Its tags are written into its own file alone, and the files
             // beside it that differ where no file of the user's is in their way.
-            let beside = was
-                .and_then(|w| w.plan.as_ref())
-                .is_some_and(|p| beside_equal(p, &r.plan));
+            let beside = redo.is_some_and(|d| !d.beside);
             if file == Some(&path)
                 && same_media
                 && (beside || blocking(library, old, &path, &r.plan).is_empty())
@@ -381,10 +324,11 @@ fn movable(
         let was = &old[from];
         let present = library.join(from).metadata().is_ok_and(|m| m.len() > 0)
             && was.sidecar_paths().all(|s| library.join(s).exists());
-        let same_media = present && was.plan.as_ref().is_some_and(|p| media_equal(p, &r.plan));
+        let redo = was.plan.as_ref().map(|p| crate::artifact::redo(p, &r.plan));
+        let same_media = present && redo.is_some_and(|d| !d.build);
         let retag = was.plan.as_ref() != Some(&r.plan);
-        let gains = was.plan.as_ref().is_none_or(|p| !beside_equal(p, &r.plan))
-            && !blocking(library, old, &path, &r.plan).is_empty();
+        let gains =
+            redo.is_none_or(|d| d.beside) && !blocking(library, old, &path, &r.plan).is_empty();
         if same_media && !gains && !(retag && edited_since_written(library, old, from)) {
             moving.push((i, from.clone(), path, retag));
         }
