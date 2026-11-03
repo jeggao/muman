@@ -537,10 +537,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .filter(|k| matches!(k, SourceKey::Manual(_)))
         .cloned()
         .collect();
+    // Comparisons and mixes are of audio: one goes once no source kept
+    // holds its audio.
+    let audio: BTreeSet<String> = state
+        .facts
+        .values()
+        .map(crate::facts::Facts::audio_rev)
+        .collect();
     state
         .alignments
-        .retain(|a| kept.contains(&a.a) && kept.contains(&a.b));
-    state.mixes.retain(|m| kept.contains(&m.source));
+        .retain(|a| audio.contains(&a.revs.0) && audio.contains(&a.revs.1));
+    state.mixes.retain(|m| audio.contains(&m.audio));
     state.save(home)?;
     for edit in edits {
         manifest.edit(edit);

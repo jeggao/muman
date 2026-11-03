@@ -695,7 +695,7 @@ fn measure_of<'a>(plan: &Plan, state: &'a State) -> Option<&'a Measure> {
     }
     match plan.format.mix() {
         Some(layout) => state
-            .mix(&plan.audio.key, &plan.audio.rev, layout)
+            .mix(&plan.audio.rev, layout)
             .and_then(Analysis::loudness),
         None => facts.audio.as_ref()?.analysis.loudness(),
     }
