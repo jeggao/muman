@@ -367,4 +367,46 @@ mod tests {
         assert!(corrupt.describe(&key).contains("does not decode"));
         assert_eq!(measure(None, 100, 0, &Found::default()), None);
     }
+
+    /// What the pass measures of audio holding samples that are no number,
+    /// beside packets whole, gapped, out of order or none, with
+    /// [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "integrity/1",
+        "bb71ab3ecdf2f533a5f2d2b0d7e05f739cb5dcb51dedf03a15290ffc93c00167",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        use crate::analysis::{Kind, Pass};
+
+        let mut samples = crate::testing::sine(8000, 2, 440.0, 0.5, 3.0);
+        samples[100] = f32::NAN;
+        samples[2001] = f32::INFINITY;
+        let wav = crate::testing::wav(8000, 2, None, &samples);
+        let gapped: Vec<(i64, i64)> = whole(3)
+            .into_iter()
+            .filter(|(pts, _)| !(1000..1150).contains(pts) && !(2000..2080).contains(pts))
+            .collect();
+        let packets = [
+            Some(whole(3)),
+            Some(gapped),
+            Some(vec![(60, 0), (0, 20), (20, 20), (500, 20)]),
+            None,
+        ];
+        let mut digest = crate::testing::Digest::default();
+        for (said, packets) in [Some(3.5), None, Some(2.0), Some(3.0)]
+            .into_iter()
+            .zip(packets)
+        {
+            let found = Found {
+                said,
+                timeline: packets.and_then(|p| Timeline::parse(&list(&p))),
+            };
+            let mut pass = Pass::new(vec![Kind::Integrity]);
+            pass.take(&wav);
+            digest.debug(&pass.finish(&found).integrity);
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

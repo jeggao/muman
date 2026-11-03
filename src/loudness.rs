@@ -1165,4 +1165,31 @@ mod tests {
             })
         );
     }
+
+    /// What the meter makes of tones and swelling noise over every
+    /// oversampling, speaker weighting and one channel, and of silence,
+    /// with [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "loudness/1",
+        "567c8a4145d8f08ed4043e9e493b5c57dc6b5b76f2879e7a6d4ff488c600b2e8",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        let mut quiet = tone(48_000, 2, -40.0, 2.0);
+        quiet.extend(tone(48_000, 2, -18.0, 3.0));
+        let samples = [
+            (48_000, 2, Some(0x3), quiet),
+            (44_100, 1, None, tone(44_100, 1, -23.0, 4.0)),
+            (48_000, 6, Some(0x3F), swells(48_000, 6, 4.0)),
+            (96_000, 2, Some(0x3), swells(96_000, 2, 3.5)),
+            (22_050, 2, None, swells(22_050, 2, 3.5)),
+            (48_000, 2, Some(0x3), vec![0.0; 96_000]),
+        ];
+        let mut digest = crate::testing::Digest::default();
+        for (rate, channels, mask, s) in samples {
+            digest.debug(&measure(rate, channels, mask, &s));
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

@@ -517,3 +517,150 @@ fn a_picture_is_looked_at_when_measured_and_an_old_one_caught_up_alone() {
     assert!(facts.pictured());
     assert_eq!(facts.covers[0].look, look);
 }
+
+/// Audio cut off at 11 kHz, mono in two channels, clipped, past full
+/// scale, of 16 bits and silent, each three segments at 44.1 kHz, and
+/// whether it has headroom.
+fn quality_audio() -> Vec<(Vec<quality::Segment>, bool)> {
+    use quality::Segment;
+
+    let noise = |n: usize, seed: u64| -> Vec<f32> {
+        crate::testing::words(n, seed)
+            .into_iter()
+            .map(|w| (f64::from(w) / f64::from(u32::MAX) - 0.5) as f32)
+            .collect()
+    };
+    let tones = |seed: u64| -> Vec<f32> {
+        let hz = crate::testing::words(40, seed);
+        (0..44_100)
+            .map(|n| {
+                let t = f64::from(n) / 44_100.0;
+                let sum: f64 = hz
+                    .iter()
+                    .map(|w| (std::f64::consts::TAU * f64::from(200 + w % 10_800) * t).sin())
+                    .sum();
+                (sum / 40.0) as f32
+            })
+            .collect()
+    };
+    let stereo = |l: &[f32], r: &[f32]| -> Segment {
+        Segment::new(2, l.iter().zip(r).flat_map(|(l, r)| [*l, *r]).collect())
+    };
+    let thrice = |s: Segment| vec![s.clone(), s.clone(), s];
+    let (left, right) = (tones(1), tones(2));
+    let full: Vec<f32> = left
+        .iter()
+        .zip(noise(left.len(), 3))
+        .map(|(t, n)| t + n)
+        .collect();
+    let half: Vec<f32> = full.iter().map(|x| x / 2.0).collect();
+    let clipped: Vec<f32> = noise(2 * 16_384, 4)
+        .iter()
+        .map(|x| (x * 3.0).clamp(-1.0, 1.0))
+        .collect();
+    let past: Vec<f32> = noise(2 * 16_384, 5).iter().map(|x| x * 2.5).collect();
+    let sixteen: Vec<f32> = noise(2 * 16_384, 6)
+        .iter()
+        .map(|x| (x * 32_768.0).round() / 32_768.0)
+        .collect();
+    vec![
+        (thrice(stereo(&left, &right)), false),
+        (thrice(stereo(&full, &half)), false),
+        (thrice(Segment::new(2, clipped)), false),
+        (thrice(Segment::new(2, past)), true),
+        (thrice(Segment::new(2, sixteen)), false),
+        (thrice(Segment::new(1, vec![0.0; 16_384])), false),
+    ]
+}
+
+/// Gray pictures detailed, upscaled, boxed in bars, blocky and flat.
+fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
+    let gray = |n: usize, seed: u64| -> Vec<u8> {
+        crate::testing::words(n, seed)
+            .into_iter()
+            .map(|w| (w >> 24) as u8)
+            .collect()
+    };
+    let detailed = gray(256 * 256, 7);
+    let small = gray(96 * 96, 8);
+    let upscaled: Vec<u8> = (0..384 * 384)
+        .map(|i| {
+            let at = |x: usize, y: usize| u32::from(small[y.min(95) * 96 + x.min(95)]);
+            let (x, y) = (i % 384 / 4, i / 384 / 4);
+            let (fx, fy) = ((i % 384 % 4) as u32, (i / 384 % 4) as u32);
+            let mixed = (4 - fx) * (4 - fy) * at(x, y)
+                + fx * (4 - fy) * at(x + 1, y)
+                + (4 - fx) * fy * at(x, y + 1)
+                + fx * fy * at(x + 1, y + 1);
+            (mixed / 16) as u8
+        })
+        .collect();
+    let boxed: Vec<u8> = (0..320 * 180)
+        .map(|i| {
+            let (x, y) = (i % 320, i / 320);
+            if (70..250).contains(&x) {
+                detailed[y * 256 + x - 70]
+            } else {
+                0
+            }
+        })
+        .collect();
+    let blocky: Vec<u8> = (0..256 * 256)
+        .map(|i| {
+            let (x, y) = (i % 256, i / 256);
+            detailed[y / 8 * 8 * 256 + x / 8 * 8].wrapping_add(((x % 8 + y % 8) / 4) as u8)
+        })
+        .collect();
+    vec![
+        (detailed, 256, 256),
+        (upscaled, 384, 384),
+        (boxed, 320, 180),
+        (blocky, 256, 256),
+        (vec![90; 64 * 64], 64, 64),
+    ]
+}
+
+/// What the quality measures make of [`quality_audio`] and
+/// [`quality_pictures`], of a graymap transparent in places, and of one
+/// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
+const QUALITY_WRITTEN: (&str, &str) = (
+    "quality/9",
+    "11ef60693c8bd1abcba85a59a6fcadd493748a64b33957b73c499758c4604879",
+);
+
+#[test]
+fn the_quality_method_rises_with_what_it_makes() {
+    let mut digest = crate::testing::Digest::default();
+    for (segments, headroom) in quality_audio() {
+        digest.debug(&quality::audio(&segments, 44_100, headroom));
+    }
+    let pictures = quality_pictures();
+    for (pixels, w, h) in &pictures {
+        digest.debug(&quality::image(pixels, *w, *h));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let header = "P7\nWIDTH 64\nHEIGHT 64\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n";
+    let mut transparent = header.as_bytes().to_vec();
+    transparent.extend(pictures[0].0[..64 * 64].iter().zip(0..).flat_map(|(g, i)| {
+        let alpha = if (i / 64) % 16 < 8 {
+            255
+        } else {
+            (i % 64 * 4) as u8
+        };
+        [*g, alpha]
+    }));
+    let pam = dir.path().join("transparent.pam");
+    std::fs::write(&pam, &transparent).unwrap();
+    let past = dir.path().join("past.pam");
+    std::fs::write(&past, &transparent).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&past)
+        .unwrap()
+        .set_len(2 * 8192 * 8192 + 1024)
+        .unwrap();
+    for path in [pam, past] {
+        digest.debug(&measure_image(&path).0);
+    }
+    crate::testing::check(QUALITY_WRITTEN, quality::METHOD, &digest.hex());
+}
