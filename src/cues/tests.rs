@@ -90,3 +90,55 @@ fn untimed_lyrics_make_no_cues_and_plain_text_drops_id_tags() {
         untimed
     );
 }
+
+/// What reading, moving and writing make of lyrics in four encodings,
+/// with [`crate::lyrics::WRITING`].
+const WRITTEN: (&str, &str) = (
+    "1",
+    "6b96d615c697db2b257d29164f89123bb5e75dbe047b11f4f784ccefa64aaaaa",
+);
+
+#[test]
+fn writing_rises_with_what_it_makes() {
+    let lrc = "[ar:Lantern Hollow]\r\n[00:01.20]<00:01.20>Paper <00:01.80>comets\r\n\
+               [00:04.50](Guitar solo)\r\n[00:09.05]on Kessler Row\r\n";
+    let utf16: Vec<u8> = [0xFF, 0xFE]
+        .into_iter()
+        .chain(lrc.encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    let sources = [
+        lrc.as_bytes().to_vec(),
+        utf16,
+        encoding_rs::WINDOWS_1252
+            .encode("[00:02.00]Caf\u{e9} lights\n")
+            .0
+            .into_owned(),
+        encoding_rs::SHIFT_JIS
+            .encode("[00:03.00]\u{591c}\u{306e}\u{706f}\u{53f0}\n")
+            .0
+            .into_owned(),
+    ];
+    let mut digest = crate::testing::Digest::default();
+    digest.debug(&crate::facts::LRC_ARGS);
+    for bytes in sources {
+        let text = crate::lyrics::decode(&bytes);
+        digest.text(&text);
+        for (offset_ms, stretch_ppm) in [(0, 0), (1500, 0), (-700, 2500)] {
+            let moved = crate::lyrics::shift_lrc(&text, offset_ms, stretch_ppm);
+            digest.text(&moved);
+            for format in [
+                LyricsFormat::Lrc,
+                LyricsFormat::Vtt,
+                LyricsFormat::Srt,
+                LyricsFormat::Txt,
+            ] {
+                for words in [true, false] {
+                    for end_ms in [None, Some(12_000)] {
+                        digest.debug(&write(&moved, format, words, end_ms));
+                    }
+                }
+            }
+        }
+    }
+    crate::testing::check(WRITTEN, &crate::lyrics::WRITING.to_string(), &digest.hex());
+}

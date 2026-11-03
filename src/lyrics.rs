@@ -25,6 +25,14 @@
 //! length: a time is read where it stands, never by copying the rest of
 //! the line, and a closing `>` or `}` found missing once is not looked
 //! for again from each later `<` or `{`.
+//!
+//! [`WRITING`] names how a song's lyrics are read from their source,
+//! moved and written: [`decode`], [`shift_lrc`], ffmpeg's
+//! [`LRC_ARGS`](crate::facts::LRC_ARGS) for a stream, and
+//! [`cues::write`](crate::cues::write). A plan records it, so a change to
+//! what these make writes every song's lyrics again, inside the song and
+//! beside it, once it is raised. A test of [`crate::cues`] pins it to a
+//! digest of what they make of fixed samples.
 
 use crate::lang::{Fit, Lang};
 use crate::units;
@@ -34,6 +42,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::info::VideoInfo;
 use crate::probe::Subtitle;
+
+/// How a song's lyrics are read, moved and written; see the module docs.
+pub const WRITING: u32 = 1;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

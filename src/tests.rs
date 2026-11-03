@@ -177,6 +177,31 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
 }
 
 #[test]
+fn lyrics_an_earlier_writing_wrote_are_written_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let home = s.dir.path().join("home");
+    let mut state = State::load(&home).unwrap();
+    for written in state.outputs.values_mut() {
+        if let Some(lyrics) = written.plan.as_mut().and_then(|p| p.lyrics.as_mut()) {
+            lyrics.writing = 0;
+        }
+    }
+    state.save(&home).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Updated (muman's rendering)"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(s.dir.path().join("lib/Artist/Record/02 Song.lrc")).unwrap(),
+        "[00:01.00]Paper comets\n"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && !text.contains("Updated"), "{text}");
+}
+
+#[test]
 fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");
