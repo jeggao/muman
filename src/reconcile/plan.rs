@@ -278,6 +278,7 @@ impl<'a> Resolver<'a> {
             alignments: &self.state.alignments,
             lyrics: &settings.lyrics,
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
+            typography: settings.tags.typography,
             albums: &self.albums,
             naming: &self.naming,
             audio: &settings.audio,

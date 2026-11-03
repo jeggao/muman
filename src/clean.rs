@@ -40,9 +40,24 @@
 //!   having one owner, but from a structured one only when the two read as
 //!   one person's, so a duet `Paper Comets / Marlo Venn` stays whole;
 //! - the ideographic space, and symbols below U+2700 such as `☆` and `♪`,
-//!   are part of a name.
+//!   are part of a name;
+//! - an en or em dash stays as written, as in `1971–1975`.
+//!
+//! MusicBrainz writes `’`, `“ ”` and the hyphen U+2010, where files and
+//! uploads mostly write `'`, `"` and `-`, so one album's songs would mix
+//! the two. `tidy.typography` writes each value one way, as `[tags]
+//! typography` says: `ascii`, or `typographic`, which spells a value's
+//! ASCII form again so both sources' come out alike. A mark opens a word
+//! at the start or after a space, an opening bracket or an opening quote.
+//! A `'` opening a word is `‘` when a later `'` closes it and no digit or
+//! elision such as `'til` follows it; every other `'` is `’`. A `"`
+//! opening a word is `“`, any other `”`. A `-` between letters
+//! or digits, though not between two digits, is `‐`. The rule runs last,
+//! so the rules reading quotes read them as the source wrote them.
 
 use std::collections::BTreeSet;
+
+use serde::Deserialize;
 
 use crate::tags::{Field, Offer, Offers};
 
@@ -154,6 +169,7 @@ const RULES: &[Rule] = &[
         Scope::Any,
         joined_genres,
     ),
+    rule("tidy.typography", TEXT, Scope::Any, typography),
 ];
 
 const fn rule(name: &'static str, fields: &'static [Field], scope: Scope, edit: Edit) -> Rule {
@@ -290,13 +306,26 @@ impl Albums {
     }
 }
 
+/// How `tidy.typography` writes quotes, apostrophes and hyphens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Typography {
+    /// `’ ‘ “ ”` and `‐`, as MusicBrainz writes them.
+    #[default]
+    Typographic,
+    /// `' "` and `-`.
+    Ascii,
+}
+
 /// What a rule may look at besides the value: the song's names, the
-/// library's albums, and the source's other offers.
+/// library's albums, the source's other offers, and how punctuation is
+/// written.
 #[derive(Debug, Clone, Copy)]
 pub struct Context<'a> {
     pub names: &'a [Name],
     pub albums: &'a Albums,
     pub offers: &'a Offers,
+    pub typography: Typography,
 }
 
 struct At<'a> {
@@ -1136,6 +1165,72 @@ fn joined_genres(v: &str, _: &At<'_>) -> Option<Vec<String>> {
         .map(str::to_string)
         .collect();
     (parts.len() > 1).then_some(parts)
+}
+
+/// Words a `'` opening them shortens, lower-case: `'til`, `rock 'n' roll`.
+const ELISIONS: [&str; 12] = [
+    "n", "til", "cause", "cos", "em", "round", "bout", "tis", "twas", "neath", "nuff", "kay",
+];
+
+fn ascii(c: char) -> char {
+    match c {
+        '’' | '‘' => '\'',
+        '“' | '”' => '"',
+        '\u{2010}' | '\u{2011}' => '-',
+        c => c,
+    }
+}
+
+/// Whether a quote after `prev` opens a word rather than closes one.
+fn opens(prev: Option<char>) -> bool {
+    prev.is_none_or(|p| {
+        is_space(p) || matches!(p, '“' | '‘') || BRACKETS.iter().any(|(o, _)| *o == p)
+    })
+}
+
+fn typographic(v: &str) -> String {
+    let chars: Vec<char> = v.chars().map(ascii).collect();
+    let mut out = String::with_capacity(v.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let (prev, next) = (out.chars().last(), chars.get(i + 1).copied());
+        out.push(match c {
+            '\'' if !opens(prev) => '’',
+            '\'' => {
+                let word: String = chars[i + 1..]
+                    .iter()
+                    .take_while(|c| c.is_alphabetic())
+                    .flat_map(|c| c.to_lowercase())
+                    .collect();
+                let elided =
+                    next.is_some_and(|n| n.is_ascii_digit()) || ELISIONS.contains(&word.as_str());
+                let closed = (i + 1..chars.len()).any(|j| {
+                    chars[j] == '\''
+                        && !opens(Some(chars[j - 1]))
+                        && chars.get(j + 1).is_none_or(|n| !n.is_alphanumeric())
+                });
+                if closed && !elided { '‘' } else { '’' }
+            }
+            '"' if opens(prev) => '“',
+            '"' => '”',
+            '-' if prev.zip(next).is_some_and(|(p, n)| {
+                p.is_alphanumeric()
+                    && n.is_alphanumeric()
+                    && !(p.is_ascii_digit() && n.is_ascii_digit())
+            }) =>
+            {
+                '\u{2010}'
+            }
+            c => c,
+        });
+    }
+    out
+}
+
+fn typography(v: &str, at: &At<'_>) -> Option<Vec<String>> {
+    match at.ctx.typography {
+        Typography::Ascii => changed(v, v.chars().map(ascii).collect::<String>()),
+        Typography::Typographic => changed(v, typographic(v)),
+    }
 }
 
 #[cfg(test)]

@@ -44,6 +44,12 @@ touch_root = false
 # Each file counts rounded up to this: "32 KiB" on a FAT32 card.
 block_size = "4 KiB"
 
+[tags]
+# How the rule tidy.typography writes quotes, apostrophes and hyphens in
+# titles, artists, albums and genres: "typographic" as ’ “ ” and ‐, as
+# MusicBrainz does, or "ascii" as ' " and -. En and em dashes stay.
+typography = "typographic"
+
 [lyrics]
 # The languages you read, best first, as language tags: "en", "pt-BR",
 # "zh-Hant". A translation is taken only into one of these.
