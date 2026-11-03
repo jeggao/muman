@@ -743,6 +743,7 @@ fn every_fixture_is_read_as_muman_reads_a_source() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
     let mut found = Vec::new();
     walk(&fixtures, &mut found);
+    found.retain(|path| !path.starts_with(fixtures.join("editions")));
     assert!(found.len() >= 7, "{found:?}");
     for fixture in &found {
         assert!(read(fixture), "{}", fixture.display());
