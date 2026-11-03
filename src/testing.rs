@@ -4,6 +4,14 @@
 //! to measure. Tags, covers and renames then run against real files
 //! offline.
 //!
+//! The audio it writes is the fixture's whatever the encode was asked
+//! for, so a song encoded with another gain or bitrate would be the same
+//! bytes. A FLAC output alone is stamped with its own arguments, in the
+//! MD5 its STREAMINFO holds: a change that should encode a song again,
+//! and did not, shows offline as FLAC bytes that differ from a fresh
+//! build's. Its inputs' paths and other outputs are left out of the
+//! stamp, so one song builds the same bytes in any folder.
+//!
 //! [`Digest`] pins each measure to its method. A measure's test hashes
 //! what it makes of fixed samples, and [`check`] holds that digest to the
 //! one recorded beside the method: a change to what a measure makes fails
@@ -29,6 +37,9 @@ use crate::runner::{Line, Runner};
 
 pub const SILENCE_OPUS: &[u8] = include_bytes!("../testdata/silence.opus");
 pub const SILENCE_FLAC: &[u8] = include_bytes!("../testdata/silence.flac");
+/// Where a FLAC's STREAMINFO holds the MD5 of its audio: after `fLaC`,
+/// the block's header and 18 bytes of the block.
+const STREAMINFO_MD5: std::ops::Range<usize> = 26..42;
 pub const SILENCE_VORBIS: &[u8] = include_bytes!("../testdata/silence.ogg");
 pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
 pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
@@ -320,7 +331,16 @@ impl Fake {
             "image2" if encoder("libwebp") => PIXEL_WEBP.to_vec(),
             "image2" => PIXEL.to_vec(),
             "opus" => SILENCE_OPUS.to_vec(),
-            "flac" => SILENCE_FLAC.to_vec(),
+            // Stamped with the audio output's own arguments, so a gain, a
+            // filter or a bitrate the encode was given changes its bytes.
+            "flac" => {
+                let mut flac = SILENCE_FLAC.to_vec();
+                let stamp = <sha2::Sha256 as sha2::Digest>::digest(
+                    args[mapped.unwrap_or(0)..at].join("\0"),
+                );
+                flac[STREAMINFO_MD5].copy_from_slice(&stamp[..16]);
+                flac
+            }
             // A stream's packets, as many bytes as 200 s at 128 kbit/s,
             // running as long as the audio its analysis decodes, unless the
             // tables say otherwise.
@@ -759,4 +779,31 @@ pub fn change_point(path: &Path) {
     if killed {
         std::panic::panic_any(Killed);
     }
+}
+
+#[test]
+fn a_fake_flac_encode_is_stamped_with_its_own_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Fake::default();
+    let encode = |out: &str, shaping: &[&str], cover: bool| {
+        let out = dir.path().join(out);
+        let mut cmd: Vec<OsString> = ["ffmpeg", "-i", "song.mkv", "-map", "0:a:0", "-c:a", "flac"]
+            .iter()
+            .chain(shaping)
+            .map(OsString::from)
+            .collect();
+        cmd.extend(["-f".into(), "flac".into(), out.clone().into()]);
+        if cover {
+            let picture = dir.path().join("cover.png");
+            cmd.extend(["-map", "0:v:0", "-f", "image2"].map(OsString::from));
+            cmd.push(picture.into());
+        }
+        fake.run(&cmd).unwrap();
+        fs::read(out).unwrap()
+    };
+    let plain = encode("a.flac", &[], false);
+    assert_eq!(plain, encode("b.flac", &[], true), "another output aside");
+    assert_ne!(plain, encode("c.flac", &["-af", "volume=-3dB"], false));
+    assert_ne!(plain, encode("d.flac", &["-b:a", "900k"], false));
+    assert_eq!(plain.len(), SILENCE_FLAC.len());
 }
