@@ -702,3 +702,80 @@ fn a_record_another_lookup_finds_stays_as_kept_and_one_asked_again_is_renewed() 
     );
     assert_eq!(unchanged, 0);
 }
+
+#[test]
+fn a_rematch_fetches_a_full_record_again_and_asks_acoustid_again_for_its_own() {
+    let (_d, mut m, mut s, p) = own(true, &NAMED);
+    let id = "00000000-0000-0000-0000-000000000001";
+    let record = SourceKey::parse(&format!("musicbrainz:{id}")).unwrap();
+    m.songs[0].sources.push(record.clone());
+    let mut facts = Facts::unreadable("1".into());
+    facts.tags = crate::tags::from_record(&crate::musicbrainz::Record {
+        id: crate::musicbrainz::Mbid::parse(id).unwrap(),
+        title: "Lantern Weather".into(),
+        artists: vec!["Paper Comets".into()],
+        credit: String::new(),
+        artist_ids: Vec::new(),
+        comment: String::new(),
+        isrcs: vec!["XX0000000001".into()],
+        length_ms: None,
+        release: Some(crate::musicbrainz::Release {
+            id: "00000000-0000-0000-0000-00000000000a".into(),
+            title: "Rooms of Salt".into(),
+            artists: vec!["Paper Comets".into()],
+            credit: String::new(),
+            artist_ids: Vec::new(),
+            group_id: Some("00000000-0000-0000-0000-00000000000b".into()),
+            date: Some("2001".into()),
+            country: None,
+            track: Some(1),
+            tracks: Some(9),
+            track_id: None,
+            disc: Some(1),
+            status: None,
+            types: Vec::new(),
+            media: None,
+            details: crate::musicbrainz::Details::default(),
+        }),
+        editions: Vec::new(),
+        original_date: None,
+        languages: vec!["eng".into()],
+    });
+    s.facts.insert(record.clone(), facts);
+    let rematch = Ask {
+        rematch: true,
+        persist: false,
+    };
+    let mine = |s: &State, ask| -> Vec<(Provider, Verdict)> {
+        verdicts(&m, s, &p, NOW, ask)
+            .unwrap()
+            .into_iter()
+            .map(|(_, q, v)| (q, v))
+            .filter(|(q, _)| matches!(q, Provider::AcoustId | Provider::MusicBrainz))
+            .collect()
+    };
+    let again = |v: &Verdict| match v {
+        Verdict::Due(d) => d.again.clone(),
+        _ => None,
+    };
+    let quiet = mine(&s, Ask::default());
+    assert!(quiet.iter().all(|(_, v)| again(v).is_none()), "{quiet:?}");
+    let searched = mine(&s, rematch);
+    assert_eq!(
+        again(&searched[1].1),
+        Some((record.clone(), 0)),
+        "{searched:?}"
+    );
+    assert!(again(&searched[0].1).is_none(), "{searched:?}");
+    s.lookups = vec![Looked {
+        from: SourceKey::parse("manual:a.flac").unwrap(),
+        find: "acoustid".into(),
+        method: method(Provider::AcoustId).into(),
+        at: NOW - DAY,
+        outcome: Outcome::Found(record.clone()),
+        unchanged: 0,
+    }];
+    let printed = mine(&s, rematch);
+    assert_eq!(again(&printed[0].1), Some((record, 0)), "{printed:?}");
+    assert!(again(&printed[1].1).is_none(), "{printed:?}");
+}

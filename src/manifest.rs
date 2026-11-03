@@ -298,6 +298,14 @@ pub enum Edit {
     Rename { from: SourceKey, to: SourceKey },
     /// A key dropped from the song listing it.
     Drop(SourceKey),
+    /// In the song listing `song`, `new` in place of `old`, or `old`
+    /// dropped where there is no `new` or it lists `new` already; another
+    /// song listing `old` keeps it.
+    Supersede {
+        song: SourceKey,
+        old: SourceKey,
+        new: Option<SourceKey>,
+    },
     /// Tags set in the `tags` of the song listing `key`, over any it
     /// sets already under another spelling of their names.
     Tag { key: SourceKey, tags: Tags },
@@ -1381,6 +1389,36 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                         }
                         crate::held::unset(song, key);
                     }
+                }
+            }
+        }
+        Edit::Supersede { song, old, new } => {
+            let (text, old_text) = (song.to_string(), old.to_string());
+            let new_text = new.as_ref().map(ToString::to_string);
+            let song = doc
+                .get_mut("song")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|list| list.iter_mut().find(|t| listed_keys(t).contains(&text)));
+            if let Some(song) = song {
+                let keys = listed_keys(song);
+                if keys.contains(&old_text) {
+                    let gone = new_text.as_ref().is_none_or(|n| keys.contains(n));
+                    let keys: Vec<SourceKey> = keys
+                        .iter()
+                        .filter(|k| !(gone && **k == old_text))
+                        .map(|k| match &new_text {
+                            Some(n) if *k == old_text => n.clone(),
+                            _ => k.clone(),
+                        })
+                        .filter_map(|k| SourceKey::parse(&k).ok())
+                        .collect();
+                    song.insert("sources", key_array(&keys));
+                    for pin in ["audio", "cover", "lyrics"] {
+                        if song.get(pin).and_then(Item::as_str) == Some(old_text.as_str()) {
+                            song.remove(pin);
+                        }
+                    }
+                    crate::held::unset(song, old);
                 }
             }
         }

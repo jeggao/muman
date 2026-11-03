@@ -484,6 +484,44 @@ fn a_rename_and_a_drop_follow_the_key_into_its_pins() {
 }
 
 #[test]
+fn a_record_superseded_in_one_song_stays_in_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = "musicbrainz:00000000-0000-0000-0000-000000000001";
+    let new = "musicbrainz:00000000-0000-0000-0000-000000000002";
+    write(
+        dir.path(),
+        &format!(
+            "[[song]]\nsources = [\"manual:a.flac\", \"{old}\"]\n\n\
+             [[song]]\nsources = [\"manual:b.flac\", \"{old}\"]\n\n\
+             [[song]]\nsources = [\"manual:c.flac\", \"{old}\", \"{new}\"]\n"
+        ),
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let key = |k: &str| SourceKey::parse(k).unwrap();
+    m.edit(Edit::Supersede {
+        song: key("manual:a.flac"),
+        old: key(old),
+        new: Some(key(new)),
+    });
+    m.edit(Edit::Supersede {
+        song: key("manual:c.flac"),
+        old: key(old),
+        new: Some(key(new)),
+    });
+    m.save().unwrap();
+    assert_eq!(m.songs[0].sources, [key("manual:a.flac"), key(new)]);
+    assert_eq!(m.songs[1].sources, [key("manual:b.flac"), key(old)]);
+    assert_eq!(m.songs[2].sources, [key("manual:c.flac"), key(new)]);
+    m.edit(Edit::Supersede {
+        song: key("manual:b.flac"),
+        old: key(old),
+        new: None,
+    });
+    m.save().unwrap();
+    assert_eq!(m.songs[1].sources, [key("manual:b.flac")]);
+}
+
+#[test]
 fn an_album_is_added_once_with_its_template() {
     let dir = tempfile::tempdir().unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();
