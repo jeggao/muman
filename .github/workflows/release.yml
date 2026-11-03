@@ -249,6 +249,8 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
           brew tap-new --no-git local/muman
+          # Homebrew loads a formula only from a tap it was told to trust.
+          brew trust local/muman
           cp packages/homebrew/muman.rb "$(brew --repository local/muman)/Formula/"
           cache=$(brew --cache --formula local/muman/muman)
           mkdir -p "$(dirname "$cache")"
