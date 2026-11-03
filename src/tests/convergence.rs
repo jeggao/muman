@@ -148,7 +148,7 @@ fn attempt(s: &Setup, fake: &Fake, args: &[&str]) {
         &mut Vec::new(),
     );
     let dirs = s.job(args).dirs;
-    if dirs.home.join(crate::dirs::STATE).exists()
+    if crate::state::exists(&dirs.home)
         && let Err(e) = crate::reconcile::invariant(&dirs)
     {
         panic!("{args:?}: {e}");

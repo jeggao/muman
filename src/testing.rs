@@ -1012,3 +1012,12 @@ pub fn mutations() -> Vec<Mutation> {
         ("folder", |p| p.folder = None),
     ]
 }
+
+/// Make `home` one an earlier muman left, its state `json` in
+/// `state.json` and no store.
+pub fn put_old_state(home: &Path, json: &[u8]) {
+    for name in ["state.db", "state.db-wal", "state.db-shm", "state.json.bak"] {
+        let _ = fs::remove_file(home.join(name));
+    }
+    fs::write(home.join(crate::dirs::STATE), json).unwrap();
+}

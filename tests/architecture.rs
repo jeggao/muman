@@ -112,6 +112,13 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     ("purge.rs", 1, "sources no song uses, deleted on request"),
     (
+        "state.rs",
+        4,
+        "state.json brought into state.db once: the store made from it \
+         linked or renamed into place, its other name and what a stopped \
+         import left removed, and state.json kept as state.json.bak",
+    ),
+    (
         "change.rs",
         1,
         "a removed song's fetched source, deleted with `remove --purge`",

@@ -9,6 +9,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **The state is kept in `state.db`**, a SQLite store, in place of
+  `state.json`. The first run brings `state.json` over and keeps it as
+  `state.json.bak`; a stub takes its place so an earlier muman refuses
+  the home instead of taking every library file for yours. To go back
+  to an earlier muman, move `state.db` aside and `state.json.bak` back
+  to `state.json`; what ran since is lost.
+
 - **A run's record keeps only the songs it changed**, not every song
   muman wrote, so the home's history stays small in a large library. A
   run an earlier muman recorded is still undone; an earlier muman cannot

@@ -177,7 +177,7 @@ That exactness costs time:
 - Adding a song can lower others, and removing one or raising the limit
   raises them again.
 - muman renders a song to learn exactly what it takes before it counts
-  toward the limit. It keeps what it learns in `state.json`, so a sync
+  toward the limit. It keeps what it learns in its state, so a sync
   that changes nothing renders nothing, and a song rendered to be
   measured moves into the library rather than being rendered twice.
 
