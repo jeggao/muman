@@ -104,6 +104,27 @@ fn go(fake: &Fake, f: &Fixture, plan: &Plan) -> Result<Rendered> {
     go_claiming(fake, f, plan, &claim)
 }
 
+/// `plan` written as a retag over `r`, which `f` holds, its lyrics inside
+/// made anew where `anew`.
+fn retag_over(fake: &Fake, f: &Fixture, plan: &Plan, r: &Rendered, anew: bool) -> Result<Rendered> {
+    let made = crate::artifact::parts(plan);
+    let beside = names(r);
+    retag(
+        fake,
+        &Job {
+            parts: &made,
+            stem: Path::new("A/Record/Song"),
+            library: &f.dir.path().join("lib"),
+            sources: &f.sources,
+            scratch: &f.dir.path().join("scratch-retag"),
+            claim: &[Ledger::taken(&r.audio)],
+            stale: &[],
+        },
+        (&r.audio, &beside),
+        anew,
+    )
+}
+
 fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result<Rendered> {
     render(
         fake,
@@ -862,14 +883,7 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         p.tags[0] = ("TITLE".into(), vec!["Paper Comets".into()]);
         let library = f.dir.path().join("lib");
         let calls = fake.calls().len();
-        let again = retag(
-            &library,
-            &first.audio,
-            &names(&first),
-            &crate::artifact::parts(&p),
-            &[Ledger::taken(&first.audio)],
-        )
-        .unwrap();
+        let again = retag_over(&fake, &f, &p, &first, false).unwrap();
         assert_eq!(fake.calls().len(), calls, "{format:?}: nothing is run");
         assert_eq!(again.audio, first.audio);
         let file = lofty::read_from_path(library.join(&again.audio)).unwrap();
@@ -896,6 +910,34 @@ fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() 
         assert_eq!(
             leftover_parts(&library.join("A/Record")),
             [] as [PathBuf; 0]
+        );
+    }
+}
+
+#[test]
+fn a_retag_making_the_lyrics_inside_anew_writes_what_a_build_would() {
+    for codec in [Codec::Opus, Codec::Flac] {
+        let mut p = plan(Format::Copy { codec });
+        p.lyrics.as_mut().unwrap().placement = LyricsPlacement::Embedded;
+        let built = |p: &Plan| {
+            let f = fixture();
+            let r = go(&Fake::default(), &f, p).unwrap();
+            let bytes = fs::read(f.dir.path().join("lib").join(&r.audio)).unwrap();
+            (bytes, f, r)
+        };
+        let (first, f, r) = built(&p);
+        let mut q = p.clone();
+        q.lyrics.as_mut().unwrap().shift_ms += 500;
+        let fake = Fake::default();
+        let again = retag_over(&fake, &f, &q, &r, true).unwrap();
+        assert!(again.problems.is_empty(), "{codec:?}: {:?}", again.problems);
+        assert!(fake.ran("0:2"), "{codec:?}: the lyrics read again");
+        assert!(!fake.ran("copy"), "{codec:?}: the audio left alone");
+        let retagged = fs::read(f.dir.path().join("lib").join(&r.audio)).unwrap();
+        assert!(retagged != first, "{codec:?}: the lyrics moved");
+        assert!(
+            retagged == built(&q).0,
+            "{codec:?}: a retag writes what a build would"
         );
     }
 }
@@ -959,28 +1001,14 @@ fn a_song_is_the_same_bytes_every_build_and_a_retag_what_a_build_writes() {
             vec!["Paper Comets, a title longer than the last".into()],
         );
         let library = f.dir.path().join("lib");
-        retag(
-            &library,
-            &r.audio,
-            &names(&r),
-            &crate::artifact::parts(&q),
-            &[Ledger::taken(&r.audio)],
-        )
-        .unwrap();
+        retag_over(&Fake::default(), &f, &q, &r, false).unwrap();
         let retagged = fs::read(library.join(&r.audio)).unwrap();
         assert!(
             retagged == built(&q).0,
             "{format:?}: a retag writes what a build would"
         );
         q.tags[0] = ("TITLE".into(), vec!["Comets".into()]);
-        retag(
-            &library,
-            &r.audio,
-            &names(&r),
-            &crate::artifact::parts(&q),
-            &[Ledger::taken(&r.audio)],
-        )
-        .unwrap();
+        retag_over(&Fake::default(), &f, &q, &r, false).unwrap();
         let shorter = fs::read(library.join(&r.audio)).unwrap();
         assert!(
             shorter == built(&q).0,

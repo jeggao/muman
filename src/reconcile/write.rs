@@ -495,7 +495,13 @@ fn render_due<R: Runner, W: Write>(
             stale: &stale,
         };
         if *retag {
-            let mut done = render::retag(&dirs.library, &path, &recorded, &parts, claim)?;
+            // Lyrics inside whose part changed are made anew; others are kept
+            // as the file holds them.
+            let anew = old
+                .get(&path)
+                .and_then(|w| w.plan.as_ref())
+                .is_none_or(|p| crate::artifact::parts(p).lyrics != parts.lyrics);
+            let mut done = render::retag(*runner, &render_job, (&path, &recorded), anew)?;
             if beside_changes(&dirs.library, old, r) {
                 let beside = render::beside(*runner, &render_job)?;
                 done.beside = beside.files;

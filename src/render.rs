@@ -75,10 +75,11 @@
 //! them in each container: ffmpeg writes an MP4's from an `FFMETADATA`
 //! file, the tag writers every other's beside the tags.
 //!
-//! A song whose plan changed in its tags alone is tagged again in place
-//! (`retag`), and the files beside it written again where they changed
-//! ([`beside`]), as a build writes them, with the cover and the lyrics its
-//! file holds, read as each container
+//! A song whose plan changed in its tags or the lyrics inside it alone is
+//! tagged again in place (`retag`), and the files beside it written again
+//! where they changed ([`beside`]), as a build writes them, with the cover
+//! its file holds, and its lyrics made anew from their source where their
+//! part changed, else as the file holds them, each read as each container
 //! holds them: `lofty`'s generic tag reads no WavPack cover, so APEv2's
 //! `Cover Art (Front)` is read itself. Every file written is read back as
 //! a source's tags are, and a field or a cover it does not hold as
@@ -355,7 +356,6 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
         }
-        let flac = made.audio.format.codec().container() == Container::Flac;
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
             (Some(l), Some(None)) => match failed(&lyrics_raw) {
@@ -372,15 +372,11 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
         }
         .filter(|text| text.lines().any(|l| !l.trim().is_empty()));
         let mut tags = made.tags.tags.to_vec();
-        if let Some(text) = text.as_deref().and_then(|t| lyrics::inside(made, t)) {
-            if flac && text.len() > FLAC_BLOCK {
-                problems.push(format!(
-                    "lyrics not embedded: {} is more than a FLAC file's tags hold",
-                    crate::units::Size(text.len() as u64)
-                ));
-            } else {
-                tags.push(("LYRICS".to_string(), vec![text.clone()]));
-            }
+        if let Some(text) = text
+            .as_deref()
+            .and_then(|t| embeddable(made, t, &mut problems))
+        {
+            tags.push(("LYRICS".to_string(), vec![text]));
         }
         let room = cover_room(made.audio.format.codec().container(), &tags);
         let picture = cover.and_then(|c| {
@@ -547,20 +543,49 @@ fn cover_room(container: Container, tags: &[(String, Vec<String>)]) -> usize {
     }
 }
 
-/// Write a song whose plan changed only in its tags by writing them into
-/// the file it has at `audio`, with the cover and the embedded lyrics
-/// that file holds: what [`render`] would write, without decoding or
-/// encoding anything. Through `.part`, as [`render`] writes, put over the
-/// file `claim` holds.
-pub(crate) fn retag(
-    library: &Path,
-    audio: &Path,
-    beside: &[PathBuf],
-    made: &Parts<'_>,
-    claim: &[Owned],
+/// The lyrics `made` holds inside the song, from their `text`, as the
+/// tags take them; none, said in `problems`, for lyrics past what a FLAC
+/// file's tags hold.
+fn embeddable(made: &Parts<'_>, text: &str, problems: &mut Vec<String>) -> Option<String> {
+    let text = lyrics::inside(made, text)?;
+    let flac = made.audio.format.codec().container() == Container::Flac;
+    if flac && text.len() > FLAC_BLOCK {
+        problems.push(format!(
+            "lyrics not embedded: {} is more than a FLAC file's tags hold",
+            crate::units::Size(text.len() as u64)
+        ));
+        return None;
+    }
+    Some(text)
+}
+
+/// Write a song whose plan changed only in its tags, and in the lyrics
+/// inside it, by writing them into the file it has at `audio`, with the
+/// cover that file holds: what [`render`] would write, without decoding
+/// or encoding anything. The lyrics inside are made anew from their
+/// source where `lyrics_anew`, as [`render`] makes them, else kept as the
+/// file holds them. Through `.part`, as [`render`] writes, put over the
+/// file `job`'s claim holds.
+pub(crate) fn retag<R: Runner>(
+    runner: &R,
+    job: &Job<'_>,
+    (audio, beside): (&Path, &[PathBuf]),
+    lyrics_anew: bool,
 ) -> Result<Rendered> {
     use lofty::file::TaggedFileExt;
 
+    let (made, library) = (job.parts, job.library);
+    let mut problems = Vec::new();
+    let anew = made
+        .lyric_text()
+        .filter(|_| lyrics_anew && made.lyrics.is_some())
+        .map(|l| {
+            lyrics::text(runner, job, l)
+                .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
+                .ok()
+                .flatten()
+                .and_then(|t| embeddable(made, &t, &mut problems))
+        });
     let path = library.join(audio);
     let staged = part(&path);
     // Into a new file, as a song written anew is: a copy would carry over
@@ -587,15 +612,16 @@ pub(crate) fn retag(
             })
             .or_else(|| ape_cover(&path));
         let mut tags = made.tags.tags.to_vec();
-        let embedded = made.lyrics.is_some();
-        if let Some(text) = tag
-            .and_then(|t| {
+        let kept = || {
+            tag.and_then(|t| {
                 t.get_string(ItemKey::Lyrics)
                     .or_else(|| t.get_string(ItemKey::UnsyncLyrics))
             })
-            .filter(|_| embedded)
-        {
-            tags.push(("LYRICS".to_string(), vec![text.to_string()]));
+            .filter(|_| made.lyrics.is_some())
+            .map(str::to_string)
+        };
+        if let Some(text) = anew.clone().unwrap_or_else(kept) {
+            tags.push(("LYRICS".to_string(), vec![text]));
         }
         let covered = picture.is_some();
         write_tags(
@@ -610,13 +636,13 @@ pub(crate) fn retag(
         Ok(verify(&staged, &tags, covered))
     })();
     let problems = match result {
-        Ok(problems) => problems,
+        Ok(verified) => problems.into_iter().chain(verified).collect(),
         Err(e) => {
             let _ = fs::remove_file(&staged);
             return Err(e);
         }
     };
-    if let Err(e) = crate::library::put(library, &staged, audio, claim) {
+    if let Err(e) = crate::library::put(library, &staged, audio, job.claim) {
         let _ = fs::remove_file(&staged);
         return Err(e);
     }

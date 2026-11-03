@@ -202,6 +202,48 @@ fn lyrics_an_earlier_writing_wrote_are_written_again() {
 }
 
 #[test]
+fn lyrics_inside_a_song_cleaned_anew_retag_it_and_encode_nothing() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    s.written(
+        "home/sources/manual/Song.lrc",
+        "[00:01.00]Paper comets\n[00:02.00][Chorus]\n",
+    );
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, "version = 1\n[[lyrics.out]]\nto = \"tag\"\n").unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let inside = || crate::tags::lyrics_in(&song).map(|(text, ..)| text);
+    assert_eq!(inside().as_deref(), Some("[00:01.00]Paper comets\n"));
+
+    let t = std::fs::read_to_string(&list).unwrap();
+    let at = t.find("[lyrics.clean.packaging]").expect(&t);
+    let off = format!(
+        "{}{}",
+        &t[..at],
+        t[at..].replacen("cues = true", "cues = false", 1)
+    );
+    std::fs::write(&list, off).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Updated (lyric cleaning)"), "{text}");
+    assert_eq!(
+        inside().as_deref(),
+        Some("[00:01.00]Paper comets\n[00:02.00][Chorus]\n")
+    );
+    assert!(
+        !fake.calls().iter().any(|c| c.iter().any(|a| a == "-c:a")),
+        "the song is tagged again, not encoded: {:?}",
+        fake.calls()
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
 fn a_lyric_cleaning_switch_flipped_writes_the_lyrics_again() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");

@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | [`AudioPart`]: renderer version, format, audio source, gain and bits, MP4 chapters, an Opus header | ffmpeg's encode or copy | builds the file again |
 //! | the cover inside ([`CoverPart`]) | the build: a FLAC's padding is sized from it, and it from the room the container leaves | builds the file again |
-//! | the lyrics inside ([`LyricsInside`]) | the build, in the tags it writes | builds the file again |
+//! | the lyrics inside ([`LyricsInside`]) | the tag writers, made anew from their source | tags the file again |
 //! | [`TagsPart`]: tags, tagging version, the lyrics' language, other containers' chapters, gains as the file holds them | the tag writers | tags the file again |
 //! | each file beside ([`Beside`]) | the lyric and cover writers | writes that file again |
 //!
@@ -416,10 +416,8 @@ impl<'a> Parts<'a> {
     #[must_use]
     pub(crate) fn redo_from(&self, old: &Parts<'_>) -> Redo {
         Redo {
-            build: !self.audio.keeps(&old.audio)
-                || self.cover != old.cover
-                || self.lyrics != old.lyrics,
-            retag: self.tags != old.tags,
+            build: !self.audio.keeps(&old.audio) || self.cover != old.cover,
+            retag: self.tags != old.tags || self.lyrics != old.lyrics,
             beside: self.beside != old.beside,
         }
     }
