@@ -102,6 +102,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   song again on the next run**, as a small library's whole sync could
   be. Each song written is now saved as written, unless saving takes
   more than a twentieth of the time writing runs.
+- **A hook running muman on its own run's home or library stops with an
+  error** (exit code 5) instead of waiting forever on the locks that run
+  holds. `list` still answers there, and `--library` writes another
+  library.
 - **A song sung in a language you read took a translation into another
   one you read** when `prefer` puts `"translation"` first: an English
   song read in `["en", "zh"]` took its Chinese subtitles over its

@@ -23,8 +23,9 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, a change or undo was refused, or the song list
-     sets commands or servers not trusted, with no terminal to ask on
+     and was left out, a change or undo was refused, the song list sets
+     commands or servers not trusted, with no terminal to ask on, or a
+     hook ran muman on the home or library of the run that started it
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started
 ```

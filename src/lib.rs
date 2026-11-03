@@ -138,6 +138,24 @@ pub struct Job {
     /// Trust the commands and servers the song list sets without asking
     /// ([`trust`]).
     pub trust: bool,
+    /// The run whose hook runs this one, if one does.
+    pub hooked: Option<Hooked>,
+}
+
+/// The run a hook runs muman from, which holds its home's locks and its
+/// library's until the hook ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hooked {
+    pub home: PathBuf,
+    pub library: Option<PathBuf>,
+}
+
+/// The run whose hook runs this one, from the variables `var` reads.
+pub fn hooked_from(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<Hooked> {
+    Some(Hooked {
+        home: var(hooks::HOOK_HOME)?.into(),
+        library: var("MUMAN_LIBRARY").map(PathBuf::from),
+    })
 }
 
 impl Job {
@@ -157,6 +175,7 @@ impl Job {
             progress: cli.progress,
             offline: cli.offline,
             trust: cli.trust,
+            hooked: None,
         }
     }
 }
@@ -205,6 +224,7 @@ pub fn run() -> ExitCode {
         ..defaults
     };
     let mut job = Job::from_cli(cli, defaults);
+    job.hooked = hooked_from(&|name| std::env::var_os(name));
     // Recorded in the state, a folder named relative to where one run
     // started would be another folder to a run started elsewhere.
     for dir in [&mut job.dirs.home, &mut job.dirs.library] {
@@ -309,6 +329,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
 ) -> Result<bool> {
     let dirs = &job.dirs;
     let traits = traits(&job.command);
+    if traits.locks
+        && let Some(hooked) = &job.hooked
+    {
+        refuse_hooked(hooked, dirs)?;
+    }
     progress::current().plan(traits.steps);
     if traits.apart {
         dirs.apart()?;
@@ -642,9 +667,39 @@ pub(crate) struct Traits {
     /// It may run ffmpeg or ffprobe: an export only when it encodes,
     /// `check` only when it decodes.
     pub ffmpeg: bool,
+    /// It may lock the home or the library, or wait on their locks, so a
+    /// hook cannot run it on the home or library of the run that started
+    /// it ([`Hooked`]).
+    pub locks: bool,
     /// The long steps it may take, in the order it takes them, which
     /// number them as it goes.
     pub steps: &'static [&'static str],
+}
+
+/// Refuse to run where `hooked`, the run whose hook this is, holds the
+/// locks: that run waits for its hook, which would wait for it.
+fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
+    if platform::same_path(&hooked.home, &dirs.home) {
+        return Err(change::Refused(format!(
+            "a hook cannot run this on {}, the home of the run that started it, which waits for \
+             the hook to end",
+            dirs.home.display()
+        ))
+        .into());
+    }
+    if hooked
+        .library
+        .as_deref()
+        .is_some_and(|l| platform::same_path(l, &dirs.library))
+    {
+        return Err(change::Refused(format!(
+            "a hook cannot run this on {}, the library the run that started it is writing; pass \
+             --library to name another",
+            dirs.library.display()
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 /// What `command` is, one arm per command, so a new command says each.
@@ -662,6 +717,7 @@ pub(crate) fn traits(command: &Command) -> Traits {
         edits_list: true,
         gated: true,
         ffmpeg: true,
+        locks: true,
         steps,
     };
     let reads = Traits {
@@ -669,6 +725,7 @@ pub(crate) fn traits(command: &Command) -> Traits {
         edits_list: false,
         gated: false,
         ffmpeg: false,
+        locks: true,
         steps: &[],
     };
     match command {
@@ -726,6 +783,7 @@ pub(crate) fn traits(command: &Command) -> Traits {
             edits(&["Comparing prints", "Comparing", "Measuring", "Writing"])
         }
         Command::Duplicates { .. } => Traits {
+            locks: false,
             steps: &["Comparing prints"],
             ..reads
         },
@@ -733,7 +791,10 @@ pub(crate) fn traits(command: &Command) -> Traits {
             gated: true,
             ..reads
         },
-        Command::List { .. } | Command::Completions { .. } => reads,
+        Command::List { .. } | Command::Completions { .. } => Traits {
+            locks: false,
+            ..reads
+        },
     }
 }
 
