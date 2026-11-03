@@ -230,6 +230,32 @@ fn every_rule_is_a_switch_of_a_tier() {
     }
 }
 
+/// A song of other names than [`song`]'s, and the same subtitle.
+fn stranger() -> Context<'static> {
+    Context {
+        title: Some("The Glass Orchards"),
+        artists: vec!["Rin Hollow"],
+        ..song()
+    }
+}
+
+/// A credit that only the title before it puts in a heading block,
+/// apart from [`SAMPLES`], so [`WRITTEN`] holds.
+const NAMES_SAMPLE: &str = "Paper Comets\nMix by Rin Hollow\nThe lamps along the quay\n";
+
+#[test]
+fn every_rule_reading_the_song_is_named() {
+    let differs: BTreeSet<&str> = names()
+        .filter(|rule| {
+            SAMPLES
+                .iter()
+                .chain([&NAMES_SAMPLE])
+                .any(|text| only(rule, text, &song()).text != only(rule, text, &stranger()).text)
+        })
+        .collect();
+    assert_eq!(differs, NAMED.into_iter().collect());
+}
+
 /// Lyrics every rule changes something in.
 const SAMPLES: [&str; 6] = [
     "\n[00:01.00] <b>Paper comets</b>\\h \n[00:00.50]\"Paper Comets\"\n[00:00.60]Art: @someone\n",

@@ -69,6 +69,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Lyrics cleaned of credits follow a renamed song.** The credits rule
+  reads the song's title and artists to tell a heading block from the
+  lyrics, so a song retitled or credited anew has its lyrics cleaned
+  again even with the title rule off.
 - **AcoustID named a stub recording that states no length** over the
   real one a few seconds off, as a 96 kHz rip's longer tail, and one
   print alone named a 29 s excerpt the full studio recording. A stated

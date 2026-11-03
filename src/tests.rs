@@ -278,6 +278,40 @@ fn a_song_retitled_cleans_its_lyrics_by_its_new_title() {
 }
 
 #[test]
+fn a_song_retitled_cleans_its_credits_by_its_new_title_with_the_title_rule_off() {
+    let list = "version = 1\n\n[lyrics.clean.packaging]\ntitle = false\n\n\
+                [[song]]\nsources = [\"manual:Song.flac\"]\n";
+    let lrc = "[00:01.00]Song\n[00:02.00]Mix by Rin Hollow\n[00:03.00]Paper comets\n";
+    let home = |list: &str| {
+        let s = Setup::new();
+        s.file("home/sources/manual/Song.flac");
+        s.written("home/sources/manual/Song.lrc", lrc);
+        s.written("home/songs.toml", list);
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+        s
+    };
+    let read = |s: &Setup, at: &str| std::fs::read_to_string(s.dir.path().join(at)).unwrap();
+    let s = home(list);
+    assert_eq!(
+        read(&s, "lib/Artist/Record/02 Song.lrc"),
+        "[00:01.00]Song\n[00:03.00]Paper comets\n",
+        "the credit after the title goes"
+    );
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:Song.flac", "title=Lantern"],
+    );
+    assert!(ok, "{text}");
+    let fresh = home(&list.replace("\"]\n", "\"]\ntags.title = \"Lantern\"\n"));
+    assert_eq!(
+        read(&s, "lib/Artist/Record/02 Lantern.lrc"),
+        read(&fresh, "lib/Artist/Record/02 Lantern.lrc"),
+        "as made from the start: {text}"
+    );
+}
+
+#[test]
 fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
     let s = Setup::new();
     s.file("home/sources/manual/Song.flac");
