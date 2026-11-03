@@ -18,6 +18,7 @@ fn query() -> Query {
         artist: "Paper Comets, Ada Quill".into(),
         album: None,
         seconds: 354.0,
+        mono: None,
     }
 }
 
@@ -357,6 +358,7 @@ fn a_record_is_kept_and_read_back() {
         title: "Lantern Weather".into(),
         artists: vec!["Paper Comets".into()],
         artist_ids: Vec::new(),
+        comment: String::new(),
         isrcs: Vec::new(),
         length_ms: Some(354_000),
         release: None,
@@ -428,4 +430,68 @@ fn a_release_s_label_and_barcode_are_looked_up_once_an_album() {
         c.find(&query()).is_err(),
         "a release that did not answer is asked again, not kept without its details"
     );
+}
+
+#[test]
+fn a_record_keeps_its_comment() {
+    let body = search(&[recording(
+        1,
+        "Lantern Weather",
+        354_000,
+        &release(1, "Rooms of Salt", "Album", "", "1991"),
+    )
+    .replace(r#""score""#, r#""disambiguation": "mono mix", "score""#)]);
+    let server = Server::default().answer("/ws/2/recording?", &body);
+    let throttle = Throttle::none();
+    let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
+    assert_eq!(record.comment, "mono mix");
+}
+
+#[test]
+fn a_comment_naming_the_other_mix_than_the_song_s_ranks_after_its_own() {
+    let album = |n| release(n, "Rooms of Salt", "Album", "", "1991");
+    let comment = |r: String, c: &str| {
+        r.replace(
+            r#""score""#,
+            &format!(r#""disambiguation": "{c}", "score""#),
+        )
+    };
+    let stereo = comment(
+        recording(
+            1,
+            "Lantern Weather",
+            354_000,
+            &[album(1), album(2)].join(","),
+        ),
+        "original stereo album mix",
+    );
+    let mono = comment(
+        recording(2, "Lantern Weather", 354_000, &album(3)),
+        "original mono album mix",
+    );
+    let body = search(&[stereo, mono]);
+    let found = |mono: Option<bool>| {
+        let server = Server::default().answer("/ws/2/recording?", &body);
+        let throttle = Throttle::none();
+        let q = Query { mono, ..query() };
+        let record = client(&server, &throttle).find(&q).unwrap().unwrap();
+        record.id.as_str().to_string()
+    };
+    assert_eq!(found(Some(true)), format!("{REC}2"));
+    assert_eq!(found(Some(false)), format!("{REC}1"));
+    assert_eq!(
+        found(None),
+        format!("{REC}1"),
+        "unknown, the most releases win"
+    );
+}
+
+#[test]
+fn a_comment_names_a_mix_by_the_word() {
+    assert!(other_mix("original mono album mix", Some(false)));
+    assert!(other_mix("Stereo", Some(true)));
+    assert!(!other_mix("original mono album mix", Some(true)));
+    assert!(!other_mix("mono and stereo", Some(true)));
+    assert!(!other_mix("monologue", Some(false)));
+    assert!(!other_mix("stereo mix", None));
 }

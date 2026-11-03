@@ -15,6 +15,7 @@ fn query() -> Query {
         title: Some("Lantern Weather".into()),
         artist: Some("Paper Comets, Ada Quill".into()),
         album: None,
+        mono: None,
     }
 }
 
@@ -55,7 +56,7 @@ fn find(body: &str, q: &Query) -> (Option<String>, Vec<String>) {
     let throttle = Throttle::none();
     let found = client(&server, &throttle).find(q).unwrap();
     (
-        found.map(|id| id.to_string()),
+        found.first().map(ToString::to_string),
         server.asked.into_inner().unwrap(),
     )
 }
@@ -177,4 +178,44 @@ fn no_error_names_the_key_or_the_print() {
         "{}",
         said[0]
     );
+}
+
+/// `recording` stating no length.
+fn untimed(n: u32, sources: u32) -> String {
+    recording(n, "Lantern Weather", 0.0, sources, "").replace(r#""duration": 0, "#, "")
+}
+
+#[test]
+fn a_length_stated_a_few_seconds_off_wins_over_none_stated() {
+    let body = answer(&[(
+        0.98,
+        &[
+            untimed(1, 13),
+            recording(2, "Lantern Weather", 247.0, 280, ""),
+            recording(3, "Lantern Weather", 248.0, 1200, ""),
+        ],
+    )]);
+    let (found, _) = find(&body, &query());
+    assert_eq!(found, Some(format!("{REC}3")));
+    let throttle = Throttle::none();
+    let server = Server::default().answer("/v2/lookup?", &body);
+    let all: Vec<String> = client(&server, &throttle)
+        .find(&query())
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        all,
+        [format!("{REC}3"), format!("{REC}2"), format!("{REC}1")],
+        "every one that fits, best first"
+    );
+}
+
+#[test]
+fn a_recording_stating_no_length_that_one_print_names_is_no_match() {
+    let (found, _) = find(&answer(&[(1.0, &[untimed(1, 1)])]), &query());
+    assert_eq!(found, None);
+    let (found, _) = find(&answer(&[(1.0, &[untimed(1, 2)])]), &query());
+    assert_eq!(found, Some(format!("{REC}1")));
 }

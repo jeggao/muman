@@ -60,6 +60,9 @@ pub struct Query {
     pub artist: String,
     pub album: Option<String>,
     pub seconds: f64,
+    /// Whether the song's audio is mono, where known: MusicBrainz holds it
+    /// against a recording whose comment names its mix.
+    pub mono: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,6 +336,7 @@ mod tests {
             artist: "Paper Comets".into(),
             album: None,
             seconds: 354.0,
+            mono: None,
         }
     }
 

@@ -107,6 +107,10 @@ use crate::state::{self, Looked, Outcome, State};
 use crate::store::{Located, Store};
 use crate::tags::Field;
 
+/// The recordings AcoustID names that an AcoustID lookup fetches at most,
+/// passing over those whose comment names the other mix than the song's.
+const MIX_TRIES: usize = 3;
+
 /// Rounds of lookups one run makes: what one round finds starts lookups
 /// of the next, as an upload's release then finds the release's lyrics.
 /// `sync --until-done` goes on until a round has nothing left to ask.
@@ -244,7 +248,18 @@ pub fn query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<Quer
         artist: tag_of(r, Field::Artist)?,
         album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
         seconds: facts.get(&r.plan.audio.key)?.length()?,
+        mono: facts.get(&r.plan.audio.key).and_then(mono_of),
     })
+}
+
+/// Whether a source's audio is mono: one channel, or two that the default
+/// stereo measure finds alike. Audio past two channels is not.
+fn mono_of(facts: &Facts) -> Option<bool> {
+    let audio = facts.audio.as_ref()?;
+    if audio.channels != 2 {
+        return Some(audio.channels == 1);
+    }
+    Some(!audio.quality?.is_stereo(crate::quality::STEREO_INCOHERENCE))
 }
 
 /// What an AcoustID lookup asks for a resolved song: the print and length
@@ -259,6 +274,7 @@ pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Optio
         title: tag_of(r, Field::Title),
         artist: tag_of(r, Field::Artist),
         album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
+        mono: mono_of(audio),
     })
 }
 
@@ -823,10 +839,15 @@ fn look<R: Runner>(
             let q = asked
                 .print
                 .context("the song's audio has no print or length")?;
-            let found = match clients.acoustid.find(q)? {
-                Some(id) => clients.musicbrainz.by_id(&id, q.album.as_deref())?,
-                None => None,
-            };
+            let mut found = None;
+            for id in clients.acoustid.find(q)?.iter().take(MIX_TRIES) {
+                if let Some(r) = clients.musicbrainz.by_id(id, q.album.as_deref())?
+                    && !musicbrainz::other_mix(&r.comment, q.mono)
+                {
+                    found = Some(r);
+                    break;
+                }
+            }
             found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
         }
         Provider::CoverArt => {
