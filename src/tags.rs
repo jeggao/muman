@@ -2200,6 +2200,7 @@ mod tests {
             title: "Esc\0ape\nTitle\u{202E}\u{1b}[2J".into(),
             artists: vec!["x".repeat(MAX_VALUE + 1), "Artist".into()],
             artist_ids: Vec::new(),
+            comment: String::new(),
             isrcs: Vec::new(),
             length_ms: None,
             release: None,
@@ -2218,6 +2219,7 @@ mod tests {
             title: "Song".into(),
             artists: vec!["A".into(), "B".into()],
             artist_ids: vec!["00000000-0000-0000-0000-0000000000a1".into()],
+            comment: String::new(),
             isrcs: vec!["XX0000000001".into()],
             length_ms: Some(200_000),
             release: Some(crate::musicbrainz::Release {

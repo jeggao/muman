@@ -55,6 +55,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **AcoustID named a stub recording that states no length** over the
+  real one a few seconds off, as a 96 kHz rip's longer tail, and one
+  print alone named a 29 s excerpt the full studio recording. A stated
+  length within 10 s now ranks first, and a recording stating none needs
+  two prints.
+- **A mono and a stereo rip took one recording**: a recording whose
+  MusicBrainz comment names the other mix than the song's audio, as
+  `original stereo album mix` for a mono file, ranks after the song's
+  own.
 - **A sync stopped within its first 30 seconds of writing wrote every
   song again on the next run**, as a small library's whole sync could
   be. Each song written is now saved as written, unless saving takes

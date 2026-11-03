@@ -18,6 +18,8 @@
 //! these from when it is next fetched again. A recording's credits, its
 //! performers, producer and the like, are not asked for.
 //!
+//! A record keeps the recording's comment, which names a mix.
+//!
 //! `/ws/2/recording` is searched for the title and the first artist as
 //! phrases, and a length within 3 s of the song's audio. A recording fits
 //! when it is no video, it has that length, and its title and credited
@@ -32,8 +34,12 @@
 //!
 //! Of the recordings that fit, one titled exactly the song's title wins
 //! over one whose title only holds it, as `Purple Rain` holds `Rain`;
-//! then the one whose best release ranks first, then the one on the most
-//! releases, then the closest in length;
+//! then one whose comment does not name the other mix than the song's
+//! audio is, by the word `mono` or `stereo` ([`other_mix`]): a mono and
+//! a stereo rip of one album fingerprint and time alike, and MusicBrainz
+//! tells their recordings apart as `original mono album mix` and
+//! `original stereo album mix`; then the one whose best release ranks
+//! first, then the one on the most releases, then the closest in length;
 //! of its releases, the best ranked, then the earliest. Measured against
 //! musicbrainz.org, a famous song's title and artist matched 225
 //! recordings, every one scored 100 and the first 25 live bootlegs; the
@@ -140,6 +146,9 @@ pub struct Record {
     /// The MBID of each credited artist.
     #[serde(default)]
     pub artist_ids: Vec<String>,
+    /// What tells it from recordings of the same name, as `mono mix`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
     #[serde(default)]
     pub isrcs: Vec<String>,
     #[serde(default)]
@@ -529,6 +538,25 @@ impl Found {
     }
 }
 
+/// Whether a recording's `comment` names a mix the song's audio is not,
+/// as `original mono album mix` for audio in stereo: `mono` says whether
+/// it is mono, where known.
+#[must_use]
+pub fn other_mix(comment: &str, mono: Option<bool>) -> bool {
+    let lower = comment.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let says = |w: &str| words.contains(&w);
+    let named = match (says("mono"), says("stereo")) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    };
+    named.is_some_and(|m| mono.is_some_and(|mono| mono != m))
+}
+
 /// An earlier year first, then the fuller date, as `1975-11-21` before
 /// `1975`, then the earlier; one stated before none.
 fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
@@ -568,18 +596,21 @@ impl Recording {
     }
 
     /// Its rank among the recordings that fit, smaller first: titled the
-    /// song's title exactly, then by its best release, a recording on none
-    /// last, then on the most releases, the gap in whole seconds, the
+    /// song's title exactly, then without a comment naming the other mix
+    /// than the song's audio is, then by its best release, a recording on
+    /// none last, then on the most releases, the gap in whole seconds, the
     /// date, without a comment, the search's score.
-    fn rank(&self, title: &str, album: Option<&str>, seconds: f64) -> impl Ord + '_ {
+    fn rank(&self, q: &Query) -> impl Ord + '_ {
+        let album = q.album.as_deref();
         let best = self.best(album);
         let class = best.map(|f| f.class(album));
         (
-            std::cmp::Reverse(music::names_match(&self.title, title)),
+            std::cmp::Reverse(music::names_match(&self.title, &q.title)),
+            other_mix(&self.disambiguation, q.mono),
             class.is_none(),
             class,
             std::cmp::Reverse(self.releases.len()),
-            self.gap(seconds).map_or(i64::MAX, whole_seconds),
+            self.gap(q.seconds).map_or(i64::MAX, whole_seconds),
             date_key(best.and_then(Found::date)),
             !self.disambiguation.trim().is_empty(),
             std::cmp::Reverse(self.score),
@@ -589,14 +620,16 @@ impl Recording {
 
     /// What is kept of it; `None` when its ID is no MBID.
     fn record(&self, album: Option<&str>) -> Option<Record> {
+        let best = self.best(album);
         Some(Record {
             id: Mbid::parse(&self.id)?,
             title: self.title.trim().to_string(),
             artists: names(&self.credit),
             artist_ids: artist_ids(&self.credit),
+            comment: self.disambiguation.trim().to_string(),
             isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
             length_ms: self.length,
-            release: self.best(album).map(Found::release),
+            release: best.map(Found::release),
             original_date: self
                 .first_release_date
                 .as_ref()
@@ -718,7 +751,7 @@ impl Client<'_> {
             .recordings
             .iter()
             .filter(|r| r.fits(q))
-            .min_by_key(|r| r.rank(&q.title, album, q.seconds));
+            .min_by_key(|r| r.rank(q));
         let mut record = best.and_then(|r| r.record(album));
         if let Some(record) = record.as_mut() {
             self.detail(record)?;

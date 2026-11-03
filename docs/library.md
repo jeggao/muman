@@ -293,18 +293,22 @@ MusicBrainz by name, so a file with wrong tags, or none, still finds
 its recording. muman sends AcoustID the fingerprint of the audio's
 first two minutes and its length. AcoustID answers with the MusicBrainz
 recordings submitted with prints like it. A result counts when its
-score is at least 0.5 and the recording's length is within 3 s of the
-song's. Of those, one named as the song is wins, then the one with the
-most prints submitted, then one on a release that is no compilation,
-live album or soundtrack. The recording is then fetched from
-MusicBrainz by its ID. To send no fingerprints, set `enabled = false`
-under `[providers.acoustid]`.
+score is at least 0.5 and the recording's length is within 10 s of the
+song's, or it states none and two prints name it. Of those, one named
+as the song is wins, then one within 3 s, then further, then stating
+none, then the one with the most prints submitted, then one on a
+release that is no compilation, live album or soundtrack. It is
+fetched from MusicBrainz by its ID, passing over one whose comment
+names the other mix, as `original stereo album mix` for a mono file.
+To send no fingerprints, set `enabled = false` under
+`[providers.acoustid]`.
 
 The search by name runs only when AcoustID finds nothing, and never
 for a song that lists a MusicBrainz record. A recording fits when it is
 no video, its length is within 3 s of the song's, and its names hold
 the song's. One titled exactly as the song wins over one whose title
-holds it. Then releases rank:
+holds it, then one whose comment does not name the other mix than the
+song's audio. Then releases rank:
 
 1. The song's own album, if it has one.
 1. A release that is no compilation, live album or soundtrack.

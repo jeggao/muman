@@ -610,6 +610,7 @@ fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
         title: "Lantern Weather".into(),
         artists: vec!["Paper Comets".into()],
         artist_ids: Vec::new(),
+        comment: String::new(),
         isrcs: Vec::new(),
         length_ms: None,
         release: None,

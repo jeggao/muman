@@ -10,15 +10,32 @@
 //! whole seconds, and muman's application key, or the one
 //! `[providers.acoustid] key` sets. A result fits when its score is at
 //! least [`MIN_SCORE`]; of its recordings, those whose length is within
-//! [`crate::musicbrainz::MAX_GAP_S`] of the song's, or that state none,
-//! rank by:
+//! [`LOOSE_GAP_S`] of the song's, or that state none but were submitted
+//! with at least [`MIN_UNTIMED_SOURCES`] prints, rank by:
 //!
-//! 1. Named as the song is, title then first artist, when it has them.
+//! 1. Titled as the song is, when it has a title.
+//! 1. Its length: within [`crate::musicbrainz::MAX_GAP_S`] of the song's,
+//!    then within [`LOOSE_GAP_S`], then stating none.
+//! 1. Crediting the song's first artist, when it has one.
 //! 1. The most sources, the prints submitted with it: a recording's
 //!    original over a duplicate MusicBrainz has not merged yet.
 //! 1. On a release group with no secondary type, as MusicBrainz's search
 //!    ranks: a compilation's or a live album's last.
 //! 1. The result's score, then the ID.
+//!
+//! A recording that states no length is one nothing checks against the
+//! song, and AcoustID links prints to such stubs: measured on a library of
+//! about two thousand songs, a stub release whose thirteen recordings
+//! state no length took every song of its album it had prints of, the
+//! real recordings standing 3 to 7 s off a 96 kHz rip's longer tail, and a
+//! 29 s excerpt of a live track was named the studio recording by the one
+//! print submitted with it. So a stated length within a looser margin
+//! ranks first, and a stub one person's print alone names is no match.
+//!
+//! [`Client::find`] answers every recording that fits, best first: the
+//! lookup takes the first whose MusicBrainz comment does not name the
+//! other mix than the song's audio is ([`crate::musicbrainz::other_mix`]),
+//! as a mono rip whose print matches the stereo recording too.
 //!
 //! AcoustID allows three requests a second from a client; every request
 //! waits its turn on one [`Throttle`], and a refusal holds every later
@@ -41,6 +58,12 @@ pub const KEY: &str = "EHCiWFI8Ce";
 /// The least score a result is taken at, as beets takes them: below it, a
 /// print shares too little with the song's to name its recording.
 pub const MIN_SCORE: f64 = 0.5;
+/// How far a recording's stated length may stand from the song's at
+/// most: a 96 kHz rip of an album measured 4.8 s longer than its release.
+pub const LOOSE_GAP_S: f64 = 10.0;
+/// The prints a recording that states no length must have been submitted
+/// with: one names a stub as surely as a mistake.
+pub const MIN_UNTIMED_SOURCES: u32 = 2;
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The spacing AcoustID asks of a client: three requests a second, and
@@ -61,6 +84,8 @@ pub struct Query {
     pub artist: Option<String>,
     /// The album the MusicBrainz release is picked for.
     pub album: Option<String>,
+    /// Whether the song's audio is mono, where known.
+    pub mono: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,9 +144,20 @@ struct Group {
 impl Recording {
     fn fits(&self, seconds: f64) -> bool {
         is_mbid(&self.id)
-            && self
-                .duration
-                .is_none_or(|d| (d - seconds).abs() <= MAX_GAP_S)
+            && match self.duration {
+                Some(d) => (d - seconds).abs() <= LOOSE_GAP_S,
+                None => self.sources >= MIN_UNTIMED_SOURCES,
+            }
+    }
+
+    /// How sure its length is, smaller first: within [`MAX_GAP_S`] of
+    /// `seconds`, then further, then stating none.
+    fn timed(&self, seconds: f64) -> u8 {
+        match self.duration {
+            Some(d) if (d - seconds).abs() <= MAX_GAP_S => 0,
+            Some(_) => 1,
+            None => 2,
+        }
     }
 
     /// Its rank, smaller first: see the module docs.
@@ -142,6 +178,7 @@ impl Recording {
             .and_then(|a| music::names_match(&credited, first_artist(a)));
         (
             std::cmp::Reverse(title),
+            self.timed(q.seconds),
             std::cmp::Reverse(artist.is_some()),
             std::cmp::Reverse(self.sources),
             !self
@@ -183,8 +220,9 @@ fn message(body: &str) -> Option<String> {
 }
 
 impl Client<'_> {
-    /// The MBID of the song's recording, or `None` when no result fits.
-    pub fn find(&self, q: &Query) -> Result<Option<Mbid>> {
+    /// The MBIDs of the recordings that fit the song, best first, each
+    /// once; none when no result fits.
+    pub fn find(&self, q: &Query) -> Result<Vec<Mbid>> {
         // Clamped to 0 first, so no sign is lost.
         let seconds = q.seconds.round().max(0.0) as u64;
         let url = format!(
@@ -201,7 +239,7 @@ impl Client<'_> {
         };
         let body = match service.get_text(&url, &[("User-Agent", agent.as_str())], TIMEOUT) {
             Ok(Some(body)) => body,
-            Ok(None) => return Ok(None),
+            Ok(None) => return Ok(Vec::new()),
             Err(e) => match e.downcast_ref::<TransportError>() {
                 Some(TransportError::Status { code, body, .. }) => match message(body) {
                     Some(m) => bail!("AcoustID: {m}"),
@@ -220,14 +258,21 @@ impl Client<'_> {
                 if m.is_empty() { &answer.status } else { &m }
             );
         }
-        let best = answer
+        let mut fitting: Vec<(&Recording, f64)> = answer
             .results
             .iter()
             .filter(|r| r.score >= MIN_SCORE)
             .flat_map(|r| r.recordings.iter().map(move |rec| (rec, r.score)))
             .filter(|(rec, _)| rec.fits(q.seconds))
-            .min_by_key(|(rec, score)| rec.rank(q, *score));
-        Ok(best.and_then(|(rec, _)| Mbid::parse(&rec.id)))
+            .collect();
+        fitting.sort_by_cached_key(|(rec, score)| rec.rank(q, *score));
+        let mut ids: Vec<Mbid> = Vec::new();
+        for id in fitting.iter().filter_map(|(rec, _)| Mbid::parse(&rec.id)) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 }
 
