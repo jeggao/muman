@@ -167,7 +167,8 @@ requests), `cargo xtask commits`, `cargo xtask docs --check`,
 that changes only Markdown and `docs/` builds and tests nothing, and one
 runs `nix flake check` only when it changes the flake, `nix/`,
 `Cargo.toml`, `Cargo.lock` or `ci.yml`; every push to main runs every
-check, and only main saves the Rust caches. Each
+check, and only main saves the Rust caches. Each push to main also runs
+the random runs of `src/tests/convergence.rs` at 64 cases. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
