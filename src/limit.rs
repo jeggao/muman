@@ -57,7 +57,7 @@ use crate::manifest::Manifest;
 use crate::parallel;
 use crate::reconcile::{Planned, changed_since_written};
 use crate::render::{self, Rendered};
-use crate::resolve::{AudioRef, CoverRef, Format, Plan};
+use crate::resolve::{AudioRef, Format, Plan};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{Measured, State, Written};
@@ -66,14 +66,8 @@ use crate::store::{self, Located};
 /// What a container adds to an audio stream, as a share of it: Ogg's
 /// page headers take about 1%, MP4's index less.
 const CONTAINER: f64 = 0.015;
-/// Bytes a file holds besides its stream, cover and tags.
-const HEADERS: u64 = 4 * 1024;
 /// FLAC from PCM, as a share of the PCM: music compresses to 50 to 70%.
 const PCM_FLAC: f64 = 0.6;
-/// The cover guessed for a song: a 1000 px JPEG.
-const COVER_GUESS: u64 = 200 * 1024;
-/// Lyrics guessed for a song that has them.
-const LYRICS_GUESS: u64 = 3 * 1024;
 /// How far estimates of a copy, of an encode at a bitrate, and of audio
 /// whose packets were never measured may be off, as a share of the audio.
 const SIGMA_COPY: f64 = 0.01;
@@ -266,26 +260,6 @@ pub(crate) fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64
     (bytes, bytes * sigma)
 }
 
-/// What a song's file is guessed to hold besides its audio, and each file
-/// beside it to take, from its plan.
-pub(crate) fn besides_audio(plan: &Plan) -> (u64, Vec<u64>) {
-    let tags: usize = plan
-        .tags
-        .iter()
-        .flat_map(|(k, values)| values.iter().map(move |v| k.len() + v.len() + 8))
-        .sum();
-    let cover = plan.cover.as_ref();
-    let inside = cover.and_then(CoverRef::inside).map_or(0, |_| COVER_GUESS);
-    let lyrics = plan.lyrics.as_ref();
-    let embedded = lyrics.filter(|l| l.tag()).map_or(0, |_| LYRICS_GUESS);
-    let files = lyrics.map_or(0, |l| l.files().len());
-    let pictures = cover.map_or(0, |c| c.files().len());
-    let folder = plan.folder.as_ref().map_or(0, |f| f.files().len());
-    let mut beside = vec![LYRICS_GUESS; files];
-    beside.extend(vec![COVER_GUESS; pictures + folder]);
-    (tags as u64 + inside + embedded + HEADERS, beside)
-}
-
 fn ladder(
     manifest: &Manifest,
     state: &State,
@@ -302,7 +276,7 @@ fn ladder(
         .map_or_else(|| plan.audio.key.to_string(), ToString::to_string);
     let facts = state.facts.get(&plan.audio.key);
     let seconds = facts.and_then(Facts::length).filter(|d| *d > 0.0);
-    let (extras, beside) = besides_audio(plan);
+    let (extras, beside) = crate::artifact::parts(plan).guess();
     let beside: u64 = beside.iter().map(|bytes| blocks(*bytes, block)).sum();
     let choice = |format: Format, loss: f64| -> Choice {
         let (audio, sigma) = match (facts, seconds) {

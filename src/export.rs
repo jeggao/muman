@@ -1081,12 +1081,13 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
     // The audio file's name and what it holds besides its stream, and what
     // the files beside it take.
     let (name, extras, beside) = if song.anew {
-        let (extras, beside) = limit::besides_audio(&song.plan);
+        let made = crate::artifact::parts(&song.plan);
+        let (extras, beside) = made.guess();
         let audio = named(
             &song.stem,
             Path::new(&format!("_.{}", song.plan.format.extension())),
         );
-        let names = crate::outputs::planned(&audio, &song.plan);
+        let names = made.files(&audio);
         let beside = names
             .iter()
             .zip(beside)

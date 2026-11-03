@@ -71,7 +71,7 @@ pub fn assign(
         .iter()
         .zip(&paths)
         .flat_map(|((_, r), p)| {
-            std::iter::once(p.clone()).chain(crate::outputs::planned(p, &r.plan))
+            std::iter::once(p.clone()).chain(crate::artifact::parts(&r.plan).files(p))
         })
         .map(|p| folded(&p))
         .collect();

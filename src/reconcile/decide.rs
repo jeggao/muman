@@ -41,7 +41,8 @@ pub(super) fn current<'a>(
 /// there, muman's or one of the user's it leaves alone: one gone is
 /// written again.
 pub(super) fn folder_there(library: &Path, path: &Path, plan: &Plan) -> bool {
-    crate::outputs::folder_files(path, plan)
+    crate::artifact::parts(plan)
+        .folder_files(path)
         .iter()
         .all(|f| std::fs::symlink_metadata(library.join(f)).is_ok())
 }
@@ -406,7 +407,8 @@ pub(super) fn intend(
             let path = path_of(r);
             let written = Written {
                 sources: manifest.songs[*n].sources.clone(),
-                sidecars: crate::outputs::planned(&path, &r.plan)
+                sidecars: crate::artifact::parts(&r.plan)
+                    .files(&path)
                     .into_iter()
                     .map(Sidecar::at)
                     .collect(),
