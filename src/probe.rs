@@ -647,4 +647,65 @@ mod tests {
         assert_eq!(audio("flt", "N/A"), (32, true));
         assert_eq!(audio("dbl", "N/A"), (64, true));
     }
+
+    /// Files that take every path [`parse`] reads by: a picture typed
+    /// beside a front cover, a stream's own length in its tag, chapters,
+    /// a control character, audio no frame of decoded, and no lengths.
+    const SAMPLES: [&str; 5] = [
+        r#"{"streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "dts", "profile": "DTS-HD MA",
+             "channels": 6, "channel_layout": "5.1(side)", "sample_rate": "96000",
+             "sample_fmt": "s32p", "bits_per_raw_sample": "24", "duration": "241.5"},
+            {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2,
+             "channel_layout": "unknown", "sample_rate": "48000", "sample_fmt": "fltp"},
+            {"index": 2, "codec_type": "video", "codec_name": "mjpeg", "width": 600,
+             "height": 600, "disposition": {"attached_pic": 1},
+             "tags": {"comment": "Cover (front)"}},
+            {"index": 3, "codec_type": "video", "codec_name": "png", "width": 300,
+             "height": 200, "disposition": {"attached_pic": 1}, "tags": {"comment": "Other"}}
+        ], "format": {"duration": "241.52", "tags": {"ARTIST": "Marlo Venn"}}}"#,
+        r#"{"streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "vorbis", "channels": 1,
+             "sample_rate": "22050", "sample_fmt": "dbl",
+             "tags": {"TITLE": "Paper Comets", "DURATION": "00:02:05.250000000"}}
+        ], "format": {"tags": {"title": "The Glass Orchards"}},
+        "chapters": [
+            {"start_time": "0.000000", "end_time": "61.5", "tags": {"title": "Part\u0007 One\n"}},
+            {"start_time": "61.5", "end_time": "61.5", "tags": {"title": "Empty"}},
+            {"start_time": "61.5", "end_time": "125.25", "tags": {"TITLE": "Part Two"}}
+        ]}"#,
+        r#"{"streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "flac", "channels": 2,
+             "bits_per_sample": 16},
+            {"index": 1, "codec_type": "subtitle", "codec_name": "ass"},
+            {"index": 2, "codec_type": "attachment", "tags": {"filename": "back.jpg",
+             "mimetype": "image/jpeg"}},
+            {"index": 3, "codec_type": "video", "codec_name": "webp", "width": 80, "height": 80,
+             "tags": {"mimetype": "image/png"}}
+        ]}"#,
+        r#"{"streams": [
+            {"index": 0, "codec_type": "audio", "codec_name": "mp3", "sample_rate": "0"}
+        ], "format": {"duration": "12.0"}}"#,
+        r#"{"streams": []}"#,
+    ];
+
+    /// What probing reads of [`SAMPLES`] and the shared fixtures, with
+    /// [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "probe/3",
+        "64a1a2eb703690337fa6710ee67451a45e7276378a1ccc129c5e92f7dafaf9ee",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        let mut digest = crate::testing::Digest::default();
+        let fixtures = [crate::testing::ORIGINAL, crate::testing::FLAC, FIXTURE];
+        for json in fixtures.into_iter().chain(SAMPLES) {
+            match parse(json.as_bytes()) {
+                Ok(probed) => digest.debug(&probed),
+                Err(_) => digest.text("unreadable"),
+            };
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

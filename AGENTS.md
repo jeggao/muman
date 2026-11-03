@@ -163,7 +163,8 @@ main saves the Rust caches. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
-minor and patch bumps as one pull request and each major alone;
+minor and patch bumps as one pull request, those of the crates the
+measures are made with as another, and each major alone;
 `flake-update.yml` moves `flake.lock` the same way.
 
 ## Conventions
@@ -238,6 +239,7 @@ that package manager is skipped.
 | How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
 | How queries, changing songs or duplicates behave for a user | [docs/songs.md](docs/songs.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
+| A measure, renderer or writer changes what it makes, or a dependency bump changes a digest | Raise its version constant and record the digest its test prints, or, for a bump that leaves saved results valid, re-record the digest and say why |
 | A module added, removed or renamed | The layout above |
 | A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md), in a pull request of their own; the merge tags and publishes it |
 

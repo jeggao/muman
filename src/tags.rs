@@ -2594,4 +2594,105 @@ mod tests {
         assert_eq!(o[&Field::AlbumGain].values, ["1.00 dB"], "-4 dB under R128");
         assert!(!o.contains_key(&Field::AlbumPeak));
     }
+
+    /// What every format's tags and lyrics offer once `lofty` writes them,
+    /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
+    /// release's info offer, with [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "tags/11",
+        "815aefc335b1e111fb94cdc278d512f9ed1488cd4d0c3227c80e2b876e8f3f5d",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::{Accessor, ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+        use crate::testing::{
+            SILENCE_FLAC, SILENCE_M4A, SILENCE_MP3, SILENCE_OPUS, SILENCE_VORBIS, SILENCE_WV,
+        };
+
+        let items = [
+            (ItemKey::TrackTitle, "Paper Comets"),
+            (ItemKey::TrackTitle, "Paper Comets (Live)"),
+            (ItemKey::TrackArtist, "Marlo Venn"),
+            (ItemKey::TrackArtist, "Ada Quill"),
+            (ItemKey::AlbumTitle, "The Glass Orchards"),
+            (ItemKey::AlbumArtist, "Marlo Venn"),
+            (ItemKey::DiscNumber, "1"),
+            (ItemKey::RecordingDate, "2019-07-04"),
+            (ItemKey::Genre, "Ambient"),
+            (ItemKey::Isrc, "XXZZ12400001"),
+            (ItemKey::Composer, "Odile Marsh"),
+            (ItemKey::Label, "Lantern Records"),
+            (ItemKey::ContentGroup, "Night Songs"),
+            (
+                ItemKey::MusicBrainzReleaseId,
+                "00000000-0000-0000-0000-000000000002",
+            ),
+            (ItemKey::ReplayGainTrackGain, "-6.1 dB"),
+            (ItemKey::ReplayGainTrackPeak, "0.98"),
+        ];
+        let lrc = "[00:01.00]first invented line\n[00:03.00]second invented line\n";
+        let formats = [
+            (
+                "a.flac",
+                SILENCE_FLAC,
+                TagType::VorbisComments,
+                ItemKey::Lyrics,
+            ),
+            (
+                "a.opus",
+                SILENCE_OPUS,
+                TagType::VorbisComments,
+                ItemKey::UnsyncLyrics,
+            ),
+            (
+                "a.ogg",
+                SILENCE_VORBIS,
+                TagType::VorbisComments,
+                ItemKey::Lyrics,
+            ),
+            ("a.m4a", SILENCE_M4A, TagType::Mp4Ilst, ItemKey::Lyrics),
+            ("a.wv", SILENCE_WV, TagType::Ape, ItemKey::Lyrics),
+            ("a.mp3", SILENCE_MP3, TagType::Id3v2, ItemKey::UnsyncLyrics),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let mut digest = crate::testing::Digest::default();
+        for (name, bytes, kind, lyrics) in formats {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let mut tag = Tag::new(kind);
+            for (key, value) in items {
+                tag.push(TagItem::new(key, ItemValue::Text(value.into())));
+            }
+            tag.set_track(3);
+            tag.set_track_total(12);
+            let mut item = TagItem::new(lyrics, ItemValue::Text(lrc.into()));
+            item.set_lang(*b"jpn");
+            tag.push(item);
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            if kind == TagType::Id3v2 {
+                let mut v1 = Tag::new(TagType::Id3v1);
+                v1.push(TagItem::new(
+                    ItemKey::TrackTitle,
+                    ItemValue::Text("Lantern Weather".into()),
+                ));
+                v1.push(TagItem::new(ItemKey::Year, ItemValue::Text("2019".into())));
+                v1.save_to_path(&path, WriteOptions::default()).unwrap();
+            }
+            let read = read_file(&path).unwrap();
+            digest
+                .debug(&read)
+                .debug(&from_container(&read))
+                .debug(&lyrics_in(&path));
+        }
+        let release = r#"{"title": "Paper Comets (Official Video)", "track": "Paper Comets",
+            "artists": ["Marlo Venn", "Ada Quill"], "album": "The Glass Orchards",
+            "release_date": "20190704", "channel": "Marlo Venn - Topic", "language": "ja"}"#;
+        for json in [crate::testing::INFO, release] {
+            digest.debug(&from_info(&info(json)));
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

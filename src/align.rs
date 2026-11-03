@@ -856,4 +856,30 @@ mod tests {
         assert_eq!(e.len(), 100);
         assert!(e.iter().all(|v| *v == 0.0));
     }
+
+    /// What comparing makes of a copy with an intro, off centre and
+    /// played fast, and of an excerpt, against their track, with
+    /// [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "envelope-xcorr/8",
+        "0ad88d33a0940a19f3beb59791fcb60577b5009de064a9b57955b1f1baac5ca4",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        let levels = song_levels();
+        let mut fast: Vec<f64> = song(300, 99).into_iter().map(|l| 0.5 + l).collect();
+        fast.extend(stretched(&levels, 0.995));
+        let track = envelope(&samples(&levels, 0));
+        let mut digest = crate::testing::Digest::default();
+        for upload in [samples(&fast, 100), samples(&levels[1000..3000], 0)] {
+            let upload = envelope(&upload);
+            let found = align(&upload, &track);
+            digest
+                .debug(&upload)
+                .debug(&found)
+                .debug(&found.map(|a| outside(&upload, &track, &a)));
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

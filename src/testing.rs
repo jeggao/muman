@@ -3,6 +3,19 @@
 //! Vorbis, MP3 or M4A fixture, a picture, a line of LRC, a print, noise
 //! to measure. Tags, covers and renames then run against real files
 //! offline.
+//!
+//! [`Digest`] pins each measure to its method. A measure's test hashes
+//! what it makes of fixed samples, and [`check`] holds that digest to the
+//! one recorded beside the method: a change to what a measure makes fails
+//! until its method is raised, so every result saved by the old one is
+//! made again. Floats are hashed to 9 significant digits, since a
+//! platform's maths library may differ from another's in the last bit.
+//!
+//! A dependency bump that changes a digest raises the method when what
+//! the old version saved is stale, and otherwise re-records the digest
+//! alone, its pull request saying why. Dependabot brings the crates the
+//! measures are made with in a pull request of their own, so such a
+//! failure holds up no other update.
 
 use std::ffi::OsString;
 use std::fs;
@@ -10,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Result, anyhow};
+use sha2::{Digest as _, Sha256};
 
 use crate::runner::{Line, Runner};
 
@@ -367,6 +381,60 @@ pub fn wav_seconds(bytes: &[u8]) -> f64 {
 #[must_use]
 pub fn quiet_wav() -> Vec<u8> {
     wav(8000, 1, None, &sine(8000, 1, 1000.0, 0.1, 2.0))
+}
+
+/// A SHA-256 of what a measure makes, each item ended by a 0 byte.
+#[derive(Default)]
+pub struct Digest(Sha256);
+
+impl Digest {
+    pub fn text(&mut self, text: &str) -> &mut Self {
+        self.bytes(text.as_bytes())
+    }
+
+    pub fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
+        self.0.update(bytes);
+        self.0.update([0]);
+        self
+    }
+
+    /// `value` as `{:?}` writes it, each float in it rounded to 9
+    /// significant digits; a string's text is kept as it is.
+    pub fn debug(&mut self, value: &impl std::fmt::Debug) -> &mut Self {
+        let float =
+            regex::Regex::new(r#""(?:[^"\\]|\\.)*"|(-?\d+\.\d+(?:e-?\d+)?|-?\d+e-?\d+)"#).unwrap();
+        let text = format!("{value:?}");
+        let rounded = float.replace_all(&text, |c: &regex::Captures<'_>| match c.get(1) {
+            None => c[0].to_string(),
+            Some(x) => {
+                let x: f64 = x.as_str().parse().unwrap();
+                if x == 0.0 {
+                    "0".to_string()
+                } else {
+                    format!("{x:.8e}")
+                }
+            }
+        });
+        self.text(&rounded)
+    }
+
+    #[must_use]
+    pub fn hex(&self) -> String {
+        crate::facts::hex(&self.0.clone().finalize())
+    }
+}
+
+/// Fails unless `written`, the method and digest a test recorded, is
+/// `method` and `digest`.
+#[track_caller]
+pub fn check(written: (&str, &str), method: &str, digest: &str) {
+    assert_eq!(
+        written,
+        (method, digest),
+        "{method} writes otherwise: if the code changed what it makes, raise its version and \
+         record {digest}; if only a dependency moved, decide whether saved results are stale, \
+         and either raise it or re-record the hex and say why in the PR"
+    );
 }
 
 impl Runner for Fake {

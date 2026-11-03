@@ -611,4 +611,24 @@ mod tests {
         let sent = URL_SAFE_NO_PAD.decode(short.encoded()).unwrap();
         assert_eq!(u32::from_be_bytes([0, sent[1], sent[2], sent[3]]), 10);
     }
+
+    /// What [`compute`] makes of chirping noise, of a stretch of it cut
+    /// mid-sample, and of audio too short for a word, with [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "chromaprint-rs/1",
+        "03d7445f3250e3576d745713b63c885be1eaf1aed5ab44c4f91646480ed10bac",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        let whole = pcm(15);
+        let mut digest = crate::testing::Digest::default();
+        for bytes in [&whole[..], &whole[2..100_001], &whole[..4000]] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("a.pcm");
+            std::fs::write(&path, bytes).unwrap();
+            digest.debug(&compute(&path).unwrap());
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }

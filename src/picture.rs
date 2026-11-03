@@ -713,4 +713,50 @@ mod tests {
             distance(&checks, &bands)
         );
     }
+
+    /// How a square cover, one in black bars, a wide one, a flat one, one
+    /// drawn in its alpha, and pictures too small or a content outside
+    /// look, with [`METHOD`].
+    const WRITTEN: (&str, &str) = (
+        "picture/3",
+        "86f5c53fd2164cedd8caec4c0dda463d1aeb0d5e17472130bd475a3b5c90bd0e",
+    );
+
+    #[test]
+    fn the_method_rises_with_what_it_makes() {
+        let rect = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        let barred = render(160, 90, |x, y| {
+            let inside = (35..125).contains(&x);
+            let at = |v: u32| f64::from(v) / 90.0;
+            if inside {
+                art(at(x - 35), at(y), 2.0)
+            } else {
+                0.0
+            }
+        });
+        let wide = render(120, 80, |x, y| {
+            art(f64::from(x) / 120.0, f64::from(y) / 80.0, 3.0)
+        });
+        let flat = render(64, 64, |x, y| f64::from(100 + (x + y) % 3));
+        let drawn: Vec<u8> = cover(64, 4.0).into_iter().flat_map(|a| [0, a]).collect();
+        let samples = [
+            (cover(96, 1.0), 96, 96, rect(0, 0, 96, 96)),
+            (barred, 160, 90, rect(35, 0, 90, 90)),
+            (wide, 120, 80, rect(0, 0, 120, 80)),
+            (flat, 64, 64, rect(0, 0, 64, 64)),
+            (quality::flatten(&drawn), 64, 64, rect(0, 0, 64, 64)),
+            (cover(8, 1.0), 8, 8, rect(0, 0, 8, 8)),
+            (cover(32, 1.0), 32, 32, rect(16, 0, 32, 32)),
+        ];
+        let mut digest = crate::testing::Digest::default();
+        for (pixels, w, h, content) in samples {
+            digest.debug(&look(&pixels, w, h, content));
+        }
+        crate::testing::check(WRITTEN, METHOD, &digest.hex());
+    }
 }
