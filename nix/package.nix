@@ -29,7 +29,6 @@ rustPlatform.buildRustPackage {
       ../Cargo.lock
       ../src
       ../crates
-      ../assets
       ../testdata
       ../tests
       ../xtask

@@ -6,7 +6,7 @@
 //! release's album, album artist, track, disc, date, track total,
 //! country, IDs, status, types and medium, every one structured, ranked
 //! against the other sources' offers as any tag is
-//! ([`crate::tags::from_record`]). A search answers none of the
+//! ([`muman_media::tags::from_record`]). A search answers none of the
 //! release's labels, catalogue numbers, barcode, ASIN or script, nor
 //! its release group's first release, the original date as Picard
 //! writes it, so the release is looked up once more for them, once a

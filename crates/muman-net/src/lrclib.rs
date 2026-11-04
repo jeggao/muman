@@ -260,7 +260,7 @@ pub fn keep(folder: &Path, record: &Record) -> Result<PathBuf> {
     Ok(path_of(folder, record.id))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing {
     //! An LRCLIB server answering from records by path.
 

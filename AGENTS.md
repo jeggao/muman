@@ -55,15 +55,10 @@ src/
   state/json.rs     state.json, as an earlier muman wrote it, read once
   state/db.rs       state.db, the store the state moves into: schema, transactions
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
-  download.rs       yt-dlp's arguments and the files it reports
-  aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
-  ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
-  music.rs          YouTube Music search and name matching
-  plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
   lookup.rs         lookups due, each provider asked until a song has what it names;
-                    providers.rs, lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs
+                    providers.rs, each provider's [providers.*] table
   reconcile.rs      the offline phase, its steps in order, each a module of its own:
                     measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
                     write.rs, prune.rs, report.rs
@@ -90,6 +85,12 @@ src/
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-net/src/   the network layer: yt-dlp and aria2c fetches, and lookups
+  download.rs, ytdlp_log.rs   yt-dlp's arguments and the files it reports; its output
+  aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
+  music.rs          YouTube Music search
+  plugins.rs        yt-dlp plugins shipped in the binary, from assets/yt-dlp/
+  lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs   the providers looked up
 crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   similar.rs        names and texts compared in any script
   picture.rs        perceptual hashes of covers
@@ -125,7 +126,6 @@ tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
 testdata/           tiny audio and picture fixtures; editions/, the song list
                     each earlier edition wrote for a new home
-assets/yt-dlp/      the plugins plugins.rs embeds
 xtask/              cargo xtask comments | commits | docs | layers
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, songs.md, configuration.md, audio.md, cli.md (generated)
