@@ -96,6 +96,8 @@ const CHECKPOINT: Duration = Duration::from_secs(30);
 struct Sub(tempfile::TempDir);
 
 impl Sub {
+    // Makes a step's folder inside the run's scratch folder.
+    #[expect(clippy::disallowed_methods)]
     fn new(scratch: &Path, name: &str) -> Result<Self> {
         std::fs::create_dir_all(scratch)
             .and_then(|()| tempfile::Builder::new().prefix(name).tempdir_in(scratch))

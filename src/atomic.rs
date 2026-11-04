@@ -426,6 +426,8 @@ impl Scratch {
     }
 
     /// A scratch folder within `parent`.
+    // Makes a run's scratch folder.
+    #[expect(clippy::disallowed_methods)]
     pub fn within(parent: &Path) -> Result<Self> {
         clear_scratch(parent);
         let mut builder = tempfile::Builder::new();

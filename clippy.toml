@@ -1,9 +1,9 @@
 # Proper nouns doc comments name; `..` keeps clippy's own list.
 doc-valid-idents = ["YouTube", "FFmpeg", "SQLite", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", "WebVTT", "SubRip", ".."]
 
-# A call that changes a file, runs a program or reaches the terminal,
-# allowed only where `#[expect]` says why; tests/architecture.rs lists the
-# files that may change files.
+# A call that changes a file, runs a program, reaches the terminal, makes
+# a run's own file or follows a link, allowed only where `#[expect]` says
+# why; tests/architecture.rs lists the files that may change files.
 disallowed-methods = [
     { path = "std::fs::write", reason = "changes a file: only where an `#[expect]` says why" },
     { path = "std::fs::rename", reason = "changes a file: only where an `#[expect]` says why" },
@@ -18,4 +18,6 @@ disallowed-methods = [
     { path = "std::io::stdin", reason = "reaches the terminal: only where an `#[expect]` says why" },
     { path = "std::io::stdout", reason = "reaches the terminal: only where an `#[expect]` says why" },
     { path = "std::io::stderr", reason = "reaches the terminal: only where an `#[expect]` says why" },
+    { path = "tempfile::Builder::new", reason = "makes a run's own file: in its scratch folder alone, where one a run stopped partway leaves is swept, and only where an `#[expect]` says why" },
+    { path = "walkdir::WalkDir::follow_links", reason = "follows links: only where an `#[expect]` says why, as `given.rs` follows one inside a folder given to `add` only to a place inside it" },
 ]

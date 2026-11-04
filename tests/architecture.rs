@@ -589,40 +589,12 @@ fn the_reasons_name_files_that_exist() {
     for (file, _) in STATICS
         .iter()
         .chain(RESHAPES)
-        .chain(WALKS)
         .chain(COPIES)
         .chain(ASKS)
         .chain(PROVIDER_NAMES)
     {
         assert!(all.contains_key(*file), "{file}");
     }
-}
-
-/// Where a file or folder of a run's own is made, and why: anywhere
-/// else, one a run stopped partway leaves would be nobody's to remove.
-const SCRATCH: &[(&str, &str)] = &[
-    (
-        "atomic.rs",
-        "a whole file written beside its place, and a run's scratch folder",
-    ),
-    (
-        "reconcile.rs",
-        "a step's folder inside a run's scratch folder",
-    ),
-];
-
-#[test]
-fn a_runs_own_files_are_made_in_its_scratch_folder() {
-    let allowed: Vec<&str> = SCRATCH.iter().map(|(f, _)| *f).collect();
-    let mut wrong = Vec::new();
-    for (file, text) in sources() {
-        for line in lines_with(&text, &["tempfile::Builder", "tempfile_in(", "tempdir_in("]) {
-            if !allowed.contains(&file.as_str()) {
-                wrong.push(format!("{file}: {}", line.trim()));
-            }
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// Where a provider's service or YouTube's search is asked, and why
@@ -763,22 +735,6 @@ fn a_fetched_source_is_named_in_one_place() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Where a link is followed wherever it leads, and why. A folder given
-/// to `add` is walked by `given.rs` alone, which follows a link inside
-/// it only to a place inside it; walked anywhere else, a link a
-/// downloaded folder holds could bring a file from anywhere on the
-/// machine into the library.
-const WALKS: &[(&str, &str)] = &[
-    (
-        "given.rs",
-        "what the user gives `add`, a link followed only to a place inside it",
-    ),
-    (
-        "store.rs",
-        "muman's own folders, the sources and the library, whose links the user made",
-    ),
-];
-
 /// Where a file is copied byte for byte, through any link, and why: a
 /// file the user gives `add` is copied by `given.rs` alone, which reads
 /// a regular file at its real path, inside the folder given.
@@ -803,20 +759,18 @@ const COPIES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn what_the_user_gives_is_walked_and_copied_in_one_place() {
+fn what_the_user_gives_is_copied_in_one_place() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        for (needle, allowed) in [("follow_links(true)", WALKS), ("fs::copy(", COPIES)] {
-            if allowed.iter().all(|(f, _)| *f != file) {
-                for line in lines_with(&text, &[needle]) {
-                    wrong.push(format!("{file}: {}", line.trim()));
-                }
+        if COPIES.iter().all(|(f, _)| *f != file) {
+            for line in lines_with(&text, &["fs::copy("]) {
+                wrong.push(format!("{file}: {}", line.trim()));
             }
         }
     }
     assert!(
         wrong.is_empty(),
-        "walk and copy what `add` is given through `given::Folder`:\n{}",
+        "copy what `add` is given through `given::Folder`:\n{}",
         wrong.join("\n")
     );
 }
