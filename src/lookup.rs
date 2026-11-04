@@ -123,15 +123,7 @@ const MIX_TRIES: usize = 3;
 /// `sync --until-done` goes on until a round has nothing left to ask.
 pub const ROUNDS: usize = 3;
 
-/// The providers looked up, in the order a round makes their lookups.
-pub const ORDER: [Provider; 6] = [
-    Provider::YouTubeMusic,
-    Provider::YouTube,
-    Provider::Lrclib,
-    Provider::AcoustId,
-    Provider::MusicBrainz,
-    Provider::CoverArt,
-];
+pub use crate::provider::ORDER;
 
 /// How a provider's lookups are made; a lookup made another way is due
 /// again.

@@ -500,7 +500,7 @@ fn triggers(doc: &mut DocumentMut) -> Result<Vec<Renamed>> {
         .map(|(n, t)| read_trigger(t, &format!("trigger {}", n + 1)))
         .collect::<Result<_>>()?;
     let mut written = Vec::new();
-    for p in crate::lookup::ORDER {
+    for p in crate::provider::ORDER {
         let mine: Vec<&Trigger> = read.iter().filter(|t| t.find == p).collect();
         let (said, set) = settings_of(p, &mine)?;
         if set.is_empty() {
