@@ -9,6 +9,9 @@
 //! DHT, peer exchange and local discovery are off, and the one tracker
 //! names the one seeder.
 
+// Tests make and change the files they check.
+#![expect(clippy::disallowed_methods)]
+
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::TcpListener;

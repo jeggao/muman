@@ -154,6 +154,8 @@ fn config(args: &[String]) -> Vec<u8> {
 
 /// Delete each `<id>.mkv` in a download folder of `partial` that has a
 /// song file of the same stem beside it: a remux stopped short.
+// Removes a remux left cut short in partial downloads.
+#[expect(clippy::disallowed_methods)]
 pub fn drop_cut_remuxes(partial: &Path) {
     let folders = std::fs::read_dir(partial)
         .into_iter()
@@ -398,6 +400,8 @@ struct Streams {
 /// ffmpeg reads a JPEG or PNG attachment as a picture stream, which a
 /// copy would write back as a video track, so each is dumped by its
 /// packet, its bytes as they are, and attached again as it was.
+// Writes a fetched file again without its info JSON's cookies and headers.
+#[expect(clippy::disallowed_methods)]
 pub fn scrub<R: Runner>(runner: &R, path: &Path, scratch: &Path) -> Result<bool> {
     let probed: Streams = serde_json::from_slice(&runner.output(&probe::ffprobe_command(path))?)
         .context("parsing ffprobe JSON")?;

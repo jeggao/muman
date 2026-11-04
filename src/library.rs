@@ -315,6 +315,8 @@ pub fn clear_leftovers(library: &Path, paths: impl Iterator<Item = PathBuf>) {
 }
 
 /// Remove each folder a removed file leaves empty, up to the library.
+// Removes the folders a removal emptied.
+#[expect(clippy::disallowed_methods)]
 pub fn remove_empty_folders(library: &Path, removed: &[PathBuf]) {
     let mut folders: Vec<PathBuf> = removed
         .iter()

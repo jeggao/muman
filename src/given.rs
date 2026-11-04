@@ -159,6 +159,8 @@ impl Folder {
     ///
     /// `from` leading out of the folder or being no regular file, or the
     /// copy failing.
+    // Copies in a file given to `add`.
+    #[expect(clippy::disallowed_methods)]
     pub fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let real =
             dunce::canonicalize(from).with_context(|| format!("reading {}", from.display()))?;

@@ -111,6 +111,8 @@ pub fn write_private(dir: &Path, name: &Name, bytes: &[u8]) -> Result<()> {
     write_as(dir, name, bytes, true)
 }
 
+// The primitive every other write goes through.
+#[expect(clippy::disallowed_methods)]
 fn write_as(dir: &Path, name: &Name, bytes: &[u8], private: bool) -> Result<()> {
     let name = name.as_str();
     let named = dir.join(name);
@@ -220,6 +222,8 @@ fn retry(mut op: impl FnMut() -> io::Result<()>) -> io::Result<()> {
 }
 
 /// `std::fs::rename`, replacing `to`, waiting out a held file.
+// The primitive every other rename goes through.
+#[expect(clippy::disallowed_methods)]
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(test)]
     crate::testing::change_point(to);
@@ -227,6 +231,8 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// `std::fs::hard_link`, a second name `to` for the file at `from`.
+// The primitive every other second name goes through.
+#[expect(clippy::disallowed_methods)]
 pub fn link(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(test)]
     crate::testing::change_point(to);
@@ -234,6 +240,8 @@ pub fn link(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// `std::fs::remove_file`, waiting out a held file.
+// The primitive every other removal goes through.
+#[expect(clippy::disallowed_methods)]
 pub fn remove(path: &Path) -> io::Result<()> {
     #[cfg(test)]
     crate::testing::change_point(path);
@@ -253,6 +261,8 @@ pub struct Lock {
 }
 
 impl Drop for Lock {
+    // Lets go of the library's lock file.
+    #[expect(clippy::disallowed_methods)]
     fn drop(&mut self) {
         #[cfg(test)]
         if let Some(library) = &self.library {
@@ -439,6 +449,8 @@ impl Scratch {
 /// renamed them into place, as by a kill or a Ctrl-C: `.<name>.<six
 /// characters>.part`, settled as a scratch folder is, so one being
 /// written now stays.
+// Removes the parts a stopped write left.
+#[expect(clippy::disallowed_methods)]
 pub fn clear_parts(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -461,6 +473,8 @@ pub fn clear_parts(dir: &Path) {
 }
 
 /// Remove the scratch folders in `parent` no run holds.
+// Removes the scratch folders a stopped run left.
+#[expect(clippy::disallowed_methods)]
 fn clear_scratch(parent: &Path) {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return;

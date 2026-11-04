@@ -2,6 +2,10 @@
 //! from its sources, the best of each aspect picked by measurement, and
 //! the result written as one tagged, covered track with its lyrics.
 
+// Tests make and change the files they check; shipped code changes one
+// only where an `#[expect]` says why.
+#![cfg_attr(test, expect(clippy::disallowed_methods))]
+
 pub mod acoustid;
 pub mod acquire;
 pub mod add;

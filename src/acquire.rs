@@ -66,6 +66,8 @@ impl Fetcher<'_> {
 
     /// [`Self::fetch`], asking for `format` in place of `[ytdlp] format`
     /// when given.
+    // Writes what yt-dlp is handed, in scratch.
+    #[expect(clippy::disallowed_methods)]
     pub fn fetch_as<R: Runner, W: Write>(
         &self,
         runner: &R,
@@ -445,6 +447,8 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
 
     /// Fetch what the URLs name, each upload's YouTube Music track first
     /// when `music_match`. Returns whether every download succeeded.
+    // Writes the URL list yt-dlp is handed, in scratch.
+    #[expect(clippy::disallowed_methods)]
     pub fn urls(&mut self, urls: &[String], music_match: bool) -> Result<(bool, Additions)> {
         let listed = list(
             urls,
