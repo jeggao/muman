@@ -1550,6 +1550,9 @@ fn plainly(message: &str) -> String {
 const MOST_NAME_BYTES: usize = 255;
 
 #[cfg(test)]
+mod naming_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

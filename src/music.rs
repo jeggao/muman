@@ -678,9 +678,9 @@ mod tests {
 
     #[test]
     fn every_lookup_takes_the_song_list_s_arguments() {
-        let options = crate::settings::Ytdlp {
+        let options = crate::download::Ytdlp {
             args: vec!["--js-runtimes".into(), "node".into()],
-            ..crate::settings::Ytdlp::default()
+            ..crate::download::Ytdlp::default()
         };
         let dir = tempfile::tempdir().unwrap();
         let passed = Passed::write(&options, dir.path()).unwrap();

@@ -48,7 +48,7 @@ src/
   album.rs          the songs of one album made to agree: one edition, spelling, release
   cli.rs            the command line (clap derive), exit codes
   settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
-                    [torrent], [tools], [history], [sites]
+                    [torrent], [tools], [history], [sites]; naming_tests.rs, its names
   migrate.rs        older song lists brought up to this edition
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
   state.rs          the state: files written, measures, comparisons
