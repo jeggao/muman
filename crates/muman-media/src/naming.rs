@@ -65,22 +65,22 @@ const ID_BYTES: usize = 64;
 /// How songs are named, from the `[library]` settings.
 #[derive(Debug)]
 pub struct Naming {
-    pub(crate) template: Template,
+    pub template: Template,
     /// What each character is replaced by, as [`replacements`] orders it.
-    pub(crate) replace: Vec<(String, String)>,
-    pub(crate) restrict: Restrict,
+    pub replace: Vec<(String, String)>,
+    pub restrict: Restrict,
     /// `[library] max_name_bytes`.
-    pub(crate) max_name_bytes: usize,
+    pub max_name_bytes: usize,
     /// The bytes after a stem: the longest audio extension or file beside
     /// a song.
-    pub(crate) tail: usize,
-    pub(crate) max_folder: usize,
+    pub tail: usize,
+    pub max_folder: usize,
     /// Characters the whole path may take after the library folder, as
     /// [`room`] counts them.
-    pub(crate) room: Option<usize>,
-    pub(crate) unknown_artist: String,
-    pub(crate) unknown_album: String,
-    pub(crate) untitled: String,
+    pub room: Option<usize>,
+    pub unknown_artist: String,
+    pub unknown_album: String,
+    pub untitled: String,
 }
 
 /// A song's tags as they come, before they are made safe.
@@ -303,7 +303,7 @@ impl Naming {
     }
 
     /// One tag value made safe for a path.
-    pub(crate) fn value(&self, text: &str) -> String {
+    pub fn value(&self, text: &str) -> String {
         let mut out: String = text.nfc().collect();
         for (from, to) in &self.replace {
             if !from.is_empty() {

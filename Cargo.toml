@@ -13,24 +13,18 @@ exclude = [".github/", "xtask/"]
 
 [dependencies]
 muman-core = { path = "crates/muman-core", version = "=0.10.0" }
+muman-media = { path = "crates/muman-media", version = "=0.10.0" }
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
-base64 = "0.23"
-chardetng = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 ctrlc = { version = "3.5.2", features = ["termination"] }
-deunicode = "1"
 directories = "6"
 dunce = "1"
-ebur128 = "0.1.10"
 encoding_rs = "0.8"
 filetime = "0.2"
-html-escape = "0.3"
-icu_casemap = "2.3"
 icu_properties = "2.3"
-icu_segmenter = "2.3"
 lofty = "0.25"
 regex = "1"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
@@ -47,7 +41,6 @@ toml = "1"
 toml_edit = "0.25"
 trash = "5"
 unicode-normalization = "0.1"
-unicode-security = "0.1"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 which = "8"
@@ -56,13 +49,13 @@ zip = { version = "9", default-features = false }
 [features]
 # For tests alone: the hooks a test stops or watches a run by
 # (`src/kill.rs`), and a state store that does not wait for the disk.
-testing = ["muman-core/testing"]
+testing = ["muman-core/testing", "muman-media/testing"]
 
 [lints]
 workspace = true
 
 [workspace]
-members = [".", "crates/muman-core", "xtask"]
+members = [".", "crates/muman-core", "crates/muman-media", "xtask"]
 
 # What every crate of muman shares; they are released together, at one
 # version.
@@ -104,4 +97,5 @@ strip = "symbols"
 
 [dev-dependencies]
 muman-core = { path = "crates/muman-core", features = ["testing"] }
+muman-media = { path = "crates/muman-media", features = ["testing"] }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }

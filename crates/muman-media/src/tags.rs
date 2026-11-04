@@ -188,7 +188,8 @@ impl Field {
 
     /// Its other names, lower-cased: the common spellings a song list may
     /// use, and the names ffprobe reports for MP3 and MP4 files.
-    pub(crate) fn aliases(self) -> &'static [&'static str] {
+    #[must_use]
+    pub fn aliases(self) -> &'static [&'static str] {
         self.spec().aliases
     }
 
@@ -1790,7 +1791,7 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// The file at `path` read by `lofty` for its tags alone. Its audio's
 /// properties are not read: `lofty` refuses some a file may hold, as an
 /// Opus stream of mapping family 255, and a file's tags never need them.
-pub(crate) fn read_tagged(
+pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
     let mut probe = lofty::probe::Probe::open(path)?;
