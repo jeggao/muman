@@ -41,6 +41,7 @@ use crate::dirs::Dirs;
 use crate::fingerprint::{Indexed, Match, Verdict};
 use crate::manifest::{Edit, Manifest, Song, Tags};
 use crate::parallel;
+use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
 use crate::reconcile;
 use crate::rows;

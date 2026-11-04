@@ -325,7 +325,8 @@ fn lyrics_out(v: &Value) -> Option<Item> {
 
 /// `[library] lyrics` as `out` set over `[lyrics]` from outside the song
 /// list, as `export --lyrics` sets it: each place as an inline table.
-pub(crate) fn lyrics_out_value(placement: &str) -> Option<Value> {
+#[must_use]
+pub fn lyrics_out_value(placement: &str) -> Option<Value> {
     let Item::ArrayOfTables(out) = lyrics_out(&Value::from(placement))? else {
         return None;
     };

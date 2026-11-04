@@ -163,8 +163,7 @@ const HEADER_START: &str = "# muman's song list";
 pub use crate::defaults::NEW;
 
 /// The tags every song's `tags.<name>` keys offer to fill in.
-pub(crate) const TAG_TEMPLATE: [&str; 6] =
-    ["title", "artist", "album", "album_artist", "genre", "date"];
+pub const TAG_TEMPLATE: [&str; 6] = ["title", "artist", "album", "album_artist", "genre", "date"];
 
 /// Tags by name, each with its values.
 pub type Tags = Vec<(String, Vec<String>)>;
@@ -1199,7 +1198,7 @@ fn tables<'a>(doc: &'a DocumentMut, key: &str) -> impl Iterator<Item = &'a Table
         .flat_map(ArrayOfTables::iter)
 }
 
-pub(crate) fn key_array(keys: &[SourceKey]) -> Item {
+pub fn key_array(keys: &[SourceKey]) -> Item {
     value(keys.iter().map(ToString::to_string).collect::<Array>())
 }
 

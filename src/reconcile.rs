@@ -36,6 +36,7 @@ use crate::library::Ledger;
 use crate::limit;
 use crate::manifest::{Edit, Manifest};
 use crate::query::Query;
+use crate::query::QueryMatch;
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::State;

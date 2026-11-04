@@ -13,10 +13,10 @@ use crate::source::SourceKey;
 use crate::tags::{self, Field};
 
 /// Fields that are no tag: what the song is made of and written as.
-pub(crate) const DERIVED: [&str; 7] = ["key", "path", "format", "cover", "lyrics", "from", "has"];
+pub const DERIVED: [&str; 7] = ["key", "path", "format", "cover", "lyrics", "from", "has"];
 
 #[derive(Debug, Clone)]
-pub(crate) enum Test {
+pub enum Test {
     Word(String),
     Key(SourceKey),
     Contains(String, String),
@@ -47,14 +47,14 @@ pub enum Have {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Term {
-    pub(crate) negated: bool,
-    pub(crate) test: Test,
+pub struct Term {
+    pub negated: bool,
+    pub test: Test,
 }
 
 /// A parsed query; with no terms it matches every song.
 #[derive(Debug, Clone, Default)]
-pub struct Query(pub(crate) Vec<Term>);
+pub struct Query(pub Vec<Term>);
 
 /// `text` without one pair of double quotes around it, so that
 /// `album:="The Glass Orchards"` reads alike whether a shell took its
@@ -66,7 +66,38 @@ fn unquoted(text: &str) -> &str {
 }
 
 impl Query {
-    pub(crate) fn parse_terms(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
+    /// Parse the terms of a query. `extractors` are the key schemes in
+    /// use, so `youtube.com:<id>` names a key where `composer:quill` names
+    /// a field.
+    pub fn parse(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
+        Self::parse_terms(terms, extractors)
+            .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How many keys the query names.
+    #[must_use]
+    pub fn keys_named(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|t| !t.negated && matches!(t.test, Test::Key(_)))
+            .count()
+    }
+
+    /// Whether the query is keys alone, each naming its song.
+    #[must_use]
+    pub fn names_keys(&self) -> bool {
+        !self.0.is_empty()
+            && self
+                .0
+                .iter()
+                .all(|t| !t.negated && matches!(t.test, Test::Key(_)))
+    }
+    pub fn parse_terms(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
         let mut parsed = Vec::new();
         for raw in terms {
             let (negated, body) = match raw.strip_prefix('^') {
@@ -125,7 +156,8 @@ impl Query {
 
 /// `text` as a query compares it: lower case, in one Unicode form, its
 /// accents taken off.
-pub(crate) fn fold(text: &str) -> String {
+#[must_use]
+pub fn fold(text: &str) -> String {
     text.nfd()
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .collect::<String>()
@@ -134,7 +166,8 @@ pub(crate) fn fold(text: &str) -> String {
         .collect()
 }
 
-pub(crate) fn is_field(name: &str) -> bool {
+#[must_use]
+pub fn is_field(name: &str) -> bool {
     DERIVED.contains(&name.to_ascii_lowercase().as_str()) || Field::named(name).is_some()
 }
 

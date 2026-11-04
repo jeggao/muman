@@ -82,6 +82,7 @@ use crate::facts::{self, LyricsAt};
 use crate::lyrics;
 use crate::manifest::{self, Edit, Manifest};
 use crate::picture::{self, Alike, Look};
+use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
 use crate::reconcile;
 use crate::runner::Runner;

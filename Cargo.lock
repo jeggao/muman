@@ -1150,12 +1150,12 @@ dependencies = [
  "clap",
  "clap_complete",
  "ctrlc",
- "directories",
  "dunce",
  "encoding_rs",
  "filetime",
  "icu_properties",
  "lofty",
+ "muman-config",
  "muman-core",
  "muman-media",
  "muman-net",
@@ -1168,17 +1168,36 @@ dependencies = [
  "sha1",
  "sha2",
  "shell-words",
- "strsim",
  "tempfile",
  "terminal_size",
  "toml",
  "toml_edit",
  "trash",
  "unicode-normalization",
- "unicode-segmentation",
  "unicode-width",
  "which",
  "zip",
+]
+
+[[package]]
+name = "muman-config"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "muman-core",
+ "muman-media",
+ "muman-net",
+ "regex",
+ "serde",
+ "shell-words",
+ "strsim",
+ "tempfile",
+ "toml",
+ "toml_edit",
+ "unicode-normalization",
+ "unicode-segmentation",
+ "which",
 ]
 
 [[package]]

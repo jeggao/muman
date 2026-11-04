@@ -306,39 +306,34 @@ pub fn removed_view(removed: &Removed, state: &State) -> View {
     }
 }
 
-impl Query {
-    /// Parse the terms of a query. `extractors` are the key schemes in
-    /// use, so `youtube.com:<id>` names a key where `composer:quill` names
-    /// a field.
-    pub fn parse(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
-        Self::parse_terms(terms, extractors)
-            .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
+/// A query held against the songs it is asked of, as they are shown.
+/// A trait, as [`Query`] is the song list's and a [`View`] the engine's.
+pub trait QueryMatch {
     /// Whether `view` is one of the songs the keys name, if any do, and
     /// satisfies every other term.
     #[must_use]
-    pub fn matches(&self, view: &View) -> bool {
+    fn matches(&self, view: &View) -> bool;
+
+    /// Refuse a field no tag muman knows is named and no song in `views`
+    /// has: a misspelling, which would match nothing, or negated, every
+    /// song.
+    fn check_fields(&self, views: &[View]) -> Result<()>;
+}
+
+impl QueryMatch for Query {
+    fn matches(&self, view: &View) -> bool {
         let named = |t: &&Term| !t.negated && matches!(t.test, Test::Key(_));
         let mut keys = self.0.iter().filter(named).peekable();
-        let keyed = keys.peek().is_none() || keys.any(|t| t.test.holds(view));
+        let keyed = keys.peek().is_none() || keys.any(|t| holds(&t.test, view));
         keyed
             && self
                 .0
                 .iter()
                 .filter(|t| !named(t))
-                .all(|t| t.negated != t.test.holds(view))
+                .all(|t| t.negated != holds(&t.test, view))
     }
 
-    /// Refuse a field no tag muman knows is named and no song in `views`
-    /// has: a misspelling, which would match nothing, or negated, every
-    /// song.
-    pub fn check_fields(&self, views: &[View]) -> Result<()> {
+    fn check_fields(&self, views: &[View]) -> Result<()> {
         for term in &self.0 {
             let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
                 &term.test
@@ -357,25 +352,6 @@ impl Query {
             }
         }
         Ok(())
-    }
-
-    /// How many keys the query names.
-    #[must_use]
-    pub fn keys_named(&self) -> usize {
-        self.0
-            .iter()
-            .filter(|t| !t.negated && matches!(t.test, Test::Key(_)))
-            .count()
-    }
-
-    /// Whether the query is keys alone, each naming its song.
-    #[must_use]
-    pub fn names_keys(&self) -> bool {
-        !self.0.is_empty()
-            && self
-                .0
-                .iter()
-                .all(|t| !t.negated && matches!(t.test, Test::Key(_)))
     }
 }
 
@@ -417,33 +393,38 @@ fn names_key(key: &SourceKey, word: &str) -> bool {
     }
 }
 
-impl Test {
-    fn holds(&self, view: &View) -> bool {
-        let any =
-            |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
-        match self {
-            Self::Word(w) => {
-                ["title", "artist", "album", "album_artist"]
-                    .iter()
-                    .any(|f| any(f, &|v| v.contains(w.as_str())))
-                    || view.keys.iter().any(|k| names_key(k, w))
-            }
-            Self::Key(k) => view.keys.contains(k),
-            Self::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
-            Self::Equals(f, text) => any(f, &|v| v == text),
-            Self::Matches(f, re) => view
-                .values(f)
+/// Whether `view` meets `term`.
+fn holds(term: &Test, view: &View) -> bool {
+    let any =
+        |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
+    match term {
+        Test::Word(w) => {
+            ["title", "artist", "album", "album_artist"]
                 .iter()
-                .any(|v| re.is_match(&v.nfc().collect::<String>())),
-            Self::Is(c) => c.holds(view),
+                .any(|f| any(f, &|v| v.contains(w.as_str())))
+                || view.keys.iter().any(|k| names_key(k, w))
         }
+        Test::Key(k) => view.keys.contains(k),
+        Test::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
+        Test::Equals(f, text) => any(f, &|v| v == text),
+        Test::Matches(f, re) => view
+            .values(f)
+            .iter()
+            .any(|v| re.is_match(&v.nfc().collect::<String>())),
+        Test::Is(c) => c.holds(view),
     }
 }
 
-impl Closed {
+/// A closed term held against a song as it is shown. A trait, as
+/// [`Closed`] is the song list's and a [`View`] the engine's.
+pub trait Holds {
     /// Whether `view` meets it.
     #[must_use]
-    pub fn holds(&self, view: &View) -> bool {
+    fn holds(&self, view: &View) -> bool;
+}
+
+impl Holds for Closed {
+    fn holds(&self, view: &View) -> bool {
         let have = |h: Have, some: bool, better: bool| match h {
             Have::Some => some,
             Have::None => !some,
