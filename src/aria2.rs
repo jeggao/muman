@@ -8,9 +8,9 @@
 //!
 //! The command line is any user's to see (`ps`), so an option of `args`
 //! that carries a login, a password, a header or an address that may
-//! hold them ([`SECRET`]) goes to a config file of the run's own instead,
-//! its owner's alone ([`crate::atomic`]), named by `--conf-path` in place
-//! of `--no-conf`: aria2c then reads that file and no other. aria2c reads
+//! hold them ([`ARIA2C_SECRET`]) goes to a config file of the run's own
+//! instead, its owner's alone ([`crate::atomic`]), named by `--conf-path`
+//! in place of `--no-conf`: aria2c then reads that file and no other. aria2c reads
 //! the file's options before the command line's, but muman sets none of
 //! these, and a `header` there adds to those given elsewhere, as on the
 //! command line. Its lines are `name=value`, the value trimmed at both
@@ -133,7 +133,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 
 use crate::manifest::Manifest;
-use crate::runner::{Line, Runner};
+use crate::runner::{ARIA2C_SECRET, Line, Runner};
 use crate::settings::Torrent;
 use crate::source::{SourceKey, TorrentKey};
 use crate::torrent::{File, Magnet, Metainfo};
@@ -240,39 +240,13 @@ fn input_file(entries: &[Entry]) -> Result<Vec<u8>> {
     Ok(text)
 }
 
-/// aria2c's options that carry a login, a password, a header or an
-/// address that may hold either: given in `[torrent] args`, each goes to
-/// the run's config file rather than its command line.
-pub const SECRET: [&str; 21] = [
-    "header",
-    "http-user",
-    "http-passwd",
-    "ftp-user",
-    "ftp-passwd",
-    "all-proxy",
-    "all-proxy-user",
-    "all-proxy-passwd",
-    "http-proxy",
-    "http-proxy-user",
-    "http-proxy-passwd",
-    "https-proxy",
-    "https-proxy-user",
-    "https-proxy-passwd",
-    "ftp-proxy",
-    "ftp-proxy-user",
-    "ftp-proxy-passwd",
-    "rpc-user",
-    "rpc-passwd",
-    "rpc-secret",
-    "bt-tracker",
-];
-
-/// The config file of a run's [`SECRET`] options, beside its input file.
+/// The config file of a run's [`ARIA2C_SECRET`] options, beside its input
+/// file.
 const CONF: &str = "aria2.conf";
 
 /// `[torrent] args` apart: those for the command line, and each option
-/// of [`SECRET`] with its value, as `--name=value` or `--name value`
-/// give it.
+/// of [`ARIA2C_SECRET`] with its value, as `--name=value` or
+/// `--name value` give it.
 fn secrets_apart(args: &[String]) -> (Vec<OsString>, Vec<(&str, &str)>) {
     let (mut kept, mut secret) = (Vec::new(), Vec::new());
     let mut args = args.iter();
@@ -281,10 +255,10 @@ fn secrets_apart(args: &[String]) -> (Vec<OsString>, Vec<(&str, &str)>) {
             .strip_prefix("--")
             .map(|o| o.split_once('=').unwrap_or((o, "")));
         match option {
-            Some((name, value)) if SECRET.contains(&name) && arg.contains('=') => {
+            Some((name, value)) if ARIA2C_SECRET.contains(&name) && arg.contains('=') => {
                 secret.push((name, value));
             }
-            Some((name, _)) if SECRET.contains(&name) => match args.next() {
+            Some((name, _)) if ARIA2C_SECRET.contains(&name) => match args.next() {
                 Some(value) => secret.push((name, value.as_str())),
                 None => kept.push(arg.into()),
             },

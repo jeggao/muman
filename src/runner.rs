@@ -493,9 +493,37 @@ impl<R: Runner> Runner for Traced<R> {
     }
 }
 
+/// aria2c's options that carry a login, a password, a header or an
+/// address that may hold either: a trace hides each one's value, and
+/// given in `[torrent] args`, each goes to the run's config file rather
+/// than its command line (`aria2.rs`).
+pub const ARIA2C_SECRET: [&str; 21] = [
+    "header",
+    "http-user",
+    "http-passwd",
+    "ftp-user",
+    "ftp-passwd",
+    "all-proxy",
+    "all-proxy-user",
+    "all-proxy-passwd",
+    "http-proxy",
+    "http-proxy-user",
+    "http-proxy-passwd",
+    "https-proxy",
+    "https-proxy-user",
+    "https-proxy-passwd",
+    "ftp-proxy",
+    "ftp-proxy-user",
+    "ftp-proxy-passwd",
+    "rpc-user",
+    "rpc-passwd",
+    "rpc-secret",
+    "bt-tracker",
+];
+
 /// yt-dlp's options, by their long names, whose value is a login, a
 /// password, a header or an address that may hold one; aria2c's are
-/// [`crate::aria2::SECRET`].
+/// [`ARIA2C_SECRET`].
 const SECRET: [&str; 11] = [
     "username",
     "password",
@@ -523,7 +551,7 @@ const HIDDEN: &str = "<hidden>";
 /// data, which stand for a session.
 fn redacted(cmd: &[OsString]) -> Vec<String> {
     let ytdlp = cmd.first().is_some_and(|p| p == "yt-dlp");
-    let secret = |name: &str| SECRET.contains(&name) || crate::aria2::SECRET.contains(&name);
+    let secret = |name: &str| SECRET.contains(&name) || ARIA2C_SECRET.contains(&name);
     let mut said = Vec::new();
     let mut next: Option<String> = None;
     let mut options = true;
