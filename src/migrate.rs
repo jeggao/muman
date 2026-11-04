@@ -1058,14 +1058,14 @@ fn text(value: &Value) -> String {
 fn meaning(
     path: &[&str],
     text: &str,
-) -> Option<(crate::settings::Settings, crate::provider::Config)> {
+) -> Option<(crate::settings::Settings, crate::providers::Config)> {
     let (key, tables) = path.split_last()?;
     let doc: DocumentMut = format!("[{}]\n{key} = {text}\n", tables.join("."))
         .parse()
         .ok()?;
     Some((
         crate::settings::read(&doc).ok()?,
-        crate::provider::read(&doc).ok()?,
+        crate::providers::read(&doc).ok()?,
     ))
 }
 

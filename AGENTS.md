@@ -76,7 +76,7 @@ src/
   picture.rs        perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   lookup.rs         lookups due, each provider asked until a song has what it names;
-                    provider.rs, lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs
+                    provider.rs, providers.rs, lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs
   reconcile.rs      the offline phase, its steps in order, each a module of its own:
                     measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
                     write.rs, prune.rs, report.rs

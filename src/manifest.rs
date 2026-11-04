@@ -58,7 +58,8 @@ use crate::atomic::{self, Lock};
 use crate::clean::{self, Settings};
 use crate::dirs::MANIFEST;
 use crate::hooks::{self, Hook};
-use crate::provider::{self, Provider};
+use crate::provider::Provider;
+use crate::providers;
 use crate::source::SourceKey;
 use crate::tags;
 
@@ -84,7 +85,7 @@ const PLAIN: i64 = 1;
 /// file.
 #[must_use]
 pub fn shareable(key: &SourceKey) -> bool {
-    provider::is_kept(key) || is_picture(key)
+    crate::provider::is_kept(key) || is_picture(key)
 }
 
 fn is_picture(key: &SourceKey) -> bool {
@@ -374,7 +375,7 @@ pub struct Manifest {
     pub clean: Settings,
     pub removed: Vec<Removed>,
     /// What `[providers]` sets over the defaults.
-    pub providers: provider::Config,
+    pub providers: providers::Config,
     pub hooks: Vec<Hook>,
     /// `[library]`, `[audio]`, `[ytdlp]` and `[history]`.
     pub settings: crate::settings::Settings,
@@ -845,7 +846,7 @@ struct Parsed {
     albums: Vec<Album>,
     torrents: BTreeMap<String, Torrent>,
     removed: Vec<Removed>,
-    providers: provider::Config,
+    providers: providers::Config,
     hooks: Vec<Hook>,
     clean: Settings,
     settings: crate::settings::Settings,
@@ -1044,7 +1045,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         albums,
         torrents: torrents_of(doc)?,
         removed,
-        providers: provider::read(doc)?,
+        providers: providers::read(doc)?,
         hooks: hooks::read(doc)?,
         clean: clean_of(doc)?,
         settings,

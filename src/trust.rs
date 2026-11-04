@@ -118,7 +118,7 @@ pub fn held_of(text: &str) -> Result<Vec<Held>> {
 /// not at its default.
 pub fn held(doc: &DocumentMut) -> Result<Vec<Held>> {
     let settings = crate::settings::read(doc)?;
-    let providers = crate::provider::read(doc)?;
+    let providers = crate::providers::read(doc)?;
     let defaults = crate::settings::Settings::default();
     let mut held = Vec::new();
     for (n, hook) in crate::hooks::read(doc)?.iter().enumerate() {

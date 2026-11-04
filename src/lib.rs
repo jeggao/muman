@@ -67,6 +67,7 @@ pub mod plugins;
 pub mod probe;
 pub mod progress;
 pub mod provider;
+pub mod providers;
 pub mod purge;
 pub mod quality;
 pub mod query;

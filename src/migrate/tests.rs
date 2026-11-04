@@ -427,7 +427,7 @@ fn rewritten(triggers: &str) -> (Vec<String>, Vec<String>) {
             }
         }
     }
-    crate::provider::read(&d).unwrap();
+    crate::providers::read(&d).unwrap();
     (lines, notes)
 }
 
@@ -595,8 +595,8 @@ fn the_song_list_of_every_edition_reads_as_the_current_one() {
         assert_eq!(left_behind(&d), None, "edition {was}");
         assert_eq!(read(&d).unwrap(), Settings::default(), "edition {was}");
         assert_eq!(
-            crate::provider::read(&d).unwrap(),
-            crate::provider::Config::default(),
+            crate::providers::read(&d).unwrap(),
+            crate::providers::Config::default(),
             "edition {was}"
         );
         let once = d.to_string();
