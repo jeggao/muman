@@ -105,6 +105,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "held",
             "hooks",
             "providers",
+            "terms",
         ],
     ),
     (
@@ -169,9 +170,7 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("manifest", "change"),
     ("manifest", "state"),
     ("migrate", "lookup"),
-    ("migrate", "query"),
     ("naming", "settings"),
-    ("providers", "query"),
     ("query", "change"),
     ("reconcile", "sync"),
     ("runner", "aria2"),

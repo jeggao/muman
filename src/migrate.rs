@@ -64,8 +64,8 @@ use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value, value};
 
 use crate::provider::Provider;
-use crate::query::{Closed, Have};
 use crate::settings::{WRITTEN, defaults};
+use crate::terms::{Closed, Have};
 use crate::units::{Bitrate, Frequency, Size, Time};
 
 /// The edition this muman writes: the last in [`HISTORY`].
