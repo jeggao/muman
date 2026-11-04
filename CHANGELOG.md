@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **A song list removed while a command runs is not written again.**
+  The command is refused (exit 5), as when the list is missing at its
+  start. Before, a list removed partway through was written anew, with
+  only what the command changed, whenever the library held no song
+  muman wrote.
+
 ## [0.10.0] - 2026-11-04
 
 ### Added

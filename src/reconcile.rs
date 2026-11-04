@@ -167,7 +167,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
 ) -> Result<bool> {
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
-    crate::manifest::present(home)?;
+    crate::state::present(home)?;
     dirs.apart()?;
     let _library = if opts.dry_run {
         None

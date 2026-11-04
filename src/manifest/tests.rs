@@ -1184,3 +1184,25 @@ fn an_older_list_gains_its_tags_settings_just_above_their_switches() {
     assert!(t.contains("spacing = false # mine"), "{t}");
     assert!(at("[tags.clean.guesswork]") < at("\n[[song]]"), "{t}");
 }
+
+#[test]
+fn a_list_removed_while_muman_runs_is_not_written_again() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "");
+    let mut m = Manifest::load(dir.path()).unwrap();
+    std::fs::remove_file(dir.path().join(MANIFEST)).unwrap();
+    m.edit(Edit::Add {
+        sources: vec![yt("aaaaaaaaaaa")],
+        album: None,
+    });
+    let error = m.save().unwrap_err();
+    assert!(
+        error.downcast_ref::<crate::errors::Refused>().is_some(),
+        "{error:#}"
+    );
+    assert!(
+        format!("{error:#}").contains("was removed while muman ran"),
+        "{error:#}"
+    );
+    assert!(!dir.path().join(MANIFEST).exists());
+}
