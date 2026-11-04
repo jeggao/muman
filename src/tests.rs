@@ -3581,6 +3581,58 @@ fn a_run_an_earlier_muman_recorded_whole_is_undone() {
 }
 
 #[test]
+fn a_home_an_earlier_muman_left_syncs_as_it_was_and_undoes_its_run() {
+    let s = Setup::new();
+    for name in ["a", "b"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    s.written("home/sources/manual/b.lrc", "[00:01.00]Paper comets\n");
+    s.run(&flacs(), &["sync"]);
+    let synced = library_of(&s);
+    let home = s.dir.path().join("home");
+    let began = serde_json::to_value(crate::state::State::load(&home).unwrap()).unwrap();
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    let removed = library_of(&s);
+
+    // As the last release left the home: its state in `state.json`, and
+    // the run recorded whole, as version 1 of the record holds it.
+    let left = crate::state::State::load(&home).unwrap();
+    crate::testing::put_old_state(&home, serde_json::to_string(&left).unwrap().as_bytes());
+    let (file, mut record) = latest_record(&s);
+    let fields = record.as_object_mut().unwrap();
+    fields.remove("before");
+    fields.insert("version".into(), 1.into());
+    fields.insert("outputs".into(), began["outputs"].clone());
+    std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    assert_eq!(library_of(&s), removed, "nothing written again");
+    assert!(
+        !fake.calls().iter().any(|c| c.iter().any(|a| a == "-c:a")),
+        "{text}"
+    );
+    assert!(crate::state::exists(&home), "brought into state.db");
+    assert!(home.join("state.json.bak").exists());
+    let stub = std::fs::read_to_string(home.join("state.json")).unwrap();
+    assert!(
+        stub.contains("moved_to"),
+        "an earlier muman refuses the home: {stub}"
+    );
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok && text.contains("Put back"), "{text}");
+    assert_eq!(
+        library_of(&s),
+        synced,
+        "the run the last release made, undone"
+    );
+}
+
+#[test]
 fn info_prints_the_state_as_json_and_changes_nothing() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
