@@ -620,7 +620,7 @@ pub fn gather<R: Runner>(
             });
         }
         Kind::Tags => {
-            let record = crate::musicbrainz::read(&located.path)?;
+            let record = crate::record::read(&located.path)?;
             facts.tags = tags::from_record(&record);
             facts.editions = tags::editions(&record);
             facts.tags_digest = digest_file(&located.path);
@@ -648,7 +648,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
     match located.kind {
         Kind::Media => {}
         Kind::Tags => {
-            let record = crate::musicbrainz::read(&located.path)?;
+            let record = crate::record::read(&located.path)?;
             return Ok(Reread {
                 tags: tags::from_record(&record),
                 editions: tags::editions(&record),

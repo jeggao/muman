@@ -74,6 +74,7 @@ pub mod purge;
 pub mod quality;
 pub mod query;
 pub mod reconcile;
+pub mod record;
 pub mod redact;
 pub mod relpath;
 pub mod render;

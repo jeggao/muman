@@ -81,6 +81,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "info",
             "similar",
             "naming",
+            "record",
             "facts",
         ],
     ),
@@ -160,7 +161,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("align", "download"),
     ("aria2", "manifest"),
     ("aria2", "sync"),
-    ("facts", "musicbrainz"),
     ("history", "change"),
     ("loudness", "resolve"),
     ("loudness", "settings"),
@@ -170,7 +170,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("naming", "settings"),
     ("reconcile", "sync"),
     ("tagfile", "musicbrainz"),
-    ("tags", "musicbrainz"),
     ("torrent", "naming"),
 ];
 

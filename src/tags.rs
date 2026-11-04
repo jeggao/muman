@@ -1344,7 +1344,7 @@ pub const RECORD_FIELDS: [Field; 27] = [
 /// the artist and the album artist alike, and each also one by one as
 /// `ARTISTS`, as Picard writes them.
 #[must_use]
-pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
+pub fn from_record(record: &crate::record::Record) -> Offers {
     let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
     let mut o = Offers::new();
     offer(&mut o, Field::Title, vec![record.title.clone()], true);
@@ -1389,7 +1389,7 @@ pub fn from_record(record: &crate::musicbrainz::Record) -> Offers {
 /// What each of a record's editions offers in place of its release's
 /// fields, as [`from_record`] offers them.
 #[must_use]
-pub fn editions(record: &crate::musicbrainz::Record) -> Vec<Offers> {
+pub fn editions(record: &crate::record::Record) -> Vec<Offers> {
     record
         .editions
         .iter()
@@ -1408,7 +1408,7 @@ pub fn editions(record: &crate::musicbrainz::Record) -> Vec<Offers> {
 }
 
 /// The fields of a MusicBrainz release, offered into `o`.
-fn offer_release(o: &mut Offers, r: &crate::musicbrainz::Release) {
+fn offer_release(o: &mut Offers, r: &crate::record::Release) {
     let one = |v: Option<&String>| v.cloned().into_iter().collect::<Vec<_>>();
     let number = |n: Option<u32>| n.map(|n| n.to_string()).into_iter().collect();
     offer(o, Field::Album, vec![r.title.clone()], true);
@@ -2231,8 +2231,8 @@ mod tests {
 
     #[test]
     fn an_offer_drops_controls_reordering_and_garbage() {
-        let record = crate::musicbrainz::Record {
-            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
+        let record = crate::record::Record {
+            id: crate::record::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Esc\0ape\nTitle\u{202E}\u{1b}[2J".into(),
             artists: vec!["x".repeat(MAX_VALUE + 1), "Artist".into()],
             credit: String::new(),
@@ -2252,8 +2252,8 @@ mod tests {
 
     #[test]
     fn a_musicbrainz_record_offers_its_release_whole() {
-        let record = crate::musicbrainz::Record {
-            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
+        let record = crate::record::Record {
+            id: crate::record::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Song".into(),
             artists: vec!["A".into(), "B".into()],
             credit: String::new(),
@@ -2261,7 +2261,7 @@ mod tests {
             comment: String::new(),
             isrcs: vec!["XX0000000001".into()],
             length_ms: Some(200_000),
-            release: Some(crate::musicbrainz::Release {
+            release: Some(crate::record::Release {
                 id: "00000000-0000-0000-0000-00000000000a".into(),
                 title: "Record".into(),
                 artists: vec!["A".into()],
@@ -2277,7 +2277,7 @@ mod tests {
                 status: Some("Official".into()),
                 types: vec!["Album".into(), "Compilation".into()],
                 media: Some("CD".into()),
-                details: crate::musicbrainz::Details {
+                details: crate::record::Details {
                     labels: vec!["Harbor Lights Records".into()],
                     catalog_numbers: vec!["HLR-0042".into()],
                     barcode: Some("0012345678905".into()),
@@ -2334,8 +2334,8 @@ mod tests {
 
     #[test]
     fn artists_credited_together_are_offered_as_the_credit_joins_them() {
-        let o = from_record(&crate::musicbrainz::Record {
-            id: crate::musicbrainz::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
+        let o = from_record(&crate::record::Record {
+            id: crate::record::Mbid::parse("00000000-0000-0000-0000-000000000001").unwrap(),
             title: "Song".into(),
             artists: vec!["Marlo Venn".into(), "The Glass Orchards".into()],
             credit: "Marlo Venn & The Glass Orchards".into(),
@@ -2343,7 +2343,7 @@ mod tests {
             comment: String::new(),
             isrcs: Vec::new(),
             length_ms: None,
-            release: Some(crate::musicbrainz::Release {
+            release: Some(crate::record::Release {
                 id: "00000000-0000-0000-0000-00000000000a".into(),
                 title: "Record".into(),
                 artists: vec!["Marlo Venn".into(), "The Glass Orchards".into()],
@@ -2359,7 +2359,7 @@ mod tests {
                 status: None,
                 types: Vec::new(),
                 media: None,
-                details: crate::musicbrainz::Details::default(),
+                details: crate::record::Details::default(),
             }),
             editions: Vec::new(),
             original_date: None,
