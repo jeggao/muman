@@ -294,14 +294,14 @@ fn place_by(root: &Path, key: &SourceKey, from: &Path, how: How) -> Result<Optio
 /// A manual file this recent may still be copying in.
 pub const SETTLING: Duration = Duration::from_secs(10);
 
-pub(crate) const MEDIA: [&str; 37] = [
+pub const MEDIA: [&str; 37] = [
     "flac", "wav", "w64", "rf64", "aif", "aiff", "aifc", "caf", "m4a", "m4b", "mp3", "mp2", "ogg",
     "oga", "opus", "spx", "wv", "ape", "tta", "tak", "shn", "aac", "ac3", "eac3", "dts", "thd",
     "mlp", "mka", "mkv", "mp4", "webm", "mov", "alac", "dsf", "dff", "wma", "au",
 ];
-pub(crate) const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
+pub const IMAGES: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 /// The names a picture covers every song in its folder by.
-pub(crate) const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
+pub const FOLDER_COVERS: [&str; 4] = ["cover", "folder", "front", "album"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -316,12 +316,14 @@ pub enum Kind {
 /// Whether two files are in one folder and named alike but for their
 /// extensions, in any case: `Song.JPG` comes with `song.flac`, as a
 /// folder's `COVER.JPG` covers it.
-pub(crate) fn named_as(a: &Path, b: &Path) -> bool {
+#[must_use]
+pub fn named_as(a: &Path, b: &Path) -> bool {
     let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
     a.parent() == b.parent() && stem(a) == stem(b)
 }
 
-pub(crate) fn kind_of(path: &Path) -> Option<Kind> {
+#[must_use]
+pub fn kind_of(path: &Path) -> Option<Kind> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     if MEDIA.contains(&ext.as_str()) {
         Some(Kind::Media)
@@ -1086,7 +1088,7 @@ pub fn moved_manual<'a>(
 
 /// Files below `dir`, at most `depth` folders down, without hidden ones
 /// and without downloads not yet finished.
-pub(crate) fn walk(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
+pub fn walk(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
     files_below(dir, depth, visible)
 }
 
@@ -1112,11 +1114,7 @@ pub(crate) fn visible(name: &str) -> bool {
 /// link only to a place inside it.
 // Walks muman's own folders, whose links the user made.
 #[expect(clippy::disallowed_methods)]
-pub(crate) fn files_below(
-    dir: &Path,
-    depth: usize,
-    keep: impl Fn(&str) -> bool,
-) -> Result<Vec<PathBuf>> {
+pub fn files_below(dir: &Path, depth: usize, keep: impl Fn(&str) -> bool) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     let entries = walkdir::WalkDir::new(dir)
         .follow_links(true)

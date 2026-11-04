@@ -1,0 +1,50 @@
+[package]
+name = "muman-core"
+description = "The lowest layer of muman: units, paths, files written safely, programs run, the store and the sources it keys."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone: the hooks a test stops or watches a run by, and the
+# fake runner and fixtures the other crates' tests share.
+testing = []
+
+[dependencies]
+anstream = "1"
+anstyle = "1"
+anyhow = "1"
+base64 = "0.23"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+deunicode = "1"
+directories = "6"
+dunce = "1"
+filetime = "0.2"
+icu_locale = "2.3"
+icu_properties = "2.3"
+indicatif = "0.18"
+inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
+minijinja = { version = "3", features = ["serde"] }
+percent-encoding = "2"
+regex = "1"
+rusty-chromaprint = "0.3"
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha1 = "0.11"
+sha2 = "0.11"
+shared_child = { version = "1.1.2", default-features = false }
+shell-words = "1"
+tempfile = "3"
+terminal_size = "0.4"
+toml = "1"
+unicode-normalization = "0.1"
+uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+walkdir = "2"
+which = "8"
+
+[lints]
+workspace = true

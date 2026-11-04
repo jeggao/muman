@@ -80,7 +80,8 @@ impl Provider {
     }
 
     /// Whether `[providers.*] url` names its server.
-    pub(crate) fn served(self) -> bool {
+    #[must_use]
+    pub fn served(self) -> bool {
         self.kept() || self == Self::AcoustId
     }
 

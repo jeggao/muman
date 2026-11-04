@@ -60,6 +60,7 @@ use toml_edit::DocumentMut;
 use crate::hooks::Event;
 use crate::migrate::{HISTORY, Step};
 use crate::provider::Provider;
+use crate::providers::ProviderRules;
 use crate::state::State;
 use crate::ui::Prompter;
 

@@ -41,6 +41,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::facts::Facts;
 use crate::manifest::{Manifest, Removed, Song};
 use crate::provider::Provider;
+use crate::providers::ProviderRules;
 use crate::reconcile;
 use crate::resolve::Resolved;
 use crate::source::SourceKey;

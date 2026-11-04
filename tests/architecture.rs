@@ -285,7 +285,7 @@ fn sites_are_described_by_the_site_table_alone() {
     }
     assert!(
         wrong.is_empty(),
-        "name sites in manifest/new.toml's [sites], not in code:\n{}",
+        "name sites in new.toml's [sites], not in code:\n{}",
         wrong.join("\n")
     );
 }

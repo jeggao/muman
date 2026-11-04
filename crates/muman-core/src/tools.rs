@@ -349,7 +349,8 @@ pub fn find(variable: Option<OsString>, named: &Named) -> Option<Vec<OsString>> 
 
 /// Whether `word` is a program's bare name, to look for, rather than a
 /// path to it.
-pub(crate) fn is_name(word: &OsStr) -> bool {
+#[must_use]
+pub fn is_name(word: &OsStr) -> bool {
     let mut parts = Path::new(word).components();
     matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
 }
@@ -357,7 +358,8 @@ pub(crate) fn is_name(word: &OsStr) -> bool {
 /// `text` split into words the way Windows programs read a command line:
 /// at spaces outside double quotes, the quotes dropped, and `\` taken
 /// as it is, since it separates folders.
-pub(crate) fn windows_words(text: &str) -> Vec<String> {
+#[must_use]
+pub fn windows_words(text: &str) -> Vec<String> {
     let (mut words, mut word, mut quoted) = (Vec::new(), String::new(), false);
     for c in text.chars() {
         match c {

@@ -38,18 +38,18 @@ use sha2::{Digest as _, Sha256};
 
 use crate::runner::{Line, Runner};
 
-pub const SILENCE_OPUS: &[u8] = include_bytes!("../testdata/silence.opus");
-pub const SILENCE_FLAC: &[u8] = include_bytes!("../testdata/silence.flac");
+pub const SILENCE_OPUS: &[u8] = include_bytes!("../../../testdata/silence.opus");
+pub const SILENCE_FLAC: &[u8] = include_bytes!("../../../testdata/silence.flac");
 /// Where a FLAC's STREAMINFO holds the MD5 of its audio: after `fLaC`,
 /// the block's header and 18 bytes of the block.
 pub const STREAMINFO_MD5: std::ops::Range<usize> = 26..42;
-pub const SILENCE_VORBIS: &[u8] = include_bytes!("../testdata/silence.ogg");
-pub const SILENCE_MP3: &[u8] = include_bytes!("../testdata/silence.mp3");
-pub const SILENCE_M4A: &[u8] = include_bytes!("../testdata/silence.m4a");
-pub const SILENCE_WV: &[u8] = include_bytes!("../testdata/silence.wv");
-pub const PIXEL: &[u8] = include_bytes!("../testdata/pixel.png");
-pub const PIXEL_JPEG: &[u8] = include_bytes!("../testdata/pixel.jpg");
-pub const PIXEL_WEBP: &[u8] = include_bytes!("../testdata/pixel.webp");
+pub const SILENCE_VORBIS: &[u8] = include_bytes!("../../../testdata/silence.ogg");
+pub const SILENCE_MP3: &[u8] = include_bytes!("../../../testdata/silence.mp3");
+pub const SILENCE_M4A: &[u8] = include_bytes!("../../../testdata/silence.m4a");
+pub const SILENCE_WV: &[u8] = include_bytes!("../../../testdata/silence.wv");
+pub const PIXEL: &[u8] = include_bytes!("../../../testdata/pixel.png");
+pub const PIXEL_JPEG: &[u8] = include_bytes!("../../../testdata/pixel.jpg");
+pub const PIXEL_WEBP: &[u8] = include_bytes!("../../../testdata/pixel.webp");
 
 /// The ffprobe JSON of a yt-dlp original: video, Opus audio, an English
 /// subtitle, its info JSON and a WebP thumbnail as attachments.

@@ -206,7 +206,7 @@ due that run, so it asks for the release they found.
 ### When a song asks
 
 Each provider has a `[providers.<name>]` table, written in
-[new.toml](../src/manifest/new.toml) with every key at its default; set
+[new.toml](../crates/muman-core/src/new.toml) with every key at its default; set
 any key and the rest keep theirs. A song asks a provider until it has
 everything the provider's `until` lists:
 

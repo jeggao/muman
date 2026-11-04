@@ -76,7 +76,7 @@ each program's version and path.
 ## Settings in the song list
 
 The first `add` or `sync` in a new home writes `songs.toml` with every
-setting at its default. [`src/manifest/new.toml`](../src/manifest/new.toml)
+setting at its default. [`crates/muman-core/src/new.toml`](../crates/muman-core/src/new.toml)
 is that file, and the reference for every key; change the values you
 want. A song list made by an earlier muman gains each setting it lacks,
 at its default, the next time muman writes it. A setting with no
@@ -265,7 +265,7 @@ is Japanese, never Korean or Chinese.
 `[lyrics] prefer` lists the roles, and `"timed"` or `"untimed"`, best
 first. Lyrics rank by the first entry that tells them apart, and a role
 left out is never taken. Its default is in
-[new.toml](../src/manifest/new.toml). This takes a song's own words,
+[new.toml](../crates/muman-core/src/new.toml). This takes a song's own words,
 else their romanization, timed lyrics before untimed ones of the same
 role, and never a translation:
 
@@ -389,7 +389,7 @@ weight = 50
 enabled = false
 ```
 
-The default weights, in [new.toml](../src/manifest/new.toml), make each
+The default weights, in [new.toml](../crates/muman-core/src/new.toml), make each
 measure outweigh all after it, so their order alone decides. To let
 measures trade, weigh each against the steps of those it should trade
 with.

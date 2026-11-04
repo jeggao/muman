@@ -303,7 +303,7 @@ fn printable_all(items: &[String]) -> Vec<String> {
 
 /// Answers from queues, in order; running out panics, surfacing the
 /// question a test did not expect.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 #[derive(Debug, Default)]
 pub struct MockPrompter {
     answers: std::collections::VecDeque<bool>,
@@ -318,7 +318,7 @@ pub struct MockPrompter {
     width: Option<usize>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl MockPrompter {
     #[must_use]
     pub fn new() -> Self {
@@ -364,7 +364,7 @@ impl MockPrompter {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl Prompter for MockPrompter {
     fn ask(&mut self, question: &str) -> io::Result<bool> {
         self.heard(question, &[]);
