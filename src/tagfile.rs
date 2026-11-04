@@ -534,7 +534,7 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
     if map.contains_key("artists")
         && map.contains_key("id")
         && map.contains_key("title")
-        && let Ok(record) = serde_json::from_value::<crate::musicbrainz::Record>(o.clone())
+        && let Ok(record) = serde_json::from_value::<crate::record::Record>(o.clone())
     {
         return Ok(recorded(sheet, &record));
     }
@@ -620,7 +620,7 @@ fn whole(v: &Value) -> Option<u64> {
     (f.is_finite() && f >= 1.0 && f.fract() == 0.0 && f < 1e15).then_some(f as u64)
 }
 
-fn recorded(sheet: &mut Sheet, record: &crate::musicbrainz::Record) -> Track {
+fn recorded(sheet: &mut Sheet, record: &crate::record::Record) -> Track {
     let mut tags = Tags::new();
     for (field, offer) in tags::from_record(record) {
         for value in &offer.values {
