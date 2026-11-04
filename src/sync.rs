@@ -593,7 +593,12 @@ pub(crate) fn dropped_in<W: Write>(
             ),
         )?;
     }
-    let renames = store::moved_manual(&listed, &state, &store, &mut ready);
+    let renames = store::moved_manual(
+        &listed,
+        |k| state.facts.get(k).map(|f| f.rev.as_str()),
+        &store,
+        &mut ready,
+    );
     for (gone, to) in &renames {
         ui::info(out, &format!("Moved: {gone} is now {to}"))?;
         manifest.edit(Edit::Rename {

@@ -370,7 +370,7 @@ pub const KEPT: [Kept; 3] = [
         main: &["json"],
         beside: &[],
         kind: Kind::Tags,
-        valid: crate::musicbrainz::is_mbid,
+        valid: crate::source::is_mbid,
     },
     Kept {
         extractor: COVERART,
@@ -379,7 +379,7 @@ pub const KEPT: [Kept; 3] = [
         main: &["jpg", "png", "webp"],
         beside: &[],
         kind: Kind::Image,
-        valid: crate::musicbrainz::is_mbid,
+        valid: crate::source::is_mbid,
     },
 ];
 
@@ -1051,9 +1051,9 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
 /// which a move keeps: the file moved there, taken out of `ready`. A
 /// listed `.lrc` or picture, which `ready` never holds, is followed to
 /// one no song lists either.
-pub fn moved_manual(
+pub fn moved_manual<'a>(
     listed: &BTreeSet<SourceKey>,
-    state: &crate::state::State,
+    rev_of: impl Fn(&SourceKey) -> Option<&'a str>,
     store: &Store,
     ready: &mut Vec<SourceKey>,
 ) -> BTreeMap<SourceKey, SourceKey> {
@@ -1069,7 +1069,7 @@ pub fn moved_manual(
         .iter()
         .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
     for gone in gone {
-        let Some(was) = state.facts.get(gone).and_then(|f| stamp_of_rev(&f.rev)) else {
+        let Some(was) = rev_of(gone).and_then(stamp_of_rev) else {
             continue;
         };
         let media = matches!(gone, SourceKey::Manual(m) if kind_of(m.path()) == Some(Kind::Media));

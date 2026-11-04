@@ -909,19 +909,7 @@ fn phrase(text: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Whether `s` has the shape of an MBID: 32 hex digits in groups of 8, 4,
-/// 4, 4 and 12.
-#[must_use]
-pub fn is_mbid(s: &str) -> bool {
-    s.len() == 36
-        && s.bytes().enumerate().all(|(i, b)| {
-            if [8, 13, 18, 23].contains(&i) {
-                b == b'-'
-            } else {
-                b.is_ascii_hexdigit()
-            }
-        })
-}
+pub use crate::source::is_mbid;
 
 /// Where a record is kept in the store.
 #[must_use]

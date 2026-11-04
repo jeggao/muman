@@ -388,6 +388,20 @@ pub fn is_plain_relative(path: &Path) -> bool {
         && path.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
+/// Whether `s` has the shape of an MBID: 32 hex digits in groups of 8, 4,
+/// 4, 4 and 12.
+#[must_use]
+pub fn is_mbid(s: &str) -> bool {
+    s.len() == 36
+        && s.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
