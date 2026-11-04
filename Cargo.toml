@@ -1,11 +1,11 @@
 [package]
 name = "muman"
-version = "0.10.0"
 description = "Keep a music library in step with a song list, each song made from the best of its sources."
-edition = "2024"
-rust-version = "1.89"
-license = "AGPL-3.0-only"
-repository = "https://github.com/jeggao/muman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 keywords = ["music", "library", "yt-dlp", "ffmpeg", "tagging"]
 categories = ["command-line-utilities", "multimedia::audio"]
 readme = "README.md"
@@ -72,6 +72,15 @@ workspace = true
 
 [workspace]
 members = [".", "xtask"]
+
+# What every crate of muman shares; they are released together, at one
+# version.
+[workspace.package]
+version = "0.10.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+repository = "https://github.com/jeggao/muman"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
