@@ -92,7 +92,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
     let store = Store::scan(dirs)?;
     // A source a sync fetches is there by the time it plans; one it does
     // not, as a file of the user's own or one whose fetch failed lately, is not.
-    let due = crate::sync::due(&manifest, &store, &state.failures, false, state::now_secs());
+    let due = crate::due::due(&manifest, &store, &state.failures, false, state::now_secs());
     let on_disk: BTreeSet<SourceKey> = manifest
         .keys()
         .into_iter()

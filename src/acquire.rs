@@ -663,14 +663,14 @@ impl<R: Runner, W: Write> Acquire<'_, R, W> {
         retry: bool,
     ) -> Result<(bool, Vec<(SourceKey, String)>)> {
         let held = |k: &SourceKey| manifest.song_with(k).and_then(|s| s.held.get(k));
-        let due = crate::sync::due(manifest, self.store, failures, retry, state::now_secs());
+        let due = crate::due::due(manifest, self.store, failures, retry, state::now_secs());
         let remote = |k: &SourceKey| matches!(k, SourceKey::Remote { .. });
         // A damaged download is fetched again as a missing one is, its
         // whole copy taking the damaged one's place.
         let refetched = due
             .now
             .iter()
-            .filter(|(k, f)| remote(k) && **f == crate::sync::Fetch::Damaged)
+            .filter(|(k, f)| remote(k) && **f == crate::due::Fetch::Damaged)
             .count();
         if refetched > 0 {
             crate::ui::info(

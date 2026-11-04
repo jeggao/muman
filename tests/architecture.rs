@@ -668,7 +668,7 @@ fn a_provider_s_name_is_spelled_in_one_place() {
 /// Where whether a failed fetch is due again is judged: what a sync
 /// fetches is decided once, so the fetches, `status` and `info` agree.
 const FETCH_DUE: &[(&str, &str)] = &[
-    ("sync.rs", "what a sync fetches of the listed sources"),
+    ("due.rs", "what a sync fetches of the listed sources"),
     ("lookup.rs", "a lookup's record fetched again"),
     ("state.rs", "how long a failure waits"),
 ];

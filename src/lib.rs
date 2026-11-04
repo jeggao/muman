@@ -28,6 +28,7 @@ pub mod cues;
 pub mod defaults;
 pub mod dirs;
 pub mod download;
+pub mod due;
 pub mod duplicates;
 pub mod editor;
 pub mod errors;
