@@ -116,6 +116,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
         &[
             "state",
             "resolve",
+            "levels",
             "artifact",
             "reconcile",
             "render",
@@ -162,9 +163,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("aria2", "manifest"),
     ("aria2", "sync"),
     ("history", "change"),
-    ("loudness", "resolve"),
-    ("loudness", "settings"),
-    ("loudness", "state"),
     ("manifest", "state"),
     ("migrate", "lookup"),
     ("naming", "settings"),

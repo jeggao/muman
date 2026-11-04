@@ -370,7 +370,7 @@ pub(crate) fn resolve_songs(
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
     }
-    crate::loudness::settle(&mut resolution.planned, state, settings);
+    crate::levels::settle(&mut resolution.planned, state, settings);
     separate(&mut resolution.planned, &resolver.naming, &|path, plan| {
         crate::artifact::parts(plan).files(path)
     });

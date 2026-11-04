@@ -48,6 +48,7 @@ pub mod identify;
 pub mod info;
 pub mod integrity;
 pub mod lang;
+pub mod levels;
 pub mod library;
 pub mod limit;
 pub mod lookup;
