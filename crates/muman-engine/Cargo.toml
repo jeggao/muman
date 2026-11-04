@@ -18,10 +18,10 @@ testing = [
 ]
 
 [dependencies]
-muman-config = { path = "../muman-config", version = "=0.10.0" }
-muman-core = { path = "../muman-core", version = "=0.10.0" }
-muman-media = { path = "../muman-media", version = "=0.10.0" }
-muman-net = { path = "../muman-net", version = "=0.10.0" }
+muman-config.workspace = true
+muman-core.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
 anstream = "1"
 anyhow = "1"
 filetime = "0.2"
@@ -37,10 +37,10 @@ unicode-normalization = "0.1"
 unicode-width = "0.2"
 
 [dev-dependencies]
-muman-config = { path = "../muman-config", features = ["testing"] }
-muman-core = { path = "../muman-core", features = ["testing"] }
-muman-media = { path = "../muman-media", features = ["testing"] }
-muman-net = { path = "../muman-net", features = ["testing"] }
+muman-config = { workspace = true, features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

@@ -12,11 +12,11 @@ readme = "README.md"
 exclude = [".github/", "xtask/"]
 
 [dependencies]
-muman-config = { path = "crates/muman-config", version = "=0.10.0" }
-muman-core = { path = "crates/muman-core", version = "=0.10.0" }
-muman-engine = { path = "crates/muman-engine", version = "=0.10.0" }
-muman-media = { path = "crates/muman-media", version = "=0.10.0" }
-muman-net = { path = "crates/muman-net", version = "=0.10.0" }
+muman-config.workspace = true
+muman-core.workspace = true
+muman-engine.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
@@ -67,6 +67,14 @@ rust-version = "1.89"
 license = "AGPL-3.0-only"
 repository = "https://github.com/jeggao/muman"
 
+# The workspace's crates, each pinned at the one version they share.
+[workspace.dependencies]
+muman-config = { path = "crates/muman-config", version = "=0.10.0" }
+muman-core = { path = "crates/muman-core", version = "=0.10.0" }
+muman-engine = { path = "crates/muman-engine", version = "=0.10.0" }
+muman-media = { path = "crates/muman-media", version = "=0.10.0" }
+muman-net = { path = "crates/muman-net", version = "=0.10.0" }
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"
@@ -97,9 +105,9 @@ opt-level = 3
 strip = "symbols"
 
 [dev-dependencies]
-muman-config = { path = "crates/muman-config", features = ["testing"] }
-muman-core = { path = "crates/muman-core", features = ["testing"] }
-muman-engine = { path = "crates/muman-engine", features = ["testing"] }
-muman-media = { path = "crates/muman-media", features = ["testing"] }
-muman-net = { path = "crates/muman-net", features = ["testing"] }
+muman-config = { workspace = true, features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-engine = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }

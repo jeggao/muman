@@ -13,9 +13,9 @@ repository.workspace = true
 testing = ["muman-core/testing", "muman-media/testing", "muman-net/testing"]
 
 [dependencies]
-muman-core = { path = "../muman-core", version = "=0.10.0" }
-muman-media = { path = "../muman-media", version = "=0.10.0" }
-muman-net = { path = "../muman-net", version = "=0.10.0" }
+muman-core.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
 anyhow = "1"
 directories = "6"
 regex = "1"
@@ -30,9 +30,9 @@ unicode-segmentation = "1"
 which = "8"
 
 [dev-dependencies]
-muman-core = { path = "../muman-core", features = ["testing"] }
-muman-media = { path = "../muman-media", features = ["testing"] }
-muman-net = { path = "../muman-net", features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true
