@@ -14,7 +14,7 @@ use crate::store::Store;
 
 /// Why a sync fetches a listed source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Fetch {
+pub enum Fetch {
     /// The store holds no file of it.
     Missing,
     /// The store's copy is damaged, and a whole one takes its place.
@@ -24,7 +24,7 @@ pub(crate) enum Fetch {
 /// What a sync fetches of the listed sources, and what it would but holds
 /// off, as its fetch failed lately.
 #[derive(Debug, Default)]
-pub(crate) struct Due {
+pub struct Due {
     pub now: BTreeMap<SourceKey, Fetch>,
     pub waiting: BTreeSet<SourceKey>,
 }
@@ -36,7 +36,8 @@ pub(crate) struct Due {
 /// failed lately waits, as one fetched again too often no longer comes,
 /// unless `retry`. A torrent's file no fetch mends is not fetched while
 /// the store holds it, `retry` or not.
-pub(crate) fn due(
+#[must_use]
+pub fn due(
     manifest: &Manifest,
     store: &Store,
     failures: &BTreeMap<SourceKey, state::Failure>,
@@ -80,10 +81,7 @@ pub(crate) fn due(
 /// The listed torrent files the store lacks or holds damaged, by their
 /// torrent's hash, each said; those that failed lately wait unless
 /// `retry`, and are said as waiting.
-pub(crate) fn torrents<W: Write>(
-    out: &mut W,
-    due: &Due,
-) -> Result<BTreeMap<String, Vec<SourceKey>>> {
+pub fn torrents<W: Write>(out: &mut W, due: &Due) -> Result<BTreeMap<String, Vec<SourceKey>>> {
     let torrent = |k: &&SourceKey| matches!(k, SourceKey::Torrent(_));
     let waiting = due.waiting.iter().filter(torrent).count();
     if waiting > 0 {

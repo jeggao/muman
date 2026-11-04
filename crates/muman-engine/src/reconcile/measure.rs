@@ -538,7 +538,7 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
 
 /// Make every comparison the songs' resolving may ask for that is not
 /// made already at the sources' revisions. Returns whether any was.
-pub(crate) fn compare<R: Runner, W: Write>(
+pub fn compare<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
     songs: &[Song],

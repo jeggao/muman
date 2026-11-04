@@ -187,7 +187,7 @@ impl Showing {
 
 /// What a sync does with a song, as `status` counts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Fate {
+pub enum Fate {
     New,
     Changed,
     Again,
@@ -219,7 +219,8 @@ impl Fate {
 }
 
 /// What `status` says a sync does with a song, its file made by `before`.
-pub(crate) fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
+#[must_use]
+pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) {
     match d {
         Doing::Keep => (Fate::Kept, "up to date".to_string()),
         Doing::Move { retag: false, .. } => (Fate::Moved, "moved".to_string()),

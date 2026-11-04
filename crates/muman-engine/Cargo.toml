@@ -1,0 +1,46 @@
+[package]
+name = "muman-engine"
+description = "The engine of muman: the state, songs resolved to plans, the library written, lookups and fetches, history and undo."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone, as muman-core's: the hooks and fakes the other
+# crates' tests share, and a state store that does not wait for the disk.
+testing = [
+    "muman-config/testing",
+    "muman-core/testing",
+    "muman-media/testing",
+    "muman-net/testing",
+]
+
+[dependencies]
+muman-config = { path = "../muman-config", version = "=0.10.0" }
+muman-core = { path = "../muman-core", version = "=0.10.0" }
+muman-media = { path = "../muman-media", version = "=0.10.0" }
+muman-net = { path = "../muman-net", version = "=0.10.0" }
+anstream = "1"
+anyhow = "1"
+filetime = "0.2"
+lofty = "0.25"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.11"
+tempfile = "3"
+trash = "5"
+unicode-normalization = "0.1"
+unicode-width = "0.2"
+
+[dev-dependencies]
+muman-config = { path = "../muman-config", features = ["testing"] }
+muman-core = { path = "../muman-core", features = ["testing"] }
+muman-media = { path = "../muman-media", features = ["testing"] }
+muman-net = { path = "../muman-net", features = ["testing"] }
+
+[lints]
+workspace = true

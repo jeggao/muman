@@ -54,7 +54,7 @@ pub(super) fn folder_there(library: &Path, path: &Path, plan: &Plan) -> bool {
 /// decision about it, to keep, move, guard, write or delete, is made of
 /// that file; a song no file was made from has none. Ties go to the song
 /// listed first, then to the path that sorts first.
-pub(crate) fn files_of(
+pub fn files_of(
     songs: impl IntoIterator<Item = usize>,
     manifest: &Manifest,
     old: &BTreeMap<PathBuf, Written>,
@@ -89,7 +89,7 @@ pub(crate) fn files_of(
 /// What a sync does with one song, decided for every song before any is
 /// done, so a sync does what `status` says it would.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Doing {
+pub enum Doing {
     /// Its file is as it would be written.
     Keep,
     /// Its file moves to the song's path, its tags written again when
@@ -120,7 +120,8 @@ pub(crate) enum Doing {
 /// What a sync decides for every song, before it does any: each song's
 /// file, the sources holding otherwise than it was built from, those
 /// damaged since, and what it does with each.
-pub(crate) struct Foreseen {
+#[derive(Debug)]
+pub struct Foreseen {
     pub files: BTreeMap<usize, PathBuf>,
     pub drifts: Vec<Drift>,
     pub damaged: BTreeSet<usize>,
@@ -129,7 +130,7 @@ pub(crate) struct Foreseen {
 
 /// What a sync of `planned` into `library` decides, `force` and `accept`
 /// as given: the one place `sync`, `status` and `info` decide it.
-pub(crate) fn foresee(
+pub fn foresee(
     manifest: &Manifest,
     state: &State,
     planned: &[PlannedSong],

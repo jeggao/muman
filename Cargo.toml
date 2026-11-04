@@ -14,6 +14,7 @@ exclude = [".github/", "xtask/"]
 [dependencies]
 muman-config = { path = "crates/muman-config", version = "=0.10.0" }
 muman-core = { path = "crates/muman-core", version = "=0.10.0" }
+muman-engine = { path = "crates/muman-engine", version = "=0.10.0" }
 muman-media = { path = "crates/muman-media", version = "=0.10.0" }
 muman-net = { path = "crates/muman-net", version = "=0.10.0" }
 anstream = "1"
@@ -28,9 +29,6 @@ filetime = "0.2"
 icu_properties = "2.3"
 lofty = "0.25"
 regex = "1"
-rusqlite = { version = "0.41.1", features = ["bundled"] }
-same-file = "1"
-serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha1 = "0.11"
 sha2 = "0.11"
@@ -39,8 +37,6 @@ tempfile = "3"
 terminal_size = "0.4"
 toml = "1"
 toml_edit = "0.25"
-trash = "5"
-unicode-normalization = "0.1"
 unicode-width = "0.2"
 which = "8"
 zip = { version = "9", default-features = false }
@@ -51,6 +47,7 @@ zip = { version = "9", default-features = false }
 testing = [
     "muman-config/testing",
     "muman-core/testing",
+    "muman-engine/testing",
     "muman-media/testing",
     "muman-net/testing",
 ]
@@ -59,7 +56,7 @@ testing = [
 workspace = true
 
 [workspace]
-members = [".", "crates/muman-config", "crates/muman-core", "crates/muman-media", "crates/muman-net", "xtask"]
+members = [".", "crates/muman-config", "crates/muman-core", "crates/muman-engine", "crates/muman-media", "crates/muman-net", "xtask"]
 
 # What every crate of muman shares; they are released together, at one
 # version.
@@ -102,6 +99,7 @@ strip = "symbols"
 [dev-dependencies]
 muman-config = { path = "crates/muman-config", features = ["testing"] }
 muman-core = { path = "crates/muman-core", features = ["testing"] }
+muman-engine = { path = "crates/muman-engine", features = ["testing"] }
 muman-media = { path = "crates/muman-media", features = ["testing"] }
 muman-net = { path = "crates/muman-net", features = ["testing"] }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }

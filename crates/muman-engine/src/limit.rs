@@ -234,7 +234,7 @@ fn by_audio(state: &State) -> ByAudio<'_> {
 
 /// A rung's estimated audio bytes and their standard deviation, from
 /// the facts alone.
-pub(crate) fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
+pub fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
     let audio = facts.audio.as_ref();
     let measured = audio.and_then(|a| a.bytes).map(|b| b as f64);
     let guess = |codec: Codec| {
