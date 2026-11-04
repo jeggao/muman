@@ -38,6 +38,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "relpath",
             "lang",
             "platform",
+            "portable",
             "parallel",
             "template",
             "ui",
@@ -163,7 +164,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("manifest", "state"),
     ("naming", "settings"),
     ("tagfile", "musicbrainz"),
-    ("torrent", "naming"),
 ];
 
 /// The upward references only tests make.

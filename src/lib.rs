@@ -68,6 +68,7 @@ pub mod parallel;
 pub mod picture;
 pub mod platform;
 pub mod plugins;
+pub mod portable;
 pub mod probe;
 pub mod progress;
 pub mod provider;
