@@ -7,7 +7,7 @@
 //! needs aria2c; CI runs it on every platform with
 //! `cargo test --test torrent -- --ignored`. Nothing leaves the machine:
 //! DHT, peer exchange and local discovery are off, and the one tracker
-//! names the one seeder.
+//! names only the seeders that announced to it.
 
 // Tests make and change the files they check.
 #![expect(clippy::disallowed_methods)]
@@ -90,33 +90,37 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// An HTTP tracker on a loopback port that names the one peer at `peer`
-/// to every announce, until the process ends; its announce address.
-fn tracker(peer: u16) -> String {
-    tracker_heard(peer).0
-}
-
-/// [`tracker`], each announcing peer's port sent on the receiver as it
-/// announces.
-fn tracker_heard(peer: u16) -> (String, mpsc::Receiver<u16>) {
+/// An HTTP tracker on a loopback port, until the process ends: it names
+/// to every announce each seeder that announced, by the port it gave, and
+/// sends that port on the receiver as it does. A port picked here and
+/// handed to aria2c may be taken by then, so the swarm is told the ports
+/// its peers did bind.
+fn tracker() -> (String, mpsc::Receiver<u16>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let (heard, hear) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut seeders: Vec<u16> = Vec::new();
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
             let mut request = [0; 4096];
             let read = stream.read(&mut request).unwrap_or(0);
             let request = String::from_utf8_lossy(&request[..read]);
-            if let Some(port) = request
-                .split_once("&port=")
-                .and_then(|(_, rest)| rest.split('&').next()?.parse().ok())
+            let port = param(&request, "port").and_then(|p| p.parse().ok());
+            if let Some(port) = port
+                && param(&request, "left") == Some("0")
+                && !seeders.contains(&port)
             {
+                seeders.push(port);
                 let _ = heard.send(port);
             }
-            let mut body = b"d8:intervali5e5:peers6:".to_vec();
-            body.extend([127, 0, 0, 1]);
-            body.extend(peer.to_be_bytes());
+            let mut peers = Vec::new();
+            for seeder in &seeders {
+                peers.extend([127, 0, 0, 1]);
+                peers.extend(seeder.to_be_bytes());
+            }
+            let mut body = format!("d8:intervali5e5:peers{}:", peers.len()).into_bytes();
+            body.extend(peers);
             body.extend(b"e");
             let _ = write!(
                 stream,
@@ -129,6 +133,24 @@ fn tracker_heard(peer: u16) -> (String, mpsc::Receiver<u16>) {
     (format!("http://127.0.0.1:{port}/announce"), hear)
 }
 
+/// The value of `name` in the query of `request`'s first line.
+fn param<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    let line = request.lines().next()?;
+    let query = line.split_once('?')?.1.split(' ').next()?;
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// Wait until a seeder announces to the tracker that `heard` is of: it
+/// does once it has checked its files and can send them, so a fetch
+/// started before then could stall.
+fn until_seeded(heard: &mpsc::Receiver<u16>) {
+    heard
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the seeder announces");
+}
+
 /// No DHT, peer exchange or local discovery: the tracker alone.
 const ALONE: [&str; 3] = [
     "--enable-dht=false",
@@ -136,18 +158,20 @@ const ALONE: [&str; 3] = [
     "--bt-enable-lpd=false",
 ];
 
-/// An aria2c seeding the torrent `metainfo` from `dir` on `port`.
+/// An aria2c seeding the torrent `metainfo` from `dir`, on the first of
+/// a few loopback ports free when it binds.
 struct Seeder(Child);
 
 impl Seeder {
-    fn start(metainfo: &Path, dir: &Path, port: u16) -> Self {
+    fn start(metainfo: &Path, dir: &Path) -> Self {
+        let ports: Vec<String> = (0..3).map(|_| free_port().to_string()).collect();
         let child = Command::new(std::env::var_os("MUMAN_ARIA2C").unwrap_or("aria2c".into()))
             .args(ALONE)
             .args([
                 "--no-conf=true",
                 "--check-integrity=true",
                 "--seed-ratio=0.0",
-                &format!("--listen-port={port}"),
+                &format!("--listen-port={}", ports.join(",")),
                 &format!("--dir={}", dir.display()),
             ])
             .arg(metainfo)
@@ -175,8 +199,7 @@ fn aria2c_fetches_the_files_muman_selects_from_a_swarm() {
         .expect("found, at or above its floor");
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let seed_port = free_port();
-    let announce = tracker(seed_port);
+    let (announce, heard) = tracker();
     let name = "Lantern Weather";
     let notes = b"Marlo Venn, recorded at home".repeat(1000);
     let pad = vec![0; PIECE - notes.len() % PIECE];
@@ -196,7 +219,8 @@ fn aria2c_fetches_the_files_muman_selects_from_a_swarm() {
     }
     let seed_meta = root.join("seed.torrent");
     std::fs::write(&seed_meta, &bytes).unwrap();
-    let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
+    let _seeder = Seeder::start(&seed_meta, &seed);
+    until_seeded(&heard);
 
     let (store, partial) = (root.join("store"), root.join("partial"));
     // A login, which goes to a config file aria2c must read.
@@ -308,8 +332,7 @@ fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
         .expect("found, at or above its floor");
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let seed_port = free_port();
-    let announce = tracker(seed_port);
+    let (announce, heard) = tracker();
     let name = "Rooms of Salt";
     let files: Vec<(&[&str], Vec<u8>, bool)> =
         vec![(&["Rooms of Salt.flac"], SONG.to_vec(), false)];
@@ -320,7 +343,8 @@ fn a_damaged_copy_has_its_bad_pieces_fetched_from_the_swarm() {
     std::fs::write(seed.join(name).join("Rooms of Salt.flac"), SONG).unwrap();
     let seed_meta = root.join("seed.torrent");
     std::fs::write(&seed_meta, &bytes).unwrap();
-    let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
+    let _seeder = Seeder::start(&seed_meta, &seed);
+    until_seeded(&heard);
 
     let mut damaged = SONG.to_vec();
     let middle = damaged.len() / 2;
@@ -399,8 +423,7 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
         .expect("found, at or above its floor");
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let seed_port = free_port();
-    let (announce, heard) = tracker_heard(seed_port);
+    let (announce, heard) = tracker();
     let nobody = format!("http://127.0.0.1:{}/announce", free_port());
     let seeded = "Lantern Weather";
     let files: Vec<(&[&str], Vec<u8>, bool)> = vec![(&["Paper Comets.flac"], SONG.to_vec(), false)];
@@ -411,14 +434,8 @@ fn torrents_fetched_in_one_run_end_each_on_their_own() {
     std::fs::write(seed.join(seeded).join("Paper Comets.flac"), SONG).unwrap();
     let seed_meta = root.join("seed.torrent");
     std::fs::write(&seed_meta, &bytes).unwrap();
-    let _seeder = Seeder::start(&seed_meta, &seed, seed_port);
-    // The seeder announces once it has checked its files and can send
-    // them; fetched before then, the seeded torrent could stall too.
-    while heard
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the seeder announces")
-        != seed_port
-    {}
+    let _seeder = Seeder::start(&seed_meta, &seed);
+    until_seeded(&heard);
     let lost_bytes = metainfo(
         "The Glass Orchards",
         &[(&["Rooms of Salt.flac"], vec![5; 3000], false)],
