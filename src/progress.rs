@@ -628,6 +628,8 @@ impl Layout {
 
 /// The terminal's width in columns, or a common width when stderr is no
 /// terminal.
+// Asks the terminal on stderr how wide it is.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn columns() -> usize {
     terminal_size::terminal_size_of(io::stderr()).map_or(80, |(w, _)| usize::from(w.0))
 }

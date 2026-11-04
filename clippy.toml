@@ -1,8 +1,9 @@
 # Proper nouns doc comments name; `..` keeps clippy's own list.
 doc-valid-idents = ["YouTube", "FFmpeg", "SQLite", "LRCLIB", "MiniJinja", "MusicBrainz", "AcoustID", "WavPack", "APEv2", "ReplayGain", "WebVTT", "SubRip", ".."]
 
-# A call that changes a file, allowed only where `#[expect]` says why, as
-# tests/architecture.rs lists the files that may.
+# A call that changes a file, runs a program or reaches the terminal,
+# allowed only where `#[expect]` says why; tests/architecture.rs lists the
+# files that may change files.
 disallowed-methods = [
     { path = "std::fs::write", reason = "changes a file: only where an `#[expect]` says why" },
     { path = "std::fs::rename", reason = "changes a file: only where an `#[expect]` says why" },
@@ -13,4 +14,8 @@ disallowed-methods = [
     { path = "std::fs::remove_dir_all", reason = "changes a file: only where an `#[expect]` says why" },
     { path = "std::fs::File::create", reason = "changes a file: only where an `#[expect]` says why" },
     { path = "std::fs::OpenOptions::new", reason = "changes a file: only where an `#[expect]` says why" },
+    { path = "std::process::Command::new", reason = "runs a program: only where an `#[expect]` says why" },
+    { path = "std::io::stdin", reason = "reaches the terminal: only where an `#[expect]` says why" },
+    { path = "std::io::stdout", reason = "reaches the terminal: only where an `#[expect]` says why" },
+    { path = "std::io::stderr", reason = "reaches the terminal: only where an `#[expect]` says why" },
 ]

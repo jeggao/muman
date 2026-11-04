@@ -491,6 +491,8 @@ fn open(read: &Read, picked: &[usize], library: &Path) -> Result<Vec<Opened>> {
 /// line and its program found with `PATHEXT`, so `code --wait` finds
 /// `code.cmd`, and the path is passed as an argument of its own rather
 /// than through cmd.exe's quoting.
+// Runs the editor the user names.
+#[expect(clippy::disallowed_methods)]
 pub fn launch(path: &Path) -> Result<()> {
     let editor = ["VISUAL", "EDITOR"]
         .iter()
