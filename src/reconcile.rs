@@ -172,7 +172,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let _library = if opts.dry_run {
         None
     } else {
-        Some(Lock::library(&dirs.library)?)
+        Some(Lock::library(&dirs.library, dirs.lock_folder()?))
     };
     let mut manifest = Manifest::load(home)?;
     if let Some(run) = run.as_deref_mut() {

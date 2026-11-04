@@ -110,6 +110,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         let listed = crate::testing::metainfo("Lantern Weather", &["a.flac", "b.flac"]);
         let listed_hash = crate::torrent::Metainfo::read(&listed)
@@ -177,6 +178,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         let hash = "0123456789abcdef0123456789abcdef01234567";
         let kept = [

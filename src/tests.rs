@@ -54,6 +54,7 @@ impl Setup {
         job.dirs = Dirs {
             home: self.dir.path().join("home"),
             library: self.dir.path().join("lib"),
+            locks: Some(self.dir.path().to_path_buf()),
         };
         job
     }
@@ -2738,6 +2739,7 @@ fn edit_shows_where_each_tag_comes_from_and_hides_what_was_held() {
     let dirs = crate::dirs::Dirs {
         home: s.dir.path().join("home"),
         library: s.dir.path().join("lib"),
+        locks: Some(s.dir.path().to_path_buf()),
     };
     let seen = std::cell::RefCell::new(String::new());
     let mut editor = |path: &std::path::Path| -> anyhow::Result<()> {

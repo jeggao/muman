@@ -7,6 +7,7 @@ fn home() -> (tempfile::TempDir, Dirs) {
     let dirs = Dirs {
         home: dir.path().join("home"),
         library: dir.path().join("lib"),
+        locks: Some(dir.path().to_path_buf()),
     };
     std::fs::create_dir_all(&dirs.home).unwrap();
     for id in ["aaaaaaaaaaa", "bbbbbbbbbbb"] {

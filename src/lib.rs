@@ -179,6 +179,7 @@ impl Job {
             dirs: Dirs {
                 home: cli.home.unwrap_or(defaults.home),
                 library: cli.library.unwrap_or(defaults.library),
+                locks: defaults.cache.as_ref().map(|c| c.join("locks")),
             },
             command: cli.command,
             verbose: cli.verbose,
@@ -529,7 +530,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let _runs = Lock::runs(&dirs.home)?;
             let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
-                let _library = Lock::library(&dirs.library)?;
+                let _library = Lock::library(&dirs.library, dirs.lock_folder()?);
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(

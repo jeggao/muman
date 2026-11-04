@@ -452,6 +452,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         std::fs::create_dir_all(&dirs.home).unwrap();
         let song = |id: &str, size: u64| {
@@ -512,6 +513,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         std::fs::create_dir_all(&dirs.home).unwrap();
         let listing = |title: &str| {
@@ -561,6 +563,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         std::fs::create_dir_all(dirs.library.join("A")).unwrap();
         std::fs::create_dir_all(&dirs.home).unwrap();
