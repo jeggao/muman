@@ -85,7 +85,6 @@ use serde::{Deserialize, Deserializer};
 
 use crate::http::{HttpTransport, Service, Throttle};
 use crate::lrclib::Query;
-use crate::music;
 
 /// The record a lookup takes must be within this of the song's length: a
 /// margin for the silence a video or a rip adds around the same master.
@@ -361,9 +360,9 @@ fn artist_ids(credit: &[Credit]) -> Vec<String> {
         .collect()
 }
 
-/// Whether two names hold one another, by [`music::names_match`].
+/// Whether two names hold one another, by [`crate::similar::names_match`].
 fn same(a: &str, b: &str) -> bool {
-    music::names_match(a, b).is_some()
+    crate::similar::names_match(a, b).is_some()
 }
 
 /// The artist a search asks for: the first of the song's, which are
@@ -515,7 +514,7 @@ impl Recording {
         let best = self.best(album);
         let class = best.map(|f| f.class(album));
         (
-            std::cmp::Reverse(music::names_match(&self.title, &q.title)),
+            std::cmp::Reverse(crate::similar::names_match(&self.title, &q.title)),
             other_mix(&self.disambiguation, q.mono),
             class.is_none(),
             class,
@@ -743,7 +742,7 @@ impl Client<'_> {
             .iter()
             .filter(|g| is_mbid(&g.id))
             .filter(|g| same(&names(&g.credit).join(" "), first_artist(artist)))
-            .filter_map(|g| Some((music::names_match(&g.title, album)?, g)))
+            .filter_map(|g| Some((crate::similar::names_match(&g.title, album)?, g)))
             .min_by_key(|(exact, g)| {
                 (
                     std::cmp::Reverse(*exact),

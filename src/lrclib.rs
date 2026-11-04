@@ -6,7 +6,7 @@
 //! by title and artist. A record fits when its length is within 2 s of
 //! the song's audio, and its track and artist names hold the song's,
 //! compared as YouTube Music's are, by letters and digits without
-//! featured artists (`music::names_match`). Of those, one with words
+//! featured artists (`similar::names_match`). Of those, one with words
 //! wins over one marked instrumental, then one named exactly the song's
 //! title over one whose name only holds it, as `Rain (Live)` holds
 //! `Rain`, then a timed one, then the closest in length. A search lists
@@ -35,8 +35,6 @@ use std::time::Duration;
 use crate::http::{HttpTransport, Service, Throttle};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-
-use crate::music;
 
 /// The record a lookup takes must be within this of the song's length;
 /// LRCLIB's own lookup allows as much.
@@ -106,16 +104,19 @@ impl Record {
     }
 
     /// How closely its name is the query's title.
-    fn titled(&self, q: &Query) -> Option<music::Exactness> {
-        music::names_match(self.track_name.as_deref().unwrap_or_default(), &q.title)
+    fn titled(&self, q: &Query) -> Option<crate::similar::Exactness> {
+        crate::similar::names_match(self.track_name.as_deref().unwrap_or_default(), &q.title)
     }
 
     /// Whether it is the query's song by its names and length.
     fn fits(&self, q: &Query) -> bool {
         self.gap(q.seconds) <= MAX_GAP_S
             && self.titled(q).is_some()
-            && music::names_match(self.artist_name.as_deref().unwrap_or_default(), &q.artist)
-                .is_some()
+            && crate::similar::names_match(
+                self.artist_name.as_deref().unwrap_or_default(),
+                &q.artist,
+            )
+            .is_some()
     }
 
     /// The `.lrc` it is kept as: timed lines when it has them, its

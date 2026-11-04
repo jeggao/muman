@@ -877,5 +877,39 @@ pub fn assign(cost: &[Vec<i64>]) -> Vec<usize> {
     out
 }
 
+/// Letters and digits only, lower-cased and in NFKC, so punctuation,
+/// spacing, case and full-width forms never decide a match.
+pub(crate) fn normalize(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfkc()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// How closely one name holds another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Exactness {
+    /// One holds the other, as `Rain` and `Rain (Live)` do.
+    Holds,
+    Exact,
+}
+
+/// Whether two names are one, by their letters and digits without
+/// featured artists, or one holds the other; `None` when neither.
+pub(crate) fn names_match(a: &str, b: &str) -> Option<Exactness> {
+    let (a, b) = (
+        normalize(clean::without_credits(a)),
+        normalize(clean::without_credits(b)),
+    );
+    if a.is_empty() || b.is_empty() {
+        None
+    } else if a == b {
+        Some(Exactness::Exact)
+    } else {
+        (a.contains(&b) || b.contains(&a)).then_some(Exactness::Holds)
+    }
+}
+
 #[cfg(test)]
 mod tests;
