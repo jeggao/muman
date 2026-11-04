@@ -1110,6 +1110,8 @@ pub(crate) fn visible(name: &str) -> bool {
 /// walks muman's own folders, whose links the user made; a folder given
 /// to `add` is walked by [`crate::given::Folder::walk`], which follows a
 /// link only to a place inside it.
+// Walks muman's own folders, whose links the user made.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn files_below(
     dir: &Path,
     depth: usize,

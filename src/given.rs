@@ -102,6 +102,8 @@ impl Folder {
     /// # Errors
     ///
     /// A folder below that cannot be read.
+    // Walks what the user gives `add`, a link followed only to a place inside it.
+    #[expect(clippy::disallowed_methods)]
     pub fn walk(&self, depth: usize) -> Result<Walked> {
         let root = if self.path.as_os_str().is_empty() {
             Path::new(".")
