@@ -496,7 +496,7 @@ impl Asking<'_> {
     fn verdict(
         &self,
         p: Provider,
-        config: &crate::provider::Config,
+        config: &crate::providers::Config,
         skipped: Option<String>,
         out: Outputs,
     ) -> Verdict {
@@ -599,7 +599,7 @@ impl Asking<'_> {
     fn again(
         &self,
         p: Provider,
-        settings: &crate::provider::Settings,
+        settings: &crate::providers::Settings,
         from: SourceKey,
         record: SourceKey,
     ) -> Verdict {

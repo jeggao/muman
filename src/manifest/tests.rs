@@ -852,8 +852,8 @@ fn the_new_song_list_sets_every_default_as_the_code_has_it() {
         crate::settings::Settings::default()
     );
     assert_eq!(
-        crate::provider::read(&doc).unwrap(),
-        crate::provider::Config::default()
+        crate::providers::read(&doc).unwrap(),
+        crate::providers::Config::default()
     );
     for p in Provider::ALL.into_iter().filter(|p| p.findable()) {
         let table = doc["providers"][p.name()].as_table().unwrap();
