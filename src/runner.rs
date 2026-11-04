@@ -224,6 +224,8 @@ impl System {
     }
 
     /// `cmd` with its tool resolved, ready to spawn.
+    // Every program muman runs is started here.
+    #[expect(clippy::disallowed_methods)]
     fn command(&self, cmd: &[OsString]) -> Result<Command> {
         let program: Vec<OsString> = match tools::TOOLS.iter().position(|t| cmd[0] == t.name) {
             Some(i) => self.tool(i)?.command.clone(),
@@ -278,6 +280,8 @@ fn locate(
 }
 
 /// What `tool`, started by `command`, prints for its version flag.
+// Runs a tool for its version.
+#[expect(clippy::disallowed_methods)]
 fn version_of(tool: &'static Tool, command: &[OsString]) -> Result<String, ToolError> {
     let program = command[0].to_string_lossy().into_owned();
     let unusable = |error: String| ToolError::Unusable {
@@ -433,6 +437,8 @@ fn without_addresses(text: &str) -> String {
 pub struct Traced<R>(pub R);
 
 impl<R: Runner> Traced<R> {
+    // Shows a traced command on stderr.
+    #[expect(clippy::disallowed_methods)]
     fn say(cmd: &[OsString]) {
         let line = redacted(cmd)
             .iter()

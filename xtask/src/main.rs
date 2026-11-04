@@ -2,8 +2,9 @@
 //! comments`, `cargo xtask commits`, `cargo xtask docs` and `cargo xtask
 //! layers`.
 
-// The rule on changing files is muman's; these checks write only their own.
-#![expect(clippy::disallowed_methods)]
+// The rules on changing files and printing are muman's; these checks
+// write only their own files and print their own findings.
+#![expect(clippy::disallowed_methods, clippy::print_stdout, clippy::print_stderr)]
 
 mod comments;
 mod commits;

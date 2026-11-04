@@ -86,6 +86,8 @@ pub struct Relay<'a, W: Write> {
 }
 
 impl<'a, W: Write> Relay<'a, W> {
+    // Asks the terminal on stderr how wide yt-dlp's line may be.
+    #[expect(clippy::disallowed_methods)]
     pub fn new(out: &'a mut W, live: bool) -> Self {
         let columns = terminal_size::terminal_size_of(std::io::stderr())
             .map_or(80, |(w, _)| usize::from(w.0));

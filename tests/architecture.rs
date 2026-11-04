@@ -66,9 +66,9 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
 }
 
 /// Every file that may change files, and why it may. A call that changes
-/// a file is one clippy's `disallowed-methods` names, which shipped code
-/// makes only where an `#[expect]` says why, or one of `atomic`'s
-/// primitives; a file the list does not name makes none.
+/// a file is one of the std calls clippy's `disallowed-methods` names,
+/// which shipped code makes only where an `#[expect]` says why, or one of
+/// `atomic`'s primitives; a file the list does not name makes none.
 const MUTATIONS: &[(&str, &str)] = &[
     (
         "atomic.rs",
@@ -149,7 +149,15 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
         "atomic::remove(",
         "atomic::rename(",
         "atomic::link(",
-        "#[expect(clippy::disallowed_methods)]",
+        "fs::write(",
+        "fs::rename(",
+        "fs::copy(",
+        "hard_link(",
+        "fs::remove_file(",
+        "fs::remove_dir(",
+        "remove_dir_all(",
+        "File::create(",
+        "OpenOptions::new(",
     ];
     let listed: BTreeSet<&str> = MUTATIONS.iter().map(|(f, _)| *f).collect();
     let changing: BTreeSet<String> = sources()

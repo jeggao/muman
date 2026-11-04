@@ -196,6 +196,8 @@ fn stop_on_signals() {
 }
 
 #[must_use]
+// Reaches the terminal: progress and messages on stderr, and the answers a prompt reads.
+#[expect(clippy::disallowed_methods)]
 pub fn run() -> ExitCode {
     stop_on_signals();
     let cli = cli::command()
@@ -284,6 +286,8 @@ pub fn run() -> ExitCode {
 /// Write `shell`'s completion script to stdout, before anything else
 /// `run` does: a package build writes the scripts where there may be no
 /// home, song list or ffmpeg, and none is needed.
+// Writes the shell completions asked for to stdout.
+#[expect(clippy::disallowed_methods)]
 fn completions(shell: clap_complete::Shell) -> ExitCode {
     match cli::completions(shell, &mut std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
