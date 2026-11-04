@@ -35,7 +35,12 @@ pub(super) fn foresee_moves<W: Write>(
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
     let (mut ready, _) = store.unlisted(&known, SystemTime::now(), settling);
-    let moved = store::moved_manual(&listed, state, store, &mut ready);
+    let moved = store::moved_manual(
+        &listed,
+        |k| state.facts.get(k).map(|f| f.rev.as_str()),
+        store,
+        &mut ready,
+    );
     for (from, to) in &moved {
         crate::ui::info(
             out,
