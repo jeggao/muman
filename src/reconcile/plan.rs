@@ -256,7 +256,7 @@ impl<'a> Resolver<'a> {
             manifest,
             settings,
             state,
-            naming: Naming::new(&settings.library, library)?.with_tail(settings.tail()),
+            naming: settings.library.naming(library)?.with_tail(settings.tail()),
             albums: Albums::of(state.facts.values().map(|f| &f.tags)),
         })
     }

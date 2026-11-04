@@ -3,7 +3,9 @@ use crate::codec::Codec;
 use crate::settings::{Cover, Library};
 
 static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
-    Naming::new(&Library::default(), std::path::Path::new("lib")).unwrap()
+    Library::default()
+        .naming(std::path::Path::new("lib"))
+        .unwrap()
 });
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 static COVER: std::sync::LazyLock<Cover> = std::sync::LazyLock::new(Cover::default);

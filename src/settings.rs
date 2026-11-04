@@ -14,9 +14,11 @@
 //! setting is never silently ignored.
 //!
 //! A table a lower layer reads is defined in the module that applies it
-//! and re-exported here: `[loudness]`, `[ytdlp]`, `[torrent]` and the
-//! `format` of `[[lyrics.out]]`. Then that layer needs nothing from
-//! this module, which sits above it.
+//! and re-exported here: `[loudness]`, `[ytdlp]`, `[torrent]`, the
+//! `format` of `[[lyrics.out]]` and `[library] restrict`. Then that layer
+//! needs nothing from this module, which sits above it. The naming of
+//! songs is built here from `[library]` ([`Library::naming`]), so naming
+//! takes no table of this module.
 //!
 //! Each aspect a song is made of keeps what decides it in its own table:
 //! `[audio.pick]` and `[cover.pick]` hold the measures their sources are
@@ -64,6 +66,7 @@ use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
 };
+pub use crate::naming::Restrict;
 use crate::quality;
 pub use crate::units::Size;
 use crate::units::serde_as;
@@ -211,6 +214,23 @@ impl Library {
     pub fn folder(&self, home: &Path) -> Option<PathBuf> {
         whole(self.path.as_deref()?.trim(), home)
     }
+
+    /// How songs are named in a library in `library`, whose length counts
+    /// against `max_path`.
+    pub fn naming(&self, library: &Path) -> Result<crate::naming::Naming> {
+        Ok(crate::naming::Naming {
+            template: crate::template::Template::new(&self.template)?,
+            replace: crate::naming::replacements(self.restrict, &self.replace),
+            restrict: self.restrict,
+            max_name_bytes: self.max_name_bytes,
+            tail: crate::naming::AUDIO_TAIL,
+            max_folder: self.max_folder_bytes,
+            room: crate::naming::room(self.max_path, library),
+            unknown_artist: self.unknown_artist.clone(),
+            unknown_album: self.unknown_album.clone(),
+            untitled: self.untitled.clone(),
+        })
+    }
 }
 
 /// The path `path` names: `~/…` in the user's home, else relative to
@@ -229,21 +249,6 @@ fn whole(path: &str, home: &Path) -> Option<PathBuf> {
     } else {
         home.join(expanded)
     })
-}
-
-/// How strictly names are made safe, beyond replacing `/` and control
-/// characters, which every filesystem refuses.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Restrict {
-    /// Only what this filesystem refuses.
-    None,
-    /// What Windows, FAT and most phones refuse too, on every system, so
-    /// a library copies anywhere.
-    #[default]
-    Windows,
-    /// As `windows`, and everything transliterated to ASCII.
-    Ascii,
 }
 
 /// Where a plan's lyrics are written, as `[library] lyrics` said before

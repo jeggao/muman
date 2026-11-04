@@ -26,11 +26,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::portable::{LOOKALIKES, reorders, reserved};
-use crate::settings::{Library, Restrict};
 use crate::template::{Fields, Template};
 
 /// What Windows refuses in a name, besides control characters.
@@ -65,20 +65,22 @@ const ID_BYTES: usize = 64;
 /// How songs are named, from the `[library]` settings.
 #[derive(Debug)]
 pub struct Naming {
-    template: Template,
-    replace: Vec<(String, String)>,
-    restrict: Restrict,
+    pub(crate) template: Template,
+    /// What each character is replaced by, as [`replacements`] orders it.
+    pub(crate) replace: Vec<(String, String)>,
+    pub(crate) restrict: Restrict,
     /// `[library] max_name_bytes`.
-    max_name_bytes: usize,
+    pub(crate) max_name_bytes: usize,
     /// The bytes after a stem: the longest audio extension or file beside
     /// a song.
-    tail: usize,
-    max_folder: usize,
-    /// Characters the whole path may take after the library folder.
-    room: Option<usize>,
-    unknown_artist: String,
-    unknown_album: String,
-    untitled: String,
+    pub(crate) tail: usize,
+    pub(crate) max_folder: usize,
+    /// Characters the whole path may take after the library folder, as
+    /// [`room`] counts them.
+    pub(crate) room: Option<usize>,
+    pub(crate) unknown_artist: String,
+    pub(crate) unknown_album: String,
+    pub(crate) untitled: String,
 }
 
 /// A song's tags as they come, before they are made safe.
@@ -100,39 +102,52 @@ pub struct Tags<'a> {
     pub id: &'a str,
 }
 
-impl Naming {
-    /// Naming for a library in `library`, whose length counts against
-    /// `max_path`.
-    pub fn new(settings: &Library, library: &Path) -> Result<Self> {
-        let mut replace: Vec<(String, String)> = match settings.restrict {
-            Restrict::None => vec![("/".into(), "⧸".into()), ("\\".into(), "⧹".into())],
-            Restrict::Windows | Restrict::Ascii => LOOKALIKES
-                .iter()
-                .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
-                .collect(),
-        };
-        for (from, to) in &settings.replace {
-            replace.retain(|(f, _)| f != from);
-            replace.push((from.clone(), to.clone()));
-        }
-        // Longest first, so a replacement of `...` is tried before `.`.
-        replace.sort_by_key(|(from, _)| std::cmp::Reverse(from.chars().count()));
-        Ok(Self {
-            template: Template::new(&settings.template)?,
-            replace,
-            restrict: settings.restrict,
-            max_name_bytes: settings.max_name_bytes,
-            tail: AUDIO_TAIL,
-            max_folder: settings.max_folder_bytes,
-            room: settings
-                .max_path
-                .map(|max| max.saturating_sub(units(&library.to_string_lossy()) + 1)),
-            unknown_artist: settings.unknown_artist.clone(),
-            unknown_album: settings.unknown_album.clone(),
-            untitled: settings.untitled.clone(),
-        })
-    }
+/// How strictly names are made safe, beyond replacing `/` and control
+/// characters, which every filesystem refuses.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Restrict {
+    /// Only what this filesystem refuses.
+    None,
+    /// What Windows, FAT and most phones refuse too, on every system, so
+    /// a library copies anywhere.
+    #[default]
+    Windows,
+    /// As `windows`, and everything transliterated to ASCII.
+    Ascii,
+}
 
+/// What each character is replaced by in a name made safe as `restrict`
+/// says, with `extra`'s replacements over the defaults; longest first, so
+/// a replacement of `...` is tried before `.`.
+#[must_use]
+pub fn replacements(
+    restrict: Restrict,
+    extra: &std::collections::BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut replace: Vec<(String, String)> = match restrict {
+        Restrict::None => vec![("/".into(), "⧸".into()), ("\\".into(), "⧹".into())],
+        Restrict::Windows | Restrict::Ascii => LOOKALIKES
+            .iter()
+            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+            .collect(),
+    };
+    for (from, to) in extra {
+        replace.retain(|(f, _)| f != from);
+        replace.push((from.clone(), to.clone()));
+    }
+    replace.sort_by_key(|(from, _)| std::cmp::Reverse(from.chars().count()));
+    replace
+}
+
+/// The characters a path may take after the library folder `library`
+/// when the whole may take `max_path`.
+#[must_use]
+pub fn room(max_path: Option<usize>, library: &Path) -> Option<usize> {
+    max_path.map(|max| max.saturating_sub(units(&library.to_string_lossy()) + 1))
+}
+
+impl Naming {
     /// This naming, keeping `tail` bytes after each stem rather than an
     /// audio extension's, for files beside a song with longer suffixes.
     #[must_use]
@@ -502,8 +517,10 @@ fn plain(text: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    use crate::settings::Library;
+
     fn naming(library: &Library) -> Naming {
-        Naming::new(library, Path::new("lib")).unwrap()
+        library.naming(Path::new("lib")).unwrap()
     }
 
     fn tags<'a>(album_artist: &'a str, album: &'a str, title: &'a str) -> Tags<'a> {
@@ -747,7 +764,7 @@ mod tests {
             max_path: Some(80),
             ..Library::default()
         };
-        let n = Naming::new(&limited, &PathBuf::from("l".repeat(20))).unwrap();
+        let n = limited.naming(&PathBuf::from("l".repeat(20))).unwrap();
         let stem = n.stem(&tags("Artist", "Album", &"t".repeat(100))).unwrap();
         assert!(20 + 1 + stem.to_string_lossy().chars().count() + SUFFIX_ROOM <= 80 + 8);
     }
@@ -829,7 +846,7 @@ mod tests {
             max_path: Some(60),
             ..Library::default()
         };
-        let n = Naming::new(&deep, Path::new("lib")).unwrap();
+        let n = deep.naming(Path::new("lib")).unwrap();
         let long = "w".repeat(80);
         let stem = n.stem(&tags(&long, &long, &long)).unwrap();
         let chars = 4 + stem.to_string_lossy().chars().count();
@@ -873,7 +890,7 @@ mod tests {
             max_path: Some(100),
             ..Library::default()
         };
-        let n = Naming::new(&limited, &PathBuf::from("l".repeat(10))).unwrap();
+        let n = limited.naming(&PathBuf::from("l".repeat(10))).unwrap();
         let clef = "\u{1D11E}".repeat(40);
         let stem = n.stem(&tags(&clef, &clef, &clef)).unwrap();
         let whole = 11 + units(&stem.to_string_lossy());
