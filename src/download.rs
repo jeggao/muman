@@ -351,6 +351,31 @@ pub fn ending(mut cmd: Vec<OsString>, passed: &Passed, target: &str) -> Vec<OsSt
     cmd
 }
 
+/// One video's audio alone, the smallest download that serves a
+/// comparison, into `dir` as `<id>.<ext>`; prints the path. The audio
+/// it picks is part of the comparison's method: a change here raises
+/// `align::METHOD`.
+#[must_use]
+pub fn audio_command(url: &str, id: &str, dir: &Path, passed: &Passed) -> Vec<OsString> {
+    let mut cmd: Vec<OsString> = [
+        "yt-dlp",
+        "--ignore-config",
+        "--quiet",
+        "--no-warnings",
+        "--no-playlist",
+        "--format",
+        "bestaudio[acodec=opus]/bestaudio",
+        "--print",
+        "after_move:filepath",
+        "--output",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    cmd.push(dir.join(format!("{id}.%(ext)s")).into_os_string());
+    ending(cmd, passed, url)
+}
+
 /// yt-dlp's argv that prints, one JSON object a line, what each of
 /// `urls` offers now, downloading nothing: asked as a fetch asks, so it
 /// lists the formats a fetch would choose from.

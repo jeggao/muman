@@ -742,7 +742,7 @@ mod tests {
             ..video()
         };
         let audio =
-            crate::align::audio_command("u", "vid00000001", std::path::Path::new("a"), &passed);
+            crate::download::audio_command("u", "vid00000001", std::path::Path::new("a"), &passed);
         for cmd in [
             list_command("u", &passed),
             video_command("vid00000001", &passed),
