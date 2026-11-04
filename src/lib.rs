@@ -25,6 +25,7 @@ pub mod codec;
 pub mod coverart;
 pub mod cue;
 pub mod cues;
+pub mod defaults;
 pub mod dirs;
 pub mod download;
 pub mod duplicates;

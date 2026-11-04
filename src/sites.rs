@@ -199,7 +199,7 @@ impl Sites {
 /// The table `manifest/new.toml` writes, read once; a test reads it too,
 /// so a table that does not read fails the build's tests.
 static BUILT_IN: LazyLock<Sites> = LazyLock::new(|| {
-    let doc: toml::Table = toml::from_str(crate::manifest::NEW).unwrap_or_default();
+    let doc: toml::Table = toml::from_str(crate::defaults::NEW).unwrap_or_default();
     doc.get("sites")
         .cloned()
         .and_then(|t| t.try_into::<BTreeMap<String, Written>>().ok())
@@ -329,7 +329,7 @@ impl Sites {
     #[must_use]
     pub fn fetch_url(&self, key: &SourceKey) -> Option<String> {
         let (_, kind, rest) = self.kind_of(key)?;
-        let id: Vec<String> = rest.split('/').map(crate::music::percent_encode).collect();
+        let id: Vec<String> = rest.split('/').map(crate::http::percent_encode).collect();
         Some(kind?.fetch.as_deref()?.replace("{id}", &id.join("/")))
     }
 
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn the_built_in_table_reads() {
-        let doc: toml::Table = toml::from_str(crate::manifest::NEW).unwrap();
+        let doc: toml::Table = toml::from_str(crate::defaults::NEW).unwrap();
         let written: BTreeMap<String, Written> = doc["sites"].clone().try_into().unwrap();
         Sites::build(written).unwrap();
         let sites = Sites::default();

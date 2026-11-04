@@ -308,7 +308,7 @@ pub fn search_command(video: &Entry, passed: &Passed) -> Option<Vec<OsString>> {
     };
     let url = format!(
         "https://music.youtube.com/search?q={}#songs",
-        percent_encode(&query)
+        crate::http::percent_encode(&query)
     );
     let own = [
         "yt-dlp",
@@ -539,28 +539,9 @@ pub(crate) fn names_match(a: &str, b: &str) -> Option<Exactness> {
     }
 }
 
-/// Every byte but the characters RFC 3986 leaves unreserved.
-const RESERVED: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
-
-pub(crate) fn percent_encode(s: &str) -> String {
-    percent_encoding::utf8_percent_encode(s, RESERVED).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_query_is_percent_encoded_but_for_unreserved_characters() {
-        assert_eq!(
-            percent_encode("Marlo Venn & Co. ~ 雨/a_b-c?"),
-            "Marlo%20Venn%20%26%20Co.%20~%20%E9%9B%A8%2Fa_b-c%3F"
-        );
-    }
 
     #[test]
     fn names_match_exactly_before_one_holds_the_other() {

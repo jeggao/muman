@@ -624,9 +624,31 @@ pub fn normalize_base(url: &str) -> Result<String, String> {
     }
 }
 
+/// Every byte but the characters RFC 3986 leaves unreserved.
+const RESERVED: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// `s` as a URL's path or query carries it, every reserved byte
+/// percent-encoded.
+#[must_use]
+pub(crate) fn percent_encode(s: &str) -> String {
+    percent_encoding::utf8_percent_encode(s, RESERVED).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_query_is_percent_encoded_but_for_unreserved_characters() {
+        assert_eq!(
+            percent_encode("Marlo Venn & Co. ~ 雨/a_b-c?"),
+            "Marlo%20Venn%20%26%20Co.%20~%20%E9%9B%A8%2Fa_b-c%3F"
+        );
+    }
 
     #[test]
     fn a_base_keeps_http_and_https_and_drops_trailing_slashes() {

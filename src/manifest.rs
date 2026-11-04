@@ -159,9 +159,7 @@ const HEADER_END: &str = "# Other keys muman does not know are kept.";
 /// The first line every version writes atop the file.
 const HEADER_START: &str = "# muman's song list";
 
-/// A new home's song list: the settings, each written out at its
-/// default, as the reference the docs point to.
-pub const NEW: &str = include_str!("manifest/new.toml");
+pub use crate::defaults::NEW;
 
 /// The tags every song's `tags.<name>` keys offer to fill in.
 pub(crate) const TAG_TEMPLATE: [&str; 6] =
