@@ -45,6 +45,10 @@ pub struct Fields {
     pub id: String,
 }
 
+/// `<album artist>/<album>/<NN title>`, `<D-NN title>` from a second
+/// disc on: a single on no album is named for its title.
+pub const DEFAULT_TEMPLATE: &str = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}";
+
 /// A compiled template.
 #[derive(Debug)]
 pub struct Template {
@@ -94,7 +98,6 @@ impl Template {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::DEFAULT_TEMPLATE;
 
     #[test]
     fn a_missing_number_writes_nothing() {
