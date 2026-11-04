@@ -2,7 +2,7 @@
 //! them: which of yt-dlp's extractors each names its sources by, the
 //! kinds of source it holds, the shape of each kind's IDs and the address
 //! one is fetched again from. Adding a site is a table in
-//! `manifest/new.toml`, the defaults every song list starts from; no code
+//! `new.toml`, the defaults every song list starts from; no code
 //! names a site but the YouTube Music lookups, which are YouTube's own.
 //!
 //! A source fetched by an extractor a site lists is named by that site,
@@ -196,7 +196,7 @@ impl Sites {
     }
 }
 
-/// The table `manifest/new.toml` writes, read once; a test reads it too,
+/// The table `new.toml` writes, read once; a test reads it too,
 /// so a table that does not read fails the build's tests.
 static BUILT_IN: LazyLock<Sites> = LazyLock::new(|| {
     let doc: toml::Table = toml::from_str(crate::defaults::NEW).unwrap_or_default();

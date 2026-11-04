@@ -14,7 +14,8 @@ pub fn digest(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes)[..16])
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes.iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
@@ -23,7 +24,8 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 /// [`digest`] of a file's bytes, read a block at a time.
-pub(crate) fn digest_file(path: &Path) -> Option<String> {
+#[must_use]
+pub fn digest_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
     let mut block = [0; 8 * 1024];

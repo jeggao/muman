@@ -634,7 +634,7 @@ const RESERVED: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERI
 /// `s` as a URL's path or query carries it, every reserved byte
 /// percent-encoded.
 #[must_use]
-pub(crate) fn percent_encode(s: &str) -> String {
+pub fn percent_encode(s: &str) -> String {
     percent_encoding::utf8_percent_encode(s, RESERVED).to_string()
 }
 

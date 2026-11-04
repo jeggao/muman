@@ -16,7 +16,7 @@
   a fallback; join paths part by part.
 - **No comment on self-documenting code.** If removing a comment loses
   nothing the line itself says, remove it. Rationale goes in rustdoc.
-- **Never copy a default into docs.** Link `src/manifest/new.toml`.
+- **Never copy a default into docs.** Link `crates/muman-core/src/new.toml`.
 
 ## After editing
 

@@ -105,6 +105,7 @@ use crate::music::{self, Entry};
 use crate::musicbrainz::{self, Mbid};
 use crate::parallel;
 use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
+use crate::providers::ProviderRules;
 use crate::query::{self as songs, View};
 use crate::reconcile::{self, Measuring};
 use crate::resolve::{self, Resolved};

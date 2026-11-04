@@ -46,7 +46,7 @@ jobs:
           if printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md|LICENSE)$'; then
             code=true
           fi
-          if printf '%s\n' "$files" | grep -qE '^(flake\.(nix|lock)|default\.nix|nix/.*|Cargo\.(toml|lock)|\.github/workflows/ci\.yml)$'; then
+          if printf '%s\n' "$files" | grep -qE '^(flake\.(nix|lock)|default\.nix|nix/.*|Cargo\.(toml|lock)|crates/[^/]+/Cargo\.toml|\.github/workflows/ci\.yml)$'; then
             nix=true
           fi
           printf 'code=%s\nnix=%s\n' "$code" "$nix" >> "$GITHUB_OUTPUT"

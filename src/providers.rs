@@ -47,13 +47,34 @@ const MUSICBRAINZ_URL: &str = "https://musicbrainz.org";
 const COVERART_URL: &str = "https://coverartarchive.org";
 const ACOUSTID_URL: &str = "https://api.acoustid.org";
 
-impl Provider {
+/// What a provider is in the song list's terms: which provider a source
+/// is from, the defaults its `[providers.*]` table is read over, and the
+/// conditions of `until` it can meet. A trait, as [`Provider`] is the
+/// lowest layer's and these read the song list's terms.
+pub trait ProviderRules: Sized {
     /// The provider a source is from, a torrent's file read as a file of
     /// the user's is: a YouTube video is a release when
     /// its facts say so. `None` for a source of another extractor, or a
     /// video not measured yet.
     #[must_use]
-    pub fn of(key: &SourceKey, facts: Option<&Facts>) -> Option<Self> {
+    fn of(key: &SourceKey, facts: Option<&Facts>) -> Option<Self>;
+
+    /// The defaults its `[providers.*]` table is read over.
+    #[must_use]
+    fn defaults(self) -> Settings;
+
+    /// Whether a song may ask this provider until it meets `c`: whether
+    /// what the provider finds can be judged to give it.
+    #[must_use]
+    fn gives(self, c: &Closed) -> bool;
+
+    /// The conditions [`Self::gives`] takes, for a message.
+    #[must_use]
+    fn conditions(self) -> String;
+}
+
+impl ProviderRules for Provider {
+    fn of(key: &SourceKey, facts: Option<&Facts>) -> Option<Self> {
         match key {
             SourceKey::Manual(_) | SourceKey::Torrent(_) => Some(Self::Manual),
             SourceKey::Remote { site, .. } if site == YOUTUBE => Some(if facts?.release {
@@ -65,9 +86,7 @@ impl Provider {
         }
     }
 
-    /// The defaults its `[providers.*]` table is read over.
-    #[must_use]
-    pub fn defaults(self) -> Settings {
+    fn defaults(self) -> Settings {
         let (days, concurrency, per_run) = match self {
             Self::Manual => (0, 1, 0),
             Self::YouTube | Self::YouTubeMusic => (14, 4, 50),
@@ -111,10 +130,7 @@ impl Provider {
         }
     }
 
-    /// Whether a song may ask this provider until it meets `c`: whether
-    /// what the provider finds can be judged to give it.
-    #[must_use]
-    pub fn gives(self, c: &Closed) -> bool {
+    fn gives(self, c: &Closed) -> bool {
         let found = |h: &Have| matches!(h, Have::Some | Have::Better);
         match (self, c) {
             (Self::YouTube | Self::Lrclib, Closed::Lyrics(h))
@@ -127,9 +143,7 @@ impl Provider {
         }
     }
 
-    /// The conditions [`Self::gives`] takes, for a message.
-    #[must_use]
-    pub fn conditions(self) -> String {
+    fn conditions(self) -> String {
         let mut all: Vec<String> = [Have::Better, Have::Some]
             .into_iter()
             .flat_map(|h| [Closed::Lyrics(h), Closed::Cover(h)])

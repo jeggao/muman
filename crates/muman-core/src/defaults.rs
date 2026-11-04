@@ -4,4 +4,4 @@
 
 /// A new home's song list: the settings, each written out at its
 /// default, as the reference the docs point to.
-pub const NEW: &str = include_str!("manifest/new.toml");
+pub const NEW: &str = include_str!("new.toml");

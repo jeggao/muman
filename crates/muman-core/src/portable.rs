@@ -7,7 +7,7 @@
 
 /// Each character Windows refuses in a name, besides control
 /// characters, and its full-width lookalike.
-pub(crate) const LOOKALIKES: [(&str, &str); 9] = [
+pub const LOOKALIKES: [(&str, &str); 9] = [
     ("/", "⧸"),
     ("\\", "⧹"),
     (":", "："),
@@ -21,7 +21,8 @@ pub(crate) const LOOKALIKES: [(&str, &str); 9] = [
 
 /// Whether `c` reorders the text around it, as `U+202E` makes a name
 /// ending in `gpj.exe` read as one ending in `exe.jpg`.
-pub(crate) fn reorders(c: char) -> bool {
+#[must_use]
+pub fn reorders(c: char) -> bool {
     matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
@@ -34,7 +35,8 @@ pub(crate) fn lookalike(c: char) -> Option<char> {
 }
 
 /// A name Windows keeps for a device, extension or not: `CON`, `nul.txt`.
-pub(crate) fn reserved(name: &str) -> bool {
+#[must_use]
+pub fn reserved(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or_default().trim_end();
     let upper = stem.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")

@@ -50,20 +50,11 @@ src/
   settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
                     [torrent], [tools], [history], [sites]
   migrate.rs        older song lists brought up to this edition
-  units.rs          sizes, bitrates, times, frequencies, shares (uom)
   manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
-  manifest/new.toml a new home's song list, the reference for every setting
   state.rs          the state: files written, measures, comparisons
   state/json.rs     state.json, as an earlier muman wrote it, read once
   state/db.rs       state.db, the store the state moves into: schema, transactions
-  platform.rs       default folders per OS, path identity, arrival times
-  dirs.rs           the home and the library folders, neither inside the other
-  relpath.rs        recorded paths, written with / and in NFC
-  runner.rs         the subprocess seam
-  tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
-  sites.rs          the song list's [sites]: how each site names and fetches
-  torrent.rs        torrent metainfo and magnet links: what a torrent: key names
   download.rs       yt-dlp's arguments and the files it reports
   aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
   ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
@@ -71,12 +62,11 @@ src/
   plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  given.rs          folders given to `add`: walked and copied, links followed inside
   similar.rs        names and texts compared in any script
   picture.rs        perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   lookup.rs         lookups due, each provider asked until a song has what it names;
-                    provider.rs, providers.rs, lrclib.rs, musicbrainz.rs, record.rs, acoustid.rs, coverart.rs
+                    providers.rs, lrclib.rs, musicbrainz.rs, record.rs, acoustid.rs, coverart.rs
   reconcile.rs      the offline phase, its steps in order, each a module of its own:
                     measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
                     write.rs, prune.rs, report.rs
@@ -86,16 +76,14 @@ src/
   loudness.rs       EBU R128 loudness and a song's gains; levels.rs, songs and albums levelled
   held.rs           what each source held when its song was built
   quality.rs        audio and picture measures
-  fingerprint.rs    Chromaprint prints and their comparison
   align.rs          audio comparison by loudness envelopes
   resolve.rs        one song's facts to the plan it is written from
   artifact.rs       the part of a plan each library file is made from, and its name
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
-  lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
   lyrics.rs         subtitle languages, LRC cleaning and timing
   cues.rs           lyrics written as LRC, WebVTT, SubRip or plain text
   chapters.rs       a source's chapters, in each container's own form
-  naming.rs         safe names; template.rs, the path template; portable.rs, what no system refuses
+  naming.rs         safe names, through the path template
   codec.rs          output codecs: names, containers, ffmpeg arguments
   ogg.rs            the output gain an Opus file's header holds
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
@@ -113,14 +101,26 @@ src/
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs          fetched sources and records no song uses, deleted
-  progress.rs       how far a long step has got, on stderr
-  parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
-  trust.rs          the song list's commands and servers, run only once trusted
-  hooks.rs, store.rs, source.rs, atomic.rs, hash.rs, defaults.rs, errors.rs, ui.rs, http.rs, ...
-  testing.rs        the fake runner and the fixtures tests share; kill.rs, the kill hooks
+  trust.rs, hooks.rs   the song list's commands and servers, trusted first; its hooks
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-core/src/   the lowest layer, which every other module builds on
+  units.rs          sizes, bitrates, times, frequencies, shares (uom)
+  new.toml          a new home's song list, the reference for every setting
+  platform.rs, dirs.rs   default folders per OS, path identity; a run's folders
+  relpath.rs        recorded paths, written with / and in NFC
+  runner.rs         the subprocess seam
+  tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
+  sites.rs          the song list's [sites]: how each site names and fetches
+  torrent.rs        torrent metainfo and magnet links: what a torrent: key names
+  given.rs          folders given to `add`: walked and copied, links followed inside
+  fingerprint.rs    Chromaprint prints and their comparison
+  lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
+  progress.rs, parallel.rs   a long step's progress on stderr; threads over a list
+  testing.rs        the fake runner and the fixtures tests share; kill.rs, the kill hooks
+  template.rs       the path template; portable.rs, what no system refuses in a name
+  store.rs, source.rs, provider.rs, atomic.rs, hash.rs, defaults.rs, errors.rs, ui.rs, http.rs
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
 testdata/           tiny audio and picture fixtures; editions/, the song list
@@ -194,7 +194,7 @@ measures and lyrics are made with as another, and each major alone;
   which wait out a file Windows reports as held open.
 - **Settings:** a new setting goes in `settings.rs`, or in the lower
   module that applies it, re-exported from `settings.rs`. Its default is
-  written out in `manifest/new.toml`; a test keeps the two equal. A
+  written out in `new.toml`; a test keeps the two equal. A
   renamed setting, or one given a unit, and a changed default each add a
   step to a new edition in `migrate::HISTORY`, raising `migrate::EDITION`.
   A setting that changes a written file must change the song's `Plan`.
@@ -243,7 +243,7 @@ that package manager is skipped.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` and the `new.toml` it replaces as `testdata/editions/<N>.toml` |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` and the `new.toml` it replaces as `testdata/editions/<N>.toml` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
 | How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
