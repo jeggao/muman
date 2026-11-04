@@ -16,7 +16,7 @@
 //! not be enough to put it there.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::ui::Prompter;
 use anyhow::{Context, Result, bail};
@@ -374,7 +374,8 @@ pub fn remove<W: Write>(
     for (file, own) in doomed {
         if own {
             run.trashed(&dirs.home, &file);
-            to_trash(&file).with_context(|| format!("moving {} to the trash", file.display()))?;
+            crate::history::to_trash(&file)
+                .with_context(|| format!("moving {} to the trash", file.display()))?;
         } else {
             match std::fs::remove_file(&file) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -418,21 +419,6 @@ fn removal(songs: usize, deleted: usize, fetched: usize, own: usize) -> (String,
         format!("{named} {leave} the list, {gone} deleted. {undo}"),
         Ask::YesNo(format!("Remove {named}?")),
     )
-}
-
-/// Move a file of the user's own to the desktop's trash. On macOS this
-/// asks the file manager API directly rather than scripting Finder,
-/// which prompts for permission and fails over SSH.
-pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
-    // Only macOS sets the delete method; elsewhere nothing writes to it.
-    #[allow(unused_mut)]
-    let mut trash = trash::TrashContext::default();
-    #[cfg(target_os = "macos")]
-    {
-        use trash::macos::{DeleteMethod, TrashContextExtMacos};
-        trash.set_delete_method(DeleteMethod::NsFileManager);
-    }
-    trash.delete(file)
 }
 
 /// List again the removed songs the query picks. Returns whether any
