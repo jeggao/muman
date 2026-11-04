@@ -598,6 +598,8 @@ impl<R: Runner> Originals<'_, R> {
     /// given or in a folder given, the one `within`; its info JSON
     /// scrubbed as a fetch's is; one of a key the store holds already is
     /// proposed, not copied again.
+    // Removes a copy whose info JSON could not be scrubbed.
+    #[expect(clippy::disallowed_methods)]
     fn bring<W: Write>(
         &mut self,
         dirs: &Dirs,

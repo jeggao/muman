@@ -171,6 +171,8 @@ pub fn torrent_path(root: &Path, key: &TorrentKey) -> PathBuf {
 /// Move `from`, a torrent's file aria2c finished, to its key's place in
 /// `root`, the torrents' folder. Refused where a filesystem that ignores
 /// case holds another file there, of a path differing only in case.
+// Moves a torrent's finished file to its key's place in the store.
+#[expect(clippy::disallowed_methods)]
 pub fn place_torrent(root: &Path, key: &TorrentKey, from: &Path) -> Result<PathBuf> {
     let to = torrent_path(root, key);
     let folder = to.parent().unwrap_or(root);
@@ -229,6 +231,8 @@ pub fn link(root: &Path, key: &SourceKey, from: &Path) -> Result<Option<PathBuf>
 
 /// Remove `from`, a fetched file in `root` whose key now has its own
 /// name for it ([`link`]).
+// Removes a fetched file whose key has a name of its own for it.
+#[expect(clippy::disallowed_methods)]
 pub fn unplace(root: &Path, from: &Path) -> Result<()> {
     if from.starts_with(root) {
         crate::atomic::remove(from).with_context(|| format!("deleting {}", from.display()))?;
@@ -243,6 +247,8 @@ enum How {
     Link,
 }
 
+// Moves or links a fetched file to its key's place in the store.
+#[expect(clippy::disallowed_methods)]
 fn place_by(root: &Path, key: &SourceKey, from: &Path, how: How) -> Result<Option<PathBuf>> {
     let ext = from.extension().and_then(|e| e.to_str()).unwrap_or("mkv");
     let to =
@@ -885,6 +891,8 @@ impl Store {
 
     /// Delete what yt-dlp fetched for each of `keys` no song in `listed`
     /// has, as an upload a release took the place of; returns what went.
+    // Deletes the fetched files no listed song has.
+    #[expect(clippy::disallowed_methods)]
     pub fn discard(
         &self,
         keys: &[SourceKey],

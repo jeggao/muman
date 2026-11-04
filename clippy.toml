@@ -18,6 +18,9 @@ disallowed-methods = [
     { path = "std::io::stdin", reason = "reaches the terminal: only where an `#[expect]` says why" },
     { path = "std::io::stdout", reason = "reaches the terminal: only where an `#[expect]` says why" },
     { path = "std::io::stderr", reason = "reaches the terminal: only where an `#[expect]` says why" },
+    { path = "muman_core::atomic::rename", reason = "moves a file safely: only where an `#[expect]` says why, as a library file moves only through the ledger" },
+    { path = "muman_core::atomic::remove", reason = "removes a file safely: only where an `#[expect]` says why, as a library file goes only through the ledger" },
+    { path = "muman_core::atomic::link", reason = "gives a file a second name: only where an `#[expect]` says why" },
     { path = "tempfile::Builder::new", reason = "makes a run's own file: in its scratch folder alone, where one a run stopped partway leaves is swept, and only where an `#[expect]` says why" },
     { path = "walkdir::WalkDir::follow_links", reason = "follows links: only where an `#[expect]` says why, as `given.rs` follows one inside a folder given to `add` only to a place inside it" },
 ]
