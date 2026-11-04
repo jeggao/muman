@@ -5308,6 +5308,30 @@ fn a_dry_run_or_a_refused_change_keeps_no_run_to_undo() {
 }
 
 #[test]
+fn a_source_touched_but_not_changed_is_not_measured_again() {
+    let s = Setup::new();
+    let song = s.file("home/sources/manual/Song.flac");
+    s.written("home/sources/manual/Song.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let later = SystemTime::now() + std::time::Duration::from_secs(3600);
+    filetime::set_file_mtime(&song, filetime::FileTime::from_system_time(later)).unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Measuring"), "{text}");
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+
+    std::fs::write(&song, b"other bytes").unwrap();
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        text.contains("Measuring"),
+        "changed, measured again: {text}"
+    );
+}
+
+#[test]
 fn a_song_taken_out_by_hand_stays_out_though_its_file_was_just_touched() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

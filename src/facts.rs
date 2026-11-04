@@ -2,6 +2,13 @@
 //! files: its audio and how good it is, its pictures, its lyrics, its
 //! tags and its fingerprint.
 //!
+//! A revision is the files' sizes and times, read without opening them.
+//! Facts also keep a digest of the bytes they were measured on
+//! ([`content_of`]), so files a copy or a touch gave a new revision but
+//! that hold the same bytes keep their facts ([`Facts::moved_to`]), once
+//! read through instead of measured again. Facts measured before muman
+//! took that digest are measured again when their revision changes.
+//!
 //! The measuring run also lists the audio's packets, whose sizes sum to
 //! what a copy takes, for `[library] max_size`; facts made before are
 //! given theirs by [`audio_bytes`] when a limit asks.
@@ -95,6 +102,10 @@ fn before_sound() -> String {
 pub struct Facts {
     /// The revision of the files they were measured on.
     pub rev: String,
+    /// What those files held: a digest of each one's bytes
+    /// ([`content_of`]); none for facts measured before muman took it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     pub method: String,
     /// The file's length, every stream's; [`Facts::length`] is its audio's.
     pub duration: Option<f64>,
@@ -176,15 +187,51 @@ impl Facts {
     /// Whether these still describe a source at revision `rev`.
     #[must_use]
     pub fn holds_for(&self, rev: &str) -> bool {
-        // Facts recorded before revisions held change times hold while
-        // the sizes and modification times do, as they did then.
-        let same = self.rev == rev || self.rev == crate::store::without_change_times(rev);
-        same && (self.method == method()
+        self.rev_holds(rev) && self.method_holds()
+    }
+
+    /// Whether they were measured at revision `rev`. Facts recorded before
+    /// revisions held change times hold while the sizes and modification
+    /// times do, as they did then.
+    fn rev_holds(&self, rev: &str) -> bool {
+        self.rev == rev || self.rev == crate::store::without_change_times(rev)
+    }
+
+    /// Whether they were measured as muman measures now, or by an earlier
+    /// method whose results stand for these.
+    fn method_holds(&self) -> bool {
+        self.method == method()
             || self.method == before_alpha() && !self.detailless() && !self.oversized()
             || self.method == before_sound()
                 && !self.soundless()
                 && !self.detailless()
-                && !self.oversized())
+                && !self.oversized()
+    }
+
+    /// These facts at revision `rev`, for files whose revision changed
+    /// but that hold `content`, the bytes they were measured on, as a
+    /// copy or a touch leaves them: none unless they were measured as
+    /// muman measures now and name every part by its digest, so no plan
+    /// names one otherwise.
+    #[must_use]
+    pub fn moved_to(&self, rev: &str, content: Option<&str>) -> Option<Self> {
+        if !self.method_holds() || self.content.is_none() || self.content.as_deref() != content {
+            return None;
+        }
+        let moved = Self {
+            rev: rev.to_string(),
+            ..self.clone()
+        };
+        let named = moved.audio_rev() == self.audio_rev()
+            && self
+                .covers
+                .iter()
+                .all(|c| moved.cover_rev(c) == self.cover_rev(c))
+            && self
+                .lyrics
+                .iter()
+                .all(|l| moved.lyrics_rev(l) == self.lyrics_rev(l));
+        named.then_some(moved)
     }
 
     /// Whether a picture measured is larger than [`quality::MOST_PIXELS`],
@@ -322,6 +369,7 @@ impl Facts {
     pub fn unreadable(rev: String) -> Self {
         Self {
             rev,
+            content: None,
             method: method(),
             duration: None,
             audio: None,
@@ -532,6 +580,20 @@ fn read_hash(path: &Path) -> Option<String> {
         .then(|| hex[..32].to_ascii_lowercase())
 }
 
+/// What `located`'s files hold: the digest of each one's bytes, in the
+/// order its revision names them; none where one cannot be read. Every
+/// byte is read, so it is taken where a revision changed or a source is
+/// measured, never to check one that did not.
+#[must_use]
+pub fn content_of(located: &Located) -> Option<String> {
+    let parts: Option<Vec<String>> = std::iter::once(&located.path)
+        .chain(&located.lyrics)
+        .chain(&located.covers)
+        .map(|p| digest_file(p))
+        .collect();
+    parts.map(|p| p.join(";"))
+}
+
 /// [`digest`] of a file's bytes, read a block at a time.
 pub(crate) fn digest_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
@@ -568,6 +630,7 @@ pub fn gather<R: Runner>(
 ) -> Result<Facts> {
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let mut facts = Facts::unreadable(located.rev());
+    facts.content = content_of(located);
     match located.kind {
         Kind::Lyrics => {
             let text = read_text(&located.path)?;

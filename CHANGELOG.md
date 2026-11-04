@@ -50,6 +50,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A file beside a song is written alone.** A `[[lyrics.out]]` or
   `[[cover.out]]` file added or changed wrote again the song's file and
   every file beside it; now only the files that changed are written.
+- **A source touched or copied whole is not measured again.** Its facts
+  keep a digest of the bytes they were measured on, so files whose
+  times changed but whose bytes did not are read through once, not
+  decoded. Facts measured before this muman are measured again the
+  first time their files' times change.
 - **`max_size` measures no song a change only tags again.** Its size is
   taken from the plan its file was written from, where a new lyric
   cleaning, tagging or chapters rendered the song again to measure it.

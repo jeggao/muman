@@ -664,3 +664,35 @@ fn the_quality_method_rises_with_what_it_makes() {
     }
     crate::testing::check(QUALITY_WRITTEN, quality::METHOD, &digest.hex());
 }
+
+#[test]
+fn facts_of_files_holding_the_same_bytes_move_to_their_new_revision() {
+    let mut facts = Facts::unreadable("10:20".into());
+    facts.content = Some("aa;bb".into());
+    facts.audio = Some(AudioFacts {
+        digest: Some("0123456789abcdef0123456789abcdef".into()),
+        ..AudioFacts::default()
+    });
+    let moved = facts.moved_to("11:30", Some("aa;bb")).unwrap();
+    assert_eq!(moved.rev, "11:30");
+    assert_eq!(
+        moved.audio_rev(),
+        facts.audio_rev(),
+        "its plans name it alike"
+    );
+    assert!(
+        facts.moved_to("11:30", Some("aa;cc")).is_none(),
+        "other bytes"
+    );
+    assert!(facts.moved_to("11:30", None).is_none(), "unread");
+
+    let mut named = facts.clone();
+    named.audio.as_mut().unwrap().digest = None;
+    assert!(
+        named.moved_to("11:30", Some("aa;bb")).is_none(),
+        "a part its plans name by the revision"
+    );
+    let mut earlier = facts.clone();
+    earlier.content = None;
+    assert!(earlier.moved_to("11:30", None).is_none(), "no digest kept");
+}

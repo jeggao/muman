@@ -46,6 +46,25 @@ impl std::fmt::Debug for Measuring<'_> {
     }
 }
 
+/// Keep the facts of each of `outdated` whose files still hold what they
+/// were measured on, a copy or a touch having changed only their
+/// revision, at their new revision in `state`, as [`Facts::moved_to`]
+/// allows. Returns the keys kept so.
+fn moved(outdated: &[Located], state: &mut State) -> BTreeSet<SourceKey> {
+    let mut kept = BTreeSet::new();
+    for l in outdated {
+        let Some(f) = state.facts.get(&l.key).filter(|f| f.content.is_some()) else {
+            continue;
+        };
+        let content = crate::facts::content_of(l);
+        if let Some(moved) = f.moved_to(&l.rev(), content.as_deref()) {
+            state.facts.insert(l.key.clone(), moved);
+            kept.insert(l.key.clone());
+        }
+    }
+    kept
+}
+
 /// Measure every source in `keys` the store holds whose facts are not
 /// current, into `state`, kept by the checkpoint as it goes and at the
 /// end. A file that cannot be read is said so, and is not read again
@@ -69,6 +88,11 @@ pub fn measure<R: Runner, W: Write>(
                 .is_some_and(|f| f.holds_for(&l.rev()))
         })
         .collect();
+    let moved = moved(&outdated, state);
+    let outdated: Vec<Located> = outdated
+        .into_iter()
+        .filter(|l| !moved.contains(&l.key))
+        .collect();
     let now = state::now_secs();
     let (due, failed): (Vec<Located>, Vec<Located>) = outdated.into_iter().partition(|l| {
         how.retry
@@ -89,7 +113,7 @@ pub fn measure<R: Runner, W: Write>(
     let retagged = retag(runner, store, keys, state, scratch, out)?;
     let relyriced = relyric(runner, store, keys, state, scratch, out)?;
     if due.is_empty() {
-        if retagged || relyriced {
+        if retagged || relyriced || !moved.is_empty() {
             (how.checkpoint)(state)?;
         }
         return Ok(());
@@ -332,7 +356,10 @@ pub(super) fn hash<R: Runner, W: Write>(
         };
         let mut new = old.clone();
         match result {
-            Ok((digests, served)) => new.take(&digests, served),
+            Ok((digests, served)) => {
+                new.take(&digests, served);
+                new.content = facts::content_of(located);
+            }
             Err(e) => {
                 crate::ui::warning(out, &format!("Could not hash {}: {e:#}", located.key))?;
                 new.hash_method = facts::HASH_METHOD.to_string();
