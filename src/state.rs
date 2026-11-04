@@ -98,6 +98,27 @@ pub fn exists(home: &Path) -> bool {
     home.join(db::FILE).exists()
 }
 
+/// Refuse a home whose song list is gone while the library holds songs
+/// muman wrote: read as listing nothing, it would remove every one, and a
+/// list saved from it would list only what a command added. A song list
+/// that lists no song removes them.
+pub fn present(home: &Path) -> Result<()> {
+    let file = home.join(crate::dirs::MANIFEST);
+    if file.exists() {
+        return Ok(());
+    }
+    let written = State::load(home).map_or(0, |s| s.outputs.len());
+    if written == 0 {
+        return Ok(());
+    }
+    Err(crate::errors::Refused(format!(
+        "{} is missing while the library holds {written} song(s) muman wrote: put it back, \
+         or `muman undo` the run that removed it. A song list that lists no song removes them",
+        file.display()
+    ))
+    .into())
+}
+
 /// When the store was last written, as its files' times say.
 #[must_use]
 pub fn written_at(home: &Path) -> Option<SystemTime> {

@@ -381,27 +381,6 @@ pub struct Manifest {
     text: Option<String>,
 }
 
-/// Refuse a home whose song list is gone while the library holds songs
-/// muman wrote: read as listing nothing, it would remove every one, and a
-/// list saved from it would list only what a command added. A song list
-/// that lists no song removes them.
-pub fn present(home: &Path) -> Result<()> {
-    let file = home.join(MANIFEST);
-    if file.exists() {
-        return Ok(());
-    }
-    let written = crate::state::State::load(home).map_or(0, |s| s.outputs.len());
-    if written == 0 {
-        return Ok(());
-    }
-    Err(crate::errors::Refused(format!(
-        "{} is missing while the library holds {written} song(s) muman wrote: put it back, \
-         or `muman undo` the run that removed it. A song list that lists no song removes them",
-        file.display()
-    ))
-    .into())
-}
-
 /// The top-level keys the song list reads besides the settings'
 /// [`crate::settings::TABLES`].
 /// The tables that list songs: one misspelled would take what it lists
@@ -483,11 +462,11 @@ fn needed_version(parsed: &Parsed) -> i64 {
 }
 
 /// Write the song list a new home starts with, every setting written
-/// out to edit, when `home` has none and none is missing: `sync` on a
-/// new home makes it, so lookups can be turned off before the first
-/// `add`.
+/// out to edit, when `home` has none: `sync` on a new home makes it, so
+/// lookups can be turned off before the first `add`. A list gone missing
+/// from a home muman wrote songs from is refused before this, by
+/// `state::present`.
 pub fn start(home: &Path) -> Result<()> {
-    present(home)?;
     if home.join(MANIFEST).exists() {
         return Ok(());
     }
@@ -654,7 +633,15 @@ impl Manifest {
         if self.edits.is_empty() && !self.stale {
             return Ok(Vec::new());
         }
-        present(&self.dir)?;
+        let file = self.dir.join(MANIFEST);
+        if self.text.is_some() && !file.exists() {
+            return Err(crate::errors::Refused(format!(
+                "{} was removed while muman ran: put it back, or `muman undo` the run that \
+                 removed it",
+                file.display()
+            ))
+            .into());
+        }
         let mut doc = read(&self.dir)?;
         let now = parse(&doc)?;
         let changed: Vec<SourceKey> = expected

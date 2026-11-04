@@ -365,7 +365,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
     }
     if traits.edits_list {
-        crate::manifest::present(&dirs.home)?;
+        crate::state::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
     if traits.gated {
