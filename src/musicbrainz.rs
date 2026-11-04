@@ -81,7 +81,7 @@ use crate::units;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 use crate::http::{HttpTransport, Service, Throttle};
 use crate::lrclib::Query;
@@ -174,262 +174,16 @@ impl Looked {
     }
 }
 
-/// A JSON `null` read as the type's default.
-fn or_default<'de, D, T>(d: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Default + Deserialize<'de>,
-{
-    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
-}
-
 #[derive(Debug, Deserialize)]
 struct Search {
     #[serde(default, deserialize_with = "or_default")]
     recordings: Vec<Recording>,
 }
 
-/// A recording as a search or a lookup answers it.
-#[derive(Debug, Deserialize)]
-struct Recording {
-    id: String,
-    #[serde(default, deserialize_with = "or_default")]
-    title: String,
-    /// What tells it from recordings of the same name: a mix, a live date.
-    #[serde(default, deserialize_with = "or_default")]
-    disambiguation: String,
-    #[serde(default)]
-    length: Option<u64>,
-    #[serde(default, deserialize_with = "or_default")]
-    video: bool,
-    #[serde(default, deserialize_with = "or_default")]
-    score: u32,
-    #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
-    credit: Vec<Credit>,
-    #[serde(default, deserialize_with = "or_default")]
-    isrcs: Vec<Isrc>,
-    #[serde(default, deserialize_with = "or_default")]
-    releases: Vec<Found>,
-    #[serde(default, rename = "first-release-date")]
-    first_release_date: Option<String>,
-    /// Its works, which a lookup asking for `work-rels` lists.
-    #[serde(default, deserialize_with = "or_default")]
-    relations: Vec<Relation>,
-}
-
-/// A recording's relation, as a lookup lists it; only a work's are read.
-#[derive(Debug, Deserialize)]
-struct Relation {
-    #[serde(default)]
-    work: Option<Work>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Work {
-    #[serde(default, deserialize_with = "or_default")]
-    languages: Vec<String>,
-}
-
-/// The lyrics languages of `relations`' works, each once.
-fn languages(relations: &[Relation]) -> Vec<String> {
-    let mut all: Vec<String> = Vec::new();
-    for language in relations
-        .iter()
-        .filter_map(|r| r.work.as_ref())
-        .flat_map(|w| &w.languages)
-    {
-        if !all.contains(language) {
-            all.push(language.clone());
-        }
-    }
-    all
-}
-
-/// An ISRC: a search lists each as `{"id": …}`, a lookup as text.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum Isrc {
-    Text(String),
-    Object { id: String },
-}
-
-impl Isrc {
-    fn code(&self) -> &str {
-        match self {
-            Self::Text(code) | Self::Object { id: code } => code,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct Credit {
-    /// The name as credited here, which may differ from the artist's own.
-    #[serde(default, deserialize_with = "or_default")]
-    name: String,
-    /// What joins it to the next name, as ` & ` or ` feat. `.
-    #[serde(default, deserialize_with = "or_default")]
-    joinphrase: String,
-    #[serde(default)]
-    artist: Option<Artist>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Artist {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Found {
-    id: String,
-    #[serde(default, deserialize_with = "or_default")]
-    title: String,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    date: Option<String>,
-    #[serde(default)]
-    country: Option<String>,
-    #[serde(default, rename = "release-group")]
-    group: Option<Group>,
-    #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
-    credit: Vec<Credit>,
-    #[serde(default, deserialize_with = "or_default")]
-    media: Vec<Medium>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Group {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default, rename = "primary-type")]
-    primary: Option<String>,
-    #[serde(default, rename = "secondary-types", deserialize_with = "or_default")]
-    secondary: Vec<String>,
-}
-
-/// A medium holding the recording; a search lists its track as `track`,
-/// a lookup as `tracks`.
-#[derive(Debug, Deserialize)]
-struct Medium {
-    #[serde(default)]
-    position: Option<u32>,
-    /// How many tracks come before the recording's on the medium.
-    #[serde(default, rename = "track-offset")]
-    offset: Option<u32>,
-    #[serde(default, rename = "track-count")]
-    count: Option<u32>,
-    #[serde(default)]
-    format: Option<String>,
-    #[serde(default, alias = "tracks", deserialize_with = "or_default")]
-    track: Vec<Track>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Track {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    position: Option<u32>,
-}
-
-fn names(credit: &[Credit]) -> Vec<String> {
-    credit
-        .iter()
-        .map(|c| c.name.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .collect()
-}
-
-/// The names of `credit` joined by its join phrases, when it credits more
-/// than one; empty otherwise, the one name being [`names`]'.
-fn credited(credit: &[Credit]) -> String {
-    if names(credit).len() < 2 {
-        return String::new();
-    }
-    let joined: String = credit
-        .iter()
-        .map(|c| [c.name.trim(), c.joinphrase.as_str()].concat())
-        .collect();
-    joined.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn artist_ids(credit: &[Credit]) -> Vec<String> {
-    credit
-        .iter()
-        .filter_map(|c| Some(c.artist.as_ref()?.id.clone()))
-        .collect()
-}
-
-/// Whether two names hold one another, by [`crate::similar::names_match`].
-fn same(a: &str, b: &str) -> bool {
-    crate::similar::names_match(a, b).is_some()
-}
-
 /// The artist a search asks for: the first of the song's, which are
 /// joined with `, `.
 pub(crate) fn first_artist(artist: &str) -> &str {
     artist.split(", ").next().unwrap_or(artist).trim()
-}
-
-/// A release's rank, smaller first, before its date: see the module docs.
-type Class = (bool, bool, bool, u8);
-
-impl Found {
-    fn class(&self, album: Option<&str>) -> Class {
-        let group = self.group.as_ref();
-        let primary = match group.and_then(|g| g.primary.as_deref()) {
-            Some("Album") => 0,
-            Some("EP") => 1,
-            Some("Single") => 2,
-            _ => 3,
-        };
-        (
-            album.is_some_and(|a| !same(&self.title, a)),
-            group.is_some_and(|g| !g.secondary.is_empty()),
-            self.status.as_deref() != Some("Official"),
-            primary,
-        )
-    }
-
-    /// Its date, or none when it states none.
-    fn date(&self) -> Option<&str> {
-        self.date
-            .as_deref()
-            .map(str::trim)
-            .filter(|d| !d.is_empty())
-    }
-
-    fn release(&self) -> Release {
-        let medium = self.media.first();
-        let track = medium.and_then(|m| m.track.first());
-        let text = |s: Option<&String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        Release {
-            id: self.id.clone(),
-            title: self.title.trim().to_string(),
-            artists: names(&self.credit),
-            credit: credited(&self.credit),
-            artist_ids: artist_ids(&self.credit),
-            group_id: text(self.group.as_ref().and_then(|g| g.id.as_ref())),
-            date: self.date().map(str::to_string),
-            country: text(self.country.as_ref()),
-            track: track
-                .and_then(|t| t.position)
-                .or_else(|| medium?.offset.map(|o| o + 1)),
-            tracks: medium.and_then(|m| m.count),
-            track_id: text(track.and_then(|t| t.id.as_ref())),
-            disc: medium.and_then(|m| m.position),
-            status: text(self.status.as_ref()),
-            types: self
-                .group
-                .iter()
-                .flat_map(|g| g.primary.iter().chain(&g.secondary))
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect(),
-            media: text(medium.and_then(|m| m.format.as_ref())),
-            details: Details::default(),
-        }
-    }
 }
 
 /// Whether a recording's `comment` names a mix the song's audio is not,
@@ -451,104 +205,42 @@ pub fn other_mix(comment: &str, mono: Option<bool>) -> bool {
     named.is_some_and(|m| mono.is_some_and(|mono| mono != m))
 }
 
-/// An earlier year first, then the fuller date, as `1975-11-21` before
-/// `1975`, then the earlier; one stated before none.
-pub(crate) fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
-    let d = date.unwrap_or_default();
-    (
-        date.is_none(),
-        d.get(..4).unwrap_or(d),
-        std::cmp::Reverse(d.len()),
-        d,
-    )
+/// The gap to the song's length in seconds, when the recording has one.
+fn gap(r: &Recording, seconds: f64) -> Option<f64> {
+    r.length
+        .map(|ms| (units::seconds_of_ms(ms as f64) - seconds).abs())
 }
 
-impl Recording {
-    /// The gap to the song's length in seconds, when the recording has one.
-    fn gap(&self, seconds: f64) -> Option<f64> {
-        self.length
-            .map(|ms| (units::seconds_of_ms(ms as f64) - seconds).abs())
-    }
+fn fits(r: &Recording, q: &Query) -> bool {
+    let artist = first_artist(&q.artist);
+    is_mbid(&r.id)
+        && !r.video
+        && gap(r, q.seconds).is_some_and(|g| g <= MAX_GAP_S)
+        && same(&r.title, &q.title)
+        && (same(&names(&r.credit).join(" "), artist) || same(&credited(&r.credit), artist))
+}
 
-    fn fits(&self, q: &Query) -> bool {
-        let artist = first_artist(&q.artist);
-        is_mbid(&self.id)
-            && !self.video
-            && self.gap(q.seconds).is_some_and(|g| g <= MAX_GAP_S)
-            && same(&self.title, &q.title)
-            && (same(&names(&self.credit).join(" "), artist)
-                || same(&credited(&self.credit), artist))
-    }
-
-    /// The other releases of `best`'s group, each once.
-    fn editions(&self, best: &Found) -> Vec<Release> {
-        let group = |f: &Found| f.group.as_ref().and_then(|g| g.id.clone());
-        let mut seen = vec![best.id.as_str()];
-        let mut editions = Vec::new();
-        for f in &self.releases {
-            if group(f).is_some() && group(f) == group(best) && !seen.contains(&f.id.as_str()) {
-                seen.push(&f.id);
-                editions.push(f.release());
-            }
-        }
-        editions
-    }
-
-    /// Its best release for a song on `album`.
-    fn best(&self, album: Option<&str>) -> Option<&Found> {
-        self.releases.iter().min_by(|a, b| {
-            a.class(album)
-                .cmp(&b.class(album))
-                .then_with(|| date_key(a.date()).cmp(&date_key(b.date())))
-                .then_with(|| a.id.cmp(&b.id))
-        })
-    }
-
-    /// Its rank among the recordings that fit, smaller first: titled the
-    /// song's title exactly, then without a comment naming the other mix
-    /// than the song's audio is, then by its best release, a recording on
-    /// none last, then on the most releases, the gap in whole seconds, the
-    /// date, without a comment, the search's score.
-    fn rank(&self, q: &Query) -> impl Ord + '_ {
-        let album = q.album.as_deref();
-        let best = self.best(album);
-        let class = best.map(|f| f.class(album));
-        (
-            std::cmp::Reverse(crate::similar::names_match(&self.title, &q.title)),
-            other_mix(&self.disambiguation, q.mono),
-            class.is_none(),
-            class,
-            std::cmp::Reverse(self.releases.len()),
-            self.gap(q.seconds).map_or(i64::MAX, whole_seconds),
-            date_key(best.and_then(Found::date)),
-            !self.disambiguation.trim().is_empty(),
-            std::cmp::Reverse(self.score),
-            self.id.as_str(),
-        )
-    }
-
-    /// What is kept of it; `None` when its ID is no MBID.
-    fn record(&self, album: Option<&str>) -> Option<Record> {
-        let best = self.best(album);
-        Some(Record {
-            id: Mbid::parse(&self.id)?,
-            title: self.title.trim().to_string(),
-            artists: names(&self.credit),
-            credit: credited(&self.credit),
-            artist_ids: artist_ids(&self.credit),
-            comment: self.disambiguation.trim().to_string(),
-            isrcs: self.isrcs.iter().map(|i| i.code().to_string()).collect(),
-            length_ms: self.length,
-            release: best.map(Found::release),
-            editions: best.map(|b| self.editions(b)).unwrap_or_default(),
-            original_date: self
-                .first_release_date
-                .as_ref()
-                .map(|d| d.trim().to_string())
-                .filter(|d| !d.is_empty()),
-            languages: languages(&self.relations),
-        })
-    }
+/// Its rank among the recordings that fit, smaller first: titled the
+/// song's title exactly, then without a comment naming the other mix
+/// than the song's audio is, then by its best release, a recording on
+/// none last, then on the most releases, the gap in whole seconds, the
+/// date, without a comment, the search's score.
+fn rank<'a>(r: &'a Recording, q: &Query) -> impl Ord + 'a {
+    let album = q.album.as_deref();
+    let best = r.best(album);
+    let class = best.map(|f| f.class(album));
+    (
+        std::cmp::Reverse(crate::similar::names_match(&r.title, &q.title)),
+        other_mix(&r.disambiguation, q.mono),
+        class.is_none(),
+        class,
+        std::cmp::Reverse(r.releases.len()),
+        gap(r, q.seconds).map_or(i64::MAX, whole_seconds),
+        date_key(best.and_then(Found::date)),
+        !r.disambiguation.trim().is_empty(),
+        std::cmp::Reverse(r.score),
+        r.id.as_str(),
+    )
 }
 
 /// One MusicBrainz server, asked through `transport` at the pace of
@@ -665,8 +357,8 @@ impl Client<'_> {
         let best = found
             .recordings
             .iter()
-            .filter(|r| r.fits(q))
-            .min_by_key(|r| r.rank(q));
+            .filter(|r| fits(r, q))
+            .min_by_key(|r| rank(r, q));
         let mut record = best.and_then(|r| r.record(album));
         if let Some(record) = record.as_mut() {
             self.detail(record)?;
@@ -765,18 +457,12 @@ fn phrase(text: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+use crate::record::{
+    Credit, Found, Recording, Relation, credited, date_key, languages, names, or_default,
+    parse_recording, same,
+};
 pub use crate::record::{Details, Mbid, Record, Release, keep, path_of, read};
 pub use crate::source::is_mbid;
-
-/// The recording a `/ws/2/recording/<id>?fmt=json` answer holds, with
-/// the release it is best known from, or the one named `album`.
-pub(crate) fn parse_recording(json: &str, album: Option<&str>) -> Result<Record> {
-    let found: Recording = serde_json::from_str(json)?;
-    match found.record(album) {
-        Some(record) => Ok(record),
-        None => anyhow::bail!("{:?} is no recording ID", found.id),
-    }
-}
 
 #[cfg(test)]
 mod tests;

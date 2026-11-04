@@ -159,11 +159,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
 ];
 
 /// The upward references the library's code makes, as `(from, to)`.
-pub const KNOWN: &[(&str, &str)] = &[
-    ("manifest", "state"),
-    ("naming", "settings"),
-    ("tagfile", "musicbrainz"),
-];
+pub const KNOWN: &[(&str, &str)] = &[("manifest", "state"), ("naming", "settings")];
 
 /// The upward references only tests make.
 pub const TEST_KNOWN: &[(&str, &str)] = &[("music", "settings"), ("template", "settings")];
