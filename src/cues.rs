@@ -19,8 +19,43 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 use crate::lyrics::{lrc_time, rewrite_word_times, without_word_times};
-use crate::settings::LyricsFormat;
+
+/// How lyrics are written, as this module writes them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LyricsFormat {
+    /// LRC, each line's time before it, as the lyrics are kept.
+    #[default]
+    Lrc,
+    /// WebVTT cues.
+    Vtt,
+    /// SubRip cues.
+    Srt,
+    /// Plain text, no times.
+    Txt,
+}
+
+impl LyricsFormat {
+    /// The extension of a file of it.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Lrc => "lrc",
+            Self::Vtt => "vtt",
+            Self::Srt => "srt",
+            Self::Txt => "txt",
+        }
+    }
+
+    /// Whether it holds only lyrics whose lines carry times, as cues.
+    #[must_use]
+    pub fn cues(self) -> bool {
+        matches!(self, Self::Vtt | Self::Srt)
+    }
+}
 
 /// How long the last cue lasts where the song's length is not known or
 /// not after it.

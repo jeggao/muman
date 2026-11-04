@@ -158,12 +158,8 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
 pub const KNOWN: &[(&str, &str)] = &[
     ("acquire", "sync"),
     ("align", "download"),
-    ("analysis", "settings"),
     ("aria2", "manifest"),
-    ("aria2", "settings"),
     ("aria2", "sync"),
-    ("cues", "settings"),
-    ("download", "settings"),
     ("facts", "musicbrainz"),
     ("history", "change"),
     ("loudness", "resolve"),

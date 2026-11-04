@@ -142,7 +142,7 @@ impl Analysis {
 
 /// The kinds the settings want measured: integrity always.
 #[must_use]
-pub fn wanted(loudness: &crate::settings::Loudness) -> Vec<Kind> {
+pub fn wanted(loudness: &crate::loudness::Loudness) -> Vec<Kind> {
     if loudness.measured() {
         vec![Kind::Integrity, Kind::Loudness]
     } else {
@@ -532,12 +532,12 @@ mod tests {
 
     #[test]
     fn integrity_is_always_wanted_caught_up_once_and_never_of_a_mix() {
-        let off = crate::settings::Loudness {
-            mode: crate::settings::LoudnessMode::Off,
-            ..crate::settings::Loudness::default()
+        let off = crate::loudness::Loudness {
+            mode: crate::loudness::LoudnessMode::Off,
+            ..crate::loudness::Loudness::default()
         };
         assert_eq!(wanted(&off), [Kind::Integrity]);
-        assert!(wanted(&crate::settings::Loudness::default()).contains(&Kind::Loudness));
+        assert!(wanted(&crate::loudness::Loudness::default()).contains(&Kind::Loudness));
         let old = Analysis {
             loudness: Some(Measured {
                 method: loudness::METHOD.into(),
