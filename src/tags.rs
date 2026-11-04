@@ -1167,7 +1167,7 @@ fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: boo
         .map(|v| {
             let v: String = v
                 .chars()
-                .filter(|c| !crate::naming::reorders(*c))
+                .filter(|c| !crate::portable::reorders(*c))
                 .filter_map(|c| match c {
                     c if c.is_whitespace() && c.is_control() => Some(' '),
                     c if c.is_control() => None,

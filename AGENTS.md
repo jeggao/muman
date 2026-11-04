@@ -95,7 +95,7 @@ src/
   lyrics.rs         subtitle languages, LRC cleaning and timing
   cues.rs           lyrics written as LRC, WebVTT, SubRip or plain text
   chapters.rs       a source's chapters, in each container's own form
-  naming.rs         safe names; template.rs, the path template
+  naming.rs         safe names; template.rs, the path template; portable.rs, what no system refuses
   codec.rs          output codecs: names, containers, ffmpeg arguments
   ogg.rs            the output gain an Opus file's header holds
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs

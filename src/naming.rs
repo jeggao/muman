@@ -29,23 +29,12 @@ use anyhow::Result;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::portable::{LOOKALIKES, reorders, reserved};
 use crate::settings::{Library, Restrict};
 use crate::template::{Fields, Template};
 
 /// What Windows refuses in a name, besides control characters.
 const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
-
-const LOOKALIKES: [(&str, &str); 9] = [
-    ("/", "⧸"),
-    ("\\", "⧹"),
-    (":", "："),
-    ("*", "＊"),
-    ("?", "？"),
-    ("\"", "＂"),
-    ("<", "＜"),
-    (">", "＞"),
-    ("|", "｜"),
-];
 
 /// Room kept in a file name for a collision suffix and a tail as long as
 /// [`AUDIO_TAIL`].
@@ -354,33 +343,6 @@ fn invisible(c: char) -> bool {
         || matches!(c, '\u{200B}'..='\u{200D}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{180E}')
 }
 
-/// Whether `c` reorders the text around it, as `U+202E` makes a name
-/// ending in `gpj.exe` read as one ending in `exe.jpg`.
-pub(crate) fn reorders(c: char) -> bool {
-    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
-/// The full-width lookalike of a character Windows refuses in a name.
-pub(crate) fn lookalike(c: char) -> Option<char> {
-    LOOKALIKES
-        .iter()
-        .find(|(from, _)| from.starts_with(c))
-        .and_then(|(_, to)| to.chars().next())
-}
-
-/// A name Windows keeps for a device, extension or not: `CON`, `nul.txt`.
-pub(crate) fn reserved(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or_default().trim_end();
-    let upper = stem.to_ascii_uppercase();
-    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
-            && stem.chars().count() == 4
-            && stem
-                .chars()
-                .nth(3)
-                .is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c)))
-}
-
 /// The number in a `TRACKNUMBER` or `DISCNUMBER` such as `3` or `3/12`.
 fn number(text: &str) -> Option<u32> {
     text.split('/').next()?.trim().parse().ok()
@@ -647,12 +609,6 @@ mod tests {
             .stem(&tags("星屑ラジオ", "Ça: va", "Ünïcode?"))
             .unwrap();
         assert_eq!(stem, path(&["Xing Xie razio", "Ca - va", "Unicode_"]));
-    }
-
-    #[test]
-    fn reserved_device_names_get_an_underscore() {
-        assert!(reserved("CON") && reserved("nul.txt") && reserved("COM1") && reserved("lpt²"));
-        assert!(!reserved("CONTACT") && !reserved("COM") && !reserved("Console.opus"));
     }
 
     #[test]

@@ -722,10 +722,10 @@ fn stored_part(name: &str) -> String {
     let mut out: String = name
         .chars()
         .map(|c| {
-            if c.is_control() || crate::naming::reorders(c) {
+            if c.is_control() || crate::portable::reorders(c) {
                 '_'
             } else {
-                crate::naming::lookalike(c).unwrap_or(c)
+                crate::portable::lookalike(c).unwrap_or(c)
             }
         })
         .collect();
@@ -739,7 +739,7 @@ fn stored_part(name: &str) -> String {
         .collect();
     out.truncate(kept);
     out.push_str(&tail);
-    if crate::naming::reserved(&out) {
+    if crate::portable::reserved(&out) {
         let at = out.find('.').unwrap_or(out.len());
         out.insert(at, '_');
     }
