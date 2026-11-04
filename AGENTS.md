@@ -149,8 +149,8 @@ cargo test --test smoke -- --ignored
 `cargo xtask docs` regenerates [docs/cli.md](docs/cli.md) and checks
 links and the changelog; `--check` only checks, as CI does. `cargo
 xtask layers` checks that no module names one of a higher layer than
-its own but as `xtask/src/layers.rs` lists; `--report` prints the
-upward references and the cycles. The smoke
+its own, each layer a crate; `--report` prints each module's fan-in
+and the cycles among a crate's modules. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
 line muman builds, against a file served from the test itself, and

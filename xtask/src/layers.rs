@@ -1,23 +1,22 @@
-//! The library's modules in layers, lowest first, and the references
-//! that reach up from one layer to a higher one: `cargo xtask layers`.
+//! The library's modules in layers, lowest first, and any reference
+//! that reaches up from one layer to a higher one: `cargo xtask layers`.
 //!
-//! A module may name any module of its own layer or a lower one. Each
-//! reference upward that the code makes today is listed, with the layer
-//! split that cuts it, in [`KNOWN`]; one only tests make in
-//! [`TEST_KNOWN`]; one a doc link makes in [`DOC_KNOWN`]. The check
-//! fails on a module in no layer, on an upward reference no list names,
-//! and on a listed one the code no longer makes, so the lists only
-//! shrink, by the pull request that cuts each, until the layers can be
-//! crates. `--report` prints what the lists are made from: each upward
-//! reference with its place, each module's fan-in, and the cycles.
+//! Each layer is a crate: `crates/<crate>`, then muman itself, the
+//! command line, at the top. A crate's layer is how many of the
+//! workspace's crates it depends on, as its Cargo.toml lists them, and a
+//! module's is its crate's. A module may name any module of its own layer
+//! or a lower one; one that names a higher one, in its code, its tests or
+//! a doc link, fails the check. Cargo already refuses a crate that uses
+//! one above it; this names the module and the place, and holds the
+//! tests and doc links too. `--report` prints each module's fan-in and
+//! the cycles among a crate's modules.
 //!
 //! References are read from the code, not compiled: `crate::name` paths
 //! and the names in `crate::{…}` groups, with comments set aside by
 //! [`crate::comments`]' lexer and the tests of a file (its
 //! `#[cfg(test)] mod tests` and any `tests.rs`) counted apart. A name
-//! that is no module is an item of `lib.rs`. A path a macro builds or a
-//! glob brings in is missed; the compiler finds those once the layers
-//! are crates.
+//! that is no module is an item of a crate's `lib.rs`. A path a macro
+//! builds or a glob brings in is missed; the compiler finds those.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -27,147 +26,6 @@ use anyhow::{Context, Result};
 use regex::Regex;
 
 use crate::comments::parse::{self, LineKind};
-
-/// Each layer and its modules, lowest first; `lib` is the crate root.
-pub const LAYERS: [(&str, &[&str]); 6] = [
-    (
-        "core",
-        &[
-            "units",
-            "hash",
-            "relpath",
-            "lang",
-            "platform",
-            "portable",
-            "parallel",
-            "template",
-            "ui",
-            "progress",
-            "atomic",
-            "kill",
-            "testing",
-            "tools",
-            "runner",
-            "fingerprint",
-            "http",
-            "source",
-            "provider",
-            "sites",
-            "defaults",
-            "errors",
-            "dirs",
-            "store",
-            "torrent",
-            "given",
-        ],
-    ),
-    (
-        "media",
-        &[
-            "ffmpeg",
-            "probe",
-            "chapters",
-            "codec",
-            "picture",
-            "quality",
-            "align",
-            "analysis",
-            "loudness",
-            "integrity",
-            "ogg",
-            "cue",
-            "cues",
-            "lyrics",
-            "clean",
-            "tags",
-            "tagfile",
-            "info",
-            "similar",
-            "naming",
-            "record",
-            "facts",
-        ],
-    ),
-    (
-        "net",
-        &[
-            "lrclib",
-            "musicbrainz",
-            "acoustid",
-            "coverart",
-            "music",
-            "download",
-            "ytdlp_log",
-            "plugins",
-            "aria2",
-        ],
-    ),
-    (
-        "config",
-        &[
-            "settings",
-            "manifest",
-            "migrate",
-            "held",
-            "hooks",
-            "providers",
-            "terms",
-        ],
-    ),
-    (
-        "engine",
-        &[
-            "state",
-            "resolve",
-            "levels",
-            "artifact",
-            "reconcile",
-            "render",
-            "limit",
-            "fit",
-            "folder",
-            "outputs",
-            "lookup",
-            "due",
-            "identify",
-            "acquire",
-            "library",
-            "history",
-            "query",
-            "rows",
-            "album",
-        ],
-    ),
-    (
-        "cli",
-        &[
-            "lib",
-            "cli",
-            "trust",
-            "add",
-            "sync",
-            "change",
-            "attach",
-            "duplicates",
-            "export",
-            "check",
-            "purge",
-            "overview",
-            "guided",
-            "editor",
-            "redact",
-        ],
-    ),
-];
-
-/// The upward references the library's code makes, as `(from, to)`.
-pub const KNOWN: &[(&str, &str)] = &[];
-
-/// The upward references only tests make.
-pub const TEST_KNOWN: &[(&str, &str)] = &[];
-
-/// The upward references only doc links make.
-pub const DOC_KNOWN: &[(&str, &str)] = &[];
 
 /// Files that are tests as a whole, not a module's code.
 const TEST_FILES: [&str; 1] = ["tests.rs"];
@@ -193,9 +51,13 @@ pub struct Reference {
 }
 
 pub fn run(root: &Path, report: bool) -> Result<usize> {
+    let ranks = crate_ranks(root)?;
     let mut references = Vec::new();
-    let mut modules = BTreeSet::from(["lib".to_string()]);
-    for (module, file) in sources(root)? {
+    let mut layers = BTreeMap::from([(
+        "lib".to_string(),
+        ranks.values().max().copied().unwrap_or(0),
+    )]);
+    for (module, file, krate) in sources(root)? {
         let text = std::fs::read_to_string(&file)
             .with_context(|| format!("reading {}", file.display()))?;
         let shown = file
@@ -207,13 +69,13 @@ pub fn run(root: &Path, report: bool) -> Result<usize> {
             .file_name()
             .is_some_and(|n| TEST_FILES.iter().any(|t| n == *t))
             || file.components().any(|c| c.as_os_str() == "tests");
-        modules.insert(module.clone());
+        layers.insert(module.clone(), ranks.get(&krate).copied().unwrap_or(0));
         references.extend(references_in(&module, &shown, &text, whole_test));
     }
     let references: Vec<Reference> = references
         .into_iter()
         .map(|mut r| {
-            if !modules.contains(&r.to) {
+            if !layers.contains_key(&r.to) {
                 r.to = "lib".into();
             }
             r
@@ -221,15 +83,60 @@ pub fn run(root: &Path, report: bool) -> Result<usize> {
         .filter(|r| r.from != r.to)
         .collect();
     // The library's own tests, in no layer, may name any module.
-    modules.retain(|m| !TEST_MODULES.contains(&m.as_str()));
-    let problems = check(&modules, &references);
+    layers.retain(|m, _| !TEST_MODULES.contains(&m.as_str()));
+    let problems = check(&layers, &references);
     if report {
-        print!("{}", describe(&references));
+        print!("{}", describe(&layers, &references));
     }
     for p in &problems {
         eprintln!("layers: {p}");
     }
     Ok(problems.len())
+}
+
+/// Each crate of the workspace by its layer: how many of the others it
+/// depends on, as its Cargo.toml lists them, transitively. muman is the
+/// root's; a crate under `crates/` is named by its folder.
+pub fn crate_ranks(root: &Path) -> Result<BTreeMap<String, usize>> {
+    let dep = Regex::new(r"(?m)^(muman(?:-[a-z]+)?)\s*=").expect("a valid pattern");
+    let mut needs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut read = |name: String, manifest: PathBuf| -> Result<()> {
+        let text = std::fs::read_to_string(&manifest)
+            .with_context(|| format!("reading {}", manifest.display()))?;
+        let deps = text
+            .split_once("[dependencies]")
+            .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
+            .unwrap_or_default();
+        let on = dep
+            .captures_iter(deps)
+            .map(|c| c[1].to_string())
+            .filter(|d| *d != name)
+            .collect();
+        needs.insert(name, on);
+        Ok(())
+    };
+    read("muman".into(), root.join("Cargo.toml"))?;
+    for src in source_roots(root)?.into_iter().skip(1) {
+        let dir = src.parent().unwrap_or(&src);
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        read(name, dir.join("Cargo.toml"))?;
+    }
+    let mut ranks = BTreeMap::new();
+    for name in needs.keys() {
+        let mut seen = BTreeSet::new();
+        let mut todo: Vec<&String> = needs[name].iter().collect();
+        while let Some(d) = todo.pop() {
+            if seen.insert(d.clone()) {
+                todo.extend(needs.get(d).into_iter().flatten());
+            }
+        }
+        ranks.insert(name.clone(), seen.len());
+    }
+    Ok(ranks)
 }
 
 /// The folders the library's code is in: `src`, then each crate's
@@ -257,7 +164,7 @@ pub fn source_roots(root: &Path) -> Result<Vec<PathBuf>> {
 /// `<module>.rs`, or a file under `<module>/`, in any of its
 /// [`source_roots`]. The binary's `main.rs` and a crate's `lib.rs` are
 /// the roots the modules hang from, no module of their own.
-fn sources(root: &Path) -> Result<Vec<(String, PathBuf)>> {
+fn sources(root: &Path) -> Result<Vec<(String, PathBuf, String)>> {
     fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
             let path = entry?.path();
@@ -272,6 +179,15 @@ fn sources(root: &Path) -> Result<Vec<(String, PathBuf)>> {
     let main = root.join("src");
     let mut out = Vec::new();
     for src in source_roots(root)? {
+        let krate = if src == main {
+            "muman".to_string()
+        } else {
+            let dir = src.parent().unwrap_or(&src);
+            dir.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
         let mut files = Vec::new();
         walk(&src, &mut files)?;
         files.sort();
@@ -282,7 +198,7 @@ fn sources(root: &Path) -> Result<Vec<(String, PathBuf)>> {
             let first = f.strip_prefix(&src).ok()?.components().next()?;
             let name = first.as_os_str().to_string_lossy();
             let module = name.strip_suffix(".rs").unwrap_or(&name).to_string();
-            Some((module, f))
+            Some((module, f, krate.clone()))
         }));
     }
     Ok(out)
@@ -388,16 +304,15 @@ fn head(item: &str) -> Option<String> {
     (!name.is_empty() && name != "self").then_some(name)
 }
 
-fn rank(module: &str) -> Option<usize> {
-    LAYERS.iter().position(|(_, ms)| ms.contains(&module))
-}
-
 /// The references that reach from a lower layer up to a higher one, by
 /// what makes them: an edge code makes is not also a test's or a doc's.
-fn upward(references: &[Reference]) -> BTreeMap<By, BTreeSet<(String, String)>> {
+fn upward(
+    layers: &BTreeMap<String, usize>,
+    references: &[Reference],
+) -> BTreeMap<By, BTreeSet<(String, String)>> {
     let mut by: BTreeMap<By, BTreeSet<(String, String)>> = BTreeMap::new();
     for r in references {
-        if let (Some(from), Some(to)) = (rank(&r.from), rank(&r.to))
+        if let (Some(from), Some(to)) = (layers.get(&r.from), layers.get(&r.to))
             && to > from
         {
             by.entry(r.by)
@@ -415,35 +330,16 @@ fn upward(references: &[Reference]) -> BTreeMap<By, BTreeSet<(String, String)>> 
 }
 
 #[must_use]
-pub fn check(modules: &BTreeSet<String>, references: &[Reference]) -> Vec<String> {
-    let mut problems: Vec<String> = modules
-        .iter()
-        .filter(|m| rank(m).is_none())
-        .map(|m| format!("{m} is in no layer; add it to LAYERS in xtask/src/layers.rs"))
-        .collect();
-    let found = upward(references);
-    for (by, list, name) in [
-        (By::Code, KNOWN, "KNOWN"),
-        (By::Test, TEST_KNOWN, "TEST_KNOWN"),
-        (By::Doc, DOC_KNOWN, "DOC_KNOWN"),
-    ] {
-        let listed: BTreeSet<(String, String)> = list
-            .iter()
-            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
-            .collect();
-        let made = found.get(&by).cloned().unwrap_or_default();
-        for (from, to) in made.difference(&listed) {
+pub fn check(layers: &BTreeMap<String, usize>, references: &[Reference]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (by, made) in upward(layers, references) {
+        for (from, to) in made {
             let at = references
                 .iter()
-                .find(|r| r.by == by && r.from == *from && r.to == *to)
+                .find(|r| r.by == by && r.from == from && r.to == to)
                 .map_or("", |r| r.at.as_str());
             problems.push(format!(
                 "{at}: {from} reaches up to {to}; name a module of its own layer or below"
-            ));
-        }
-        for (from, to) in listed.difference(&made) {
-            problems.push(format!(
-                "{name} lists {from} -> {to}, which nothing makes now; remove it"
             ));
         }
     }
@@ -452,9 +348,9 @@ pub fn check(modules: &BTreeSet<String>, references: &[Reference]) -> Vec<String
 
 /// Each upward reference with its places, each module's fan-in, and the
 /// modules that reach each other round, largest first.
-fn describe(references: &[Reference]) -> String {
+fn describe(layers: &BTreeMap<String, usize>, references: &[Reference]) -> String {
     let mut out = String::new();
-    let found = upward(references);
+    let found = upward(layers, references);
     for (by, edges) in &found {
         let _ = writeln!(out, "upward, by {by:?}: {} edge(s)", edges.len());
         for (from, to) in edges {
@@ -590,29 +486,22 @@ mod tests {
     }
 
     #[test]
-    fn a_reference_up_a_layer_is_reported_unless_listed_and_a_stale_entry_is_too() {
+    fn a_reference_up_a_layer_is_reported_and_one_down_is_not() {
         let r = |from: &str, to: &str, by| Reference {
             from: from.into(),
             to: to.into(),
             by,
             at: "src/x.rs:1".into(),
         };
-        let modules: BTreeSet<String> = ["units", "state", "nowhere"].map(String::from).into();
+        let layers = BTreeMap::from([("units".to_string(), 0), ("state".to_string(), 4)]);
         let problems = check(
-            &modules,
-            &[r("units", "state", By::Code), r("state", "units", By::Code)],
+            &layers,
+            &[r("units", "state", By::Test), r("state", "units", By::Code)],
         );
-        assert!(
-            problems
-                .iter()
-                .any(|p| p.contains("nowhere is in no layer"))
+        assert_eq!(
+            problems,
+            ["src/x.rs:1: units reaches up to state; name a module of its own layer or below"]
         );
-        assert!(
-            problems
-                .iter()
-                .any(|p| p.contains("units reaches up to state"))
-        );
-        assert!(!problems.iter().any(|p| p.contains("state reaches up")));
     }
 
     #[test]
@@ -637,8 +526,49 @@ mod tests {
             roots,
             [root.join("src"), root.join("crates/muman-core/src")]
         );
-        let modules: Vec<String> = sources(root).unwrap().into_iter().map(|(m, _)| m).collect();
-        assert_eq!(modules, ["lib", "units", "hash", "store"]);
+        let modules: Vec<(String, String)> = sources(root)
+            .unwrap()
+            .into_iter()
+            .map(|(m, _, c)| (m, c))
+            .collect();
+        let at = |m: &str, c: &str| (m.to_string(), c.to_string());
+        assert_eq!(
+            modules,
+            [
+                at("lib", "muman"),
+                at("units", "muman"),
+                at("hash", "muman-core"),
+                at("store", "muman-core")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_crate_s_layer_counts_the_crates_it_stands_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let crate_at = |dir: &Path, deps: &str| {
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                format!("[package]\nname = \"x\"\n\n[dependencies]\n{deps}\n[lints]\n"),
+            )
+            .unwrap();
+        };
+        crate_at(
+            root,
+            "muman-media = { path = \"crates/muman-media\" }\nanyhow = \"1\"\n",
+        );
+        crate_at(&root.join("crates/muman-core"), "anyhow = \"1\"\n");
+        crate_at(
+            &root.join("crates/muman-media"),
+            "muman-core = { path = \"../muman-core\" }\n",
+        );
+        let ranks = crate_ranks(root).unwrap();
+        let want: BTreeMap<String, usize> = [("muman", 2), ("muman-core", 0), ("muman-media", 1)]
+            .map(|(c, n)| (c.to_string(), n))
+            .into();
+        assert_eq!(ranks, want);
     }
 
     #[test]
