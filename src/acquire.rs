@@ -227,7 +227,7 @@ fn remote_envelope<R: Runner>(
     dir: &Path,
 ) -> Result<Vec<f64>> {
     std::fs::create_dir_all(dir)?;
-    let printed = runner.output(&align::audio_command(&watch_url(id), id, dir, passed))?;
+    let printed = runner.output(&download::audio_command(&watch_url(id), id, dir, passed))?;
     let path = String::from_utf8_lossy(&printed)
         .lines()
         .map(str::trim)

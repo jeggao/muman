@@ -159,7 +159,6 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
 /// The upward references the library's code makes, as `(from, to)`.
 pub const KNOWN: &[(&str, &str)] = &[
     ("acquire", "sync"),
-    ("align", "download"),
     ("aria2", "manifest"),
     ("aria2", "sync"),
     ("history", "change"),
