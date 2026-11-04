@@ -112,6 +112,34 @@ pub struct Settings {
     pub clean: Option<crate::clean::Settings>,
 }
 
+impl Settings {
+    /// The bytes the longest tail after a song's stem takes: its audio's
+    /// extension, or a file beside it, as `[[lyrics.out]]` and
+    /// `[[cover.out]]` name them.
+    #[must_use]
+    pub fn tail(&self) -> usize {
+        let lyrics = self
+            .lyrics
+            .out
+            .iter()
+            .filter(|o| o.to == To::File)
+            .map(|o| o.suffix.len() + 1 + o.format.extension().len());
+        let covers = self
+            .cover
+            .of(Scope::Song)
+            .filter(|o| o.to == To::File)
+            .flat_map(|o| {
+                o.format
+                    .extensions()
+                    .iter()
+                    .map(|e| o.suffix.len() + 1 + e.len())
+            });
+        lyrics
+            .chain(covers)
+            .fold(crate::naming::AUDIO_TAIL, usize::max)
+    }
+}
+
 /// The library's place and each song's path in it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -585,7 +613,7 @@ impl Cover {
                 ),
                 To::Tag => {}
                 To::File => {
-                    crate::outputs::check_suffix(&out.suffix)
+                    crate::naming::check_suffix(&out.suffix)
                         .map_err(|e| anyhow::anyhow!("[[cover.out]] suffix: {e}"))?;
                     let names = |o: &CoverOut| -> Vec<String> {
                         o.format
@@ -620,7 +648,7 @@ impl Cover {
         if !out.suffix.is_empty() {
             bail!("[[cover.out]] scope = \"folder\" takes a name, not a suffix");
         }
-        crate::outputs::check_name(&out.name)
+        crate::naming::check_name(&out.name)
             .map_err(|e| anyhow::anyhow!("[[cover.out]] name: {e}"))?;
         let names = |o: &CoverOut| -> Vec<String> {
             o.format
@@ -1098,7 +1126,7 @@ impl Default for Lyrics {
 
 impl Lyrics {
     /// Each `[[lyrics.out]]` as it may be: one tag at most, a tag with no
-    /// suffix, each file's suffix a plain one ([`crate::outputs`]), and no
+    /// suffix, each file's suffix a plain one ([`crate::naming::check_suffix`]), and no
     /// two files of one name for one song's lyrics.
     fn check(&self) -> Result<()> {
         let tags = self.out.iter().filter(|o| o.to == To::Tag).count();
@@ -1121,7 +1149,7 @@ impl Lyrics {
                     out.format.extension()
                 ),
                 To::File => {
-                    crate::outputs::check_suffix(&out.suffix)
+                    crate::naming::check_suffix(&out.suffix)
                         .map_err(|e| anyhow::anyhow!("[[lyrics.out]] suffix: {e}"))?;
                     let name = |o: &LyricsOut| {
                         format!("{}.{}", o.suffix, o.format.extension()).to_uppercase()
@@ -1440,7 +1468,7 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         (
             "max_name_bytes",
             library.max_name_bytes,
-            crate::naming::min_name_bytes(crate::outputs::tail(&settings)),
+            crate::naming::min_name_bytes(settings.tail()),
         ),
         (
             "max_folder_bytes",

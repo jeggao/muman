@@ -169,7 +169,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("migrate", "lookup"),
     ("naming", "settings"),
     ("reconcile", "sync"),
-    ("settings", "outputs"),
     ("tagfile", "musicbrainz"),
     ("tags", "musicbrainz"),
     ("torrent", "naming"),
