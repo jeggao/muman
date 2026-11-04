@@ -817,7 +817,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
     let mut clues = Clues {
         stem: folded_stem(path),
         grace: (GRACE_MS, SPAN_MS),
-        digest: facts::digest_file(path),
+        digest: crate::hash::digest_file(path),
         ..Clues::default()
     };
     if let Some(id) = crate::source::id_of(path) {
@@ -830,7 +830,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
             let text = if matches!(extension(path).as_str(), "srt" | "vtt") {
                 let lrc = scratch.join(format!("{}.lrc", clues.stem.len()));
                 let converted = subtitles_as_lrc(runner, path, &lrc)?;
-                clues.digest = Some(facts::digest(&converted));
+                clues.digest = Some(crate::hash::digest(&converted));
                 let text = lyrics::decode(&converted);
                 bytes = Some(converted);
                 text
@@ -1895,7 +1895,7 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
             std::fs::read(&item.path).with_context(|| format!("reading {}", item.path.display()))?
         }
     };
-    let digest = facts::digest(&bytes);
+    let digest = crate::hash::digest(&bytes);
     let added = manual.join(ADDED);
     std::fs::create_dir_all(&added).with_context(|| format!("creating {}", added.display()))?;
     let stem = item
@@ -1917,7 +1917,8 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
         let to = added.join(&name);
         let key = SourceKey::Manual(PathBuf::from(ADDED).join(&name).into());
         if to.exists() {
-            if !taken.contains(&key) && facts::digest_file(&to).as_deref() == Some(digest.as_str())
+            if !taken.contains(&key)
+                && crate::hash::digest_file(&to).as_deref() == Some(digest.as_str())
             {
                 taken.insert(key.clone());
                 return Ok(key);

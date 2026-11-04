@@ -112,7 +112,7 @@ fn of_all(parts: &[(String, &String)]) -> Option<String> {
         let _ = writeln!(text, "{at}={d}");
         text
     });
-    cut(&crate::facts::digest(text.as_bytes()))
+    cut(&crate::hash::digest(text.as_bytes()))
 }
 
 /// Whether two digests agree as far as both go.

@@ -370,7 +370,7 @@ impl Fake {
                     .into_iter()
                     .flat_map(u32::to_be_bytes)
                     .collect();
-                format!("SHA256={}\n", crate::facts::hex(&bytes)).into_bytes()
+                format!("SHA256={}\n", crate::hash::hex(&bytes)).into_bytes()
             }
             "ogg" => SILENCE_VORBIS.to_vec(),
             "mp3" => SILENCE_MP3.to_vec(),
@@ -440,7 +440,7 @@ impl Digest {
 
     #[must_use]
     pub fn hex(&self) -> String {
-        crate::facts::hex(&self.0.clone().finalize())
+        crate::hash::hex(&self.0.clone().finalize())
     }
 }
 

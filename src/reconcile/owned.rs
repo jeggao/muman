@@ -132,7 +132,7 @@ pub(crate) fn edited_since_written(
         return false;
     };
     written.digest.as_ref().is_some_and(|was| {
-        !emptied(&file) && crate::facts::digest_file(&file).is_some_and(|now| now != *was)
+        !emptied(&file) && crate::hash::digest_file(&file).is_some_and(|now| now != *was)
     })
 }
 
@@ -191,7 +191,7 @@ fn stamped(file: &Path, stamp: Option<&String>, digest: Option<&String>) -> AsWr
         return AsWritten::Same;
     }
     match digest {
-        Some(digest) if crate::facts::digest_file(file).as_ref() == Some(digest) => {
+        Some(digest) if crate::hash::digest_file(file).as_ref() == Some(digest) => {
             AsWritten::Copied(now)
         }
         _ => AsWritten::Not,

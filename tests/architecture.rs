@@ -802,7 +802,7 @@ const WRITES: &[(&str, usize, &str)] = &[
     ("chapters.rs", 2, "an FFMETADATA file, in a String"),
     ("attach.rs", 3, "a song offered to pick, in a String"),
     ("editor.rs", 1, "the file the editor opens, in a String"),
-    ("facts.rs", 1, "a hash in hex, in a String"),
+    ("hash.rs", 1, "a hash in hex, in a String"),
     ("held.rs", 1, "what a digest is made of, in a String"),
     ("lrclib.rs", 1, "lyrics as an `.lrc` file, in a String"),
     ("lyrics.rs", 1, "a timestamp, in a String"),

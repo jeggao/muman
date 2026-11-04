@@ -59,7 +59,7 @@ use sha1::{Digest as _, Sha1};
 use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::facts::hex;
+use crate::hash::hex;
 use crate::source::{SourceKey, TorrentKey};
 
 /// Hex digits of a v1 hash, SHA-1's 20 bytes.

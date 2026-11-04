@@ -164,7 +164,7 @@ pub fn tags_digest(json: &[u8]) -> Option<String> {
         .into_iter()
         .filter(|(k, v)| TAG_FIELDS.contains(&k.as_str()) && !v.is_null())
         .collect();
-    Some(crate::facts::digest(&serde_json::to_vec(&read).ok()?))
+    Some(crate::hash::digest(&serde_json::to_vec(&read).ok()?))
 }
 
 /// `json` with only the fields muman reads, or `None` when it holds

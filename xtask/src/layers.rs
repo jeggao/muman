@@ -34,6 +34,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
         "core",
         &[
             "units",
+            "hash",
             "relpath",
             "lang",
             "platform",
@@ -152,7 +153,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("aria2", "manifest"),
     ("aria2", "settings"),
     ("aria2", "sync"),
-    ("atomic", "facts"),
     ("cues", "settings"),
     ("dirs", "provider"),
     ("download", "settings"),
@@ -179,7 +179,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("store", "state"),
     ("tagfile", "musicbrainz"),
     ("tags", "musicbrainz"),
-    ("torrent", "facts"),
     ("torrent", "naming"),
 ];
 
