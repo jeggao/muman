@@ -85,7 +85,7 @@ pub fn assign(
         let folder = parent(&paths[songs[0]]).to_path_buf();
         let mut albums: BTreeMap<Album, Vec<usize>> = BTreeMap::new();
         for &i in songs.iter() {
-            let album = crate::loudness::album_of(&planned[i].1);
+            let album = crate::levels::album_of(&planned[i].1);
             let own = album.is_none().then_some(i);
             albums.entry((album, own)).or_default().push(i);
         }
