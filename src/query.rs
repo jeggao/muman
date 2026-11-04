@@ -311,7 +311,7 @@ impl Query {
     /// a field.
     pub fn parse(terms: &[String], extractors: &BTreeSet<String>) -> Result<Self> {
         Self::parse_terms(terms, extractors)
-            .map_err(|e| crate::change::Refused(format!("{e:#}")).into())
+            .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
     }
 
     #[must_use]
@@ -347,7 +347,7 @@ impl Query {
             let name = tags::vorbis_key(field);
             let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
             if !is_field(field) && !had {
-                return Err(crate::change::Refused(format!(
+                return Err(crate::errors::Refused(format!(
                     "No song has a field `{field}`: a tag such as title, artist, album, \
                      album_artist, genre or date, or one of {}",
                     DERIVED.join(", ")
@@ -389,7 +389,7 @@ pub fn check_format(template: &str, views: &[View]) -> Result<()> {
         let name = tags::vorbis_key(field);
         let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
         if !is_field(field) && !had {
-            return Err(crate::change::Refused(format!(
+            return Err(crate::errors::Refused(format!(
                 "The format names `{{{field}}}`, which no song has: a tag such as title, \
                  artist or album, or one of {}. The path template's own variables, as \
                  disc_track, are not fields",
@@ -581,7 +581,7 @@ mod tests {
         let terms = ["title::(".to_string()];
         let e = Query::parse(&terms, &BTreeSet::new()).unwrap_err();
         assert!(
-            e.downcast_ref::<crate::change::Refused>().is_some(),
+            e.downcast_ref::<crate::errors::Refused>().is_some(),
             "{e:#}"
         );
     }
@@ -596,7 +596,7 @@ mod tests {
         assert!(check_format("{key}\\t{title} {genre}", &v).is_ok());
         let e = check_format("{key} {nosuch}", &v).unwrap_err();
         assert!(
-            e.downcast_ref::<crate::change::Refused>().is_some(),
+            e.downcast_ref::<crate::errors::Refused>().is_some(),
             "{e:#}"
         );
     }
@@ -655,7 +655,7 @@ mod tests {
         for term in ["artst:fenn", "^artst:fenn", "gnere::x", "orchestra:quill"] {
             let e = query(&[term]).check_fields(&v).unwrap_err();
             assert!(
-                e.downcast_ref::<crate::change::Refused>().is_some(),
+                e.downcast_ref::<crate::errors::Refused>().is_some(),
                 "{term}: {e:#}"
             );
         }

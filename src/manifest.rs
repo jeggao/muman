@@ -406,7 +406,7 @@ pub fn present(home: &Path) -> Result<()> {
     if written == 0 {
         return Ok(());
     }
-    Err(crate::change::Refused(format!(
+    Err(crate::errors::Refused(format!(
         "{} is missing while the library holds {written} song(s) muman wrote: put it back, \
          or `muman undo` the run that removed it. A song list that lists no song removes them",
         file.display()

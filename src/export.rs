@@ -417,7 +417,7 @@ pub fn export<R: Runner, W: Write>(
     // The library is as the last run left it; a song list edited since
     // would not describe it.
     if crate::history::songs_as_last_left(&dirs.home) == Some(false) {
-        return Err(crate::change::Refused(
+        return Err(crate::errors::Refused(
             "The song list changed since the last run; `muman sync` first, so the export's \
              library matches it"
                 .into(),
@@ -673,7 +673,7 @@ fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> 
     }
     crate::naming::Naming::new(&settings.library, Path::new("")).map_err(invalid)?;
     if settings.loudness.measured() && !manifest.settings.loudness.measured() {
-        return Err(crate::change::Refused(
+        return Err(crate::errors::Refused(
             "The export levels songs, and the song list's [loudness] mode = \"off\" measures \
              none; set its mode and `muman sync` first"
                 .into(),

@@ -316,7 +316,7 @@ pub fn gate<W: Write>(
     )?;
     if !trust {
         let Some(prompter) = prompter else {
-            return Err(crate::change::Refused(
+            return Err(crate::errors::Refused(
                 "Nothing run: without a terminal to ask on, --trust trusts the song list as it is"
                     .into(),
             )
@@ -419,7 +419,7 @@ run = ["mpc", "update"]
         let (went, said, _) = gate_with(&held, None, false);
         let e = went.unwrap_err();
         assert!(
-            e.downcast_ref::<crate::change::Refused>().is_some()
+            e.downcast_ref::<crate::errors::Refused>().is_some()
                 && format!("{e}").contains("--trust")
         );
         assert!(
