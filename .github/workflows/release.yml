@@ -370,9 +370,14 @@ jobs:
             --urls "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/muman-$TAG-x86_64-pc-windows-msvc.zip"
 
   # Publishing to crates.io needs Trusted Publishing set up for this
-  # repository and workflow on the crate's crates.io settings page, then
+  # repository and workflow on each crate's crates.io settings page, then
   # the repository variable PUBLISH_CRATE set to `true`. Until then the
-  # crate is published by hand with `cargo publish`.
+  # crates are published by hand with `cargo publish --workspace`.
+  #
+  # Every crate of the workspace that publishes is published, in the
+  # order their dependencies need, at the one version they share. One
+  # whose version crates.io holds already is left out, so a run started
+  # again for a tag publishes only what the last one did not.
   crate:
     needs: [version, build]
     if: needs.version.outputs.release == 'true' && vars.PUBLISH_CRATE == 'true'
@@ -389,6 +394,27 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
-      - run: cargo publish --locked --package muman
+      - name: Publish each crate crates.io does not hold yet
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          skip=()
+          wanted=0
+          while read -r name version; do
+            wanted=$((wanted + 1))
+            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A "muman release workflow (https://github.com/$GITHUB_REPOSITORY)" \
+              "https://crates.io/api/v1/crates/$name/$version")
+            case "$status" in
+              200) echo "$name $version is on crates.io already"; skip+=(--exclude "$name") ;;
+              404) ;;
+              *) echo "::error::crates.io answered $status for $name $version"; exit 1 ;;
+            esac
+          done < <(cargo metadata --format-version 1 --no-deps --locked \
+            | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"')
+          if [ "$((wanted * 2))" -eq "${#skip[@]}" ]; then
+            echo "every crate is on crates.io already"
+            exit 0
+          fi
+          cargo publish --workspace --locked "${skip[@]}"

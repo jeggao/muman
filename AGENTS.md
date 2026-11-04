@@ -223,7 +223,7 @@ changing the version in `Cargo.toml` and `Cargo.lock` and dating the
 changelog section. Merging it tags `main` as `v<version>`, builds the
 binaries for each platform and publishes them with that section as the
 notes (`.github/workflows/release.yml`); run that workflow by hand to
-build a tag made before it existed. The crate goes to crates.io by hand
+build a tag made before it existed. Each crate goes to crates.io by hand
 until Trusted Publishing is set up there and the repository variable
 `PUBLISH_CRATE` is `true`.
 
