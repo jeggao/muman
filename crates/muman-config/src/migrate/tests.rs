@@ -551,13 +551,13 @@ fn every_changed_default_is_found_stale_at_its_old_value() {
 /// The song list each earlier edition wrote for a new home: its
 /// `new.toml` as it last stood, comments and blank lines taken out.
 const WRITTEN_BEFORE: [&str; 7] = [
-    include_str!("../../testdata/editions/1.toml"),
-    include_str!("../../testdata/editions/2.toml"),
-    include_str!("../../testdata/editions/3.toml"),
-    include_str!("../../testdata/editions/4.toml"),
-    include_str!("../../testdata/editions/5.toml"),
-    include_str!("../../testdata/editions/6.toml"),
-    include_str!("../../testdata/editions/7.toml"),
+    include_str!("../../../../testdata/editions/1.toml"),
+    include_str!("../../../../testdata/editions/2.toml"),
+    include_str!("../../../../testdata/editions/3.toml"),
+    include_str!("../../../../testdata/editions/4.toml"),
+    include_str!("../../../../testdata/editions/5.toml"),
+    include_str!("../../../../testdata/editions/6.toml"),
+    include_str!("../../../../testdata/editions/7.toml"),
 ];
 
 /// The first edition's song list as a muman before editions wrote it.

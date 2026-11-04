@@ -107,6 +107,7 @@ use crate::parallel;
 use crate::provider::{COVERART, LRCLIB, MUSICBRAINZ, Provider};
 use crate::providers::ProviderRules;
 use crate::query::{self as songs, View};
+use crate::query::{Holds, QueryMatch};
 use crate::reconcile::{self, Measuring};
 use crate::resolve::{self, Resolved};
 use crate::runner::Runner;

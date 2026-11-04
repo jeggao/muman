@@ -47,23 +47,17 @@ src/
   add.rs, sync.rs   the add and sync commands, and the network steps they share
   album.rs          the songs of one album made to agree: one edition, spelling, release
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
-                    [torrent], [tools], [history], [sites]; naming_tests.rs, its names
-  migrate.rs        older song lists brought up to this edition
-  manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
   state.rs          the state: files written, measures, comparisons
   state/json.rs     state.json, as an earlier muman wrote it, read once
   state/db.rs       state.db, the store the state moves into: schema, transactions
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  lookup.rs         lookups due, each provider asked until a song has what it names;
-                    providers.rs, each provider's [providers.*] table
+  lookup.rs         lookups due, each provider asked until a song has what it names
   reconcile.rs      the offline phase, its steps in order, each a module of its own:
                     measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
                     write.rs, prune.rs, report.rs
   levels.rs         songs and albums levelled, from what loudness.rs measured
-  held.rs           what each source held when its song was built
   resolve.rs        one song's facts to the plan it is written from
   artifact.rs       the part of a plan each library file is made from, and its name
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
@@ -75,16 +69,22 @@ src/
   export.rs         the song list and the library into one zip
   redact.rs         the song list with its secrets replaced, for export --redact
   history.rs        run records and undo
-  change.rs, editor.rs, query.rs, terms.rs   list, set, edit, remove, restore
+  change.rs, editor.rs, query.rs   list, set, edit, remove, restore
   guided.rs         set with a query alone: songs changed field by field
   rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs          fetched sources and records no song uses, deleted
-  trust.rs, hooks.rs   the song list's commands and servers, trusted first; its hooks
+  trust.rs          the song list's commands and servers, run only once trusted
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-config/src/   the config layer: the song list, its settings, editions and hooks
+  settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
+                    [torrent], [tools], [history], [sites]; naming_tests.rs, its names
+  manifest.rs       songs.toml: songs, albums, removed, cleaning, edits; migrate.rs, older editions
+  held.rs, hooks.rs   what each source held when its song was built; the [[hook]] commands
+  providers.rs, terms.rs   each provider's [providers.*] table; a query's terms
 crates/muman-net/src/   the network layer: yt-dlp and aria2c fetches, and lookups
   download.rs, ytdlp_log.rs   yt-dlp's arguments and the files it reports; its output
   aria2.rs          aria2c fetching a torrent's files: its arguments and its lines

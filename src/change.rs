@@ -25,6 +25,7 @@ use toml_edit::{Table, value};
 use crate::cli::Confirm;
 use crate::dirs::Dirs;
 use crate::manifest::{self, Edit, Manifest, Rewritten, Song, SongTable};
+use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
 use crate::resolve::Resolved;
 use crate::rows;
