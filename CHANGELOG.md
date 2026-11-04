@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-04
+
 ### Added
 
 - **`info --state`** prints what muman keeps of the library and its
@@ -40,8 +42,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A sync writes again only the files a change reaches.** A file of
   cues added to `[[lyrics.out]]` built again every song with its lyrics
   inside; it is now only written beside them. The form of the lyrics
-  inside wrote every lyric file beside a song again, and now builds only
-  the song. A chapter changed in a song other than an MP4 tags it again
+  inside wrote every lyric file beside a song again, and now tags only
+  the song again. A chapter changed in a song other than an MP4 tags it again
   instead of building it.
 - **Lyrics inside a song are tagged into it, not built again.** A lyric
   cleaning switch, a new title the cleaning reads, or a new offset
@@ -2092,7 +2094,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jeggao/muman/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jeggao/muman/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jeggao/muman/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jeggao/muman/compare/v0.6.0...v0.7.0
