@@ -42,7 +42,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest as _, Sha256};
 
-use super::{State, VERSION};
+use super::{Caches, State, VERSION};
+use crate::facts::Facts;
 use crate::source::SourceKey;
 
 pub(crate) const FILE: &str = "state.db";
@@ -52,6 +53,16 @@ const APPLICATION_ID: i32 = i32::from_be_bytes(*b"muSt");
 
 /// The schema this muman writes: 1 holds each row of the state as JSON.
 pub(crate) const SCHEMA: i32 = 1;
+
+/// The renamings a step without the run's lock recorded of a source's
+/// parts, in the order made, which a load applies to the kept plans and
+/// a whole save, writing them renamed, clears ([`Db::keep`]).
+const RENAMINGS: &str = "
+    CREATE TABLE IF NOT EXISTS renamings (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, old TEXT NOT NULL,
+        new TEXT NOT NULL
+    );
+";
 
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
@@ -120,11 +131,16 @@ impl Db {
         if version == 0 {
             db.write(|tx| {
                 tx.execute_batch(TABLES)?;
+                tx.execute_batch(RENAMINGS)?;
                 tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                 tx.pragma_update(None, "user_version", SCHEMA)?;
                 Ok(())
             })
             .with_context(|| format!("making {}", db.file.display()))?;
+        } else {
+            db.conn
+                .execute_batch(RENAMINGS)
+                .with_context(|| format!("opening {}", db.file.display()))?;
         }
         Ok(db)
     }
@@ -242,7 +258,7 @@ impl Row {
 /// table and key: a save writes the rows whose digest differs, and
 /// deletes those of these the state no longer holds.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Loaded(BTreeMap<(&'static str, String), [u8; 16]>);
+pub(crate) struct Loaded(BTreeMap<(&'static str, String), [u8; 16]>, i64);
 
 fn json(value: &impl Serialize) -> Result<String> {
     Ok(serde_json::to_string(value)?)
@@ -251,6 +267,102 @@ fn json(value: &impl Serialize) -> Result<String> {
 /// `text` read as a `T` whose JSON is a string, as a key is.
 fn key_of<T: DeserializeOwned>(text: &str) -> Option<T> {
     serde_json::from_value(serde_json::Value::String(text.to_string())).ok()
+}
+
+/// The tables a step without the run's lock keeps what it measured in.
+const CACHES: [&Table; 5] = [&FACTS, &ALIGNMENTS, &MIXES, &FAILURES, &SIZES];
+
+/// The state the rows `read`, by table, hold; a table not read is empty.
+/// A cache row an earlier version wrote in another shape is dropped; an
+/// output that does not read refuses the store at `file`.
+fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<State> {
+    let parse = |t: &Table| read.get(t.name).into_iter().flatten();
+    let value = |r: &Row| r.value.clone().unwrap_or_default();
+    let mut state = State {
+        version: VERSION,
+        ..State::default()
+    };
+    for row in parse(&META) {
+        if row.keys[0] == "library" {
+            state.library = serde_json::from_str(&value(row)).ok();
+        }
+    }
+    for row in parse(&OUTPUTS) {
+        let refused = || {
+            anyhow::anyhow!(
+                "{} cannot be read; move it aside to start over, which forgets which library files are muman's",
+                file.display()
+            )
+        };
+        let path = crate::relpath::recorded(&row.keys[0]).map_err(|_| refused())?;
+        let written = serde_json::from_str(&value(row)).map_err(|_| refused())?;
+        state.outputs.insert(path, written);
+    }
+    for row in parse(&REPLACED) {
+        if let (Some(old), Some(new)) = (key_of(&row.keys[0]), key_of(&value(row))) {
+            state.replaced.insert(old, new);
+        }
+    }
+    state.listed = parse(&LISTED).filter_map(|r| key_of(&r.keys[0])).collect();
+    for row in parse(&DAMAGED) {
+        if let Some(k) = key_of(&row.keys[0]) {
+            state.damaged.insert(k, value(row));
+        }
+    }
+    for row in parse(&TRUSTED) {
+        state.trusted.insert(row.keys[0].clone(), value(row));
+    }
+    for row in parse(&FACTS) {
+        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
+            state.facts.insert(k, f);
+        }
+    }
+    state.alignments = parse(&ALIGNMENTS)
+        .filter_map(|r| serde_json::from_str(&value(r)).ok())
+        .collect();
+    state.mixes = parse(&MIXES)
+        .filter_map(|r| serde_json::from_str(&value(r)).ok())
+        .collect();
+    for row in parse(&FAILURES) {
+        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
+            state.failures.insert(k, f);
+        }
+    }
+    state.lookups = parse(&LOOKUPS)
+        .filter_map(|r| serde_json::from_str(&value(r)).ok())
+        .collect();
+    for row in parse(&SIZES) {
+        if let Ok(m) = serde_json::from_str(&value(row)) {
+            state.sizes.insert(row.keys[0].clone(), m);
+        }
+    }
+    Ok(state)
+}
+
+/// The renamings recorded, in the order made, with each one's place; one
+/// an earlier version wrote in another shape is dropped.
+fn renamings_in(tx: &Transaction<'_>) -> Result<Vec<(i64, SourceKey, Facts, Facts)>> {
+    let mut statement = tx.prepare("SELECT seq, key, old, new FROM renamings ORDER BY seq")?;
+    let rows = statement.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut renamings = Vec::new();
+    for row in rows {
+        let (seq, key, old, new) = row?;
+        if let (Some(key), Ok(old), Ok(new)) = (
+            key_of(&key),
+            serde_json::from_str(&old),
+            serde_json::from_str(&new),
+        ) {
+            renamings.push((seq, key, old, new));
+        }
+    }
+    Ok(renamings)
 }
 
 /// The rows `state` is stored as, table by table: what muman keeps
@@ -403,11 +515,12 @@ impl Db {
     /// muman's.
     pub(crate) fn snapshot(&mut self) -> Result<(State, Loaded)> {
         let file = self.file.clone();
-        let read = self.read(|tx| {
-            TABLES_OF_STATE
+        let (read, renamings) = self.read(|tx| {
+            let read = TABLES_OF_STATE
                 .iter()
                 .map(|t| Ok((t.name, rows_in(tx, t)?)))
-                .collect::<Result<BTreeMap<_, _>>>()
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            Ok((read, renamings_in(tx)?))
         })?;
         let mut loaded = Loaded::default();
         for (name, rows) in &read {
@@ -415,67 +528,56 @@ impl Db {
                 loaded.0.insert((name, row.key()), row.digest());
             }
         }
-        let parse = |t: &Table| read[t.name].iter();
-        let value = |r: &Row| r.value.clone().unwrap_or_default();
-        let mut state = State {
-            version: VERSION,
-            ..State::default()
-        };
-        for row in parse(&META) {
-            if row.keys[0] == "library" {
-                state.library = serde_json::from_str(&value(row)).ok();
-            }
-        }
-        for row in parse(&OUTPUTS) {
-            let refused = || {
-                anyhow::anyhow!(
-                    "{} cannot be read; move it aside to start over, which forgets which library files are muman's",
-                    file.display()
-                )
-            };
-            let path = crate::relpath::recorded(&row.keys[0]).map_err(|_| refused())?;
-            let written = serde_json::from_str(&value(row)).map_err(|_| refused())?;
-            state.outputs.insert(path, written);
-        }
-        for row in parse(&REPLACED) {
-            if let (Some(old), Some(new)) = (key_of(&row.keys[0]), key_of(&value(row))) {
-                state.replaced.insert(old, new);
-            }
-        }
-        state.listed = parse(&LISTED).filter_map(|r| key_of(&r.keys[0])).collect();
-        for row in parse(&DAMAGED) {
-            if let Some(k) = key_of(&row.keys[0]) {
-                state.damaged.insert(k, value(row));
-            }
-        }
-        for row in parse(&TRUSTED) {
-            state.trusted.insert(row.keys[0].clone(), value(row));
-        }
-        for row in parse(&FACTS) {
-            if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
-                state.facts.insert(k, f);
-            }
-        }
-        state.alignments = parse(&ALIGNMENTS)
-            .filter_map(|r| serde_json::from_str(&value(r)).ok())
-            .collect();
-        state.mixes = parse(&MIXES)
-            .filter_map(|r| serde_json::from_str(&value(r)).ok())
-            .collect();
-        for row in parse(&FAILURES) {
-            if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
-                state.failures.insert(k, f);
-            }
-        }
-        state.lookups = parse(&LOOKUPS)
-            .filter_map(|r| serde_json::from_str(&value(r)).ok())
-            .collect();
-        for row in parse(&SIZES) {
-            if let Ok(m) = serde_json::from_str(&value(row)) {
-                state.sizes.insert(row.keys[0].clone(), m);
-            }
+        let mut state = state_of(&read, &file)?;
+        for (seq, key, old, new) in renamings {
+            state.rebase(&key, &old, &new);
+            loaded.1 = seq;
         }
         Ok((state, loaded))
+    }
+
+    /// Keep what a step `measured` without the run's lock in the caches as
+    /// they are now, in one transaction that reads and writes theirs
+    /// alone: a fact replaces the one kept, a failure the step cleared is
+    /// cleared, and a comparison or size is recorded by its key. A fact
+    /// that names a source's parts anew renames the comparisons here, and
+    /// is recorded among the renamings that every load applies to the
+    /// kept plans until a whole save writes them renamed: what the library
+    /// holds is left to the run that holds its lock.
+    pub(crate) fn keep(&mut self, measured: &Caches) -> Result<()> {
+        let file = self.file.clone();
+        self.write(|tx| {
+            let read = CACHES
+                .iter()
+                .map(|t| Ok((t.name, rows_in(tx, t)?)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let mut state = state_of(&read, &file)?;
+            for (key, old, new) in state.merge_measured(measured) {
+                tx.execute(
+                    "INSERT INTO renamings (key, old, new) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![key.to_string(), json(&old)?, json(&new)?],
+                )?;
+            }
+            for (table, rows) in rows_of(&state)? {
+                let Some(was) = read.get(table.name) else {
+                    continue;
+                };
+                let was: BTreeMap<String, [u8; 16]> =
+                    was.iter().map(|r| (r.key(), r.digest())).collect();
+                let mut now = BTreeSet::new();
+                for row in rows {
+                    let digest = row.digest();
+                    if was.get(&row.key()) != Some(&digest) {
+                        put_row(tx, table, &row, &digest)?;
+                    }
+                    now.insert(row.key());
+                }
+                for key in was.keys().filter(|k| !now.contains(*k)) {
+                    delete_row(tx, table, key)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Write the rows of `state` whose digest differs from `loaded`'s, and
@@ -503,10 +605,13 @@ impl Db {
             .filter(|k| !held.contains(*k))
             .cloned()
             .collect();
-        if upserts.is_empty() && gone.is_empty() {
+        let renamed = loaded.1;
+        if upserts.is_empty() && gone.is_empty() && renamed == 0 {
             return Ok(false);
         }
         self.write(|tx| {
+            // The plans written here hold the renamings the load applied.
+            tx.execute("DELETE FROM renamings WHERE seq <= ?1", [renamed])?;
             for (table, row, digest) in &upserts {
                 put_row(tx, table, row, digest)?;
             }
@@ -524,6 +629,7 @@ impl Db {
         for key in gone {
             loaded.0.remove(&key);
         }
+        loaded.1 = 0;
         Ok(true)
     }
 
