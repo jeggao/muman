@@ -1542,7 +1542,7 @@ mod tests {
     fn a_state_json_brought_over_and_stopped_anywhere_ends_in_the_store() {
         let dir = tempfile::tempdir().unwrap();
         old_home(dir.path());
-        let counted = crate::testing::kill_at(dir.path(), usize::MAX);
+        let counted = crate::kill::kill_at(dir.path(), usize::MAX);
         State::load(dir.path()).unwrap();
         let steps = counted.seen();
         drop(counted);
@@ -1551,7 +1551,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let home = dir.path();
             let old = old_home(home);
-            let kill = crate::testing::kill_at(home, at);
+            let kill = crate::kill::kill_at(home, at);
             let stopped = std::panic::catch_unwind(|| State::load(home));
             drop(kill);
             assert!(stopped.is_err(), "stopped at step {at} of {steps}");

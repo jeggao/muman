@@ -83,7 +83,7 @@ impl Setup {
 
     fn run(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
         let mut out = Vec::new();
-        let _guard = crate::testing::guard_library(&self.job(args).dirs.library);
+        let _guard = crate::kill::guard_library(&self.job(args).dirs.library);
         let ok = run_with(
             &self.job(args),
             fake,
@@ -6179,7 +6179,7 @@ fn survives_a_kill_at_every_step(
     let whole = Setup::new();
     prepare(&whole);
     let before = library_of(&whole);
-    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
     whole.run(&flacs(), command);
     let steps = counted.seen();
     drop(counted);
@@ -6190,7 +6190,7 @@ fn survives_a_kill_at_every_step(
     for at in 1..=steps {
         let s = Setup::new();
         prepare(&s);
-        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let kill = crate::kill::kill_at(s.dir.path(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_with(
                 &s.job(command),
@@ -6207,7 +6207,7 @@ fn survives_a_kill_at_every_step(
             "{command:?} not stopped at step {at} of {steps}"
         );
         let stopped_as = library_of(&s);
-        let guard = crate::testing::guard_library(&s.dir.path().join("lib"));
+        let guard = crate::kill::guard_library(&s.dir.path().join("lib"));
         let _ = run_with(
             &s.job(&["status"]),
             &flacs(),
@@ -6363,7 +6363,7 @@ fn an_undo_killed_anywhere_is_finished_by_the_next_and_goes_no_further() {
     let synced = library_of(&whole);
     let whole = Setup::new();
     set(&whole);
-    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
     whole.run(&flacs(), &["undo", "-y"]);
     let steps = counted.seen();
     drop(counted);
@@ -6371,7 +6371,7 @@ fn an_undo_killed_anywhere_is_finished_by_the_next_and_goes_no_further() {
     for at in 1..=steps {
         let s = Setup::new();
         set(&s);
-        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let kill = crate::kill::kill_at(s.dir.path(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_with(
                 &s.job(&["undo", "-y"]),
@@ -6405,7 +6405,7 @@ fn a_change_waits_for_an_undo_stopped_before_it_put_the_library_back() {
     );
     let home = s.dir.path().join("home");
     // Stopped once its record says it is undoing, before it puts back a file.
-    let kill = crate::testing::kill_at(s.dir.path(), 2);
+    let kill = crate::kill::kill_at(s.dir.path(), 2);
     let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_with(
             &s.job(&["undo", "-y"]),
@@ -6479,7 +6479,7 @@ fn a_sync_killed_after_a_hand_edit_is_undone_with_the_edit() {
     let whole = Setup::new();
     prepare(&whole);
     let before = library_of(&whole);
-    let counted = crate::testing::kill_at(whole.dir.path(), usize::MAX);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
     whole.run(&flacs(), &["sync"]);
     let steps = counted.seen();
     drop(counted);
@@ -6491,7 +6491,7 @@ fn a_sync_killed_after_a_hand_edit_is_undone_with_the_edit() {
     for at in 1..=steps {
         let s = Setup::new();
         prepare(&s);
-        let kill = crate::testing::kill_at(s.dir.path(), at);
+        let kill = crate::kill::kill_at(s.dir.path(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_with(
                 &s.job(&["sync"]),

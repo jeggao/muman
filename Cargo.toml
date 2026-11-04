@@ -62,6 +62,11 @@ walkdir = "2"
 which = "8"
 zip = { version = "9", default-features = false }
 
+[features]
+# For tests alone: the hooks a test stops or watches a run by
+# (`src/kill.rs`), and a state store that does not wait for the disk.
+testing = []
+
 [lints]
 workspace = true
 

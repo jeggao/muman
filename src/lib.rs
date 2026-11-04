@@ -48,6 +48,8 @@ pub mod http;
 pub mod identify;
 pub mod info;
 pub mod integrity;
+#[cfg(any(test, feature = "testing"))]
+pub mod kill;
 pub mod lang;
 pub mod levels;
 pub mod library;
