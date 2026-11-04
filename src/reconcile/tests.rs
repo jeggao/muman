@@ -1994,7 +1994,7 @@ fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
         (h, old)
     };
     let (whole, _) = prepare();
-    let counted = crate::testing::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    let counted = crate::kill::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
     whole.run(&fake, Options::default());
     let steps = counted.seen();
     drop(counted);
@@ -2004,7 +2004,7 @@ fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
     );
     for at in 1..=steps {
         let (h, old) = prepare();
-        let kill = crate::testing::kill_at(h.dirs.home.parent().unwrap(), at);
+        let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             reconcile(&fake, &h.dirs, Options::default(), None, &mut Vec::new())
         }));

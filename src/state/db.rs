@@ -28,7 +28,7 @@
 //! on Apple platforms, whose `fsync` does not reach the disk. A writer
 //! waits for another's transaction as long as the caller allows. Tests
 //! commit without waiting for the disk, and each commit is a change
-//! `testing::kill_at` can stop a test at, just before it lands:
+//! `kill::kill_at` can stop a test at, just before it lands:
 //! a write stopped there is rolled back whole, as a write killed before
 //! its rename leaves the file as it was.
 
@@ -122,7 +122,15 @@ impl Db {
             );
         }
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", if cfg!(test) { "OFF" } else { "FULL" })?;
+        conn.pragma_update(
+            None,
+            "synchronous",
+            if cfg!(any(test, feature = "testing")) {
+                "OFF"
+            } else {
+                "FULL"
+            },
+        )?;
         if cfg!(target_vendor = "apple") {
             conn.pragma_update(None, "fullfsync", true)?;
         }
@@ -153,8 +161,8 @@ impl Db {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .with_context(|| format!("writing {}", self.file.display()))?;
         let done = f(&tx)?;
-        #[cfg(test)]
-        crate::testing::change_point(&self.file);
+        #[cfg(any(test, feature = "testing"))]
+        crate::kill::change_point(&self.file);
         tx.commit()
             .with_context(|| format!("writing {}", self.file.display()))?;
         Ok(done)
@@ -765,7 +773,7 @@ mod tests {
     fn a_write_stopped_before_its_commit_leaves_the_store_as_it_was() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = Db::open(dir.path(), WAIT).unwrap();
-        let kill = crate::testing::kill_at(dir.path(), 1);
+        let kill = crate::kill::kill_at(dir.path(), 1);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             db.write(|tx| {
                 Ok(tx.execute("INSERT INTO listed VALUES ('manual:Low Orchard.flac')", [])?)

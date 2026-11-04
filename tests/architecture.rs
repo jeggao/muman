@@ -223,6 +223,10 @@ const STATICS: &[(&str, &str)] = &[
         "runner.rs",
         "the programs a signal stops with muman, and whether one of the user's own answers it",
     ),
+    (
+        "kill.rs",
+        "the kills and guarded libraries tests arm, compiled for tests alone",
+    ),
 ];
 
 #[test]

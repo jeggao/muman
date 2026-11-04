@@ -44,6 +44,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "ui",
             "progress",
             "atomic",
+            "kill",
             "tools",
             "runner",
             "fingerprint",

@@ -3,7 +3,7 @@
 //! and deletes that wait out a file another program holds open.
 //!
 //! Each change of a file passes a point a test can stop the run at, as
-//! a crash would (`testing::kill_at`), so the tests kill every command at
+//! a crash would (`kill::kill_at`), so the tests kill every command at
 //! every step and check what recovery makes of it.
 //!
 //! A write names its file by a [`Name`], one plain part of a path checked
@@ -146,8 +146,8 @@ fn write_as(dir: &Path, name: &Name, bytes: &[u8], private: bool) -> Result<()> 
         // Kept, so a test's kill leaves it as a real kill does, for
         // clear_parts.
         let path = part.into_temp_path().keep().map_err(|e| e.error)?;
-        #[cfg(test)]
-        crate::testing::change_point(&file);
+        #[cfg(any(test, feature = "testing"))]
+        crate::kill::change_point(&file);
         if let Err(e) = retry(|| std::fs::rename(&path, &file)) {
             drop(tempfile::TempPath::try_from_path(path));
             return Err(e);
@@ -226,8 +226,8 @@ fn retry(mut op: impl FnMut() -> io::Result<()>) -> io::Result<()> {
 // The primitive every other rename goes through.
 #[expect(clippy::disallowed_methods)]
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
-    #[cfg(test)]
-    crate::testing::change_point(to);
+    #[cfg(any(test, feature = "testing"))]
+    crate::kill::change_point(to);
     retry(|| std::fs::rename(from, to))
 }
 
@@ -235,8 +235,8 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
 // The primitive every other second name goes through.
 #[expect(clippy::disallowed_methods)]
 pub fn link(from: &Path, to: &Path) -> io::Result<()> {
-    #[cfg(test)]
-    crate::testing::change_point(to);
+    #[cfg(any(test, feature = "testing"))]
+    crate::kill::change_point(to);
     std::fs::hard_link(from, to)
 }
 
@@ -244,8 +244,8 @@ pub fn link(from: &Path, to: &Path) -> io::Result<()> {
 // The primitive every other removal goes through.
 #[expect(clippy::disallowed_methods)]
 pub fn remove(path: &Path) -> io::Result<()> {
-    #[cfg(test)]
-    crate::testing::change_point(path);
+    #[cfg(any(test, feature = "testing"))]
+    crate::kill::change_point(path);
     retry(|| std::fs::remove_file(path))
 }
 
@@ -257,7 +257,7 @@ pub struct Lock {
     /// of its own keeps its file.
     removed: Option<PathBuf>,
     /// The library a test guards that this locks.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     library: Option<PathBuf>,
 }
 
@@ -265,9 +265,9 @@ impl Drop for Lock {
     // Lets go of the library's lock file.
     #[expect(clippy::disallowed_methods)]
     fn drop(&mut self) {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "testing"))]
         if let Some(library) = &self.library {
-            crate::testing::library_held(library, false);
+            crate::kill::library_held(library, false);
         }
         // Before the file closes, which lets the lock go.
         if let Some(path) = &self.removed {
@@ -339,9 +339,9 @@ impl Lock {
                 && held == named
             {
                 lock.removed = Some(path);
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testing"))]
                 {
-                    crate::testing::library_held(&resolved, true);
+                    crate::kill::library_held(&resolved, true);
                     lock.library = Some(resolved);
                 }
                 return Ok(lock);
@@ -367,7 +367,7 @@ impl Lock {
         let locked = |file| Self {
             file,
             removed: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             library: None,
         };
         match file.try_lock() {

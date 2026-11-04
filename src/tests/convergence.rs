@@ -138,7 +138,7 @@ fn command(s: &Setup, op: &Op) -> Vec<String> {
 /// Run `args` on `s` as [`Setup::run`] does, a command refused, such
 /// as a restore of a song listed, being one outcome among others.
 fn attempt(s: &Setup, fake: &Fake, args: &[&str]) {
-    let _guard = crate::testing::guard_library(&s.job(args).dirs.library);
+    let _guard = crate::kill::guard_library(&s.job(args).dirs.library);
     let _ = run_with(
         &s.job(args),
         fake,
@@ -167,7 +167,7 @@ fn take(s: &Setup, fake: &Fake, (op, kill): &Step) {
         attempt(s, fake, &args);
         return;
     };
-    let killing = crate::testing::kill_at(s.dir.path(), *at);
+    let killing = crate::kill::kill_at(s.dir.path(), *at);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_with(
             &s.job(&args),
