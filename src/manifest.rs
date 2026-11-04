@@ -62,6 +62,7 @@ use crate::provider::Provider;
 use crate::providers;
 use crate::source::SourceKey;
 use crate::tags;
+pub use crate::torrent::Torrent;
 
 /// The newest format this version reads, written only when a song lists
 /// a torrent's file, a key no muman before it reads. Adding a key is not
@@ -254,19 +255,6 @@ pub struct Removed {
     pub note: String,
     /// The tags it was given by hand.
     pub tags: Tags,
-}
-
-/// A torrent songs list files of, as `[torrents."<hash>"]` records it:
-/// what fetches it again where the store has lost its metainfo.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Torrent {
-    /// Its own name, to show.
-    pub name: Option<String>,
-    /// Its trackers, where it is not private: a private tracker's address
-    /// holds a personal key, which the song list never does.
-    pub trackers: Vec<String>,
-    /// Its v2 hash, where its keys name it by its v1 one.
-    pub v2: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

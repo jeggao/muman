@@ -590,6 +590,19 @@ fn dedup(list: &mut Vec<String>) {
     list.retain(|t| seen.insert(t.clone()));
 }
 
+/// A torrent songs list files of, as `[torrents."<hash>"]` records it:
+/// what fetches it again where the store has lost its metainfo.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Torrent {
+    /// Its own name, to show.
+    pub name: Option<String>,
+    /// Its trackers, where it is not private: a private tracker's address
+    /// holds a personal key, which the song list never does.
+    pub trackers: Vec<String>,
+    /// Its v2 hash, where its keys name it by its v1 one.
+    pub v2: Option<String>,
+}
+
 /// A magnet link's torrent: its hashes, name and trackers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Magnet {

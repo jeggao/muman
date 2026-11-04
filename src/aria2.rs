@@ -133,7 +133,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::manifest::Manifest;
 use crate::runner::{ARIA2C_SECRET, Line, Runner};
 use crate::source::{SourceKey, TorrentKey};
 use crate::torrent::{File, Magnet, Metainfo};
@@ -1048,20 +1047,24 @@ pub struct Refetched {
 }
 
 /// Fetch the files `by_hash` names of each torrent again, with the
-/// lyrics and pictures a listed song file of it brings: a run for the
-/// metainfo the store lost, then one for every torrent's files.
+/// lyrics and pictures a `listed` song file of it brings: a run for the
+/// metainfo the store lost, asked by what the song list records of each
+/// of `torrents`, then one for every torrent's files.
 pub fn fetch_due<R: Runner, W: Write>(
     runner: &R,
     out: &mut W,
     places: &Places<'_>,
-    manifest: &Manifest,
+    (torrents, listed): (
+        &BTreeMap<String, crate::torrent::Torrent>,
+        &BTreeSet<SourceKey>,
+    ),
     by_hash: &BTreeMap<String, Vec<SourceKey>>,
 ) -> Result<Refetched> {
     let mut failed = Vec::new();
     let lost: Vec<(&String, Magnet)> = by_hash
         .keys()
         .filter(|h| !crate::store::metainfo_path(places.store, h).is_file())
-        .map(|h| (h, magnet_of(manifest, h)))
+        .map(|h| (h, magnet_of(torrents, h)))
         .collect();
     let magnets: Vec<&Magnet> = lost.iter().map(|(_, m)| m).collect();
     let asked = metainfos(runner, out, places, &magnets)
@@ -1077,7 +1080,7 @@ pub fn fetch_due<R: Runner, W: Write>(
     let mut wanted = Vec::new();
     let mut asking = Vec::new();
     for (meta, keys) in &metas {
-        let files = wanted_files(places, manifest, meta, keys);
+        let files = wanted_files(places, listed, meta, keys);
         match repair_from_store(places, meta, &files) {
             Ok(()) => {
                 wanted.push(Wanted { meta, files });
@@ -1133,8 +1136,8 @@ fn fail<W: Write>(
 
 /// A magnet link of the torrent of `hash`, with what the song list
 /// records of it.
-fn magnet_of(manifest: &Manifest, hash: &str) -> Magnet {
-    let recorded = manifest.torrents.get(hash).cloned().unwrap_or_default();
+fn magnet_of(torrents: &BTreeMap<String, crate::torrent::Torrent>, hash: &str) -> Magnet {
+    let recorded = torrents.get(hash).cloned().unwrap_or_default();
     Magnet {
         v1: (hash.len() == crate::torrent::V1_HEX).then(|| hash.to_string()),
         v2: recorded
@@ -1177,14 +1180,13 @@ fn read_kept(
 /// pictures a listed song file of it brings that the store lacks.
 fn wanted_files<'m>(
     places: &Places<'_>,
-    manifest: &Manifest,
+    listed: &BTreeSet<SourceKey>,
     meta: &'m Metainfo,
     keys: &[SourceKey],
 ) -> Vec<&'m File> {
     let hash = meta.hash();
-    let listed: Vec<&Path> = manifest
-        .keys()
-        .into_iter()
+    let listed: Vec<&Path> = listed
+        .iter()
         .filter_map(|k| match k {
             SourceKey::Torrent(t) if t.hash() == hash => Some(
                 meta.files
