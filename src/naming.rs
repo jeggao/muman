@@ -487,6 +487,55 @@ fn split(start: &str) -> String {
         .to_string()
 }
 
+/// The most bytes a suffix the song list gives may take.
+pub const MOST_SUFFIX: usize = 24;
+
+/// Whether `suffix`, what follows a song's stem in a file beside it, as
+/// `.en` in `Song.en.lrc` or `.lrc` itself, names a file beside the song
+/// on every system: empty, or a dot and up to [`MOST_SUFFIX`] bytes in
+/// all of what any filesystem takes in a name. Why not, if not.
+pub fn check_suffix(suffix: &str) -> Result<(), String> {
+    if suffix.is_empty() {
+        return Ok(());
+    }
+    if !suffix.starts_with('.') {
+        return Err(format!("`{suffix}` must begin with a dot, as `.en`"));
+    }
+    plain(suffix)
+}
+
+/// Whether `name`, a file a folder of songs holds once, as `cover`, is
+/// one name of its own on every system, before its extension. Why not, if
+/// not.
+pub fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.starts_with('.') {
+        return Err(format!(
+            "`{name}` must name a file, not begin with a dot or be empty"
+        ));
+    }
+    if name.ends_with([' ', '.']) || reserved(name) {
+        return Err(format!("`{name}` is a name Windows refuses"));
+    }
+    plain(name)
+}
+
+/// `text` of nothing a name refuses on any system, within
+/// [`MOST_SUFFIX`] bytes.
+fn plain(text: &str) -> Result<(), String> {
+    if text.len() > MOST_SUFFIX {
+        return Err(format!(
+            "`{text}` is over {MOST_SUFFIX} bytes, the most a name keeps for it"
+        ));
+    }
+    if let Some(c) = text
+        .chars()
+        .find(|c| c.is_control() || "/\\:*?\"<>|".contains(*c))
+    {
+        return Err(format!("`{text}` holds {c:?}, which a file name cannot"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,5 +943,28 @@ mod tests {
         };
         let stem = naming(&none).stem(&tags("A", "B", "a\\b")).unwrap();
         assert_eq!(stem.file_name().unwrap(), "a⧹b");
+    }
+
+    #[test]
+    fn a_suffix_or_a_folder_s_file_is_one_plain_name() {
+        for good in ["", ".en", ".lrc", ".zh-Hant"] {
+            assert_eq!(check_suffix(good), Ok(()), "{good}");
+        }
+        for bad in [
+            "en",
+            "./x",
+            ".a/b",
+            ".a\\b",
+            ".a:b",
+            ".\u{7}",
+            &".x".repeat(13),
+        ] {
+            assert!(check_suffix(bad).is_err(), "{bad}");
+        }
+        assert_eq!(check_name("cover"), Ok(()));
+        assert_eq!(check_name("folder"), Ok(()));
+        for bad in ["", ".cover", "../cover", "a/b", "CON", "cover.", "cover "] {
+            assert!(check_name(bad).is_err(), "{bad}");
+        }
     }
 }

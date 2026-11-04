@@ -256,8 +256,7 @@ impl<'a> Resolver<'a> {
             manifest,
             settings,
             state,
-            naming: Naming::new(&settings.library, library)?
-                .with_tail(crate::outputs::tail(settings)),
+            naming: Naming::new(&settings.library, library)?.with_tail(settings.tail()),
             albums: Albums::of(state.facts.values().map(|f| &f.tags)),
         })
     }
