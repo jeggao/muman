@@ -125,6 +125,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "folder",
             "outputs",
             "lookup",
+            "due",
             "identify",
             "acquire",
             "library",
@@ -158,14 +159,11 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
 
 /// The upward references the library's code makes, as `(from, to)`.
 pub const KNOWN: &[(&str, &str)] = &[
-    ("acquire", "sync"),
     ("aria2", "manifest"),
-    ("aria2", "sync"),
     ("history", "change"),
     ("manifest", "state"),
     ("migrate", "lookup"),
     ("naming", "settings"),
-    ("reconcile", "sync"),
     ("tagfile", "musicbrainz"),
     ("torrent", "naming"),
 ];

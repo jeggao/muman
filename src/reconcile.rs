@@ -295,7 +295,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     // A dry run fetches nothing: what a sync would fetch counts as there,
     // and a song waiting on a source never measured is fetched, not failed.
     let to_fetch: BTreeSet<SourceKey> = if opts.dry_run {
-        let due = crate::sync::due(
+        let due = crate::due::due(
             &manifest,
             &store,
             &state.failures,
@@ -303,7 +303,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
             crate::state::now_secs(),
         );
         (due.now.into_iter())
-            .filter(|(_, f)| *f == crate::sync::Fetch::Missing)
+            .filter(|(_, f)| *f == crate::due::Fetch::Missing)
             .map(|(k, _)| k)
             .collect()
     } else {

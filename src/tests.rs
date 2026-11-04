@@ -3170,13 +3170,13 @@ fn a_sync_fetches_what_is_missing_or_damaged_and_waits_on_what_failed_lately() {
     let torrent = key(&format!("torrent:{hash}/a.flac"));
     state.record_failure(&torrent, crate::state::Step::Refetch, None, "cut".into());
     let now = crate::state::now_secs();
-    let due = crate::sync::due(&manifest, &store, &state.failures, false, now);
-    let missing = crate::sync::Fetch::Missing;
+    let due = crate::due::due(&manifest, &store, &state.failures, false, now);
+    let missing = crate::due::Fetch::Missing;
     assert_eq!(
         due.now,
         BTreeMap::from([
             (key("jamendo.com:1234567"), missing),
-            (torrent.clone(), crate::sync::Fetch::Damaged),
+            (torrent.clone(), crate::due::Fetch::Damaged),
         ]),
         "a manual file and a key of no address to fetch from are no fetch"
     );
@@ -3184,7 +3184,7 @@ fn a_sync_fetches_what_is_missing_or_damaged_and_waits_on_what_failed_lately() {
         due.waiting,
         std::collections::BTreeSet::from([key("jamendo.com:7654321")])
     );
-    let retried = crate::sync::due(&manifest, &store, &state.failures, true, now);
+    let retried = crate::due::due(&manifest, &store, &state.failures, true, now);
     assert!(retried.now.contains_key(&key("jamendo.com:7654321")));
     assert!(retried.waiting.is_empty());
 }

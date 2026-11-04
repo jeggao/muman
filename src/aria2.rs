@@ -1037,53 +1037,6 @@ pub fn keep_metainfo(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The listed torrent files the store lacks or holds damaged, by their
-/// torrent's hash, each said; those that failed lately wait unless
-/// `retry`, and are said as waiting.
-pub(crate) fn due<W: Write>(
-    out: &mut W,
-    due: &crate::sync::Due,
-) -> Result<BTreeMap<String, Vec<SourceKey>>> {
-    let torrent = |k: &&SourceKey| matches!(k, SourceKey::Torrent(_));
-    let waiting = due.waiting.iter().filter(torrent).count();
-    if waiting > 0 {
-        crate::ui::warning(
-            out,
-            &format!(
-                "Not fetching {waiting} missing torrent file(s) that failed lately; `sync --retry` \
-                 tries now"
-            ),
-        )?;
-    }
-    let mut by_hash: BTreeMap<String, Vec<SourceKey>> = BTreeMap::new();
-    let (mut repaired, mut gone) = (0, 0);
-    for (key, fetch) in &due.now {
-        if let SourceKey::Torrent(t) = key {
-            by_hash
-                .entry(t.hash().to_string())
-                .or_default()
-                .push(key.clone());
-            match fetch {
-                crate::sync::Fetch::Damaged => repaired += 1,
-                crate::sync::Fetch::Missing => gone += 1,
-            }
-        }
-    }
-    if repaired > 0 {
-        crate::ui::info(
-            out,
-            &format!("Fetching {repaired} damaged torrent file(s) again"),
-        )?;
-    }
-    if gone > 0 {
-        crate::ui::info(
-            out,
-            &format!("Fetching {gone} missing torrent file(s) again"),
-        )?;
-    }
-    Ok(by_hash)
-}
-
 /// What a sync's fetch of torrent files again ended in.
 #[derive(Debug, Default)]
 pub struct Refetched {

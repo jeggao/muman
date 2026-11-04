@@ -61,7 +61,7 @@ src/
   relpath.rs        recorded paths, written with / and in NFC
   runner.rs         the subprocess seam
   tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
-  acquire.rs        the network phase: yt-dlp listing, fetching, matching
+  acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
   sites.rs          the song list's [sites]: how each site names and fetches
   torrent.rs        torrent metainfo and magnet links: what a torrent: key names
   download.rs       yt-dlp's arguments and the files it reports
