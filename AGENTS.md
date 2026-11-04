@@ -192,12 +192,12 @@ measures and lyrics are made with as another, and each major alone;
 - **Files:** whole-file writes through `atomic::write`; renames and
   deletes in the library through `atomic::rename` and `atomic::remove`,
   which wait out a file Windows reports as held open.
-- **Settings:** a new setting goes in `settings.rs`, with its default
+- **Settings:** a new setting goes in `settings.rs`, or in the lower
+  module that applies it, re-exported from `settings.rs`. Its default is
   written out in `manifest/new.toml`; a test keeps the two equal. A
-  renamed setting, or one given a unit, and a changed default each add
-  a step to a new edition in `migrate::HISTORY`, raising
-  `migrate::EDITION`. A setting that changes a written file must change the
-  song's `Plan`.
+  renamed setting, or one given a unit, and a changed default each add a
+  step to a new edition in `migrate::HISTORY`, raising `migrate::EDITION`.
+  A setting that changes a written file must change the song's `Plan`.
 - **Formats:** `songs.toml` carries a `version`, `state.db` a schema in
   `user_version`; a changed meaning is a new version, a new key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the

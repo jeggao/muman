@@ -53,9 +53,87 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::analysis::{Analysis, Analyzer, Measured, Stream};
 use crate::resolve::{Format, Plan, Resolved, TagWhy};
-use crate::settings::{GainScope, LoudnessMode, Settings};
+use crate::settings::Settings;
 use crate::state::State;
 use crate::tags::{Field, Scope};
+use crate::units::serde_as;
+
+/// How loud each song is made, from its loudness measured as EBU R128
+/// measures it; the module docs hold the design.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Loudness {
+    pub mode: LoudnessMode,
+    /// The loudness every song is levelled to, in hundredths of a LUFS.
+    #[serde(deserialize_with = "serde_as::lufs")]
+    pub target: i32,
+    /// Peaks between samples, as a DAC rebuilds them, rather than the
+    /// samples' own.
+    pub true_peak: bool,
+    /// The gain `header` and `audio` apply.
+    pub scope: GainScope,
+    /// The highest peak a raising gain applied may lift a song to, in
+    /// hundredths of a dB against full scale.
+    #[serde(deserialize_with = "serde_as::db")]
+    pub ceiling: i32,
+}
+
+impl Default for Loudness {
+    fn default() -> Self {
+        Self {
+            mode: LoudnessMode::Tags,
+            target: -1800,
+            true_peak: true,
+            scope: GainScope::Album,
+            ceiling: -100,
+        }
+    }
+}
+
+impl Loudness {
+    /// Whether songs are measured at all.
+    #[must_use]
+    pub fn measured(&self) -> bool {
+        self.mode != LoudnessMode::Off
+    }
+
+    pub(crate) fn check(&self) -> anyhow::Result<()> {
+        if !(-7000..=0).contains(&self.target) {
+            anyhow::bail!("[loudness] target must lie between -70 LUFS and 0 LUFS");
+        }
+        if self.ceiling > 0 {
+            anyhow::bail!("[loudness] ceiling must be 0 dB or less, at most full scale");
+        }
+        Ok(())
+    }
+}
+
+/// Where a song's gain is put.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoudnessMode {
+    /// Nothing measured: the gains a source's own tags carry are kept.
+    Off,
+    /// ReplayGain tags players apply, R128 gains in Opus.
+    #[default]
+    Tags,
+    /// Tags, and in Opus the gain in the header every decoder applies.
+    Header,
+    /// The samples scaled, encoding audio that would be copied.
+    Audio,
+}
+
+/// Which of a song's gains is applied to it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GainScope {
+    /// Its album's, so the album keeps its songs' levels; a song on no
+    /// album takes its own.
+    #[default]
+    Album,
+    /// Its own.
+    Track,
+}
 
 /// Names the meter and its constants; a measure by another is measured
 /// again, so changing anything below means changing this.

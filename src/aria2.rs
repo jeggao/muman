@@ -131,12 +131,43 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::Deserialize;
 
 use crate::manifest::Manifest;
 use crate::runner::{ARIA2C_SECRET, Line, Runner};
-use crate::settings::Torrent;
 use crate::source::{SourceKey, TorrentKey};
 use crate::torrent::{File, Magnet, Metainfo};
+use crate::units::serde_as;
+
+/// How aria2c fetches a torrent's files.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Torrent {
+    /// More arguments for every aria2c run, as a port range or a speed
+    /// limit.
+    pub args: Vec<String>,
+    /// How long a fetch waits with no byte arriving before it fails, to
+    /// be tried again by a later sync.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub stall: std::time::Duration,
+    /// How long a fetched torrent is seeded before the run goes on.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub seed_time: std::time::Duration,
+    /// How long an unfinished fetch is kept to resume.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub keep_partial: std::time::Duration,
+}
+
+impl Default for Torrent {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            stall: std::time::Duration::from_secs(10 * 60),
+            seed_time: std::time::Duration::ZERO,
+            keep_partial: crate::units::Time::days(30).duration(),
+        }
+    }
+}
 
 /// Where aria2c runs and how.
 #[derive(Debug, Clone, Copy)]

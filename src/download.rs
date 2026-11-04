@@ -66,10 +66,58 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::runner::Runner;
-use crate::settings::Ytdlp;
 use crate::sites::Sites;
 use crate::source::SourceKey;
+use crate::units::serde_as;
 use crate::{ffmpeg, info, probe};
+
+/// How yt-dlp fetches a source.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Ytdlp {
+    /// yt-dlp's `--format`: what is kept of a video. muman reads a
+    /// source's audio, subtitles and thumbnail, never the video itself, so
+    /// a format with video in it only takes room in the store.
+    pub format: String,
+    /// yt-dlp's `--sub-langs`: the subtitles kept for lyrics. YouTube's
+    /// live chat, Niconico's comments and Bilibili's danmaku are listed
+    /// as subtitles too, though they are viewers' comments, and none goes
+    /// into the Matroska file a source is kept in.
+    pub sub_langs: String,
+    pub concurrent_fragments: u32,
+    /// Load muman's yt-dlp plugins ([`crate::plugins`]), which keep
+    /// generated captions out, take a YouTube Music track's square album
+    /// art and give each file of an archive.org item its item's details.
+    pub plugins: bool,
+    /// More arguments for every yt-dlp run: listing, searching, the
+    /// audio a comparison downloads, and fetching. They reach yt-dlp in a
+    /// config file of the run's own, not on its command line, as the
+    /// module docs say.
+    pub args: Vec<String>,
+    /// yt-dlp's `--extractor-args`, by extractor, for a fetch and the
+    /// check of what a source offers upstream.
+    pub extractor_args: BTreeMap<String, String>,
+    /// How long an unfinished download is kept to resume.
+    #[serde(deserialize_with = "serde_as::duration")]
+    pub keep_partial: std::time::Duration,
+}
+
+impl Default for Ytdlp {
+    fn default() -> Self {
+        Self {
+            format: "ba/b".into(),
+            sub_langs: "all,-live_chat,-comments,-danmaku".into(),
+            concurrent_fragments: 4,
+            plugins: true,
+            args: Vec::new(),
+            extractor_args: BTreeMap::from([(
+                "youtube".into(),
+                "skip=translated_subs;player_client=default,web_music".into(),
+            )]),
+            keep_partial: crate::units::Time::days(14).duration(),
+        }
+    }
+}
 
 /// `<extractor>/<id>.mkv`: what names a download the same every time it
 /// is tried, nothing a site may rename.

@@ -13,6 +13,11 @@
 //! key these tables do not know is an error naming it, so a misspelled
 //! setting is never silently ignored.
 //!
+//! A table a lower layer reads is defined in the module that applies it
+//! and re-exported here: `[loudness]`, `[ytdlp]`, `[torrent]` and the
+//! `format` of `[[lyrics.out]]`. Then that layer needs nothing from
+//! this module, which sits above it.
+//!
 //! Each aspect a song is made of keeps what decides it in its own table:
 //! `[audio.pick]` and `[cover.pick]` hold the measures their sources are
 //! ranked by, and `[lyrics.clean]`, as `[tags.clean]`, the switches of the
@@ -49,8 +54,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
 
+pub use crate::aria2::Torrent;
 use crate::codec::{Codec, Layout, Shape, Speakers};
+pub use crate::cues::LyricsFormat;
+pub use crate::download::Ytdlp;
 use crate::lang::{Lang, Role};
+pub use crate::loudness::{GainScope, Loudness, LoudnessMode};
 use crate::migrate::FIRST;
 pub use crate::migrate::{
     EDITION, EDITIONS, Editions, Stale, edition_of, stale, stale_warnings, update,
@@ -254,40 +263,6 @@ pub enum To {
     File,
     /// A tag inside the song's file.
     Tag,
-}
-
-/// How lyrics are written ([`crate::cues`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LyricsFormat {
-    /// LRC, each line's time before it, as the lyrics are kept.
-    #[default]
-    Lrc,
-    /// WebVTT cues.
-    Vtt,
-    /// SubRip cues.
-    Srt,
-    /// Plain text, no times.
-    Txt,
-}
-
-impl LyricsFormat {
-    /// The extension of a file of it.
-    #[must_use]
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Lrc => "lrc",
-            Self::Vtt => "vtt",
-            Self::Srt => "srt",
-            Self::Txt => "txt",
-        }
-    }
-
-    /// Whether it holds only lyrics whose lines carry times, as cues.
-    #[must_use]
-    pub fn cues(self) -> bool {
-        matches!(self, Self::Vtt | Self::Srt)
-    }
 }
 
 /// Which lyrics an output takes, by whether their lines carry times.
@@ -509,83 +484,6 @@ impl Audio {
         }
         self.pick.check()
     }
-}
-
-/// How loud each song is made, from its loudness measured as EBU R128
-/// measures it; [`crate::loudness`] holds the design.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Loudness {
-    pub mode: LoudnessMode,
-    /// The loudness every song is levelled to, in hundredths of a LUFS.
-    #[serde(deserialize_with = "serde_as::lufs")]
-    pub target: i32,
-    /// Peaks between samples, as a DAC rebuilds them, rather than the
-    /// samples' own.
-    pub true_peak: bool,
-    /// The gain `header` and `audio` apply.
-    pub scope: GainScope,
-    /// The highest peak a raising gain applied may lift a song to, in
-    /// hundredths of a dB against full scale.
-    #[serde(deserialize_with = "serde_as::db")]
-    pub ceiling: i32,
-}
-
-impl Default for Loudness {
-    fn default() -> Self {
-        Self {
-            mode: LoudnessMode::Tags,
-            target: -1800,
-            true_peak: true,
-            scope: GainScope::Album,
-            ceiling: -100,
-        }
-    }
-}
-
-impl Loudness {
-    /// Whether songs are measured at all.
-    #[must_use]
-    pub fn measured(&self) -> bool {
-        self.mode != LoudnessMode::Off
-    }
-
-    fn check(&self) -> Result<()> {
-        if !(-7000..=0).contains(&self.target) {
-            bail!("[loudness] target must lie between -70 LUFS and 0 LUFS");
-        }
-        if self.ceiling > 0 {
-            bail!("[loudness] ceiling must be 0 dB or less, at most full scale");
-        }
-        Ok(())
-    }
-}
-
-/// Where a song's gain is put.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LoudnessMode {
-    /// Nothing measured: the gains a source's own tags carry are kept.
-    Off,
-    /// ReplayGain tags players apply, R128 gains in Opus.
-    #[default]
-    Tags,
-    /// Tags, and in Opus the gain in the header every decoder applies.
-    Header,
-    /// The samples scaled, encoding audio that would be copied.
-    Audio,
-}
-
-/// Which of a song's gains is applied to it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GainScope {
-    /// Its album's, so the album keeps its songs' levels; a song on no
-    /// album takes its own.
-    #[default]
-    Album,
-    /// Its own.
-    Track,
 }
 
 /// How the best audio of a song's sources is picked. Each measure scores
@@ -1038,84 +936,6 @@ macro_rules! weighed {
 weighed!(
     Purity, Bandwidth, Stereo, Clipping, Square, Resolution, Blockiness
 );
-
-/// How yt-dlp fetches a source.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Ytdlp {
-    /// yt-dlp's `--format`: what is kept of a video. muman reads a
-    /// source's audio, subtitles and thumbnail, never the video itself, so
-    /// a format with video in it only takes room in the store.
-    pub format: String,
-    /// yt-dlp's `--sub-langs`: the subtitles kept for lyrics. YouTube's
-    /// live chat, Niconico's comments and Bilibili's danmaku are listed
-    /// as subtitles too, though they are viewers' comments, and none goes
-    /// into the Matroska file a source is kept in.
-    pub sub_langs: String,
-    pub concurrent_fragments: u32,
-    /// Load muman's yt-dlp plugins ([`crate::plugins`]), which keep
-    /// generated captions out, take a YouTube Music track's square album
-    /// art and give each file of an archive.org item its item's details.
-    pub plugins: bool,
-    /// More arguments for every yt-dlp run: listing, searching, the
-    /// audio a comparison downloads, and fetching. They reach yt-dlp in a
-    /// config file of the run's own, not on its command line
-    /// ([`crate::download`]).
-    pub args: Vec<String>,
-    /// yt-dlp's `--extractor-args`, by extractor, for a fetch and the
-    /// check of what a source offers upstream.
-    pub extractor_args: BTreeMap<String, String>,
-    /// How long an unfinished download is kept to resume.
-    #[serde(deserialize_with = "serde_as::duration")]
-    pub keep_partial: std::time::Duration,
-}
-
-impl Default for Ytdlp {
-    fn default() -> Self {
-        Self {
-            format: "ba/b".into(),
-            sub_langs: "all,-live_chat,-comments,-danmaku".into(),
-            concurrent_fragments: 4,
-            plugins: true,
-            args: Vec::new(),
-            extractor_args: BTreeMap::from([(
-                "youtube".into(),
-                "skip=translated_subs;player_client=default,web_music".into(),
-            )]),
-            keep_partial: crate::units::Time::days(14).duration(),
-        }
-    }
-}
-
-/// How aria2c fetches a torrent's files.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Torrent {
-    /// More arguments for every aria2c run, as a port range or a speed
-    /// limit.
-    pub args: Vec<String>,
-    /// How long a fetch waits with no byte arriving before it fails, to
-    /// be tried again by a later sync.
-    #[serde(deserialize_with = "serde_as::duration")]
-    pub stall: std::time::Duration,
-    /// How long a fetched torrent is seeded before the run goes on.
-    #[serde(deserialize_with = "serde_as::duration")]
-    pub seed_time: std::time::Duration,
-    /// How long an unfinished fetch is kept to resume.
-    #[serde(deserialize_with = "serde_as::duration")]
-    pub keep_partial: std::time::Duration,
-}
-
-impl Default for Torrent {
-    fn default() -> Self {
-        Self {
-            args: Vec::new(),
-            stall: std::time::Duration::from_secs(10 * 60),
-            seed_time: std::time::Duration::ZERO,
-            keep_partial: crate::units::Time::days(30).duration(),
-        }
-    }
-}
 
 /// The programs muman runs: `[tools.ffmpeg]`, `[tools.ffprobe]`,
 /// `[tools."yt-dlp"]` and `[tools.aria2c]`.
