@@ -2546,7 +2546,7 @@ fn a_plan_is_stored_and_keyed_as_the_last_release_kept() {
         crate::testing::Digest::default(),
     );
     for format in every_format() {
-        let plan = crate::testing::every_part(format);
+        let plan = crate::resolve::testing::every_part(format);
         let json = serde_json::to_string(&plan).unwrap();
         let read: Plan = serde_json::from_str(&json).unwrap();
         assert!(read == plan, "{format:?} reads back as stored");
@@ -2565,7 +2565,7 @@ fn a_plan_is_stored_and_keyed_as_the_last_release_kept() {
 
 #[test]
 fn each_part_of_a_plan_changes_what_is_stored_and_the_audio_s_the_key() {
-    let base = crate::testing::every_part(Format::Encode {
+    let base = crate::resolve::testing::every_part(Format::Encode {
         codec: Codec::Opus,
         kbps: Some(192),
         adapt: None,
@@ -2574,7 +2574,7 @@ fn each_part_of_a_plan_changes_what_is_stored_and_the_audio_s_the_key() {
     let json = serde_json::to_string(&base).unwrap();
     let key = crate::limit::plan_key("tools", &base);
     let mut kept = Vec::new();
-    for (name, change) in crate::testing::mutations() {
+    for (name, change) in crate::resolve::testing::mutations() {
         let mut plan = base.clone();
         change(&mut plan);
         assert_ne!(serde_json::to_string(&plan).unwrap(), json, "{name}");

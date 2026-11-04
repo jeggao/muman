@@ -45,6 +45,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
             "progress",
             "atomic",
             "kill",
+            "testing",
             "tools",
             "runner",
             "fingerprint",
@@ -173,10 +174,10 @@ pub const TEST_KNOWN: &[(&str, &str)] = &[
 pub const DOC_KNOWN: &[(&str, &str)] = &[];
 
 /// Files that are tests as a whole, not a module's code.
-const TEST_FILES: [&str; 2] = ["tests.rs", "testing.rs"];
+const TEST_FILES: [&str; 1] = ["tests.rs"];
 
-/// The library's own test modules, `src/tests.rs` and `src/testing.rs`.
-const TEST_MODULES: [&str; 2] = ["tests", "testing"];
+/// The library's own test module, `src/tests.rs`.
+const TEST_MODULES: [&str; 1] = ["tests"];
 
 /// What a reference is made by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

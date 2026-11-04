@@ -2,12 +2,12 @@ use super::*;
 use crate::codec::Codec;
 
 fn opus() -> Plan {
-    crate::testing::every_part(Format::Copy { codec: Codec::Opus })
+    crate::resolve::testing::every_part(Format::Copy { codec: Codec::Opus })
 }
 
 /// What each change to `base` writes again, by the change's name.
 fn redone(base: &Plan) -> Vec<(&'static str, Redo)> {
-    crate::testing::mutations()
+    crate::resolve::testing::mutations()
         .into_iter()
         .map(|(name, change)| {
             let mut plan = base.clone();
@@ -101,7 +101,7 @@ fn each_change_lands_in_the_part_that_writes_it() {
 #[test]
 fn an_mp4_s_chapters_are_built_and_another_s_tagged() {
     let chapters = |codec| {
-        redone(&crate::testing::every_part(Format::Encode {
+        redone(&crate::resolve::testing::every_part(Format::Encode {
             codec,
             kbps: Some(256),
             adapt: None,
@@ -128,8 +128,8 @@ fn a_plan_s_parts_are_equal_where_the_plan_is() {
             mix: None,
         },
     ] {
-        let base = crate::testing::every_part(format);
-        for (name, change) in crate::testing::mutations() {
+        let base = crate::resolve::testing::every_part(format);
+        for (name, change) in crate::resolve::testing::mutations() {
             let mut plan = base.clone();
             change(&mut plan);
             assert_eq!(
@@ -253,8 +253,8 @@ fn the_parts_decide_as_the_projections_they_replace_but_where_named() {
             mix: None,
         },
     ] {
-        let base = crate::testing::every_part(format);
-        for (name, change) in crate::testing::mutations() {
+        let base = crate::resolve::testing::every_part(format);
+        for (name, change) in crate::resolve::testing::mutations() {
             let mut plan = base.clone();
             change(&mut plan);
             let now = redo(&base, &plan);
@@ -327,8 +327,8 @@ fn the_parts_name_and_guess_the_files_beside_as_the_plan_did() {
         Format::Copy { codec: Codec::Opus },
         Format::Copy { codec: Codec::Flac },
     ] {
-        let base = crate::testing::every_part(format);
-        for (name, change) in crate::testing::mutations() {
+        let base = crate::resolve::testing::every_part(format);
+        for (name, change) in crate::resolve::testing::mutations() {
             let mut plan = base.clone();
             change(&mut plan);
             let made = parts(&plan);

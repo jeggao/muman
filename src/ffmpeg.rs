@@ -244,8 +244,7 @@ pub fn run<R: Runner>(runner: &R, inputs: &[Input], outputs: &[Output]) -> Vec<R
     }
 }
 
-/// The path of an output written to ffmpeg's stdout.
-pub const PIPE: &str = "pipe:1";
+pub use crate::runner::PIPE;
 
 /// What a piped output's reader is handed.
 #[derive(Debug)]

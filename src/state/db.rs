@@ -804,9 +804,11 @@ mod tests {
                 sidecars: vec![Sidecar::at(
                     "Marlo Venn/Harbor Lights/01 Lantern Weather.lrc".into(),
                 )],
-                plan: Some(crate::testing::every_part(crate::resolve::Format::Copy {
-                    codec: crate::codec::Codec::Flac,
-                })),
+                plan: Some(crate::resolve::testing::every_part(
+                    crate::resolve::Format::Copy {
+                        codec: crate::codec::Codec::Flac,
+                    },
+                )),
                 stamp: Some("10:20".into()),
                 digest: Some("d".into()),
             },

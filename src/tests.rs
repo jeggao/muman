@@ -3600,7 +3600,7 @@ fn a_home_an_earlier_muman_left_syncs_as_it_was_and_undoes_its_run() {
     // As the last release left the home: its state in `state.json`, and
     // the run recorded whole, as version 1 of the record holds it.
     let left = crate::state::State::load(&home).unwrap();
-    crate::testing::put_old_state(&home, serde_json::to_string(&left).unwrap().as_bytes());
+    crate::state::put_old_state(&home, serde_json::to_string(&left).unwrap().as_bytes());
     let (file, mut record) = latest_record(&s);
     let fields = record.as_object_mut().unwrap();
     fields.remove("before");
@@ -3655,7 +3655,7 @@ fn info_prints_the_state_as_json_and_changes_nothing() {
 
     // A home an earlier muman left is read as it is.
     let state = crate::state::State::load(&home).unwrap();
-    crate::testing::put_old_state(&home, serde_json::to_string(&state).unwrap().as_bytes());
+    crate::state::put_old_state(&home, serde_json::to_string(&state).unwrap().as_bytes());
     let mut again = Vec::new();
     crate::state::State::dump(&home, &mut again).unwrap();
     assert_eq!(String::from_utf8(again).unwrap(), text);

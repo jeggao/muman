@@ -493,6 +493,9 @@ impl<R: Runner> Runner for Traced<R> {
     }
 }
 
+/// The path of an output ffmpeg writes to its stdout.
+pub const PIPE: &str = "pipe:1";
+
 /// aria2c's options that carry a login, a password, a header or an
 /// address that may hold either: a trace hides each one's value, and
 /// given in `[torrent] args`, each goes to the run's config file rather
