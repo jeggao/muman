@@ -11,9 +11,22 @@ pub const STATE: &str = "state.json";
 pub struct Dirs {
     pub home: PathBuf,
     pub library: PathBuf,
+    /// The folder of the user's own the library's lock is kept in, under
+    /// its cache folder, to leave no file in the library; `None` where the
+    /// platform names no home directory. Tests keep it beside their own
+    /// library, and read no folder of the machine's.
+    pub locks: Option<PathBuf>,
 }
 
 impl Dirs {
+    /// [`Self::locks`], or why a library cannot be locked without one.
+    pub fn lock_folder(&self) -> anyhow::Result<&Path> {
+        use anyhow::Context;
+        self.locks
+            .as_deref()
+            .context("this system names no folder of the user's own to keep the library's lock in")
+    }
+
     /// Refuse folders that hold each other where muman would read its
     /// own songs back as new ones, or skip every file of the user's as
     /// one of the library's.

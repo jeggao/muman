@@ -172,6 +172,7 @@ fn setup() -> Setup {
     let dirs = Dirs {
         home: dir.path().join("home"),
         library: dir.path().join("lib"),
+        locks: Some(dir.path().to_path_buf()),
     };
     std::fs::create_dir_all(dir.path().join("temp")).unwrap();
     Setup { dir, dirs }

@@ -15,6 +15,7 @@ fn home(manual: &[&str]) -> Home {
     let dirs = Dirs {
         home: dir.path().join("home"),
         library: dir.path().join("lib"),
+        locks: Some(dir.path().to_path_buf()),
     };
     let fetched = dirs.ytdlp().join("c/Song [aaaaaaaaaaa].mkv");
     std::fs::create_dir_all(fetched.parent().unwrap()).unwrap();

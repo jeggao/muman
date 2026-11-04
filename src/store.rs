@@ -1158,6 +1158,7 @@ mod tests {
         Dirs {
             home: root.to_path_buf(),
             library: root.join("lib"),
+            locks: Some(root.to_path_buf()),
         }
     }
 

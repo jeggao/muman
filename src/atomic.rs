@@ -35,8 +35,9 @@
 //! A sync and an undo hold the library's lock while they change the
 //! library, after the home's; nothing else changes it, and a dry run
 //! such as `status` changes nothing in it. The lock is kept out of the
-//! library, in a folder of the user's own under their cache folder
-//! ([`crate::platform::locks`]), made private on Unix. Not in the
+//! library, in a folder of the user's own under their cache folder,
+//! which the caller names ([`crate::dirs::Dirs::locks`]) and this makes
+//! private on Unix. Not in the
 //! system's temporary folder, where its
 //! name, the digest of the library's path, is known to every user:
 //! another could make it first as a link, so that opening it made or
@@ -275,21 +276,6 @@ impl Drop for Lock {
     }
 }
 
-/// The folder library locks are kept in: the user's own, made private,
-/// but beside the library in tests, which read no folder of the
-/// machine's.
-fn library_locks(library: &Path) -> Result<PathBuf> {
-    if cfg!(test)
-        && let Some(parent) = library.parent()
-    {
-        return Ok(parent.to_path_buf());
-    }
-    let dir = crate::platform::locks()
-        .context("this system names no folder of the user's own to keep the library's lock in")?;
-    private(&dir)?;
-    Ok(dir)
-}
-
 /// Make `dir`, and on Unix make it the user's alone, as it may have been
 /// made by an older muman or another program.
 fn private(dir: &Path) -> Result<()> {
@@ -331,10 +317,11 @@ impl Lock {
     }
 
     /// A lock on the library folder, so two homes never write one
-    /// library at once. It is kept in a folder of the user's own, named by
-    /// the library's resolved path, to leave no file in the library, and
-    /// removed as it is let go.
-    pub fn library(library: &Path) -> Result<Self> {
+    /// library at once. It is kept in `locks`, a folder of the user's own
+    /// the caller names and this makes private, named by the library's
+    /// resolved path, to leave no file in the library, and removed as it
+    /// is let go.
+    pub fn library(library: &Path, locks: &Path) -> Result<Self> {
         // Made first, so its path resolves alike on the first run and later.
         if !library.exists() {
             std::fs::create_dir_all(library)
@@ -342,7 +329,8 @@ impl Lock {
         }
         let resolved = dunce::canonicalize(library).unwrap_or_else(|_| library.to_path_buf());
         let name = crate::hash::digest(resolved.to_string_lossy().as_bytes());
-        let path = library_locks(&resolved)?.join(format!(".muman-library-{name}.lock"));
+        private(locks)?;
+        let path = locks.join(format!(".muman-library-{name}.lock"));
         loop {
             let mut lock = Self::at(&path, library)?;
             let held = lock.file.try_clone().and_then(same_file::Handle::from_file);
@@ -661,7 +649,7 @@ mod tests {
                 .filter(|n| n.starts_with(".muman-library-"))
                 .count()
         };
-        let lock = Lock::library(&library).unwrap();
+        let lock = Lock::library(&library, dir.path()).unwrap();
         assert_eq!(locks(), 1);
         drop(lock);
         assert_eq!(locks(), 0, "let go of, its file goes");
@@ -670,7 +658,7 @@ mod tests {
             for _ in 0..4 {
                 scope.spawn(|| {
                     for _ in 0..10 {
-                        let _lock = Lock::library(&library).unwrap();
+                        let _lock = Lock::library(&library, dir.path()).unwrap();
                         assert_eq!(inside.fetch_add(1, Ordering::SeqCst), 0, "two hold it");
                         std::thread::sleep(Duration::from_millis(1));
                         inside.fetch_sub(1, Ordering::SeqCst);

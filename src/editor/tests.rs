@@ -13,6 +13,7 @@ fn home(songs: &str) -> Home {
     let dirs = Dirs {
         home: dir.path().join("home"),
         library: dir.path().join("lib"),
+        locks: Some(dir.path().to_path_buf()),
     };
     for name in ["a", "b", "c"] {
         let file = dirs.manual().join(format!("{name}.flac"));
