@@ -6231,7 +6231,7 @@ fn survives_a_kill_at_every_step(
         let fine = now == after || (ends == Ends::WholeOrNone && now == before);
         let show = |lib: &BTreeMap<PathBuf, Vec<u8>>| {
             lib.iter()
-                .map(|(p, b)| format!("{} {}", p.display(), crate::facts::digest(b)))
+                .map(|(p, b)| format!("{} {}", p.display(), crate::hash::digest(b)))
                 .collect::<Vec<_>>()
         };
         assert!(

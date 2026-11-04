@@ -341,7 +341,7 @@ impl Lock {
                 .with_context(|| format!("creating {}", library.display()))?;
         }
         let resolved = dunce::canonicalize(library).unwrap_or_else(|_| library.to_path_buf());
-        let name = crate::facts::digest(resolved.to_string_lossy().as_bytes());
+        let name = crate::hash::digest(resolved.to_string_lossy().as_bytes());
         let path = library_locks(&resolved)?.join(format!(".muman-library-{name}.lock"));
         loop {
             let mut lock = Self::at(&path, library)?;

@@ -285,7 +285,7 @@ fn the_edition_rises_with_what_the_rules_write() {
         ran.extend(c.rules);
     }
     assert_eq!(ran, names().collect(), "every rule changes a sample");
-    let digest = crate::facts::hex(&hash.finalize());
+    let digest = crate::hash::hex(&hash.finalize());
     assert_eq!(
         (EDITION, digest.as_str()),
         WRITTEN,

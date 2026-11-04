@@ -37,6 +37,7 @@ pub mod fit;
 pub mod folder;
 pub mod given;
 pub mod guided;
+pub mod hash;
 pub mod held;
 pub mod history;
 pub mod hooks;

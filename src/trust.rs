@@ -252,7 +252,7 @@ fn canonical(value: &Value) -> String {
 
 fn digest(name: &str, value: &str) -> String {
     let hash = Sha256::digest(format!("{name}\0{value}").as_bytes());
-    crate::facts::hex(&hash[..16])
+    crate::hash::hex(&hash[..16])
 }
 
 /// `text` with each control character, and each mark that reorders or

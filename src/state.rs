@@ -505,7 +505,7 @@ impl Sidecar {
         let file = library.join(&path);
         Self {
             stamp: crate::store::stamp_text(&file),
-            digest: crate::facts::digest_file(&file),
+            digest: crate::hash::digest_file(&file),
             path,
         }
     }

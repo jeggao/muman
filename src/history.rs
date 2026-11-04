@@ -509,7 +509,7 @@ impl Run {
             let outputs = &self.record.was;
             let changed = crate::reconcile::changed_since_written(library, outputs, rel)
                 && outputs.get(rel).is_some_and(|w| {
-                    w.digest.is_none() || crate::facts::digest_file(&from) != w.digest
+                    w.digest.is_none() || crate::hash::digest_file(&from) != w.digest
                 });
             if changed {
                 self.record.changed.insert(rel.to_path_buf());
@@ -538,8 +538,7 @@ impl Run {
     /// Record that the run copied `file`, under `home`, into the
     /// sources, so `undo` takes the copy out with the song.
     pub fn copied(&mut self, home: &Path, file: &Path) {
-        if let (Ok(rel), Some(digest)) = (file.strip_prefix(home), crate::facts::digest_file(file))
-        {
+        if let (Ok(rel), Some(digest)) = (file.strip_prefix(home), crate::hash::digest_file(file)) {
             self.record.copied.insert(rel.to_path_buf(), digest);
         }
     }
@@ -1193,7 +1192,7 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
 
 /// Whether `file` holds the bytes it was copied with.
 fn as_copied(file: &Path, digest: &str) -> bool {
-    crate::facts::digest_file(file).as_deref() == Some(digest)
+    crate::hash::digest_file(file).as_deref() == Some(digest)
 }
 
 /// The outputs once `record`'s run is undone, from `now`'s: as the run

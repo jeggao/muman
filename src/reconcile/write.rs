@@ -680,7 +680,7 @@ fn vouch<R: Runner, W: Write>(
         sidecars,
         plan: Some(r.plan.clone()),
         stamp: store::stamp_text(&library.join(&done.audio)),
-        digest: crate::facts::digest_file(&library.join(&done.audio)),
+        digest: crate::hash::digest_file(&library.join(&done.audio)),
     };
     Ok((vouched, learned))
 }
