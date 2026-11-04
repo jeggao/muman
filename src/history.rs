@@ -1144,6 +1144,21 @@ fn copies_said(home: &Path, record: &Record) -> Vec<String> {
         .collect()
 }
 
+/// Move a file of the user's own to the desktop's trash. On macOS this
+/// asks the file manager API directly rather than scripting Finder,
+/// which prompts for permission and fails over SSH.
+pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
+    // Only macOS sets the delete method; elsewhere nothing writes to it.
+    #[allow(unused_mut)]
+    let mut trash = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        trash.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    trash.delete(file)
+}
+
 /// Take out each copy `add` made that is still there, and the folders
 /// that leaves empty in the sources.
 // Removes the copies `add` made, as undo.
@@ -1162,8 +1177,7 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
                 &format!("Deleted the copy the run made: {}", copy.display()),
             )?;
         } else {
-            crate::change::to_trash(&copy)
-                .with_context(|| format!("moving {} to the trash", copy.display()))?;
+            to_trash(&copy).with_context(|| format!("moving {} to the trash", copy.display()))?;
             crate::ui::info(
                 out,
                 &format!(
