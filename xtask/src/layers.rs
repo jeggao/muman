@@ -173,7 +173,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("naming", "settings"),
     ("query", "change"),
     ("reconcile", "sync"),
-    ("runner", "aria2"),
     ("settings", "outputs"),
     ("sites", "manifest"),
     ("sites", "music"),
