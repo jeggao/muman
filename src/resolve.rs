@@ -2145,5 +2145,7 @@ fn split_places(input: &Input<'_>, written: &mut Vec<(String, Slot)>) {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 #[cfg(test)]
 mod tests;

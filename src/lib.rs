@@ -97,8 +97,8 @@ pub mod tagfile;
 pub mod tags;
 pub mod template;
 pub mod terms;
-#[cfg(test)]
-mod testing;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tools;
 pub mod torrent;
 pub mod trust;
