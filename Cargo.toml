@@ -61,7 +61,7 @@ members = [".", "crates/muman-config", "crates/muman-core", "crates/muman-engine
 # What every crate of muman shares; they are released together, at one
 # version.
 [workspace.package]
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version = "1.89"
 license = "AGPL-3.0-only"
@@ -69,11 +69,11 @@ repository = "https://github.com/jeggao/muman"
 
 # The workspace's crates, each pinned at the one version they share.
 [workspace.dependencies]
-muman-config = { path = "crates/muman-config", version = "=0.10.0" }
-muman-core = { path = "crates/muman-core", version = "=0.10.0" }
-muman-engine = { path = "crates/muman-engine", version = "=0.10.0" }
-muman-media = { path = "crates/muman-media", version = "=0.10.0" }
-muman-net = { path = "crates/muman-net", version = "=0.10.0" }
+muman-config = { path = "crates/muman-config", version = "=0.10.1" }
+muman-core = { path = "crates/muman-core", version = "=0.10.1" }
+muman-engine = { path = "crates/muman-engine", version = "=0.10.1" }
+muman-media = { path = "crates/muman-media", version = "=0.10.1" }
+muman-net = { path = "crates/muman-net", version = "=0.10.1" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
