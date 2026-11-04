@@ -671,7 +671,7 @@ fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> 
         }
         settings.clean = Some(clean);
     }
-    crate::naming::Naming::new(&settings.library, Path::new("")).map_err(invalid)?;
+    settings.library.naming(Path::new("")).map_err(invalid)?;
     if settings.loudness.measured() && !manifest.settings.loudness.measured() {
         return Err(crate::errors::Refused(
             "The export levels songs, and the song list's [loudness] mode = \"off\" measures \
