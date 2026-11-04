@@ -88,6 +88,7 @@ pub mod sync;
 pub mod tagfile;
 pub mod tags;
 pub mod template;
+pub mod terms;
 #[cfg(test)]
 mod testing;
 pub mod tools;

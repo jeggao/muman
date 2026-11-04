@@ -107,7 +107,7 @@ src/
   export.rs         the song list and the library into one zip
   redact.rs         the song list with its secrets replaced, for export --redact
   history.rs        run records and undo
-  change.rs, editor.rs, query.rs   list, set, edit, remove, restore
+  change.rs, editor.rs, query.rs, terms.rs   list, set, edit, remove, restore
   guided.rs         set with a query alone: songs changed field by field
   rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info

@@ -36,9 +36,9 @@ use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, Value};
 
 use crate::facts::Facts;
-use crate::query::{Closed, Have};
 use crate::source::{SourceKey, YOUTUBE};
 use crate::tags::{Field, RECORD_FIELDS};
+use crate::terms::{Closed, Have};
 
 use crate::provider::Provider;
 
@@ -268,7 +268,7 @@ fn read_skip(item: &Item, what: &str) -> Result<Vec<String>> {
             let text = v.as_str().with_context(|| {
                 format!("{what}: each entry is a query, as 'album:=\"Some Album\"'")
             })?;
-            crate::query::parse_text(text, &schemes)
+            crate::terms::parse_text(text, &schemes)
                 .map_err(|e| anyhow::anyhow!("{what}: `{text}`: {e:#}"))?;
             Ok(text.to_string())
         })
