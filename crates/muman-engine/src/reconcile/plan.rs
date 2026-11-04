@@ -18,7 +18,8 @@ use crate::tags::Field;
 
 /// How a song is named in messages: its title and artist as resolved,
 /// else its first source.
-pub(crate) fn name_of(
+#[must_use]
+pub fn name_of(
     song: &Song,
     resolved: Option<&Resolved>,
     facts: &BTreeMap<SourceKey, Facts>,
@@ -47,7 +48,8 @@ pub(crate) fn name_of(
         .unwrap_or_else(|| "a song with no sources".to_string())
 }
 
-pub(crate) fn path_of(r: &Resolved) -> PathBuf {
+#[must_use]
+pub fn path_of(r: &Resolved) -> PathBuf {
     let mut name = r.stem.as_os_str().to_os_string();
     name.push(".");
     name.push(r.plan.format.extension());
@@ -106,14 +108,14 @@ pub(super) fn separate(
 }
 
 /// Each song's place in the song list, and what it resolved to.
-pub(crate) type Planned = Vec<(usize, Resolved)>;
+pub type Planned = Vec<(usize, Resolved)>;
 
 /// One song of [`Planned`].
 pub(super) type PlannedSong = (usize, Resolved);
 
 /// Resolve every song, saying which could not be and returning their
 /// sources with the plans, each song with a path of its own.
-pub(crate) fn plan<W: Write>(
+pub fn plan<W: Write>(
     manifest: &Manifest,
     state: &State,
     library: &Path,
@@ -161,7 +163,7 @@ pub(super) fn plan_awaiting<W: Write>(
 
 /// [`plan`] under `settings` rather than the song list's, saying only
 /// which songs could not be resolved and which paths are too long.
-pub(crate) fn plan_with<W: Write>(
+pub fn plan_with<W: Write>(
     manifest: &Manifest,
     settings: &crate::settings::Settings,
     state: &State,
@@ -219,7 +221,8 @@ pub(super) fn resolve_all<W: Write>(
 }
 
 /// What resolving every song found, for a caller to say or count.
-pub(crate) struct Resolution {
+#[derive(Debug)]
+pub struct Resolution {
     pub planned: Planned,
     /// Each song that could not be resolved, by its place, and why.
     pub unresolved: Vec<(usize, anyhow::Error)>,
@@ -237,7 +240,8 @@ pub(crate) struct Resolution {
 /// the sources offer, made once for many songs. A song need not be
 /// listed, so one made in memory, as songs merged, resolves as the sync
 /// after would resolve it.
-pub(crate) struct Resolver<'a> {
+#[derive(Debug)]
+pub struct Resolver<'a> {
     manifest: &'a Manifest,
     settings: &'a crate::settings::Settings,
     state: &'a State,
@@ -246,7 +250,7 @@ pub(crate) struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    pub(crate) fn new(
+    pub fn new(
         manifest: &'a Manifest,
         settings: &'a crate::settings::Settings,
         state: &'a State,
@@ -263,7 +267,7 @@ impl<'a> Resolver<'a> {
 
     /// What resolving `song` reads, with the sources `on_disk` when the
     /// store was looked at.
-    pub(crate) fn input<'s>(
+    pub fn input<'s>(
         &'s self,
         song: &'s Song,
         on_disk: Option<&'s BTreeSet<SourceKey>>,
@@ -288,7 +292,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// `song` resolved, listed or not.
-    pub(crate) fn resolve(&self, song: &Song) -> Result<Resolved> {
+    pub fn resolve(&self, song: &Song) -> Result<Resolved> {
         resolve::resolve(&self.input(song, None))
     }
 }
@@ -339,7 +343,7 @@ fn agree_on_albums(
 
 /// Resolve every song under `settings`, each with a path of its own,
 /// saying nothing.
-pub(crate) fn resolve_songs(
+pub fn resolve_songs(
     manifest: &Manifest,
     settings: &crate::settings::Settings,
     state: &State,

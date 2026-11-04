@@ -1157,13 +1157,11 @@ dependencies = [
  "lofty",
  "muman-config",
  "muman-core",
+ "muman-engine",
  "muman-media",
  "muman-net",
  "proptest",
  "regex",
- "rusqlite",
- "same-file",
- "serde",
  "serde_json",
  "sha1",
  "sha2",
@@ -1172,8 +1170,6 @@ dependencies = [
  "terminal_size",
  "toml",
  "toml_edit",
- "trash",
- "unicode-normalization",
  "unicode-width",
  "which",
  "zip",
@@ -1236,6 +1232,29 @@ dependencies = [
  "ureq",
  "walkdir",
  "which",
+]
+
+[[package]]
+name = "muman-engine"
+version = "0.10.0"
+dependencies = [
+ "anstream",
+ "anyhow",
+ "filetime",
+ "lofty",
+ "muman-config",
+ "muman-core",
+ "muman-media",
+ "muman-net",
+ "rusqlite",
+ "same-file",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "trash",
+ "unicode-normalization",
+ "unicode-width",
 ]
 
 [[package]]

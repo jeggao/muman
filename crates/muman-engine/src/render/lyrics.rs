@@ -106,7 +106,8 @@ pub(super) fn planned(
 
 /// The file lyrics at `at` of `source` are read from; none for a stream
 /// or a tag, or lyrics beside it that are gone.
-pub(crate) fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
+#[must_use]
+pub fn lyrics_file(at: &LyricsAt, source: &Located) -> Option<PathBuf> {
     match at {
         LyricsAt::Stream { .. } | LyricsAt::Tag => None,
         LyricsAt::Sidecar => source.lyrics.clone(),

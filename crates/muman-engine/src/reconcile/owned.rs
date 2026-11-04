@@ -100,7 +100,8 @@ pub(super) fn emptied(file: &Path) -> bool {
 
 /// Whether a file muman wrote has changed since, by its size and
 /// time: a tagger or player that rewrote it.
-pub(crate) fn changed_since_written(
+#[must_use]
+pub fn changed_since_written(
     library: &Path,
     old: &BTreeMap<PathBuf, Written>,
     path: &Path,
@@ -119,11 +120,8 @@ pub(crate) fn changed_since_written(
 /// edit fitting the tag's padding. The bytes are read only here, for a
 /// file about to be written over, moved with new tags or removed, so a
 /// sync reads no file it leaves as it is.
-pub(crate) fn edited_since_written(
-    library: &Path,
-    old: &BTreeMap<PathBuf, Written>,
-    path: &Path,
-) -> bool {
+#[must_use]
+pub fn edited_since_written(library: &Path, old: &BTreeMap<PathBuf, Written>, path: &Path) -> bool {
     if changed_since_written(library, old, path) {
         return true;
     }
@@ -139,7 +137,7 @@ pub(crate) fn edited_since_written(
 /// Take each output whose size or time changed since it was written,
 /// but whose bytes are the ones written, as muman's still: a backup put
 /// back or a copy made without its times. Only those are read.
-pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
+pub fn vouch_for_copies(library: &Path, state: &mut State) {
     for (path, written) in &mut state.outputs {
         if let AsWritten::Copied(now) = as_written(&library.join(path), written) {
             written.stamp = Some(now);
@@ -155,7 +153,8 @@ pub(crate) fn vouch_for_copies(library: &Path, state: &mut State) {
 /// Whether a file beside an output is as muman wrote it, by its size and
 /// time or its bytes; one an earlier version recorded by its place alone
 /// is.
-pub(crate) fn sidecar_as_written(library: &Path, sidecar: &Sidecar) -> bool {
+#[must_use]
+pub fn sidecar_as_written(library: &Path, sidecar: &Sidecar) -> bool {
     sidecar.stamp.is_none() || !matches!(sidecar_written(library, sidecar), AsWritten::Not)
 }
 
@@ -204,7 +203,7 @@ fn stamped(file: &Path, stamp: Option<&String>, digest: Option<&String>) -> AsWr
 /// where a copy gave it new times; the rest are let go of, to be written
 /// anew, or left alone where another file is in the way. How many were
 /// kept and let go of.
-pub(crate) fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -> (usize, usize) {
+pub fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -> (usize, usize) {
     let before = outputs.len();
     outputs.retain(
         |path, written| match as_written(&library.join(path), written) {
@@ -234,7 +233,7 @@ pub(crate) fn rehome(outputs: &mut BTreeMap<PathBuf, Written>, library: &Path) -
 /// Take `library` as the folder the outputs are in: the files there as
 /// muman wrote them stay its ([`rehome`]), and those written into another
 /// before are no longer muman's to delete.
-pub(crate) fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
+pub fn adopt<W: Write>(state: &mut State, library: &Path, out: &mut W) -> Result<()> {
     if library.exists() && !library.is_dir() {
         anyhow::bail!("the library {} is a file, not a folder", library.display());
     }

@@ -40,7 +40,7 @@ use crate::state::Written;
 
 /// Every part of `plan`.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Parts<'a> {
+pub struct Parts<'a> {
     pub audio: AudioPart<'a>,
     pub tags: TagsPart<'a>,
     pub cover: Option<CoverPart<'a>>,
@@ -50,7 +50,7 @@ pub(crate) struct Parts<'a> {
 
 /// What the audio of the song's file is made from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AudioPart<'a> {
+pub struct AudioPart<'a> {
     pub version: u32,
     pub format: Format,
     pub source: &'a AudioRef,
@@ -64,7 +64,7 @@ pub(crate) struct AudioPart<'a> {
 
 /// What the tags of the song's file are made from.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TagsPart<'a> {
+pub struct TagsPart<'a> {
     pub tags: &'a [(String, Vec<String>)],
     pub tagging: u32,
     pub language: Option<&'a str>,
@@ -77,7 +77,7 @@ pub(crate) struct TagsPart<'a> {
 
 /// What a song's lyrics' text is made from, wherever it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LyricText<'a> {
+pub struct LyricText<'a> {
     pub key: &'a SourceKey,
     pub rev: &'a str,
     pub at: &'a LyricsAt,
@@ -92,14 +92,14 @@ pub(crate) struct LyricText<'a> {
 
 /// The lyrics inside the song, and how they are written there.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LyricsInside<'a> {
+pub struct LyricsInside<'a> {
     pub text: LyricText<'a>,
     pub form: LyricsFile,
 }
 
 /// A file of lyrics beside the song.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LyricsFilePart<'a> {
+pub struct LyricsFilePart<'a> {
     pub text: LyricText<'a>,
     pub file: LyricsFile,
     /// Where the song ends, which ends a file of cues' last cue.
@@ -108,7 +108,7 @@ pub(crate) struct LyricsFilePart<'a> {
 
 /// What a cover picture is made from, wherever it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CoverSource<'a> {
+pub struct CoverSource<'a> {
     pub key: &'a SourceKey,
     pub rev: &'a str,
     pub at: &'a CoverAt,
@@ -118,7 +118,7 @@ pub(crate) struct CoverSource<'a> {
 
 /// One place a cover goes, and what it is made from there.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CoverPart<'a> {
+pub struct CoverPart<'a> {
     pub source: CoverSource<'a>,
     pub place: CoverPlace,
     /// How it is made, where this place encodes it.
@@ -127,7 +127,7 @@ pub(crate) struct CoverPart<'a> {
 
 /// A file written beside the song, in the order they are named.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Beside<'a> {
+pub enum Beside<'a> {
     Lyrics(LyricsFilePart<'a>),
     Cover(CoverPart<'a>),
     Folder(CoverPart<'a>),
@@ -171,7 +171,7 @@ const LYRICS_GUESS: u64 = 3 * 1024;
 
 /// What a plan's parts that differ from an old plan's write again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Redo {
+pub struct Redo {
     pub build: bool,
     pub retag: bool,
     pub beside: bool,
@@ -179,7 +179,7 @@ pub(crate) struct Redo {
 
 /// The parts of `plan`.
 #[must_use]
-pub(crate) fn parts(plan: &Plan) -> Parts<'_> {
+pub fn parts(plan: &Plan) -> Parts<'_> {
     let mp4 = plan.format.codec().container() == Container::Mp4;
     let chapters = plan.chapters.as_slice();
     let text = plan.lyrics.as_ref().map(|l| lyric_text(plan, l));
@@ -292,7 +292,7 @@ fn cover_part(c: &CoverRef, place: CoverPlace) -> CoverPart<'_> {
 
 /// What writing `new` over a song built as `old` writes again.
 #[must_use]
-pub(crate) fn redo(old: &Plan, new: &Plan) -> Redo {
+pub fn redo(old: &Plan, new: &Plan) -> Redo {
     parts(new).redo_from(&parts(old))
 }
 
@@ -358,7 +358,7 @@ impl<'a> Parts<'a> {
     /// The files written beside the song whose audio file is at `audio`:
     /// its lyrics', its cover's, then its folder's.
     #[must_use]
-    pub(crate) fn files(&self, audio: &Path) -> Vec<PathBuf> {
+    pub fn files(&self, audio: &Path) -> Vec<PathBuf> {
         self.beside.iter().filter_map(|b| b.path(audio)).collect()
     }
 
@@ -378,7 +378,7 @@ impl<'a> Parts<'a> {
     /// last build's. A file of the user's own at any other name is not
     /// the song's to touch.
     #[must_use]
-    pub(crate) fn touched(&self, audio: &Path, recorded: Option<&Written>) -> Vec<PathBuf> {
+    pub fn touched(&self, audio: &Path, recorded: Option<&Written>) -> Vec<PathBuf> {
         let mut files = self.files(audio);
         for path in recorded.into_iter().flat_map(Written::sidecar_paths) {
             if !files.contains(path) {
@@ -391,7 +391,7 @@ impl<'a> Parts<'a> {
     /// What the song's file is guessed to hold besides its audio, and
     /// each file beside it to take, before any is written.
     #[must_use]
-    pub(crate) fn guess(&self) -> (u64, Vec<u64>) {
+    pub fn guess(&self) -> (u64, Vec<u64>) {
         let tags: usize = self
             .tags
             .tags

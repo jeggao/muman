@@ -143,7 +143,7 @@ pub(super) fn note_damage<W: Write>(
 /// Note that `key`, a torrent's file at `rev`, holds every byte its
 /// torrent names, as each peer's copy does, so it is not fetched again
 /// until it changes, and say so.
-pub(crate) fn as_its_torrent<W: Write>(
+pub fn as_its_torrent<W: Write>(
     state: &mut State,
     key: &SourceKey,
     rev: Option<String>,
@@ -231,7 +231,7 @@ pub(super) fn damaged_since_built(
 /// run that finds them rather than the next: a file damaged on disk
 /// since it was measured is found by measuring, which the offline phase
 /// does after the fetches.
-pub(crate) fn note_damaged<R: Runner, W: Write>(
+pub fn note_damaged<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     retry: bool,

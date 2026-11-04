@@ -45,33 +45,12 @@ These bind every change, by a person or an agent.
 src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   add.rs, sync.rs   the add and sync commands, and the network steps they share
-  album.rs          the songs of one album made to agree: one edition, spelling, release
   cli.rs            the command line (clap derive), exit codes
-  state.rs          the state: files written, measures, comparisons
-  state/json.rs     state.json, as an earlier muman wrote it, read once
-  state/db.rs       state.db, the store the state moves into: schema, transactions
-  acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
-  identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  lookup.rs         lookups due, each provider asked until a song has what it names
-  reconcile.rs      the offline phase, its steps in order, each a module of its own:
-                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
-                    write.rs, prune.rs, report.rs
-  levels.rs         songs and albums levelled, from what loudness.rs measured
-  resolve.rs        one song's facts to the plan it is written from
-  artifact.rs       the part of a plan each library file is made from, and its name
-  render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
-  outputs.rs        the files beside a song: their names, and where a move takes them
-  folder.rs         the cover file a folder holds once, and the song that holds it
-  library.rs        the ledger: every move and removal in the library
-  fit.rs            songs fitted into a size, least audible loss first
-  limit.rs          the library kept under [library] max_size
   export.rs         the song list and the library into one zip
   redact.rs         the song list with its secrets replaced, for export --redact
-  history.rs        run records and undo
-  change.rs, editor.rs, query.rs   list, set, edit, remove, restore
+  change.rs, editor.rs   list, set, edit, remove, restore
   guided.rs         set with a query alone: songs changed field by field
-  rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs          fetched sources and records no song uses, deleted
@@ -79,6 +58,26 @@ src/
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
+  album.rs          the songs of one album made to agree: one edition, spelling, release
+  state.rs          the state: files written, measures, comparisons
+  state/json.rs     state.json, as an earlier muman wrote it, read once
+  state/db.rs       state.db, the store the state moves into: schema, transactions
+  acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
+  identify.rs       new sources to songs, by fingerprint
+  lookup.rs         lookups due, each provider asked until a song has what it names
+  reconcile.rs      the offline phase, its steps in order, each a module of its own:
+                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
+                    write.rs, prune.rs, report.rs
+  resolve.rs, levels.rs   one song's facts to the plan it is written from; songs levelled
+  artifact.rs       the part of a plan each library file is made from, and its name
+  render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
+  outputs.rs        the files beside a song: their names, and where a move takes them
+  folder.rs         the cover file a folder holds once, and the song that holds it
+  library.rs        the ledger: every move and removal in the library
+  fit.rs, limit.rs  songs fitted into a size, least audible loss first; [library] max_size
+  history.rs, query.rs   run records and undo; a query held against the songs
+  rows.rs           songs shown as aligned rows that tell them apart
 crates/muman-config/src/   the config layer: the song list, its settings, editions and hooks
   settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
                     [torrent], [tools], [history], [sites]; naming_tests.rs, its names

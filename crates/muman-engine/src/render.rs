@@ -131,12 +131,12 @@ pub(crate) use cover::converts;
 pub use cover::{COVER_MAKING, PICTURE_ARGS};
 use cover::{CoverPlan, cover_bytes, cover_files, cover_plans, cover_rels, fit_cover};
 use cover::{folder_plans, folder_rels, pictures, read_picture};
-pub(crate) use lyrics::lyrics_file;
+pub use lyrics::lyrics_file;
 
 #[derive(Debug)]
 pub struct Job<'a> {
     /// The parts of the song's plan, which alone its files are made from.
-    pub(crate) parts: &'a Parts<'a>,
+    pub parts: &'a Parts<'a>,
     /// The song's path in the library, without its extension.
     pub stem: &'a Path,
     pub library: &'a Path,

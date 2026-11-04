@@ -1147,7 +1147,7 @@ fn copies_said(home: &Path, record: &Record) -> Vec<String> {
 /// Move a file of the user's own to the desktop's trash. On macOS this
 /// asks the file manager API directly rather than scripting Finder,
 /// which prompts for permission and fails over SSH.
-pub(crate) fn to_trash(file: &Path) -> Result<(), trash::Error> {
+pub fn to_trash(file: &Path) -> Result<(), trash::Error> {
     // Only macOS sets the delete method; elsewhere nothing writes to it.
     #[allow(unused_mut)]
     let mut trash = trash::TrashContext::default();

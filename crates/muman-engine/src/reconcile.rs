@@ -42,21 +42,21 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{Located, Store};
 
-pub(crate) use self::damage::{as_its_torrent, note_damaged};
+pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
-pub(crate) use self::decide::{Doing, Foreseen, files_of, foresee};
+pub use self::decide::{Doing, Foreseen, files_of, foresee};
 use self::keys::{foresee_moves, sites_found};
-pub(crate) use self::measure::compare;
+pub use self::measure::compare;
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, analyze_mixes, hash, sizes};
-pub(crate) use self::owned::{
+pub use self::owned::{
     adopt, changed_since_written, edited_since_written, rehome, sidecar_as_written,
     vouch_for_copies,
 };
 use self::plan::plan_awaiting;
-pub(crate) use self::plan::{Planned, Resolver, name_of, path_of, plan, plan_with, resolve_songs};
-pub(crate) use self::report::{Fate, verdict};
+pub use self::plan::{Planned, Resolver, name_of, path_of, plan, plan_with, resolve_songs};
+pub use self::report::{Fate, verdict};
 use self::report::{Showing, Shown, fit_summary, left_out, status};
 use self::write::{Writing, apply, touch};
 
@@ -590,14 +590,14 @@ pub fn reconcile_into<R: Runner, W: Write>(
 
 /// What every run leaves, whatever came before it: each file the state
 /// records is there, no song has two, and nothing is half written.
-#[cfg(test)]
-pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
+#[cfg(any(test, feature = "testing"))]
+pub fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
     let state = State::load(&dirs.home).map_err(|e| format!("{e:#}"))?;
     let mut owners: BTreeMap<&SourceKey, &std::path::PathBuf> = BTreeMap::new();
     for (path, written) in &state.outputs {
         for file in written.files(path) {
             if !dirs.library.join(file).exists() {
-                return Err(format!("{file:?} is recorded, not there"));
+                return Err(format!("{} is recorded, not there", file.display()));
             }
         }
         for key in written
@@ -606,7 +606,11 @@ pub(crate) fn invariant(dirs: &Dirs) -> std::result::Result<(), String> {
             .filter(|k| !crate::manifest::shareable(k))
         {
             if let Some(other) = owners.insert(key, path) {
-                return Err(format!("{key} made both {other:?} and {path:?}"));
+                return Err(format!(
+                    "{key} made both {} and {}",
+                    other.display(),
+                    path.display()
+                ));
             }
         }
     }

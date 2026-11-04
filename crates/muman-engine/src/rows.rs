@@ -267,7 +267,8 @@ pub fn fit(songs: &[Cells], width: Option<usize>) -> Rows {
 }
 
 /// `text` no wider than `room`, ending in "…" when cut.
-pub(crate) fn cut(text: &str, room: usize) -> String {
+#[must_use]
+pub fn cut(text: &str, room: usize) -> String {
     if text.width() <= room {
         return text.to_string();
     }
