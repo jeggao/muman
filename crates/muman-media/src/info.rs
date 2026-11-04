@@ -117,11 +117,13 @@ pub struct Format {
 }
 
 impl Format {
-    pub(crate) fn has_audio(&self) -> bool {
+    #[must_use]
+    pub fn has_audio(&self) -> bool {
         self.acodec.as_deref().is_none_or(|c| c != "none")
     }
 
-    pub(crate) fn has_video(&self) -> bool {
+    #[must_use]
+    pub fn has_video(&self) -> bool {
         self.vcodec.as_deref().is_some_and(|c| c != "none")
     }
 }

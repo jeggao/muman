@@ -94,7 +94,7 @@ impl Loudness {
         self.mode != LoudnessMode::Off
     }
 
-    pub(crate) fn check(&self) -> anyhow::Result<()> {
+    pub fn check(&self) -> anyhow::Result<()> {
         if !(-7000..=0).contains(&self.target) {
             anyhow::bail!("[loudness] target must lie between -70 LUFS and 0 LUFS");
         }

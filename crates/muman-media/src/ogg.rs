@@ -99,8 +99,9 @@ pub fn set_output_gain(file: &mut File, gain: i16) -> Result<()> {
 /// `bytes`, an Ogg Opus file whose identification header is alone on its
 /// page, with that header written for mapping family 255, as ffmpeg
 /// writes channels with no speakers named: one stream each, none coupled.
-#[cfg(test)]
-pub(crate) fn discrete(bytes: &[u8]) -> Vec<u8> {
+#[cfg(any(test, feature = "testing"))]
+#[must_use]
+pub fn discrete(bytes: &[u8]) -> Vec<u8> {
     let (length, packet) = id_page(bytes).unwrap();
     let mut head = bytes[packet..length].to_vec();
     let channels = head[9];

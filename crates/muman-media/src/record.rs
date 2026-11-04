@@ -181,7 +181,7 @@ pub fn read(path: &Path) -> Result<Record> {
 }
 
 /// A JSON `null` read as the type's default.
-pub(crate) fn or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+pub fn or_default<'de, D, T>(d: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Default + Deserialize<'de>,
@@ -191,47 +191,48 @@ where
 
 /// A recording as a search or a lookup answers it.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Recording {
-    pub(crate) id: String,
+pub struct Recording {
+    pub id: String,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) title: String,
+    pub title: String,
     /// What tells it from recordings of the same name: a mix, a live date.
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) disambiguation: String,
+    pub disambiguation: String,
     #[serde(default)]
-    pub(crate) length: Option<u64>,
+    pub length: Option<u64>,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) video: bool,
+    pub video: bool,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) score: u32,
+    pub score: u32,
     #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
-    pub(crate) credit: Vec<Credit>,
+    pub credit: Vec<Credit>,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) isrcs: Vec<Isrc>,
+    pub isrcs: Vec<Isrc>,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) releases: Vec<Found>,
+    pub releases: Vec<Found>,
     #[serde(default, rename = "first-release-date")]
-    pub(crate) first_release_date: Option<String>,
+    pub first_release_date: Option<String>,
     /// Its works, which a lookup asking for `work-rels` lists.
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) relations: Vec<Relation>,
+    pub relations: Vec<Relation>,
 }
 
 /// A recording's relation, as a lookup lists it; only a work's are read.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Relation {
+pub struct Relation {
     #[serde(default)]
-    pub(crate) work: Option<Work>,
+    pub work: Option<Work>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Work {
+pub struct Work {
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) languages: Vec<String>,
+    pub languages: Vec<String>,
 }
 
 /// The lyrics languages of `relations`' works, each once.
-pub(crate) fn languages(relations: &[Relation]) -> Vec<String> {
+#[must_use]
+pub fn languages(relations: &[Relation]) -> Vec<String> {
     let mut all: Vec<String> = Vec::new();
     for language in relations
         .iter()
@@ -248,7 +249,7 @@ pub(crate) fn languages(relations: &[Relation]) -> Vec<String> {
 /// An ISRC: a search lists each as `{"id": …}`, a lookup as text.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum Isrc {
+pub enum Isrc {
     Text(String),
     Object { id: String },
 }
@@ -262,77 +263,78 @@ impl Isrc {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Credit {
+pub struct Credit {
     /// The name as credited here, which may differ from the artist's own.
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) name: String,
+    pub name: String,
     /// What joins it to the next name, as ` & ` or ` feat. `.
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) joinphrase: String,
+    pub joinphrase: String,
     #[serde(default)]
-    pub(crate) artist: Option<Artist>,
+    pub artist: Option<Artist>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Artist {
-    pub(crate) id: String,
+pub struct Artist {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Found {
-    pub(crate) id: String,
+pub struct Found {
+    pub id: String,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) title: String,
+    pub title: String,
     #[serde(default)]
-    pub(crate) status: Option<String>,
+    pub status: Option<String>,
     #[serde(default)]
-    pub(crate) date: Option<String>,
+    pub date: Option<String>,
     #[serde(default)]
-    pub(crate) country: Option<String>,
+    pub country: Option<String>,
     #[serde(default, rename = "release-group")]
-    pub(crate) group: Option<Group>,
+    pub group: Option<Group>,
     #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
-    pub(crate) credit: Vec<Credit>,
+    pub credit: Vec<Credit>,
     #[serde(default, deserialize_with = "or_default")]
-    pub(crate) media: Vec<Medium>,
+    pub media: Vec<Medium>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Group {
+pub struct Group {
     #[serde(default)]
-    pub(crate) id: Option<String>,
+    pub id: Option<String>,
     #[serde(default, rename = "primary-type")]
-    pub(crate) primary: Option<String>,
+    pub primary: Option<String>,
     #[serde(default, rename = "secondary-types", deserialize_with = "or_default")]
-    pub(crate) secondary: Vec<String>,
+    pub secondary: Vec<String>,
 }
 
 /// A medium holding the recording; a search lists its track as `track`,
 /// a lookup as `tracks`.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Medium {
+pub struct Medium {
     #[serde(default)]
-    pub(crate) position: Option<u32>,
+    pub position: Option<u32>,
     /// How many tracks come before the recording's on the medium.
     #[serde(default, rename = "track-offset")]
-    pub(crate) offset: Option<u32>,
+    pub offset: Option<u32>,
     #[serde(default, rename = "track-count")]
-    pub(crate) count: Option<u32>,
+    pub count: Option<u32>,
     #[serde(default)]
-    pub(crate) format: Option<String>,
+    pub format: Option<String>,
     #[serde(default, alias = "tracks", deserialize_with = "or_default")]
-    pub(crate) track: Vec<Track>,
+    pub track: Vec<Track>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Track {
+pub struct Track {
     #[serde(default)]
-    pub(crate) id: Option<String>,
+    pub id: Option<String>,
     #[serde(default)]
-    pub(crate) position: Option<u32>,
+    pub position: Option<u32>,
 }
 
-pub(crate) fn names(credit: &[Credit]) -> Vec<String> {
+#[must_use]
+pub fn names(credit: &[Credit]) -> Vec<String> {
     credit
         .iter()
         .map(|c| c.name.trim().to_string())
@@ -342,7 +344,8 @@ pub(crate) fn names(credit: &[Credit]) -> Vec<String> {
 
 /// The names of `credit` joined by its join phrases, when it credits more
 /// than one; empty otherwise, the one name being [`names`]'.
-pub(crate) fn credited(credit: &[Credit]) -> String {
+#[must_use]
+pub fn credited(credit: &[Credit]) -> String {
     if names(credit).len() < 2 {
         return String::new();
     }
@@ -353,7 +356,8 @@ pub(crate) fn credited(credit: &[Credit]) -> String {
     joined.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub(crate) fn artist_ids(credit: &[Credit]) -> Vec<String> {
+#[must_use]
+pub fn artist_ids(credit: &[Credit]) -> Vec<String> {
     credit
         .iter()
         .filter_map(|c| Some(c.artist.as_ref()?.id.clone()))
@@ -361,15 +365,17 @@ pub(crate) fn artist_ids(credit: &[Credit]) -> Vec<String> {
 }
 
 /// Whether two names hold one another, by [`crate::similar::names_match`].
-pub(crate) fn same(a: &str, b: &str) -> bool {
+#[must_use]
+pub fn same(a: &str, b: &str) -> bool {
     crate::similar::names_match(a, b).is_some()
 }
 
 /// A release's rank, smaller first, before its date: see the module docs.
-pub(crate) type Class = (bool, bool, bool, u8);
+pub type Class = (bool, bool, bool, u8);
 
 impl Found {
-    pub(crate) fn class(&self, album: Option<&str>) -> Class {
+    #[must_use]
+    pub fn class(&self, album: Option<&str>) -> Class {
         let group = self.group.as_ref();
         let primary = match group.and_then(|g| g.primary.as_deref()) {
             Some("Album") => 0,
@@ -386,14 +392,14 @@ impl Found {
     }
 
     /// Its date, or none when it states none.
-    pub(crate) fn date(&self) -> Option<&str> {
+    pub fn date(&self) -> Option<&str> {
         self.date
             .as_deref()
             .map(str::trim)
             .filter(|d| !d.is_empty())
     }
 
-    pub(crate) fn release(&self) -> Release {
+    pub fn release(&self) -> Release {
         let medium = self.media.first();
         let track = medium.and_then(|m| m.track.first());
         let text = |s: Option<&String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -428,7 +434,8 @@ impl Found {
 
 /// An earlier year first, then the fuller date, as `1975-11-21` before
 /// `1975`, then the earlier; one stated before none.
-pub(crate) fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
+#[must_use]
+pub fn date_key(date: Option<&str>) -> (bool, &str, std::cmp::Reverse<usize>, &str) {
     let d = date.unwrap_or_default();
     (
         date.is_none(),
@@ -454,7 +461,8 @@ impl Recording {
     }
 
     /// Its best release for a song on `album`.
-    pub(crate) fn best(&self, album: Option<&str>) -> Option<&Found> {
+    #[must_use]
+    pub fn best(&self, album: Option<&str>) -> Option<&Found> {
         self.releases.iter().min_by(|a, b| {
             a.class(album)
                 .cmp(&b.class(album))
@@ -464,7 +472,7 @@ impl Recording {
     }
 
     /// What is kept of it; `None` when its ID is no MBID.
-    pub(crate) fn record(&self, album: Option<&str>) -> Option<Record> {
+    pub fn record(&self, album: Option<&str>) -> Option<Record> {
         let best = self.best(album);
         Some(Record {
             id: Mbid::parse(&self.id)?,
@@ -489,7 +497,7 @@ impl Recording {
 
 /// The recording a `/ws/2/recording/<id>?fmt=json` answer holds, with
 /// the release it is best known from, or the one named `album`.
-pub(crate) fn parse_recording(json: &str, album: Option<&str>) -> Result<Record> {
+pub fn parse_recording(json: &str, album: Option<&str>) -> Result<Record> {
     let found: Recording = serde_json::from_str(json)?;
     match found.record(album) {
         Some(record) => Ok(record),

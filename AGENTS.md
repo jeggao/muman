@@ -62,30 +62,15 @@ src/
   plugins.rs        yt-dlp plugins shipped in the binary
   identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  similar.rs        names and texts compared in any script
-  picture.rs        perceptual hashes of covers
-  tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   lookup.rs         lookups due, each provider asked until a song has what it names;
-                    providers.rs, lrclib.rs, musicbrainz.rs, record.rs, acoustid.rs, coverart.rs
+                    providers.rs, lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs
   reconcile.rs      the offline phase, its steps in order, each a module of its own:
                     measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
                     write.rs, prune.rs, report.rs
-  facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
-  analysis.rs       the whole of a source's audio, one decode, every analyzer
-  integrity.rs      whether a source's audio is all there: cut off or missing
-  loudness.rs       EBU R128 loudness and a song's gains; levels.rs, songs and albums levelled
+  levels.rs         songs and albums levelled, from what loudness.rs measured
   held.rs           what each source held when its song was built
-  quality.rs        audio and picture measures
-  align.rs          audio comparison by loudness envelopes
   resolve.rs        one song's facts to the plan it is written from
   artifact.rs       the part of a plan each library file is made from, and its name
-  tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
-  lyrics.rs         subtitle languages, LRC cleaning and timing
-  cues.rs           lyrics written as LRC, WebVTT, SubRip or plain text
-  chapters.rs       a source's chapters, in each container's own form
-  naming.rs         safe names, through the path template
-  codec.rs          output codecs: names, containers, ffmpeg arguments
-  ogg.rs            the output gain an Opus file's header holds
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
   outputs.rs        the files beside a song: their names, and where a move takes them
   folder.rs         the cover file a folder holds once, and the song that holds it
@@ -105,6 +90,21 @@ src/
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
+  similar.rs        names and texts compared in any script
+  picture.rs        perceptual hashes of covers
+  tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
+  facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
+  analysis.rs       the whole of a source's audio, one decode, every analyzer
+  integrity.rs      whether a source's audio is all there: cut off or missing
+  loudness.rs       EBU R128 loudness and a song's gains
+  tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
+  lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
+  chapters.rs       a source's chapters, in each container's own form
+  naming.rs         safe names, through the path template
+  quality.rs, align.rs   audio and picture measures; audio compared by loudness envelopes
+  codec.rs, ogg.rs  output codecs: names, containers, ffmpeg arguments; an Opus header's gain
+  record.rs         the MusicBrainz record kept, and the answer it is read from
 crates/muman-core/src/   the lowest layer, which every other module builds on
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   new.toml          a new home's song list, the reference for every setting
