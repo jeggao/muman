@@ -267,7 +267,7 @@ fn rank_of<'a>(of: impl Fn(Field) -> Option<&'a [String]>) -> Rank<'a> {
         first(Field::ReleaseStatus) != Some("official"),
         types.len() > 1,
         primary,
-        crate::musicbrainz::date_key(first(Field::Date)),
+        crate::record::date_key(first(Field::Date)),
     )
 }
 

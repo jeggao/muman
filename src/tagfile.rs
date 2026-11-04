@@ -528,7 +528,7 @@ fn object(sheet: &mut Sheet, o: &Value) -> Result<Track> {
         bail!("holds a MusicBrainz release, which names no one recording");
     }
     if map.contains_key("artist-credit") {
-        let record = crate::musicbrainz::parse_recording(&o.to_string(), None)?;
+        let record = crate::record::parse_recording(&o.to_string(), None)?;
         return Ok(recorded(sheet, &record));
     }
     if map.contains_key("artists")
