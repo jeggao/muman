@@ -236,8 +236,31 @@ pub fn run(root: &Path, report: bool) -> Result<usize> {
     Ok(problems.len())
 }
 
+/// The folders the library's code is in: `src`, then each crate's
+/// `crates/<crate>/src`, as the library is split into crates.
+pub fn source_roots(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = vec![root.join("src")];
+    let crates = root.join("crates");
+    if crates.is_dir() {
+        let mut found = Vec::new();
+        for entry in
+            std::fs::read_dir(&crates).with_context(|| format!("reading {}", crates.display()))?
+        {
+            let src = entry?.path().join("src");
+            if src.is_dir() {
+                found.push(src);
+            }
+        }
+        found.sort();
+        roots.extend(found);
+    }
+    Ok(roots)
+}
+
 /// Every Rust file of the library, with the module it belongs to:
-/// `src/<module>.rs`, or a file under `src/<module>/`.
+/// `<module>.rs`, or a file under `<module>/`, in any of its
+/// [`source_roots`]. The binary's `main.rs` and a crate's `lib.rs` are
+/// the roots the modules hang from, no module of their own.
 fn sources(root: &Path) -> Result<Vec<(String, PathBuf)>> {
     fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -250,20 +273,23 @@ fn sources(root: &Path) -> Result<Vec<(String, PathBuf)>> {
         }
         Ok(())
     }
-    let src = root.join("src");
-    let mut files = Vec::new();
-    walk(&src, &mut files)?;
-    files.sort();
-    Ok(files
-        .into_iter()
-        .filter(|f| !f.ends_with(Path::new("src").join("main.rs")))
-        .filter_map(|f| {
+    let main = root.join("src");
+    let mut out = Vec::new();
+    for src in source_roots(root)? {
+        let mut files = Vec::new();
+        walk(&src, &mut files)?;
+        files.sort();
+        out.extend(files.into_iter().filter_map(|f| {
+            if f == src.join("main.rs") || (src != main && f == src.join("lib.rs")) {
+                return None;
+            }
             let first = f.strip_prefix(&src).ok()?.components().next()?;
             let name = first.as_os_str().to_string_lossy();
             let module = name.strip_suffix(".rs").unwrap_or(&name).to_string();
             Some((module, f))
-        })
-        .collect())
+        }));
+    }
+    Ok(out)
 }
 
 /// The references `module`'s file `text` makes, its tests' apart.
@@ -591,6 +617,32 @@ mod tests {
                 .any(|p| p.contains("units reaches up to state"))
         );
         assert!(!problems.iter().any(|p| p.contains("state reaches up")));
+    }
+
+    #[test]
+    fn a_crate_s_modules_count_beside_the_library_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for file in [
+            "src/lib.rs",
+            "src/main.rs",
+            "src/units.rs",
+            "crates/muman-core/src/lib.rs",
+            "crates/muman-core/src/hash.rs",
+            "crates/muman-core/src/store/tests.rs",
+            "crates/notes/README.md",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let roots = source_roots(root).unwrap();
+        assert_eq!(
+            roots,
+            [root.join("src"), root.join("crates/muman-core/src")]
+        );
+        let modules: Vec<String> = sources(root).unwrap().into_iter().map(|(m, _)| m).collect();
+        assert_eq!(modules, ["lib", "units", "hash", "store"]);
     }
 
     #[test]

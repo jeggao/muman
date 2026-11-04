@@ -9,14 +9,14 @@
 //! purpose.
 //!
 //! Only code that ships is read: a file's inline `mod tests`, the
-//! `tests.rs` and `testing.rs` files, and the modules of `src/tests/` are
-//! left out.
+//! `tests.rs` and `testing.rs` files, and the modules of a `tests/`
+//! folder in a `src` are left out.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Every source file under `src`, by its path from `src`, without its
-/// tests.
+/// Every source file under `src`, and under each `crates/<crate>/src`,
+/// by its path from its `src`, without its tests.
 fn sources() -> BTreeMap<String, String> {
     fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -28,16 +28,24 @@ fn sources() -> BTreeMap<String, String> {
             }
         }
     }
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut found = Vec::new();
-    walk(&src, &mut found);
-    found
-        .into_iter()
-        .filter(|p| {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut roots = vec![root.join("src")];
+    if let Ok(crates) = std::fs::read_dir(root.join("crates")) {
+        roots.extend(
+            crates
+                .filter_map(|e| Some(e.ok()?.path().join("src")))
+                .filter(|src| src.is_dir()),
+        );
+    }
+    let mut out = BTreeMap::new();
+    for src in roots {
+        let mut found = Vec::new();
+        walk(&src, &mut found);
+        for p in found {
             let name = p.file_name().unwrap().to_string_lossy();
-            name != "tests.rs" && name != "testing.rs" && !p.starts_with(src.join("tests"))
-        })
-        .map(|p| {
+            if name == "tests.rs" || name == "testing.rs" || p.starts_with(src.join("tests")) {
+                continue;
+            }
             let text = std::fs::read_to_string(&p).unwrap();
             let shipped = match text.find("#[cfg(test)]\nmod tests {") {
                 Some(at) => text[..at].to_string(),
@@ -50,9 +58,10 @@ fn sources() -> BTreeMap<String, String> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            (name, shipped)
-        })
-        .collect()
+            out.insert(name, shipped);
+        }
+    }
+    out
 }
 
 /// The lines of `text` holding any of `needles`, comments aside.
