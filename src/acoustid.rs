@@ -50,7 +50,6 @@ use serde::Deserialize;
 
 use crate::fingerprint::Print;
 use crate::http::{HttpTransport, Service, Throttle, TransportError};
-use crate::music;
 use crate::musicbrainz::{MAX_GAP_S, Mbid, first_artist, is_mbid};
 
 /// muman's application key, which AcoustID asks every client to send.
@@ -167,7 +166,7 @@ impl Recording {
         let title = q
             .title
             .as_deref()
-            .and_then(|t| music::names_match(&self.title, t));
+            .and_then(|t| crate::similar::names_match(&self.title, t));
         let names = self
             .artists
             .iter()
@@ -180,8 +179,8 @@ impl Recording {
             .map(|a| [a.name.as_str(), a.joinphrase.as_str()].concat())
             .collect();
         let artist = q.artist.as_deref().and_then(|a| {
-            music::names_match(&names, first_artist(a))
-                .or_else(|| music::names_match(&joined, first_artist(a)))
+            crate::similar::names_match(&names, first_artist(a))
+                .or_else(|| crate::similar::names_match(&joined, first_artist(a)))
         });
         (
             std::cmp::Reverse(title),

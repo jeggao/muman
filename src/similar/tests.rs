@@ -269,3 +269,22 @@ fn a_word_said_again_is_not_said_once_and_kanji_and_kana_are_not_compared() {
     assert!(distance("東京の雨", "東京のあめ").is_some());
     assert_eq!(shingles(&tokens("rain"), 0).len(), 1);
 }
+
+#[test]
+fn names_match_exactly_before_one_holds_the_other() {
+    assert_eq!(
+        names_match("Lantern Weather", "lantern weather!"),
+        Some(Exactness::Exact)
+    );
+    assert_eq!(
+        names_match("Ｌａｎｔｅｒｎ　Ｗｅａｔｈｅｒ", "Lantern Weather"),
+        Some(Exactness::Exact),
+        "full-width forms are the same letters"
+    );
+    assert_eq!(
+        names_match("Lantern Weather (Live)", "Lantern Weather"),
+        Some(Exactness::Holds)
+    );
+    assert_eq!(names_match("Second Tune", "Lantern Weather"), None);
+    assert_eq!(names_match("", "Lantern Weather"), None);
+}
