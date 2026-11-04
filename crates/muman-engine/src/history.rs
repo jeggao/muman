@@ -763,6 +763,8 @@ pub enum Moves {
 /// under [`Moves::Follow`]; under [`Moves::Foresee`], as a dry run
 /// reads, it stays and is recorded where it is, so nothing in the
 /// library changes.
+// Moves the files beside a song a stopped run left behind it.
+#[expect(clippy::disallowed_methods)]
 pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves) -> usize {
     let Some(dir) = runs(home).ok().and_then(|mut r| r.pop()) else {
         return 0;

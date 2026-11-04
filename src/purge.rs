@@ -25,6 +25,8 @@ use crate::ui::Prompter;
 
 /// Delete every fetched file and kept record no listed or removed song
 /// uses, once confirmed. Returns whether anything went.
+// Deletes the fetched files and records no song uses.
+#[expect(clippy::disallowed_methods)]
 pub fn purge<W: Write>(
     dirs: &Dirs,
     confirm: &Confirm,

@@ -140,6 +140,8 @@ pub fn written_at(home: &Path) -> Option<SystemTime> {
 /// file, and sets the file aside. Returns the state when it brought it
 /// over now, holding what an earlier version named a key, which only
 /// this process's run reads.
+// Links or moves the store made from state.json into place.
+#[expect(clippy::disallowed_methods)]
 fn bring_over(home: &Path) -> Result<Option<State>> {
     let file = home.join(crate::dirs::STATE);
     let text = match std::fs::read(&file) {
@@ -183,6 +185,8 @@ fn bring_over(home: &Path) -> Result<Option<State>> {
 
 /// Remove a store being made from `state.json`, or its other name once
 /// it is `state.db`.
+// Removes a store left half made from state.json.
+#[expect(clippy::disallowed_methods)]
 fn clear_import(home: &Path) -> Result<()> {
     for end in ["", "-wal", "-shm", "-journal"] {
         let path = home.join(format!("{IMPORTING}{end}"));
@@ -197,6 +201,8 @@ fn clear_import(home: &Path) -> Result<()> {
 }
 
 /// Keep `state.json` as `state.json.bak`, a stub in its place.
+// Keeps state.json as state.json.bak.
+#[expect(clippy::disallowed_methods)]
 fn set_aside(home: &Path) -> Result<()> {
     let file = home.join(crate::dirs::STATE);
     atomic::rename(&file, &home.join(BACKUP))

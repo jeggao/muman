@@ -565,6 +565,8 @@ fn target_of(options: &Options<'_>, settings: &Settings) -> Result<(PathBuf, Tar
 /// Write `entries` as `target` at `output`, made in `scratch` so a run
 /// killed partway leaves it where the next clears it. Returns what it
 /// takes.
+// Renames the finished zip from scratch into place.
+#[expect(clippy::disallowed_methods)]
 fn write<'a>(
     target: Target,
     scratch: &Path,

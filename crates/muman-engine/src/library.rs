@@ -127,6 +127,8 @@ impl<'a> Ledger<'a> {
     }
 
     /// Remove each of `files`, kept for `undo` first.
+    // Removes library files, the ledger's own change.
+    #[expect(clippy::disallowed_methods)]
     pub fn remove(&mut self, files: &[Owned]) -> Result<Removal> {
         self.replacing(files)?;
         let mut gone = Vec::new();
@@ -207,6 +209,8 @@ impl<'a> Ledger<'a> {
 /// Put the file staged at `staged` in its place at `rel` in the library
 /// `root`: over a file there only as `claim` holds it, and never a staged
 /// path that is no longer a plain file, as a link put in its place is not.
+// Puts a staged file in its library place, the ledger's own change.
+#[expect(clippy::disallowed_methods)]
 pub fn put(root: &Path, staged: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
     let plain = std::fs::symlink_metadata(staged).is_ok_and(|m| m.file_type().is_file());
     if !plain {
@@ -220,6 +224,8 @@ pub fn put(root: &Path, staged: &Path, rel: &Path, claim: &[Owned]) -> Result<()
 
 /// Remove `rel` from the library `root` if a file is there, as `claim`
 /// holds it.
+// Removes a library file the claim holds, the ledger's own change.
+#[expect(clippy::disallowed_methods)]
 pub fn clear(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
     held(root, rel, claim)?;
     let path = root.join(rel);
@@ -274,6 +280,8 @@ pub struct Relocation {
 }
 
 /// Rename a library file, creating its new folder.
+// Renames a library file, the ledger's own change.
+#[expect(clippy::disallowed_methods)]
 fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
     let (from, to) = (library.join(from), library.join(to));
     if let Some(dir) = to.parent() {
@@ -301,6 +309,8 @@ fn move_file(library: &Path, from: &Path, to: &Path) -> Result<()> {
 /// each a song's file or one beside it: a `.part` it was writing, a
 /// `.moving` it was renaming through. Only beside those paths, so a
 /// download of the user's own named so is not.
+// Removes what a stopped run left beside the paths muman writes.
+#[expect(clippy::disallowed_methods)]
 pub fn clear_leftovers(library: &Path, paths: impl Iterator<Item = PathBuf>) {
     for file in paths {
         for suffix in [".part", ".moving"] {
