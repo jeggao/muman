@@ -1158,6 +1158,7 @@ dependencies = [
  "lofty",
  "muman-core",
  "muman-media",
+ "muman-net",
  "proptest",
  "regex",
  "rusqlite",
@@ -1242,6 +1243,21 @@ dependencies = [
  "unicode-normalization",
  "unicode-security",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "muman-net"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "muman-core",
+ "muman-media",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "terminal_size",
+ "unicode-width",
 ]
 
 [[package]]
