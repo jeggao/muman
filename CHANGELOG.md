@@ -9,6 +9,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **muman is built from six crates**: `muman`, and beneath it
+  `muman-engine`, `muman-config`, `muman-net`, `muman-media` and
+  `muman-core`, published to crates.io together at one version.
+  `cargo install muman` installs the same program; a package built
+  from the source needs its `crates/` folder too.
+
 - **A song list removed while a command runs is not written again.**
   The command is refused (exit 5), as when the list is missing at its
   start. Before, a list removed partway through was written anew, with

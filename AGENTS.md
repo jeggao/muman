@@ -2,9 +2,10 @@
 
 How to work in the muman repository: what is where, how to build and
 check it, the conventions the code keeps, and the rules every change
-follows. muman is one Rust command-line program; its design is
-documented in the code, in each module's `//!` docs, and this file
-routes to them. [README.md](README.md) says what muman does for a user.
+follows. muman is one Rust command-line program built from six crates,
+one a layer, as the layout shows; its design is documented in the
+code, in each module's `//!` docs, and this file routes to them.
+[README.md](README.md) says what muman does for a user.
 
 Read before changing anything: this file, [COMMENTS.md](COMMENTS.md)
 before writing code, and [DOCUMENTATION.md](DOCUMENTATION.md) before
