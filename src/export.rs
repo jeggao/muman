@@ -1221,6 +1221,8 @@ fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
 /// each at its name, a file encoded for the export moved there and any
 /// other copied with its time, every one on the disk before the folder
 /// takes its place.
+// Makes the export's folder in scratch and puts it in place.
+#[expect(clippy::disallowed_methods)]
 fn write_folder<'a>(
     staging: &Path,
     to: &Path,
@@ -1265,6 +1267,8 @@ fn write_folder<'a>(
 }
 
 /// Write `entries` into a new zip at `path`, each stored as it is.
+// Makes the export's zip in scratch.
+#[expect(clippy::disallowed_methods)]
 fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Result<()> {
     let entries: Vec<&Entry> = entries.collect();
     let step = crate::progress::step("Writing the zip", Some(entries.len() as u64));

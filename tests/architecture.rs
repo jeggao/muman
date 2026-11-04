@@ -12,7 +12,7 @@
 //! `tests.rs` and `testing.rs` files, and the modules of `src/tests/` are
 //! left out.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Every source file under `src`, by its path from `src`, without its
@@ -65,37 +65,32 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
         .collect()
 }
 
-/// Every file that may change files, the most calls it may make, and why
-/// it may. A file the list does not name changes none; one that makes
-/// more calls than its count has grown a way to change files that this
-/// list, and its reason, should say.
-const MUTATIONS: &[(&str, usize, &str)] = &[
+/// Every file that may change files, and why it may. A call that changes
+/// a file is one clippy's `disallowed-methods` names, which shipped code
+/// makes only where an `#[expect]` says why, or one of `atomic`'s
+/// primitives; a file the list does not name makes none.
+const MUTATIONS: &[(&str, &str)] = &[
     (
         "atomic.rs",
-        7,
         "the primitives every other write goes through, a second name for a file, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
     ),
     (
         "library.rs",
-        7,
         "the ledger: every move and removal in the library, recorded first, \
          and a song's staged files put in place over only what it proved muman's",
     ),
     (
         "render.rs",
-        7,
         "a song's new files staged beside their paths, whatever was at a staged \
          name removed first, and those staged files removed when the song fails \
          or the files beside it, written again alone, cannot be put in place",
     ),
     (
         "history.rs",
-        15,
         "run records, the files kept for undo, undo putting them back or removing lyrics it added and the copies `add` made, and an undone run's record let go of once its sync ends",
     ),
     (
         "store.rs",
-        7,
         "an upload its release replaced, deleted from the sources; a file \
          fetched moved to its key's place, replacing the key's other; a \
          file a site renamed named at its new key's place, replacing \
@@ -104,56 +99,44 @@ const MUTATIONS: &[(&str, usize, &str)] = &[
     ),
     (
         "aria2.rs",
-        4,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
          damaged copy copied in to be checked; the input file of a run, \
          in scratch",
     ),
-    ("purge.rs", 1, "sources no song uses, deleted on request"),
+    ("purge.rs", "sources no song uses, deleted on request"),
     (
         "state.rs",
-        4,
         "state.json brought into state.db once: the store made from it \
          linked or renamed into place, its other name and what a stopped \
          import left removed, and state.json kept as state.json.bak",
     ),
     (
         "change.rs",
-        1,
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
     (
         "given.rs",
-        1,
         "files copied in by `add`, and a download taken up",
     ),
     (
         "add.rs",
-        1,
         "a file fetched before, removed again when its info JSON cannot be cleared",
     ),
-    ("sync.rs", 2, "downloads left unfinished too long"),
+    ("sync.rs", "downloads left unfinished too long"),
     (
         "acquire.rs",
-        2,
         "the URL list and download archive handed to yt-dlp, in scratch",
     ),
     (
         "download.rs",
-        3,
         "a file just fetched or copied in, written again without the cookies \
          and headers of its info JSON, that JSON kept in scratch; a remux left \
          cut short in partial downloads",
     ),
-    (
-        "editor.rs",
-        1,
-        "the file the editor is opened on, in scratch",
-    ),
+    ("editor.rs", "the file the editor is opened on, in scratch"),
     (
         "export.rs",
-        6,
         "the zip or the folder, made in scratch and renamed into place, an \
          empty folder there replaced; each song encoded for it moved or \
          deleted from scratch once it is in, any other copied in",
@@ -166,28 +149,23 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
         "atomic::remove(",
         "atomic::rename(",
         "atomic::link(",
-        "fs::remove_file(",
-        "fs::rename(",
-        "fs::copy(",
-        "hard_link(",
-        "fs::remove_dir(",
-        "remove_dir_all(",
-        "fs::write(",
+        "#[expect(clippy::disallowed_methods)]",
     ];
-    let allowed: BTreeMap<&str, usize> = MUTATIONS.iter().map(|(f, n, _)| (*f, *n)).collect();
-    let mut wrong = Vec::new();
-    for (file, text) in sources() {
-        let found = lines_with(&text, &calls);
-        let most = allowed.get(file.as_str()).copied().unwrap_or(0);
-        if found.len() > most {
-            wrong.push(format!(
-                "{file}: {} where {most} may be:\n{}",
-                found.len(),
-                found.join("\n")
-            ));
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+    let listed: BTreeSet<&str> = MUTATIONS.iter().map(|(f, _)| *f).collect();
+    let changing: BTreeSet<String> = sources()
+        .into_iter()
+        .filter(|(_, text)| !lines_with(text, &calls).is_empty())
+        .map(|(file, _)| file)
+        .collect();
+    let unlisted: Vec<&String> = changing
+        .iter()
+        .filter(|f| !listed.contains(f.as_str()))
+        .collect();
+    let stale: Vec<&&str> = listed.iter().filter(|f| !changing.contains(**f)).collect();
+    assert!(
+        unlisted.is_empty() && stale.is_empty(),
+        "files that change files, unlisted: {unlisted:?}; listed, changing none: {stale:?}"
+    );
 }
 
 /// A library file is written over or removed only as the ledger proves
@@ -591,7 +569,10 @@ fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
-    for (file, ..) in MUTATIONS.iter().chain(WRITES) {
+    for (file, _) in MUTATIONS {
+        assert!(all.contains_key(*file), "{file}");
+    }
+    for (file, ..) in WRITES {
         assert!(all.contains_key(*file), "{file}");
     }
     for (file, ..) in CLEANS.iter().chain(&RENAMES) {

@@ -430,6 +430,8 @@ pub fn fetch_command(places: &Places<'_>, downloads: usize, input: &Path) -> Vec
 /// folder of the run's, which a run stopped partway leaves for the next
 /// to clear, `labels` naming each on `step`: how each ended, and the
 /// errors aria2c reported.
+// Writes the input file of a run, in scratch.
+#[expect(clippy::disallowed_methods)]
 fn run<R: Runner>(
     runner: &R,
     places: &Places<'_>,
@@ -689,6 +691,8 @@ fn warn<W: Write>(out: &mut W, ended: &[Ended], errors: &[String]) -> Result<()>
 
 /// The metainfo of the torrent each of `magnets` names, from its peers,
 /// in one run: its bytes, or why they did not arrive.
+// Drops the metainfo a magnet link's peers sent, once read.
+#[expect(clippy::disallowed_methods)]
 pub fn metainfos<R: Runner, W: Write>(
     runner: &R,
     out: &mut W,
@@ -851,6 +855,8 @@ pub fn fetch_all<R: Runner, W: Write>(
 
 /// Place each file of `wanted` a finished fetch wrote at its key's
 /// place.
+// Removes a torrent's unfinished folder once its files are placed.
+#[expect(clippy::disallowed_methods)]
 fn place<W: Write>(out: &mut W, places: &Places<'_>, wanted: &Wanted<'_>) -> Result<Fetched> {
     let meta = wanted.meta;
     let dir = places.partial.join(meta.hash());
@@ -1252,6 +1258,8 @@ fn wanted_files<'m>(
 /// Copy what the store holds of `files`, a damaged copy among them, and
 /// of the files sharing a piece with them, to where a fetch writes each,
 /// so aria2c fetches only the pieces that do not check.
+// Copies in a damaged copy to be checked.
+#[expect(clippy::disallowed_methods)]
 fn repair_from_store(places: &Places<'_>, meta: &Metainfo, files: &[&File]) -> Result<()> {
     let dir = places.partial.join(meta.hash());
     for file in files

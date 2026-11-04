@@ -474,6 +474,8 @@ impl Run {
         self.lost = true;
     }
 
+    // Keeps a file for undo before the run changes it.
+    #[expect(clippy::disallowed_methods)]
     fn try_keep(&mut self, library: &Path, rel: &Path) -> Result<()> {
         let from = library.join(rel);
         let Ok(meta) = std::fs::metadata(&from) else {
@@ -581,6 +583,8 @@ impl Run {
     /// now holds otherwise than the run began with, whatever noted it. A
     /// run that only wrote new songs still changed the library; one that
     /// left the same outputs, if newly vouched for, did not.
+    // Lets go of a run's folder once nothing needs it.
+    #[expect(clippy::disallowed_methods)]
     pub fn finish(mut self, home: &Path) -> Result<()> {
         let _lock = atomic::Lock::folder(home)?;
         if let Some(undone) = self.finishes.as_ref().filter(|_| self.synced) {
@@ -659,6 +663,8 @@ fn make_room(others: &mut [(PathBuf, u64)], mine: u64, budget: u64) -> Result<()
 /// Let go of the files a run keeps and keep its record, which then lists
 /// none kept, so `undo` has them written again from their sources; a run
 /// whose record does not read goes whole.
+// Lets go of a run's folder.
+#[expect(clippy::disallowed_methods)]
 fn let_go(dir: &Path) -> Result<()> {
     let record = std::fs::read(dir.join(RECORD))
         .ok()
@@ -1018,6 +1024,8 @@ impl Undone {
     }
 
     /// Let go of the run's record, the sync after the undo ended.
+    // Lets go of a run's folder once nothing needs it.
+    #[expect(clippy::disallowed_methods)]
     pub fn finish(self) -> Result<()> {
         std::fs::remove_dir_all(&self.dir)
             .with_context(|| format!("removing {}", self.dir.display()))
@@ -1030,6 +1038,8 @@ impl Undone {
 /// follows writes again what was not kept and removes what the run
 /// added, then finishes the undo. An undo stopped partway, in its sync
 /// too, finishes when run again.
+// Puts kept files back and removes what the run added.
+#[expect(clippy::disallowed_methods)]
 pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone> {
     let home = &dirs.home;
     let UndoPlan {
@@ -1137,6 +1147,8 @@ fn copies_said(home: &Path, record: &Record) -> Vec<String> {
 
 /// Take out each copy `add` made that is still there, and the folders
 /// that leaves empty in the sources.
+// Removes the copies `add` made, as undo.
+#[expect(clippy::disallowed_methods)]
 fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Result<()> {
     let home = &dirs.home;
     for (rel, digest) in &record.copied {

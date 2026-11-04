@@ -189,6 +189,8 @@ fn part(path: &Path) -> PathBuf {
 }
 
 /// A new, empty file at `part`, whatever was there removed first.
+// Makes a song's staged file anew.
+#[expect(clippy::disallowed_methods)]
 fn stage(part: &Path) -> Result<fs::File> {
     match fs::remove_file(part) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -261,6 +263,8 @@ fn audio_output(
 
 // The steps read in the order they run; split up, the order would be in the call sites.
 #[expect(clippy::too_many_lines)]
+// Removes a song's staged files when it fails.
+#[expect(clippy::disallowed_methods)]
 pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let made = job.parts;
     let locate = |key: &SourceKey| {
@@ -566,6 +570,8 @@ fn embeddable(made: &Parts<'_>, text: &str, problems: &mut Vec<String>) -> Optio
 /// source where `lyrics_anew`, as [`render`] makes them, else kept as the
 /// file holds them. Through `.part`, as [`render`] writes, put over the
 /// file `job`'s claim holds.
+// Removes a song's staged file when its tags fail.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn retag<R: Runner>(
     runner: &R,
     job: &Job<'_>,
@@ -718,6 +724,8 @@ fn verify(path: &Path, tags: &[(String, Vec<String>)], covered: bool) -> Vec<Str
 
 /// The `gain` an Opus header holds, set in `path` once its tags are
 /// written, as [`crate::ogg`] sets it.
+// Sets the gain of a staged file's Opus header in place.
+#[expect(clippy::disallowed_methods)]
 fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
     let Some(gain) = gain else {
         return Ok(());
@@ -741,6 +749,8 @@ fn size_of(path: &Path) -> u64 {
 /// last build left that it has none of now gone: over or in place of only
 /// the files `claim` holds, a file of its `folder` at a name a file not
 /// muman's holds left alone, said.
+// Removes a song's staged files when they cannot be put in place.
+#[expect(clippy::disallowed_methods)]
 pub fn place(
     from: &Path,
     rendered: &Rendered,
@@ -809,6 +819,8 @@ pub struct Beside {
 /// `keep`, as they would be written already, are left as they are, and
 /// nothing is made for them. A file the last build left beside it that
 /// the plan has none of goes, as [`render`] clears it.
+// Removes the staged files beside a song when they cannot be put in place.
+#[expect(clippy::disallowed_methods)]
 pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<Beside> {
     let made = job.parts;
     let mut problems = Vec::new();
@@ -889,6 +901,8 @@ const FFMPEG_VENDOR: &str = "ffmpeg";
 /// cover and the chapters, keeping the encoder's vendor string and a
 /// FLAC's [`CHANNEL_MASK`]. An MP4's chapters are ffmpeg's, and kept.
 /// `lyrics` is the ISO 639-2 code of the language the `LYRICS` tag is in.
+// Writes a staged file's tags in place.
+#[expect(clippy::disallowed_methods)]
 fn write_tags(
     path: &Path,
     format: Format,

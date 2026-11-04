@@ -288,6 +288,8 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
 
 /// Remove the songs the query picks, and with `purge` their sources.
 /// Returns whether anything was removed.
+// Deletes a removed song's fetched source, with `remove --purge`.
+#[expect(clippy::disallowed_methods)]
 pub fn remove<W: Write>(
     dirs: &Dirs,
     terms: &[String],

@@ -424,6 +424,8 @@ pub(crate) fn network<R: Runner, W: Write, T>(
 /// folders that leaves empty; younger, a later run resumes it. `apart`
 /// itself stays even empty: a torrent fetched beside this run makes its
 /// folder in it, and would find it gone.
+// Removes downloads left unfinished too long.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Option<&Path>) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];

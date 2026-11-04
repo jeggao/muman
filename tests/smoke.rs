@@ -3,6 +3,9 @@
 //! removed and put back. Ignored by default, since it needs ffmpeg; CI
 //! runs it on every platform with `cargo test --test smoke -- --ignored`.
 
+// Tests make and change the files they check.
+#![expect(clippy::disallowed_methods)]
+
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

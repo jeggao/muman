@@ -360,6 +360,8 @@ fn summarize<W: Write>(
 /// Open the songs the query picks in an editor, run by `editor` on the
 /// file's path, and apply what changed, calling `before_save` first each
 /// time it saves. Returns whether anything did.
+// Writes the file the editor is opened on, in scratch.
+#[expect(clippy::disallowed_methods)]
 pub fn edit<W: Write>(
     dirs: &Dirs,
     terms: &[String],
