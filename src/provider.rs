@@ -114,6 +114,16 @@ impl fmt::Display for Provider {
     }
 }
 
+/// The providers looked up, in the order a round makes their lookups.
+pub const ORDER: [Provider; 6] = [
+    Provider::YouTubeMusic,
+    Provider::YouTube,
+    Provider::Lrclib,
+    Provider::AcoustId,
+    Provider::MusicBrainz,
+    Provider::CoverArt,
+];
+
 /// The extractor name LRCLIB's keys carry: `lrclib:<id>`.
 pub const LRCLIB: &str = "lrclib";
 /// The extractor name MusicBrainz's keys carry: `musicbrainz:<recording id>`.

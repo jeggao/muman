@@ -162,7 +162,6 @@ pub const KNOWN: &[(&str, &str)] = &[
     ("aria2", "manifest"),
     ("history", "change"),
     ("manifest", "state"),
-    ("migrate", "lookup"),
     ("naming", "settings"),
     ("tagfile", "musicbrainz"),
     ("torrent", "naming"),
