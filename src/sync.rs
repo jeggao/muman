@@ -146,7 +146,8 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     let (fetched, (torrents, said)) = std::thread::scope(|scope| {
         let beside = scope.spawn(|| {
             let mut said = Vec::new();
-            let fetched = crate::aria2::fetch_due(runner, &mut said, &places, manifest, &due);
+            let listed = (&manifest.torrents, &manifest.keys());
+            let fetched = crate::aria2::fetch_due(runner, &mut said, &places, listed, &due);
             (fetched, said)
         });
         let fetched = network(job, runner, out, |acquire| {
