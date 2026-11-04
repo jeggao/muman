@@ -13,8 +13,8 @@ repository.workspace = true
 testing = ["muman-core/testing", "muman-media/testing"]
 
 [dependencies]
-muman-core = { path = "../muman-core", version = "=0.10.0" }
-muman-media = { path = "../muman-media", version = "=0.10.0" }
+muman-core.workspace = true
+muman-media.workspace = true
 anyhow = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -24,8 +24,8 @@ terminal_size = "0.4"
 unicode-width = "0.2"
 
 [dev-dependencies]
-muman-core = { path = "../muman-core", features = ["testing"] }
-muman-media = { path = "../muman-media", features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

@@ -219,13 +219,13 @@ Changelog form, user-facing bullets with a bold lead phrase; changes
 since the last release collect under `[Unreleased]`.
 
 A release is a pull request of its own, `release: muman <version>`,
-changing the version in `Cargo.toml` and `Cargo.lock` and dating the
-changelog section. Merging it tags `main` as `v<version>`, builds the
-binaries for each platform and publishes them with that section as the
-notes (`.github/workflows/release.yml`); run that workflow by hand to
-build a tag made before it existed. Each crate goes to crates.io by hand
-until Trusted Publishing is set up there and the repository variable
-`PUBLISH_CRATE` is `true`.
+changing the version and the crates' pins on it in `Cargo.toml`, then
+`Cargo.lock`, and dating the changelog section. Merging it tags `main`
+as `v<version>`, builds the binaries for each platform and publishes
+them with that section as the notes (`.github/workflows/release.yml`);
+run that workflow by hand to build a tag made before it existed. Each
+crate goes to crates.io by hand until Trusted Publishing is set up there
+and the repository variable `PUBLISH_CRATE` is `true`.
 
 The release also reaches each package manager set up for it below,
 through the repository variable and secret its row names. Until then

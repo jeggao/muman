@@ -13,7 +13,7 @@ repository.workspace = true
 testing = ["muman-core/testing"]
 
 [dependencies]
-muman-core = { path = "../muman-core", version = "=0.10.0" }
+muman-core.workspace = true
 anyhow = "1"
 base64 = "0.23"
 chardetng = "1"
@@ -35,7 +35,7 @@ unicode-security = "0.1"
 unicode-segmentation = "1"
 
 [dev-dependencies]
-muman-core = { path = "../muman-core", features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true
