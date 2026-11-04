@@ -867,7 +867,7 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
         .map(|rel| format!("  {}", home.join(rel).display()))
         .collect();
     if !gone.is_empty() {
-        return Err(crate::change::Refused(format!(
+        return Err(crate::errors::Refused(format!(
             "The last run moved these to the trash; put them back there, then undo \
              again:\n{}",
             gone.join("\n")
@@ -891,7 +891,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         .clone()
         .or_else(|| Some(crate::manifest::NEW.to_string()));
     if songs != record.songs_after && !(record.undoing && songs == before) {
-        return Err(crate::change::Refused(format!(
+        return Err(crate::errors::Refused(format!(
             "The song list changed after the last run; undoing it would lose those changes. \
              Edit {} by hand instead",
             home.join(MANIFEST).display()
@@ -904,7 +904,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
     {
         return Err(
-            crate::change::Refused("The last run wrote another library folder".into()).into(),
+            crate::errors::Refused("The last run wrote another library folder".into()).into(),
         );
     }
     // What undoing would write over must be muman's as the run left it.
@@ -935,7 +935,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             let Some(why) = why else {
                 continue;
             };
-            return Err(crate::change::Refused(format!(
+            return Err(crate::errors::Refused(format!(
                 "{} {why}; undoing would write over it. Move it aside first",
                 crate::relpath::show(rel)
             ))
@@ -988,7 +988,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
 
 fn latest(home: &Path, now: &BTreeMap<PathBuf, Written>) -> Result<(PathBuf, Record)> {
     let Some(dir) = runs(home)?.pop() else {
-        return Err(crate::change::Refused("There is no run to undo".into()).into());
+        return Err(crate::errors::Refused("There is no run to undo".into()).into());
     };
     let text = std::fs::read(dir.join(RECORD))
         .with_context(|| format!("reading {}", dir.join(RECORD).display()))?;
@@ -1363,7 +1363,7 @@ mod tests {
         std::fs::write(d.home.join(MANIFEST), "edited by hand").unwrap();
         let e = plan(&d).unwrap_err();
         assert!(
-            e.downcast_ref::<crate::change::Refused>().is_some(),
+            e.downcast_ref::<crate::errors::Refused>().is_some(),
             "{e:#}"
         );
         assert!(format!("{e:#}").contains("changed after"), "{e:#}");

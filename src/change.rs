@@ -15,7 +15,6 @@
 //! desktop's trash on every platform, and a yes given from habit should
 //! not be enough to put it there.
 
-use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -33,18 +32,7 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::Store;
 
-/// A change refused for how it was asked: nothing matched, or it needs
-/// a terminal, `-y` or `--all`.
-#[derive(Debug)]
-pub struct Refused(pub String);
-
-impl fmt::Display for Refused {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Refused {}
+pub use crate::errors::Refused;
 
 fn refuse<T>(why: impl Into<String>) -> Result<T> {
     Err(Refused(why.into()).into())

@@ -1280,7 +1280,7 @@ pub fn attach<R: Runner, W: Write>(
         for value in &how.to {
             terms.extend(
                 shell_words::split(value)
-                    .map_err(|e| crate::change::Refused(format!("--to {value}: {e}")))?,
+                    .map_err(|e| crate::errors::Refused(format!("--to {value}: {e}")))?,
             );
         }
         let q = Query::parse(&terms, &extractors)?;
@@ -1289,7 +1289,7 @@ pub fn attach<R: Runner, W: Write>(
             .collect();
         if found.is_empty() {
             return Err(
-                crate::change::Refused(format!("No song matches `{}`", how.to.join(" "))).into(),
+                crate::errors::Refused(format!("No song matches `{}`", how.to.join(" "))).into(),
             );
         }
         Some(found)

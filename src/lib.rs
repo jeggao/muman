@@ -30,6 +30,7 @@ pub mod dirs;
 pub mod download;
 pub mod duplicates;
 pub mod editor;
+pub mod errors;
 pub mod export;
 pub mod facts;
 pub mod ffmpeg;

@@ -116,7 +116,7 @@ src/
   progress.rs       how far a long step has got, on stderr
   parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
   trust.rs          the song list's commands and servers, run only once trusted
-  hooks.rs, store.rs, source.rs, atomic.rs, hash.rs, defaults.rs, ui.rs, http.rs, ...
+  hooks.rs, store.rs, source.rs, atomic.rs, hash.rs, defaults.rs, errors.rs, ui.rs, http.rs, ...
   testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
