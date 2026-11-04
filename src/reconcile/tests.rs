@@ -1427,7 +1427,7 @@ fn a_source_whose_file_times_change_writes_nothing_again() {
     filetime::set_file_mtime(&source, filetime::FileTime::from_unix_time(1_000_000, 0)).unwrap();
     let (ok, text) = h.run(&fake, Options::default());
     assert!(ok, "{text}");
-    assert!(text.contains("Measuring 1 source(s)"), "{text}");
+    assert!(!text.contains("Measuring"), "the same bytes: {text}");
     assert!(
         !text.contains("Added") && !text.contains("Updated"),
         "{text}"
