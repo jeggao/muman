@@ -735,7 +735,7 @@ impl Client<'_> {
         let path = format!(
             "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs+work-rels\
              &fmt=json",
-            music::percent_encode(id.as_str())
+            crate::http::percent_encode(id.as_str())
         );
         let Some(body) = self.get(&path)? else {
             return Ok(None);
@@ -763,7 +763,7 @@ impl Client<'_> {
         } else {
             let path = format!(
                 "/ws/2/release/{}?inc=labels+release-groups&fmt=json",
-                music::percent_encode(&release.id)
+                crate::http::percent_encode(&release.id)
             );
             let looked = match self.get(&path)? {
                 Some(body) => Some(
@@ -799,7 +799,7 @@ impl Client<'_> {
         );
         let path = format!(
             "/ws/2/recording?query={}&limit={LIMIT}&fmt=json",
-            music::percent_encode(&query)
+            crate::http::percent_encode(&query)
         );
         let Some(body) = self.get(&path)? else {
             return Ok(None);
@@ -829,7 +829,7 @@ impl Client<'_> {
         }
         let path = format!(
             "/ws/2/recording/{}?inc=work-rels&fmt=json",
-            music::percent_encode(record.id.as_str())
+            crate::http::percent_encode(record.id.as_str())
         );
         if let Some(body) = self.get(&path)? {
             let related: Related = serde_json::from_str(&body)
@@ -875,7 +875,7 @@ impl Client<'_> {
         );
         let path = format!(
             "/ws/2/release-group?query={}&limit=25&fmt=json",
-            music::percent_encode(&query)
+            crate::http::percent_encode(&query)
         );
         let Some(body) = self.get(&path)? else {
             return Ok(None);

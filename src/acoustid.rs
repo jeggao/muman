@@ -235,7 +235,7 @@ impl Client<'_> {
         let url = format!(
             "{}/v2/lookup?client={}&format=json&meta=recordings+releasegroups+sources&duration={seconds}&fingerprint={}",
             self.base.trim_end_matches('/'),
-            music::percent_encode(self.key),
+            crate::http::percent_encode(self.key),
             q.print.encoded()
         );
         let agent = crate::http::user_agent();

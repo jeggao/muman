@@ -194,7 +194,7 @@ impl Client<'_> {
     /// else searched for by title and artist; of those that fit, ranked as
     /// the module docs say.
     pub fn find(&self, q: &Query) -> Result<Found> {
-        let enc = |s: &str| music::percent_encode(s);
+        let enc = |s: &str| crate::http::percent_encode(s);
         let mut candidates: Vec<Record> = Vec::new();
         // `/api/get` takes a duration of 1 to 3600 s and refuses any other;
         // a longer song is found by search alone.
