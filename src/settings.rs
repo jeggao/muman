@@ -68,6 +68,7 @@ pub use crate::migrate::{
 };
 pub use crate::naming::Restrict;
 use crate::quality;
+pub use crate::template::DEFAULT_TEMPLATE;
 pub use crate::units::Size;
 use crate::units::serde_as;
 
@@ -182,10 +183,6 @@ pub struct Library {
     /// filesystem's allocation unit.
     pub block_size: Size,
 }
-
-/// `<album artist>/<album>/<NN title>`, `<D-NN title>` from a second
-/// disc on: a single on no album is named for its title.
-pub const DEFAULT_TEMPLATE: &str = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}";
 
 impl Default for Library {
     fn default() -> Self {

@@ -164,11 +164,7 @@ pub const LAYERS: [(&str, &[&str]); 6] = [
 pub const KNOWN: &[(&str, &str)] = &[];
 
 /// The upward references only tests make.
-pub const TEST_KNOWN: &[(&str, &str)] = &[
-    ("music", "settings"),
-    ("naming", "settings"),
-    ("template", "settings"),
-];
+pub const TEST_KNOWN: &[(&str, &str)] = &[("music", "settings"), ("naming", "settings")];
 
 /// The upward references only doc links make.
 pub const DOC_KNOWN: &[(&str, &str)] = &[];
