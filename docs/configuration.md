@@ -418,7 +418,7 @@ Beside MiniJinja's own filters (`default`, `lower`, `upper`, `replace`,
 
 | Filter | Does |
 |---|---|
-| `asciify` | Transliterates to ASCII: `Ça` becomes `Ca` |
+| `asciify` | Transliterates to ASCII: `Ça` becomes `Ca`, and a `/` or `\` it would make, as `½` makes `1/2`, becomes `_` |
 | `pad(n)` | Pads a number with zeros: `track \| pad(3)` gives `003` |
 | `the_suffix` | Moves a leading "The": `The Orchards` becomes `Orchards, The` |
 | `truncate(n)` | Keeps the first `n` characters |

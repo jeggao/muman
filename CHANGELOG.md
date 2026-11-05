@@ -13,6 +13,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   muman's.** A record from before 0.10 was read as the newer kind, so
   undoing a run that moved or removed songs counted the files it put
   back as the user's own, and the next sync would not write them.
+- **`asciify` makes no folder.** A `/` or `\` it transliterated, from a
+  title's `/` or from a character such as `½` or `÷`, split the path or
+  kept a non-ASCII stand-in; it is now written `_`. A song so named
+  moves to its new path at the next sync.
 
 ## [0.10.1] - 2026-11-04
 

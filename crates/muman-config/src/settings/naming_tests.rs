@@ -342,6 +342,28 @@ fn a_path_limit_counts_as_windows_does_and_keeps_characters_whole() {
 }
 
 #[test]
+fn asciify_never_makes_a_folder_of_a_separator_in_a_value() {
+    for restrict in [Restrict::None, Restrict::Windows] {
+        let ascii = Library {
+            template: "{{ album_artist | asciify }}/{{ title | asciify }}".into(),
+            restrict,
+            ..Library::default()
+        };
+        let n = naming(&ascii);
+        assert_eq!(
+            n.stem(&tags("Moth/Lamp", "B", "Night\\Day")).unwrap(),
+            path(&["Moth_Lamp", "Night_Day"]),
+            "{restrict:?}"
+        );
+        assert_eq!(
+            n.stem(&tags("Ça", "B", "½ Tide ÷ 2")).unwrap(),
+            path(&["Ca", "1_2 Tide _ 2"]),
+            "{restrict:?}"
+        );
+    }
+}
+
+#[test]
 fn a_backslash_never_names_a_folder_on_another_system() {
     let none = Library {
         restrict: Restrict::None,
