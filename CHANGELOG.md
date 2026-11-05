@@ -23,6 +23,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Two commands making a new `state.db` at once both go on.** One of
   them failed, as making tables already made, as reading another
   program's file, or as finding the store locked.
+- **A source with an accented name is placed again on an HFS+ disk.**
+  A fetched or torrent file whose place already held it was refused as
+  differing from its own name only in case, since HFS+ lists names
+  decomposed.
 
 ## [0.10.1] - 2026-11-04
 
