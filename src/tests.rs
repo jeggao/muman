@@ -2968,6 +2968,27 @@ fn audio_that_does_not_read_is_not_copied_in_or_listed() {
 }
 
 #[test]
+fn a_folder_named_by_where_it_ends_is_copied_under_its_own_name() {
+    let s = Setup::new();
+    s.file("rips/One/Disc/a.flac");
+    let fake = Fake::default().probe(".flac", FLAC);
+    let up = s
+        .dir
+        .path()
+        .join("rips")
+        .join("One")
+        .join("Disc")
+        .join("..");
+    let up = up.to_string_lossy().into_owned();
+    let (ok, text) = s.run(&fake, &["add", &up]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("One/Disc/a.flac".into())]]
+    );
+}
+
+#[test]
 fn a_hidden_file_is_refused_and_one_in_a_folder_left_behind() {
     let s = Setup::new();
     let hidden = s.file("in/.Song.flac");

@@ -181,7 +181,7 @@ pub fn place_torrent(root: &Path, key: &TorrentKey, from: &Path) -> Result<PathB
     let named = std::fs::read_dir(folder)
         .with_context(|| format!("reading {}", folder.display()))?
         .filter_map(|e| Some(e.ok()?.file_name()))
-        .any(|n| n == name);
+        .any(|n| same_name(&n, name));
     if to.exists() && !named {
         anyhow::bail!(
             "{} holds another file of the torrent, its path differing from {}'s only in case, \
@@ -193,6 +193,19 @@ pub fn place_torrent(root: &Path, key: &TorrentKey, from: &Path) -> Result<PathB
     crate::atomic::rename(from, &to)
         .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
     Ok(to)
+}
+
+/// Whether a name a folder lists is `name` itself, not one a filesystem
+/// that ignores case took for it. Compared in NFC: HFS+ lists every name
+/// decomposed (NFD), whatever form it was made in, so an accented name
+/// would differ from its own.
+fn same_name(listed: &std::ffi::OsStr, name: &std::ffi::OsStr) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    listed == name
+        || matches!(
+            (listed.to_str(), name.to_str()),
+            (Some(a), Some(b)) if a.nfc().eq(b.nfc())
+        )
 }
 
 /// The key of a file at its key's place in `root`, as [`fetched_path`]
@@ -264,7 +277,7 @@ fn place_by(root: &Path, key: &SourceKey, from: &Path, how: How) -> Result<Optio
         .filter_map(|e| Some(e.ok()?.file_name()))
         .collect();
     let to_name = to.file_name().unwrap_or_default();
-    if to.exists() && !names.iter().any(|n| n == to_name) {
+    if to.exists() && !names.iter().any(|n| same_name(n, to_name)) {
         anyhow::bail!(
             "{} holds another source's file, its ID differing from {key}'s only in case, \
              which this filesystem does not tell apart",
@@ -286,8 +299,8 @@ fn place_by(root: &Path, key: &SourceKey, from: &Path, how: How) -> Result<Optio
     }
     for name in &names {
         let other = folder.join(name);
-        if name != to_name
-            && other.file_stem() == Some(stem.as_os_str())
+        if !same_name(name, to_name)
+            && other.file_stem().is_some_and(|s| same_name(s, &stem))
             && kind_of(&other) == Some(Kind::Media)
         {
             crate::atomic::remove(&other)
@@ -1152,6 +1165,18 @@ fn is_link(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_listed_decomposed_is_the_same_name_but_one_in_another_case_is_not() {
+        let composed = std::ffi::OsStr::new("Caf\u{e9}.mkv");
+        let decomposed = std::ffi::OsStr::new("Cafe\u{301}.mkv");
+        assert!(same_name(decomposed, composed));
+        assert!(!same_name(std::ffi::OsStr::new("CAF\u{c9}.mkv"), composed));
+        assert!(!same_name(
+            std::ffi::OsStr::new("CAFE\u{301}.mkv"),
+            composed
+        ));
+    }
 
     fn touch(root: &Path, rel: &str) -> PathBuf {
         let path = root.join(rel);

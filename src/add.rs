@@ -300,6 +300,10 @@ pub(crate) fn import<R: Runner, W: Write>(
     unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
+    let names = paths
+        .iter()
+        .map(|p| copy_name(Path::new(p)).with_context(|| format!("{p} names no file")))
+        .collect::<Result<Vec<_>>>()?;
     let Probed {
         mut walked,
         reads: probed,
@@ -324,10 +328,7 @@ pub(crate) fn import<R: Runner, W: Write>(
     };
     let mut brought = Vec::new();
     let mut folders: HashMap<PathBuf, Walked> = HashMap::new();
-    for path in paths.iter().map(Path::new) {
-        let name = path
-            .file_name()
-            .with_context(|| format!("{} names no file", path.display()))?;
+    for (path, name) in paths.iter().map(Path::new).zip(names) {
         if let Some(key) = original(runner, sites, path) {
             let given = (&Folder::new(path), path);
             originals_in.bring_into(dirs, given, key, (out, copied), &mut brought)?;
@@ -394,6 +395,20 @@ pub(crate) fn import<R: Runner, W: Write>(
     }
     unread.extend(not_read);
     Ok(proposals)
+}
+
+/// The name `path`'s copy in the manual folder takes: its last part, or,
+/// for a folder named by where it ends, as `.`, `./` or `Album/..`, the
+/// last part of its real path; none for `/`, which names no folder of
+/// its own.
+fn copy_name(path: &Path) -> Option<std::ffi::OsString> {
+    match path.file_name() {
+        Some(name) => Some(name.to_os_string()),
+        None => dunce::canonicalize(path)
+            .ok()?
+            .file_name()
+            .map(std::ffi::OsStr::to_os_string),
+    }
 }
 
 /// Copy the song file `path` to `to` with the sidecars beside it, its

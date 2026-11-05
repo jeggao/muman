@@ -21,7 +21,9 @@
 //! than this muman's, is refused, as a newer `state.json` is. Each value
 //! is a row of JSON text, as `state.json` holds it, so a fact or a plan
 //! of another shape needs no change to the tables, and is read as
-//! leniently as the file is.
+//! leniently as the file is. Two processes opening a home with no store
+//! make it once: each reads the header again in the transaction that
+//! would make the tables, and the second finds them made.
 //!
 //! The journal is WAL, so a reader is never blocked by a writer, and a
 //! commit waits for the disk: `synchronous` is `FULL`, with `fullfsync`
@@ -34,7 +36,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
@@ -106,22 +108,11 @@ impl Db {
     /// The store at `file`, as [`Db::open`] opens one.
     pub(crate) fn open_file(file: &Path, wait: Duration) -> Result<Self> {
         let file = file.to_path_buf();
-        let conn =
+        let mut conn =
             Connection::open(&file).with_context(|| format!("opening {}", file.display()))?;
         conn.busy_timeout(wait)?;
-        let id: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
-        let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
-        if id != APPLICATION_ID && (id != 0 || version != 0 || tables != 0) {
-            bail!("{} is not muman's state", file.display());
-        }
-        if version > SCHEMA {
-            bail!(
-                "{} is format version {version}, newer than this muman's {SCHEMA}",
-                file.display()
-            );
-        }
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        let version = schema(&conn.transaction()?, &file)?;
+        wal(&conn, wait)?;
         conn.pragma_update(
             None,
             "synchronous",
@@ -137,12 +128,15 @@ impl Db {
         conn.pragma_update(None, "temp_store", "MEMORY")?;
         let mut db = Self { conn, file };
         if version == 0 {
+            let file = db.file.clone();
             db.write(|tx| {
-                tx.execute_batch(TABLES)?;
-                tx.execute_batch(RENAMINGS)?;
-                tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-                tx.pragma_update(None, "user_version", SCHEMA)?;
-                Ok(())
+                // Another opener may have made the store since it was read.
+                if schema(tx, &file)? == 0 {
+                    tx.execute_batch(TABLES)?;
+                    tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+                    tx.pragma_update(None, "user_version", SCHEMA)?;
+                }
+                Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
         } else {
@@ -177,6 +171,44 @@ impl Db {
             .with_context(|| format!("reading {}", self.file.display()))?;
         f(&tx)
     }
+}
+
+/// Set `conn`'s journal to WAL, waiting up to `wait` for another opener.
+/// The change needs the whole file, and while another connection holds a
+/// lock on it, SQLite may return busy at once rather than call the busy
+/// handler, where waiting could deadlock.
+fn wal(conn: &Connection, wait: Duration) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy && start.elapsed() < wait =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            done => return Ok(done?),
+        }
+    }
+}
+
+/// The schema of the store `file` that `tx` reads, 0 for one not yet
+/// made; refused when another application's or newer than [`SCHEMA`].
+/// Read in one transaction, so another opener making the store meanwhile
+/// is seen as it was before or after, never halfway.
+fn schema(tx: &Transaction<'_>, file: &Path) -> Result<i32> {
+    let id: i32 = tx.pragma_query_value(None, "application_id", |r| r.get(0))?;
+    let version: i32 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    let tables: i64 = tx.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get(0))?;
+    if id != APPLICATION_ID && (id != 0 || version != 0 || tables != 0) {
+        bail!("{} is not muman's state", file.display());
+    }
+    if version > SCHEMA {
+        bail!(
+            "{} is format version {version}, newer than this muman's {SCHEMA}",
+            file.display()
+        );
+    }
+    Ok(version)
 }
 
 /// A table of [`SCHEMA`]: its key columns, and the column of its value,
@@ -744,6 +776,29 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA);
+    }
+
+    #[test]
+    fn a_store_made_by_several_openers_at_once_is_made_once() {
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let start = std::sync::Barrier::new(4);
+            std::thread::scope(|s| {
+                let opened: Vec<_> = (0..4)
+                    .map(|_| {
+                        s.spawn(|| {
+                            start.wait();
+                            Db::open(dir.path(), WAIT)
+                                .map(drop)
+                                .map_err(|e| format!("{e:#}"))
+                        })
+                    })
+                    .collect();
+                for o in opened {
+                    o.join().unwrap().unwrap();
+                }
+            });
+        }
     }
 
     #[test]

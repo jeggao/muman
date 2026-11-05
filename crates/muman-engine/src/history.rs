@@ -104,7 +104,7 @@ const RECORD: &str = "run.json";
 const VERSION: u32 = 2;
 
 fn version_one() -> u32 {
-    VERSION
+    1
 }
 
 fn complete() -> bool {
@@ -1298,6 +1298,21 @@ mod tests {
         assert_eq!(mode(&history(&d.home)), 0o700);
         assert_eq!(mode(&kept[0]), 0o700);
         assert_eq!(mode(&kept[0].join(RECORD)), 0o600);
+    }
+
+    #[test]
+    fn a_record_without_a_version_is_read_as_version_1() {
+        let old = br#"{"songs_before":"before","songs_after":"after",
+            "outputs":{"A/x.opus":{"sources":[],"stamp":"1:1"}},"touched":[],"kept":[]}"#;
+        let mut now = BTreeMap::new();
+        now.insert(PathBuf::from("A/y.opus"), written());
+        let record = Record::read(old, &now).unwrap();
+        assert_eq!(record.version, 1);
+        assert_eq!(
+            record.was.keys().collect::<Vec<_>>(),
+            [Path::new("A/x.opus")],
+            "the outputs as the run began are those version 1 kept"
+        );
     }
 
     #[test]

@@ -18,6 +18,13 @@
 //! the text transliterated to ASCII; and `the_suffix`, `The Orchards` as
 //! `Orchards, The`. Every value arrives already safe for a path, so a `/` in
 //! a title never makes a folder; only the template's own `/` does.
+//!
+//! `asciify` keeps that promise too. A value arrives with its `/` and `\`
+//! written `⧸` and `⧹`, which `deunicode` writes back as `/` and `\`; it
+//! writes others as a separator, `½` as `1/2` and `÷` as `/`. So the filter
+//! transliterates one character at a time and writes a separator so made
+//! as `_`, as `[library] restrict = "ascii"` does a tag's; a `/` or `\`
+//! the text held before it stays.
 
 use anyhow::{Context, Result};
 use minijinja::value::Serde;
@@ -77,7 +84,7 @@ impl Template {
         env.add_filter("truncate", |s: String, n: usize| {
             s.chars().take(n).collect::<String>()
         });
-        env.add_filter("asciify", |s: String| deunicode::deunicode(&s));
+        env.add_filter("asciify", |s: String| asciify(&s));
         env.add_filter("the_suffix", |s: String| match s.strip_prefix("The ") {
             Some(rest) if !rest.is_empty() => format!("{rest}, The"),
             _ => s,
@@ -93,6 +100,26 @@ impl Template {
             .render(Serde(fields))
             .context("rendering the library template")
     }
+}
+
+/// `s` transliterated to ASCII, each separator a transliteration makes
+/// written `_`.
+fn asciify(s: &str) -> String {
+    use deunicode::AsciiChars;
+    let mut out = String::with_capacity(s.len());
+    for (c, ascii) in s.chars().zip(s.ascii_chars()) {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            out.extend(
+                ascii
+                    .unwrap_or("[?]")
+                    .chars()
+                    .map(|a| if matches!(a, '/' | '\\') { '_' } else { a }),
+            );
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -157,6 +184,17 @@ mod tests {
             t.render(&fields()).unwrap(),
             "Paper Comets, The/2024 - Harbor Lights/003 Paper Comets, Ada Qu - Lantern Weather"
         );
+    }
+
+    #[test]
+    fn asciify_writes_a_separator_it_makes_as_an_underscore() {
+        let t = Template::new("{{ title | asciify }}/{{ album | asciify }}").unwrap();
+        let f = Fields {
+            title: "Night⧸Day ⧹ Ça".into(),
+            album: "a/b ½".into(),
+            ..fields()
+        };
+        assert_eq!(t.render(&f).unwrap(), "Night_Day _ Ca/a/b 1_2");
     }
 
     #[test]

@@ -7,6 +7,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **`undo` of a run an earlier muman recorded puts its files back as
+  muman's.** A record from before 0.10 was read as the newer kind, so
+  undoing a run that moved or removed songs counted the files it put
+  back as the user's own, and the next sync would not write them.
+- **`asciify` makes no folder.** A `/` or `\` it transliterated, from a
+  title's `/` or from a character such as `½` or `÷`, split the path or
+  kept a non-ASCII stand-in; it is now written `_`. A song so named
+  moves to its new path at the next sync.
+- **`add .` adds the folder it names.** A folder given as `.`, `./` or
+  `Album/..` was refused as naming no file, after every file in it was
+  probed; it is now copied under its own name.
+- **Two commands making a new `state.db` at once both go on.** One of
+  them failed, as making tables already made, as reading another
+  program's file, or as finding the store locked.
+- **A source with an accented name is placed again on an HFS+ disk.**
+  A fetched or torrent file whose place already held it was refused as
+  differing from its own name only in case, since HFS+ lists names
+  decomposed.
+
 ## [0.10.1] - 2026-11-04
 
 ### Changed
