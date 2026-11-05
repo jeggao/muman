@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Fixed
+
+- **`undo` of a run an earlier muman recorded puts its files back as
+  muman's.** A record from before 0.10 was read as the newer kind, so
+  undoing a run that moved or removed songs counted the files it put
+  back as the user's own, and the next sync would not write them.
+
 ## [0.10.1] - 2026-11-04
 
 ### Changed
