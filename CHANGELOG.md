@@ -17,6 +17,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   title's `/` or from a character such as `½` or `÷`, split the path or
   kept a non-ASCII stand-in; it is now written `_`. A song so named
   moves to its new path at the next sync.
+- **`add .` adds the folder it names.** A folder given as `.`, `./` or
+  `Album/..` was refused as naming no file, after every file in it was
+  probed; it is now copied under its own name.
 
 ## [0.10.1] - 2026-11-04
 
