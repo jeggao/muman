@@ -20,6 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **`add .` adds the folder it names.** A folder given as `.`, `./` or
   `Album/..` was refused as naming no file, after every file in it was
   probed; it is now copied under its own name.
+- **Two commands making a new `state.db` at once both go on.** One of
+  them failed, as making tables already made, as reading another
+  program's file, or as finding the store locked.
 
 ## [0.10.1] - 2026-11-04
 
