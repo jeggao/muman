@@ -10,9 +10,7 @@
 //! only once yt-dlp's gives it up ([`crate::progress::step_beneath`]).
 //! Each side's failures are recorded whatever the other's end.
 //!
-//! What a sync fetches is decided once, by `due`: the fetches, `status`
-//! and `info` all read it, so none says a song is made from a source a
-//! sync would not fetch.
+//! What a sync fetches is decided once, by [`crate::due`].
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -136,6 +134,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         return Ok(true);
     }
     let mut state = State::load(&job.dirs.home)?;
+    let base = state.caches();
     let root = job.dirs.torrent();
     let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
     let places = crate::aria2::Places {
@@ -147,7 +146,8 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     let (fetched, (torrents, said)) = std::thread::scope(|scope| {
         let beside = scope.spawn(|| {
             let mut said = Vec::new();
-            let fetched = crate::aria2::fetch_due(runner, &mut said, &places, manifest, &due);
+            let listed = (&manifest.torrents, &manifest.keys());
+            let fetched = crate::aria2::fetch_due(runner, &mut said, &places, listed, &due);
             (fetched, said)
         });
         let fetched = network(job, runner, out, |acquire| {
@@ -179,7 +179,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         Err(e) => error = error.or(Some(e)),
     }
     if let Some(e) = error {
-        record_fetches(job, &mut state, failed, &same, out)?;
+        record_fetches(job, &mut state, &base, failed, &same, out)?;
         return Err(e);
     }
     let records = lookup::refetch(
@@ -219,7 +219,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
         ui::error(out, &format!("Could not fetch {key} again: {error}"))?;
     }
     failed.extend(records.failed);
-    record_fetches(job, &mut state, failed, &same, out)?;
+    record_fetches(job, &mut state, &base, failed, &same, out)?;
     Ok(ok)
 }
 
@@ -229,6 +229,7 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
 fn record_fetches<W: Write>(
     job: &Job,
     state: &mut State,
+    base: &state::Caches,
     failed: Vec<(SourceKey, String)>,
     same: &[SourceKey],
     out: &mut W,
@@ -257,78 +258,13 @@ fn record_fetches<W: Write>(
             };
             state.record_failure(&key, step, rev, error);
         }
-        State::keep_measures(&job.dirs.home, state)?;
+        State::keep_measures(&job.dirs.home, &state.since(base))?;
     }
     Ok(())
 }
 
-/// Why a sync fetches a listed source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Fetch {
-    /// The store holds no file of it.
-    Missing,
-    /// The store's copy is damaged, and a whole one takes its place.
-    Damaged,
-}
-
-/// What a sync fetches of the listed sources, and what it would but holds
-/// off, as its fetch failed lately.
-#[derive(Debug, Default)]
-pub(crate) struct Due {
-    pub now: BTreeMap<SourceKey, Fetch>,
-    pub waiting: BTreeSet<SourceKey>,
-}
-
-/// What a sync fetches of what `manifest` lists, the store holding
-/// `store`, `failures` recorded, at `now`: a source yt-dlp fetched with an
-/// address to fetch it again from, or a torrent's file, missing from the
-/// store or damaged there and noted to be fetched again; one whose fetch
-/// failed lately waits, as one fetched again too often no longer comes,
-/// unless `retry`. A torrent's file no fetch mends is not fetched while
-/// the store holds it, `retry` or not.
-pub(crate) fn due(
-    manifest: &Manifest,
-    store: &Store,
-    failures: &BTreeMap<SourceKey, state::Failure>,
-    retry: bool,
-    now: u64,
-) -> Due {
-    let fetchable = |k: &SourceKey| match k {
-        SourceKey::Torrent(_) => true,
-        SourceKey::Manual(_) => false,
-        SourceKey::Remote { .. } => {
-            !crate::provider::is_kept(k)
-                && (manifest.settings.sites.fetch_url(k).is_some()
-                    || manifest
-                        .song_with(k)
-                        .and_then(|s| s.held.get(k)?.url.as_ref())
-                        .is_some())
-        }
-    };
-    let mut due = Due::default();
-    for key in manifest.keys().into_iter().filter(fetchable) {
-        let failure = failures.get(&key);
-        let damaged =
-            failure.is_some_and(|f| f.step == state::Step::Refetch && (retry || f.due(None, now)));
-        let fetch = match (store.has(&key), damaged) {
-            (_, true) => Fetch::Damaged,
-            (false, false) => Fetch::Missing,
-            (true, false) => continue,
-        };
-        let waits = fetch == Fetch::Missing
-            && !retry
-            && failure.is_some_and(|f| f.step == state::Step::Fetch && !f.due(None, now));
-        if waits {
-            due.waiting.insert(key);
-        } else {
-            due.now.insert(key, fetch);
-        }
-    }
-    due
-}
-
 /// The listed torrent files due to be fetched again, by torrent, as
-/// [`crate::aria2::due`] says and says them; what waits in `places`'
+/// [`crate::due::torrents`] says and says them; what waits in `places`'
 /// partial folder too long is cleared first.
 fn torrents_due<W: Write>(
     job: &Job,
@@ -339,13 +275,13 @@ fn torrents_due<W: Write>(
     out: &mut W,
 ) -> Result<BTreeMap<String, Vec<SourceKey>>> {
     let store = Store::scan(&job.dirs)?;
-    let due = due(manifest, &store, failures, retry, state::now_secs());
+    let due = crate::due::due(manifest, &store, failures, retry, state::now_secs());
     let torrent = |k: &SourceKey| matches!(k, SourceKey::Torrent(_));
     if !due.now.keys().chain(&due.waiting).any(torrent) {
         return Ok(BTreeMap::new());
     }
     clear_stale(places.partial, places.options.keep_partial, None);
-    crate::aria2::due(out, &due)
+    crate::due::torrents(out, &due)
 }
 
 /// Move the song list's settings still at an earlier edition's default
@@ -422,6 +358,8 @@ pub(crate) fn network<R: Runner, W: Write, T>(
 /// folders that leaves empty; younger, a later run resumes it. `apart`
 /// itself stays even empty: a torrent fetched beside this run makes its
 /// folder in it, and would find it gone.
+// Removes downloads left unfinished too long.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Option<&Path>) {
     let mut folders = Vec::new();
     let mut left = vec![partial.to_path_buf()];
@@ -589,7 +527,12 @@ pub(crate) fn dropped_in<W: Write>(
             ),
         )?;
     }
-    let renames = store::moved_manual(&listed, &state, &store, &mut ready);
+    let renames = store::moved_manual(
+        &listed,
+        |k| state.facts.get(k).map(|f| f.rev.as_str()),
+        &store,
+        &mut ready,
+    );
     for (gone, to) in &renames {
         ui::info(out, &format!("Moved: {gone} is now {to}"))?;
         manifest.edit(Edit::Rename {

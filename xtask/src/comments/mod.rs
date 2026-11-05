@@ -2,7 +2,7 @@
 //! every Rust file in the repository.
 
 mod diff;
-mod parse;
+pub(crate) mod parse;
 mod report;
 mod rules;
 

@@ -1,71 +1,79 @@
 [package]
 name = "muman"
-version = "0.8.0"
 description = "Keep a music library in step with a song list, each song made from the best of its sources."
-edition = "2024"
-rust-version = "1.89"
-license = "AGPL-3.0-only"
-repository = "https://github.com/jeggao/muman"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 keywords = ["music", "library", "yt-dlp", "ffmpeg", "tagging"]
 categories = ["command-line-utilities", "multimedia::audio"]
 readme = "README.md"
 exclude = [".github/", "xtask/"]
 
 [dependencies]
+muman-config.workspace = true
+muman-core.workspace = true
+muman-engine.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
-base64 = "0.23"
-chardetng = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 ctrlc = { version = "3.5.2", features = ["termination"] }
-deunicode = "1"
-directories = "6"
 dunce = "1"
-ebur128 = "0.1.10"
 encoding_rs = "0.8"
 filetime = "0.2"
-html-escape = "0.3"
-icu_casemap = "2.3"
-icu_locale = "2.3"
 icu_properties = "2.3"
-icu_segmenter = "2.3"
-indicatif = "0.18"
-inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 lofty = "0.25"
-minijinja = { version = "3", features = ["serde"] }
-percent-encoding = "2"
 regex = "1"
-rusty-chromaprint = "0.3"
-same-file = "1"
-serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha1 = "0.11"
 sha2 = "0.11"
-shared_child = { version = "1.1.2", default-features = false }
 shell-words = "1"
-strsim = "0.11"
 tempfile = "3"
 terminal_size = "0.4"
 toml = "1"
 toml_edit = "0.25"
-trash = "5"
-unicode-normalization = "0.1"
-unicode-security = "0.1"
-unicode-segmentation = "1"
 unicode-width = "0.2"
-uom = { version = "0.38", default-features = false, features = ["f64", "si", "std"] }
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
-walkdir = "2"
 which = "8"
 zip = { version = "9", default-features = false }
+
+[features]
+# For tests alone: the hooks a test stops or watches a run by
+# (`src/kill.rs`), and a state store that does not wait for the disk.
+testing = [
+    "muman-config/testing",
+    "muman-core/testing",
+    "muman-engine/testing",
+    "muman-media/testing",
+    "muman-net/testing",
+]
 
 [lints]
 workspace = true
 
 [workspace]
-members = [".", "xtask"]
+members = [".", "crates/muman-config", "crates/muman-core", "crates/muman-engine", "crates/muman-media", "crates/muman-net", "xtask"]
+
+# What every crate of muman shares; they are released together, at one
+# version.
+[workspace.package]
+version = "0.10.1"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+repository = "https://github.com/jeggao/muman"
+
+# The workspace's crates, each pinned at the one version they share.
+[workspace.dependencies]
+muman-config = { path = "crates/muman-config", version = "=0.10.1" }
+muman-core = { path = "crates/muman-core", version = "=0.10.1" }
+muman-engine = { path = "crates/muman-engine", version = "=0.10.1" }
+muman-media = { path = "crates/muman-media", version = "=0.10.1" }
+muman-net = { path = "crates/muman-net", version = "=0.10.1" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -84,6 +92,10 @@ missing_panics_doc = "allow"
 cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
 cast_sign_loss = "allow"
+# Text reaches the terminal through `ui`, which makes it printable.
+print_stdout = "warn"
+print_stderr = "warn"
+dbg_macro = "warn"
 
 # The loudness meter decodes whole songs; unoptimized, its tests take seconds each.
 [profile.dev.package.ebur128]
@@ -91,3 +103,11 @@ opt-level = 3
 
 [profile.release]
 strip = "symbols"
+
+[dev-dependencies]
+muman-config = { workspace = true, features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-engine = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }

@@ -2,9 +2,10 @@
 
 How to work in the muman repository: what is where, how to build and
 check it, the conventions the code keeps, and the rules every change
-follows. muman is one Rust command-line program; its design is
-documented in the code, in each module's `//!` docs, and this file
-routes to them. [README.md](README.md) says what muman does for a user.
+follows. muman is one Rust command-line program built from six crates,
+one a layer, as the layout shows; its design is documented in the
+code, in each module's `//!` docs, and this file routes to them.
+[README.md](README.md) says what muman does for a user.
 
 Read before changing anything: this file, [COMMENTS.md](COMMENTS.md)
 before writing code, and [DOCUMENTATION.md](DOCUMENTATION.md) before
@@ -34,9 +35,10 @@ These bind every change, by a person or an agent.
 1. **No pushes to `main`.** Changes go through a pull request, and CI
    must pass on all three platforms.
 1. **The rules here and the style guides change only when asked.**
-   Propose a rule change in the pull request instead. The layout and
-   the checklist below describe the code and change with it, in the
-   same commit; `cargo xtask docs` fails on a module the layout lacks.
+   Propose a rule change in the pull request instead. The layout, the
+   checklist and the files and formats the conventions name describe
+   the code and change with it, in the same commit; what a convention
+   asks does not. `cargo xtask docs` fails on a module the layout lacks.
 
 ## Layout
 
@@ -45,87 +47,91 @@ src/
   main.rs, lib.rs   entry point; Job, run() and the run_with() test seam
   add.rs, sync.rs   the add and sync commands, and the network steps they share
   cli.rs            the command line (clap derive), exit codes
-  settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
-                    [torrent], [tools], [history], [sites]
-  migrate.rs        older song lists brought up to this edition
-  units.rs          sizes, bitrates, times, frequencies, shares (uom)
-  manifest.rs       songs.toml: songs, albums, removed, cleaning, edits
-  manifest/new.toml a new home's song list, the reference for every setting
-  state.rs          state.json: files written, measures, comparisons
-  platform.rs       default folders per OS, path identity, arrival times
-  dirs.rs           the home and the library folders, neither inside the other
-  relpath.rs        recorded paths, written with / and in NFC
-  runner.rs         the subprocess seam
-  tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
-  acquire.rs        the network phase: yt-dlp listing, fetching, matching
-  sites.rs          the song list's [sites]: how each site names and fetches
-  torrent.rs        torrent metainfo and magnet links: what a torrent: key names
-  download.rs       yt-dlp's arguments and the files it reports
-  aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
-  ytdlp_log.rs      yt-dlp's output, line by line: its errors, warnings and progress
-  music.rs          YouTube Music search and name matching
-  plugins.rs        yt-dlp plugins shipped in the binary
-  identify.rs       new sources to songs, by fingerprint
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  given.rs          folders given to `add`: walked and copied, links followed inside
-  similar.rs        names and texts compared in any script
-  picture.rs        perceptual hashes of covers
-  tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
-  lookup.rs         lookups due, each provider asked until a song has what it names;
-                    provider.rs, lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs
-  reconcile.rs      the offline phase, its steps in order, each a module of its own:
-                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
-                    write.rs, prune.rs, report.rs
-  facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
-  analysis.rs       the whole of a source's audio, one decode, every analyzer
-  integrity.rs      whether a source's audio is all there: cut off or missing
-  loudness.rs       EBU R128 loudness, album pooling and the gains of a song
-  held.rs           what each source held when its song was built
-  quality.rs        audio and picture measures
-  fingerprint.rs    Chromaprint prints and their comparison
-  align.rs          audio comparison by loudness envelopes
-  resolve.rs        one song's facts to the plan it is written from
-  tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
-  lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
-  lyrics.rs         subtitle languages, LRC cleaning and timing
-  cues.rs           lyrics written as LRC, WebVTT, SubRip or plain text
-  chapters.rs       a source's chapters, in each container's own form
-  naming.rs         safe names; template.rs, the path template
-  codec.rs          output codecs: names, containers, ffmpeg arguments
-  ogg.rs            the output gain an Opus file's header holds
-  render.rs         one plan to library files
-  outputs.rs        the files beside a song: their names, and where a move takes them
-  folder.rs         the cover file a folder holds once, and the song that holds it
-  library.rs        the ledger: every move and removal in the library
-  fit.rs            songs fitted into a size, least audible loss first
-  limit.rs          the library kept under [library] max_size
   export.rs         the song list and the library into one zip
   redact.rs         the song list with its secrets replaced, for export --redact
-  history.rs        run records and undo
-  change.rs, editor.rs, query.rs   list, set, edit, remove, restore
+  change.rs, editor.rs   list, set, edit, remove, restore
   guided.rs         set with a query alone: songs changed field by field
-  rows.rs           songs shown as aligned rows that tell them apart
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs          fetched sources and records no song uses, deleted
-  progress.rs       how far a long step has got, on stderr
-  parallel.rs       a fixed number of threads over a list, for subprocess-bound steps
   trust.rs          the song list's commands and servers, run only once trusted
-  hooks.rs, store.rs, source.rs, atomic.rs, ui.rs, http.rs, ...
-  testing.rs        the fake runner and the fixtures every test shares
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
+  tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
+crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
+  album.rs          the songs of one album made to agree: one edition, spelling, release
+  state.rs          the state: files written, measures, comparisons
+  state/json.rs     state.json, as an earlier muman wrote it, read once
+  state/db.rs       state.db, the store the state moves into: schema, transactions
+  acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
+  identify.rs       new sources to songs, by fingerprint
+  lookup.rs         lookups due, each provider asked until a song has what it names
+  reconcile.rs      the offline phase, its steps in order, each a module of its own:
+                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
+                    write.rs, prune.rs, report.rs
+  resolve.rs, levels.rs   one song's facts to the plan it is written from; songs levelled
+  artifact.rs       the part of a plan each library file is made from, and its name
+  render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
+  outputs.rs        the files beside a song: their names, and where a move takes them
+  folder.rs         the cover file a folder holds once, and the song that holds it
+  library.rs        the ledger: every move and removal in the library
+  fit.rs, limit.rs  songs fitted into a size, least audible loss first; [library] max_size
+  history.rs, query.rs   run records and undo; a query held against the songs
+  rows.rs           songs shown as aligned rows that tell them apart
+crates/muman-config/src/   the config layer: the song list, its settings, editions and hooks
+  settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
+                    [torrent], [tools], [history], [sites]; naming_tests.rs, its names
+  manifest.rs       songs.toml: songs, albums, removed, cleaning, edits; migrate.rs, older editions
+  held.rs, hooks.rs   what each source held when its song was built; the [[hook]] commands
+  providers.rs, terms.rs   each provider's [providers.*] table; a query's terms
+crates/muman-net/src/   the network layer: yt-dlp and aria2c fetches, and lookups
+  download.rs, ytdlp_log.rs   yt-dlp's arguments and the files it reports; its output
+  aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
+  music.rs          YouTube Music search
+  plugins.rs        yt-dlp plugins shipped in the binary, from assets/yt-dlp/
+  lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs   the providers looked up
+crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
+  similar.rs        names and texts compared in any script
+  picture.rs        perceptual hashes of covers
+  tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
+  facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
+  analysis.rs       the whole of a source's audio, one decode, every analyzer
+  integrity.rs      whether a source's audio is all there: cut off or missing
+  loudness.rs       EBU R128 loudness and a song's gains
+  tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
+  lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
+  chapters.rs       a source's chapters, in each container's own form
+  naming.rs         safe names, through the path template
+  quality.rs, align.rs   audio and picture measures; audio compared by loudness envelopes
+  codec.rs, ogg.rs  output codecs: names, containers, ffmpeg arguments; an Opus header's gain
+  record.rs         the MusicBrainz record kept, and the answer it is read from
+crates/muman-core/src/   the lowest layer, which every other module builds on
+  units.rs          sizes, bitrates, times, frequencies, shares (uom)
+  new.toml          a new home's song list, the reference for every setting
+  platform.rs, dirs.rs   default folders per OS, path identity; a run's folders
+  relpath.rs        recorded paths, written with / and in NFC
+  runner.rs         the subprocess seam
+  tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
+  sites.rs          the song list's [sites]: how each site names and fetches
+  torrent.rs        torrent metainfo and magnet links: what a torrent: key names
+  given.rs          folders given to `add`: walked and copied, links followed inside
+  fingerprint.rs    Chromaprint prints and their comparison
+  lang.rs           language tags: their spellings, ISO 639 codes, preferences, roles
+  progress.rs, parallel.rs   a long step's progress on stderr; threads over a list
+  testing.rs        the fake runner and the fixtures tests share; kill.rs, the kill hooks
+  template.rs       the path template; portable.rs, what no system refuses in a name
+  store.rs, source.rs, provider.rs, atomic.rs, hash.rs, defaults.rs, errors.rs, ui.rs, http.rs
 tests/              the smoke test, yt-dlp and aria2c given muman's command
                     lines, and the architecture's rules over src/
-testdata/           tiny audio and picture fixtures
-assets/yt-dlp/      the plugins plugins.rs embeds
-xtask/              cargo xtask comments | docs
+testdata/           tiny audio and picture fixtures; editions/, the song list
+                    each earlier edition wrote for a new home
+xtask/              cargo xtask comments | commits | docs | layers
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
 docs/               guide.md, library.md, songs.md, configuration.md, audio.md, cli.md (generated)
 ```
 
-Start from a module's `//!` docs: they hold its design and the reasons
-for its constants.
+A module's `//!` docs hold its design and the reasons for its constants.
 
 ## Commands
 
@@ -137,11 +143,15 @@ cargo fmt --all
 cargo xtask comments
 cargo xtask commits --diff-base origin/main
 cargo xtask docs
+cargo xtask layers
 cargo test --test smoke -- --ignored
 ```
 
 `cargo xtask docs` regenerates [docs/cli.md](docs/cli.md) and checks
-links and the changelog; `--check` only checks, as CI does. The smoke
+links and the changelog; `--check` only checks, as CI does. `cargo
+xtask layers` checks that no module names one of a higher layer than
+its own, each layer a crate; `--report` prints each module's fan-in
+and the cycles among a crate's modules. The smoke
 test runs muman end to end against a real ffmpeg on generated audio;
 `cargo test --test ytdlp -- --ignored` hands a real yt-dlp the command
 line muman builds, against a file served from the test itself, and
@@ -152,12 +162,19 @@ against real recordings and sites are made by hand.
 CI (`.github/workflows/ci.yml`) runs clippy, the tests and the smoke,
 yt-dlp and torrent tests on Linux, macOS and Windows, plus rustfmt,
 rustdoc, the minimum Rust version, `cargo xtask comments` (with `--diff-base` on pull
-requests), `cargo xtask commits`, `cargo xtask docs --check` and
-cargo-deny, all on the Rust `RUST_TOOLCHAIN` in `ci.yml` names. Each
+requests), `cargo xtask commits`, `cargo xtask docs --check`,
+`cargo xtask layers` and cargo-deny, all on the Rust `RUST_TOOLCHAIN` in
+`ci.yml` names, and `nix flake check` on Linux and macOS. A pull request
+that changes only Markdown and `docs/` builds and tests nothing, and one
+runs `nix flake check` only when it changes the flake, `nix/`,
+`Cargo.toml`, `Cargo.lock` or `ci.yml`; every push to main runs every
+check, and only main saves the Rust caches. Each push to main also runs
+the random runs of `src/tests/convergence.rs` at 64 cases. Each
 week `toolchain-preview.yml` runs the same checks on the newest stable;
 when it fails, one pull request raises the pin, in `ci.yml` and
 `release.yml`, and meets the new lints. Dependabot opens the week's
-minor and patch bumps as one pull request and each major alone;
+minor and patch bumps as one pull request, those of the crates the
+measures and lyrics are made with as another, and each major alone;
 `flake-update.yml` moves `flake.lock` the same way.
 
 ## Conventions
@@ -175,14 +192,14 @@ minor and patch bumps as one pull request and each major alone;
 - **Files:** whole-file writes through `atomic::write`; renames and
   deletes in the library through `atomic::rename` and `atomic::remove`,
   which wait out a file Windows reports as held open.
-- **Settings:** a new setting goes in `settings.rs`, with its default
-  written out in `manifest/new.toml`; a test keeps the two equal. A
-  renamed setting, or one given a unit, and a changed default each add
-  a step to a new edition in `migrate::HISTORY`, raising
-  `migrate::EDITION`. A setting that changes a written file must change the
-  song's `Plan`.
-- **Formats:** `songs.toml` and `state.json` carry a `version`; changing
-  what an existing key means is a new version, adding a key is not.
+- **Settings:** a new setting goes in `settings.rs`, or in the lower
+  module that applies it, re-exported from `settings.rs`. Its default is
+  written out in `new.toml`; a test keeps the two equal. A
+  renamed setting, or one given a unit, and a changed default each add a
+  step to a new edition in `migrate::HISTORY`, raising `migrate::EDITION`.
+  A setting that changes a written file must change the song's `Plan`.
+- **Formats:** `songs.toml` carries a `version`, `state.db` a schema in
+  `user_version`; a changed meaning is a new version, a new key is not.
 - **Lints:** clippy pedantic and `unsafe_code = "deny"` for the
   workspace, the three cast lints off, as `Cargo.toml` says why.
   `#[expect]` one lint narrowly, with the reason in a `//` comment
@@ -202,13 +219,13 @@ Changelog form, user-facing bullets with a bold lead phrase; changes
 since the last release collect under `[Unreleased]`.
 
 A release is a pull request of its own, `release: muman <version>`,
-changing the version in `Cargo.toml` and `Cargo.lock` and dating the
-changelog section. Merging it tags `main` as `v<version>`, builds the
-binaries for each platform and publishes them with that section as the
-notes (`.github/workflows/release.yml`); run that workflow by hand to
-build a tag made before it existed. The crate goes to crates.io by hand
-until Trusted Publishing is set up there and the repository variable
-`PUBLISH_CRATE` is `true`.
+changing the version and the crates' pins on it in `Cargo.toml`, then
+`Cargo.lock`, and dating the changelog section. Merging it tags `main`
+as `v<version>`, builds the binaries for each platform and publishes
+them with that section as the notes (`.github/workflows/release.yml`);
+run that workflow by hand to build a tag made before it existed. Each
+crate goes to crates.io by hand until Trusted Publishing is set up there
+and the repository variable `PUBLISH_CRATE` is `true`.
 
 The release also reaches each package manager set up for it below,
 through the repository variable and secret its row names. Until then
@@ -226,13 +243,14 @@ that package manager is skipped.
 | Change | Update in the same commit |
 |---|---|
 | A command, flag, help text or exit code | Run `cargo xtask docs`; the README's tables if a command or code changed |
-| A setting added, removed or renamed, or a default changed | `settings.rs`, `manifest/new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` |
+| A setting added, removed or renamed, or a default changed | `settings.rs`, `new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` and the `new.toml` it replaces as `testdata/editions/<N>.toml` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
 | How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
 | How queries, changing songs or duplicates behave for a user | [docs/songs.md](docs/songs.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
-| A module added, removed or renamed | The layout above |
+| A measure, renderer or writer changes what it makes, or a dependency bump changes a digest | Raise its version constant and record the digest its test prints, or, for a bump that leaves saved results valid, re-record the digest and say why |
+| A module added, removed or renamed | The layout above, and its layer in `xtask/src/layers.rs` |
 | A release | `Cargo.toml` version, [CHANGELOG.md](CHANGELOG.md), in a pull request of their own; the merge tags and publishes it |
 
 ## Commits and pull requests

@@ -7,6 +7,78 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-04
+
+### Changed
+
+- **muman is built from six crates**: `muman`, and beneath it
+  `muman-engine`, `muman-config`, `muman-net`, `muman-media` and
+  `muman-core`, published to crates.io together at one version.
+  `cargo install muman` installs the same program; a package built
+  from the source needs its `crates/` folder too.
+
+- **A song list removed while a command runs is not written again.**
+  The command is refused (exit 5), as when the list is missing at its
+  start. Before, a list removed partway through was written anew, with
+  only what the command changed, whenever the library held no song
+  muman wrote.
+
+## [0.10.0] - 2026-11-04
+
+### Added
+
+- **`info --state`** prints what muman keeps of the library and its
+  sources as JSON, in the shape `state.json` held, now that it is kept
+  in `state.db`.
+
+### Changed
+
+- **The state is kept in `state.db`**, a SQLite store, in place of
+  `state.json`. The first run brings `state.json` over and keeps it as
+  `state.json.bak`; a stub takes its place so an earlier muman refuses
+  the home instead of taking every library file for yours. To go back
+  to an earlier muman, move `state.db` aside and `state.json.bak` back
+  to `state.json`; what ran since is lost.
+
+- **A sync records each song in `state.db` as it writes it**, one
+  commit for one song, where it saved the whole state now and then. A
+  sync stopped partway writes again only the song it was writing.
+
+- **A run's record keeps only the songs it changed**, not every song
+  muman wrote, so the home's history stays small in a large library. A
+  run an earlier muman recorded is still undone; an earlier muman cannot
+  undo a run this one recorded.
+
+### Fixed
+
+- **A command waits for an undo stopped partway.** An undo stopped
+  before it put the song list back left both copies of a song once a
+  sync ran; a command that changes the library or the song list now
+  refuses until `undo` finishes it.
+- **A sync writes again only the files a change reaches.** A file of
+  cues added to `[[lyrics.out]]` built again every song with its lyrics
+  inside; it is now only written beside them. The form of the lyrics
+  inside wrote every lyric file beside a song again, and now tags only
+  the song again. A chapter changed in a song other than an MP4 tags it again
+  instead of building it.
+- **Lyrics inside a song are tagged into it, not built again.** A lyric
+  cleaning switch, a new title the cleaning reads, or a new offset
+  encoded or copied again every song holding its lyrics inside; it is
+  now tagged again in place, as docs/library.md says.
+- **A file beside a song is written alone.** A `[[lyrics.out]]` or
+  `[[cover.out]]` file added or changed wrote again the song's file and
+  every file beside it; now only the files that changed are written.
+- **A source touched or copied whole is not measured again.** Its facts
+  keep a digest of the bytes they were measured on, so files whose
+  times changed but whose bytes did not are read through once, not
+  decoded. Facts measured before this muman are measured again the
+  first time their files' times change.
+- **`max_size` measures no song a change only tags again.** Its size is
+  taken from the plan its file was written from, where a new lyric
+  cleaning, tagging or chapters rendered the song again to measure it.
+
+## [0.9.0] - 2026-11-03
+
 ### Added
 
 - **Each provider says what a song asks it `until`.** `[providers.<name>]`
@@ -19,9 +91,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   them, such as `'album:="Some Album"'` or `"from:manual"`.
 - **A song turns its own lookups off** with `lookups = false`, or one
   provider's with `lookups.<provider> = false`.
+- **Quotes, apostrophes and hyphens in tags are spelled one way.** The
+  cleaning rule `tidy.typography` writes `’`, `“ ”` and the hyphen `‐` in
+  titles, artists, albums and genres, as MusicBrainz does, so a release
+  and an upload spell a song alike; `[tags] typography = "ascii"` writes
+  `'`, `"` and `-` instead. En and em dashes stay as written. The next
+  `sync` writes again each song whose tags this changes.
 - **`sync --until-done`** makes every lookup due in one run, past
   `per_run`, over as many rounds as finds start, asking again at once
   what failed and fetching again what failed to arrive.
+- **The songs of one album agree.** Where an album's songs are on
+  several MusicBrainz releases of it, they take the one most of them can
+  be on; an album or album artist spelled two ways, as `On The Border`
+  and `On the Border`, is spelled as most of its songs spell it; and the
+  songs of one release share its date, label and IDs, so an album split
+  into folders by edition, by `’` and `'`, or by one file's date comes
+  together. A mono mix on a mono edition keeps that edition.
+- **`sync --rematch` renews every MusicBrainz record**: it fetches each
+  record a song lists again by its ID, however full the song, and asks
+  AcoustID again for its own finds, its new find taking the old record's
+  place in that song and a record it no longer names going. One run
+  brings records kept by an earlier muman up to date.
+- **`original_year` in the path template**, the year the album was
+  first released, puts every edition of an album in one folder.
 - **`status <query>` says why each lookup is made, waits or is not**,
   song by song, and `info` counts lookups waiting, skipped or unable to
   ask.
@@ -49,26 +141,71 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Lyrics cleaned of credits follow a renamed song.** The credits rule
+  reads the song's title and artists to tell a heading block from the
+  lyrics, so a song retitled or credited anew has its lyrics cleaned
+  again even with the title rule off.
+- **AcoustID named a stub recording that states no length** over the
+  real one a few seconds off, as a 96 kHz rip's longer tail, and one
+  print alone named a 29 s excerpt the full studio recording. A stated
+  length within 10 s now ranks first, and a recording stating none needs
+  two prints.
+- **A song holding its folder's cover is not written again** when facts
+  made again name its source's parts anew: the folder's cover is renamed
+  with the song's own. A source renamed by its site also finds its
+  measured size under `[library] max_size` again.
+- **A mono and a stereo rip took one recording**: a recording whose
+  MusicBrainz comment names the other mix than the song's audio, as
+  `original stereo album mix` for a mono file, ranks after the song's
+  own.
+- **`undo` and `purge` refuse a library inside the home** as every other
+  command that changes the library does, rather than writing a library
+  muman would read back as sources.
+- **Artists credited together lost their join**: a MusicBrainz credit of
+  `Marlo Venn & The Glass Orchards` was written `Marlo Venn, The Glass
+  Orchards`, and its album filed under `Marlo Venn`. The artist and the
+  album artist are written as the credit joins them, each artist also
+  listed in `ARTISTS`.
+- **`undo` keeps other homes out of the library** while it puts files
+  back, as a sync does, and **`status` moves no file**: after a run
+  stopped partway, the files beside a moved song stay where they are
+  until the next sync moves them.
 - **A sync stopped within its first 30 seconds of writing wrote every
   song again on the next run**, as a small library's whole sync could
   be. Each song written is now saved as written, unless saving takes
   more than a twentieth of the time writing runs.
+- **A hook running muman on its own run's home or library stops with an
+  error** (exit code 5) instead of waiting forever on the locks that run
+  holds. `list` still answers there, and `--library` writes another
+  library.
 - **A song sung in a language you read took a translation into another
   one you read** when `prefer` puts `"translation"` first: an English
   song read in `["en", "zh"]` took its Chinese subtitles over its
   English ones. The original in a language `read` names counts as
   readable as a translation.
+- **A run stopped by Ctrl-C leaves no part files in the home**: the
+  `.state.json`, `.songs.toml` and run record parts a stopped write
+  left are removed by the next run.
 - **A song took the language an uploader set for their channel**: a
   song titled in kana, or on a release in Japanese script, was tagged
   Korean or Chinese from YouTube's audio language. A language read off
   an upload is taken only where the song's title and its release's
   script could be in it.
+- **A sync stopped while renaming a source by its site finishes the
+  rename** rather than downloading the source again.
 - **An M4A whose tags were changed to shorter ones kept the room they
   left**, so its bytes differed from the same song written anew, and
   depended on every edit before. The room is now removed.
+- **Fetching and lookups no longer write stale measurements back**: a
+  step that runs while another muman measures keeps only what it
+  measured itself, so what the other recorded meanwhile stays, and a
+  failure the other cleared is not put back.
 - **A song with `lyrics = false`, or its lyrics or cover pinned, asked
   LRCLIB, YouTube or the Cover Art Archive** for what it would never
   take.
+- **A cover larger than 8192 × 8192 pixels is measured again** where an
+  earlier muman measured it, as this one does not, so it is judged as
+  one found now is.
 - **A record found again with other content was not kept**: the copy
   first stored stayed, and a song pinned to its old content.
 - **A cover drawn only in its transparency measured as having no
@@ -1973,7 +2110,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/jeggao/muman/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/jeggao/muman/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/jeggao/muman/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jeggao/muman/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jeggao/muman/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jeggao/muman/compare/v0.5.1...v0.6.0

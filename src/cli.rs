@@ -45,8 +45,9 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, a change or undo was refused, or the song list
-     sets commands or servers not trusted, with no terminal to ask on
+     and was left out, a change or undo was refused, the song list sets
+     commands or servers not trusted, with no terminal to ask on, or a
+     hook ran muman on the home or library of the run that started it
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started";
 
@@ -383,7 +384,10 @@ pub enum Command {
     Sync {
         /// Make every lookup a song still wants now, whatever an earlier
         /// one found: a song that has what a provider's `until` names, or
-        /// whose record from it gives all it can, asks it nothing.
+        /// whose record from it gives all it can, asks it nothing, but
+        /// every MusicBrainz record a song lists is fetched again by its
+        /// ID, and AcoustID asked again for one it found, its find now in
+        /// that record's place.
         #[arg(long)]
         rematch: bool,
 
@@ -638,7 +642,13 @@ pub enum Command {
     /// list, the lookups due, and what in it could be better: lossy or narrow audio,
     /// missing or soft covers, missing lyrics or tags. Reads only what
     /// earlier runs recorded; `--verbose` names every song counted.
-    Info,
+    Info {
+        /// Print what muman keeps of the library and its sources instead,
+        /// as JSON: the files it wrote and what each was made from, and
+        /// what it measured.
+        #[arg(long)]
+        state: bool,
+    },
     /// Write a script that completes muman's commands, flags and values
     /// in a shell, for the shell to load.
     #[command(after_help = COMPLETIONS_HELP)]

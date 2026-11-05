@@ -25,6 +25,8 @@ use crate::ui::Prompter;
 
 /// Delete every fetched file and kept record no listed or removed song
 /// uses, once confirmed. Returns whether anything went.
+// Deletes the fetched files and records no song uses.
+#[expect(clippy::disallowed_methods)]
 pub fn purge<W: Write>(
     dirs: &Dirs,
     confirm: &Confirm,
@@ -110,6 +112,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         let listed = crate::testing::metainfo("Lantern Weather", &["a.flac", "b.flac"]);
         let listed_hash = crate::torrent::Metainfo::read(&listed)
@@ -177,6 +180,7 @@ mod tests {
         let dirs = Dirs {
             home: dir.path().join("home"),
             library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
         };
         let hash = "0123456789abcdef0123456789abcdef01234567";
         let kept = [

@@ -1,0 +1,46 @@
+[package]
+name = "muman-engine"
+description = "The engine of muman: the state, songs resolved to plans, the library written, lookups and fetches, history and undo."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone, as muman-core's: the hooks and fakes the other
+# crates' tests share, and a state store that does not wait for the disk.
+testing = [
+    "muman-config/testing",
+    "muman-core/testing",
+    "muman-media/testing",
+    "muman-net/testing",
+]
+
+[dependencies]
+muman-config.workspace = true
+muman-core.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
+anstream = "1"
+anyhow = "1"
+filetime = "0.2"
+lofty = "0.25"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+same-file = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.11"
+tempfile = "3"
+trash = "5"
+unicode-normalization = "0.1"
+unicode-width = "0.2"
+
+[dev-dependencies]
+muman-config = { workspace = true, features = ["testing"] }
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

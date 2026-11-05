@@ -62,7 +62,7 @@ pub fn run(root: &Path, check: bool) -> Result<Vec<String>> {
         problems.extend(over_length(&file, &text));
     }
     let agents = std::fs::read_to_string(root.join("AGENTS.md")).context("reading AGENTS.md")?;
-    problems.extend(layout_problems(&agents, &source_files(&root.join("src"))?));
+    problems.extend(layout_problems(&agents, &source_files(root)?));
     let manifest =
         std::fs::read_to_string(root.join("Cargo.toml")).context("reading Cargo.toml")?;
     let changelog =
@@ -187,7 +187,9 @@ fn over_length(file: &Path, text: &str) -> Option<String> {
 }
 
 /// Every `.rs` file under `dir`, by its path from there with `/`.
-fn source_files(dir: &Path) -> Result<Vec<String>> {
+/// Every Rust file of the library, by its path from `root`, in each of
+/// its [`crate::layers::source_roots`].
+fn source_files(root: &Path) -> Result<Vec<String>> {
     fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<()> {
         for entry in std::fs::read_dir(dir).with_context(|| format!("listing {}", dir.display()))? {
             let entry = entry?;
@@ -202,7 +204,14 @@ fn source_files(dir: &Path) -> Result<Vec<String>> {
         Ok(())
     }
     let mut out = Vec::new();
-    walk(dir, "", &mut out)?;
+    for src in crate::layers::source_roots(root)? {
+        let shown = src.strip_prefix(root).unwrap_or(&src);
+        let prefix: Vec<String> = shown
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        walk(&src, &format!("{}/", prefix.join("/")), &mut out)?;
+    }
     out.sort();
     Ok(out)
 }
@@ -225,7 +234,7 @@ fn layout_problems(agents: &str, sources: &[String]) -> Vec<String> {
             let name = path.rsplit('/').next().unwrap_or(path);
             !block.contains(name)
         })
-        .map(|path| format!("AGENTS.md's layout does not name `src/{path}`"))
+        .map(|path| format!("AGENTS.md's layout does not name `{path}`"))
         .collect()
 }
 
@@ -330,10 +339,18 @@ mod tests {
     #[test]
     fn a_module_the_layout_leaves_out_is_named() {
         let agents = "# A\n\n## Layout\n\n```text\nsrc/\n  a.rs   one\n  */tests.rs  tests\n```\n";
-        let sources = ["a.rs".to_string(), "a/tests.rs".into(), "b.rs".into()];
+        let sources = [
+            "src/a.rs".to_string(),
+            "src/a/tests.rs".into(),
+            "src/b.rs".into(),
+            "crates/muman-core/src/c.rs".into(),
+        ];
         assert_eq!(
             layout_problems(agents, &sources),
-            ["AGENTS.md's layout does not name `src/b.rs`"]
+            [
+                "AGENTS.md's layout does not name `src/b.rs`",
+                "AGENTS.md's layout does not name `crates/muman-core/src/c.rs`",
+            ]
         );
         assert_eq!(layout_problems("# A\n", &sources).len(), 1);
     }

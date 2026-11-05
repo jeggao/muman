@@ -2,92 +2,109 @@
 //! from its sources, the best of each aspect picked by measurement, and
 //! the result written as one tagged, covered track with its lyrics.
 
-pub mod acoustid;
-pub mod acquire;
+// Tests make and change the files they check; shipped code changes one
+// only where an `#[expect]` says why.
+#![cfg_attr(test, expect(clippy::disallowed_methods))]
+
+pub use muman_engine::acquire;
+pub use muman_net::acoustid;
 pub mod add;
-pub mod align;
-pub mod analysis;
-pub mod aria2;
-pub mod atomic;
+pub use muman_core::atomic;
+pub use muman_engine::album;
+pub use muman_engine::artifact;
+pub use muman_media::align;
+pub use muman_media::analysis;
+pub use muman_net::aria2;
 pub mod attach;
 pub mod change;
-pub mod chapters;
+pub use muman_media::chapters;
 pub mod check;
-pub mod clean;
+pub use muman_media::clean;
 pub mod cli;
-pub mod codec;
-pub mod coverart;
-pub mod cue;
-pub mod cues;
-pub mod dirs;
-pub mod download;
+pub use muman_core::defaults;
+pub use muman_core::dirs;
+pub use muman_engine::due;
+pub use muman_media::codec;
+pub use muman_media::cue;
+pub use muman_media::cues;
+pub use muman_net::coverart;
+pub use muman_net::download;
 pub mod duplicates;
 pub mod editor;
+pub use muman_core::errors;
 pub mod export;
-pub mod facts;
-pub mod ffmpeg;
-pub mod fingerprint;
-pub mod fit;
-pub mod folder;
-pub mod given;
+pub use muman_core::fingerprint;
+pub use muman_core::given;
+pub use muman_engine::fit;
+pub use muman_engine::folder;
+pub use muman_media::facts;
+pub use muman_media::ffmpeg;
 pub mod guided;
-pub mod held;
-pub mod history;
-pub mod hooks;
-pub mod http;
-pub mod identify;
-pub mod info;
-pub mod integrity;
-pub mod lang;
-pub mod library;
-pub mod limit;
-pub mod lookup;
-pub mod loudness;
-pub mod lrclib;
-pub mod lyrics;
-pub mod manifest;
-pub mod migrate;
-pub mod music;
-pub mod musicbrainz;
-pub mod naming;
-pub mod ogg;
-pub mod outputs;
+pub use muman_config::held;
+pub use muman_config::hooks;
+pub use muman_config::manifest;
+pub use muman_config::migrate;
+pub use muman_core::hash;
+pub use muman_core::http;
+#[cfg(any(test, feature = "testing"))]
+pub use muman_core::kill;
+pub use muman_core::lang;
+pub use muman_engine::history;
+pub use muman_engine::identify;
+pub use muman_engine::levels;
+pub use muman_engine::library;
+pub use muman_engine::limit;
+pub use muman_engine::lookup;
+pub use muman_engine::outputs;
+pub use muman_media::info;
+pub use muman_media::integrity;
+pub use muman_media::loudness;
+pub use muman_media::lyrics;
+pub use muman_media::naming;
+pub use muman_media::ogg;
+pub use muman_net::lrclib;
+pub use muman_net::music;
+pub use muman_net::musicbrainz;
 pub mod overview;
-pub mod parallel;
-pub mod picture;
-pub mod platform;
-pub mod plugins;
-pub mod probe;
-pub mod progress;
-pub mod provider;
+pub use muman_config::providers;
+pub use muman_core::parallel;
+pub use muman_core::platform;
+pub use muman_core::portable;
+pub use muman_core::progress;
+pub use muman_core::provider;
+pub use muman_media::picture;
+pub use muman_media::probe;
+pub use muman_net::plugins;
 pub mod purge;
-pub mod quality;
-pub mod query;
-pub mod reconcile;
+pub use muman_engine::query;
+pub use muman_engine::reconcile;
+pub use muman_media::quality;
+pub use muman_media::record;
 pub mod redact;
-pub mod relpath;
-pub mod render;
-pub mod resolve;
-pub mod rows;
-pub mod runner;
-pub mod settings;
-pub mod similar;
-pub mod sites;
-pub mod source;
-pub mod state;
-pub mod store;
+pub use muman_config::settings;
+pub use muman_core::relpath;
+pub use muman_core::runner;
+pub use muman_core::sites;
+pub use muman_core::source;
+pub use muman_core::store;
+pub use muman_engine::render;
+pub use muman_engine::resolve;
+pub use muman_engine::rows;
+pub use muman_engine::state;
+pub use muman_media::similar;
 pub mod sync;
-pub mod tagfile;
-pub mod tags;
-pub mod template;
-#[cfg(test)]
-mod testing;
-pub mod tools;
-pub mod torrent;
+pub use muman_config::terms;
+pub use muman_core::template;
+#[cfg(any(test, feature = "testing"))]
+pub use muman_core::testing;
+pub use muman_core::tools;
+pub use muman_core::torrent;
+pub use muman_media::tagfile;
+pub use muman_media::tags;
 pub mod trust;
-pub mod ui;
-pub mod units;
-pub mod ytdlp_log;
+pub use muman_core::ui;
+pub use muman_core::units;
+pub use muman_net::ytdlp_log;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -105,6 +122,7 @@ use crate::history::Run;
 use crate::identify::Mode;
 use crate::manifest::Manifest;
 use crate::platform::Defaults;
+use crate::query::QueryMatch;
 use crate::reconcile::Options;
 use crate::runner::{Runner, System, Traced};
 use crate::state::State;
@@ -137,6 +155,24 @@ pub struct Job {
     /// Trust the commands and servers the song list sets without asking
     /// ([`trust`]).
     pub trust: bool,
+    /// The run whose hook runs this one, if one does.
+    pub hooked: Option<Hooked>,
+}
+
+/// The run a hook runs muman from, which holds its home's locks and its
+/// library's until the hook ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hooked {
+    pub home: PathBuf,
+    pub library: Option<PathBuf>,
+}
+
+/// The run whose hook runs this one, from the variables `var` reads.
+pub fn hooked_from(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<Hooked> {
+    Some(Hooked {
+        home: var(hooks::HOOK_HOME)?.into(),
+        library: var("MUMAN_LIBRARY").map(PathBuf::from),
+    })
 }
 
 impl Job {
@@ -146,6 +182,7 @@ impl Job {
             dirs: Dirs {
                 home: cli.home.unwrap_or(defaults.home),
                 library: cli.library.unwrap_or(defaults.library),
+                locks: defaults.cache.as_ref().map(|c| c.join("locks")),
             },
             command: cli.command,
             verbose: cli.verbose,
@@ -156,6 +193,7 @@ impl Job {
             progress: cli.progress,
             offline: cli.offline,
             trust: cli.trust,
+            hooked: None,
         }
     }
 }
@@ -171,6 +209,8 @@ fn stop_on_signals() {
 }
 
 #[must_use]
+// Reaches the terminal: progress and messages on stderr, and the answers a prompt reads.
+#[expect(clippy::disallowed_methods)]
 pub fn run() -> ExitCode {
     stop_on_signals();
     let cli = cli::command()
@@ -204,6 +244,7 @@ pub fn run() -> ExitCode {
         ..defaults
     };
     let mut job = Job::from_cli(cli, defaults);
+    job.hooked = hooked_from(&|name| std::env::var_os(name));
     // Recorded in the state, a folder named relative to where one run
     // started would be another folder to a run started elsewhere.
     for dir in [&mut job.dirs.home, &mut job.dirs.library] {
@@ -258,6 +299,8 @@ pub fn run() -> ExitCode {
 /// Write `shell`'s completion script to stdout, before anything else
 /// `run` does: a package build writes the scripts where there may be no
 /// home, song list or ffmpeg, and none is needed.
+// Writes the shell completions asked for to stdout.
+#[expect(clippy::disallowed_methods)]
 fn completions(shell: clap_complete::Shell) -> ExitCode {
     match cli::completions(shell, &mut std::io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -307,22 +350,29 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     data: &mut D,
 ) -> Result<bool> {
     let dirs = &job.dirs;
-    progress::current().plan(steps_of(&job.command));
-    let writes = matches!(
-        job.command,
-        Command::Add { .. }
-            | Command::Sync { .. }
-            | Command::Remove { .. }
-            | Command::Restore { .. }
-            | Command::Set { .. }
-            | Command::Edit { .. }
-    ) || merges(&job.command);
-    if writes {
+    let traits = traits(&job.command);
+    if traits.locks
+        && let Some(hooked) = &job.hooked
+    {
+        refuse_hooked(hooked, dirs)?;
+    }
+    progress::current().plan(traits.steps);
+    if traits.apart {
         dirs.apart()?;
-        crate::manifest::present(&dirs.home)?;
+        if !matches!(job.command, Command::Undo { .. }) && history::undo_unfinished(&dirs.home) {
+            return Err(change::Refused(
+                "An undo stopped partway has not put the library back yet; run `muman undo` to \
+                 finish it"
+                    .into(),
+            )
+            .into());
+        }
+    }
+    if traits.edits_list {
+        crate::state::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
     }
-    if trust::gated(&job.command) {
+    if traits.gated {
         let held = trust::held_in(&dirs.home)?;
         if !trust::gate(
             &dirs.home,
@@ -336,7 +386,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     }
     // yt-dlp is found when a run first fetches; a library made from
     // files alone never needs it.
-    if needs_ffmpeg(&job.command) {
+    if traits.ffmpeg {
         runner.require("ffmpeg")?;
         runner.require("ffprobe")?;
     }
@@ -362,7 +412,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             };
             reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))
         }
-        Command::Info => {
+        Command::Info { state: true } => {
+            state::State::dump(&dirs.home, data)?;
+            Ok(true)
+        }
+        Command::Info { state: false } => {
             overview::info(dirs, job.verbose, data)?;
             let found: Vec<tools::Status> = tools::TOOLS
                 .iter()
@@ -479,6 +533,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let _runs = Lock::runs(&dirs.home)?;
             let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
+                let _library = Lock::library(&dirs.library, dirs.lock_folder()?);
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(
@@ -628,37 +683,61 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
     reconcile::reconcile(runner, &job.dirs, opts, run, out)
 }
 
-/// Whether `command` may run ffmpeg or ffprobe: an export only when it
-/// encodes, `check` only when it decodes.
-pub(crate) fn needs_ffmpeg(command: &Command) -> bool {
-    match command {
-        Command::Info
-        | Command::List { .. }
-        | Command::Purge { .. }
-        | Command::Completions { .. } => false,
-        Command::Duplicates { .. } => merges(command),
-        Command::Check { decode, .. } => *decode,
-        Command::Export {
-            max_size,
-            codec,
-            template,
-            lyrics,
-            set,
-            ..
-        } => {
-            max_size.is_some()
-                || codec.is_some()
-                || template.is_some()
-                || lyrics.is_some()
-                || !set.is_empty()
-        }
-        _ => true,
-    }
+/// What [`run_with`] must know of a command before running it.
+// Each bool is one question run_with asks of every command.
+#[expect(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Traits {
+    /// It changes the library, the home's sources or the song list, so
+    /// the library and the home must lie apart ([`Dirs::apart`]).
+    pub apart: bool,
+    /// It writes the song list: the list must be there while the library
+    /// holds songs, and each setting it renames is said first.
+    pub edits_list: bool,
+    /// It may run a tool, a hook or a request on the song list's
+    /// settings, so asks first ([`trust`]). `undo` asks apart, about the
+    /// list it puts back.
+    pub gated: bool,
+    /// It may run ffmpeg or ffprobe: an export only when it encodes,
+    /// `check` only when it decodes.
+    pub ffmpeg: bool,
+    /// It may lock the home or the library, or wait on their locks, so a
+    /// hook cannot run it on the home or library of the run that started
+    /// it ([`Hooked`]).
+    pub locks: bool,
+    /// The long steps it may take, in the order it takes them, which
+    /// number them as it goes.
+    pub steps: &'static [&'static str],
 }
 
-/// The long steps a command may take, in the order it takes them, which
-/// number them as it goes.
-fn steps_of(command: &Command) -> &'static [&'static str] {
+/// Refuse to run where `hooked`, the run whose hook this is, holds the
+/// locks: that run waits for its hook, which would wait for it.
+fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
+    if platform::same_path(&hooked.home, &dirs.home) {
+        return Err(change::Refused(format!(
+            "a hook cannot run this on {}, the home of the run that started it, which waits for \
+             the hook to end",
+            dirs.home.display()
+        ))
+        .into());
+    }
+    if hooked
+        .library
+        .as_deref()
+        .is_some_and(|l| platform::same_path(l, &dirs.library))
+    {
+        return Err(change::Refused(format!(
+            "a hook cannot run this on {}, the library the run that started it is writing; pass \
+             --library to name another",
+            dirs.library.display()
+        ))
+        .into());
+    }
+    Ok(())
+}
+
+/// What `command` is, one arm per command, so a new command says each.
+pub(crate) fn traits(command: &Command) -> Traits {
     const SYNC: &[&str] = &[
         "Fetching",
         "Measuring",
@@ -666,31 +745,91 @@ fn steps_of(command: &Command) -> &'static [&'static str] {
         "Comparing",
         "Writing",
     ];
+    const CHANGE: &[&str] = &["Measuring", "Comparing", "Writing"];
+    let edits = |steps| Traits {
+        apart: true,
+        edits_list: true,
+        gated: true,
+        ffmpeg: true,
+        locks: true,
+        steps,
+    };
+    let reads = Traits {
+        apart: false,
+        edits_list: false,
+        gated: false,
+        ffmpeg: false,
+        locks: true,
+        steps: &[],
+    };
     match command {
-        Command::Add { .. } | Command::Sync { .. } => SYNC,
-        Command::Restore { .. } => &["Fetching", "Measuring", "Comparing", "Writing"],
-        Command::Remove { .. }
-        | Command::Set { .. }
-        | Command::Edit { .. }
-        | Command::Undo { .. } => &["Measuring", "Comparing", "Writing"],
-        Command::Status { .. } => &["Measuring", "Comparing"],
-        Command::Check { .. } => &["Decoding"],
-        Command::Export { folder: true, .. } => &["Encoding", "Writing the folder"],
-        Command::Export { .. } => &["Encoding", "Writing the zip"],
-        Command::Duplicates { .. } if merges(command) => {
-            &["Comparing prints", "Comparing", "Measuring", "Writing"]
+        Command::Add { .. } | Command::Sync { .. } => edits(SYNC),
+        Command::Restore { .. } => edits(&["Fetching", "Measuring", "Comparing", "Writing"]),
+        Command::Remove { .. } | Command::Set { .. } | Command::Edit { .. } => edits(CHANGE),
+        Command::Undo { .. } => Traits {
+            apart: true,
+            ffmpeg: true,
+            steps: CHANGE,
+            ..reads
+        },
+        Command::Purge { .. } => Traits {
+            apart: true,
+            ..reads
+        },
+        Command::Status { .. } => Traits {
+            gated: true,
+            ffmpeg: true,
+            steps: &["Measuring", "Comparing"],
+            ..reads
+        },
+        Command::Check { decode, upstream } => Traits {
+            gated: *decode || *upstream,
+            ffmpeg: *decode,
+            steps: &["Decoding"],
+            ..reads
+        },
+        Command::Export {
+            folder,
+            max_size,
+            codec,
+            template,
+            lyrics,
+            set,
+            ..
+        } => {
+            let encodes = max_size.is_some()
+                || codec.is_some()
+                || template.is_some()
+                || lyrics.is_some()
+                || !set.is_empty();
+            Traits {
+                gated: encodes,
+                ffmpeg: encodes,
+                steps: if *folder {
+                    &["Encoding", "Writing the folder"]
+                } else {
+                    &["Encoding", "Writing the zip"]
+                },
+                ..reads
+            }
         }
-        Command::Duplicates { .. } => &["Comparing prints"],
-        Command::List { .. }
-        | Command::Info
-        | Command::Purge { .. }
-        | Command::Completions { .. } => &[],
+        Command::Duplicates { resolve, merge, .. } if *resolve || merge.is_some() => {
+            edits(&["Comparing prints", "Comparing", "Measuring", "Writing"])
+        }
+        Command::Duplicates { .. } => Traits {
+            locks: false,
+            steps: &["Comparing prints"],
+            ..reads
+        },
+        Command::Info { .. } => Traits {
+            gated: true,
+            ..reads
+        },
+        Command::List { .. } | Command::Completions { .. } => Traits {
+            locks: false,
+            ..reads
+        },
     }
-}
-
-/// Whether `command` is a `duplicates` that merges, rather than lists.
-pub(crate) fn merges(command: &Command) -> bool {
-    matches!(command, Command::Duplicates { resolve, merge, .. } if *resolve || merge.is_some())
 }
 
 /// Finish `run` whatever became of its command, so one that stopped on

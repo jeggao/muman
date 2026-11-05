@@ -1,0 +1,41 @@
+[package]
+name = "muman-media"
+description = "The media layer of muman: probing, decoding and measuring audio and pictures, tags, lyrics and names."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone, as muman-core's: the hooks and fakes the other
+# crates' tests share.
+testing = ["muman-core/testing"]
+
+[dependencies]
+muman-core.workspace = true
+anyhow = "1"
+base64 = "0.23"
+chardetng = "1"
+deunicode = "1"
+ebur128 = "0.1.10"
+encoding_rs = "0.8"
+html-escape = "0.3"
+icu_casemap = "2.3"
+icu_properties = "2.3"
+icu_segmenter = "2.3"
+lofty = "0.25"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.11"
+tempfile = "3"
+unicode-normalization = "0.1"
+unicode-security = "0.1"
+unicode-segmentation = "1"
+
+[dev-dependencies]
+muman-core = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

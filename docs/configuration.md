@@ -15,7 +15,7 @@ is about:
 
 | Flag | Variable | Sets |
 |---|---|---|
-| `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.json`, the sources and the run history |
+| `--home` | `MUMAN_HOME` | The home: `songs.toml`, `state.db`, the sources and the run history |
 | `--library` | `MUMAN_LIBRARY` | The library folder, over the song list's `[library] path` |
 | `--offline` | `MUMAN_OFFLINE` | Reach no network: no lookup, no fetch, and URLs refused |
 | `--progress` | `MUMAN_PROGRESS` | How a long step shows its progress: `auto`, `plain`, `json` or `none` ([progress](guide.md#progress-and-output)) |
@@ -76,7 +76,7 @@ each program's version and path.
 ## Settings in the song list
 
 The first `add` or `sync` in a new home writes `songs.toml` with every
-setting at its default. [`src/manifest/new.toml`](../src/manifest/new.toml)
+setting at its default. [`crates/muman-core/src/new.toml`](../crates/muman-core/src/new.toml)
 is that file, and the reference for every key; change the values you
 want. A song list made by an earlier muman gains each setting it lacks,
 at its default, the next time muman writes it. A setting with no
@@ -110,6 +110,7 @@ bitrate, a time, a loudness or a level needs its unit.
 | Table | Sets |
 |---|---|
 | `[library]` | The library folder, the [path template](#the-path-template), [safe names](#safe-names-on-every-system), fallback names, whether sources' comments are written, and [the most the library may take](audio.md#library-size) |
+| `[tags]` | How [cleaning](library.md#cleaning) writes quotes, apostrophes and hyphens: typographic, as MusicBrainz does, or ASCII |
 | `[lyrics]` | The languages you read, [which lyrics a song takes](#which-lyrics-a-song-takes) and [where they go](#where-lyrics-go) |
 | `[audio]` | [The codecs](audio.md#codecs) copied as they are, what the rest is encoded to, each encoder's bitrate, and the speaker layouts kept |
 | `[audio.pick.*]` | [How audio sources are ranked](#how-sources-are-ranked) |
@@ -228,7 +229,7 @@ addresses too, which a sync fetches from. Read a song list as you would
 a script before you run muman on it.
 
 muman runs none of these until you trust them. It keeps what you
-trusted in `state.json`, by each setting's value, not its spelling or
+trusted in its state, by each setting's value, not its spelling or
 comments. When a command could run a program, a hook or a request, and
 the song list holds such a setting you have not trusted as it is now,
 muman lists every one, marks the new and the changed, and asks once. A
@@ -264,7 +265,7 @@ is Japanese, never Korean or Chinese.
 `[lyrics] prefer` lists the roles, and `"timed"` or `"untimed"`, best
 first. Lyrics rank by the first entry that tells them apart, and a role
 left out is never taken. Its default is in
-[new.toml](../src/manifest/new.toml). This takes a song's own words,
+[new.toml](../crates/muman-core/src/new.toml). This takes a song's own words,
 else their romanization, timed lyrics before untimed ones of the same
 role, and never a translation:
 
@@ -388,7 +389,7 @@ weight = 50
 enabled = false
 ```
 
-The default weights, in [new.toml](../src/manifest/new.toml), make each
+The default weights, in [new.toml](../crates/muman-core/src/new.toml), make each
 measure outweigh all after it, so their order alone decides. To let
 measures trade, weigh each against the steps of those it should trade
 with.
@@ -406,6 +407,7 @@ without the extension. `/` in the template separates folders.
 | `album`, `album_artist` | The album and its artist, or the fallback names |
 | `genre`, `composer` | The genre and the composer, or empty |
 | `date`, `year` | The date as tagged, and its first four digits |
+| `original_year` | The year the album was first released, from `ORIGINALDATE`, else `year`: one folder for every edition of an album |
 | `track`, `disc` | The track and disc numbers, or none |
 | `disc_track` | `03 ` on a first disc, `2-03 ` on a later one, nothing without a track number |
 | `bpm`, `key` | The tempo and the musical key, or empty |

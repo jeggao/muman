@@ -1,9 +1,15 @@
 //! Repository checks run by CI and before a commit: `cargo xtask
-//! comments`, `cargo xtask commits` and `cargo xtask docs`.
+//! comments`, `cargo xtask commits`, `cargo xtask docs` and `cargo xtask
+//! layers`.
+
+// The rules on changing files and printing are muman's; these checks
+// write only their own files and print their own findings.
+#![expect(clippy::disallowed_methods, clippy::print_stdout, clippy::print_stderr)]
 
 mod comments;
 mod commits;
 mod docs;
+mod layers;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -62,6 +68,14 @@ enum Task {
         #[arg(long)]
         check: bool,
     },
+    /// Check that no module names one of a higher layer than its own,
+    /// but as xtask/src/layers.rs lists.
+    Layers {
+        /// Also print each upward reference, each module's fan-in and the
+        /// cycles.
+        #[arg(long)]
+        report: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -88,6 +102,7 @@ fn main() -> ExitCode {
             &author,
             github_annotations,
         ),
+        Task::Layers { report } => layers::run(&root, report),
         Task::Docs { check } => docs::run(&root, check).map(|problems| {
             for p in &problems {
                 eprintln!("docs: {p}");

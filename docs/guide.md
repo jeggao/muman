@@ -17,7 +17,7 @@ both are.
 | Path in the home | Holds |
 |---|---|
 | `songs.toml` | The song list: every song, its sources, tags and pins, and the settings |
-| `state.json` | The library files muman wrote and what each was made from, and what it measured of every source |
+| `state.db` | The library files muman wrote and what each was made from, and what it measured of every source; the `state.json` an earlier muman kept is read into it once and kept as `state.json.bak` |
 | `sources/yt-dlp/<site>/` | What yt-dlp fetched, each at a path made from its key: audio, thumbnail, subtitles and metadata in one file |
 | `sources/manual/` | Files of your own, at any depth, with the lyrics and pictures beside them |
 | `sources/torrent/` | Each torrent's metainfo, `<hash>.torrent`, and its files in the folder `<hash>/` |
@@ -62,7 +62,7 @@ that swap paths are written again.
 
 ### Files muman owns
 
-muman deletes or writes over only the files `state.json` records as
+muman deletes or writes over only the files its state records as
 its own. Anything else in the library folder stays as it is:
 
 - A file of yours at a song's path, or where a file beside the song

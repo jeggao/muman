@@ -1,0 +1,31 @@
+[package]
+name = "muman-net"
+description = "The network layer of muman: yt-dlp and aria2c fetches, and lookups on LRCLIB, MusicBrainz, AcoustID and the Cover Art Archive."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone, as muman-core's: the hooks and fakes the other
+# crates' tests share, and a fake LRCLIB server.
+testing = ["muman-core/testing", "muman-media/testing"]
+
+[dependencies]
+muman-core.workspace = true
+muman-media.workspace = true
+anyhow = "1"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tempfile = "3"
+terminal_size = "0.4"
+unicode-width = "0.2"
+
+[dev-dependencies]
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

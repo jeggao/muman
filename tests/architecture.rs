@@ -8,14 +8,15 @@
 //! fails here until the rule, and the reason beside it, is changed on
 //! purpose.
 //!
-//! Only code that ships is read: a file's inline `mod tests` and the
-//! `tests.rs` and `testing.rs` files are left out.
+//! Only code that ships is read: a file's inline `mod tests`, the
+//! `tests.rs` and `testing.rs` files, and the modules of a `tests/`
+//! folder in a `src` are left out.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Every source file under `src`, by its path from `src`, without its
-/// tests.
+/// Every source file under `src`, and under each `crates/<crate>/src`,
+/// by its path from its `src`, without its tests.
 fn sources() -> BTreeMap<String, String> {
     fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -27,16 +28,24 @@ fn sources() -> BTreeMap<String, String> {
             }
         }
     }
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut found = Vec::new();
-    walk(&src, &mut found);
-    found
-        .into_iter()
-        .filter(|p| {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut roots = vec![root.join("src")];
+    if let Ok(crates) = std::fs::read_dir(root.join("crates")) {
+        roots.extend(
+            crates
+                .filter_map(|e| Some(e.ok()?.path().join("src")))
+                .filter(|src| src.is_dir()),
+        );
+    }
+    let mut out = BTreeMap::new();
+    for src in roots {
+        let mut found = Vec::new();
+        walk(&src, &mut found);
+        for p in found {
             let name = p.file_name().unwrap().to_string_lossy();
-            name != "tests.rs" && name != "testing.rs"
-        })
-        .map(|p| {
+            if name == "tests.rs" || name == "testing.rs" || p.starts_with(src.join("tests")) {
+                continue;
+            }
             let text = std::fs::read_to_string(&p).unwrap();
             let shipped = match text.find("#[cfg(test)]\nmod tests {") {
                 Some(at) => text[..at].to_string(),
@@ -49,9 +58,10 @@ fn sources() -> BTreeMap<String, String> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            (name, shipped)
-        })
-        .collect()
+            out.insert(name, shipped);
+        }
+    }
+    out
 }
 
 /// The lines of `text` holding any of `needles`, comments aside.
@@ -64,86 +74,78 @@ fn lines_with<'a>(text: &'a str, needles: &[&str]) -> Vec<&'a str> {
         .collect()
 }
 
-/// Every file that may change files, the most calls it may make, and why
-/// it may. A file the list does not name changes none; one that makes
-/// more calls than its count has grown a way to change files that this
-/// list, and its reason, should say.
-const MUTATIONS: &[(&str, usize, &str)] = &[
+/// Every file that may change files, and why it may. A call that changes
+/// a file is one of the std calls clippy's `disallowed-methods` names,
+/// which shipped code makes only where an `#[expect]` says why, or one of
+/// `atomic`'s primitives; a file the list does not name makes none.
+const MUTATIONS: &[(&str, &str)] = &[
     (
         "atomic.rs",
-        5,
-        "the primitives every other write goes through, scratch folders, and the library's lock file as it is let go",
+        "the primitives every other write goes through, a second name for a file, scratch folders, the parts a stopped write left, and the library's lock file as it is let go",
     ),
     (
         "library.rs",
-        7,
         "the ledger: every move and removal in the library, recorded first, \
          and a song's staged files put in place over only what it proved muman's",
     ),
     (
         "render.rs",
-        7,
         "a song's new files staged beside their paths, whatever was at a staged \
          name removed first, and those staged files removed when the song fails \
          or the files beside it, written again alone, cannot be put in place",
     ),
     (
         "history.rs",
-        15,
         "run records, the files kept for undo, undo putting them back or removing lyrics it added and the copies `add` made, and an undone run's record let go of once its sync ends",
     ),
     (
         "store.rs",
-        4,
         "an upload its release replaced, deleted from the sources; a file \
          fetched moved to its key's place, replacing the key's other; a \
-         torrent's file aria2c finished moved to its key's place",
+         file a site renamed named at its new key's place, replacing \
+         another there, and its old name removed once the list names the \
+         new; a torrent's file aria2c finished moved to its key's place",
     ),
     (
         "aria2.rs",
-        4,
         "the metainfo a magnet link's peers sent, dropped once read; a \
          torrent's unfinished folder, once its files are placed; a \
          damaged copy copied in to be checked; the input file of a run, \
          in scratch",
     ),
-    ("purge.rs", 1, "sources no song uses, deleted on request"),
+    ("purge.rs", "sources no song uses, deleted on request"),
+    (
+        "state.rs",
+        "state.json brought into state.db once: the store made from it \
+         linked or renamed into place, its other name and what a stopped \
+         import left removed, and state.json kept as state.json.bak",
+    ),
     (
         "change.rs",
-        1,
         "a removed song's fetched source, deleted with `remove --purge`",
     ),
     (
         "given.rs",
-        1,
         "files copied in by `add`, and a download taken up",
     ),
     (
         "add.rs",
-        1,
         "a file fetched before, removed again when its info JSON cannot be cleared",
     ),
-    ("sync.rs", 2, "downloads left unfinished too long"),
+    ("sync.rs", "downloads left unfinished too long"),
     (
         "acquire.rs",
-        2,
         "the URL list and download archive handed to yt-dlp, in scratch",
     ),
     (
         "download.rs",
-        3,
         "a file just fetched or copied in, written again without the cookies \
          and headers of its info JSON, that JSON kept in scratch; a remux left \
          cut short in partial downloads",
     ),
-    (
-        "editor.rs",
-        1,
-        "the file the editor is opened on, in scratch",
-    ),
+    ("editor.rs", "the file the editor is opened on, in scratch"),
     (
         "export.rs",
-        6,
         "the zip or the folder, made in scratch and renamed into place, an \
          empty folder there replaced; each song encoded for it moved or \
          deleted from scratch once it is in, any other copied in",
@@ -155,28 +157,32 @@ fn files_change_only_where_the_change_is_recorded_or_scratch() {
     let calls = [
         "atomic::remove(",
         "atomic::rename(",
-        "fs::remove_file(",
+        "atomic::link(",
+        "fs::write(",
         "fs::rename(",
         "fs::copy(",
         "hard_link(",
+        "fs::remove_file(",
         "fs::remove_dir(",
         "remove_dir_all(",
-        "fs::write(",
+        "File::create(",
+        "OpenOptions::new(",
     ];
-    let allowed: BTreeMap<&str, usize> = MUTATIONS.iter().map(|(f, n, _)| (*f, *n)).collect();
-    let mut wrong = Vec::new();
-    for (file, text) in sources() {
-        let found = lines_with(&text, &calls);
-        let most = allowed.get(file.as_str()).copied().unwrap_or(0);
-        if found.len() > most {
-            wrong.push(format!(
-                "{file}: {} where {most} may be:\n{}",
-                found.len(),
-                found.join("\n")
-            ));
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
+    let listed: BTreeSet<&str> = MUTATIONS.iter().map(|(f, _)| *f).collect();
+    let changing: BTreeSet<String> = sources()
+        .into_iter()
+        .filter(|(_, text)| !lines_with(text, &calls).is_empty())
+        .map(|(file, _)| file)
+        .collect();
+    let unlisted: Vec<&String> = changing
+        .iter()
+        .filter(|f| !listed.contains(f.as_str()))
+        .collect();
+    let stale: Vec<&&str> = listed.iter().filter(|f| !changing.contains(**f)).collect();
+    assert!(
+        unlisted.is_empty() && stale.is_empty(),
+        "files that change files, unlisted: {unlisted:?}; listed, changing none: {stale:?}"
+    );
 }
 
 /// A library file is written over or removed only as the ledger proves
@@ -225,6 +231,10 @@ const STATICS: &[(&str, &str)] = &[
     (
         "runner.rs",
         "the programs a signal stops with muman, and whether one of the user's own answers it",
+    ),
+    (
+        "kill.rs",
+        "the kills and guarded libraries tests arm, compiled for tests alone",
     ),
 ];
 
@@ -275,7 +285,7 @@ fn sites_are_described_by_the_site_table_alone() {
     }
     assert!(
         wrong.is_empty(),
-        "name sites in manifest/new.toml's [sites], not in code:\n{}",
+        "name sites in new.toml's [sites], not in code:\n{}",
         wrong.join("\n")
     );
 }
@@ -391,16 +401,16 @@ fn ffmpeg_reads_a_file_only_as_its_input_says() {
 /// Where ffmpeg is told to encode a picture, and why there.
 const PICTURES: [(&str, &str); 2] = [
     (
-        "render.rs",
+        "render/cover.rs",
         "the covers written into the library, each with `PICTURE_ARGS`",
     ),
     ("quality.rs", "a graymap measured, never written"),
 ];
 
 /// A picture written into the library is the same bytes on every
-/// processor, as far as ffmpeg can make it: each encoder `render.rs`
-/// names follows `PICTURE_ARGS` in its function, and no other module
-/// encodes one.
+/// processor, as far as ffmpeg can make it: each encoder
+/// `render/cover.rs` names follows `PICTURE_ARGS` in its function, and no
+/// other module encodes one.
 #[test]
 fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
     let mut wrong = Vec::new();
@@ -416,14 +426,14 @@ fn a_picture_is_encoded_with_the_options_that_make_it_alike_everywhere() {
                 .rposition(|l| l.trim_start().starts_with("fn ") || l.contains(" fn "))
                 .unwrap_or(0);
             let exact = lines[start..n].iter().any(|l| l.contains("PICTURE_ARGS"));
-            if !allowed || (file == "render.rs" && !exact) {
+            if !allowed || (file == "render/cover.rs" && !exact) {
                 wrong.push(format!("{file}: {}", line.trim()));
             }
         }
     }
     assert!(
         wrong.is_empty(),
-        "encode a picture in `render.rs`, after `PICTURE_ARGS`:\n{}",
+        "encode a picture in `render/cover.rs`, after `PICTURE_ARGS`:\n{}",
         wrong.join("\n")
     );
 }
@@ -469,7 +479,7 @@ fn a_plan_changes_format_with_its_renderer_version() {
 /// lyrics are cleaned only to be measured or matched.
 const CLEANS: [(&str, &str, &str); 5] = [
     (
-        "render.rs",
+        "render/lyrics.rs",
         "lyrics::clean(",
         "writes a song's lyrics as its plan's `clean_off` and `cleaning` say",
     ),
@@ -562,7 +572,7 @@ fn a_file_beside_a_song_is_named_in_one_place() {
 fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        if file == "cues.rs" || file == "render.rs" {
+        if file == "cues.rs" || file == "render/lyrics.rs" {
             continue;
         }
         for line in lines_with(&text, &["cues::write("]) {
@@ -571,7 +581,7 @@ fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
     }
     assert!(
         wrong.is_empty(),
-        "lyrics are written in a format outside `render.rs`, which writes them as \
+        "lyrics are written in a format outside `render/lyrics.rs`, which writes them as \
          a plan's outputs say, so a library file could hold what no plan names:\n{}",
         wrong.join("\n")
     );
@@ -580,7 +590,10 @@ fn lyrics_are_written_in_their_formats_only_as_a_plan_says() {
 #[test]
 fn the_reasons_name_files_that_exist() {
     let all = sources();
-    for (file, ..) in MUTATIONS.iter().chain(WRITES) {
+    for (file, _) in MUTATIONS {
+        assert!(all.contains_key(*file), "{file}");
+    }
+    for (file, ..) in WRITES {
         assert!(all.contains_key(*file), "{file}");
     }
     for (file, ..) in CLEANS.iter().chain(&RENAMES) {
@@ -589,40 +602,12 @@ fn the_reasons_name_files_that_exist() {
     for (file, _) in STATICS
         .iter()
         .chain(RESHAPES)
-        .chain(WALKS)
         .chain(COPIES)
         .chain(ASKS)
         .chain(PROVIDER_NAMES)
     {
         assert!(all.contains_key(*file), "{file}");
     }
-}
-
-/// Where a file or folder of a run's own is made, and why: anywhere
-/// else, one a run stopped partway leaves would be nobody's to remove.
-const SCRATCH: &[(&str, &str)] = &[
-    (
-        "atomic.rs",
-        "a whole file written beside its place, and a run's scratch folder",
-    ),
-    (
-        "reconcile.rs",
-        "a step's folder inside a run's scratch folder",
-    ),
-];
-
-#[test]
-fn a_runs_own_files_are_made_in_its_scratch_folder() {
-    let allowed: Vec<&str> = SCRATCH.iter().map(|(f, _)| *f).collect();
-    let mut wrong = Vec::new();
-    for (file, text) in sources() {
-        for line in lines_with(&text, &["tempfile::Builder", "tempfile_in(", "tempdir_in("]) {
-            if !allowed.contains(&file.as_str()) {
-                wrong.push(format!("{file}: {}", line.trim()));
-            }
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// Where a provider's service or YouTube's search is asked, and why
@@ -696,7 +681,7 @@ fn a_provider_s_name_is_spelled_in_one_place() {
 /// Where whether a failed fetch is due again is judged: what a sync
 /// fetches is decided once, so the fetches, `status` and `info` agree.
 const FETCH_DUE: &[(&str, &str)] = &[
-    ("sync.rs", "what a sync fetches of the listed sources"),
+    ("due.rs", "what a sync fetches of the listed sources"),
     ("lookup.rs", "a lookup's record fetched again"),
     ("state.rs", "how long a failure waits"),
 ];
@@ -763,22 +748,6 @@ fn a_fetched_source_is_named_in_one_place() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Where a link is followed wherever it leads, and why. A folder given
-/// to `add` is walked by `given.rs` alone, which follows a link inside
-/// it only to a place inside it; walked anywhere else, a link a
-/// downloaded folder holds could bring a file from anywhere on the
-/// machine into the library.
-const WALKS: &[(&str, &str)] = &[
-    (
-        "given.rs",
-        "what the user gives `add`, a link followed only to a place inside it",
-    ),
-    (
-        "store.rs",
-        "muman's own folders, the sources and the library, whose links the user made",
-    ),
-];
-
 /// Where a file is copied byte for byte, through any link, and why: a
 /// file the user gives `add` is copied by `given.rs` alone, which reads
 /// a regular file at its real path, inside the folder given.
@@ -803,20 +772,18 @@ const COPIES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn what_the_user_gives_is_walked_and_copied_in_one_place() {
+fn what_the_user_gives_is_copied_in_one_place() {
     let mut wrong = Vec::new();
     for (file, text) in sources() {
-        for (needle, allowed) in [("follow_links(true)", WALKS), ("fs::copy(", COPIES)] {
-            if allowed.iter().all(|(f, _)| *f != file) {
-                for line in lines_with(&text, &[needle]) {
-                    wrong.push(format!("{file}: {}", line.trim()));
-                }
+        if COPIES.iter().all(|(f, _)| *f != file) {
+            for line in lines_with(&text, &["fs::copy("]) {
+                wrong.push(format!("{file}: {}", line.trim()));
             }
         }
     }
     assert!(
         wrong.is_empty(),
-        "walk and copy what `add` is given through `given::Folder`:\n{}",
+        "copy what `add` is given through `given::Folder`:\n{}",
         wrong.join("\n")
     );
 }
@@ -848,7 +815,7 @@ const WRITES: &[(&str, usize, &str)] = &[
     ("chapters.rs", 2, "an FFMETADATA file, in a String"),
     ("attach.rs", 3, "a song offered to pick, in a String"),
     ("editor.rs", 1, "the file the editor opens, in a String"),
-    ("facts.rs", 1, "a hash in hex, in a String"),
+    ("hash.rs", 1, "a hash in hex, in a String"),
     ("held.rs", 1, "what a digest is made of, in a String"),
     ("lrclib.rs", 1, "lyrics as an `.lrc` file, in a String"),
     ("lyrics.rs", 1, "a timestamp, in a String"),

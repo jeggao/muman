@@ -1,0 +1,63 @@
+version = 1
+edition = 1
+[library]
+template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
+restrict = "windows"
+replace = {}
+max_name_bytes = 200
+max_folder_bytes = 120
+unknown_artist = "Unknown Artist"
+unknown_album = "Unknown Album"
+untitled = "Untitled"
+lyrics = "sidecar"
+touch_root = false
+block_size = "4 KiB"
+[audio]
+codecs = ["opus", "flac"]
+lossy = "opus"
+lossless = "flac"
+opus_kbps = 160
+opus_surround_kbps = 256
+vorbis_kbps = 192
+aac_kbps = 256
+mp3_kbps = 320
+[quality.purity]
+enabled = true
+weight = 10000
+step_ms = 2000
+[quality.bandwidth]
+enabled = true
+weight = 10
+step_hz = 500
+[quality.stereo]
+enabled = true
+weight = 5
+incoherence = 0.01
+[quality.clipping]
+enabled = true
+weight = 1
+cutoffs = [0.001, 0.01]
+[quality.square]
+enabled = true
+weight = 10000
+tolerance = 0.03
+[quality.resolution]
+enabled = true
+weight = 20
+step = 0.1
+[quality.blockiness]
+enabled = true
+weight = 1
+step = 0.1
+[ytdlp]
+format = "bv*+ba/b"
+sub_langs = "all,-live_chat"
+concurrent_fragments = 4
+plugins = true
+args = []
+partial_days = 14
+[history]
+runs = 3
+max_mib = 2048
+[defaults]
+lyrics = ["en"]

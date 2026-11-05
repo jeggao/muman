@@ -82,6 +82,7 @@ use crate::facts::{self, LyricsAt};
 use crate::lyrics;
 use crate::manifest::{self, Edit, Manifest};
 use crate::picture::{self, Alike, Look};
+use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
 use crate::reconcile;
 use crate::runner::Runner;
@@ -817,7 +818,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
     let mut clues = Clues {
         stem: folded_stem(path),
         grace: (GRACE_MS, SPAN_MS),
-        digest: facts::digest_file(path),
+        digest: crate::hash::digest_file(path),
         ..Clues::default()
     };
     if let Some(id) = crate::source::id_of(path) {
@@ -830,7 +831,7 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
             let text = if matches!(extension(path).as_str(), "srt" | "vtt") {
                 let lrc = scratch.join(format!("{}.lrc", clues.stem.len()));
                 let converted = subtitles_as_lrc(runner, path, &lrc)?;
-                clues.digest = Some(facts::digest(&converted));
+                clues.digest = Some(crate::hash::digest(&converted));
                 let text = lyrics::decode(&converted);
                 bytes = Some(converted);
                 text
@@ -1244,6 +1245,7 @@ pub fn attach<R: Runner, W: Write>(
     }
     let mut manifest = Manifest::load(&dirs.home)?;
     let mut state = State::load(&dirs.home)?;
+    let mut base = state.caches();
     let store = Store::scan(dirs)?;
     let listed = manifest.keys();
     let temp = crate::atomic::Scratch::new()?;
@@ -1252,7 +1254,7 @@ pub fn attach<R: Runner, W: Write>(
         let mut measuring = reconcile::Measuring {
             retry: false,
             say_unread: false,
-            checkpoint: &mut |s: &State| State::keep_measures(home, s),
+            checkpoint: &mut |s: &State| s.keep_since(home, &mut base),
             analyses: crate::analysis::wanted(&manifest.settings.loudness),
         };
         reconcile::measure(
@@ -1268,7 +1270,7 @@ pub fn attach<R: Runner, W: Write>(
     if paths.iter().any(|(_, w)| *w == What::Picture)
         && reconcile::look(runner, &store, &listed, &mut state, temp.path(), out)?
     {
-        State::keep_measures(&dirs.home, &state)?;
+        state.keep_since(&dirs.home, &mut base)?;
     }
     let mut cands = candidates(&manifest, &state, &store, dirs)?;
     let extractors = query::extractors(&manifest);
@@ -1279,7 +1281,7 @@ pub fn attach<R: Runner, W: Write>(
         for value in &how.to {
             terms.extend(
                 shell_words::split(value)
-                    .map_err(|e| crate::change::Refused(format!("--to {value}: {e}")))?,
+                    .map_err(|e| crate::errors::Refused(format!("--to {value}: {e}")))?,
             );
         }
         let q = Query::parse(&terms, &extractors)?;
@@ -1288,7 +1290,7 @@ pub fn attach<R: Runner, W: Write>(
             .collect();
         if found.is_empty() {
             return Err(
-                crate::change::Refused(format!("No song matches `{}`", how.to.join(" "))).into(),
+                crate::errors::Refused(format!("No song matches `{}`", how.to.join(" "))).into(),
             );
         }
         Some(found)
@@ -1894,7 +1896,7 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
             std::fs::read(&item.path).with_context(|| format!("reading {}", item.path.display()))?
         }
     };
-    let digest = facts::digest(&bytes);
+    let digest = crate::hash::digest(&bytes);
     let added = manual.join(ADDED);
     std::fs::create_dir_all(&added).with_context(|| format!("creating {}", added.display()))?;
     let stem = item
@@ -1916,7 +1918,8 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
         let to = added.join(&name);
         let key = SourceKey::Manual(PathBuf::from(ADDED).join(&name).into());
         if to.exists() {
-            if !taken.contains(&key) && facts::digest_file(&to).as_deref() == Some(digest.as_str())
+            if !taken.contains(&key)
+                && crate::hash::digest_file(&to).as_deref() == Some(digest.as_str())
             {
                 taken.insert(key.clone());
                 return Ok(key);

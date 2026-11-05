@@ -374,7 +374,7 @@ tags.title = "Paper Comets"
         assert_eq!(redact(text).unwrap(), (want.clone(), 6));
         let doc: DocumentMut = want.parse().unwrap();
         crate::settings::read(&doc).unwrap();
-        crate::provider::read(&doc).unwrap();
+        crate::providers::read(&doc).unwrap();
         let new = crate::manifest::NEW;
         assert_eq!(redact(new).unwrap(), (new.to_string(), 0));
     }

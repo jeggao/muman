@@ -1,0 +1,38 @@
+[package]
+name = "muman-config"
+description = "The config layer of muman: the song list, its settings, editions and hooks, and the queries that pick its songs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# For tests alone, as muman-core's: the hooks and fakes the other
+# crates' tests share.
+testing = ["muman-core/testing", "muman-media/testing", "muman-net/testing"]
+
+[dependencies]
+muman-core.workspace = true
+muman-media.workspace = true
+muman-net.workspace = true
+anyhow = "1"
+directories = "6"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+shell-words = "1"
+strsim = "0.11"
+tempfile = "3"
+toml = "1"
+toml_edit = "0.25"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+which = "8"
+
+[dev-dependencies]
+muman-core = { workspace = true, features = ["testing"] }
+muman-media = { workspace = true, features = ["testing"] }
+muman-net = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

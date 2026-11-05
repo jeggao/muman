@@ -16,11 +16,11 @@
 }:
 
 let
-  manifest = (lib.importTOML ../Cargo.toml).package;
+  toml = lib.importTOML ../Cargo.toml;
 in
 rustPlatform.buildRustPackage {
-  pname = manifest.name;
-  inherit (manifest) version;
+  pname = toml.package.name;
+  inherit (toml.workspace.package) version;
 
   src = lib.fileset.toSource {
     root = ../.;
@@ -28,7 +28,7 @@ rustPlatform.buildRustPackage {
       ../Cargo.toml
       ../Cargo.lock
       ../src
-      ../assets
+      ../crates
       ../testdata
       ../tests
       ../xtask
@@ -85,9 +85,9 @@ rustPlatform.buildRustPackage {
     '';
 
   meta = {
-    inherit (manifest) description;
-    homepage = manifest.repository;
-    changelog = "${manifest.repository}/blob/v${manifest.version}/CHANGELOG.md";
+    inherit (toml.package) description;
+    homepage = toml.workspace.package.repository;
+    changelog = "${toml.workspace.package.repository}/blob/v${toml.workspace.package.version}/CHANGELOG.md";
     license = lib.licenses.agpl3Only;
     mainProgram = "muman";
     platforms = lib.platforms.unix;

@@ -39,8 +39,8 @@
 //! values are shown escaped, so neither a control character nor a
 //! bidirectional mark can hide part of one.
 //!
-//! Every command that may run a tool, a hook or a request asks first
-//! ([`gated`]). `undo` asks about the list it puts back, before putting
+//! Every command that may run a tool, a hook or a request asks first, as
+//! its traits in [`crate::run_with`] say. `undo` asks about the list it puts back, before putting
 //! it back. `list`, `duplicates`, `purge` and `completions` read only
 //! what muman recorded and run nothing; nor does `check` without
 //! `--decode` or `--upstream`, nor an export that encodes nothing, which
@@ -57,10 +57,10 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use crate::cli::Command;
 use crate::hooks::Event;
 use crate::migrate::{HISTORY, Step};
 use crate::provider::Provider;
+use crate::providers::ProviderRules;
 use crate::state::State;
 use crate::ui::Prompter;
 
@@ -93,23 +93,6 @@ impl Held {
     }
 }
 
-/// Whether `command` may run a tool, a hook or a request on the song
-/// list's settings, and so asks first. `undo` asks apart, about the list
-/// it puts back.
-#[must_use]
-pub fn gated(command: &Command) -> bool {
-    match command {
-        Command::Duplicates { .. } => crate::merges(command),
-        Command::List { .. }
-        | Command::Purge { .. }
-        | Command::Completions { .. }
-        | Command::Undo { .. } => false,
-        Command::Check { decode, upstream } => *decode || *upstream,
-        Command::Export { .. } => crate::needs_ffmpeg(command),
-        _ => true,
-    }
-}
-
 /// What the song list in `home` holds that runs a program or reaches a
 /// server; a new home's list when it has none.
 pub fn held_in(home: &Path) -> Result<Vec<Held>> {
@@ -136,7 +119,7 @@ pub fn held_of(text: &str) -> Result<Vec<Held>> {
 /// not at its default.
 pub fn held(doc: &DocumentMut) -> Result<Vec<Held>> {
     let settings = crate::settings::read(doc)?;
-    let providers = crate::provider::read(doc)?;
+    let providers = crate::providers::read(doc)?;
     let defaults = crate::settings::Settings::default();
     let mut held = Vec::new();
     for (n, hook) in crate::hooks::read(doc)?.iter().enumerate() {
@@ -270,7 +253,7 @@ fn canonical(value: &Value) -> String {
 
 fn digest(name: &str, value: &str) -> String {
     let hash = Sha256::digest(format!("{name}\0{value}").as_bytes());
-    crate::facts::hex(&hash[..16])
+    crate::hash::hex(&hash[..16])
 }
 
 /// `text` with each control character, and each mark that reorders or
@@ -334,7 +317,7 @@ pub fn gate<W: Write>(
     )?;
     if !trust {
         let Some(prompter) = prompter else {
-            return Err(crate::change::Refused(
+            return Err(crate::errors::Refused(
                 "Nothing run: without a terminal to ask on, --trust trusts the song list as it is"
                     .into(),
             )
@@ -437,7 +420,7 @@ run = ["mpc", "update"]
         let (went, said, _) = gate_with(&held, None, false);
         let e = went.unwrap_err();
         assert!(
-            e.downcast_ref::<crate::change::Refused>().is_some()
+            e.downcast_ref::<crate::errors::Refused>().is_some()
                 && format!("{e}").contains("--trust")
         );
         assert!(

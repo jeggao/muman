@@ -41,6 +41,7 @@ use crate::dirs::Dirs;
 use crate::fingerprint::{Indexed, Match, Verdict};
 use crate::manifest::{Edit, Manifest, Song, Tags};
 use crate::parallel;
+use crate::query::QueryMatch;
 use crate::query::{self, Query, View};
 use crate::reconcile;
 use crate::rows;
@@ -59,6 +60,8 @@ const RATIO: f64 = 0.8;
 struct Found {
     manifest: Manifest,
     state: State,
+    /// The state's caches as loaded, for [`State::keep_since`].
+    base: crate::state::Caches,
     views: Vec<View>,
     /// The groups the query names: those an album holds twice, then
     /// those across albums.
@@ -160,6 +163,7 @@ fn find<W: Write>(dirs: &Dirs, terms: &[String], out: &mut W) -> Result<Found> {
         .partition(|g| twice(&ids(g)).is_some());
     Ok(Found {
         manifest,
+        base: state.caches(),
         state,
         views,
         twice,
@@ -346,7 +350,7 @@ fn compare_together<R: Runner, W: Write>(
         .collect();
     let store = Store::scan(dirs)?;
     if reconcile::compare(runner, &store, &together, &mut found.state, out)? {
-        State::keep_measures(&dirs.home, &found.state)?;
+        found.state.keep_since(&dirs.home, &mut found.base)?;
     }
     Ok(())
 }

@@ -2,8 +2,9 @@
 name = "xtask"
 version = "0.0.0"
 description = "Repository checks for muman: comment rules and generated docs."
-edition = "2024"
-license = "AGPL-3.0-only"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

@@ -7,6 +7,12 @@ updates:
     commit-message:
       prefix: deps
     groups:
+      # The crates measures and lyrics are made with come apart: a bump
+      # that changes what they make fails a digest test until it is
+      # settled.
+      measures:
+        patterns: ["lofty", "ebur128", "rusty-chromaprint", "chardetng", "encoding_rs"]
+        update-types: ["minor", "patch"]
       # Minor and patch bumps come as one pull request. A major may not
       # compile, so it comes alone and holds up no other update.
       cargo-minor:

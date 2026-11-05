@@ -417,7 +417,7 @@ pub fn export<R: Runner, W: Write>(
     // The library is as the last run left it; a song list edited since
     // would not describe it.
     if crate::history::songs_as_last_left(&dirs.home) == Some(false) {
-        return Err(crate::change::Refused(
+        return Err(crate::errors::Refused(
             "The song list changed since the last run; `muman sync` first, so the export's \
              library matches it"
                 .into(),
@@ -565,6 +565,8 @@ fn target_of(options: &Options<'_>, settings: &Settings) -> Result<(PathBuf, Tar
 /// Write `entries` as `target` at `output`, made in `scratch` so a run
 /// killed partway leaves it where the next clears it. Returns what it
 /// takes.
+// Renames the finished zip from scratch into place.
+#[expect(clippy::disallowed_methods)]
 fn write<'a>(
     target: Target,
     scratch: &Path,
@@ -671,9 +673,9 @@ fn settings_of(manifest: &Manifest, overrides: &[Override]) -> Result<Settings> 
         }
         settings.clean = Some(clean);
     }
-    crate::naming::Naming::new(&settings.library, Path::new("")).map_err(invalid)?;
+    settings.library.naming(Path::new("")).map_err(invalid)?;
     if settings.loudness.measured() && !manifest.settings.loudness.measured() {
-        return Err(crate::change::Refused(
+        return Err(crate::errors::Refused(
             "The export levels songs, and the song list's [loudness] mode = \"off\" measures \
              none; set its mode and `muman sync` first"
                 .into(),
@@ -1081,12 +1083,13 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
     // The audio file's name and what it holds besides its stream, and what
     // the files beside it take.
     let (name, extras, beside) = if song.anew {
-        let (extras, beside) = limit::besides_audio(&song.plan);
+        let made = crate::artifact::parts(&song.plan);
+        let (extras, beside) = made.guess();
         let audio = named(
             &song.stem,
             Path::new(&format!("_.{}", song.plan.format.extension())),
         );
-        let names = crate::outputs::planned(&audio, &song.plan);
+        let names = made.files(&audio);
         let beside = names
             .iter()
             .zip(beside)
@@ -1165,10 +1168,11 @@ fn encode<R: Runner>(
         song.plan.with_format(format)
     };
     let library = scratch.join("library");
+    let parts = crate::artifact::parts(&plan);
     let rendered = render::render(
         runner,
         &render::Job {
-            plan: &plan,
+            parts: &parts,
             stem: &song.stem,
             library: &library,
             sources,
@@ -1219,6 +1223,8 @@ fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
 /// each at its name, a file encoded for the export moved there and any
 /// other copied with its time, every one on the disk before the folder
 /// takes its place.
+// Makes the export's folder in scratch and puts it in place.
+#[expect(clippy::disallowed_methods)]
 fn write_folder<'a>(
     staging: &Path,
     to: &Path,
@@ -1263,6 +1269,8 @@ fn write_folder<'a>(
 }
 
 /// Write `entries` into a new zip at `path`, each stored as it is.
+// Makes the export's zip in scratch.
+#[expect(clippy::disallowed_methods)]
 fn write_zip<'a>(path: &Path, entries: impl Iterator<Item = &'a Entry>) -> Result<()> {
     let entries: Vec<&Entry> = entries.collect();
     let step = crate::progress::step("Writing the zip", Some(entries.len() as u64));

@@ -18,62 +18,134 @@ env:
   RUST_TOOLCHAIN: "1.99"
 
 jobs:
+  # What a pull request changes, so a job whose inputs it leaves alone
+  # passes at once: one that changes only Markdown and docs/ builds and
+  # tests nothing, and nix builds only for the flake, its package and
+  # what it locks. A push to main runs every job.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      nix: ${{ steps.diff.outputs.nix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            printf 'code=true\nnix=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull request's checkout is its merge into the base, whose
+          # first parent is the base.
+          files=$(git diff --name-only HEAD^1 HEAD)
+          printf '%s\n' "$files"
+          code=false
+          nix=false
+          if printf '%s\n' "$files" | grep -qvE '^(docs/.*|.*\.md|LICENSE)$'; then
+            code=true
+          fi
+          if printf '%s\n' "$files" | grep -qE '^(flake\.(nix|lock)|default\.nix|nix/.*|Cargo\.(toml|lock)|crates/[^/]+/Cargo\.toml|\.github/workflows/ci\.yml)$'; then
+            nix=true
+          fi
+          printf 'code=%s\nnix=%s\n' "$code" "$nix" >> "$GITHUB_OUTPUT"
+
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    # Run even when `changes` failed, so a check is never skipped by an
+    # error; a matrix job skipped whole would report under an unexpanded
+    # name, so its steps are skipped instead.
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CODE: ${{ needs.changes.outputs.code != 'false' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
+      - if: env.CODE == 'true'
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
+      - if: env.CODE == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: env.CODE == 'true'
+        run: cargo clippy --workspace --all-targets --locked
+      - if: env.CODE == 'true'
+        run: cargo test --workspace --locked
 
-  smoke:
-    name: smoke (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  # The random runs of src/tests/convergence.rs at 64 cases, about nine
+  # minutes: on each push to main, so no pull request waits on them.
+  convergence:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test --lib --locked many_random_runs -- --ignored
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    needs: changes
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CODE: ${{ needs.changes.outputs.code != 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+      - if: env.CODE == 'true'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - if: env.CODE == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # setup-ffmpeg has x64 builds only; macOS runners are arm64. Its
       # download fails now and then, and once left main red for two days;
       # Linux then takes the distribution's own, above muman's floor.
-      - if: runner.os != 'macOS'
+      - if: env.CODE == 'true' && runner.os != 'macOS'
         id: ffmpeg
         continue-on-error: true
         uses: FedericoCarboni/setup-ffmpeg@v3
-      - if: runner.os != 'macOS' && steps.ffmpeg.outcome == 'failure'
+      - if: env.CODE == 'true' && runner.os != 'macOS' && steps.ffmpeg.outcome == 'failure'
         id: ffmpeg-again
         continue-on-error: ${{ runner.os == 'Linux' }}
         uses: FedericoCarboni/setup-ffmpeg@v3
-      - if: runner.os == 'Linux' && steps.ffmpeg-again.outcome == 'failure'
+      - if: env.CODE == 'true' && runner.os == 'Linux' && steps.ffmpeg-again.outcome == 'failure'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - if: runner.os == 'macOS'
+      - if: env.CODE == 'true' && runner.os == 'macOS'
         run: brew install ffmpeg
-      - uses: actions/setup-python@v7
+      - if: env.CODE == 'true'
+        uses: actions/setup-python@v7
         with:
           python-version: "3.x"
-      - run: pip install yt-dlp
-      - if: runner.os == 'Linux'
+      - if: env.CODE == 'true'
+        run: pip install yt-dlp
+      - if: env.CODE == 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y aria2
-      - if: runner.os == 'macOS'
+      - if: env.CODE == 'true' && runner.os == 'macOS'
         run: brew install aria2
-      - if: runner.os == 'Windows'
+      - if: env.CODE == 'true' && runner.os == 'Windows'
         run: choco install aria2 -y --no-progress
-      - run: cargo test --test smoke --test ytdlp --test torrent --locked -- --ignored
+      - if: env.CODE == 'true'
+        run: cargo test --test smoke --test ytdlp --test torrent --locked -- --ignored
 
   fmt:
     runs-on: ubuntu-latest
@@ -86,6 +158,8 @@ jobs:
       - run: cargo fmt --all --check
 
   doc:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -93,11 +167,15 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: -D warnings
 
   msrv:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -108,6 +186,8 @@ jobs:
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check --package muman --all-targets --locked
 
   lint:
@@ -120,6 +200,8 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask comments --github-annotations
       - if: github.event_name == 'pull_request'
         run: cargo xtask comments --github-annotations --diff-base origin/${{ github.base_ref }}
@@ -138,6 +220,7 @@ jobs:
           printf '%s\n\n%s\n' "$TITLE" "$BODY" > "$RUNNER_TEMP/pull-request.txt"
           cargo xtask commits --github-annotations --message-file "$RUNNER_TEMP/pull-request.txt" --author "$AUTHOR"
       - run: cargo xtask docs --check
+      - run: cargo xtask layers
 
   deny:
     runs-on: ubuntu-latest
@@ -145,13 +228,25 @@ jobs:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
-  nix:
-    name: nix (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # nix builds and tests the package from scratch, about ten minutes,
+  # so a pull request runs it only when the flake, the package or what it
+  # locks changes; every push to main runs it. Two jobs rather than a
+  # matrix: a skipped matrix job reports under an unexpanded name.
+  nix-linux:
+    name: nix (ubuntu-latest)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.nix != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check -L
+
+  nix-macos:
+    name: nix (macos-latest)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.nix != 'false' }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31

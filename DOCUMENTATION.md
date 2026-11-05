@@ -26,7 +26,7 @@ what is not about one module.
 | Folders, programs, settings, templates, safe names | [docs/configuration.md](docs/configuration.md) |
 | Codecs, encoding, loudness and the size limit | [docs/audio.md](docs/audio.md) |
 | Every command and flag | [docs/cli.md](docs/cli.md), generated from `src/cli.rs` |
-| Each setting's default | [src/manifest/new.toml](src/manifest/new.toml) |
+| Each setting's default | [crates/muman-core/src/new.toml](crates/muman-core/src/new.toml) |
 | Why a module works as it does | That module's `//!` docs |
 | How to work in this repository | [AGENTS.md](AGENTS.md) |
 | What changed in each release | [CHANGELOG.md](CHANGELOG.md) |
@@ -65,7 +65,7 @@ Do not create other Markdown files unless asked.
 
 1. **State a fact once, and link to it elsewhere.** A paraphrase drifts.
 1. **Never copy a default value or a list the code holds.** Say what a
-   setting means and link [new.toml](src/manifest/new.toml); a test keeps
+   setting means and link [new.toml](crates/muman-core/src/new.toml); a test keeps
    that file equal to the code's defaults.
 1. **Link in-repo files by relative path**, never by GitHub URL; the
    repository may move. `cargo xtask docs --check` fails on a link to a

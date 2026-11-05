@@ -1,0 +1,387 @@
+version = 1
+edition = 8
+
+# Settings, each written at its default; change any. A size, bitrate,
+# time or share takes its unit: "2 GiB", "160 kb/s", "14 days", "1 %".
+# `edition` names the settings' names and defaults the file was written
+# to: a later muman renames what it renamed, and `muman sync
+# --update-defaults` moves each setting still at a default it changed,
+# leaving the ones you changed. A key a table does not know is an error.
+
+[library]
+# The library folder: absolute, ~/..., or relative to this file's folder.
+# Unset, it is the platform's music folder, then `muman`; --library and
+# MUMAN_LIBRARY override it on one machine.
+# path = "~/Music/muman"
+# Each song's path without its extension, as a MiniJinja template. See
+# docs/configuration.md for the variables and filters.
+template = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}"
+# What is replaced in tag values before they make a path; set "none" to
+# replace only "/" and "\", or "ascii" to transliterate everything to ASCII.
+restrict = "windows"
+# Replacements merged over the defaults, such as { ":" = " -" }.
+replace = {}
+max_name_bytes = 200
+max_folder_bytes = 120
+# The longest whole path in characters as Windows counts them, an emoji
+# two, library folder included; unset, there is no limit. 250 keeps a
+# library usable on Windows.
+# max_path = 250
+unknown_artist = "Unknown Artist"
+unknown_album = "Unknown Album"
+untitled = "Untitled"
+# Write the comment a source's own tags carry, as a store or an uploader
+# left it; a `comment` in a song's or an album's `tags` is written
+# either way.
+source_comments = false
+# Set the library folder's time after a change, for players that rescan
+# only when it is newer.
+touch_root = false
+# The most the library may take, such as "32 GiB"; songs are encoded at
+# lower bitrates of `[audio] lossy` to fit, the least audible first.
+# Unset, there is no limit.
+# max_size = "32 GiB"
+# Each file counts rounded up to this: "32 KiB" on a FAT32 card.
+block_size = "4 KiB"
+
+[tags]
+# How the rule tidy.typography writes quotes, apostrophes and hyphens in
+# titles, artists, albums and genres: "typographic" as ’ “ ” and ‐, as
+# MusicBrainz does, or "ascii" as ' " and -. En and em dashes stay.
+typography = "typographic"
+
+[lyrics]
+# The languages you read, best first, as language tags: "en", "pt-BR",
+# "zh-Hant". A translation is taken only into one of these.
+read = ["en"]
+# What lyrics a song takes, best first; lyrics rank by the first of these
+# that tells them apart. "original" is in the language the song is sung
+# in, "romanization" in its Latin letters, "translation" in a language
+# you read, as the original is when you read it; one left out is never
+# taken. "timed" or "untimed" prefers
+# lyrics whose lines carry times, or those whose lines do not.
+prefer = ["translation", "original", "romanization", "timed"]
+
+# Where the lyrics a song takes are written, one [[lyrics.out]] each:
+# `to` "file", beside the song, named as it is with `suffix` and the
+# format's extension after, as ".en" names "Song.en.lrc"; or "tag",
+# inside the song. `format` "lrc" times each line, "vtt" and "srt" are
+# subtitle cues, of timed lyrics alone, and "txt" plain lines; a tag
+# holds "lrc" or "txt". `when` "timed" or "untimed" writes only lyrics
+# whose lines carry times, or only those whose lines do not; "any"
+# writes either. `words` keeps each word's time where lyrics carry them.
+# `out = []` under [lyrics] writes none.
+[[lyrics.out]]
+to = "file"
+suffix = ""
+format = "lrc"
+when = "any"
+words = true
+
+[audio]
+# Codecs a source's audio is copied in: opus, vorbis, aac, mp3, flac,
+# alac and wavpack. Audio in any other is encoded: lossy audio to `lossy`,
+# lossless audio to `lossless`, or FLAC or WavPack where that cannot keep
+# it whole; audio already in that codec is copied.
+codecs = ["opus", "vorbis", "aac", "mp3", "flac"]
+lossy = "opus"
+lossless = "flac"
+# Bitrates for audio that is encoded rather than copied. Vorbis and AAC
+# are raised in proportion past two channels; MP3 holds two, and Opus at
+# most 256 kb/s a channel.
+opus_bitrate = "160 kb/s"
+opus_surround_bitrate = "256 kb/s"
+vorbis_bitrate = "192 kb/s"
+aac_bitrate = "256 kb/s"
+mp3_bitrate = "320 kb/s"
+# The lowest bitrate a song is lowered to for `max_size`; unset, the
+# encoder's lowest.
+# min_bitrate = "64 kb/s"
+# Speaker layouts audio is written in as it is, by ffmpeg's names, such
+# as "stereo", "5.1" or "7.1.4": "5.1" takes "5.1(side)" too, and "any"
+# takes every one. Audio in any other is mixed into the first of
+# `downmix` with no more channels than it has, else the one with the
+# fewest, scaled so it cannot clip.
+layouts = ["any"]
+downmix = ["stereo"]
+
+# How the best audio of a song's sources is picked. Each measure scores
+# a source in whole steps; the steps times the weight are summed, and
+# the lowest sum wins. `enabled = false` or `weight = 0` ignores a
+# measure. The weights below rank by each measure in turn, top first.
+[audio.pick.purity]
+# Sound beyond the song, such as a video's intro, and the song an
+# excerpt lacks, in steps of `step`.
+enabled = true
+weight = 10000
+step = "2 s"
+[audio.pick.stereo]
+# One step for mono: the channels' energy no gain or lag between them
+# explains is at most `incoherence`.
+enabled = true
+weight = 5000
+incoherence = "1 %"
+[audio.pick.bandwidth]
+# Where a lowpass cuts the audio off, a step per `step` lower.
+enabled = true
+weight = 10
+step = "500 Hz"
+[audio.pick.clipping]
+# A step for each share of clipped samples reached.
+enabled = true
+weight = 1
+cutoffs = ["0.1 %", "1 %"]
+
+[loudness]
+# How each song is levelled to `target`, measured as EBU R128 measures:
+# "tags" writes ReplayGain 2.0 gains and peaks that players apply, as
+# R128 gains in Opus; "header" also writes the gain into each Opus file's
+# header, which every Opus player applies; "audio" scales the samples,
+# encoding audio that would be copied; "off" measures nothing and keeps
+# the gains a source's tags carry.
+mode = "tags"
+target = "-18 LUFS"
+# Peaks between samples, as a DAC rebuilds them, rather than the
+# samples' own.
+true_peak = true
+# The gain "header" and "audio" apply: "album", its album's for a song on
+# one, else its own; or "track", always its own.
+scope = "album"
+# A raising gain "header" or "audio" applies is lowered so the peak stays
+# at or under this; a lowering one never is.
+ceiling = "-1 dB"
+
+# How the best cover of a song's sources is picked, scored as
+# [audio.pick] scores audio.
+[cover.pick.square]
+# One step for a cover that is not square within `tolerance`, the log
+# of its sides' ratio.
+enabled = true
+weight = 10000
+tolerance = 0.03
+[cover.pick.resolution]
+# A cover's detail, a step per `step` less resolution.
+enabled = true
+weight = 20
+step = "10 %"
+[cover.pick.blockiness]
+# A cover's JPEG block artifacts, a step per `step`, ten at most.
+enabled = true
+weight = 1
+step = 0.1
+# Where the cover a song takes is written, one [[cover.out]] each: `to`
+# "tag", inside the song, or "file", beside it, named as it is with
+# `suffix` and the format's extension after, as ".cover" names
+# "Song.cover.jpg". `format` "keep" writes a JPEG or PNG without borders
+# as its own bytes and any other picture as PNG; "jpeg", "png" and "webp"
+# encode it, JPEG and WebP at `quality`, from 1 to 100. `max_side`, in
+# pixels, scales a longer picture down. A tag holds "keep", "jpeg" or
+# "png". `scope` "folder" makes a file the song's folder holds once,
+# named by `name` and the extension; a folder of several albums' songs
+# takes none, unless `mixed` "majority" takes the album most of its songs
+# are on. `out = []` under [cover] writes none.
+[[cover.out]]
+to = "tag"
+scope = "song"
+suffix = ""
+name = ""
+format = "keep"
+# max_side = 1200
+quality = 90
+mixed = "none"
+
+[ytdlp]
+# What is kept of a video, as yt-dlp's --format; muman reads its
+# audio, subtitles and thumbnail, never the video itself.
+format = "ba/b"
+# Subtitles kept for lyrics, as yt-dlp's --sub-langs; viewers' comments
+# some sites list as subtitles are left out.
+sub_langs = "all,-live_chat,-comments,-danmaku"
+concurrent_fragments = 4
+# muman's yt-dlp plugins: no generated captions, square album art, an
+# archive.org item's details on each of its files.
+plugins = true
+# More arguments for every yt-dlp run, listing and searching as well as
+# fetching, such as ["--cookies-from-browser", "firefox"] or
+# ["--js-runtimes", "node"]. They reach yt-dlp in a file only you can
+# read, not on its command line, and muman's own options win over them.
+args = []
+# yt-dlp's --extractor-args for each fetch, by extractor. YouTube's
+# machine-translated captions run to hundreds a video and trip its rate
+# limit; only its web_music client lists a track's square album art.
+extractor_args = { youtube = "skip=translated_subs;player_client=default,web_music" }
+# How long an unfinished download is kept to resume.
+keep_partial = "14 days"
+
+[torrent]
+# More arguments for every aria2c run, such as ["--listen-port=51413"]
+# or ["--max-overall-upload-limit=1M"].
+args = []
+# How long a fetch waits with nothing arriving before it fails, 1 s or
+# more; a later sync tries again.
+stall = "10 min"
+# How long a fetched torrent is seeded before the run goes on.
+seed_time = "0 s"
+# How long an unfinished fetch is kept to resume.
+keep_partial = "30 days"
+
+# The programs muman runs. `command` is a name, looked for beside muman
+# and then on PATH, or a path: absolute, ~/... or relative to this file's
+# folder; then any arguments, as ["python3", "-m", "yt_dlp"]. A fork that
+# takes the same options runs in its place. MUMAN_FFMPEG, MUMAN_FFPROBE,
+# MUMAN_YT_DLP and MUMAN_ARIA2C override `command` on one machine.
+# `version_check = false` runs a release older than muman asks for, or
+# one numbered its own way.
+[tools.ffmpeg]
+command = ["ffmpeg"]
+version_check = true
+[tools.ffprobe]
+command = ["ffprobe"]
+version_check = true
+[tools.yt-dlp]
+command = ["yt-dlp"]
+version_check = true
+[tools.aria2c]
+command = ["aria2c"]
+version_check = true
+
+[history]
+# Changing runs `undo` can put back, and the most their replaced files
+# may take together.
+runs = 3
+max_size = "2 GiB"
+
+# What each song looks up online, a table a provider. `until` lists what
+# a song asks the provider until it has, every one of them: a provider
+# that finds nothing, or a record that lacks what the song still lacks,
+# is asked again after `recheck`, and a record found again unchanged
+# waits twice as long each time, up to 90 days. `has:<tag>` holds for a
+# tag a source or this file gives, not one muman fills in itself, as an
+# album artist taken from the artist. `skip` lists queries as `muman
+# list` takes them, one a string, as 'album:="Some Album"' or
+# "from:manual"; a song any matches asks the provider nothing, and
+# [providers] skip leaves songs out of every provider. A song sets
+# lookups = false to ask none, or lookups.<provider> = false. `enabled =
+# false` asks a service nothing at all. `per_run` caps the lookups one
+# sync makes, 0 for none, so a backlog drains over several syncs;
+# `concurrency` is how many run at once. youtube-music is searched from a
+# YouTube upload and youtube from a release; musicbrainz waits while
+# acoustid is due, and coverart while either is; each sync asks in this
+# order for up to three rounds, `sync --until-done` until none is due.
+[providers]
+skip = []
+
+# The YouTube Music release of a YouTube upload: album, track, square
+# cover. Takes until "from:youtube-music".
+[providers.youtube-music]
+enabled = true
+until = ["from:youtube-music"]
+skip = []
+recheck = "14 days"
+per_run = 50
+concurrency = 4
+
+# An upload of a release with a person's timed subtitles. Takes until
+# "lyrics:timed", "lyrics:yes" or "from:youtube".
+[providers.youtube]
+enabled = true
+until = ["lyrics:timed"]
+skip = []
+recheck = "14 days"
+per_run = 50
+concurrency = 4
+
+# Lyrics, by title, artist, album and length. Takes until "lyrics:timed",
+# "lyrics:yes" or "from:lrclib".
+[providers.lrclib]
+enabled = true
+until = ["lyrics:timed"]
+skip = []
+recheck = "7 days"
+per_run = 300
+concurrency = 4
+url = "https://lrclib.net"
+
+# The MusicBrainz recording of a song's audio, by its fingerprint: sends
+# a print of the audio's first two minutes. Off while musicbrainz is.
+# Takes until "from:musicbrainz", or "has:<tag>" of a tag a MusicBrainz
+# record gives.
+[providers.acoustid]
+enabled = true
+until = ["has:album", "has:album_artist", "has:date", "has:track", "has:disc", "has:isrc"]
+skip = []
+recheck = "30 days"
+per_run = 200
+concurrency = 1
+url = "https://api.acoustid.org"
+# The application key AcoustID is asked with; unset, muman's own.
+# key = ""
+
+# The MusicBrainz recording, by title, artist and length, when AcoustID
+# found none. Takes until as acoustid does.
+[providers.musicbrainz]
+enabled = true
+until = ["has:album", "has:album_artist", "has:date", "has:track", "has:disc", "has:isrc"]
+skip = []
+recheck = "30 days"
+per_run = 200
+concurrency = 1
+url = "https://musicbrainz.org"
+
+# The front cover of a song's album, from the Cover Art Archive. Takes
+# until "cover:sharp", "cover:yes" or "from:coverart".
+[providers.coverart]
+enabled = true
+until = ["cover:sharp"]
+skip = []
+recheck = "30 days"
+per_run = 500
+concurrency = 1
+url = "https://coverartarchive.org"
+
+# The sites yt-dlp fetches from. Each names its sources by its domain,
+# whatever address they were found at: `extractors` are yt-dlp's
+# extractors it names, each with the prefix its IDs take; each kind of
+# source it holds has a prefix, a regular expression its IDs match and
+# the address it is fetched again from, {id} its ID, percent-encoded
+# but for /. `aliases` are other domains its sources were named by, which
+# a sync renames. A source of a site not listed is named by its page's
+# domain and fetched again from it.
+[sites."youtube.com"]
+extractors = { youtube = "", youtubetab = "playlist/" }
+kinds = [
+    { prefix = "", id = "^[A-Za-z0-9_-]{11}$", fetch = "https://www.youtube.com/watch?v={id}" },
+    { prefix = "playlist/", id = "^[A-Za-z0-9_-]+$", fetch = "https://www.youtube.com/playlist?list={id}" },
+]
+[sites."archive.org"]
+extractors = { archiveorg = "" }
+kinds = [{ prefix = "", fetch = "https://archive.org/details/{id}" }]
+[sites."soundcloud.com"]
+extractors = { soundcloud = "" }
+[sites."bandcamp.com"]
+extractors = { bandcamp = "" }
+[sites."vimeo.com"]
+extractors = { vimeo = "" }
+[sites."dailymotion.com"]
+extractors = { dailymotion = "" }
+kinds = [{ prefix = "", fetch = "https://www.dailymotion.com/video/{id}" }]
+[sites."mixcloud.com"]
+extractors = { mixcloud = "" }
+[sites."audiomack.com"]
+extractors = { audiomack = "" }
+[sites."nicovideo.jp"]
+extractors = { niconico = "" }
+kinds = [{ prefix = "", id = "^(?:[a-z]{2})?[0-9]+$", fetch = "https://www.nicovideo.jp/watch/{id}" }]
+[sites."bilibili.com"]
+extractors = { bilibili = "" }
+[sites."x.com"]
+extractors = { twitter = "" }
+[sites."tiktok.com"]
+extractors = { tiktok = "" }
+[sites."jamendo.com"]
+extractors = { jamendo = "" }
+aliases = ["licensing.jamendo.com"]
+kinds = [{ prefix = "", id = "^[0-9]+$", fetch = "https://www.jamendo.com/track/{id}" }]
+[sites."audius.co"]
+extractors = { audius = "", audiustrack = "" }
+kinds = [{ prefix = "", fetch = "audius:{id}" }]

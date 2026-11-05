@@ -23,8 +23,9 @@ Exit codes:
      list or state could not be read or written, or check found a problem
   5  A query for a change did not read or matched no song, a change
      needs a terminal, -y or --all, a file added matched no song for sure
-     and was left out, a change or undo was refused, or the song list
-     sets commands or servers not trusted, with no terminal to ask on
+     and was left out, a change or undo was refused, the song list sets
+     commands or servers not trusted, with no terminal to ask on, or a
+     hook ran muman on the home or library of the run that started it
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started
 ```
@@ -108,7 +109,7 @@ Bring the library in line with the song list: fetch any missing source, add file
 
 **Options:**
 
-* `--rematch` — Make every lookup a song still wants now, whatever an earlier one found: a song that has what a provider's `until` names, or whose record from it gives all it can, asks it nothing
+* `--rematch` — Make every lookup a song still wants now, whatever an earlier one found: a song that has what a provider's `until` names, or whose record from it gives all it can, asks it nothing, but every MusicBrainz record a song lists is fetched again by its ID, and AcoustID asked again for one it found, its find now in that record's place
 * `--until-done` — Keep going until the library is up to date: make every lookup due, however many `per_run` allows and over as many rounds as what one finds starts, ask again at once what failed, and fetch again what failed to arrive, as --retry does. Each service is still asked at its own pace
 * `--force` — Write every song again, changed or not, a library file changed since muman wrote it included
 * `--retry` — Read again sources that could not be read before, and fetch again at once those that failed to
@@ -421,7 +422,11 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 Count what the library holds, whether it is in step with the song list, the lookups due, and what in it could be better: lossy or narrow audio, missing or soft covers, missing lyrics or tags. Reads only what earlier runs recorded; `--verbose` names every song counted
 
-**Usage:** `muman info`
+**Usage:** `muman info [OPTIONS]`
+
+**Options:**
+
+* `--state` — Print what muman keeps of the library and its sources instead, as JSON: the files it wrote and what each was made from, and what it measured
 
 
 

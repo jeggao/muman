@@ -360,6 +360,8 @@ fn summarize<W: Write>(
 /// Open the songs the query picks in an editor, run by `editor` on the
 /// file's path, and apply what changed, calling `before_save` first each
 /// time it saves. Returns whether anything did.
+// Writes the file the editor is opened on, in scratch.
+#[expect(clippy::disallowed_methods)]
 pub fn edit<W: Write>(
     dirs: &Dirs,
     terms: &[String],
@@ -489,6 +491,8 @@ fn open(read: &Read, picked: &[usize], library: &Path) -> Result<Vec<Opened>> {
 /// line and its program found with `PATHEXT`, so `code --wait` finds
 /// `code.cmd`, and the path is passed as an argument of its own rather
 /// than through cmd.exe's quoting.
+// Runs the editor the user names.
+#[expect(clippy::disallowed_methods)]
 pub fn launch(path: &Path) -> Result<()> {
     let editor = ["VISUAL", "EDITOR"]
         .iter()

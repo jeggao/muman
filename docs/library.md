@@ -110,9 +110,19 @@ Each field describes either the recording or the release.
   that titles the recording as the song is titled.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
-  album ranks best. So an album never splits across folders, and one
-  release's IDs never mix with another's. Of albums that rank alike,
-  the source with more of the release's fields wins.
+  album ranks best. So one release's IDs never mix with another's. Of
+  albums that rank alike, the source with more of the release's fields
+  wins.
+
+Then the songs of one album agree: a MusicBrainz release group, else
+an album artist and album alike but for case and punctuation, in one
+year. Songs on several releases of it take the one most can be on, as
+releases rank below; a mono mix on a mono edition keeps its own. An
+album spelled two ways, as `On The Border` and `On the Border`, is
+spelled as most of its songs spell it, and songs on one release share
+its date, label and IDs. A tag set by hand never changes nor counts.
+`original_year` puts every edition in one folder
+([configuration](configuration.md#the-path-template)).
 
 A song on no album is a single, named for its title. ReplayGain's gains
 and peaks are measured from the audio itself ([loudness](audio.md#loudness)).
@@ -141,7 +151,7 @@ Each rule is a switch under `[tags.clean.<tier>]`, or
 
 | Tier | Its tag rules | Its lyric rules |
 |---|---|---|
-| `tidy` | Fix spacing and punctuation; never remove a word | Drop markup, `\h`, invisible characters, stray spaces and blank lines; give a look-alike letter, as a Cyrillic `е` in `hеad`, its word's script |
+| `tidy` | Fix spacing and punctuation, writing quotes and hyphens as [`[tags]`](configuration.md#settings-in-the-song-list) says; never remove a word | Drop markup, `\h`, invisible characters, stray spaces and blank lines; give a look-alike letter, as a Cyrillic `е` in `hеad`, its word's script |
 | `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, credits, the title and artist restated around the lyrics, and ID tags in untimed lyrics |
 | `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | Put lines in time order; keep once a subtitle written again for each frame |
 | `guesswork` | Read a video title by convention, as `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | Keep, as one line, a subtitle line typed out over three lines or more |
@@ -196,7 +206,7 @@ due that run, so it asks for the release they found.
 ### When a song asks
 
 Each provider has a `[providers.<name>]` table, written in
-[new.toml](../src/manifest/new.toml) with every key at its default; set
+[new.toml](../crates/muman-core/src/new.toml) with every key at its default; set
 any key and the rest keep theirs. A song asks a provider until it has
 everything the provider's `until` lists:
 
@@ -293,18 +303,22 @@ MusicBrainz by name, so a file with wrong tags, or none, still finds
 its recording. muman sends AcoustID the fingerprint of the audio's
 first two minutes and its length. AcoustID answers with the MusicBrainz
 recordings submitted with prints like it. A result counts when its
-score is at least 0.5 and the recording's length is within 3 s of the
-song's. Of those, one named as the song is wins, then the one with the
-most prints submitted, then one on a release that is no compilation,
-live album or soundtrack. The recording is then fetched from
-MusicBrainz by its ID. To send no fingerprints, set `enabled = false`
-under `[providers.acoustid]`.
+score is at least 0.5 and the recording's length is within 10 s of the
+song's, or it states none and two prints name it. Of those, one named
+as the song is wins, then one within 3 s, then further, then stating
+none, then the one with the most prints submitted, then one on a
+release that is no compilation, live album or soundtrack. It is
+fetched from MusicBrainz by its ID, passing over one whose comment
+names the other mix, as `original stereo album mix` for a mono file.
+To send no fingerprints, set `enabled = false` under
+`[providers.acoustid]`.
 
 The search by name runs only when AcoustID finds nothing, and never
 for a song that lists a MusicBrainz record. A recording fits when it is
 no video, its length is within 3 s of the song's, and its names hold
 the song's. One titled exactly as the song wins over one whose title
-holds it. Then releases rank:
+holds it, then one whose comment does not name the other mix than the
+song's audio. Then releases rank:
 
 1. The song's own album, if it has one.
 1. A release that is no compilation, live album or soundtrack.
@@ -317,8 +331,12 @@ remixes and live takes. Of its releases, the best ranked wins, then
 the earliest. A song without a title, an artist or a measured length
 is not searched for by name. The record's tags are ranked with
 every other source's: a value it agrees on with another source wins
-over one alone. To look every song up once, set `until =
+over one alone. Artists credited together are written as MusicBrainz
+joins them, `Marlo Venn & The Glass Orchards`, and listed one by one in
+`ARTISTS`. To look every song up once, set `until =
 ["from:musicbrainz"]` for `acoustid` and `musicbrainz`.
+`sync --rematch` fetches every record again and asks AcoustID again for
+its own finds, replacing them: run it once after upgrading.
 
 ### Cover Art Archive
 
@@ -456,4 +474,5 @@ shell (`sh -c`, `pwsh -Command`, `cmd /c`) must read `"$MUMAN_PATH"`:
 a placeholder inside it, where a title could run as code, is refused. A
 batch file (`.bat`, `.cmd`) gets the variables only. A hook's output
 shows as `hook:`, and a hook that fails is warned of but fails nothing.
-`status` runs no hook.
+`status` runs no hook. A muman a hook runs on its run's home or library
+stops with exit code 5 rather than wait on that run's locks.
