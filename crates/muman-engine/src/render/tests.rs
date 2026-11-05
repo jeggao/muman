@@ -190,6 +190,32 @@ fn an_opus_song_is_copied_tagged_covered_and_given_lyrics_in_one_run() {
 }
 
 #[test]
+fn an_ogg_file_s_comments_take_no_padding() {
+    use lofty::config::WriteOptions;
+    let f = fixture();
+    let r = go(
+        &Fake::default(),
+        &f,
+        &plan(Format::Copy { codec: Codec::Opus }),
+    )
+    .unwrap();
+    let path = f.dir.path().join("lib").join(&r.audio);
+    let built = fs::metadata(&path).unwrap().len();
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    let opus = OpusFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    opus.vorbis_comments()
+        .save_to(&mut file, WriteOptions::default().preferred_padding(0))
+        .unwrap();
+    drop(file);
+    assert_eq!(fs::metadata(&path).unwrap().len(), built);
+}
+
+#[test]
 fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none() {
     let f = fixture();
     let p = plan(Format::Copy { codec: Codec::Opus });
