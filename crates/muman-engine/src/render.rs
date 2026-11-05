@@ -26,7 +26,10 @@
 //! all the same. Ogg, MP3, MP4 and WavPack are `lofty`'s to write. In an
 //! MP4 it keeps the room a shrunken tag leaves as a `free` atom, and fills
 //! it on the next write, so a retag would write other bytes than a build;
-//! that room is removed (`drop_mp4_padding`).
+//! that room is removed (`drop_mp4_padding`). In Ogg it writes the whole
+//! file again on every write, so the padding it would add after the
+//! comments, rounded up to a page of 8160 bytes, saves no write and only
+//! takes room: none is asked for.
 //!
 //! Each codec goes into its own container, as [`crate::codec`] says. Tags
 //! come from the plan alone: the container's, yt-dlp's description and URL
@@ -931,7 +934,7 @@ fn write_tags(
         Container::Ogg => {
             let comments = vorbis_comments(&mut file, path, codec, tags, picture, chapters)?;
             file.seek(SeekFrom::Start(0))?;
-            comments.save_to(&mut file, WriteOptions::default())
+            comments.save_to(&mut file, WriteOptions::default().preferred_padding(0))
         }
         Container::Mp3 => {
             id3_tag(tags, lyrics, picture, chapters).save_to(&mut file, WriteOptions::default())
