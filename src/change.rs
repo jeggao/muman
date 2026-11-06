@@ -616,18 +616,22 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                 ));
             }
             _ => {
-                if let Some(why) = v.and_then(|v| crate::tags::bad_value(name, v)) {
-                    return refuse(why);
-                }
+                // Shown and stored as it takes effect; one that reads as
+                // nothing sets nothing, so it clears as `NAME!` does.
+                let v = match v.map(|v| crate::tags::by_hand(name, v)).transpose() {
+                    Ok(v) => v,
+                    Err(why) => return refuse(why),
+                };
                 match (
                     tags.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(name)),
                     v,
                 ) {
-                    (Some((_, values)), Some(v)) => values.push(v.to_string()),
+                    (Some((_, values)), Some(v)) if !v.is_empty() => values.push(v),
+                    (Some(_), Some(_)) => {}
                     (Some(_), None) => bail!("`{term}` both sets and clears {name}"),
                     (None, v) => tags.push((
                         name.to_string(),
-                        v.map(str::to_string).into_iter().collect(),
+                        v.filter(|v| !v.is_empty()).into_iter().collect(),
                     )),
                 }
             }

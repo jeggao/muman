@@ -4315,6 +4315,39 @@ fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
 }
 
 #[test]
+fn set_shows_and_stores_each_value_as_it_takes_effect() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let tags = || -> BTreeMap<String, Vec<String>> {
+        let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+        m.songs[0].tags.iter().cloned().collect()
+    };
+    let (ok, text) = s.run(
+        &flacs(),
+        &[
+            "set",
+            "-y",
+            "manual:a.flac",
+            "tracknumber=07",
+            "date=2019-07-04 10:00",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ 7\n"), "{text}");
+    assert!(text.contains("→ 2019-07-04\n"), "{text}");
+    let songs = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(songs.contains("tracknumber = \"7\""), "{songs}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "tracknumber=07"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Nothing changed"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "date=\u{200f}"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("→ what the sources offer"), "{text}");
+    assert!(!tags().contains_key("date"), "{:?}", tags());
+}
+
+#[test]
 fn set_tags_a_song_and_writes_it_again() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

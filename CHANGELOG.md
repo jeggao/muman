@@ -61,6 +61,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **`set` shows and stores a value as it takes effect.**
+  `tracknumber=07` said `→ 07` and stored `07`, read as 7; it now says
+  and stores `7`, and setting it again changes nothing. A value that
+  reads as nothing, as `date=` given only a mark that turns text
+  around, said `→ ` and stored an empty value; it now clears the tag,
+  as `date!` does, and says so.
 - **`add album.cue -y` says when no track fits a song.** It set nothing
   and said nothing, and exited 0; it now leaves the sheet out and says
   so, as it does without `-y`.
