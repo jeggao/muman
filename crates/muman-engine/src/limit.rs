@@ -166,9 +166,10 @@ pub fn tools<R: Runner>(runner: &R) -> String {
 /// What fitting did, for messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fitted {
+    /// `[library] max_size`, whole.
     pub max: u64,
     /// What the library is projected to take, the margin for any
-    /// estimate left included.
+    /// estimate left included, and the files kept for songs that failed.
     pub projected: u64,
     /// The songs left out for want of room, by their place in the list.
     pub left_out: Vec<usize>,
@@ -518,7 +519,10 @@ pub fn fit_library<R: Runner, W: Write>(
     let Some(max) = manifest.settings.library.max_size else {
         return Ok(None);
     };
-    let max = max.0.saturating_sub(at.kept);
+    let max = max.0;
+    // The files kept for songs that failed are already there, so the
+    // songs fitted share what they leave.
+    let budget = max.saturating_sub(at.kept);
     let block = manifest.settings.library.block_size.0;
     let tools = tools(runner);
     let written = by_audio(state);
@@ -545,7 +549,7 @@ pub fn fit_library<R: Runner, W: Write>(
         .flat_map(|l| l.rungs.iter().map(|c| c.plan_key.clone()))
         .collect();
     let policy = Policy {
-        max,
+        max: budget,
         sigmas: SIGMAS,
     };
     let mut learnt = Learnt::default();
@@ -602,7 +606,7 @@ pub fn fit_library<R: Runner, W: Write>(
     left_out.sort_unstable();
     let fitted = Fitted {
         max,
-        projected: fit.total,
+        projected: fit.total + at.kept,
         left_out,
         floor,
         lowered,

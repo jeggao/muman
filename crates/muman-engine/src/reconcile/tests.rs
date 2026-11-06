@@ -1023,6 +1023,24 @@ fn status_says_a_song_would_move() {
 }
 
 /// A home with one manual FLAC whose audio takes 30 MB, and `settings`.
+#[test]
+fn a_failed_song_s_file_kept_counts_once_against_max_size() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let b = h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let kept = h.lib("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
+    std::fs::write(&kept, vec![0; 900 * 1024]).unwrap();
+    h.songs(&format!("[library]\nmax_size = \"1 MiB\"\n{TWO}"));
+    std::fs::remove_file(&b).unwrap();
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert!(!text.contains("over its max_size"), "{text}");
+}
+
 fn flac_home(settings: &str) -> Home {
     let h = home();
     let path = h.dirs.manual().join("Song.flac");

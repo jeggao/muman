@@ -20,6 +20,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`max_size` is said whole while a failed song's file is kept.** The
+  limit was compared with, and printed as, what the kept file left of
+  it, so a library under its limit was warned of as over it, sync after
+  sync.
 - **What `undo` puts back is said as it is.** A change promised
   "`muman undo` puts it back" under `[history] runs = 0`, which keeps
   no run to undo; it now says the change cannot be undone. Removing or
