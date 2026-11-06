@@ -20,6 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song with no audio says why of each source.** "No source of this
+  song has audio that reads" now names each source and whether it is
+  gone from the sources, could not be read, or holds no audio.
 - **A file muman wrote and the user changed is said to be so.** A
   library `.lrc` edited by hand was called "not muman's" by a sync,
   while `check` called it changed since muman wrote it; both now say

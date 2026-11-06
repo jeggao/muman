@@ -3419,6 +3419,20 @@ fn lyrics_muman_wrote_and_the_user_changed_are_said_to_be_so() {
 }
 
 #[test]
+fn a_song_whose_source_is_gone_says_which() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    std::fs::remove_file(&a).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("manual:a.flac is not in the sources"),
+        "{text}"
+    );
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
