@@ -1907,12 +1907,12 @@ fn copy_in(
     let digest = crate::hash::digest(&bytes);
     let added = manual.join(ADDED);
     std::fs::create_dir_all(&added).with_context(|| format!("creating {}", added.display()))?;
-    let stem = item
-        .path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("added")
-        .to_string();
+    // Composed, as its key is, so the copy, its key and the run's record
+    // of it are one name.
+    let stem = item.path.file_stem().and_then(|s| s.to_str()).map_or_else(
+        || "added".to_string(),
+        |s| crate::relpath::to_portable(Path::new(s)),
+    );
     let ext = match (item.what, extension(&item.path).as_str()) {
         (What::Lyrics, _) => "lrc".to_string(),
         (_, ext) => ext.to_string(),

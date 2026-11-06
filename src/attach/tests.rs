@@ -269,6 +269,15 @@ fn a_file_copied_in_twice_is_one_file_and_a_name_taken_gets_another() {
             .0,
         SourceKey::Manual("added/words (3).lrc".into())
     );
+    let decomposed = dir.path().join("cafe\u{301}.txt");
+    std::fs::write(&decomposed, "third light\n").unwrap();
+    let (key, made) = copy_in(&manual, &item(&decomposed), &mut BTreeSet::new()).unwrap();
+    assert_eq!(key, SourceKey::Manual("added/caf\u{e9}.lrc".into()));
+    assert_eq!(
+        made,
+        Some(manual.join("added").join("caf\u{e9}.lrc")),
+        "named as its key is"
+    );
     assert_eq!(song_list_name("ALBUMARTIST"), "album_artist");
     assert_eq!(song_list_name("MOOD"), "mood");
 }
