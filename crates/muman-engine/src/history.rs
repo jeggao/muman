@@ -1067,6 +1067,8 @@ pub struct Changed {
 pub struct Undone {
     dir: PathBuf,
     changed: Changed,
+    /// The song list the undo put back.
+    put_back: String,
 }
 
 impl Undone {
@@ -1076,12 +1078,35 @@ impl Undone {
         self.changed
     }
 
-    /// Let go of the run's record, the sync after the undo ended.
+    /// Let go of the run's record, the sync after the undo ended. That
+    /// sync may write into the song list what it reads anew, as a
+    /// source's changed tags, and the run before, now the last, is moved
+    /// on to the list it left: the runs lock held from the undo to here,
+    /// no hand changed it meanwhile, so the next `undo` goes on.
     // Lets go of a run's folder once nothing needs it.
     #[expect(clippy::disallowed_methods)]
     pub fn finish(self) -> Result<()> {
         std::fs::remove_dir_all(&self.dir)
-            .with_context(|| format!("removing {}", self.dir.display()))
+            .with_context(|| format!("removing {}", self.dir.display()))?;
+        let Some(home) = self.dir.parent().and_then(Path::parent) else {
+            return Ok(());
+        };
+        let Some(last) = runs(home)?.pop() else {
+            return Ok(());
+        };
+        let now = songs_text(home)?.unwrap_or_else(|| crate::manifest::NEW.to_string());
+        let left = head(&last).filter(|h| h.complete && !h.undoing && !h.undone);
+        if now == self.put_back || left.and_then(|h| h.songs_after) != Some(self.put_back) {
+            return Ok(());
+        }
+        let file = last.join(RECORD);
+        let mut record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
+        )
+        .with_context(|| format!("reading {}", file.display()))?;
+        record["songs_after"] = serde_json::Value::String(now);
+        let text = serde_json::to_vec(&record).context("writing the run record")?;
+        atomic::write_private(&last, &atomic::Name::new(RECORD)?, &text)
     }
 }
 
@@ -1174,7 +1199,15 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         let text = serde_json::to_vec(&record).context("writing the run record")?;
         atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
-    Ok(Undone { dir, changed })
+    let put_back = record
+        .songs_before
+        .clone()
+        .unwrap_or_else(|| crate::manifest::NEW.to_string());
+    Ok(Undone {
+        dir,
+        changed,
+        put_back,
+    })
 }
 
 /// What undoing does with each copy `add` made that is still there, a

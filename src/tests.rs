@@ -3828,6 +3828,32 @@ fn one_undo_takes_back_a_run_killed_partway_and_the_run_that_finished_it() {
 }
 
 #[test]
+fn undo_after_undoing_a_sync_that_followed_a_source_goes_on() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let first = std::fs::read_to_string(&songs).unwrap();
+    s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    std::fs::write(&a, "retagged").unwrap();
+    let retagged = || {
+        Fake::default().probe(
+            ".flac",
+            &FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Song Two\""),
+        )
+    };
+    let (ok, text) = s.run(&retagged(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&retagged(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&retagged(), &["undo", "-y"]);
+    assert!(ok, "the set is undone too: {text}");
+    let back = std::fs::read_to_string(&songs).unwrap();
+    assert!(!back.contains("Folk"), "{back}");
+    assert_ne!(back, first, "the source's change is held: {back}");
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
