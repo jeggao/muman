@@ -135,7 +135,7 @@ fn a_tag_set_by_hand_is_read_as_its_field_holds_it() {
         dir.path(),
         "[[song]]\nsources = [\"manual:a.flac\"]\ntags = { date = \"2019/07/04\", \
          isrc = \"xx-zz1-24-00001\", track = \"03/12\", compilation = false, \
-         originaldate = 1999-02-03, mood = \"\" }\n",
+         originaldate = 1999-02-03, mood = \"\", album = \"\\u202E\\u202C\" }\n",
     );
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(
@@ -151,6 +151,7 @@ fn a_tag_set_by_hand_is_read_as_its_field_holds_it() {
     for (tags, why) in [
         ("date = \"July 2019\"", "no date"),
         ("date = \"2019-02-30\"", "no date"),
+        ("date = \"2019-07-04 extra\"", "no date"),
         ("track = \"fast\"", "no number"),
         ("replaygain_track_gain = \"-3 dB\"", "measured by muman"),
         ("note = \"a\\u0000b\"", "control character"),

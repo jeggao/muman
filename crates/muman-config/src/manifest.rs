@@ -1992,6 +1992,8 @@ fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
         let values = raw
             .iter()
             .map(|v| tags::by_hand(key, v).map_err(|why| anyhow::anyhow!("{what}: tags.{why}")))
+            // A value read as nothing, as one of marks alone, sets nothing.
+            .filter(|v| !matches!(v, Ok(v) if v.is_empty()))
             .collect::<Result<Vec<String>>>()?;
         if !values.is_empty() {
             tags.push((key.to_string(), values));

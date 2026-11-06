@@ -1115,6 +1115,11 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
             "{name:?} is no tag name: give one of ASCII letters, digits and marks but ="
         ));
     }
+    // A mark that turns text around shows as nothing, as from a source.
+    let value: String = value
+        .chars()
+        .filter(|c| !crate::portable::reorders(*c))
+        .collect();
     if value.trim().is_empty() {
         return Ok(String::new());
     }
@@ -1126,8 +1131,45 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
         ));
     }
     let kind = Field::named(name).map_or(Kind::Text, |f| f.spec().kind);
-    kind.read(value)
+    // A source's date may run on into its time; one given by hand is a
+    // date, a time of day after it at the most.
+    let tail = value
+        .trim()
+        .split_once(['T', ' '])
+        .map(|(_, tail)| tail.trim());
+    if kind == Kind::Date && tail.is_some_and(|t| !time_of_day(t)) {
+        return Err(format!(
+            "{name} = {value:?} is no date: give YYYY-MM-DD, YYYY-MM or a year"
+        ));
+    }
+    kind.read(&value)
         .map_err(|why| format!("{name} = {value:?} is {why}"))
+}
+
+/// Whether `t` is a time of day, as a date's tail: `HH:MM`, seconds and
+/// their fraction after it, then a zone, `Z` or `+HH:MM`, if any.
+fn time_of_day(t: &str) -> bool {
+    let t = t
+        .strip_suffix(['Z', 'z'])
+        .or_else(|| t.rfind(['+', '-']).filter(|at| *at >= 5).map(|at| &t[..at]))
+        .unwrap_or(t);
+    let mut parts = t.split(':');
+    let two = |p: Option<&str>, most: u32| {
+        p.is_some_and(|p| p.len() == 2 && p.parse::<u32>().is_ok_and(|v| v <= most))
+    };
+    if !(two(parts.next(), 23) && two(parts.next(), 59)) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(sec) => {
+            let (whole, frac) = sec.split_once('.').unwrap_or((sec, "0"));
+            two(Some(whole), 60)
+                && !frac.is_empty()
+                && frac.bytes().all(|b| b.is_ascii_digit())
+                && parts.next().is_none()
+        }
+    }
 }
 
 /// What is wrong with `value` as `name`'s, set by hand, as [`by_hand`]
@@ -2605,6 +2647,23 @@ mod tests {
         assert_eq!(o[&Field::TrackPeak].values, ["0.980000"]);
         assert_eq!(o[&Field::AlbumGain].values, ["1.00 dB"], "-4 dB under R128");
         assert!(!o.contains_key(&Field::AlbumPeak));
+    }
+
+    #[test]
+    fn a_hand_value_is_read_strictly_and_hides_nothing() {
+        assert_eq!(
+            by_hand("album", "Glass\u{202E}Orchards").unwrap(),
+            "GlassOrchards"
+        );
+        assert_eq!(by_hand("album", "\u{202E}\u{202C}").unwrap(), "");
+        assert!(by_hand("date", "2019-07-04 extra").is_err());
+        assert!(by_hand("date", "2019-07-04Tea").is_err());
+        assert_eq!(
+            by_hand("date", "2019-07-04T10:00:00Z").unwrap(),
+            "2019-07-04"
+        );
+        assert_eq!(by_hand("date", "2019-07-04 10:00").unwrap(), "2019-07-04");
+        assert_eq!(by_hand("date", "2019-07-04").unwrap(), "2019-07-04");
     }
 
     #[test]
