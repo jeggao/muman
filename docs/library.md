@@ -382,10 +382,10 @@ lookup alone.
   missing or soft covers, untimed or missing lyrics, missing tags. It
   reads only what earlier runs recorded. `--verbose` names every song.
 - **`check`** reports library files missing, empty, changed, left by a
-  run that was cut short, or not muman's; and sources missing,
-  unreadable, cut off or missing audio. `--decode` decodes every source
-  in full again, to find damage in a file changed since it was
-  measured.
+  run that was cut short, or not muman's; sources missing, unreadable,
+  cut off or missing audio; and songs no sync can build or the last
+  could not write. `--decode` decodes every source in full again, to
+  find damage in a file changed since it was measured.
 - **`check --upstream`** asks each site, downloading nothing, whether
   it still serves each fetched source in the format and at the size its
   song records, with the same tags. It names each source served

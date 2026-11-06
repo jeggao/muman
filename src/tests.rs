@@ -772,6 +772,28 @@ fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
 }
 
 #[test]
+fn a_song_that_fails_keeps_the_folder_s_cover_it_holds() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let before = library_of(&s);
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    let SourceKey::Manual(file) = &holder else {
+        panic!("{holder}");
+    };
+    std::fs::remove_file(s.dir.path().join("home/sources/manual").join(file.path())).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert_eq!(library_of(&s), before, "nothing moves for its sake: {text}");
+    assert_eq!(holder_of(&s, "cover.jpg"), Some(holder), "{text}");
+}
+
+#[test]
 fn a_folder_s_own_cover_is_left_alone_and_blocks_no_song() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -852,6 +874,49 @@ fn a_folder_s_cover_moves_with_its_album() {
     assert!(!fake.ran("-c:a"), "moved, not written: {text}");
     let (_, text) = s.run(&flacs(), &["sync"]);
     assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
+fn a_song_that_fails_still_counts_toward_its_folder_s_majority() {
+    let s = Setup::new();
+    for name in ["a.flac", "b.flac", "other.flac"] {
+        s.file(&format!("home/sources/manual/{name}"));
+    }
+    let other = crate::testing::FLAC.replace("\"Record\"", "\"Harbor\"");
+    let fake = || {
+        Fake::default()
+            .probe("other.flac", &other)
+            .probe(".flac", FLAC)
+    };
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    let flat = "[library]\ntemplate = \"{{ artist }}/{{ title }}\"\n";
+    let majority =
+        FOLDER_COVER.replace("name = \"cover\"", "name = \"cover\"\nmixed = \"majority\"");
+    std::fs::write(&list, format!("version = 1\n{flat}{majority}")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let before = library_of(&s);
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    let other_of_record = if holder.to_string() == "manual:a.flac" {
+        "b.flac"
+    } else {
+        "a.flac"
+    };
+    std::fs::remove_file(
+        s.dir
+            .path()
+            .join("home/sources/manual")
+            .join(other_of_record),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert!(
+        !text.contains("No folder cover"),
+        "two songs of Record still: {text}"
+    );
+    assert_eq!(library_of(&s), before, "{text}");
 }
 
 #[test]
@@ -3655,6 +3720,67 @@ fn a_source_that_reads_as_none_is_written_from_by_no_sync() {
     let text = String::from_utf8(out).unwrap();
     assert!(!ok && text.contains("manual:a.flac"), "{text}");
     assert_eq!(library_of(&s), before, "held as it was: {text}");
+}
+
+/// The fake, but every ffmpeg run fails, as on a disk gone full.
+struct NoFfmpeg(Fake);
+
+impl Runner for NoFfmpeg {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffmpeg"))
+        {
+            anyhow::bail!("No space left on device");
+        }
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffmpeg"))
+        {
+            anyhow::bail!("No space left on device");
+        }
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn check_names_a_song_the_last_sync_could_not_write_until_one_writes_it() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &NoFfmpeg(flacs()),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok && text.contains("Failed"), "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains("The last 1 sync(s) could not write it: manual:a.flac"),
+        "{report}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok && !report.contains("could not write"), "{report}");
 }
 
 /// The fake, but ffprobe is stopped by a signal once.

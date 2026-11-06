@@ -523,6 +523,10 @@ pub fn reconcile_into<R: Runner, W: Write>(
     )?;
     ok &= applied.ok;
     state.sizes.extend(applied.learned);
+    state.songs_failed(
+        (applied.songs_failed.into_iter())
+            .filter_map(|(n, e)| Some((manifest.songs[n].id()?.clone(), e))),
+    );
     if let Some(f) = &fitted {
         let block = manifest.settings.library.block_size.0;
         let size = limit::library_size(&state, &dirs.library, block);

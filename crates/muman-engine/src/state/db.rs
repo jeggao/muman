@@ -66,6 +66,12 @@ const RENAMINGS: &str = "
     );
 ";
 
+/// The songs the last sync could not write, a table a store made before
+/// it lacks, so made on every open.
+const SONG_FAILURES: &str = "
+    CREATE TABLE IF NOT EXISTS song_failures (key TEXT PRIMARY KEY, row TEXT NOT NULL);
+";
+
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
 const TABLES: &str = "
@@ -141,12 +147,14 @@ impl Db {
                     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
                     tx.pragma_update(None, "user_version", SCHEMA)?;
                 }
+                tx.execute_batch(SONG_FAILURES)?;
                 Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
         } else {
             db.conn
-                .execute_batch(RENAMINGS)
+                .execute_batch(SONG_FAILURES)
+                .and_then(|()| db.conn.execute_batch(RENAMINGS))
                 .with_context(|| format!("opening {}", db.file.display()))?;
         }
         Ok(db)
@@ -260,6 +268,7 @@ const ALIGNMENTS: Table = table(
 );
 const MIXES: Table = table("mixes", &["audio", "layout"], Some("row"), false);
 const FAILURES: Table = table("failures", &["key"], Some("row"), false);
+const SONGS_FAILED: Table = table("song_failures", &["key"], Some("row"), false);
 const LOOKUPS: Table = table("lookups", &["source", "find"], Some("row"), false);
 const SIZES: Table = table("sizes", &["plan_key"], Some("row"), false);
 
@@ -278,13 +287,14 @@ const fn table(
 }
 
 /// Every table, in the order a snapshot reads them.
-const TABLES_OF_STATE: [&Table; 12] = [
+const TABLES_OF_STATE: [&Table; 13] = [
     &META,
     &OUTPUTS,
     &REPLACED,
     &LISTED,
     &DAMAGED,
     &TRUSTED,
+    &SONGS_FAILED,
     &FACTS,
     &ALIGNMENTS,
     &MIXES,
@@ -388,6 +398,11 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
     state.mixes = parse(&MIXES)
         .filter_map(|r| serde_json::from_str(&value(r)).ok())
         .collect();
+    for row in parse(&SONGS_FAILED) {
+        if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
+            state.song_failures.insert(k, f);
+        }
+    }
     for row in parse(&FAILURES) {
         if let (Some(k), Ok(f)) = (key_of(&row.keys[0]), serde_json::from_str(&value(row))) {
             state.failures.insert(k, f);
@@ -483,6 +498,14 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
             .iter()
             .map(|(name, digest)| Row::new(vec![name.clone()], Some(digest.clone())))
             .collect(),
+    ));
+    tables.push((
+        &SONGS_FAILED,
+        state
+            .song_failures
+            .iter()
+            .map(|(k, f)| Ok(Row::new(vec![key(k)], Some(json(f)?))))
+            .collect::<Result<_>>()?,
     ));
     tables.extend(cache_rows(state)?);
     Ok(tables)
@@ -804,6 +827,17 @@ mod tests {
     }
 
     #[test]
+    fn a_store_made_before_the_table_of_song_failures_gains_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        db.write(|tx| Ok(tx.execute_batch("DROP TABLE song_failures")?))
+            .unwrap();
+        drop(db);
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        assert_eq!(count(&mut db, "song_failures"), 0);
+    }
+
+    #[test]
     fn a_store_made_by_several_openers_at_once_is_made_once() {
         for _ in 0..20 {
             let dir = tempfile::tempdir().unwrap();
@@ -899,6 +933,7 @@ mod tests {
         state.listed.push(manual.clone());
         state.damaged.insert(key.clone(), "a1".into());
         state.trusted.insert("hooks".into(), "t1".into());
+        state.songs_failed([(key.clone(), "no audio".to_string())]);
         state
             .facts
             .insert(key.clone(), crate::facts::Facts::unreadable("10:20".into()));

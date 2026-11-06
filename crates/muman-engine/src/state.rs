@@ -15,6 +15,7 @@
 //! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
+//! | `song_failures` | Yes: `check` names a song the last sync could not write only after the next sync fails it again |
 //! | `damaged` | Yes: a song built from a damaged download then waits for `sync --accept` to take the whole copy fetched in its place |
 //! | `trusted` | Yes: the song list's commands and servers are asked about again (`trust`) |
 //!
@@ -262,6 +263,16 @@ pub struct State {
     /// once.
     #[serde(default, deserialize_with = "json::lenient_map")]
     pub failures: BTreeMap<SourceKey, Failure>,
+    /// Each song the last sync could not write, by [`Song::id`], so
+    /// `check` names it until a sync writes it.
+    ///
+    /// [`Song::id`]: crate::manifest::Song::id
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub song_failures: BTreeMap<SourceKey, SongFailure>,
     /// Each lookup a song made from one of its sources, and what it found.
     #[serde(default, deserialize_with = "json::lenient_list")]
     pub lookups: Vec<Looked>,
@@ -556,6 +567,15 @@ impl Measured {
             .map(|bytes| crate::limit::blocks(bytes, block))
             .sum()
     }
+}
+
+/// A song a sync could not write: why, how many syncs in a row, when last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SongFailure {
+    pub error: String,
+    pub count: u32,
+    /// Seconds since the Unix epoch.
+    pub last: u64,
 }
 
 /// A step that failed for a source: what it was, how often, when last.
@@ -915,6 +935,23 @@ impl State {
                 last: now_secs(),
             },
         );
+    }
+
+    /// The songs this sync could not write, each by its id with why: the
+    /// rest, written, kept or not tried, fail no more.
+    pub fn songs_failed(&mut self, failed: impl IntoIterator<Item = (SourceKey, String)>) {
+        let was = std::mem::take(&mut self.song_failures);
+        for (id, error) in failed {
+            let count = was.get(&id).map_or(0, |f| f.count);
+            self.song_failures.insert(
+                id,
+                SongFailure {
+                    error,
+                    count: count + 1,
+                    last: now_secs(),
+                },
+            );
+        }
     }
 
     /// Forget that a step failed for `key`, as its success shows.

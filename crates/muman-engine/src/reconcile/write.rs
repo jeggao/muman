@@ -193,6 +193,9 @@ pub(super) struct Applied {
     /// What each plan fitting asked about rendered to, by
     /// [`limit::plan_key`].
     pub learned: Vec<(String, state::Measured)>,
+    /// Each song that failed to be written, by its place in the song
+    /// list, and why.
+    pub songs_failed: Vec<(usize, String)>,
 }
 
 /// Carry out `intent` on `planned`: the moves, each song written or
@@ -270,6 +273,7 @@ pub(super) fn apply<R: Runner, W: Write>(
         moved: arrived.len(),
         removed: removed.len(),
         learned: wrote.learned,
+        songs_failed: wrote.songs_failed,
     })
 }
 
@@ -297,6 +301,8 @@ pub(super) struct Wrote {
     pub failed: BTreeSet<SourceKey>,
     /// Where each song that failed would have been written.
     pub failed_at: Vec<PathBuf>,
+    /// Each song that failed, by its place in the song list, and why.
+    pub songs_failed: Vec<(usize, String)>,
 }
 
 /// The files writing each song may write over or remove, by its place in
@@ -551,6 +557,7 @@ fn render_due<R: Runner, W: Write>(
         learned: Vec::new(),
         failed: BTreeSet::new(),
         failed_at: Vec::new(),
+        songs_failed: Vec::new(),
     };
     let writing = progress::step("Writing", Some(due.len() as u64));
     let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
@@ -610,6 +617,7 @@ fn render_due<R: Runner, W: Write>(
                             .cloned(),
                     );
                     wrote.failed_at.push(path_of(r));
+                    wrote.songs_failed.push((*n, format!("{e:#}")));
                     crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
                 }
             }
