@@ -500,7 +500,10 @@ impl Session<'_> {
         let check: Check = Rc::new(|typed: &str| {
             let typed = typed.trim();
             (!typed.is_empty())
-                .then(|| typed.parse::<crate::units::Time>().err())
+                .then(|| match typed.parse::<crate::units::Time>() {
+                    Ok(t) => crate::manifest::offset_refused(t.0).map(str::to_string),
+                    Err(e) => Some(e),
+                })
                 .flatten()
         });
         let help = "a time, as 120 ms, or -0.5 s for earlier; nothing for none";

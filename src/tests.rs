@@ -3433,6 +3433,35 @@ fn a_song_whose_source_is_gone_says_which() {
 }
 
 #[test]
+fn a_lyrics_offset_past_an_hour_is_refused_before_it_is_shown() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let before = std::fs::read_to_string(&songs).unwrap();
+    for term in ["lyrics_offset=-2h", "lyrics_offset_ms=-7200000"] {
+        let mut out = Vec::new();
+        let e = run_with(
+            &s.job(&["set", "-y", "manual:a.flac", term]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            e.downcast_ref::<change::Refused>().is_some(),
+            "{term}: {e:#}"
+        );
+        assert!(format!("{e:#}").contains("more than an hour"), "{e:#}");
+        assert!(!text.contains("changes"), "{term}: {text}");
+        assert_eq!(std::fs::read_to_string(&songs).unwrap(), before);
+    }
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

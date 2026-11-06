@@ -542,6 +542,14 @@ pub(crate) enum Assign {
     Offset(Option<i64>),
 }
 
+/// Refuse `term`, setting a lyrics offset of `ms`, when it is no song's.
+fn refuse_offset(term: &str, ms: Option<i64>) -> Result<()> {
+    match ms.and_then(crate::manifest::offset_refused) {
+        Some(why) => refuse(format!("`{term}` {why}")),
+        None => Ok(()),
+    }
+}
+
 /// The query terms and the assignments among `terms`: a word with `=`
 /// before any `:`, or ending in `!`, assigns.
 fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
@@ -586,6 +594,7 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                             .map_err(|e| anyhow::anyhow!("`{term}`: {e}"))
                     })
                     .transpose()?;
+                refuse_offset(term, ms)?;
                 other.push(Assign::Offset(ms));
             }
             // The name before times took their unit, in milliseconds.
@@ -596,6 +605,7 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                             .with_context(|| format!("`{term}` is no number"))
                     })
                     .transpose()?;
+                refuse_offset(term, ms)?;
                 other.push(Assign::Offset(ms));
             }
             // What a query reads of a song, or how the song list names its

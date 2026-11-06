@@ -903,10 +903,18 @@ fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
         .with_context(|| format!("{what}: `lyrics_offset` must be a time, such as \"120 ms\""))?
         .parse()
         .map_err(|e| anyhow::anyhow!("{what}: `lyrics_offset`: {e}"))?;
-    if time.0.unsigned_abs() > MAX_OFFSET_MS {
-        bail!("{what}: `lyrics_offset` moves lyrics more than an hour, longer than any song");
+    if let Some(why) = offset_refused(time.0) {
+        bail!("{what}: `lyrics_offset` {why}");
     }
     Ok(time.0)
+}
+
+/// Why a lyrics offset of `ms` is no song's, when it is none: what every
+/// command that sets one asks before it shows the change.
+#[must_use]
+pub fn offset_refused(ms: i64) -> Option<&'static str> {
+    (ms.unsigned_abs() > MAX_OFFSET_MS)
+        .then_some("moves lyrics more than an hour, longer than any song")
 }
 
 /// A song's `lookups`: false, or a table of providers each set false.
