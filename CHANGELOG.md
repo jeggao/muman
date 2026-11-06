@@ -20,6 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`add album.cue -y` says when no track fits a song.** It set nothing
+  and said nothing, and exited 0; it now leaves the sheet out and says
+  so, as it does without `-y`.
 - **`export --redact` leaves no tracker passkey, proxy login or query
   secret.** It kept a `passkey=` in `--bt-tracker`, a passkey in a
   tracker's path, a proxy's login given without a scheme, and an
