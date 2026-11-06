@@ -78,7 +78,7 @@ crates/muman-engine/src/   the engine: the state, plans, the library written, ru
   library.rs        the ledger: every move and removal in the library
   fit.rs, limit.rs  songs fitted into a size, least audible loss first; [library] max_size
   history.rs, query.rs   run records and undo; a query held against the songs
-  rows.rs           songs shown as aligned rows that tell them apart
+  diagnose.rs, rows.rs   what `check` reports and `status` counts; songs shown as rows
 crates/muman-config/src/   the config layer: the song list, its settings, editions and hooks
   settings.rs       [library], [lyrics], [audio], [loudness], [cover], [ytdlp],
                     [torrent], [tools], [history], [sites]; naming_tests.rs, its names

@@ -376,7 +376,7 @@ lookup alone.
   leaves as it is is only counted, unless `--all` is given. A query
   shows each song it matches, up to date or not. The last line counts
   the songs by what a sync does with each, as `Songs: 2 new, 1 changed,
-  1 moved, 1240 up to date`.
+  1 moved, 1240 up to date`, then the problems `check` would list.
 - **`info`** counts what the library holds, whether it is in step, the
   lookups due, and what could be better: narrow, mono or clipped audio,
   missing or soft covers, untimed or missing lyrics, missing tags. It
