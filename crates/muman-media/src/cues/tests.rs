@@ -95,7 +95,7 @@ fn untimed_lyrics_make_no_cues_and_plain_text_drops_id_tags() {
 /// with [`crate::lyrics::WRITING`].
 const WRITTEN: (&str, &str) = (
     "2",
-    "8df482484591e51957a499f2bee555bb0beabfc99e633ee15fb7954ca551cc0d",
+    "cc706d488e35fe15b2148acea481b04f064180b2b573dbf4b99bc2119c30103b",
 );
 
 #[test]

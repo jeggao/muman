@@ -51,6 +51,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `[99:99.99]`, was carried into the minutes; the one now reads, the
   other is not taken for a time. Every song's lyrics are written again
   once.
+- **A line whose time reads as none is no lyric.** A line opened by a
+  time that cannot be read, as `[00:-3.00]`, `[01:00:00.00]` or
+  `[00:1e1]`, was written into the library's `.lrc` as sung text,
+  brackets and all; it is now left out.
 - **`add album.cue -y` says when no track fits a song.** It set nothing
   and said nothing, and exited 0; it now leaves the sheet out and says
   so, as it does without `-y`.

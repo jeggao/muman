@@ -21,7 +21,7 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::lyrics::{lrc_time, rewrite_word_times, without_word_times};
+use crate::lyrics::{opened, rewrite_word_times, without_word_times};
 
 /// How lyrics are written, as this module writes them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,14 +121,12 @@ struct Cue {
 fn timed(lrc: &str) -> Vec<(i64, String)> {
     let mut sung: Vec<(i64, usize, String)> = Vec::new();
     for (n, line) in lrc.lines().enumerate() {
-        let mut rest = line.trim();
-        let mut times = Vec::new();
-        while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            times.push(ms);
-            rest = after;
+        let opened = opened(line.trim());
+        if opened.damaged {
+            continue;
         }
-        for ms in times {
-            sung.push((ms, n, rest.trim().to_string()));
+        for ms in opened.times {
+            sung.push((ms, n, opened.rest.trim().to_string()));
         }
     }
     sung.sort_by_key(|(ms, n, _)| (*ms, *n));

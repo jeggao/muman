@@ -672,13 +672,12 @@ pub(crate) fn without_word_times(line: &str) -> String {
 pub fn sung(text: &str) -> String {
     let mut words = Vec::new();
     for line in text.lines() {
-        let mut rest = line.trim();
-        let mut timed = false;
-        while let Some((_, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            timed = true;
-            rest = after;
+        let opened = opened(line.trim());
+        if opened.damaged {
+            continue;
         }
-        let line = without_word_times(rest);
+        let timed = !opened.times.is_empty();
+        let line = without_word_times(opened.rest);
         let header = !timed && line.starts_with('[') && line.ends_with(']');
         if !header && !line.trim().is_empty() {
             words.push(line.trim().to_string());
@@ -783,14 +782,9 @@ pub struct Timing {
 pub fn timing(text: &str) -> Option<Timing> {
     let mut times = Vec::new();
     for line in text.lines() {
-        let mut rest = line;
-        let mut stamps = Vec::new();
-        while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-            stamps.push(ms);
-            rest = after;
-        }
-        if !without_word_times(rest).trim().is_empty() {
-            times.extend(stamps);
+        let opened = opened(line);
+        if !opened.damaged && !without_word_times(opened.rest).trim().is_empty() {
+            times.extend(opened.times);
         }
     }
     Some(Timing {
@@ -820,11 +814,13 @@ impl<'a> Lrc<'a> {
         let mut offset_ms = 0;
         let mut lines = Vec::new();
         for line in text.lines() {
-            let mut rest = line;
-            let mut times = Vec::new();
-            while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
-                times.push(ms);
-                rest = after;
+            let Opened {
+                times,
+                rest,
+                damaged,
+            } = opened(line);
+            if damaged {
+                continue;
             }
             if !times.is_empty() {
                 lines.push(Line::Timed { times, rest });
@@ -961,6 +957,48 @@ pub(crate) fn rewrite_word_times(
     out
 }
 
+/// A line of LRC as its times open it: each time it opens with, what
+/// follows them, and whether a bracket shaped as a time that reads as
+/// none follows them, as `[00:-3.00]` or `[01:00:00.00]`. Such a line is
+/// damaged: no lyric, no header, and not written on. Every reader of a
+/// line's times reads them here, so none takes a damaged time for text.
+pub(crate) struct Opened<'a> {
+    pub times: Vec<i64>,
+    pub rest: &'a str,
+    pub damaged: bool,
+}
+
+pub(crate) fn opened(line: &str) -> Opened<'_> {
+    let mut rest = line;
+    let mut times = Vec::new();
+    while let Some((ms, after)) = rest.strip_prefix('[').and_then(lrc_time) {
+        times.push(ms);
+        rest = after;
+    }
+    Opened {
+        times,
+        rest,
+        damaged: time_shaped(rest),
+    }
+}
+
+/// Whether `s` opens with a bracket holding only what a time is written
+/// with, digits and `: . , + - e E`, a digit and a colon among them; an
+/// ID tag's name, as `length` or `offset`, holds other letters.
+fn time_shaped(s: &str) -> bool {
+    let inner = s
+        .trim_start()
+        .strip_prefix('[')
+        .and_then(|r| r.split_once(']'))
+        .map(|(inner, _)| inner);
+    inner.is_some_and(|i| {
+        i.contains(':')
+            && i.bytes().any(|b| b.is_ascii_digit())
+            && i.bytes()
+                .all(|b| b.is_ascii_digit() || b":.,+-eE".contains(&b))
+    })
+}
+
 /// `mm:ss.xx]` or `mm:ss.xxx]` at the start of `s`, in milliseconds,
 /// and what follows the bracket.
 pub(crate) fn lrc_time(s: &str) -> Option<(i64, &str)> {
@@ -1046,10 +1084,7 @@ mod tests {
             sung("[00:01.00]<00:01.00>rain <00:01.50>falls"),
             "rain falls\n"
         );
-        assert_eq!(
-            sung("[9999999999999999:00.00]x"),
-            "[9999999999999999:00.00]x\n"
-        );
+        assert_eq!(sung("[9999999999999999:00.00]x"), "");
         assert_eq!(timing("[9999999999999999:00.00]x"), None);
         let _ = shift_lrc("[153722867280912:55.807]x", -1, 0);
         assert_eq!(
@@ -1108,6 +1143,32 @@ mod tests {
         assert_eq!(lrc_time("01:59.99]x"), Some((119_990, "x")));
         assert_eq!(lrc_time("99:99.99]x"), None);
         assert_eq!(lrc_time("00:60.00]x"), None);
+    }
+
+    #[test]
+    fn a_line_opened_by_a_time_that_reads_as_none_is_no_lyric() {
+        let lrc = "[ar:Lumo Fenn]\n[length:04:00]\n[00:-3.00]Minus\n[01:00:00.00]Hours\n\
+                   [00:1e1]Exponent\n[00:01.00][00:99.99]Late\n[00:02.00]Sung\n";
+        assert_eq!(sung(lrc).trim(), "Sung");
+        let moved = shift_lrc(lrc, 1000, 0);
+        assert!(
+            !moved.contains("Minus") && !moved.contains("Hours"),
+            "{moved}"
+        );
+        assert!(
+            !moved.contains("Exponent") && !moved.contains("Late"),
+            "{moved}"
+        );
+        assert!(
+            moved.contains("[00:01.00]Sung") && moved.contains("[ar:Lumo Fenn]"),
+            "{moved}"
+        );
+        let cleaned = crate::clean::lyrics::all(lrc);
+        assert!(
+            !cleaned.contains("Minus") && !cleaned.contains("Late"),
+            "{cleaned}"
+        );
+        assert_eq!(timing(lrc).map(|t| t.lines), Some(1));
     }
 
     #[test]
