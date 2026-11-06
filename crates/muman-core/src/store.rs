@@ -337,7 +337,10 @@ pub enum Kind {
 /// folder's `COVER.JPG` covers it.
 #[must_use]
 pub fn named_as(a: &Path, b: &Path) -> bool {
-    let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().to_lowercase());
+    let stem = |p: &Path| {
+        p.file_stem()
+            .map(|s| crate::relpath::to_portable(Path::new(s)).to_lowercase())
+    };
     a.parent() == b.parent() && stem(a) == stem(b)
 }
 

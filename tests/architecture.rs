@@ -130,7 +130,8 @@ const MUTATIONS: &[(&str, &str)] = &[
     ),
     (
         "add.rs",
-        "a file fetched before, removed again when its info JSON cannot be cleared",
+        "a file fetched before, removed again when its info JSON cannot be cleared; \
+         the files an add copied, removed again when it is refused partway",
     ),
     ("sync.rs", "downloads left unfinished too long"),
     (

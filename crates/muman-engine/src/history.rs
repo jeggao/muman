@@ -1177,6 +1177,10 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
     for (rel, digest) in &record.copied {
         let copy = home.join(rel);
         if !copy.exists() {
+            crate::ui::info(
+                out,
+                &format!("The copy the run made is gone already: {}", copy.display()),
+            )?;
             continue;
         }
         if as_copied(&copy, digest) {
