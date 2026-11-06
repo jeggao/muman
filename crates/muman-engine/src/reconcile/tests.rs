@@ -610,6 +610,35 @@ fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
 }
 
 #[test]
+fn a_song_whose_write_failed_keeps_its_record_as_it_was() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n");
+    h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    let before = State::load(&h.dirs.home).unwrap().outputs;
+    let mut failing = infos(&["aaaaaaaaaaa"]);
+    failing.failing = vec!["opus".into()];
+    let forced = Options {
+        force: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&failing, forced);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    let after = State::load(&h.dirs.home).unwrap().outputs;
+    for (path, written) in &after {
+        assert!(
+            written.plan.is_some(),
+            "{} lost its plan: {text}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();
     h.fetched("aaaaaaaaaaa");

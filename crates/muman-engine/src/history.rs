@@ -231,6 +231,11 @@ fn history(home: &Path) -> PathBuf {
     home.join("history")
 }
 
+/// Whether the history keeps any run of `home`.
+pub(crate) fn kept_any(home: &Path) -> bool {
+    runs(home).is_ok_and(|r| !r.is_empty())
+}
+
 /// The runs kept, oldest first.
 fn runs(home: &Path) -> Result<Vec<PathBuf>> {
     let mut found: Vec<PathBuf> = match std::fs::read_dir(history(home)) {

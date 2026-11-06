@@ -3261,6 +3261,26 @@ fn undo_moves_songs_back_after_a_template_edited_by_hand() {
 }
 
 #[test]
+fn a_state_damaged_or_emptied_is_named_and_not_read_as_new() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let home = s.dir.path().join("home");
+    for beside in ["state.db-wal", "state.db-shm"] {
+        let _ = std::fs::remove_file(home.join(beside));
+    }
+    let db = home.join("state.db");
+    let mut bytes = std::fs::read(&db).unwrap();
+    bytes[..100].fill(b'x');
+    std::fs::write(&db, &bytes).unwrap();
+    let e = s.trusting(&flacs(), &["list"], None).unwrap_err();
+    assert!(format!("{e:#}").contains(&*db.to_string_lossy()), "{e:#}");
+    std::fs::write(&db, b"").unwrap();
+    let e = s.trusting(&flacs(), &["check"], None).unwrap_err();
+    assert!(format!("{e:#}").contains("is empty"), "{e:#}");
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
