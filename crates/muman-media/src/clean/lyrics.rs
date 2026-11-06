@@ -207,22 +207,20 @@ impl Lyrics {
     fn parse(text: &str) -> Self {
         let lines = text
             .lines()
-            .map(|line| {
-                let mut rest = line;
-                let mut ms = Vec::new();
-                while let Some((t, after)) = rest.strip_prefix('[').and_then(lyrics::lrc_time) {
-                    ms.push(t);
-                    rest = after;
-                }
-                if ms.is_empty() {
+            .filter_map(|line| {
+                let opened = lyrics::opened(line);
+                let rest = opened.rest;
+                Some(if opened.damaged {
+                    return None;
+                } else if opened.times.is_empty() {
                     Line::Other(line.to_string())
                 } else {
                     Line::Timed {
                         stamps: line[..line.len() - rest.len()].to_string(),
-                        ms,
+                        ms: opened.times,
                         text: rest.to_string(),
                     }
-                }
+                })
             })
             .collect();
         Self(lines)

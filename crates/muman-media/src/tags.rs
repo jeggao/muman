@@ -15,7 +15,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/11";
+pub const METHOD: &str = "tags/12";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1115,6 +1115,11 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
             "{name:?} is no tag name: give one of ASCII letters, digits and marks but ="
         ));
     }
+    // A mark that turns text around shows as nothing, as from a source.
+    let value: String = value
+        .chars()
+        .filter(|c| !crate::portable::reorders(*c))
+        .collect();
     if value.trim().is_empty() {
         return Ok(String::new());
     }
@@ -1126,8 +1131,45 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
         ));
     }
     let kind = Field::named(name).map_or(Kind::Text, |f| f.spec().kind);
-    kind.read(value)
+    // A source's date may run on into its time; one given by hand is a
+    // date, a time of day after it at the most.
+    let tail = value
+        .trim()
+        .split_once(['T', ' '])
+        .map(|(_, tail)| tail.trim());
+    if kind == Kind::Date && tail.is_some_and(|t| !time_of_day(t)) {
+        return Err(format!(
+            "{name} = {value:?} is no date: give YYYY-MM-DD, YYYY-MM or a year"
+        ));
+    }
+    kind.read(&value)
         .map_err(|why| format!("{name} = {value:?} is {why}"))
+}
+
+/// Whether `t` is a time of day, as a date's tail: `HH:MM`, seconds and
+/// their fraction after it, then a zone, `Z` or `+HH:MM`, if any.
+fn time_of_day(t: &str) -> bool {
+    let t = t
+        .strip_suffix(['Z', 'z'])
+        .or_else(|| t.rfind(['+', '-']).filter(|at| *at >= 5).map(|at| &t[..at]))
+        .unwrap_or(t);
+    let mut parts = t.split(':');
+    let two = |p: Option<&str>, most: u32| {
+        p.is_some_and(|p| p.len() == 2 && p.parse::<u32>().is_ok_and(|v| v <= most))
+    };
+    if !(two(parts.next(), 23) && two(parts.next(), 59)) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(sec) => {
+            let (whole, frac) = sec.split_once('.').unwrap_or((sec, "0"));
+            two(Some(whole), 60)
+                && !frac.is_empty()
+                && frac.bytes().all(|b| b.is_ascii_digit())
+                && parts.next().is_none()
+        }
+    }
 }
 
 /// What is wrong with `value` as `name`'s, set by hand, as [`by_hand`]
@@ -1803,15 +1845,14 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// The file at `path` read by `lofty` for its tags alone. Its audio's
 /// properties are not read: `lofty` refuses some a file may hold, as an
 /// Opus stream of mapping family 255, and a file's tags never need them.
+/// Its format is told by its bytes, as ffprobe tells it, its name only
+/// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
+/// and `song.opus.part` is a file being written.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    let mut probe = lofty::probe::Probe::open(path)?;
-    // A file being written, as `song.opus.part`, is known by its bytes.
-    if probe.file_type().is_none() {
-        probe = probe.guess_file_type()?;
-    }
-    probe
+    lofty::probe::Probe::open(path)?
+        .guess_file_type()?
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
 }
@@ -2608,11 +2649,53 @@ mod tests {
         assert!(!o.contains_key(&Field::AlbumPeak));
     }
 
+    #[test]
+    fn a_hand_value_is_read_strictly_and_hides_nothing() {
+        assert_eq!(
+            by_hand("album", "Glass\u{202E}Orchards").unwrap(),
+            "GlassOrchards"
+        );
+        assert_eq!(by_hand("album", "\u{202E}\u{202C}").unwrap(), "");
+        assert!(by_hand("date", "2019-07-04 extra").is_err());
+        assert!(by_hand("date", "2019-07-04Tea").is_err());
+        assert_eq!(
+            by_hand("date", "2019-07-04T10:00:00Z").unwrap(),
+            "2019-07-04"
+        );
+        assert_eq!(by_hand("date", "2019-07-04 10:00").unwrap(), "2019-07-04");
+        assert_eq!(by_hand("date", "2019-07-04").unwrap(), "2019-07-04");
+    }
+
+    #[test]
+    fn a_file_named_as_another_format_is_read_as_it_is() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::{Accessor, Tag, TagExt, TagType};
+
+        use crate::testing::{SILENCE_FLAC, SILENCE_VORBIS};
+
+        let dir = tempfile::tempdir().unwrap();
+        for (fixture, name) in [(SILENCE_FLAC, "song.flac"), (SILENCE_VORBIS, "song.ogg")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, fixture).unwrap();
+            let mut tag = Tag::new(TagType::VorbisComments);
+            tag.set_title("Paper Comets".into());
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            let named = dir.path().join(format!("{name}.mp3"));
+            std::fs::rename(&path, &named).unwrap();
+            let read = read_file(&named).unwrap();
+            assert_eq!(
+                read.get("title"),
+                Some(&vec!["Paper Comets".to_string()]),
+                "{name}"
+            );
+        }
+    }
+
     /// What every format's tags and lyrics offer once `lofty` writes them,
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/11",
+        "tags/12",
         "815aefc335b1e111fb94cdc278d512f9ed1488cd4d0c3227c80e2b876e8f3f5d",
     );
 

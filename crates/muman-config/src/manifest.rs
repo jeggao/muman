@@ -903,10 +903,18 @@ fn lyrics_offset(t: &Table, what: &str) -> Result<i64> {
         .with_context(|| format!("{what}: `lyrics_offset` must be a time, such as \"120 ms\""))?
         .parse()
         .map_err(|e| anyhow::anyhow!("{what}: `lyrics_offset`: {e}"))?;
-    if time.0.unsigned_abs() > MAX_OFFSET_MS {
-        bail!("{what}: `lyrics_offset` moves lyrics more than an hour, longer than any song");
+    if let Some(why) = offset_refused(time.0) {
+        bail!("{what}: `lyrics_offset` {why}");
     }
     Ok(time.0)
+}
+
+/// Why a lyrics offset of `ms` is no song's, when it is none: what every
+/// command that sets one asks before it shows the change.
+#[must_use]
+pub fn offset_refused(ms: i64) -> Option<&'static str> {
+    (ms.unsigned_abs() > MAX_OFFSET_MS)
+        .then_some("moves lyrics more than an hour, longer than any song")
 }
 
 /// A song's `lookups`: false, or a table of providers each set false.
@@ -1992,6 +2000,8 @@ fn tags_of(item: Option<&Item>, what: &str) -> Result<Tags> {
         let values = raw
             .iter()
             .map(|v| tags::by_hand(key, v).map_err(|why| anyhow::anyhow!("{what}: tags.{why}")))
+            // A value read as nothing, as one of marks alone, sets nothing.
+            .filter(|v| !matches!(v, Ok(v) if v.is_empty()))
             .collect::<Result<Vec<String>>>()?;
         if !values.is_empty() {
             tags.push((key.to_string(), values));

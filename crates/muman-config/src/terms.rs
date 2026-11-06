@@ -155,10 +155,13 @@ impl Query {
 }
 
 /// `text` as a query compares it: lower case, in one Unicode form, its
-/// accents taken off.
+/// accents taken off, and the punctuation typography respells written
+/// plain, so `twenty-five` finds `Twenty‐Five`.
 #[must_use]
 pub fn fold(text: &str) -> String {
-    text.nfd()
+    let plain: String = text.chars().map(crate::clean::plain_punctuation).collect();
+    plain
+        .nfd()
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .collect::<String>()
         .to_lowercase()
@@ -236,4 +239,17 @@ pub fn parse_text(text: &str, extractors: &BTreeSet<String>) -> Result<Query> {
         bail!("an empty query would match every song");
     }
     Query::parse_terms(&terms, extractors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typography_folds_as_what_it_respelled() {
+        assert_eq!(
+            fold("Twenty\u{2010}Five \u{2019}n\u{2019} \u{201c}x\u{201d}"),
+            fold("twenty-five 'n' \"x\"")
+        );
+    }
 }

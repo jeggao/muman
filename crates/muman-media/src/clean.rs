@@ -1172,6 +1172,13 @@ const ELISIONS: [&str; 12] = [
     "n", "til", "cause", "cos", "em", "round", "bout", "tis", "twas", "neath", "nuff", "kay",
 ];
 
+/// `c` as written before typography respelled it, as `’` is `'`: a
+/// query compares the two alike.
+#[must_use]
+pub fn plain_punctuation(c: char) -> char {
+    ascii(c)
+}
+
 fn ascii(c: char) -> char {
     match c {
         '’' | '‘' => '\'',
