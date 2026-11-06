@@ -20,6 +20,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An LRC time reads as its tool wrote it.** `[00:03,50]`, with a
+  decimal comma, was not read, and a time past 59 seconds, as
+  `[99:99.99]`, was carried into the minutes; the one now reads, the
+  other is not taken for a time. Every song's lyrics are written again
+  once.
 - **`add album.cue -y` says when no track fits a song.** It set nothing
   and said nothing, and exited 0; it now leaves the sheet out and says
   so, as it does without `-y`.
