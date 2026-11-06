@@ -295,6 +295,10 @@ struct Judged {
     distance: i64,
     /// Whether the verdict rests on the fields alone, so needs its lead.
     by_fields: bool,
+    /// Whether the file is named as the song's own, by its file's name,
+    /// an ID, its bytes or coming with it: a tag file so named retags the
+    /// song, whatever its fields say of the song's tags now.
+    named: bool,
     looks: Alike,
     already: bool,
     reasons: Vec<String>,
@@ -586,6 +590,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         verdict = Verdict::Same;
         reasons.push("came with it".to_string());
     }
+    let named = verdict == Verdict::Same;
     let mut distance = NO_MATCH;
     let mut conflicts = Vec::new();
     for reading in &clues.readings {
@@ -616,7 +621,10 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
     }
     for conflict in &conflicts {
         reasons.push((*conflict).to_string());
-        cap = Verdict::Unsure;
+        // The tags a tag file names its song by are the ones it sets.
+        if !(what == What::Tags && named) {
+            cap = Verdict::Unsure;
+        }
     }
     let mut looks = Alike::Different;
     if let Some(look) = &clues.look {
@@ -648,6 +656,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                 verdict: Verdict::Different,
                 distance,
                 by_fields: false,
+                named: false,
                 looks,
                 already: false,
                 reasons: vec![format!(
@@ -665,6 +674,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                     verdict: Verdict::Different,
                     distance,
                     by_fields: false,
+                    named: false,
                     looks,
                     already: false,
                     reasons: vec![format!(
@@ -718,6 +728,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         verdict: verdict.min(cap),
         distance,
         by_fields,
+        named,
         looks,
         already,
         reasons,
@@ -1711,7 +1722,7 @@ fn decide_sheet<W: Write>(
                         .find(|j| j.song == *song)
                         .map_or(NO_MATCH, |j| match j.verdict {
                             Verdict::Different => NO_MATCH,
-                            _ if j.distance >= NO_MATCH => 0,
+                            _ if j.named || j.distance >= NO_MATCH => 0,
                             _ => j.distance,
                         })
                 })

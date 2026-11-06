@@ -464,6 +464,31 @@ fn a_cue_sheet_tags_each_song_its_tracks_are() {
 }
 
 #[test]
+fn a_cue_sheet_retags_the_songs_its_file_lines_name() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let cue = s.written(
+        "dl/retag.cue",
+        "PERFORMER \"Lumo Fenn\"\nTITLE \"Harbor Lights\"\n\
+         FILE \"Lantern Weather.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Paper Comets\"\n    INDEX 01 00:00:00\n\
+         FILE \"Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Kessler Row\"\n    INDEX 01 00:00:00\n",
+    );
+    let (ok, text) = s.run(&fake, &["add", "-y", &cue]);
+    assert!(ok, "{text}");
+    for (song, title) in [
+        ("Lantern Weather", "Paper Comets"),
+        ("Copper Moth", "Kessler Row"),
+    ] {
+        let tags = s.song_with(song).tags;
+        assert!(
+            tags.iter().any(|(k, v)| k == "title" && v == &[title]),
+            "{song}: {tags:?}: {text}"
+        );
+    }
+}
+
+#[test]
 fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     let s = Setup::new();
     let fake = library();
