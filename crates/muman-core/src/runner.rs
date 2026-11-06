@@ -411,16 +411,67 @@ impl Runner for System {
     }
 }
 
-/// The error of `cmd` exiting with `status`, naming the tail of `stderr`.
+/// A program muman ran that ended in failure: its name, its exit code,
+/// none when a signal stopped it, and the last line it said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exited {
+    pub program: String,
+    pub code: Option<i32>,
+    pub said: String,
+}
+
+impl Exited {
+    /// Whether it ended for no fault of what it read: stopped by a
+    /// signal, or exiting with a code past 128, as a shell says a program
+    /// a signal stopped did. The same file may read the next time.
+    #[must_use]
+    pub fn by_chance(&self) -> bool {
+        self.code.is_none_or(|c| c > 128)
+    }
+}
+
+impl std::fmt::Display for Exited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            Some(code) => write!(f, "{} failed (exit {code}): {}", self.program, self.said),
+            None => write!(
+                f,
+                "{} failed (stopped by a signal): {}",
+                self.program, self.said
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Exited {}
+
+/// Whether `e` says nothing of the file a program read: a program a
+/// signal stopped, or one that could not be started.
+#[must_use]
+pub fn by_chance(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<Exited>().is_some_and(Exited::by_chance)
+            || c.downcast_ref::<std::io::Error>().is_some()
+    })
+}
+
+/// The error of `cmd` exiting with `status`, in one line: the last line
+/// of `stderr` that says anything, where ffmpeg and ffprobe say what
+/// stopped them. The lines before it go to a trace, not to every sync
+/// that meets the same file.
 fn failed(cmd: &[OsString], status: std::process::ExitStatus, stderr: &[u8]) -> anyhow::Error {
     let stderr = String::from_utf8_lossy(stderr);
-    let lines: Vec<&str> = stderr.lines().collect();
-    let tail = without_addresses(&lines[lines.len().saturating_sub(10)..].join("\n"));
-    anyhow!(
-        "{} failed (exit {}): {tail}",
-        name(cmd),
-        status.code().unwrap_or(-1)
-    )
+    let said = stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(without_addresses)
+        .unwrap_or_default();
+    anyhow::Error::new(Exited {
+        program: name(cmd),
+        code: status.code(),
+        said,
+    })
 }
 
 /// `text` without the memory addresses ffmpeg names its parts by, as

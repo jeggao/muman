@@ -3527,6 +3527,92 @@ impl Runner for Unprobed {
 }
 
 #[test]
+fn a_source_that_reads_as_none_is_written_from_by_no_sync() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    std::fs::write(&a, "garbage").unwrap();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Unprobed(flacs()),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync", "--force"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok && text.contains("manual:a.flac"), "{text}");
+    assert_eq!(library_of(&s), before, "held as it was: {text}");
+}
+
+/// The fake, but ffprobe is stopped by a signal once.
+struct StoppedOnce(Fake, std::sync::atomic::AtomicBool);
+
+impl Runner for StoppedOnce {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        let probe = cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffprobe"));
+        if probe && !self.1.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(anyhow::Error::new(crate::runner::Exited {
+                program: "ffprobe".into(),
+                code: None,
+                said: String::new(),
+            }));
+        }
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn a_source_a_signal_stopped_the_reading_of_is_read_by_the_next_sync() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &StoppedOnce(flacs(), std::sync::atomic::AtomicBool::new(false)),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("this time"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "no --retry needed: {text}");
+    assert_eq!(library_of(&s).len(), 1, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(
+        ok && !report.contains("Failed"),
+        "nothing kept failed: {report}"
+    );
+}
+
+#[test]
 fn a_source_that_reads_again_is_no_longer_reported_failed() {
     let s = Setup::new();
     let a = s.file("home/sources/manual/a.flac");

@@ -1148,7 +1148,7 @@ fn unheard(input: &Input<'_>) -> Vec<String> {
         .iter()
         .map(|k| {
             if input.on_disk.is_some_and(|d| !d.contains(k)) {
-                format!("{k} is not in the sources")
+                format!("{k} is not in the sources, or does not read")
             } else {
                 match input.facts.get(k) {
                     None => format!("{k} could not be read"),

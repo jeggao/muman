@@ -319,9 +319,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
     } else {
         BTreeSet::new()
     };
+    // A source whose file reads as none now is no source a song is made
+    // from: its song is held as it was rather than written from bytes
+    // that do not read.
+    let unread = |k: &SourceKey| {
+        (state.failures.get(k)).is_some_and(|f| {
+            f.step == crate::state::Step::Measure
+                && f.applies(store.locate(k).as_ref(), state.facts.get(k))
+        })
+    };
     let on_disk: BTreeSet<SourceKey> = listed
         .iter()
-        .filter(|k| store.has(k) || to_fetch.contains(k))
+        .filter(|k| (store.has(k) && !unread(k)) || to_fetch.contains(k))
         .cloned()
         .collect();
     let (mut planned, mut failed) = plan_awaiting(
