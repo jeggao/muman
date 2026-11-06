@@ -6,6 +6,11 @@
 //! `--upstream` asks each site whether it still serves each fetched
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
+//!
+//! Each song is resolved as a sync resolves it, from what was measured,
+//! so a song no sync can build is reported though no run recorded it; a
+//! failure recorded is reported while it still applies, and while a run
+//! holds the home, a file it may be moving or writing is not.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -47,12 +52,21 @@ pub fn check<R: Runner, W: Write, D: Write>(
     let store = Store::scan(dirs)?;
     let library = &dirs.library;
     crate::reconcile::vouch_for_copies(library, &mut state);
+    // As the next sync reads it: a file a stopped run moved before the
+    // state could say so is where it went, and no file is missing.
+    crate::history::follow_moves(
+        &dirs.home,
+        library,
+        &mut state,
+        crate::history::Moves::Foresee,
+    );
     // What a run under way is writing is no run's leftover.
     let busy = crate::atomic::Lock::busy(&dirs.home);
     if busy {
         crate::ui::info(
             report,
-            "A muman run is under way: the files it is writing are not reported",
+            "A muman run is under way: the files it is writing, moving or removing are not \
+             reported",
         )?;
     }
     let mut problems = 0_usize;
@@ -80,6 +94,8 @@ pub fn check<R: Runner, W: Write, D: Write>(
         owned.extend(written.sidecar_paths().cloned());
         let file = library.join(path);
         match std::fs::metadata(&file) {
+            // A run under way may be moving it, or about to write it.
+            _ if busy && !file.is_file() => {}
             Err(_) => problem(
                 report,
                 format!(
@@ -160,7 +176,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
         let hidden = rel
             .components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-        if !hidden && !owned.contains(rel) {
+        if !hidden && !owned.contains(rel) && !busy {
             crate::ui::info(
                 report,
                 &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
@@ -218,13 +234,47 @@ pub fn check<R: Runner, W: Write, D: Write>(
         }
     }
     for (key, failure) in &state.failures {
+        if !failure.applies(store.locate(key).as_ref(), state.facts.get(key)) {
+            continue;
+        }
         problem(
             report,
             format!(
-                "Failed {} time(s) to {:?}: {key}: {}",
-                failure.count, failure.step, failure.error
+                "Failed {} time(s) to {}: {key}: {}",
+                failure.count,
+                match failure.step {
+                    crate::state::Step::Measure => "read",
+                    crate::state::Step::Fetch => "fetch",
+                    crate::state::Step::Refetch => "fetch again",
+                    crate::state::Step::Mend => "mend",
+                },
+                failure.error
             ),
         )?;
+    }
+    // Each song as a sync would resolve it from what was measured, so a
+    // song no sync can build, as by a template naming no field, is said.
+    // One whose source is missing, which `sync` fetches again, waits.
+    let (on_disk, waiting): (BTreeSet<SourceKey>, BTreeSet<SourceKey>) =
+        listed.iter().cloned().partition(|k| store.has(k));
+    let resolution = crate::reconcile::resolve_songs(
+        &manifest,
+        &manifest.settings,
+        &state,
+        library,
+        Some(&on_disk),
+        &waiting,
+    );
+    match resolution {
+        Ok(r) => {
+            for (n, e) in &r.unresolved {
+                let song = manifest.songs[*n]
+                    .id()
+                    .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
+                problem(report, format!("No sync can build it: {song}: {e:#}"))?;
+            }
+        }
+        Err(e) => problem(report, format!("No sync can build the songs: {e:#}"))?,
     }
     let media: Vec<_> = listed
         .iter()

@@ -32,7 +32,8 @@ pub struct Due {
 /// What a sync fetches of what `manifest` lists, the store holding
 /// `store`, `failures` recorded, at `now`: a source yt-dlp fetched with an
 /// address to fetch it again from, or a torrent's file, missing from the
-/// store or damaged there and noted to be fetched again; one whose fetch
+/// store, damaged there and noted to be fetched again, or held there in
+/// a copy that does not read; one whose fetch
 /// failed lately waits, as one fetched again too often no longer comes,
 /// unless `retry`. A torrent's file no fetch mends is not fetched while
 /// the store holds it, `retry` or not.
@@ -59,8 +60,14 @@ pub fn due(
     let mut due = Due::default();
     for key in manifest.keys().into_iter().filter(fetchable) {
         let failure = failures.get(&key);
-        let damaged =
-            failure.is_some_and(|f| f.step == state::Step::Refetch && (retry || f.due(None, now)));
+        // A copy that does not read at all is fetched again too, while
+        // the tries last: no measure of it would ever say it is whole.
+        let unread = |f: &state::Failure| {
+            f.step == state::Step::Measure && store.has(&key) && f.count <= state::REFETCH_TRIES
+        };
+        let damaged = failure.is_some_and(|f| {
+            (f.step == state::Step::Refetch && (retry || f.due(None, now))) || unread(f)
+        });
         let fetch = match (store.has(&key), damaged) {
             (_, true) => Fetch::Damaged,
             (false, false) => Fetch::Missing,

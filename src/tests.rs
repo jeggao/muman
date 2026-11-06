@@ -718,6 +718,25 @@ fn holder_of(s: &Setup, file: &str) -> Option<SourceKey> {
 }
 
 #[test]
+fn a_song_that_fails_keeps_its_file_and_its_name_from_a_song_of_its_name() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let before = library_of(&s);
+    assert_eq!(before.len(), 2, "{text}");
+    std::fs::remove_file(&a).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert_eq!(library_of(&s), before, "neither file changes: {text}");
+    assert!(
+        !text.contains("Updated") && !text.contains("Removed"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -2119,6 +2138,50 @@ fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
 }
 
 #[test]
+fn a_download_that_does_not_read_is_fetched_again() {
+    let s = Setup::new();
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\
+         [providers.youtube-music]\nenabled = false\n\
+         [providers.youtube]\nenabled = false\n\
+         [providers.lrclib]\nenabled = false\n\
+         [providers.acoustid]\nenabled = false\n\
+         [providers.musicbrainz]\nenabled = false\n\
+         [providers.coverart]\nenabled = false\n\
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    s.written("home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv", "garbage");
+    let info =
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#;
+    let _ = run_with(
+        &s.job(&["sync", "--offline"]),
+        &Unprobed(Fake::default().info("aaaaaaaaaaa", info)),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Measure)
+    );
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Fake::default().info("aaaaaaaaaaa", info),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("damaged source(s) again"), "{text}");
+}
+
+#[test]
 fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
     let s = Setup::new();
     s.written(
@@ -3460,6 +3523,183 @@ fn a_lyrics_offset_past_an_hour_is_refused_before_it_is_shown() {
         assert!(!text.contains("changes"), "{term}: {text}");
         assert_eq!(std::fs::read_to_string(&songs).unwrap(), before);
     }
+}
+
+#[test]
+fn check_during_a_run_reports_no_file_it_is_moving() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let lib = s.dir.path().join("lib");
+    let from = lib.join("Artist/Record/02 Song.flac");
+    let to = lib.join("Elsewhere/02 Song.flac");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    let held = Lock::runs(&s.dir.path().join("home")).unwrap();
+    std::fs::rename(&from, &to).unwrap();
+    let (_, report) = s.report(&flacs(), &["check"]);
+    drop(held);
+    assert!(report.contains("run is under way"), "{report}");
+    assert!(!report.contains("Missing"), "{report}");
+    assert!(!report.contains("Not muman's"), "{report}");
+}
+
+/// The fake, but ffprobe reads nothing, as of a file damaged past reading.
+struct Unprobed(Fake);
+
+impl Runner for Unprobed {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffprobe"))
+        {
+            anyhow::bail!("Invalid data found when processing input");
+        }
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn a_source_that_reads_as_none_is_written_from_by_no_sync() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    std::fs::write(&a, "garbage").unwrap();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Unprobed(flacs()),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync", "--force"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok && text.contains("manual:a.flac"), "{text}");
+    assert_eq!(library_of(&s), before, "held as it was: {text}");
+}
+
+/// The fake, but ffprobe is stopped by a signal once.
+struct StoppedOnce(Fake, std::sync::atomic::AtomicBool);
+
+impl Runner for StoppedOnce {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        let probe = cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffprobe"));
+        if probe && !self.1.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(anyhow::Error::new(crate::runner::Exited {
+                program: "ffprobe".into(),
+                code: None,
+                said: String::new(),
+            }));
+        }
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn a_source_a_signal_stopped_the_reading_of_is_read_by_the_next_sync() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &StoppedOnce(flacs(), std::sync::atomic::AtomicBool::new(false)),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("this time"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "no --retry needed: {text}");
+    assert_eq!(library_of(&s).len(), 1, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(
+        ok && !report.contains("Failed"),
+        "nothing kept failed: {report}"
+    );
+}
+
+#[test]
+fn a_source_that_reads_again_is_no_longer_reported_failed() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let whole = std::fs::read(&a).unwrap();
+    std::fs::write(&a, "garbage").unwrap();
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Unprobed(flacs()),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("Could not read manual:a.flac"), "{text}");
+    std::fs::write(&a, whole).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok && !report.contains("Failed"), "{report}");
+}
+
+#[test]
+fn check_reports_a_song_no_sync_can_build() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &songs,
+        listed.replace(&default, "template = \"{{ nosuch }}{{ title }}\""),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok, "{report}");
+    assert!(report.contains("No sync can build it"), "{report}");
+    assert!(!report.contains("No problems found"), "{report}");
 }
 
 #[test]

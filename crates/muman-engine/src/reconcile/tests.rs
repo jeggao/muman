@@ -2563,7 +2563,7 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
         song("Intro", "aaaaaaaaaaa"),
         song("intro.en", "bbbbbbbbbbb"),
     ];
-    plan::separate(&mut planned, &naming, &beside);
+    plan::separate(&mut planned, &[], &naming, &beside);
     assert_eq!(planned[0].1.stem, PathBuf::from("Intro"));
     assert_eq!(
         planned[1].1.stem,
@@ -2574,7 +2574,7 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
         song("Intro", "aaaaaaaaaaa"),
         song("Outro.en", "bbbbbbbbbbb"),
     ];
-    plan::separate(&mut apart, &naming, &beside);
+    plan::separate(&mut apart, &[], &naming, &beside);
     assert_eq!(apart[1].1.stem, PathBuf::from("Outro.en"));
 }
 

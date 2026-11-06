@@ -107,20 +107,28 @@ fn level_of(
 }
 
 /// Level every song planned as `[loudness]` says: each its gains, its
-/// album's pooled over the album's songs, applied as the mode says and
-/// its tags derived from them. Reads what was measured, measuring
-/// nothing, so every view of the plans levels alike.
-pub fn settle(planned: &mut [(usize, Resolved)], state: &State, settings: &Settings) {
+/// album's pooled over the album's songs, `held` among them, applied as
+/// the mode says and its tags derived from them. Reads what was
+/// measured, measuring nothing, so every view of the plans levels alike.
+pub fn settle(
+    planned: &mut [(usize, Resolved)],
+    held: &[(usize, Resolved)],
+    state: &State,
+    settings: &Settings,
+) {
     let loudness = &settings.loudness;
     if !loudness.measured() {
         return;
     }
     let measures: Vec<Option<&Measure>> = planned
         .iter()
+        // A song held at its last plan, its file still in its album, is
+        // pooled with the album as that file was made; its gains stay.
+        .chain(held)
         .map(|(_, r)| measure_of(&r.plan, state))
         .collect();
     let mut albums: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
-    for (i, (_, r)) in planned.iter().enumerate() {
+    for (i, (_, r)) in planned.iter().chain(held).enumerate() {
         if let Some(key) = album_of(r) {
             albums.entry(key).or_default().push(i);
         }

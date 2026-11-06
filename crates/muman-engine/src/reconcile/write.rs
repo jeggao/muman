@@ -602,7 +602,13 @@ fn render_due<R: Runner, W: Write>(
                     wrote.outputs.insert(done.audio, vouched);
                 }
                 Err(e) => {
-                    wrote.failed.extend(song.sources.iter().cloned());
+                    // A picture or record other songs share keeps no file
+                    // of theirs.
+                    wrote.failed.extend(
+                        (song.sources.iter())
+                            .filter(|k| !crate::manifest::shareable(k))
+                            .cloned(),
+                    );
                     wrote.failed_at.push(path_of(r));
                     crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
                 }

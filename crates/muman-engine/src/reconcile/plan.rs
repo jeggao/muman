@@ -1,5 +1,11 @@
 //! Every song resolved to its plan, each with a path of its own, and how
 //! a song is named in messages.
+//!
+//! A song that fails to resolve, its file still in the library, is held
+//! at the plan that file was made from: no song takes its path, and its
+//! album's loudness is pooled with it as it was. What it failed with is
+//! its own sources, never a picture or a record it shares, so no other
+//! song's file is kept for it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -68,6 +74,7 @@ pub fn path_of(r: &Resolved) -> PathBuf {
 /// writes beside it by its plan.
 pub(super) fn separate(
     planned: &mut [(usize, Resolved)],
+    failed: &[(usize, Resolved)],
     naming: &Naming,
     beside: &dyn Fn(&Path, &resolve::Plan) -> Vec<PathBuf>,
 ) {
@@ -91,6 +98,11 @@ pub(super) fn separate(
         }
         free
     };
+    // A song that failed keeps the name its file has, so no song takes
+    // its path, and its file, while it is held.
+    for (_, r) in failed {
+        hold(r, &mut stems);
+    }
     for (_, r) in planned.iter_mut() {
         if hold(r, &mut stems) {
             continue;
@@ -199,7 +211,12 @@ pub(super) fn resolve_all<W: Write>(
     let mut failed = BTreeSet::new();
     for (n, e) in &resolution.unresolved {
         let song = &manifest.songs[*n];
-        failed.extend(song.sources.iter().cloned());
+        // A picture or record other songs share keeps no file of theirs.
+        failed.extend(
+            (song.sources.iter())
+                .filter(|k| !crate::manifest::shareable(k))
+                .cloned(),
+        );
         let name = name_of(song, None, &state.facts);
         crate::ui::error(out, &format!("Failed: {name}: {e:#}"))?;
     }
@@ -218,6 +235,33 @@ pub(super) fn resolve_all<W: Write>(
         )?;
     }
     Ok((resolution.planned, failed))
+}
+
+/// Each song of `unresolved` with a file the state records as made from
+/// a plan: held at that plan while it fails, as its file stays in the
+/// library, so the songs beside it take neither its path nor its place
+/// in its album's loudness.
+fn held(
+    manifest: &Manifest,
+    state: &State,
+    unresolved: &[(usize, anyhow::Error)],
+) -> Vec<(usize, Resolved)> {
+    let files = super::files_of(unresolved.iter().map(|(n, _)| *n), manifest, &state.outputs);
+    files
+        .into_iter()
+        .filter_map(|(n, path)| {
+            let plan = state.outputs.get(&path)?.plan.clone()?;
+            let stem = path.with_extension("");
+            Some((
+                n,
+                Resolved {
+                    plan,
+                    stem,
+                    why: resolve::Why::default(),
+                },
+            ))
+        })
+        .collect()
 }
 
 /// What resolving every song found, for a caller to say or count.
@@ -374,10 +418,14 @@ pub fn resolve_songs(
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
     }
-    crate::levels::settle(&mut resolution.planned, state, settings);
-    separate(&mut resolution.planned, &resolver.naming, &|path, plan| {
-        crate::artifact::parts(plan).files(path)
-    });
+    let held = held(manifest, state, &resolution.unresolved);
+    crate::levels::settle(&mut resolution.planned, &held, state, settings);
+    separate(
+        &mut resolution.planned,
+        &held,
+        &resolver.naming,
+        &|path, plan| crate::artifact::parts(plan).files(path),
+    );
     resolution.unplaced =
         crate::folder::assign(&mut resolution.planned, &settings.cover, &state.facts);
     Ok(resolution)
