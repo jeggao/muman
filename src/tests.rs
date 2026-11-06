@@ -496,7 +496,7 @@ fn lyrics_changed_by_hand_are_neither_written_over_nor_removed() {
     std::fs::write(&list, off).unwrap();
     let (_, text) = s.run(&flacs(), &["sync"]);
     assert!(
-        text.contains("Artist/Record/02 Song.lrc is not muman's"),
+        text.contains("Artist/Record/02 Song.lrc changed since muman wrote it"),
         "{text}"
     );
     assert_eq!(std::fs::read_to_string(&lrc).unwrap(), mended);
@@ -3398,6 +3398,24 @@ fn what_undo_puts_back_is_counted_and_promised_only_while_runs_are_kept() {
         assert!(!text.contains("`muman undo` takes"), "{args:?}: {text}");
         assert!(text.contains("runs = 0"), "{args:?}: {text}");
     }
+}
+
+#[test]
+fn lyrics_muman_wrote_and_the_user_changed_are_said_to_be_so() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
+    assert!(lrc.exists(), "{text}");
+    std::fs::write(&lrc, "[00:01.00]Paper comets, by hand\n").unwrap();
+    let (_, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "lyrics_offset=1s"],
+    );
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
 }
 
 #[test]

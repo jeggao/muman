@@ -107,11 +107,16 @@ pub enum Doing {
     /// Left alone: its file, changed since muman wrote it.
     Guard { file: PathBuf },
     /// Left alone: a file not muman's, `by`, is at its path or its
-    /// lyrics'.
-    Unowned { by: PathBuf },
+    /// lyrics': one muman wrote and the user `edited` since, or another.
+    Unowned { by: PathBuf, edited: bool },
     /// Left where it is: a file not muman's, `by`, is at the song's path
-    /// or its lyrics'.
-    Blocked { file: PathBuf, by: PathBuf },
+    /// or its lyrics': one muman wrote and the user `edited` since, or
+    /// another.
+    Blocked {
+        file: PathBuf,
+        by: PathBuf,
+        edited: bool,
+    },
     /// Left as built: a source it was built from was fetched again and
     /// holds otherwise, not yet accepted.
     Held { file: PathBuf },
@@ -290,13 +295,15 @@ pub(super) fn decide(
                 return Doing::Retag;
             }
             if let Some(by) = blocking(library, old, &path, &r.plan).into_iter().next() {
+                let edited = super::owned::changed_since_muman(old, &by);
                 // Its own file stays where it is rather than go for nothing.
                 return match file.filter(|_| present) {
                     Some(file) => Doing::Blocked {
                         file: file.clone(),
                         by,
+                        edited,
                     },
-                    None => Doing::Unowned { by },
+                    None => Doing::Unowned { by, edited },
                 };
             }
             Doing::Write

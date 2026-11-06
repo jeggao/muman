@@ -20,6 +20,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A file muman wrote and the user changed is said to be so.** A
+  library `.lrc` edited by hand was called "not muman's" by a sync,
+  while `check` called it changed since muman wrote it; both now say
+  the latter.
 - **A disc or track total with no number is read back as written.**
   WavPack and MP3 songs with a total but no disc or track number
   warned "tags not held as written" at each write: the total was

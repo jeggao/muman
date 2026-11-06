@@ -474,13 +474,25 @@ fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
                     crate::relpath::show(file)
                 ),
             )?,
-            Doing::Unowned { by } => unowned.push(by.clone()),
-            Doing::Blocked { file, by } => crate::ui::warning(
+            Doing::Unowned { by, edited: true } => crate::ui::warning(
                 out,
                 &format!(
-                    "Left at {}: {} is not muman's (`sync --force` writes over it)",
-                    crate::relpath::show(file),
+                    "Left alone, {} changed since muman wrote it (`sync --force` writes it again)",
                     crate::relpath::show(by)
+                ),
+            )?,
+            Doing::Unowned { by, .. } => unowned.push(by.clone()),
+            Doing::Blocked { file, by, edited } => crate::ui::warning(
+                out,
+                &format!(
+                    "Left at {}: {} {} (`sync --force` writes over it)",
+                    crate::relpath::show(file),
+                    crate::relpath::show(by),
+                    if *edited {
+                        "changed since muman wrote it"
+                    } else {
+                        "is not muman's"
+                    }
                 ),
             )?,
             _ => {}
