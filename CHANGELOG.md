@@ -61,6 +61,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **A sync stopped as it kept files is undone whole.** A sync going on
+  with one stopped as it kept the files it writes over could empty a
+  song's file in the library, linking a kept copy onto itself, and an
+  undo then put back, as the user's, a file beside a song that the
+  stopped run had made. Both found by the random runs of the tests.
 - **`undo` finds a purged file of a decomposed name put back.** A file
   of your own named decomposed, as a Mac names one, was recorded by its
   composed key when `remove --purge` trashed it, and `undo` looked for
