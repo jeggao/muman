@@ -15,7 +15,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/11";
+pub const METHOD: &str = "tags/12";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1803,15 +1803,14 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// The file at `path` read by `lofty` for its tags alone. Its audio's
 /// properties are not read: `lofty` refuses some a file may hold, as an
 /// Opus stream of mapping family 255, and a file's tags never need them.
+/// Its format is told by its bytes, as ffprobe tells it, its name only
+/// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
+/// and `song.opus.part` is a file being written.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    let mut probe = lofty::probe::Probe::open(path)?;
-    // A file being written, as `song.opus.part`, is known by its bytes.
-    if probe.file_type().is_none() {
-        probe = probe.guess_file_type()?;
-    }
-    probe
+    lofty::probe::Probe::open(path)?
+        .guess_file_type()?
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
 }
@@ -2608,11 +2607,36 @@ mod tests {
         assert!(!o.contains_key(&Field::AlbumPeak));
     }
 
+    #[test]
+    fn a_file_named_as_another_format_is_read_as_it_is() {
+        use lofty::config::WriteOptions;
+        use lofty::tag::{Accessor, Tag, TagExt, TagType};
+
+        use crate::testing::{SILENCE_FLAC, SILENCE_VORBIS};
+
+        let dir = tempfile::tempdir().unwrap();
+        for (fixture, name) in [(SILENCE_FLAC, "song.flac"), (SILENCE_VORBIS, "song.ogg")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, fixture).unwrap();
+            let mut tag = Tag::new(TagType::VorbisComments);
+            tag.set_title("Paper Comets".into());
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            let named = dir.path().join(format!("{name}.mp3"));
+            std::fs::rename(&path, &named).unwrap();
+            let read = read_file(&named).unwrap();
+            assert_eq!(
+                read.get("title"),
+                Some(&vec!["Paper Comets".to_string()]),
+                "{name}"
+            );
+        }
+    }
+
     /// What every format's tags and lyrics offer once `lofty` writes them,
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/11",
+        "tags/12",
         "815aefc335b1e111fb94cdc278d512f9ed1488cd4d0c3227c80e2b876e8f3f5d",
     );
 
