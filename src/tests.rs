@@ -3533,6 +3533,27 @@ fn a_source_that_reads_again_is_no_longer_reported_failed() {
 }
 
 #[test]
+fn check_reports_a_song_no_sync_can_build() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &songs,
+        listed.replace(&default, "template = \"{{ nosuch }}{{ title }}\""),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok, "{report}");
+    assert!(report.contains("No sync can build it"), "{report}");
+    assert!(!report.contains("No problems found"), "{report}");
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

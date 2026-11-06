@@ -6,6 +6,11 @@
 //! `--upstream` asks each site whether it still serves each fetched
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
+//!
+//! Each song is resolved as a sync resolves it, from what was measured,
+//! so a song no sync can build is reported though no run recorded it; a
+//! failure recorded is reported while it still applies, and while a run
+//! holds the home, a file it may be moving or writing is not.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -246,6 +251,30 @@ pub fn check<R: Runner, W: Write, D: Write>(
                 failure.error
             ),
         )?;
+    }
+    // Each song as a sync would resolve it from what was measured, so a
+    // song no sync can build, as by a template naming no field, is said.
+    // One whose source is missing, which `sync` fetches again, waits.
+    let (on_disk, waiting): (BTreeSet<SourceKey>, BTreeSet<SourceKey>) =
+        listed.iter().cloned().partition(|k| store.has(k));
+    let resolution = crate::reconcile::resolve_songs(
+        &manifest,
+        &manifest.settings,
+        &state,
+        library,
+        Some(&on_disk),
+        &waiting,
+    );
+    match resolution {
+        Ok(r) => {
+            for (n, e) in &r.unresolved {
+                let song = manifest.songs[*n]
+                    .id()
+                    .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
+                problem(report, format!("No sync can build it: {song}: {e:#}"))?;
+            }
+        }
+        Err(e) => problem(report, format!("No sync can build the songs: {e:#}"))?,
     }
     let media: Vec<_> = listed
         .iter()
