@@ -44,7 +44,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 2;
+pub const WRITING: u32 = 3;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -801,8 +801,9 @@ enum Line<'a> {
     Other(&'a str),
 }
 
-/// LRC read line by line, its `[offset:]` taken out and kept apart, so
-/// moving it moves every time it holds, a word's as a line's.
+/// LRC read line by line, its `[offset:]` lines taken out and the first
+/// kept apart, as [`headers`] reads it, so moving it moves every time it
+/// holds, a word's as a line's.
 struct Lrc<'a> {
     lines: Vec<Line<'a>>,
     /// `[offset:]`: how much earlier every time is meant, in ms.
@@ -811,7 +812,7 @@ struct Lrc<'a> {
 
 impl<'a> Lrc<'a> {
     fn parse(text: &'a str) -> Self {
-        let mut offset_ms = 0;
+        let mut offset_ms = None;
         let mut lines = Vec::new();
         for line in text.lines() {
             let Opened {
@@ -825,12 +826,15 @@ impl<'a> Lrc<'a> {
             if !times.is_empty() {
                 lines.push(Line::Timed { times, rest });
             } else if let Some(offset) = id_tag(line, "offset") {
-                offset_ms = offset.parse().unwrap_or(0);
+                offset_ms.get_or_insert_with(|| offset.parse().unwrap_or(0));
             } else {
                 lines.push(Line::Other(line));
             }
         }
-        Self { lines, offset_ms }
+        Self {
+            lines,
+            offset_ms: offset_ms.unwrap_or(0),
+        }
     }
 }
 
@@ -1401,6 +1405,13 @@ mod tests {
             shift_lrc(lrc, 920, 0),
             "[00:00.93](intro)\n[00:04.53]line\n[01:01.38][01:09.08]twice\n[ar:x]\n"
         );
+    }
+
+    #[test]
+    fn the_first_offset_moves_the_lines_as_the_headers_read_it() {
+        let lrc = "[offset:+500]\n[offset:-900]\n[00:02.00]on Kessler Row\n";
+        assert_eq!(headers(lrc).offset_ms, 500);
+        assert_eq!(shift_lrc(lrc, 0, 0), "[00:01.50]on Kessler Row\n");
     }
 
     #[test]

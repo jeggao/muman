@@ -56,7 +56,7 @@ use crate::lyrics::{self, Kind};
 
 /// What the rules write, raised whenever a rule writes otherwise than
 /// before, so every song with lyrics is written again.
-pub const EDITION: u32 = 2;
+pub const EDITION: u32 = 3;
 
 /// One rule: what it does to the lyrics, knowing the song.
 type Edit = fn(&mut Lyrics, &Context<'_>);
@@ -120,13 +120,16 @@ pub struct Cleaned {
     pub text: String,
     /// The rules that changed the lyrics, in the order run.
     pub rules: Vec<&'static str>,
+    /// The lines left out for opening with a time that reads as none,
+    /// whatever rules are off.
+    pub damaged: usize,
 }
 
 /// `text` cleaned by every rule but those named in `off`. CRLF and a
 /// missing last newline come out as LF, every line ended.
 #[must_use]
 pub fn clean(text: &str, ctx: &Context<'_>, off: &[String]) -> Cleaned {
-    let mut lyrics = Lyrics::parse(text);
+    let (mut lyrics, damaged) = Lyrics::parse(text);
     let mut rules = Vec::new();
     for (name, edit) in RULES {
         if off.iter().any(|o| o == name) {
@@ -141,6 +144,7 @@ pub fn clean(text: &str, ctx: &Context<'_>, off: &[String]) -> Cleaned {
     Cleaned {
         text: lyrics.write(),
         rules,
+        damaged,
     }
 }
 
@@ -204,13 +208,16 @@ impl Line {
 struct Lyrics(Vec<Line>);
 
 impl Lyrics {
-    fn parse(text: &str) -> Self {
+    /// The lines of `text`, and how many were left out as damaged.
+    fn parse(text: &str) -> (Self, usize) {
+        let mut damaged = 0;
         let lines = text
             .lines()
             .filter_map(|line| {
                 let opened = lyrics::opened(line);
                 let rest = opened.rest;
                 Some(if opened.damaged {
+                    damaged += 1;
                     return None;
                 } else if opened.times.is_empty() {
                     Line::Other(line.to_string())
@@ -223,7 +230,7 @@ impl Lyrics {
                 })
             })
             .collect();
-        Self(lines)
+        (Self(lines), damaged)
     }
 
     fn write(&self) -> String {
@@ -740,12 +747,14 @@ fn credits(l: &mut Lyrics, ctx: &Context<'_>) {
 }
 
 /// No ID tag in untimed lyrics, where a player shows it as a line; in
-/// timed ones, none naming who timed them or with what.
+/// timed ones, none naming who timed them or with what, and of each
+/// other tag only the first, the one muman and most players read.
 fn headers(l: &mut Lyrics, _: &Context<'_>) {
     let timed = l.timed();
+    let mut seen = BTreeSet::new();
     l.0.retain(|line| match line {
         Line::Other(text) => match id_key(text) {
-            Some(key) => timed && !MAKERS.contains(&key.as_str()),
+            Some(key) => timed && !MAKERS.contains(&key.as_str()) && seen.insert(key),
             None => true,
         },
         Line::Timed { .. } => true,

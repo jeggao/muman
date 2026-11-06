@@ -54,7 +54,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A line whose time reads as none is no lyric.** A line opened by a
   time that cannot be read, as `[00:-3.00]`, `[01:00:00.00]` or
   `[00:1e1]`, was written into the library's `.lrc` as sung text,
-  brackets and all; it is now left out.
+  brackets and all; it is now left out, and the sync that writes the
+  song says how many lines of its lyrics it left out.
+- **An `.lrc` tag given twice is read once.** Lyrics with two `[ar:]`
+  or two `[offset:]` lines kept both in the library's `.lrc`; the
+  offset moved the lines by the last and was read as the first. The
+  first of each is kept and moves the lines, and every song with
+  lyrics is written again.
 - **`add album.cue -y` says when no track fits a song.** It set nothing
   and said nothing, and exited 0; it now leaves the sheet out and says
   so, as it does without `-y`.

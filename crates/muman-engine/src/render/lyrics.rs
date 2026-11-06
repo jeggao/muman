@@ -48,6 +48,7 @@ pub(super) fn text<R: Runner>(
     runner: &R,
     job: &Job<'_>,
     lyrics: &LyricText<'_>,
+    problems: &mut Vec<String>,
 ) -> Result<Option<String>> {
     let source = job
         .sources
@@ -56,22 +57,29 @@ pub(super) fn text<R: Runner>(
     fs::create_dir_all(job.scratch)?;
     let raw = job.scratch.join("lyrics.lrc");
     let (mut inputs, mut outputs) = (Inputs::default(), Vec::new());
-    let mut text = planned(lyrics, source, &raw, &mut inputs, &mut outputs)?;
+    let mut text = planned(lyrics, source, &raw, &mut inputs, &mut outputs, problems)?;
     if text.is_none() {
         let paths: Vec<&Path> = inputs.0.iter().map(PathBuf::as_path).collect();
         for result in ffmpeg::run_outputs(runner, &paths, &outputs) {
             result?;
         }
         let read = fs::read(&raw).with_context(|| format!("reading {}", raw.display()))?;
-        text = Some(cleaned(&crate::lyrics::decode(&read), lyrics));
+        text = Some(cleaned(&crate::lyrics::decode(&read), lyrics, problems));
     }
     Ok(text.filter(|t| t.lines().any(|l| !l.trim().is_empty())))
 }
 
-/// `text` cleaned as `lyrics` say, then moved to the audio.
-pub(super) fn cleaned(text: &str, lyrics: &LyricText<'_>) -> String {
-    let text = crate::clean::lyrics::clean(text, &lyrics.context(), lyrics.clean_off).text;
-    crate::lyrics::shift_lrc(&text, lyrics.shift_ms, lyrics.stretch_ppm)
+/// `text` cleaned as `lyrics` say, then moved to the audio; the damaged
+/// lines left out are named in `problems`.
+pub(super) fn cleaned(text: &str, lyrics: &LyricText<'_>, problems: &mut Vec<String>) -> String {
+    let cleaned = crate::clean::lyrics::clean(text, &lyrics.context(), lyrics.clean_off);
+    if cleaned.damaged > 0 {
+        problems.push(format!(
+            "lyrics of {}: {} line(s) left out, opening with a time that reads as none",
+            lyrics.key, cleaned.damaged
+        ));
+    }
+    crate::lyrics::shift_lrc(&cleaned.text, lyrics.shift_ms, lyrics.stretch_ppm)
 }
 
 /// Plan the lyrics: a file's text now, or a subtitle stream the run
@@ -82,6 +90,7 @@ pub(super) fn planned(
     raw: &Path,
     inputs: &mut Inputs,
     outputs: &mut Vec<Output>,
+    problems: &mut Vec<String>,
 ) -> Result<Option<String>> {
     if let LyricsAt::Stream { index } = lyrics.at {
         let n = inputs.index(&source.path);
@@ -101,7 +110,7 @@ pub(super) fn planned(
             &fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
         )
     };
-    Ok(Some(cleaned(&text, lyrics)))
+    Ok(Some(cleaned(&text, lyrics, problems)))
 }
 
 /// The file lyrics at `at` of `source` are read from; none for a stream

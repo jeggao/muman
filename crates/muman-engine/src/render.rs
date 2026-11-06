@@ -344,8 +344,14 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     outputs.append(&mut cover_outputs);
     let lyrics_raw = job.scratch.join("lyrics.lrc");
     let lyrics_text = match made.lyric_text() {
-        Some(l) => match lyrics::planned(l, locate(l.key)?, &lyrics_raw, &mut inputs, &mut outputs)
-        {
+        Some(l) => match lyrics::planned(
+            l,
+            locate(l.key)?,
+            &lyrics_raw,
+            &mut inputs,
+            &mut outputs,
+            &mut problems,
+        ) {
             Ok(text) => Some(text),
             Err(e) => {
                 problems.push(format!("no lyrics: {e:#}"));
@@ -373,7 +379,7 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
                 None => fs::read(&lyrics_raw)
                     .map_err(|e| problems.push(format!("no lyrics: {e}")))
                     .ok()
-                    .map(|b| lyrics::cleaned(&crate::lyrics::decode(&b), l)),
+                    .map(|b| lyrics::cleaned(&crate::lyrics::decode(&b), l, &mut problems)),
             },
             _ => None,
         }
@@ -589,7 +595,7 @@ pub(crate) fn retag<R: Runner>(
         .lyric_text()
         .filter(|_| lyrics_anew && made.lyrics.is_some())
         .map(|l| {
-            lyrics::text(runner, job, l)
+            lyrics::text(runner, job, l, &mut problems)
                 .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
                 .ok()
                 .flatten()
@@ -832,7 +838,7 @@ pub fn beside<R: Runner>(runner: &R, job: &Job<'_>, keep: &[PathBuf]) -> Result<
     let due = |rels: &[PathBuf]| rels.iter().any(|r| !keep.contains(r));
     let mut held = match made.lyric_text() {
         Some(l) if due(&lyrics_rels) => {
-            let text = lyrics::text(runner, job, l)
+            let text = lyrics::text(runner, job, l, &mut problems)
                 .map_err(|e| problems.push(format!("no lyrics: {e:#}")))
                 .ok()
                 .flatten();

@@ -3120,6 +3120,25 @@ fn lyrics_named_decomposed_come_with_a_song_named_composed() {
 }
 
 #[test]
+fn lyrics_lines_left_out_as_damaged_are_said_when_the_song_is_written() {
+    let s = Setup::new();
+    let song = s.file("rips/a.flac");
+    s.written(
+        "rips/a.lrc",
+        "[00:01.00]Paper comets\n[00:-3.00]Lantern\n[00:02.00]Kessler Row\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics of manual:a.flac: 1 line(s) left out"),
+        "{text}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("left out"), "said once, as written: {text}");
+}
+
+#[test]
 fn a_folder_named_by_where_it_ends_is_copied_under_its_own_name() {
     let s = Setup::new();
     s.file("rips/One/Disc/a.flac");

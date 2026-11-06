@@ -172,6 +172,14 @@ fn headers_name_only_the_song_in_timed_lyrics_and_nothing_in_untimed() {
 }
 
 #[test]
+fn headers_keep_the_first_of_each_tag() {
+    assert_eq!(
+        run("[ar:Marlo Venn]\n[offset:+500]\n[ar:Ada Quill]\n[offset:-900]\n[00:01.00]The lamps\n"),
+        "[ar:Marlo Venn]\n[offset:+500]\n[00:01.00]The lamps\n"
+    );
+}
+
+#[test]
 fn lines_are_put_in_order_and_frames_of_one_line_are_one() {
     assert_eq!(
         run("[ar:x]\n[00:02.00]second\n[00:01.00]first\n"),
@@ -257,21 +265,22 @@ fn every_rule_reading_the_song_is_named() {
 }
 
 /// Lyrics every rule changes something in.
-const SAMPLES: [&str; 6] = [
+const SAMPLES: [&str; 7] = [
     "\n[00:01.00] <b>Paper comets</b>\\h \n[00:00.50]\"Paper Comets\"\n[00:00.60]Art: @someone\n",
     "[length:03:00]\n[Chorus]\nTurn your h\u{435}ad\n\n\nLyrics posted by Ada Quill\n",
     "[by:someone]\n[00:01.00]Lantern\n[00:01.03]Lantern\n[00:03.00](Spoken) Quay &amp; lamps\n[00:02.00]Pier\n",
     "[00:08.00]I don't\n[00:09.00]I don't know\n[00:09.50]I don't know what it is\n[00:11.00]to feel\n",
     "[00:01.00]Marlo Venn feat. Ada Quill\n[00:02.00]Voice  Rin Hollow\n[00:03.00]The lamps\n",
     "[00:01.00]灯台の夢\u{3000}雨\u{200b}\n[00:02.00]*GuitarSolo*\n[00:03.00]詞：ほしのきり\n",
+    "[ar:Lantern Hollow]\n[ar:Marlo Venn]\n[00:01.00]Paper comets\n",
 ];
 
 /// What the rules write of [`SAMPLES`], with [`EDITION`]. A change to any
 /// rule's output changes it: raise [`EDITION`], so every song with lyrics
 /// is written again, then record the new digest here.
 const WRITTEN: (u32, &str) = (
-    2,
-    "23dab8721db48cfcfc3b467ab1a0032192859d90abaeeb746e96813a633b9d74",
+    3,
+    "62c2cdc65209375b1758520fb623ae38b7db9caa19e0fa340c0d066c47446830",
 );
 
 #[test]

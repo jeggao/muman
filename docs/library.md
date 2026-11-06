@@ -152,7 +152,7 @@ Each rule is a switch under `[tags.clean.<tier>]`, or
 | Tier | Its tag rules | Its lyric rules |
 |---|---|---|
 | `tidy` | Fix spacing and punctuation, writing quotes and hyphens as [`[tags]`](configuration.md#settings-in-the-song-list) says; never remove a word | Drop markup, `\h`, invisible characters, stray spaces and blank lines; give a look-alike letter, as a Cyrillic `е` in `hеad`, its word's script |
-| `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, credits, the title and artist restated around the lyrics, and ID tags in untimed lyrics |
+| `packaging` | Remove words naming the release or video: `(Official Video)`, `[Remastered]`, `VEVO` | Drop cues, credits, the title and artist restated around the lyrics, ID tags in untimed lyrics, and a tag given twice |
 | `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | Put lines in time order; keep once a subtitle written again for each frame |
 | `guesswork` | Read a video title by convention, as `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | Keep, as one line, a subtitle line typed out over three lines or more |
 
