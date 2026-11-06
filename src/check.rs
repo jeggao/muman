@@ -276,6 +276,21 @@ pub fn check<R: Runner, W: Write, D: Write>(
         }
         Err(e) => problem(report, format!("No sync can build the songs: {e:#}"))?,
     }
+    for song in &manifest.songs {
+        let Some((id, f)) = song
+            .id()
+            .and_then(|id| Some((id, state.song_failures.get(id)?)))
+        else {
+            continue;
+        };
+        problem(
+            report,
+            format!(
+                "The last {} sync(s) could not write it: {id}: {}",
+                f.count, f.error
+            ),
+        )?;
+    }
     let media: Vec<_> = listed
         .iter()
         .filter_map(|k| store.locate(k))

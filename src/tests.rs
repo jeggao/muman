@@ -3722,6 +3722,67 @@ fn a_source_that_reads_as_none_is_written_from_by_no_sync() {
     assert_eq!(library_of(&s), before, "held as it was: {text}");
 }
 
+/// The fake, but every ffmpeg run fails, as on a disk gone full.
+struct NoFfmpeg(Fake);
+
+impl Runner for NoFfmpeg {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffmpeg"))
+        {
+            anyhow::bail!("No space left on device");
+        }
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffmpeg"))
+        {
+            anyhow::bail!("No space left on device");
+        }
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn check_names_a_song_the_last_sync_could_not_write_until_one_writes_it() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &NoFfmpeg(flacs()),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(!ok && text.contains("Failed"), "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains("The last 1 sync(s) could not write it: manual:a.flac"),
+        "{report}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok && !report.contains("could not write"), "{report}");
+}
+
 /// The fake, but ffprobe is stopped by a signal once.
 struct StoppedOnce(Fake, std::sync::atomic::AtomicBool);
 

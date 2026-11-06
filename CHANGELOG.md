@@ -61,6 +61,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **`check` names a song the last sync could not write.** A song whose
+  file failed to be written, as by a disk gone full, was said only by
+  that sync; `check` then found no problem. The state records it until
+  a sync writes the song, and `check` names it with why.
 - **A song that fails moves no folder cover.** While a song failed,
   its folder was planned without it: the cover it held passed to
   another song, which listed the same file, and a folder whose
