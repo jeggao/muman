@@ -165,6 +165,38 @@ fn lyrics_named_as_a_song_s_file_go_to_it_and_into_the_library() {
 }
 
 #[test]
+fn undo_takes_out_the_lyrics_add_copied() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    let lrc = s.written("elsewhere/Lantern Weather.lrc", "[00:01.00]first light\n");
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok, "{text}");
+    assert_eq!(s.added(), ["Lantern Weather.lrc"]);
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(s.added().is_empty(), "{:?}: {text}", s.added());
+}
+
+#[test]
+fn purge_deletes_the_lyrics_add_copied_once_no_song_lists_them() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather"]);
+    let lrc = s.written("elsewhere/Lantern Weather.lrc", "[00:01.00]first light\n");
+    s.run(&fake, &["add", &lrc]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let key = ", \"manual:added/Lantern Weather.lrc\"";
+    assert!(listed.contains(key), "{listed}");
+    std::fs::write(&songs, listed.replace(key, "")).unwrap();
+    s.run(&fake, &["sync"]);
+    let (ok, text) = s.run(&fake, &["purge", "-y"]);
+    assert!(ok, "{text}");
+    assert!(s.added().is_empty(), "{:?}: {text}", s.added());
+}
+
+#[test]
 fn lyrics_tags_name_their_song_and_a_length_far_off_keeps_them_out() {
     let s = Setup::new();
     let fake = library();
@@ -429,6 +461,31 @@ fn a_cue_sheet_tags_each_song_its_tracks_are() {
             .iter()
             .any(|(k, v)| k == "genre" && !v.is_empty())
     );
+}
+
+#[test]
+fn a_cue_sheet_retags_the_songs_its_file_lines_name() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    let cue = s.written(
+        "dl/retag.cue",
+        "PERFORMER \"Lumo Fenn\"\nTITLE \"Harbor Lights\"\n\
+         FILE \"Lantern Weather.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Paper Comets\"\n    INDEX 01 00:00:00\n\
+         FILE \"Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Kessler Row\"\n    INDEX 01 00:00:00\n",
+    );
+    let (ok, text) = s.run(&fake, &["add", "-y", &cue]);
+    assert!(ok, "{text}");
+    for (song, title) in [
+        ("Lantern Weather", "Paper Comets"),
+        ("Copper Moth", "Kessler Row"),
+    ] {
+        let tags = s.song_with(song).tags;
+        assert!(
+            tags.iter().any(|(k, v)| k == "title" && v == &[title]),
+            "{song}: {tags:?}: {text}"
+        );
+    }
 }
 
 #[test]

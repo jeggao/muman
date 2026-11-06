@@ -127,6 +127,49 @@ fn a_mistake_reopens_with_what_is_wrong_and_a_fix_applies() {
 }
 
 #[test]
+fn a_source_listed_twice_is_said_by_the_file_s_own_numbers() {
+    let h = home(
+        "[[song]]\nsources = [\"manual:a.flac\"]\n\n[[song]]\nsources = [\"manual:b.flac\"]\n\n\
+         [[song]]\nsources = [\"manual:c.flac\"]\n",
+    );
+    let mut prompter = crate::ui::MockPrompter::new();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let mut editor = |path: &Path| -> Result<()> {
+        let text = std::fs::read_to_string(path)?;
+        let first = seen.borrow().is_empty();
+        seen.borrow_mut().push(text.clone());
+        if first {
+            let joined = text.replace(
+                "[\"manual:c.flac\"]",
+                "[\"manual:c.flac\", \"manual:a.flac\"]",
+            );
+            std::fs::write(path, joined)?;
+            let later = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+            filetime::set_file_mtime(path, filetime::FileTime::from_system_time(later))?;
+        }
+        Ok(())
+    };
+    let changed = edit(
+        &h.dirs,
+        &["manual:c.flac".to_string()],
+        false,
+        Some(&mut prompter),
+        &mut editor,
+        &mut || Ok(()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!changed);
+    let seen = seen.into_inner();
+    let said = &seen[1];
+    assert!(
+        said.contains("song 1: manual:a.flac is listed by manual:a.flac, a song not opened"),
+        "{said}"
+    );
+    assert!(!said.contains("song 3"), "{said}");
+}
+
+#[test]
 fn a_comment_inside_a_song_survives_and_changes_nothing() {
     let commented = "[[song]]\n# ripped from the second pressing\nsources = [\"manual:a.flac\", \"manual:b.flac\"]\n\n[[song]]\nsources = [\"manual:c.flac\"]\n";
     let h = home(commented);

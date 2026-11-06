@@ -2676,7 +2676,8 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
     assert!(s.songs().is_empty(), "{text}");
     assert_eq!(
         s.listed(&["list", "--removed", "--keys", "album:record"]),
-        "manual:b.flac\nmanual:a.flac\n"
+        "manual:a.flac\nmanual:b.flac\n",
+        "a, restored where it stood, is first again"
     );
     let (ok, text) = s.run(&flacs(), &["restore", "-y", "--all", "album:record"]);
     assert!(ok, "{text}");
@@ -3737,6 +3738,119 @@ fn check_decode_measures_each_source_afresh_and_names_its_damage() {
         report.contains("Damaged audio: manual:a.flac lacks"),
         "{report}"
     );
+}
+
+#[test]
+fn restore_puts_removed_songs_back_where_they_were() {
+    let s = Setup::new();
+    for n in 1..=4 {
+        s.file(&format!("home/sources/manual/t{n}.flac"));
+    }
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (order, before) = (s.songs(), library_of(&s));
+    let go = |args: &[&str]| {
+        let (ok, text) = s.run(&flacs(), args);
+        assert!(ok, "{args:?}: {text}");
+    };
+    go(&["remove", "-y", "manual:t1.flac"]);
+    go(&["restore", "-y", "manual:t1.flac"]);
+    assert_eq!(s.songs(), order, "one alone");
+    assert_eq!(library_of(&s), before, "one alone");
+    for (removed, restored) in [(["t2", "t3"], ["t3", "t2"]), (["t3", "t2"], ["t3", "t2"])] {
+        for t in removed {
+            go(&["remove", "-y", &format!("manual:{t}.flac")]);
+        }
+        for t in restored {
+            go(&["restore", "-y", &format!("manual:{t}.flac")]);
+        }
+        assert_eq!(s.songs(), order, "{removed:?} then {restored:?}");
+        assert_eq!(library_of(&s), before, "{removed:?} then {restored:?}");
+    }
+}
+
+#[test]
+fn one_undo_takes_back_a_run_killed_partway_and_the_run_that_finished_it() {
+    let prepare = |s: &Setup| {
+        s.file("home/sources/manual/a.flac");
+        s.file("home/sources/manual/b.flac");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+    };
+    let edit = |s: &Setup| {
+        let songs = s.dir.path().join("home/songs.toml");
+        let listed = std::fs::read_to_string(&songs).unwrap();
+        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+        std::fs::write(
+            &songs,
+            listed.replace(&default, "template = \"{{ title }} {{ id }}\""),
+        )
+        .unwrap();
+        listed
+    };
+    let whole = Setup::new();
+    prepare(&whole);
+    edit(&whole);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["sync"]);
+    let steps = counted.seen();
+    drop(counted);
+    assert!(steps > 1, "{steps}");
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let (library, before) = (library_of(&s), edit(&s));
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["sync"]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "step {at}: {text}");
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "step {at}: {text}");
+        let songs = s.dir.path().join("home/songs.toml");
+        assert_eq!(
+            std::fs::read_to_string(&songs).unwrap(),
+            before,
+            "step {at}: {text}"
+        );
+        assert_eq!(library_of(&s), library, "step {at}: {text}");
+    }
+}
+
+#[test]
+fn undo_after_undoing_a_sync_that_followed_a_source_goes_on() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let first = std::fs::read_to_string(&songs).unwrap();
+    s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    std::fs::write(&a, "retagged").unwrap();
+    let retagged = || {
+        Fake::default().probe(
+            ".flac",
+            &FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Song Two\""),
+        )
+    };
+    let (ok, text) = s.run(&retagged(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&retagged(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&retagged(), &["undo", "-y"]);
+    assert!(ok, "the set is undone too: {text}");
+    let back = std::fs::read_to_string(&songs).unwrap();
+    assert!(!back.contains("Folk"), "{back}");
+    assert_ne!(back, first, "the source's change is held: {back}");
 }
 
 #[test]

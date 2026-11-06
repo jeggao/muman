@@ -248,22 +248,35 @@ fn a_file_copied_in_twice_is_one_file_and_a_name_taken_gets_another() {
         sheet: None,
     };
     let mut none = BTreeSet::new();
-    let key = copy_in(&manual, &item(&from), &mut none).unwrap();
+    let (key, made) = copy_in(&manual, &item(&from), &mut none).unwrap();
     assert_eq!(key, SourceKey::Manual("added/words.lrc".into()));
+    assert_eq!(made, Some(manual.join("added").join("words.lrc")));
     assert_eq!(
         copy_in(&manual, &item(&from), &mut BTreeSet::new()).unwrap(),
-        key
+        (key.clone(), None),
+        "a copy there already is made again by no one"
     );
     let mut taken = BTreeSet::from([key.clone()]);
     assert_eq!(
-        copy_in(&manual, &item(&from), &mut taken).unwrap(),
+        copy_in(&manual, &item(&from), &mut taken).unwrap().0,
         SourceKey::Manual("added/words (2).lrc".into()),
         "another song's own copy is not given to a second song"
     );
     std::fs::write(&from, "second light\n").unwrap();
     assert_eq!(
-        copy_in(&manual, &item(&from), &mut BTreeSet::new()).unwrap(),
+        copy_in(&manual, &item(&from), &mut BTreeSet::new())
+            .unwrap()
+            .0,
         SourceKey::Manual("added/words (3).lrc".into())
+    );
+    let decomposed = dir.path().join("cafe\u{301}.txt");
+    std::fs::write(&decomposed, "third light\n").unwrap();
+    let (key, made) = copy_in(&manual, &item(&decomposed), &mut BTreeSet::new()).unwrap();
+    assert_eq!(key, SourceKey::Manual("added/caf\u{e9}.lrc".into()));
+    assert_eq!(
+        made,
+        Some(manual.join("added").join("caf\u{e9}.lrc")),
+        "named as its key is"
     );
     assert_eq!(song_list_name("ALBUMARTIST"), "album_artist");
     assert_eq!(song_list_name("MOOD"), "mood");

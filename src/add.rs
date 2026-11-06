@@ -131,19 +131,14 @@ pub(crate) fn run<R: Runner, W: Write>(
             to: request.to.to_vec(),
             verbose: job.verbose,
         };
-        // A loose file's refusal waits for the songs added with it
-        // to be written.
-        let attached =
-            match attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out) {
-                Ok(a) => a,
-                Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
-                    refused = Some(e);
-                    attach::Attached::default()
-                }
-                Err(e) => return Err(e),
-            };
+        let attached = attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out);
+        let attached = held_back(attached, &mut refused)?;
         left_out = attached.left_out;
         unread.extend(attached.unread);
+        attached
+            .copied
+            .iter()
+            .for_each(|f| run.copied(&dirs.home, f));
         give_tags(dirs, &attached.songs, &how, listed, out)?;
         ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
         ok &= crate::reconcile_now(
@@ -162,6 +157,22 @@ pub(crate) fn run<R: Runner, W: Write>(
     }
     not_added(&unread, left_out, request.matching.yes)?;
     Ok(ok)
+}
+
+/// What attaching the loose files did: a refusal is held in `refused`
+/// until the songs added with them are written.
+fn held_back(
+    attached: Result<attach::Attached>,
+    refused: &mut Option<anyhow::Error>,
+) -> Result<attach::Attached> {
+    match attached {
+        Ok(a) => Ok(a),
+        Err(e) if e.downcast_ref::<change::Refused>().is_some() => {
+            *refused = Some(e);
+            Ok(attach::Attached::default())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Refuse what is fetched from the network, `fetched`, when the run

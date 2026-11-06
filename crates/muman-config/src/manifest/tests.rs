@@ -735,10 +735,11 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     m.edit(Edit::Restore(yt("aaaaaaaaaaa")));
     m.save().unwrap();
     assert_eq!(m.removed, []);
-    let song = &m.songs[1];
-    assert_eq!(song.audio, Some(yt("bbbbbbbbbbb")));
+    let song = &m.songs[0];
+    assert_eq!(song.audio, Some(yt("bbbbbbbbbbb")), "back where it stood");
     assert_eq!(song.tags, [("genre".to_string(), vec!["Pop".to_string()])]);
-    assert!(!text(dir.path()).contains("note"));
+    let t = text(dir.path());
+    assert!(!t.contains("note") && !t.contains("next ="), "{t}");
 }
 
 #[test]

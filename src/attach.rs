@@ -226,6 +226,8 @@ pub struct Attached {
     pub left_out: usize,
     /// The files that could not be read or used, each with why.
     pub unread: Vec<String>,
+    /// The copies made in the manual folder's `added/`, for `undo`.
+    pub copied: Vec<PathBuf>,
 }
 
 /// One song as a loose file is matched against it.
@@ -293,6 +295,10 @@ struct Judged {
     distance: i64,
     /// Whether the verdict rests on the fields alone, so needs its lead.
     by_fields: bool,
+    /// Whether the file is named as the song's own, by its file's name,
+    /// an ID, its bytes or coming with it: a tag file so named retags the
+    /// song, whatever its fields say of the song's tags now.
+    named: bool,
     looks: Alike,
     already: bool,
     reasons: Vec<String>,
@@ -584,6 +590,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         verdict = Verdict::Same;
         reasons.push("came with it".to_string());
     }
+    let named = verdict == Verdict::Same;
     let mut distance = NO_MATCH;
     let mut conflicts = Vec::new();
     for reading in &clues.readings {
@@ -614,7 +621,10 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
     }
     for conflict in &conflicts {
         reasons.push((*conflict).to_string());
-        cap = Verdict::Unsure;
+        // The tags a tag file names its song by are the ones it sets.
+        if !(what == What::Tags && named) {
+            cap = Verdict::Unsure;
+        }
     }
     let mut looks = Alike::Different;
     if let Some(look) = &clues.look {
@@ -646,6 +656,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                 verdict: Verdict::Different,
                 distance,
                 by_fields: false,
+                named: false,
                 looks,
                 already: false,
                 reasons: vec![format!(
@@ -663,6 +674,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
                     verdict: Verdict::Different,
                     distance,
                     by_fields: false,
+                    named: false,
                     looks,
                     already: false,
                     reasons: vec![format!(
@@ -716,6 +728,7 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         verdict: verdict.min(cap),
         distance,
         by_fields,
+        named,
         looks,
         already,
         reasons,
@@ -1349,11 +1362,12 @@ pub fn attach<R: Runner, W: Write>(
             Decision::Listed(songs) => {
                 // A picture is one file the songs share; lyrics are one
                 // song's own, so another song's copy is not reused.
-                let key = if item.what == What::Picture {
+                let (key, made) = if item.what == What::Picture {
                     copy_in(&manual, item, &mut BTreeSet::new())?
                 } else {
                     copy_in(&manual, item, &mut taken)?
                 };
+                attached.copied.extend(made);
                 for n in songs {
                     let id = cands[n].id.clone();
                     manifest.edit(Edit::Add {
@@ -1708,7 +1722,7 @@ fn decide_sheet<W: Write>(
                         .find(|j| j.song == *song)
                         .map_or(NO_MATCH, |j| match j.verdict {
                             Verdict::Different => NO_MATCH,
-                            _ if j.distance >= NO_MATCH => 0,
+                            _ if j.named || j.distance >= NO_MATCH => 0,
                             _ => j.distance,
                         })
                 })
@@ -1887,9 +1901,14 @@ fn decide_sheet<W: Write>(
 }
 
 /// Copy `item` into the manual folder's `added/`, or find it there: its
-/// key. A copy already there with its bytes is listed again, but for one
-/// in `taken`, the keys of other songs' own files, which is copied anew.
-fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Result<SourceKey> {
+/// key, and the copy when one was made. A copy already there with its
+/// bytes is listed again, but for one in `taken`, the keys of other
+/// songs' own files, which is copied anew.
+fn copy_in(
+    manual: &Path,
+    item: &Item,
+    taken: &mut BTreeSet<SourceKey>,
+) -> Result<(SourceKey, Option<PathBuf>)> {
     let bytes = match &item.bytes {
         Some(b) => b.clone(),
         None => {
@@ -1899,12 +1918,12 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
     let digest = crate::hash::digest(&bytes);
     let added = manual.join(ADDED);
     std::fs::create_dir_all(&added).with_context(|| format!("creating {}", added.display()))?;
-    let stem = item
-        .path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("added")
-        .to_string();
+    // Composed, as its key is, so the copy, its key and the run's record
+    // of it are one name.
+    let stem = item.path.file_stem().and_then(|s| s.to_str()).map_or_else(
+        || "added".to_string(),
+        |s| crate::relpath::to_portable(Path::new(s)),
+    );
     let ext = match (item.what, extension(&item.path).as_str()) {
         (What::Lyrics, _) => "lrc".to_string(),
         (_, ext) => ext.to_string(),
@@ -1922,13 +1941,13 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
                 && crate::hash::digest_file(&to).as_deref() == Some(digest.as_str())
             {
                 taken.insert(key.clone());
-                return Ok(key);
+                return Ok((key, None));
             }
             continue;
         }
         crate::atomic::write(&added, &crate::atomic::Name::new(&name)?, &bytes)?;
         taken.insert(key.clone());
-        return Ok(key);
+        return Ok((key, Some(to)));
     }
     unreachable!("some name is free")
 }

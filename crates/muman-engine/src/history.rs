@@ -24,9 +24,14 @@
 //! writes over or removes a library file, which a sync does only through
 //! [`crate::library::Ledger`], or writes a new one, and again as it goes,
 //! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
-//! interrupted, and can be undone. A folder with no record, left by a run
-//! stopped before it wrote one, holds nothing `undo` could use and is
-//! let go of with the runs past the count. A file such a run moved before
+//! interrupted, and can be undone. The next run that changes the home,
+//! holding the runs lock that proves the stopped one gone, goes on in
+//! its record rather than begin its own: the song list before and the
+//! files kept are the stopped run's, so one undo takes back both, and
+//! what it made is not kept as though it had been there before. A
+//! folder with no record, left by a run stopped before it wrote one,
+//! holds nothing `undo` could use and is let go of with the runs past
+//! the count. A file such a run moved before
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
@@ -206,6 +211,9 @@ pub struct Run {
     finishes: Option<PathBuf>,
     /// Whether the run's sync reached its end.
     synced: bool,
+    /// The outputs a run stopped partway made, which this run continues:
+    /// none was there before it, so none is kept to put back.
+    made_before: BTreeSet<PathBuf>,
     /// Held while the run lasts, so no other begins meanwhile.
     _runs: atomic::Lock,
 }
@@ -347,13 +355,30 @@ impl Run {
             .as_ref()
             .filter(|(h, _)| h.undone)
             .map(|(_, dir)| dir.clone());
+        // As they stand, for a run that ends before it reaches the
+        // library: an empty record would read as every song added.
+        let outputs = State::load(home).map(|s| s.outputs).unwrap_or_default();
+        // A run stopped partway, as by a kill, is no run's but this one's
+        // to finish, the runs lock held: it goes on in its record, so one
+        // undo takes back both, its song list and its files with them.
+        let resumed = last
+            .as_ref()
+            .filter(|(h, _)| !h.complete && !h.undoing && !h.undone)
+            .and_then(|(_, dir)| {
+                let text = std::fs::read(dir.join(RECORD)).ok()?;
+                Some((dir.clone(), Record::read(&text, &outputs).ok()?))
+            });
         let now = {
             // Read whole, not halfway through another run's save.
             let _lock = atomic::Lock::folder(home)?;
             songs_text(home)
         };
-        let (songs_before, now) = match (last.and_then(|(h, _)| h.left()), now) {
-            (Some(left), now) => (Some(left), now.ok().flatten()),
+        let left = match &resumed {
+            Some((_, record)) => Some(record.songs_before.clone()),
+            None => last.and_then(|(h, _)| h.left()).map(Some),
+        };
+        let (songs_before, now) = match (left, now) {
+            (Some(left), now) => (left, now.ok().flatten()),
             (None, now) => {
                 let now = now?;
                 (now.clone(), now)
@@ -367,34 +392,51 @@ impl Run {
             .and_then(|doc| crate::settings::read(&doc).ok())
             .unwrap_or_default()
             .history;
+        let mine = resumed.as_ref().map(|(dir, _)| dir.clone());
         let others = runs(home)
             .unwrap_or_default()
             .into_iter()
+            .filter(|dir| Some(dir) != mine.as_ref())
             .map(|dir| {
                 let bytes = held(&dir);
                 (dir, bytes)
             })
             .collect();
-        // As they stand, for a run that ends before it reaches the
-        // library: an empty record would read as every song added.
-        let outputs = State::load(home).map(|s| s.outputs).unwrap_or_default();
+        let (dir, record, outputs_known) = match resumed {
+            Some((dir, mut record)) => {
+                record.version = VERSION;
+                record.songs_before = songs_before;
+                (dir, record, true)
+            }
+            None => (
+                history(home).join(id),
+                Record {
+                    version: VERSION,
+                    complete: false,
+                    songs_before,
+                    was: outputs,
+                    ..Record::default()
+                },
+                false,
+            ),
+        };
+        let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
+        let made_before = (record.before.iter())
+            .filter(|(_, was)| was.is_none())
+            .map(|(rel, _)| rel.clone())
+            .collect();
         Ok(Self {
-            dir: history(home).join(id),
-            record: Record {
-                version: VERSION,
-                complete: false,
-                songs_before,
-                was: outputs,
-                ..Record::default()
-            },
-            outputs_known: false,
-            changing: BTreeSet::new(),
+            dir,
+            record,
+            outputs_known,
+            changing,
             others,
             limits,
             lost: false,
             seen: Seen::Not,
             finishes,
             synced: false,
+            made_before,
             _runs: runs_lock,
         })
     }
@@ -487,6 +529,9 @@ impl Run {
             return Ok(());
         };
         self.changing.insert(rel.to_path_buf());
+        if self.made_before.contains(rel) {
+            return Ok(());
+        }
         if !self.record.touched.insert(rel.to_path_buf()) {
             return Ok(());
         }
@@ -1022,6 +1067,8 @@ pub struct Changed {
 pub struct Undone {
     dir: PathBuf,
     changed: Changed,
+    /// The song list the undo put back.
+    put_back: String,
 }
 
 impl Undone {
@@ -1031,12 +1078,35 @@ impl Undone {
         self.changed
     }
 
-    /// Let go of the run's record, the sync after the undo ended.
+    /// Let go of the run's record, the sync after the undo ended. That
+    /// sync may write into the song list what it reads anew, as a
+    /// source's changed tags, and the run before, now the last, is moved
+    /// on to the list it left: the runs lock held from the undo to here,
+    /// no hand changed it meanwhile, so the next `undo` goes on.
     // Lets go of a run's folder once nothing needs it.
     #[expect(clippy::disallowed_methods)]
     pub fn finish(self) -> Result<()> {
         std::fs::remove_dir_all(&self.dir)
-            .with_context(|| format!("removing {}", self.dir.display()))
+            .with_context(|| format!("removing {}", self.dir.display()))?;
+        let Some(home) = self.dir.parent().and_then(Path::parent) else {
+            return Ok(());
+        };
+        let Some(last) = runs(home)?.pop() else {
+            return Ok(());
+        };
+        let now = songs_text(home)?.unwrap_or_else(|| crate::manifest::NEW.to_string());
+        let left = head(&last).filter(|h| h.complete && !h.undoing && !h.undone);
+        if now == self.put_back || left.and_then(|h| h.songs_after) != Some(self.put_back) {
+            return Ok(());
+        }
+        let file = last.join(RECORD);
+        let mut record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
+        )
+        .with_context(|| format!("reading {}", file.display()))?;
+        record["songs_after"] = serde_json::Value::String(now);
+        let text = serde_json::to_vec(&record).context("writing the run record")?;
+        atomic::write_private(&last, &atomic::Name::new(RECORD)?, &text)
     }
 }
 
@@ -1129,7 +1199,15 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
         let text = serde_json::to_vec(&record).context("writing the run record")?;
         atomic::write_private(&dir, &atomic::Name::new(RECORD)?, &text)?;
     }
-    Ok(Undone { dir, changed })
+    let put_back = record
+        .songs_before
+        .clone()
+        .unwrap_or_else(|| crate::manifest::NEW.to_string());
+    Ok(Undone {
+        dir,
+        changed,
+        put_back,
+    })
 }
 
 /// What undoing does with each copy `add` made that is still there, a

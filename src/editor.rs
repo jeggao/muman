@@ -239,6 +239,17 @@ fn interpret(
         .filter_map(|o| read.manifest.song_with(&o.id))
         .flat_map(|s| s.held.iter().map(|(k, h)| (k.clone(), h.clone())))
         .collect();
+    // Numbered as the file numbers its songs, before the whole list's
+    // reading numbers them as the list does.
+    let mut listed: BTreeMap<SourceKey, usize> = BTreeMap::new();
+    let not_opened = |k: &SourceKey| {
+        read.manifest
+            .songs
+            .iter()
+            .filter(|s| s.id().is_none_or(|id| !opened.iter().any(|o| &o.id == id)))
+            .find(|s| s.sources.contains(k))
+            .and_then(|s| s.id().cloned())
+    };
     for (n, mut table) in tables.into_iter().enumerate() {
         let what = format!("song {}", n + 1);
         let id = table.remove("id");
@@ -251,21 +262,12 @@ fn interpret(
                 "{what} lists no source; delete the whole [[song]] to remove it"
             ));
         }
-        for key in table
-            .get("sources")
-            .and_then(Item::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-        {
-            match SourceKey::parse(key) {
-                Ok(k) if !known.contains(&&k) && !store.has(&k) => problems.push(format!(
-                    "{what}: {k} is a source of no song opened and is not in the store"
-                )),
-                Ok(_) => {}
-                Err(e) => problems.push(format!("{what}: {e:#}")),
-            }
-        }
+        let sources = Sources {
+            known: &known,
+            store,
+            not_opened: &not_opened,
+        };
+        sources.check(&table, n, &mut listed, &mut problems);
         match id.as_ref().map(|i| i.as_str()) {
             None => new.push(SongTable(with_held(table, &held))),
             Some(Some(id)) => match opened.iter().find(|o| o.id.to_string() == id) {
@@ -300,6 +302,55 @@ fn interpret(
         .trial(std::slice::from_ref(&edit))
         .map_err(|e| vec![format!("{e:#}")])?;
     Ok(Some(edit))
+}
+
+/// What the sources a song of the file lists are checked against.
+struct Sources<'a> {
+    /// The sources of the songs opened.
+    known: &'a [&'a SourceKey],
+    store: &'a Store,
+    /// The song not opened that lists a source, if any.
+    not_opened: &'a dyn Fn(&SourceKey) -> Option<SourceKey>,
+}
+
+impl Sources<'_> {
+    /// What is wrong with the sources of `table`, the file's song `n`:
+    /// one of no song opened and not in the store, or one `listed` by
+    /// another song, the file's or one not opened.
+    fn check(
+        &self,
+        table: &Table,
+        n: usize,
+        listed: &mut BTreeMap<SourceKey, usize>,
+        problems: &mut Vec<String>,
+    ) {
+        let what = format!("song {}", n + 1);
+        for key in table
+            .get("sources")
+            .and_then(Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+        {
+            match SourceKey::parse(key) {
+                Ok(k) if !self.known.contains(&&k) && !self.store.has(&k) => problems.push(
+                    format!("{what}: {k} is a source of no song opened and is not in the store"),
+                ),
+                Ok(k) if crate::manifest::shareable(&k) => {}
+                Ok(k) => {
+                    if let Some(other) = listed.get(&k) {
+                        problems.push(format!("{what}: {k} is listed by song {} too", other + 1));
+                    } else if let Some(owner) = (self.not_opened)(&k) {
+                        problems.push(format!(
+                            "{what}: {k} is listed by {owner}, a song not opened"
+                        ));
+                    }
+                    listed.insert(k, n);
+                }
+                Err(e) => problems.push(format!("{what}: {e:#}")),
+            }
+        }
+    }
 }
 
 /// Say what an edit does, song by song; one in `gone`, removed from the
