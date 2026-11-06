@@ -130,6 +130,7 @@ pub struct Foreseen {
 
 /// What a sync of `planned` into `library` decides, `force` and `accept`
 /// as given: the one place `sync`, `status` and `info` decide it.
+#[must_use]
 pub fn foresee(
     manifest: &Manifest,
     state: &State,

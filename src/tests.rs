@@ -3261,6 +3261,61 @@ fn undo_moves_songs_back_after_a_template_edited_by_hand() {
 }
 
 #[test]
+fn a_state_damaged_or_emptied_is_named_and_not_read_as_new() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let home = s.dir.path().join("home");
+    for beside in ["state.db-wal", "state.db-shm"] {
+        let _ = std::fs::remove_file(home.join(beside));
+    }
+    let db = home.join("state.db");
+    let mut bytes = std::fs::read(&db).unwrap();
+    bytes[..100].fill(b'x');
+    std::fs::write(&db, &bytes).unwrap();
+    let e = s.trusting(&flacs(), &["list"], None).unwrap_err();
+    assert!(format!("{e:#}").contains(&*db.to_string_lossy()), "{e:#}");
+    std::fs::write(&db, b"").unwrap();
+    let e = s.trusting(&flacs(), &["check"], None).unwrap_err();
+    assert!(format!("{e:#}").contains("is empty"), "{e:#}");
+}
+
+#[test]
+fn undo_waits_for_a_run_under_way_before_it_plans() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    let held = Lock::runs(&s.dir.path().join("home")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut out = Vec::new();
+            let done = run_with(
+                &s.job(&["undo", "--dry-run"]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut out,
+                &mut Vec::new(),
+            );
+            let done = done.map_err(|e| format!("{e:#}"));
+            tx.send((done, String::from_utf8(out).unwrap())).unwrap();
+        });
+        let early = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            early.is_err(),
+            "planned while a run held the home: {early:?}"
+        );
+        drop(held);
+        let (done, text) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert!(done.unwrap(), "{text}");
+        assert!(text.contains("Undoing the last run"), "{text}");
+        assert!(!text.contains("stopped before it ended"), "{text}");
+    });
+}
+
+#[test]
 fn undo_is_refused_before_saying_what_it_would_do() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

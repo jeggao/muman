@@ -110,22 +110,27 @@ impl Db {
         let file = file.to_path_buf();
         let mut conn =
             Connection::open(&file).with_context(|| format!("opening {}", file.display()))?;
-        conn.busy_timeout(wait)?;
-        let version = schema(&conn.transaction()?, &file)?;
-        wal(&conn, wait)?;
-        conn.pragma_update(
-            None,
-            "synchronous",
-            if cfg!(any(test, feature = "testing")) {
-                "OFF"
-            } else {
-                "FULL"
-            },
-        )?;
-        if cfg!(target_vendor = "apple") {
-            conn.pragma_update(None, "fullfsync", true)?;
-        }
-        conn.pragma_update(None, "temp_store", "MEMORY")?;
+        // SQLite reads the file only now, so a damaged one is found here.
+        let version = (|| {
+            conn.busy_timeout(wait)?;
+            let version = schema(&conn.transaction()?, &file)?;
+            wal(&conn, wait)?;
+            conn.pragma_update(
+                None,
+                "synchronous",
+                if cfg!(any(test, feature = "testing")) {
+                    "OFF"
+                } else {
+                    "FULL"
+                },
+            )?;
+            if cfg!(target_vendor = "apple") {
+                conn.pragma_update(None, "fullfsync", true)?;
+            }
+            conn.pragma_update(None, "temp_store", "MEMORY")?;
+            Ok(version)
+        })()
+        .map_err(|e| named(e, &file))?;
         let mut db = Self { conn, file };
         if version == 0 {
             let file = db.file.clone();
@@ -154,7 +159,7 @@ impl Db {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .with_context(|| format!("writing {}", self.file.display()))?;
-        let done = f(&tx)?;
+        let done = f(&tx).map_err(|e| named(e, &self.file))?;
         #[cfg(any(test, feature = "testing"))]
         crate::kill::change_point(&self.file);
         tx.commit()
@@ -169,7 +174,27 @@ impl Db {
             .conn
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .with_context(|| format!("reading {}", self.file.display()))?;
-        f(&tx)
+        f(&tx).map_err(|e| named(e, &self.file))
+    }
+}
+
+/// `e` with the store `file` named, and for a file SQLite cannot read as
+/// a store, what keeping it or not costs.
+fn named(e: anyhow::Error, file: &Path) -> anyhow::Error {
+    let damaged = e.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
+        matches!(
+            e.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt)
+        )
+    });
+    if damaged {
+        e.context(format!(
+            "{} is damaged: put back a copy of it, or move it aside to start a new one, \
+             which takes every file in the library for yours until `sync --force`",
+            file.display()
+        ))
+    } else {
+        e.context(format!("reading {}", file.display()))
     }
 }
 

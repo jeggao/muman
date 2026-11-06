@@ -63,7 +63,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::align;
@@ -311,13 +311,15 @@ pub struct State {
 
 /// What a state read from the store holds of its rows ([`db::Loaded`]);
 /// none for a state made in code, whose save deletes no row. Two states
-/// are equal whatever they hold.
-#[derive(Default)]
-pub(crate) struct Held(Mutex<db::Loaded>);
+/// are equal whatever they hold. A clone shares them, so a copy saved as
+/// a run goes, as the outputs about to be written, leaves the rows its
+/// state saves next diffed against what the store now holds.
+#[derive(Default, Clone)]
+pub(crate) struct Held(std::sync::Arc<Mutex<db::Loaded>>);
 
 impl Held {
     fn new(loaded: db::Loaded) -> Self {
-        Self(Mutex::new(loaded))
+        Self(std::sync::Arc::new(Mutex::new(loaded)))
     }
 
     fn get(&self) -> db::Loaded {
@@ -339,12 +341,6 @@ impl Held {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = loaded;
-    }
-}
-
-impl Clone for Held {
-    fn clone(&self) -> Self {
-        Self::new(self.get())
     }
 }
 
@@ -755,6 +751,15 @@ impl State {
                 version: VERSION,
                 ..Self::default()
             });
+        }
+        let file = home.join(db::FILE);
+        if std::fs::metadata(&file).is_ok_and(|m| m.len() == 0) && crate::history::kept_any(home) {
+            bail!(
+                "{} is empty, though the home's history keeps its runs: it was emptied or cut \
+                 short, and read so, every file in the library would be taken for yours; put \
+                 back a copy, or delete it to start a new one and `sync --force`",
+                file.display()
+            );
         }
         let (mut state, loaded) = db::Db::open(home, BUSY_WAIT)?.snapshot()?;
         state.held = Held::new(loaded);
