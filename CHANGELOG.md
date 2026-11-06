@@ -20,6 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Lyrics from LRCLIB state one length.** An answer whose lyrics
+  carried their own `[length:]` was kept with two that disagreed; the
+  record's duration is now the one stated.
 - **An LRC time reads as its tool wrote it.** `[00:03,50]`, with a
   decimal comma, was not read, and a time past 59 seconds, as
   `[99:99.99]`, was carried into the minutes; the one now reads, the
