@@ -12,6 +12,10 @@
 //! | `composer`, `bpm`, `key` | The composer, the tempo and the musical key, or empty |
 //! | `id` | The ID or file name of the song's audio source |
 //!
+//! A template naming a variable outside this table is refused as it is
+//! read, before any song is named, so a misspelt `{{ albm }}` stops the
+//! sync up front rather than failing every song.
+//!
 //! Besides MiniJinja's own filters (`default`, `lower`, `upper`,
 //! `replace`, `first`, `join`, …) there are `pad(n)`, a number with
 //! leading zeros; `truncate(n)`, the first `n` characters; `asciify`,
@@ -52,6 +56,26 @@ pub struct Fields {
     pub id: String,
 }
 
+/// The names [`Fields`] gives a template.
+pub const VARIABLES: [&str; 16] = [
+    "title",
+    "artist",
+    "artists",
+    "album",
+    "album_artist",
+    "genre",
+    "date",
+    "year",
+    "original_year",
+    "track",
+    "disc",
+    "disc_track",
+    "composer",
+    "bpm",
+    "key",
+    "id",
+];
+
 /// `<album artist>/<album>/<NN title>`, `<D-NN title>` from a second
 /// disc on: a single on no album is named for its title.
 pub const DEFAULT_TEMPLATE: &str = "{{ album_artist }}/{{ album }}/{{ disc_track }}{{ title }}";
@@ -91,6 +115,21 @@ impl Template {
         });
         env.add_template_owned(NAME, source.to_string())
             .context("reading the library template")?;
+        let mut unknown: Vec<String> = env
+            .get_template(NAME)?
+            .undeclared_variables(false)
+            .into_iter()
+            .filter(|v| !VARIABLES.contains(&v.as_str()) && env.globals().all(|(g, _)| g != v))
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort();
+            return Err(crate::errors::Refused(format!(
+                "the library template names {}, which no song has; it may name {}",
+                unknown.join(", "),
+                VARIABLES.join(", ")
+            ))
+            .into());
+        }
         Ok(Self { env })
     }
 
@@ -198,9 +237,33 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_variable_is_an_error_not_a_blank() {
-        let t = Template::new("{{ albm }}/{{ title }}").unwrap();
-        assert!(t.render(&fields()).is_err());
+    fn an_unknown_variable_is_refused_as_the_template_is_read() {
+        let e = Template::new("{{ albm }}/{{ title }}").unwrap_err();
+        assert!(
+            e.downcast_ref::<crate::errors::Refused>().is_some(),
+            "{e:#}"
+        );
+        assert!(format!("{e:#}").contains("names albm,"), "{e:#}");
         assert!(Template::new("{{ title").is_err());
+    }
+
+    #[test]
+    fn names_a_template_sets_or_loops_over_are_its_own() {
+        let t = Template::new(
+            "{% set a = artists | join(', ') %}{{ a }}/\
+             {% for x in range(2) %}{{ loop.index }}{{ x }}{% endfor %}{{ title }}",
+        )
+        .unwrap();
+        assert!(t.render(&fields()).is_ok());
+    }
+
+    #[test]
+    fn the_variables_are_the_fields() {
+        let fields = Value::from(Serde(Fields::default()));
+        let mut names: Vec<String> = fields.try_iter().unwrap().map(|k| k.to_string()).collect();
+        names.sort();
+        let mut variables = VARIABLES.map(str::to_string).to_vec();
+        variables.sort();
+        assert_eq!(names, variables);
     }
 }

@@ -3710,7 +3710,7 @@ fn check_reports_a_song_no_sync_can_build() {
     let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
     std::fs::write(
         &songs,
-        listed.replace(&default, "template = \"{{ nosuch }}{{ title }}\""),
+        listed.replace(&default, "template = \"{{ title | truncate('x') }}\""),
     )
     .unwrap();
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -3719,6 +3719,30 @@ fn check_reports_a_song_no_sync_can_build() {
     assert!(!ok, "{report}");
     assert!(report.contains("No sync can build it"), "{report}");
     assert!(!report.contains("No problems found"), "{report}");
+}
+
+#[test]
+fn a_template_naming_no_field_is_refused_before_the_sync_while_songs_still_list() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &songs,
+        listed.replace(&default, "template = \"{{ albm }}/{{ title }}\""),
+    )
+    .unwrap();
+    s.file("home/sources/manual/b.flac");
+    let e = s.refused(&["sync"]);
+    assert!(e.contains("names albm"), "{e}");
+    assert_eq!(library_of(&s), before);
+    assert!(!std::fs::read_to_string(&songs).unwrap().contains("b.flac"));
+    assert!(s.listed(&["list"]).contains("manual:a.flac"));
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok && report.contains("names albm"), "{report}");
 }
 
 #[test]

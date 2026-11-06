@@ -62,6 +62,11 @@ pub(crate) fn run<R: Runner, W: Write>(
     let dirs = &job.dirs;
     crate::atomic::private_dir(&dirs.home)?;
     manifest::start(&dirs.home)?;
+    // Before anything is fetched: a template refused would fail every song.
+    Manifest::load(&dirs.home)?
+        .settings
+        .library
+        .naming(&dirs.library)?;
     let mut run = Run::begin(&dirs.home)?;
     let mut due = crate::hooks::Due::default();
     let done = (|| {

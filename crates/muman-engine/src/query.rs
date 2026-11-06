@@ -144,7 +144,13 @@ pub fn resolved_views(
     state: &State,
     library: &Path,
 ) -> Result<Vec<(View, Option<Resolved>)>> {
-    let (mut planned, _) = reconcile::plan(manifest, state, library, None, &mut std::io::sink())?;
+    // A sync refuses a plan the settings cannot make, as a template naming
+    // no field; a query still reads each song, unresolved.
+    let mut planned = match reconcile::plan(manifest, state, library, None, &mut std::io::sink()) {
+        Ok((planned, _)) => planned,
+        Err(e) if e.downcast_ref::<crate::errors::Refused>().is_some() => Vec::new(),
+        Err(e) => return Err(e),
+    };
     crate::limit::as_written(manifest, state, &mut planned);
     let mut plans: Vec<Option<Resolved>> = vec![None; manifest.songs.len()];
     for (n, r) in planned {

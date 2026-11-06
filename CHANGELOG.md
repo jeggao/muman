@@ -61,6 +61,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **A template naming no field is refused up front.** A misspelt
+  `{{ albm }}` failed every song one by one, after the sync had fetched
+  and looked up; the sync now refuses it before anything is done (exit
+  5), naming the variable and those a template may name. `list`,
+  `edit` and `check` still read the songs.
 - **`set` shows and stores a value as it takes effect.**
   `tracknumber=07` said `→ 07` and stored `07`, read as 7; it now says
   and stores `7`, and setting it again changes nothing. A value that

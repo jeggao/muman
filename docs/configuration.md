@@ -1,7 +1,6 @@
 # Configuration
 
-muman takes its configuration from two places, split by what a setting
-is about:
+muman's settings live in two places, split by what a setting is about:
 
 - **How the library is made** is set in the song list, `songs.toml`:
   its layout and file names, encoding, how yt-dlp and aria2c fetch,
@@ -46,8 +45,7 @@ The song list may hold logins and tokens, and the run history keeps
 copies of it. So on Linux and macOS a home muman makes is yours alone
 (`0700`), as are the history's folders and records. A home made before
 keeps its permissions; `chmod -R go= <home>` makes it yours alone. On
-Windows a new home takes its parent folder's permissions, your own by
-default.
+Windows a new home takes its parent folder's permissions, yours by default.
 
 ### Programs
 
@@ -412,6 +410,9 @@ without the extension. `/` in the template separates folders.
 | `disc_track` | `03 ` on a first disc, `2-03 ` on a later one, nothing without a track number |
 | `bpm`, `key` | The tempo and the musical key, or empty |
 | `id` | The ID or file name of the song's audio source |
+
+A template naming any other variable is refused before a sync fetches
+or writes anything (exit 5); `list` and `edit` still work.
 
 Beside MiniJinja's own filters (`default`, `lower`, `upper`, `replace`,
 `first`, `join` and more), muman adds:
