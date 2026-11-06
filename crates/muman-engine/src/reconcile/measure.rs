@@ -65,6 +65,21 @@ fn moved(outdated: &[Located], state: &mut State) -> BTreeSet<SourceKey> {
     kept
 }
 
+/// Clear the failure of each source of `keys` whose facts hold for its
+/// file again, as its bytes put back: it is measured no more, so no
+/// measure that succeeds would clear it.
+fn clear_read(store: &Store, keys: &BTreeSet<SourceKey>, state: &mut State) {
+    for key in keys {
+        let read = store.locate(key).and_then(|l| {
+            let f = state.failures.get(key)?;
+            Some(!f.applies(Some(&l), state.facts.get(key)))
+        });
+        if read == Some(true) {
+            state.clear_failure(key);
+        }
+    }
+}
+
 /// Measure every source in `keys` the store holds whose facts are not
 /// current, into `state`, kept by the checkpoint as it goes and at the
 /// end. A file that cannot be read is said so, and is not read again
@@ -93,6 +108,7 @@ pub fn measure<R: Runner, W: Write>(
         .into_iter()
         .filter(|l| !moved.contains(&l.key))
         .collect();
+    clear_read(store, keys, state);
     let now = state::now_secs();
     let (due, failed): (Vec<Located>, Vec<Located>) = outdated.into_iter().partition(|l| {
         how.retry

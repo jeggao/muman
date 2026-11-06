@@ -229,11 +229,21 @@ pub fn check<R: Runner, W: Write, D: Write>(
         }
     }
     for (key, failure) in &state.failures {
+        if !failure.applies(store.locate(key).as_ref(), state.facts.get(key)) {
+            continue;
+        }
         problem(
             report,
             format!(
-                "Failed {} time(s) to {:?}: {key}: {}",
-                failure.count, failure.step, failure.error
+                "Failed {} time(s) to {}: {key}: {}",
+                failure.count,
+                match failure.step {
+                    crate::state::Step::Measure => "read",
+                    crate::state::Step::Fetch => "fetch",
+                    crate::state::Step::Refetch => "fetch again",
+                    crate::state::Step::Mend => "mend",
+                },
+                failure.error
             ),
         )?;
     }

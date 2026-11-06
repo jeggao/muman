@@ -599,6 +599,20 @@ pub const SHORT_MAX_WAIT_SECS: u64 = 90 * 24 * 3600;
 pub const REFETCH_TRIES: u32 = 5;
 
 impl Failure {
+    /// Whether the failure still stands, for a source the store holds
+    /// as `located`, none when it holds none, with `facts` as measured: a
+    /// measure failed while no facts hold for the file as it is, a fetch
+    /// while the store lacks it. A copy fetched again, or mended, stands
+    /// until its own step says otherwise.
+    #[must_use]
+    pub fn applies(&self, located: Option<&crate::store::Located>, facts: Option<&Facts>) -> bool {
+        match self.step {
+            Step::Measure => located.is_some_and(|l| !facts.is_some_and(|f| f.holds_for(&l.rev()))),
+            Step::Fetch => located.is_none(),
+            Step::Refetch | Step::Mend => true,
+        }
+    }
+
     /// Whether the step is due again: a measure when the file changed, a
     /// fetch once an hour has passed, doubling with each failure; a
     /// damaged download's first fetch again at once, the next as a failed

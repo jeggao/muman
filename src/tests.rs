@@ -3480,6 +3480,58 @@ fn check_during_a_run_reports_no_file_it_is_moving() {
     assert!(!report.contains("Not muman's"), "{report}");
 }
 
+/// The fake, but ffprobe reads nothing, as of a file damaged past reading.
+struct Unprobed(Fake);
+
+impl Runner for Unprobed {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        if cmd
+            .first()
+            .is_some_and(|p| p.to_string_lossy().contains("ffprobe"))
+        {
+            anyhow::bail!("Invalid data found when processing input");
+        }
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+}
+
+#[test]
+fn a_source_that_reads_again_is_no_longer_reported_failed() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let whole = std::fs::read(&a).unwrap();
+    std::fs::write(&a, "garbage").unwrap();
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Unprobed(flacs()),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("Could not read manual:a.flac"), "{text}");
+    std::fs::write(&a, whole).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok && !report.contains("Failed"), "{report}");
+}
+
 #[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
