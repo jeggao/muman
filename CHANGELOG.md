@@ -20,6 +20,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **The guide says where a sync looks for a song's file.** It said
+  "wherever it is now"; a sync finds the file the last run recorded,
+  and a file you move becomes yours.
 - **A song with no audio says why of each source.** "No source of this
   song has audio that reads" now names each source and whether it is
   gone from the sources, could not be read, or holds no audio.
