@@ -1363,6 +1363,33 @@ fn every_field_is_read_back_from_every_container_as_written() {
 }
 
 #[test]
+fn a_total_alone_is_read_back_from_every_container_as_written() {
+    use crate::testing::{
+        SILENCE_FLAC, SILENCE_M4A, SILENCE_MP3, SILENCE_OPUS, SILENCE_VORBIS, SILENCE_WV,
+    };
+
+    for total in ["DISCTOTAL", "TRACKTOTAL"] {
+        let tags = vec![(total.to_string(), vec!["2".to_string()])];
+        for (fixture, name, codec) in [
+            (SILENCE_FLAC, "song.flac", Codec::Flac),
+            (SILENCE_OPUS, "song.opus", Codec::Opus),
+            (SILENCE_VORBIS, "song.ogg", Codec::Vorbis),
+            (SILENCE_MP3, "song.mp3", Codec::Mp3),
+            (SILENCE_M4A, "song.m4a", Codec::Aac),
+            (SILENCE_WV, "song.wv", Codec::WavPack),
+        ] {
+            let (_dir, path) = written(fixture, name);
+            write_tags(&path, Format::Copy { codec }, &tags, None, None, &[]).unwrap();
+            assert_eq!(
+                verify(&path, &tags, false),
+                [] as [String; 0],
+                "{total} in {name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn chapters_are_written_in_each_container_s_own_form() {
     use crate::chapters::Chapter;
     use lofty::id3::v2::Frame;

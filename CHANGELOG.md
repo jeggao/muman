@@ -20,6 +20,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A disc or track total with no number is read back as written.**
+  WavPack and MP3 songs with a total but no disc or track number
+  warned "tags not held as written" at each write: the total was
+  written under its Vorbis name, and read back only from the number's
+  own frame.
 - **`max_size` is said whole while a failed song's file is kept.** The
   limit was compared with, and printed as, what the kept file left of
   it, so a library under its limit was warned of as over it, sync after

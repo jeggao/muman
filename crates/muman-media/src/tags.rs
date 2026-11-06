@@ -1671,7 +1671,17 @@ fn id3_fields(tag: &lofty::id3::v2::Id3v2Tag) -> Read {
                     })
                     .into_iter()
                     .collect(),
-                Id3::Within => Vec::new(),
+                // A total its place's frame holds, or alone, as the
+                // writer writes one with no place, by its Vorbis name.
+                Id3::Within => frames
+                    .iter()
+                    .find_map(|f| match f {
+                        Frame::UserText(t) if t.description.eq_ignore_ascii_case(spec.vorbis) => {
+                            Some(split(&t.content))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
                 Id3::Whole(id) => FrameId::new(id)
                     .ok()
                     .and_then(|id| tag.get_text(&id))
@@ -1781,7 +1791,9 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
     TABLE
         .iter()
         .filter_map(|spec| {
-            let item = ape.get(spec.ape?)?;
+            // A field with no APE name of its own, as a total alone, is
+            // written by its Vorbis name.
+            let item = ape.get(spec.ape.unwrap_or(spec.vorbis))?;
             let values = item.text_values()?.map(str::to_string).collect();
             Some((spec, values))
         })
