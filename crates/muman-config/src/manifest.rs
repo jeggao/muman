@@ -1170,7 +1170,9 @@ fn respell(
             if let Some(keys) = t.get_mut("sources").and_then(Item::as_array_mut) {
                 keys.iter_mut().for_each(|v| string(v, &mut written));
             }
-            for name in ["source", "album", "audio", "cover", "lyrics"] {
+            for name in [
+                "source", "album", "audio", "cover", "lyrics", "next", "prev",
+            ] {
                 if let Some(v) = t.get_mut(name).and_then(Item::as_value_mut) {
                     string(v, &mut written);
                 }
@@ -1426,15 +1428,17 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             set_tags(album, tags);
         }
         Edit::Remove { key, note } => {
+            let at = tables(doc, "song").position(|t| listed_keys(t).contains(&key.to_string()));
+            let near = at.map(|at| neighbours(doc, at)).unwrap_or_default();
             let Some(song) = take(doc, "song", key) else {
                 return Ok(());
             };
-            tables_mut(doc, "removed")?.push(tombstone(song, note));
+            tables_mut(doc, "removed")?.push(tombstone(song, note, near));
         }
         Edit::Tombstone { key, note } => {
             let mut song = Table::new();
             song.insert("sources", key_array(std::slice::from_ref(key)));
-            tables_mut(doc, "removed")?.push(tombstone(song, note));
+            tables_mut(doc, "removed")?.push(tombstone(song, note, Near::default()));
         }
         Edit::Restore(key) => {
             let Some(mut song) = take(doc, "removed", key) else {
@@ -1466,7 +1470,15 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                     song.remove(pin);
                 }
             }
-            tables_mut(doc, "song")?.push(song);
+            let at = place(doc, &removed);
+            for near in ["next", "prev"] {
+                song.remove(near);
+            }
+            let list = tables_mut(doc, "song")?;
+            match at {
+                Some(at) => list.insert(at, song),
+                None => list.push(song),
+            }
         }
         Edit::Rewrite { songs, new } => {
             let list = tables_mut(doc, "song")?;
@@ -1479,6 +1491,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 })
                 .collect();
             let mut gone = Vec::new();
+            let near: Vec<Near> = (0..list.len()).map(|at| neighbours_in(list, at)).collect();
             for (at, to) in &found {
                 let Some(song) = list.get_mut(*at) else {
                     continue;
@@ -1499,7 +1512,7 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
             for (at, note) in gone {
                 if let Some(song) = list.get(at).cloned() {
                     list.remove(at);
-                    removed.push(tombstone(song, &note));
+                    removed.push(tombstone(song, &note, near[at].clone()));
                 }
             }
             for table in new {
@@ -1556,13 +1569,88 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
 }
 
 /// A song's table as `[[removed]]` keeps it, its note first.
-fn tombstone(mut song: Table, note: &str) -> Table {
+fn tombstone(mut song: Table, note: &str, near: Near) -> Table {
     let mut gone = Table::new();
     gone.insert("note", value(note));
     song.remove("note");
     gone.extend(song.iter().map(|(k, v)| (k.to_string(), v.clone())));
+    for (name, key) in [("next", near.next), ("prev", near.prev)] {
+        match key {
+            Some(key) => gone.insert(name, value(key)),
+            None => gone.remove(name),
+        };
+    }
     unplace(&mut gone);
     gone
+}
+
+/// The songs a removed song stood between, each named by its first
+/// source, so `restore` puts it back where it was: list order says which
+/// of two songs at one path keeps it plain, so a song put back elsewhere
+/// would trade paths with another. A neighbour removed too is followed
+/// through the removed songs to one listed.
+#[derive(Debug, Clone, Default)]
+struct Near {
+    next: Option<String>,
+    prev: Option<String>,
+}
+
+/// [`Near`] of the song at `at` among the listed songs of `doc`, a song
+/// removed beside it before taken for the neighbour it was.
+fn neighbours(doc: &DocumentMut, at: usize) -> Near {
+    let Some(list) = doc.get("song").and_then(Item::as_array_of_tables) else {
+        return Near::default();
+    };
+    let me = list.get(at).and_then(first_key);
+    let gone_beside = |side: &str| {
+        let me = me.as_deref()?;
+        tables(doc, "removed")
+            .filter(|t| t.get(side).and_then(Item::as_str) == Some(me))
+            .last()
+            .and_then(first_key)
+    };
+    let listed = neighbours_in(list, at);
+    Near {
+        next: gone_beside("prev").or(listed.next),
+        prev: gone_beside("next").or(listed.prev),
+    }
+}
+
+/// [`Near`] of the song at `at` in `list`, as it stands.
+fn neighbours_in(list: &ArrayOfTables, at: usize) -> Near {
+    Near {
+        next: list.get(at + 1).and_then(first_key),
+        prev: at
+            .checked_sub(1)
+            .and_then(|p| list.get(p))
+            .and_then(first_key),
+    }
+}
+
+fn first_key(t: &Table) -> Option<String> {
+    listed_keys(t).into_iter().next()
+}
+
+/// Where the removed song `gone` goes back among the listed songs: before
+/// the first listed song its `next` leads to, through songs removed
+/// beside it, else after the first its `prev` does; none when neither
+/// leads to one, and it goes last.
+fn place(doc: &DocumentMut, gone: &Table) -> Option<usize> {
+    let listed: Vec<Vec<String>> = tables(doc, "song").map(listed_keys).collect();
+    let follow = |side: &str| {
+        let mut key = gone.get(side).and_then(Item::as_str).map(str::to_string);
+        for _ in 0..=tables(doc, "removed").count() {
+            let k = key?;
+            if let Some(at) = listed.iter().position(|keys| keys.contains(&k)) {
+                return Some(at);
+            }
+            key = tables(doc, "removed")
+                .find(|t| listed_keys(t).contains(&k))
+                .and_then(|t| t.get(side).and_then(Item::as_str).map(str::to_string));
+        }
+        None
+    };
+    follow("next").or_else(|| follow("prev").map(|at| at + 1))
 }
 
 /// A table moved to another place in the file, written where it lands

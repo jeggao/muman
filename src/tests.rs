@@ -2676,7 +2676,8 @@ fn a_removed_song_goes_and_stays_gone_until_restored() {
     assert!(s.songs().is_empty(), "{text}");
     assert_eq!(
         s.listed(&["list", "--removed", "--keys", "album:record"]),
-        "manual:b.flac\nmanual:a.flac\n"
+        "manual:a.flac\nmanual:b.flac\n",
+        "a, restored where it stood, is first again"
     );
     let (ok, text) = s.run(&flacs(), &["restore", "-y", "--all", "album:record"]);
     assert!(ok, "{text}");
@@ -3737,6 +3738,35 @@ fn check_decode_measures_each_source_afresh_and_names_its_damage() {
         report.contains("Damaged audio: manual:a.flac lacks"),
         "{report}"
     );
+}
+
+#[test]
+fn restore_puts_removed_songs_back_where_they_were() {
+    let s = Setup::new();
+    for n in 1..=4 {
+        s.file(&format!("home/sources/manual/t{n}.flac"));
+    }
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (order, before) = (s.songs(), library_of(&s));
+    let go = |args: &[&str]| {
+        let (ok, text) = s.run(&flacs(), args);
+        assert!(ok, "{args:?}: {text}");
+    };
+    go(&["remove", "-y", "manual:t1.flac"]);
+    go(&["restore", "-y", "manual:t1.flac"]);
+    assert_eq!(s.songs(), order, "one alone");
+    assert_eq!(library_of(&s), before, "one alone");
+    for (removed, restored) in [(["t2", "t3"], ["t3", "t2"]), (["t3", "t2"], ["t3", "t2"])] {
+        for t in removed {
+            go(&["remove", "-y", &format!("manual:{t}.flac")]);
+        }
+        for t in restored {
+            go(&["restore", "-y", &format!("manual:{t}.flac")]);
+        }
+        assert_eq!(s.songs(), order, "{removed:?} then {restored:?}");
+        assert_eq!(library_of(&s), before, "{removed:?} then {restored:?}");
+    }
 }
 
 #[test]
