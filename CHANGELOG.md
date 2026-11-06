@@ -61,6 +61,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **A song that fails moves no folder cover.** While a song failed,
+  its folder was planned without it: the cover it held passed to
+  another song, which listed the same file, and a folder whose
+  majority it made lost its cover or gained one. A failing song now
+  counts among its folder's songs, keeps the cover it holds, and the
+  size limit counts that cover once.
 - **An add or a purge stopped at any step is undone whole.** A copy
   `add` made was recorded only once every copy was made, and a file
   `remove --purge` moved to the trash only once the sync began, so a

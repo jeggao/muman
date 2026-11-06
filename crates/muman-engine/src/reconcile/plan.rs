@@ -426,7 +426,11 @@ pub fn resolve_songs(
         &resolver.naming,
         &|path, plan| crate::artifact::parts(plan).files(path),
     );
-    resolution.unplaced =
-        crate::folder::assign(&mut resolution.planned, &settings.cover, &state.facts);
+    resolution.unplaced = crate::folder::assign(
+        &mut resolution.planned,
+        &held,
+        &settings.cover,
+        &state.facts,
+    );
     Ok(resolution)
 }

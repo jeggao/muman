@@ -21,6 +21,12 @@
 //! which writes it over; a file another song's plan writes is never
 //! stale to the song it leaves ([`crate::reconcile`]). A name one of the
 //! songs' own files takes is left to the song, said.
+//!
+//! A song held at its last plan while it fails ([`crate::reconcile`]) is
+//! one of its folder's songs still: it counts toward the albums, the
+//! majority and the cover, and one that holds the folder's file keeps
+//! it, its file kept with it. So a song that fails moves no cover, makes
+//! none appear and takes none away, and no two songs list one file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -55,10 +61,11 @@ pub enum Why {
 type Album = (Option<(String, String)>, Option<usize>);
 
 /// Give each folder's cover, as the folder outputs of `cover` say, to
-/// the song of `planned` that holds it; each folder's file not written,
-/// and why.
+/// the song of `planned` that holds it, the songs of `held` counted
+/// among theirs; each folder's file not written, and why.
 pub fn assign(
     planned: &mut [(usize, Resolved)],
+    held: &[(usize, Resolved)],
     cover: &Cover,
     facts: &BTreeMap<SourceKey, Facts>,
 ) -> Vec<Unplaced> {
@@ -66,8 +73,30 @@ pub fn assign(
     if outs.is_empty() {
         return Vec::new();
     }
-    let paths: Vec<PathBuf> = planned.iter().map(|(_, r)| path_of(r)).collect();
-    let taken: BTreeSet<String> = planned
+    // Planned songs first, so an index below `planned.len()` is one that
+    // can be given the file.
+    let mut given = Vec::new();
+    let unplaced = {
+        let all: Vec<&(usize, Resolved)> = planned.iter().chain(held).collect();
+        assigned(&all, planned.len(), &outs, facts, &mut given)
+    };
+    for (i, placed) in given {
+        planned[i].1.plan.folder = Some(placed);
+    }
+    unplaced
+}
+
+/// [`assign`] of `all`, the first `planned` of which can hold a file:
+/// each holder and its file into `given`.
+fn assigned(
+    all: &[&(usize, Resolved)],
+    planned: usize,
+    outs: &[&CoverOut],
+    facts: &BTreeMap<SourceKey, Facts>,
+    given: &mut Vec<(usize, CoverRef)>,
+) -> Vec<Unplaced> {
+    let paths: Vec<PathBuf> = all.iter().map(|(_, r)| path_of(r)).collect();
+    let taken: BTreeSet<String> = all
         .iter()
         .zip(&paths)
         .flat_map(|((_, r), p)| {
@@ -85,7 +114,7 @@ pub fn assign(
         let folder = parent(&paths[songs[0]]).to_path_buf();
         let mut albums: BTreeMap<Album, Vec<usize>> = BTreeMap::new();
         for &i in songs.iter() {
-            let album = crate::levels::album_of(&planned[i].1);
+            let album = crate::levels::album_of(&all[i].1);
             let own = album.is_none().then_some(i);
             albums.entry((album, own)).or_default().push(i);
         }
@@ -116,18 +145,28 @@ pub fn assign(
         let Some(album) = chosen.filter(|_| !admitted.is_empty()) else {
             continue;
         };
-        let Some(base) = album_cover(planned, &album) else {
+        // A held song keeps the file it holds; else the first song by path
+        // that can be given it holds it.
+        if album
+            .iter()
+            .any(|&i| i >= planned && all[i].1.plan.folder.is_some())
+        {
+            continue;
+        }
+        let Some(&holder) = album.iter().find(|&&i| i < planned) else {
+            continue;
+        };
+        let Some(base) = album_cover(all, &album) else {
             continue;
         };
         let q = facts
             .get(&base.key)
             .and_then(|f| f.covers.iter().find(|x| x.at == base.at))
             .and_then(|x| x.quality);
-        let holder = album[0];
         let mut places = Vec::new();
         for out in admitted {
             let place = crate::resolve::place(out, &base.mimetype, q, out.name.clone());
-            let file = crate::outputs::folder_file(&planned[holder].1.stem, &place);
+            let file = crate::outputs::folder_file(&all[holder].1.stem, &place);
             if let Some(file) = file.filter(|f| taken.contains(&folded(f))) {
                 unplaced.push(Unplaced {
                     folder: folder.clone(),
@@ -138,7 +177,7 @@ pub fn assign(
             places.push(place);
         }
         if !places.is_empty() {
-            planned[holder].1.plan.folder = Some(crate::resolve::placed(&base, places));
+            given.push((holder, crate::resolve::placed(&base, places)));
         }
     }
     unplaced
@@ -146,7 +185,7 @@ pub fn assign(
 
 /// The cover most of `album`'s songs of `planned`, in the order of their
 /// paths, take, a tie going to the first; none where none takes one.
-fn album_cover(planned: &[(usize, Resolved)], album: &[usize]) -> Option<CoverRef> {
+fn album_cover(planned: &[&(usize, Resolved)], album: &[usize]) -> Option<CoverRef> {
     let mut counts: Vec<(CoverRef, usize)> = Vec::new();
     for &i in album {
         let Some(c) = &planned[i].1.plan.cover else {
