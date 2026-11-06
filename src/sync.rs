@@ -63,6 +63,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     crate::atomic::private_dir(&dirs.home)?;
     manifest::start(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
+    let mut due = crate::hooks::Due::default();
     let done = (|| {
         if request.update_defaults {
             update_settings(&dirs.home, out)?;
@@ -92,10 +93,10 @@ pub(crate) fn run<R: Runner, W: Write>(
             accept: request.accept,
             ..Options::default()
         };
-        ok &= crate::reconcile_now(job, runner, opts, Some(&mut run), out)?;
+        ok &= crate::reconcile_now(job, runner, opts, Some(&mut run), &mut due, out)?;
         Ok(ok)
     })();
-    crate::recorded(run, &dirs.home, done)
+    crate::finished(job, runner, run, done, &due, out)
 }
 
 /// Make every lookup due, as `lookup::run` does.

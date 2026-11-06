@@ -47,7 +47,7 @@ Exit codes:
      needs a terminal, -y or --all, a file added matched no song for sure
      and was left out, a change or undo was refused, the song list sets
      commands or servers not trusted, with no terminal to ask on, or a
-     hook ran muman on the home or library of the run that started it
+     hook ran muman on its run's library under another home
   130  Stopped by Ctrl-C or a signal to stop, with every program
        muman started";
 

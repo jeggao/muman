@@ -7,7 +7,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Changed
+
+- **A hook runs only once a command has changed the library, after it
+  lets go of the home.** `on = "written"`, which ran on each song file
+  as it was placed, is refused: it changed a file muman had written,
+  outside the song's plan, and an export left it out. A tag a program
+  should add is given with `muman add` as a tag file. A hook's words
+  take `{library}`, `{written}`, `{moved}` and `{removed}` alone, so no
+  title reaches a command line, and a hook may run muman on its own
+  home; a muman a hook starts runs no hook.
+
 ### Fixed
+
+- **A hook muman cannot run no longer stops every command.** It is
+  refused alone, said by each command that would run it and by
+  `check`; `edit`, `set` and every other hook still work. The guard
+  that tried to tell a shell's script from its other words, bypassed by
+  `sh -c --`, wrappers such as `env -S` and `nice`, and interpreters
+  such as `python3 -c`, and refusing hooks such as `tag.sh -force`, is
+  gone with the values it guarded.
 
 - **`undo` of a run an earlier muman recorded puts its files back as
   muman's.** A record from before 0.10 was read as the newer kind, so

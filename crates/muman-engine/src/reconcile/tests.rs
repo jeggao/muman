@@ -40,7 +40,9 @@ impl Home {
 
     fn run(&self, fake: &Fake, opts: Options) -> (bool, String) {
         let mut out = Vec::new();
-        let ok = reconcile(fake, &self.dirs, opts, None, &mut out).unwrap();
+        let ok = reconcile(fake, &self.dirs, opts, None, &mut out)
+            .unwrap()
+            .ok;
         let text = String::from_utf8(out).unwrap();
         if !opts.dry_run {
             self.holds(&text);
@@ -61,7 +63,7 @@ impl Home {
             query: &query,
             all,
         };
-        reconcile_into(
+        let _ = reconcile_into(
             fake,
             &self.dirs,
             opts,
@@ -304,7 +306,7 @@ fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
         dry_run: true,
         ..Options::default()
     };
-    reconcile(
+    let _ = reconcile(
         &infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]),
         &elsewhere,
         dry,
@@ -562,51 +564,49 @@ fn a_file_retagged_by_hand_keeping_its_size_and_time_is_left_alone() {
 
 #[test]
 fn a_run_stopped_while_writing_leaves_each_file_vouched_for_or_claimed() {
-    let h = home();
-    h.fetched("aaaaaaaaaaa");
-    h.fetched("bbbbbbbbbbb");
-    h.songs(TWO);
-    h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
-    h.songs(&format!(
-        "[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{{rel}}\"]\n{TWO}"
-    ));
-    let mut stopping = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    stopping.on_stream = Some(Box::new(|args: &[String]| {
-        assert!(
-            !args.iter().any(|a| a.contains("bbbbbbbbbbb")),
-            "the run stops while writing the second song"
-        );
-        true
-    }));
+    let prepare = || {
+        let h = home();
+        h.fetched("aaaaaaaaaaa");
+        h.fetched("bbbbbbbbbbb");
+        h.songs(TWO);
+        h.run(&infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]), Options::default());
+        h
+    };
     let every_song = Options {
         force: true,
         ..Options::default()
     };
-    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h.run(&stopping, every_song)
-    }));
-    assert!(stopped.is_err());
-
-    let state = State::load(&h.dirs.home).unwrap();
-    let a = Path::new("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus");
-    let b = Path::new("Chan/Title bbbbbbbbbbb/Title bbbbbbbbbbb.opus");
-    assert!(state.outputs[a].plan.is_some(), "the first is vouched for");
-    assert!(!changed_since_written(&h.dirs.library, &state.outputs, a));
-    assert_eq!(
-        (&state.outputs[b].plan, &state.outputs[b].stamp),
-        (&None, &None),
-        "the second is claimed, not taken for changed by someone else"
-    );
-    h.songs(TWO);
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
-    let (ok, text) = h.run(&fake, Options::default());
-    assert!(ok, "{text}");
-    assert_eq!(renders(&fake), 1, "only the claimed song: {text}");
-    assert!(!text.contains("changed since muman wrote it"), "{text}");
-    assert!(
-        text.contains("Written again: Chan/Title bbbbbbbbbbb"),
-        "{text}"
-    );
+    let whole = prepare();
+    let counted = crate::kill::kill_at(whole.dirs.home.parent().unwrap(), usize::MAX);
+    whole.run(&fake, every_song);
+    let steps = counted.seen();
+    drop(counted);
+    assert!(steps > 2, "{steps}");
+    for at in 1..=steps {
+        let h = prepare();
+        let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
+        let stopped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.run(&fake, every_song)));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let state = State::load(&h.dirs.home).unwrap();
+        for (path, written) in &state.outputs {
+            assert!(
+                (written.plan.is_some()
+                    && !changed_since_written(&h.dirs.library, &state.outputs, path))
+                    || (written.plan.is_none() && written.stamp.is_none()),
+                "step {at}: {} is neither vouched for nor claimed",
+                path.display()
+            );
+        }
+        let (ok, text) = h.run(&fake, Options::default());
+        assert!(ok, "step {at}: {text}");
+        assert!(
+            !text.contains("changed since muman wrote it"),
+            "step {at}: {text}"
+        );
+    }
 }
 
 #[test]
@@ -736,7 +736,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
     h.songs("[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags = { genre = \"Pop\" }\n");
     let mut run = Run::begin(&h.dirs.home).unwrap();
     let mut out = Vec::new();
-    reconcile(
+    let _ = reconcile(
         &infos(&["aaaaaaaaaaa"]),
         &h.dirs,
         Options::default(),

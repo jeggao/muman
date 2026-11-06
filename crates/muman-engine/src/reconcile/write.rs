@@ -21,7 +21,6 @@ use anyhow::Result;
 
 use crate::dirs::Dirs;
 use crate::facts::Facts;
-use crate::hooks;
 use crate::library::{Ledger, Owned, Relocation};
 use crate::limit;
 use crate::manifest::{Manifest, Song};
@@ -508,8 +507,8 @@ fn say_left<W: Write>(doing: &[Doing], out: &mut W) -> Result<()> {
 }
 
 /// Render `due`, each from its sources, from the folder fitting rendered
-/// it into, or by its tags alone into the file `old` records, saying each
-/// and running the hooks on it; `pending` keeps each as it is vouched for.
+/// it into, or by its tags alone into the file `old` records, saying
+/// each; `pending` keeps each as it is vouched for.
 fn render_due<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     due: &[(&PlannedSong, bool)],
@@ -596,10 +595,9 @@ fn render_due<R: Runner, W: Write>(
     Ok(wrote)
 }
 
-/// Say what writing `done` did to its song, run the hooks on its file,
-/// and vouch for it and each file beside it as written, those of a song
-/// only `retag`ged as they were; with what its plan rendered to, when
-/// fitting asks.
+/// Say what writing `done` did to its song, and vouch for it and each
+/// file beside it as written, those of a song only `retag`ged as they
+/// were; with what its plan rendered to, when fitting asks.
 fn vouch<R: Runner, W: Write>(
     job: &Writing<'_, R>,
     (song, r): (&Song, &Resolved),
@@ -633,18 +631,6 @@ fn vouch<R: Runner, W: Write>(
     for problem in &done.problems {
         crate::ui::warning(out, &format!("  {problem}"))?;
     }
-    // Before the stamp, so a hook that tags the file further does not make
-    // it look changed by something else.
-    let values = hooks::written_values(library, &done.audio);
-    let values: Vec<(&str, &str)> = values.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    hooks::run(
-        job.runner,
-        &job.dirs.home,
-        &job.manifest.hooks,
-        hooks::Event::Written,
-        &values,
-        out,
-    )?;
     let learned = job.fitted.map(|f| {
         let measured = state::Measured {
             source: r.plan.audio.key.clone(),

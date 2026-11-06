@@ -65,6 +65,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     let dirs = &job.dirs;
     crate::atomic::private_dir(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
+    let mut due = crate::hooks::Due::default();
     let mut left_out = 0;
     let mut unread = Vec::new();
     let mut refused = None;
@@ -76,12 +77,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         } = sort_inputs(request.inputs)?;
         let (loose, files) = split_loose(&files, &mut unread);
         let mut ok = true;
-        if let Some(url) = urls.first().or(torrents.first()).filter(|_| job.offline) {
-            return Err(change::Refused(format!(
-                "{url} is fetched from the network, and --offline reaches none"
-            ))
-            .into());
-        }
+        refuse_offline(job, urls.first().or(torrents.first()))?;
         let sites = Manifest::load(&dirs.home)?.settings.sites;
         let mut beside = Vec::new();
         let mut copied = Vec::new();
@@ -114,11 +110,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             ok &= fine;
             proposals.extend(record(dirs, additions)?);
         }
-        let declined: BTreeSet<SourceKey> = if request.no_match {
-            proposals.iter().flat_map(|p| p.sources.clone()).collect()
-        } else {
-            BTreeSet::new()
-        };
+        let declined = declined(request.no_match, &proposals);
         let how = Listing {
             mode: crate::mode(request.matching),
             verbose: job.verbose,
@@ -154,15 +146,43 @@ pub(crate) fn run<R: Runner, W: Write>(
         unread.extend(attached.unread);
         give_tags(dirs, &attached.songs, &how, listed, out)?;
         ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
-        ok &= crate::reconcile_now(job, runner, Options::default(), Some(&mut run), out)?;
+        ok &= crate::reconcile_now(
+            job,
+            runner,
+            Options::default(),
+            Some(&mut run),
+            &mut due,
+            out,
+        )?;
         Ok(ok)
     })();
-    let ok = crate::recorded(run, &dirs.home, done)?;
+    let ok = crate::finished(job, runner, run, done, &due, out)?;
     if let Some(e) = refused {
         return Err(e);
     }
     not_added(&unread, left_out, request.matching.yes)?;
     Ok(ok)
+}
+
+/// Refuse what is fetched from the network, `fetched`, when the run
+/// reaches none.
+fn refuse_offline(job: &Job, fetched: Option<&&String>) -> Result<()> {
+    match fetched.filter(|_| job.offline) {
+        Some(url) => Err(change::Refused(format!(
+            "{url} is fetched from the network, and --offline reaches none"
+        ))
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// The sources of `proposals`, each looked up for nothing when `no_match`.
+fn declined(no_match: bool, proposals: &[Proposal]) -> BTreeSet<SourceKey> {
+    if no_match {
+        proposals.iter().flat_map(|p| p.sources.clone()).collect()
+    } else {
+        BTreeSet::new()
+    }
 }
 
 /// What `add` was given, by how each is added.

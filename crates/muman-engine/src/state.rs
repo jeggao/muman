@@ -539,7 +539,7 @@ impl Sidecar {
 }
 
 /// What a plan renders to, as rendered once: its audio file and each file
-/// beside it, in bytes, before any hook.
+/// beside it, in bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "json::StoredMeasured")]
 pub struct Measured {

@@ -136,8 +136,8 @@ const HEADER: &str = "\
 #             `until` it has, which songs it `skip`s, and how the service
 #             is asked. A song sets lookups = false to ask none, or
 #             lookups.<provider> = false to ask that one nothing.
-#   Hooks:    [[hook]] runs a command, on = \"written\" for each song file
-#             ({path}), \"changed\" once a run wrote or removed any.
+#   Hooks:    [[hook]] runs a command, on = \"changed\", once a run wrote,
+#             moved or removed any file.
 #   Settings: [library], [tags], [lyrics], [audio], [loudness],
 #             [cover], [ytdlp], [torrent], [tools], [history] and
 #             [sites.*] lay out and name the library, spell quotes and
@@ -1018,7 +1018,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         torrents: torrents_of(doc)?,
         removed,
         providers: providers::read(doc)?,
-        hooks: hooks::read(doc)?,
+        hooks: hooks::read(doc),
         clean: clean_of(doc)?,
         settings,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),

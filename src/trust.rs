@@ -57,7 +57,6 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use toml_edit::DocumentMut;
 
-use crate::hooks::Event;
 use crate::migrate::{HISTORY, Step};
 use crate::provider::Provider;
 use crate::providers::ProviderRules;
@@ -122,14 +121,16 @@ pub fn held(doc: &DocumentMut) -> Result<Vec<Held>> {
     let providers = crate::providers::read(doc)?;
     let defaults = crate::settings::Settings::default();
     let mut held = Vec::new();
-    for (n, hook) in crate::hooks::read(doc)?.iter().enumerate() {
-        let on = match hook.on {
-            Event::Written => "written",
-            Event::Changed => "changed",
-        };
+    // A refused hook never runs, so there is nothing of it to trust.
+    let hooks = crate::hooks::read(doc);
+    for (n, hook) in hooks
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.refused.is_none())
+    {
         let value = format!(
             "on = {}, run = {}",
-            canonical(&json!(on)),
+            canonical(&json!("changed")),
             canonical(&json!(hook.run))
         );
         held.push(Held::new(format!("[[hook]] {}", n + 1), value));

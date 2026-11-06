@@ -159,8 +159,7 @@ pub struct Job {
     pub hooked: Option<Hooked>,
 }
 
-/// The run a hook runs muman from, which holds its home's locks and its
-/// library's until the hook ends.
+/// The run a hook runs muman from: its home, and the library it wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hooked {
     pub home: PathBuf,
@@ -410,7 +409,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 query,
                 all: *all,
             };
-            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))
+            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report)).map(|s| s.ok)
         }
         Command::Info { state: true } => {
             state::State::dump(&dirs.home, data)?;
@@ -437,6 +436,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             dry_run,
         } if *resolve || merge.is_some() => {
             let mut run = Run::begin(&dirs.home)?;
+            let mut due = hooks::Due::default();
             let confirm = cli::Confirm {
                 yes: *yes,
                 all: false,
@@ -451,9 +451,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 if !changed {
                     return Ok(true);
                 }
-                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Some(&mut run),
+                    &mut due,
+                    out,
+                )
             })();
-            recorded(run, &dirs.home, done)
+            finished(job, runner, run, done, &due, out)
         }
         Command::Duplicates { query, .. } => {
             duplicates::report(dirs, query, out, data)?;
@@ -530,7 +537,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 return Ok(true);
             }
             // As a run holds it, so no run begins between the undo and its sync.
-            let _runs = Lock::runs(&dirs.home)?;
+            let runs = Lock::runs(&dirs.home)?;
             let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let _library = Lock::library(&dirs.library, dirs.lock_folder()?);
@@ -547,8 +554,11 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 before: undone.changed(),
                 ..Options::default()
             };
-            let ok = reconcile_now(job, runner, opts, None, out)?;
+            let mut due = hooks::Due::default();
+            let ok = reconcile_now(job, runner, opts, None, &mut due, out)?;
             undone.finish()?;
+            drop(runs);
+            run_hooks(job, runner, &due, out)?;
             Ok(ok)
         }
         Command::Add {
@@ -603,41 +613,66 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             confirm,
         } => {
             let mut run = Run::begin(&dirs.home)?;
+            let mut due = hooks::Due::default();
             let done = (|| {
                 if !change::remove(dirs, query, *purge, confirm, prompter, &mut run, out)? {
                     return Ok(true);
                 }
-                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Some(&mut run),
+                    &mut due,
+                    out,
+                )
             })();
-            recorded(run, &dirs.home, done)
+            finished(job, runner, run, done, &due, out)
         }
         Command::Restore { query, confirm } => {
             let mut run = Run::begin(&dirs.home)?;
+            let mut due = hooks::Due::default();
             let done = (|| {
                 if !change::restore(dirs, query, confirm, prompter, out)? {
                     return Ok(true);
                 }
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
-                ok &= reconcile_now(job, runner, Options::default(), Some(&mut run), out)?;
+                ok &= reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Some(&mut run),
+                    &mut due,
+                    out,
+                )?;
                 Ok(ok)
             })();
-            recorded(run, &dirs.home, done)
+            finished(job, runner, run, done, &due, out)
         }
         Command::Set { terms, confirm } => {
             let mut run = Run::begin(&dirs.home)?;
+            let mut due = hooks::Due::default();
             let done = (|| {
                 if !change::set(dirs, terms, confirm, prompter, out)? {
                     return Ok(true);
                 }
-                reconcile_now(job, runner, Options::default(), Some(&mut run), out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Some(&mut run),
+                    &mut due,
+                    out,
+                )
             })();
-            recorded(run, &dirs.home, done)
+            finished(job, runner, run, done, &due, out)
         }
         Command::Edit { query, all } => {
             // Begun once the editor is closed, so an open editor holds no
             // other run back.
             let mut run: Option<Run> = None;
+            let mut due = hooks::Due::default();
             let edited = editor::edit(
                 dirs,
                 query,
@@ -657,30 +692,54 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             };
             let done = edited.and_then(|edited| {
                 if edited {
-                    reconcile_now(job, runner, Options::default(), Some(&mut run), out)
+                    reconcile_now(
+                        job,
+                        runner,
+                        Options::default(),
+                        Some(&mut run),
+                        &mut due,
+                        out,
+                    )
                 } else {
                     Ok(true)
                 }
             });
-            recorded(run, &dirs.home, done)
+            finished(job, runner, run, done, &due, out)
         }
     }
 }
 
 /// The offline phase with the run's settling time, as every command
-/// that writes ends.
+/// that writes ends; the hooks it makes due are added to `due`.
 pub(crate) fn reconcile_now<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     opts: Options,
     run: Option<&mut Run>,
+    due: &mut hooks::Due,
     out: &mut W,
 ) -> Result<bool> {
     let opts = Options {
         settling: job.settling,
         ..opts
     };
-    reconcile::reconcile(runner, &job.dirs, opts, run, out)
+    let synced = reconcile::reconcile(runner, &job.dirs, opts, run, out)?;
+    due.then(synced.due);
+    Ok(synced.ok)
+}
+
+/// Run the hooks `due` names, once the command has let go of the home; a
+/// muman a hook started runs none.
+pub(crate) fn run_hooks<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    due: &hooks::Due,
+    out: &mut W,
+) -> Result<()> {
+    if job.hooked.is_some() {
+        return Ok(());
+    }
+    due.run(runner, &job.dirs.home, out)
 }
 
 /// What [`run_with`] must know of a command before running it.
@@ -701,34 +760,29 @@ pub(crate) struct Traits {
     /// It may run ffmpeg or ffprobe: an export only when it encodes,
     /// `check` only when it decodes.
     pub ffmpeg: bool,
-    /// It may lock the home or the library, or wait on their locks, so a
-    /// hook cannot run it on the home or library of the run that started
-    /// it ([`Hooked`]).
+    /// It may lock the home or the library, so a hook cannot run it on
+    /// the library of the run that started it under another home
+    /// ([`Hooked`]).
     pub locks: bool,
     /// The long steps it may take, in the order it takes them, which
     /// number them as it goes.
     pub steps: &'static [&'static str],
 }
 
-/// Refuse to run where `hooked`, the run whose hook this is, holds the
-/// locks: that run waits for its hook, which would wait for it.
+/// Refuse to run on the library `hooked`, the run whose hook this is,
+/// named in the `MUMAN_LIBRARY` the hook inherits, under another home:
+/// two homes would write one library.
 fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
-    if platform::same_path(&hooked.home, &dirs.home) {
-        return Err(change::Refused(format!(
-            "a hook cannot run this on {}, the home of the run that started it, which waits for \
-             the hook to end",
-            dirs.home.display()
-        ))
-        .into());
-    }
-    if hooked
-        .library
-        .as_deref()
-        .is_some_and(|l| platform::same_path(l, &dirs.library))
+    let elsewhere = !platform::same_path(&hooked.home, &dirs.home);
+    if elsewhere
+        && hooked
+            .library
+            .as_deref()
+            .is_some_and(|l| platform::same_path(l, &dirs.library))
     {
         return Err(change::Refused(format!(
-            "a hook cannot run this on {}, the library the run that started it is writing; pass \
-             --library to name another",
+            "a hook cannot run this on {}, the library of the run that started it, under \
+             another home; pass --library to name another",
             dirs.library.display()
         ))
         .into());
@@ -839,6 +893,21 @@ pub(crate) fn recorded(run: Run, home: &Path, done: Result<bool>) -> Result<bool
     let ok = done?;
     finished?;
     Ok(ok)
+}
+
+/// [`recorded`], then the hooks `due` names, run once `run` has let go of
+/// the home, whether or not its command stopped on an error.
+pub(crate) fn finished<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    run: Run,
+    done: Result<bool>,
+    due: &hooks::Due,
+    out: &mut W,
+) -> Result<bool> {
+    let done = recorded(run, &job.dirs.home, done);
+    run_hooks(job, runner, due, out)?;
+    done
 }
 
 /// Write the songs the query matches to `data`, or the removed ones.

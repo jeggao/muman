@@ -31,7 +31,7 @@
 //! rendering. A song rendered to be measured is moved into the library
 //! rather than rendered twice. A song a change only tags again takes the
 //! size of the plan its file was written from until it is written and
-//! measured. Sizes are taken before any hook runs.
+//! measured.
 //!
 //! **Too little room.** When even the songs' lowest rungs, measured,
 //! cannot fit, songs are left out, the last listed first, until the rest
