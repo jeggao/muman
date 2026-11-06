@@ -4709,6 +4709,94 @@ fn exported_home(seconds: &str) -> (Setup, Fake) {
 }
 
 #[test]
+fn an_export_writes_over_no_file_of_the_home_and_another_s_only_when_forced() {
+    let (s, fake) = exported_home("200.0");
+    let stranger = PathBuf::from(s.written("theirs.flac", "their own"));
+    let home = s.dir.path().join("home");
+    let targets = [
+        home.join("songs.toml"),
+        home.join("state.db"),
+        home.join("sources/manual/Song.flac"),
+        s.dir.path().join("lib/Artist/Record/02 Song.flac"),
+        stranger.clone(),
+    ];
+    for target in &targets {
+        let before = std::fs::read(target).unwrap();
+        let e = s
+            .trusting(&fake, &["export", "-o", &target.to_string_lossy()], None)
+            .unwrap_err();
+        assert!(
+            e.downcast_ref::<change::Refused>().is_some(),
+            "{}: {e:#}",
+            target.display()
+        );
+        assert_eq!(
+            std::fs::read(target).unwrap(),
+            before,
+            "{}",
+            target.display()
+        );
+    }
+    let (ok, text) = s.run(
+        &fake,
+        &["export", "--force", "-o", &stranger.to_string_lossy()],
+    );
+    assert!(ok, "{text}");
+    assert!(std::fs::read(&stranger).unwrap().starts_with(b"PK"));
+    let songs = home.join("songs.toml");
+    let e = s
+        .trusting(
+            &fake,
+            &["export", "--force", "-o", &songs.to_string_lossy()],
+            None,
+        )
+        .unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+}
+
+#[test]
+fn an_export_into_a_folder_not_there_is_refused_before_it_is_made() {
+    let (s, fake) = exported_home("0.05");
+    let nowhere = s.dir.path().join("nowhere");
+    let named = format!("{}{}", nowhere.display(), std::path::MAIN_SEPARATOR);
+    let e = s
+        .trusting(&fake, &["export", "-o", &named], None)
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("no folder"), "{e:#}");
+    assert!(!nowhere.exists());
+    let scratch: Vec<_> = std::fs::read_dir(s.dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(".muman-scratch-"))
+        .collect();
+    assert!(scratch.is_empty(), "{scratch:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_export_fills_the_empty_folder_a_link_names_and_keeps_the_link() {
+    let (s, fake) = exported_home("0.05");
+    for (n, slash) in ["", "/"].into_iter().enumerate() {
+        let card = s.dir.path().join(format!("card{n}"));
+        std::fs::create_dir(&card).unwrap();
+        let link = s.dir.path().join(format!("link{n}"));
+        std::os::unix::fs::symlink(&card, &link).unwrap();
+        let named = format!("{}{slash}", link.display());
+        let (ok, text) = s.run(&fake, &["export", "--folder", "-o", &named]);
+        assert!(ok, "{named}: {text}");
+        let kept = std::fs::symlink_metadata(&link).unwrap();
+        assert!(kept.file_type().is_symlink(), "{named}");
+        assert!(card.join("songs.toml").is_file(), "{named}: {text}");
+        assert!(card.join("library").is_dir(), "{named}: {text}");
+        let left: Vec<_> = std::fs::read_dir(&card)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left.len(), 2, "{named}: {left:?}");
+    }
+}
+
+#[test]
 fn an_export_short_of_a_song_fails() {
     let (s, fake) = exported_home("200.0");
     std::fs::remove_file(s.dir.path().join("lib/Artist/Record/02 Song.flac")).unwrap();

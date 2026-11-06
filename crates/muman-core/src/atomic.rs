@@ -240,6 +240,22 @@ pub fn link(from: &Path, to: &Path) -> io::Result<()> {
     std::fs::hard_link(from, to)
 }
 
+/// `from` moved to `to` only where nothing is at `to`: a second name made
+/// for it first, which no filesystem gives over a file already there,
+/// then its first name removed. Where the filesystem makes no second
+/// name, as FAT, `to` is looked for before the rename, so only a file
+/// made between the two would be written over.
+// The primitive a file placed where no other may be goes through.
+#[expect(clippy::disallowed_methods)]
+pub fn place_new(from: &Path, to: &Path) -> io::Result<()> {
+    match link(from, to) {
+        Ok(()) => remove(from),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        Err(_) if to.symlink_metadata().is_ok() => Err(io::ErrorKind::AlreadyExists.into()),
+        Err(_) => rename(from, to),
+    }
+}
+
 /// `std::fs::remove_file`, waiting out a held file.
 // The primitive every other removal goes through.
 #[expect(clippy::disallowed_methods)]
@@ -491,6 +507,21 @@ fn clear_scratch(parent: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_placed_new_takes_no_file_s_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("a.part"), dir.path().join("a"));
+        std::fs::write(&from, "new").unwrap();
+        std::fs::write(&to, "theirs").unwrap();
+        let e = super::place_new(&from, &to).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "theirs");
+        std::fs::remove_file(&to).unwrap();
+        super::place_new(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "new");
+        assert!(!from.exists());
+    }
+
     use super::*;
 
     fn name(s: &str) -> Name {

@@ -146,9 +146,10 @@ const MUTATIONS: &[(&str, &str)] = &[
     ("editor.rs", "the file the editor is opened on, in scratch"),
     (
         "export.rs",
-        "the zip or the folder, made in scratch and renamed into place, an \
-         empty folder there replaced; each song encoded for it moved or \
-         deleted from scratch once it is in, any other copied in",
+        "the zip, made in scratch and placed where no file is, or with \
+         --force over one; the folder's song list and library, made in \
+         scratch inside it and renamed up; each song encoded for it moved \
+         or deleted from scratch once it is in, any other copied in",
     ),
 ];
 

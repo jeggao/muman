@@ -494,6 +494,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         Command::Export {
             output,
             folder,
+            force,
             max_size,
             codec,
             template,
@@ -513,6 +514,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 max_size: *max_size,
                 settings: &settings,
                 redact: *redact,
+                force: *force,
             };
             export::export(runner, dirs, &options, out)
         }

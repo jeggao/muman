@@ -20,6 +20,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`export -o` writes over no file unasked.** It wrote its zip over
+  whatever `-o` named: the song list, `state.db`, a source, a song of
+  the library, or a zip of the user's. Nothing is now written in the
+  home or the library, and a file elsewhere is written over only with
+  `--force`; both are said before any song is encoded.
+- **`export --folder -o` fills the empty folder a link names.** It
+  failed at the end with "Not a directory" after building the whole
+  export; the folder is now filled from inside, and the link, or a
+  card's mount point, stays. A zip named as a folder that is not there,
+  as `-o new/`, is refused before anything is built.
+- **The export help's MP3 example says what it does.** An MP3 is
+  copied as it is; only other songs are encoded at 192 kb/s.
 - **A hook muman cannot run no longer stops every command.** It is
   refused alone, said by each command that would run it and by
   `check`; `edit`, `set` and every other hook still work. The guard
