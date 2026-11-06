@@ -3048,6 +3048,44 @@ fn manual_files(s: &Setup) -> Vec<String> {
     names
 }
 
+#[test]
+fn an_add_stopped_at_any_step_leaves_no_copy_undo_cannot_take_out() {
+    let whole = Setup::new();
+    let given = whole.file("rips/a.flac");
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["add", &given]);
+    let steps = counted.seen();
+    drop(counted);
+    assert!(steps > 1, "{steps}");
+    for at in 1..=steps {
+        let s = Setup::new();
+        let given = s.file("rips/a.flac");
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["add", &given]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "step {at}: {text}");
+        let undone = s.trusting(&flacs(), &["undo", "-y"], None);
+        assert_eq!(
+            manual_files(&s),
+            Vec::<String>::new(),
+            "step {at}: {undone:?}"
+        );
+        let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+        assert!(m.songs.is_empty(), "step {at}: {undone:?}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn add_refuses_two_files_named_alike_once_normalized_and_copies_neither() {
@@ -4644,6 +4682,54 @@ fn undo_of_a_purge_waits_for_the_file_of_your_own_back_from_the_trash() {
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
     assert!(ok, "{text}");
     assert_eq!(s.songs().len(), 1, "{text}");
+}
+
+#[test]
+fn a_purge_stopped_at_any_step_still_asks_for_its_file_back_from_the_trash() {
+    let prepare = |s: &Setup| {
+        let a = s.file("home/sources/manual/a.flac");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+        a
+    };
+    let purge = ["remove", "-y", "--purge", "manual:a.flac"];
+    let whole = Setup::new();
+    prepare(&whole);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &purge);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let s = Setup::new();
+        let a = prepare(&s);
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&purge),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "step {at}: {text}");
+        if s.songs().len() == 1 {
+            assert!(Path::new(&a).exists(), "step {at}: {text}");
+            continue;
+        }
+        if !Path::new(&a).exists() {
+            let said = s.refused(&["undo", "-y"]);
+            assert!(said.contains("to the trash"), "step {at}: {said}");
+            s.file("home/sources/manual/a.flac");
+        }
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "step {at}: {text}");
+        assert_eq!(s.songs().len(), 1, "step {at}: {text}");
+    }
 }
 
 #[test]

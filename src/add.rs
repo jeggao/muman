@@ -80,7 +80,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         refuse_offline(job, urls.first().or(torrents.first()))?;
         let sites = Manifest::load(&dirs.home)?.settings.sites;
         let mut beside = Vec::new();
-        let mut copied = Vec::new();
+        let mut copied = Copies::noted(&mut run, &dirs.home);
         let imported = import(
             runner,
             dirs,
@@ -90,9 +90,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             &mut unread,
             out,
         );
-        for file in &copied {
-            run.copied(&dirs.home, file);
-        }
+        copied.finish()?;
         let mut proposals = imported?;
         if !torrents.is_empty() {
             let (fine, found) = add_torrents(job, runner, &torrents, request.from, out)?;
@@ -139,6 +137,9 @@ pub(crate) fn run<R: Runner, W: Write>(
             .copied
             .iter()
             .for_each(|f| run.copied(&dirs.home, f));
+        if !attached.copied.is_empty() {
+            run.checkpoint(&dirs.home)?;
+        }
         give_tags(dirs, &attached.songs, &how, listed, out)?;
         ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
         ok &= crate::reconcile_now(
@@ -329,17 +330,18 @@ pub(crate) fn import<R: Runner, W: Write>(
     dirs: &Dirs,
     sites: &crate::sites::Sites,
     paths: &[&String],
-    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Copies<'_>),
     unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
-    let start = copied.len();
+    let start = copied.made.len();
     let imported = import_all(runner, dirs, sites, paths, (beside, copied), unread, out);
     if imported.is_err() {
         // An add refused partway, as by two names one once composed,
         // leaves none of its copies for the next sync to list.
-        for file in copied.drain(start..).rev() {
+        for file in copied.made.split_off(start).into_iter().rev() {
             atomic::remove(&file).with_context(|| format!("removing {}", file.display()))?;
+            copied.forget(&file);
         }
     }
     imported
@@ -351,7 +353,7 @@ fn import_all<R: Runner, W: Write>(
     dirs: &Dirs,
     sites: &crate::sites::Sites,
     paths: &[&String],
-    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Copies<'_>),
     unread: &mut Vec<String>,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
@@ -473,7 +475,7 @@ fn copy_with_sidecars<W: Write>(
     path: &Path,
     to: &Path,
     dirs: &Dirs,
-    (folders, copied): (&mut HashMap<PathBuf, Walked>, &mut Vec<PathBuf>),
+    (folders, copied): (&mut HashMap<PathBuf, Walked>, &mut Copies<'_>),
     out: &mut W,
 ) -> Result<()> {
     copy_new(&Folder::new(path), path, to, copied)?;
@@ -653,7 +655,7 @@ impl<R: Runner> Originals<'_, R> {
         dirs: &Dirs,
         given: (&Folder, &Path),
         key: SourceKey,
-        (out, copied): (&mut W, &mut Vec<PathBuf>),
+        (out, copied): (&mut W, &mut Copies<'_>),
         brought: &mut Vec<Brought>,
     ) -> Result<()> {
         brought.push(Brought::Ready(self.bring(
@@ -676,7 +678,7 @@ impl<R: Runner> Originals<'_, R> {
         dirs: &Dirs,
         (within, file): (&Folder, &Path),
         key: SourceKey,
-        (out, copied): (&mut W, &mut Vec<PathBuf>),
+        (out, copied): (&mut W, &mut Copies<'_>),
     ) -> Result<Proposal> {
         if self.held.has(&key) || self.brought.contains(&key) {
             ui::info(
@@ -699,7 +701,8 @@ impl<R: Runner> Originals<'_, R> {
                 atomic::Scratch::new().and_then(|s| download::scrub(self.runner, &to, s.path()));
             if let Err(e) = scrubbed {
                 atomic::remove(&to).with_context(|| format!("removing {}", to.display()))?;
-                copied.retain(|c| *c != to);
+                copied.made.retain(|c| *c != to);
+                copied.forget(&to);
                 bail!(
                     "{}: not added, its info JSON not cleared of what its fetch sent: {e:#}",
                     file.display()
@@ -1168,9 +1171,9 @@ pub(crate) fn copy_new(
     within: &Folder,
     from: &Path,
     to: &Path,
-    copied: &mut Vec<PathBuf>,
+    copied: &mut Copies<'_>,
 ) -> Result<()> {
-    if copied.iter().any(|c| c == to) {
+    if copied.made.iter().any(|c| c == to) {
         return Err(change::Refused(format!(
             "{} and another file given are both named {} once composed; rename one of them first",
             from.display(),
@@ -1189,9 +1192,52 @@ pub(crate) fn copy_new(
     if let Some(dir) = to.parent() {
         crate::create(dir)?;
     }
+    copied.ahead(to)?;
     within.copy(from, to)?;
-    copied.push(to.to_path_buf());
+    copied.made.push(to.to_path_buf());
     Ok(())
+}
+
+/// The copies an add makes into the sources, `made`. Each is noted in the
+/// run's record before it is made, so a run stopped at any step leaves
+/// none that `undo` cannot take out.
+pub(crate) struct Copies<'r> {
+    pub(crate) made: Vec<PathBuf>,
+    run: (&'r mut Run, &'r Path),
+}
+
+impl<'r> Copies<'r> {
+    pub(crate) fn noted(run: &'r mut Run, home: &'r Path) -> Self {
+        Self {
+            made: Vec::new(),
+            run: (run, home),
+        }
+    }
+
+    fn ahead(&mut self, to: &Path) -> Result<()> {
+        let (run, home) = &mut self.run;
+        run.copying(home, to);
+        run.checkpoint(home)
+    }
+
+    fn forget(&mut self, to: &Path) {
+        let (run, home) = &mut self.run;
+        run.not_copied(home, to);
+    }
+
+    /// Note each copy as made, with what it holds, for `undo` to tell
+    /// whether it changed since.
+    pub(crate) fn finish(self) -> Result<()> {
+        let (run, home) = self.run;
+        for file in &self.made {
+            run.copied(home, file);
+        }
+        if self.made.is_empty() {
+            Ok(())
+        } else {
+            run.checkpoint(home)
+        }
+    }
 }
 
 /// Copy the files of `files`, as `from` was walked, that `keep` lets
@@ -1201,7 +1247,7 @@ pub(crate) fn copy_tree(
     files: &[PathBuf],
     to: &Path,
     keep: &mut impl FnMut(&Path) -> bool,
-    copied: &mut Vec<PathBuf>,
+    copied: &mut Copies<'_>,
 ) -> Result<()> {
     if to.exists() {
         return Err(change::Refused(format!(
