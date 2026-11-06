@@ -3770,6 +3770,64 @@ fn restore_puts_removed_songs_back_where_they_were() {
 }
 
 #[test]
+fn one_undo_takes_back_a_run_killed_partway_and_the_run_that_finished_it() {
+    let prepare = |s: &Setup| {
+        s.file("home/sources/manual/a.flac");
+        s.file("home/sources/manual/b.flac");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+    };
+    let edit = |s: &Setup| {
+        let songs = s.dir.path().join("home/songs.toml");
+        let listed = std::fs::read_to_string(&songs).unwrap();
+        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+        std::fs::write(
+            &songs,
+            listed.replace(&default, "template = \"{{ title }} {{ id }}\""),
+        )
+        .unwrap();
+        listed
+    };
+    let whole = Setup::new();
+    prepare(&whole);
+    edit(&whole);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["sync"]);
+    let steps = counted.seen();
+    drop(counted);
+    assert!(steps > 1, "{steps}");
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let (library, before) = (library_of(&s), edit(&s));
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["sync"]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "step {at}: {text}");
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "step {at}: {text}");
+        let songs = s.dir.path().join("home/songs.toml");
+        assert_eq!(
+            std::fs::read_to_string(&songs).unwrap(),
+            before,
+            "step {at}: {text}"
+        );
+        assert_eq!(library_of(&s), library, "step {at}: {text}");
+    }
+}
+
+#[test]
 fn undo_puts_a_removed_song_back() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
