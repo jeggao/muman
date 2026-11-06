@@ -718,6 +718,25 @@ fn holder_of(s: &Setup, file: &str) -> Option<SourceKey> {
 }
 
 #[test]
+fn a_song_that_fails_keeps_its_file_and_its_name_from_a_song_of_its_name() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let before = library_of(&s);
+    assert_eq!(before.len(), 2, "{text}");
+    std::fs::remove_file(&a).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok && text.contains("Failed"), "{text}");
+    assert_eq!(library_of(&s), before, "neither file changes: {text}");
+    assert!(
+        !text.contains("Updated") && !text.contains("Removed"),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_folder_s_cover_is_written_once_and_handed_on_when_its_song_goes() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
