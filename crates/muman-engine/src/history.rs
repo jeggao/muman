@@ -577,8 +577,10 @@ impl Run {
         });
     }
 
-    /// Record that the run moved `file`, under `home`, to the desktop's
-    /// trash, which muman cannot take it back from on every platform.
+    /// Record that the run moves `file`, under `home`, to the desktop's
+    /// trash, which muman cannot take it back from on every platform;
+    /// [`Run::checkpoint`] before the move, so a run stopped after it
+    /// still asks for it back.
     pub fn trashed(&mut self, home: &Path, file: &Path) {
         if let Ok(rel) = file.strip_prefix(home) {
             self.record.trashed.insert(rel.to_path_buf());
@@ -590,6 +592,22 @@ impl Run {
     pub fn copied(&mut self, home: &Path, file: &Path) {
         if let (Ok(rel), Some(digest)) = (file.strip_prefix(home), crate::hash::digest_file(file)) {
             self.record.copied.insert(rel.to_path_buf(), digest);
+        }
+    }
+
+    /// Record that the run is about to copy into `file`, a name no file
+    /// holds, so a run stopped before [`Run::copied`] notes it still
+    /// takes the copy out: [`Run::checkpoint`] before the copy.
+    pub fn copying(&mut self, home: &Path, file: &Path) {
+        if let Ok(rel) = file.strip_prefix(home) {
+            self.record.copied.insert(rel.to_path_buf(), String::new());
+        }
+    }
+
+    /// Forget a copy the run took out again itself.
+    pub fn not_copied(&mut self, home: &Path, file: &Path) {
+        if let Ok(rel) = file.strip_prefix(home) {
+            self.record.copied.remove(rel);
         }
     }
 
@@ -934,6 +952,24 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
 /// What undoing the latest run would do, refused as `undo` itself would
 /// be: when the song list changed since, or the run wrote another
 /// library folder.
+/// Refuse to undo `record` in another library than the one it wrote. A
+/// run stopped before its sync, as an add after its copies, wrote none.
+fn refuse_another_library(record: &Record, state: &State, dirs: &Dirs) -> Result<()> {
+    let wrote_library =
+        !(record.touched.is_empty() && record.moves.is_empty() && record.before.is_empty());
+    if wrote_library
+        && !state
+            .library
+            .as_deref()
+            .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
+    {
+        return Err(
+            crate::errors::Refused("The last run wrote another library folder".into()).into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     let home = &dirs.home;
     let state = State::load(home)?;
@@ -952,15 +988,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         ))
         .into());
     }
-    if !state
-        .library
-        .as_deref()
-        .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
-    {
-        return Err(
-            crate::errors::Refused("The last run wrote another library folder".into()).into(),
-        );
-    }
+    refuse_another_library(&record, &state, dirs)?;
     // What undoing would write over must be muman's as the run left it.
     // An undo resumed has put some files back already, and a run stopped
     // partway may have written files it never recorded: both know theirs.
@@ -1261,7 +1289,9 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
             )?;
             continue;
         }
-        if as_copied(&copy, digest) {
+        // No digest: the run stopped as it copied, so what is there is
+        // its copy, whole or not.
+        if digest.is_empty() || as_copied(&copy, digest) {
             std::fs::remove_file(&copy).with_context(|| format!("deleting {}", copy.display()))?;
             crate::ui::info(
                 out,

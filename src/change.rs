@@ -277,8 +277,6 @@ fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
 
 /// Remove the songs the query picks, and with `purge` their sources.
 /// Returns whether anything was removed.
-// Deletes a removed song's fetched source, with `remove --purge`.
-#[expect(clippy::disallowed_methods)]
 pub fn remove<W: Write>(
     dirs: &Dirs,
     terms: &[String],
@@ -372,10 +370,24 @@ pub fn remove<W: Write>(
             note: view.name(),
         });
     }
+    for (file, _) in doomed.iter().filter(|(_, own)| *own) {
+        run.trashed(&dirs.home, file);
+    }
+    if doomed.iter().any(|(_, own)| *own) {
+        run.checkpoint(&dirs.home)?;
+    }
     read.save(&picked)?;
+    purge_all(doomed)?;
+    Ok(true)
+}
+
+/// Move each file of `doomed` that is the user's own to the trash, and
+/// delete the others, which muman fetched.
+// Deletes a removed song's fetched source, with `remove --purge`.
+#[expect(clippy::disallowed_methods)]
+fn purge_all(doomed: Vec<(PathBuf, bool)>) -> Result<()> {
     for (file, own) in doomed {
         if own {
-            run.trashed(&dirs.home, &file);
             crate::history::to_trash(&file)
                 .with_context(|| format!("moving {} to the trash", file.display()))?;
         } else {
@@ -387,7 +399,7 @@ pub fn remove<W: Write>(
             }
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// What `muman undo` would do to the `n` things just named, `does` and

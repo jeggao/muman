@@ -61,6 +61,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **An add or a purge stopped at any step is undone whole.** A copy
+  `add` made was recorded only once every copy was made, and a file
+  `remove --purge` moved to the trash only once the sync began, so a
+  run stopped between left a copy `undo` never took out, or let `undo`
+  bring a song back without asking for its file. Each is recorded
+  before it is made or moved; a run stopped before its sync is undone
+  without a library to compare.
 - **A template naming no field is refused up front.** A misspelt
   `{{ albm }}` failed every song one by one, after the sync had fetched
   and looked up; the sync now refuses it before anything is done (exit
