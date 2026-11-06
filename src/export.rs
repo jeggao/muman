@@ -26,10 +26,9 @@
 //! A song changed since muman wrote it is copied as the library holds it:
 //! the file is the user's. So is one whose sources are gone, or that the
 //! export's settings resolve to no plan, as its file is the only one there
-//! is; each is said, and the export fails. A song made anew runs no
-//! `written` hook. The settings that place or cap the library folder,
-//! `path`, `touch_root` and `max_size`, are no export's, and `block_size`
-//! is a folder's alone. Nor is `[audio.pick]`: the measures a sync takes
+//! is; each is said, and the export fails. The settings that place or
+//! cap the library folder, `path`, `touch_root` and `max_size`, are no
+//! export's, and `block_size` is a folder's alone. Nor is `[audio.pick]`: the measures a sync takes
 //! follow its weights, so an export could rank by measures never taken. Loudness
 //! is refused for the same reason when the song list's mode measures none.
 //!

@@ -449,30 +449,29 @@ changes.
 
 ## Hooks
 
-A `[[hook]]` runs a command as you when the library changes, once you
-have [trusted it](configuration.md#commands-servers-and-secrets):
+A `[[hook]]` runs a command as you once a command has changed the
+library, after you have [trusted it](configuration.md#commands-servers-and-secrets):
 
 ```toml
-[[hook]]
-on = "written"
-run = ["rsgain", "custom", "-s", "i", "{path}"]
-
 [[hook]]
 on = "changed"
 run = ["mpc", "update"]
 ```
 
-| Event | Runs | Values |
-|---|---|---|
-| `written` | After each song file is in place, before muman records its size and time, so a hook may tag it | `path`, `rel` (in the library, with `/`, led by `./`), `library` |
-| `changed` | Once, after a run that wrote, moved or removed any file; an undo's files put back count as written | `library`, `written`, `moved`, `removed` (counts) |
-
-Each value reaches the command as a `{name}` placeholder in its words
-and as a `MUMAN_<NAME>` environment variable, such as `MUMAN_PATH`.
-`run` is an argument list, run without a shell. A script handed to a
-shell (`sh -c`, `pwsh -Command`, `cmd /c`) must read `"$MUMAN_PATH"`:
-a placeholder inside it, where a title could run as code, is refused. A
-batch file (`.bat`, `.cmd`) gets the variables only. A hook's output
+It runs once, after a run that wrote, moved or removed any file (an
+undo's files put back count as written), and after that run lets go of
+the home and the library, so it may run muman there; a muman a hook
+starts runs no hook. It is given `library` and how many files were
+`written`, `moved` and `removed`, each as a `{name}` placeholder in its
+words and as a `MUMAN_<NAME>` variable, such as `MUMAN_LIBRARY`; none
+holds a title or a file's name. `run` is an argument list, run without a
+shell; a batch file (`.bat`, `.cmd`) gets the variables only. Its output
 shows as `hook:`, and a hook that fails is warned of but fails nothing.
-`status` runs no hook. A muman a hook runs on its run's home or library
-stops with exit code 5 rather than wait on that run's locks.
+
+A hook muman cannot run, as one `on = "written"`, is refused alone:
+commands that would run it say so, `check` reports it, and the rest
+still work. A tag a program should add goes in through `muman add` as a
+[tag file](songs.md#giving-songs-lyrics-pictures-and-tags); ReplayGain
+is [`[loudness]`](audio.md#loudness)'s. A muman a hook runs under
+another home, on the library the hook's run wrote, stops with exit code
+5: pass `--library` to name another.

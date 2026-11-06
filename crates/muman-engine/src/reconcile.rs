@@ -122,16 +122,25 @@ fn persist(home: &Path, state: &State, dry_run: bool, lock: &Lock) -> Result<()>
     }
 }
 
+/// What a sync did: whether every song was written, and the song list's
+/// hooks with what the run changed, to run once its command has let go
+/// of the home.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[must_use]
+pub struct Synced {
+    pub ok: bool,
+    pub due: hooks::Due,
+}
+
 /// Bring the library in line with the song list, recording what it
-/// replaces and removes in `run`. Returns whether every song was
-/// written.
+/// replaces and removes in `run`.
 pub fn reconcile<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     opts: Options,
     run: Option<&mut Run>,
     out: &mut W,
-) -> Result<bool> {
+) -> Result<Synced> {
     reconcile_into(runner, dirs, opts, run, out, None)
 }
 
@@ -165,7 +174,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     mut run: Option<&mut Run>,
     out: &mut W,
     report: Option<Report<'_>>,
-) -> Result<bool> {
+) -> Result<Synced> {
     let lock = Lock::folder(&dirs.home)?;
     let home = &dirs.home;
     crate::state::present(home)?;
@@ -479,7 +488,10 @@ pub fn reconcile_into<R: Runner, W: Write>(
             }
         }
         drop(lock);
-        return Ok(ok);
+        return Ok(Synced {
+            ok,
+            due: hooks::Due::default(),
+        });
     }
     let edits = std::mem::take(&mut intent.edits);
     let mut ledger = Ledger::new(&dirs.library, home, run.as_deref_mut());
@@ -562,30 +574,17 @@ pub fn reconcile_into<R: Runner, W: Write>(
         run.saw(&manifest);
         run.synced();
     }
-    let counts = [
-        ("written", applied.written + opts.before.written),
-        ("moved", applied.moved + opts.before.moved),
-        ("removed", applied.removed + opts.before.removed),
-    ];
-    if counts.iter().any(|(_, n)| *n > 0) {
-        if manifest.settings.library.touch_root {
-            touch(&dirs.library, out)?;
-        }
-        let counts = counts.map(|(name, n)| (name, n.to_string()));
-        let library = dirs.library.to_string_lossy();
-        let values: Vec<(&str, &str)> = std::iter::once(("library", library.as_ref()))
-            .chain(counts.iter().map(|(name, n)| (*name, n.as_str())))
-            .collect();
-        hooks::run(
-            runner,
-            home,
-            &manifest.hooks,
-            hooks::Event::Changed,
-            &values,
-            out,
-        )?;
+    let counts = (
+        applied.written + opts.before.written,
+        applied.moved + opts.before.moved,
+        applied.removed + opts.before.removed,
+    );
+    let mut due = hooks::Due::default();
+    due.add(&manifest.hooks, &dirs.library, counts);
+    if due.changed() && manifest.settings.library.touch_root {
+        touch(&dirs.library, out)?;
     }
-    Ok(ok)
+    Ok(Synced { ok, due })
 }
 
 /// What every run leaves, whatever came before it: each file the state

@@ -4327,43 +4327,24 @@ fn a_song_lrclib_lacks_is_not_asked_again_for_a_week() {
 }
 
 #[test]
-fn hooks_run_for_each_file_written_and_once_a_run_changed_anything() {
+fn the_hook_runs_once_a_run_changed_anything() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     std::fs::write(
         s.dir.path().join("home/songs.toml"),
-        "version = 1\n[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{rel}\"]\n\
-         [[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\", \"{written}\"]\n",
+        "version = 1\n[[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\", \"{written}\"]\n",
     )
     .unwrap();
     let fake = flacs();
-    let mut out = Vec::new();
-    run_with(
-        &s.job(&["--trust", "sync"]),
-        &fake,
-        &Server::default(),
-        None,
-        &mut out,
-        &mut Vec::new(),
-    )
-    .unwrap();
-    let text = String::from_utf8(out).unwrap();
-    assert!(fake.ran("./Artist/Record/02 Song.flac"), "{text}");
+    let (ok, text) = s.run(&fake, &["--trust", "sync"]);
+    assert!(ok, "{text}");
     assert!(
         fake.calls().iter().any(|c| c == &["mpc", "update", "1"]),
         "{:?}",
         fake.calls()
     );
     let fake = flacs();
-    run_with(
-        &s.job(&["sync"]),
-        &fake,
-        &Server::default(),
-        None,
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
-    .unwrap();
+    s.run(&fake, &["sync"]);
     assert!(!fake.ran("mpc"), "nothing changed, no hook");
 }
 
@@ -4412,6 +4393,138 @@ fn the_changed_hook_runs_after_a_run_that_only_put_back_or_moved_files() {
     assert_eq!(ran, [["mpc", "update", "0", "1", "0"]], "{text}");
 }
 
+#[test]
+fn a_hook_refused_disables_itself_alone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{path}\"]\n\
+         [[hook]]\non = \"changed\"\nrun = \"mpc update\"\n\
+         [[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n",
+    )
+    .unwrap();
+    let fake = flacs();
+    let (ok, text) = s.run(&fake, &["--trust", "sync"]);
+    assert!(ok, "{text}");
+    assert!(!fake.ran("tagger"), "{:?}", fake.calls());
+    assert!(fake.ran("mpc"), "{:?}", fake.calls());
+    assert!(text.contains("Hook 1 not run"), "{text}");
+    assert!(text.contains("Hook 2 not run"), "{text}");
+    for args in [&["list"][..], &["set", "-y", "manual:a.flac", "genre=Folk"]] {
+        let (ok, text) = s.run(&flacs(), args);
+        assert!(ok, "{args:?}: {text}");
+    }
+    let mut report = Vec::new();
+    let ok = run_with(
+        &s.job(&["check"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut report,
+    )
+    .unwrap();
+    let report = String::from_utf8(report).unwrap();
+    assert!(!ok && report.contains("Hook 1 is never run"), "{report}");
+}
+
+/// Says, when the hook's program runs, whether a run held the home.
+struct Watching<'a> {
+    fake: Fake,
+    home: &'a Path,
+    busy: std::sync::Mutex<Vec<bool>>,
+}
+
+impl Runner for Watching<'_> {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        self.fake.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.fake.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.fake.stream(cmd, on_line)
+    }
+
+    fn stream_env(
+        &self,
+        cmd: &[std::ffi::OsString],
+        env: &[(String, String)],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        if cmd.first().is_some_and(|p| p == "mpc") {
+            self.busy.lock().unwrap().push(Lock::busy(self.home));
+        }
+        self.fake.stream_env(cmd, env, on_line)
+    }
+}
+
+#[test]
+fn the_hook_runs_once_its_run_has_let_go_of_the_home() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n",
+    )
+    .unwrap();
+    let home = s.dir.path().join("home");
+    let watching = Watching {
+        fake: flacs(),
+        home: &home,
+        busy: std::sync::Mutex::default(),
+    };
+    let mut out = Vec::new();
+    let done = run_with(
+        &s.job(&["--trust", "sync"]),
+        &watching,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(done.unwrap(), "{text}");
+    assert_eq!(*watching.busy.lock().unwrap(), [false], "{text}");
+}
+
+#[test]
+fn a_muman_a_hook_starts_runs_no_hook_and_may_use_its_home() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        "version = 1\n[[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n",
+    )
+    .unwrap();
+    let mut job = s.job(&["--trust", "sync"]);
+    job.hooked = Some(Hooked {
+        home: s.dir.path().join("home"),
+        library: Some(s.dir.path().join("lib")),
+    });
+    let fake = flacs();
+    let mut out = Vec::new();
+    let done = run_with(
+        &job,
+        &fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(done.unwrap(), "{text}");
+    assert!(text.contains("Added:"), "{text}");
+    assert!(!fake.ran("mpc"), "{:?}", fake.calls());
+}
+
 impl Setup {
     /// Run `args` with `prompter` answering, if any; the error, if any.
     fn trusting(
@@ -4434,7 +4547,7 @@ impl Setup {
     }
 }
 
-const HOOKED: &str = "version = 1\n[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{rel}\"]\n";
+const HOOKED: &str = "version = 1\n[[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n";
 
 #[test]
 fn a_song_list_s_hook_runs_only_once_trusted_and_y_trusts_nothing() {
@@ -4457,14 +4570,14 @@ fn a_song_list_s_hook_runs_only_once_trusted_and_y_trusts_nothing() {
     let mut no = crate::ui::MockPrompter::answering([false]);
     let text = s.trusting(&fake, &["sync"], Some(&mut no)).unwrap();
     assert!(
-        text.contains("[[hook]] 1 (new): on = \"written\""),
+        text.contains("[[hook]] 1 (new): on = \"changed\""),
         "{text}"
     );
     assert!(fake.calls().is_empty(), "declined, nothing runs");
     let fake = flacs();
     let mut yes = crate::ui::MockPrompter::answering([true]);
     s.trusting(&fake, &["sync"], Some(&mut yes)).unwrap();
-    assert!(fake.ran("tagger"), "{:?}", fake.calls());
+    assert!(fake.ran("mpc"), "{:?}", fake.calls());
     let mut unasked = crate::ui::MockPrompter::new();
     s.trusting(&flacs(), &["sync", "--force"], Some(&mut unasked))
         .unwrap();
@@ -4479,7 +4592,7 @@ fn undo_putting_back_a_hook_taken_out_asks_again() {
     std::fs::write(&songs, HOOKED).unwrap();
     s.trusting(&flacs(), &["--trust", "sync"], None).unwrap();
     let listed = std::fs::read_to_string(&songs).unwrap();
-    let hook = "[[hook]]\non = \"written\"\nrun = [\"tagger\", \"{rel}\"]\n";
+    let hook = "[[hook]]\non = \"changed\"\nrun = [\"mpc\", \"update\"]\n";
     assert!(listed.contains(hook), "{listed}");
     std::fs::write(&songs, listed.replace(hook, "")).unwrap();
     s.trusting(
@@ -5724,7 +5837,7 @@ fn each_command_is_classified_as_it_runs() {
 }
 
 #[test]
-fn a_hook_cannot_run_muman_on_the_home_or_library_of_its_run() {
+fn a_hook_may_run_muman_on_its_home_but_not_on_its_library_elsewhere() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -5747,27 +5860,16 @@ fn a_hook_cannot_run_muman_on_the_home_or_library_of_its_run() {
         home: s.dir.path().join("home"),
         library: Some(s.dir.path().join("lib")),
     };
-    let before = library_of(&s);
-    for args in [&["sync"][..], &["status"], &["undo", "-y"], &["info"]] {
-        let e = go(args, own.clone()).0.unwrap_err();
-        assert!(
-            e.downcast_ref::<change::Refused>().is_some(),
-            "{args:?}: {e:#}"
-        );
-        assert!(
-            format!("{e:#}").contains("the home of the run"),
-            "{args:?}: {e:#}"
-        );
+    for args in [&["sync"][..], &["status"], &["info"], &["list"]] {
+        let (done, text) = go(args, own.clone());
+        assert!(done.unwrap(), "{args:?}: {text}");
     }
-    assert_eq!(library_of(&s), before);
-    let (listed, _) = go(&["list"], own.clone());
-    assert!(listed.unwrap());
-
     let elsewhere = Hooked {
         home: s.dir.path().join("other"),
         ..own.clone()
     };
     let e = go(&["sync"], elsewhere).0.unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert!(format!("{e:#}").contains("--library"), "{e:#}");
     let apart = Hooked {
         home: s.dir.path().join("other"),

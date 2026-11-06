@@ -60,6 +60,11 @@ pub fn check<R: Runner, W: Write, D: Write>(
         problems += 1;
         crate::ui::warning(out, &text)
     };
+    for (n, hook) in manifest.hooks.iter().enumerate() {
+        if let Some(why) = &hook.refused {
+            problem(report, format!("Hook {} is never run: {why}", n + 1))?;
+        }
+    }
     if !busy && crate::history::undo_stopped(&dirs.home) {
         problem(
             report,
