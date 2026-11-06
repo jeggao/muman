@@ -5,8 +5,10 @@
 //! them; `purge` is what deletes them.
 //!
 //! A removed song's sources stay, since `restore` lists it again with
-//! them, and a file in the manual folder is never touched: one no song
-//! lists is added by the next sync. Nothing here can be undone, but
+//! them, and a file in the manual folder is never touched, one no song
+//! lists being added by the next sync, but for the lyrics and pictures
+//! `add` copied into its `added/`, muman's copies of files the user
+//! keeps where they were. Nothing here can be undone, but
 //! nothing is lost either: a fetched source a song lists again is fetched
 //! again by the next sync.
 
@@ -69,8 +71,8 @@ pub fn purge<W: Write>(
     Ok(true)
 }
 
-/// Every file of a fetched source or a kept record no key of `known`
-/// names, with the files that come with it.
+/// Every file of a fetched source, a kept record or a copy `add` made in
+/// `added/` no key of `known` names, with the files that come with it.
 fn unused_files(
     dirs: &Dirs,
     store: &Store,
@@ -82,7 +84,11 @@ fn unused_files(
             doomed.extend(store.fetched_files_at(&path));
             continue;
         }
-        if path.starts_with(dirs.torrent()) {
+        // What `add` copied of lyrics and pictures is muman's copy of a
+        // file the user keeps elsewhere, as fetched sources are.
+        if path.starts_with(dirs.torrent())
+            || path.starts_with(dirs.manual().join(crate::attach::ADDED))
+        {
             doomed.insert(path);
             continue;
         }

@@ -226,6 +226,8 @@ pub struct Attached {
     pub left_out: usize,
     /// The files that could not be read or used, each with why.
     pub unread: Vec<String>,
+    /// The copies made in the manual folder's `added/`, for `undo`.
+    pub copied: Vec<PathBuf>,
 }
 
 /// One song as a loose file is matched against it.
@@ -1349,11 +1351,12 @@ pub fn attach<R: Runner, W: Write>(
             Decision::Listed(songs) => {
                 // A picture is one file the songs share; lyrics are one
                 // song's own, so another song's copy is not reused.
-                let key = if item.what == What::Picture {
+                let (key, made) = if item.what == What::Picture {
                     copy_in(&manual, item, &mut BTreeSet::new())?
                 } else {
                     copy_in(&manual, item, &mut taken)?
                 };
+                attached.copied.extend(made);
                 for n in songs {
                     let id = cands[n].id.clone();
                     manifest.edit(Edit::Add {
@@ -1887,9 +1890,14 @@ fn decide_sheet<W: Write>(
 }
 
 /// Copy `item` into the manual folder's `added/`, or find it there: its
-/// key. A copy already there with its bytes is listed again, but for one
-/// in `taken`, the keys of other songs' own files, which is copied anew.
-fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Result<SourceKey> {
+/// key, and the copy when one was made. A copy already there with its
+/// bytes is listed again, but for one in `taken`, the keys of other
+/// songs' own files, which is copied anew.
+fn copy_in(
+    manual: &Path,
+    item: &Item,
+    taken: &mut BTreeSet<SourceKey>,
+) -> Result<(SourceKey, Option<PathBuf>)> {
     let bytes = match &item.bytes {
         Some(b) => b.clone(),
         None => {
@@ -1922,13 +1930,13 @@ fn copy_in(manual: &Path, item: &Item, taken: &mut BTreeSet<SourceKey>) -> Resul
                 && crate::hash::digest_file(&to).as_deref() == Some(digest.as_str())
             {
                 taken.insert(key.clone());
-                return Ok(key);
+                return Ok((key, None));
             }
             continue;
         }
         crate::atomic::write(&added, &crate::atomic::Name::new(&name)?, &bytes)?;
         taken.insert(key.clone());
-        return Ok(key);
+        return Ok((key, Some(to)));
     }
     unreachable!("some name is free")
 }
