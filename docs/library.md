@@ -406,11 +406,12 @@ lookup alone.
 last run left them, into one zip: `songs.toml` at its root and every
 song, with its lyrics, under `library/` at its path in the library. A
 song not written yet is not in it, so `sync` first. `-o` may name a
-folder, which gets `muman.zip`.
+folder, which gets `muman.zip`; a file there already is written over
+only with `--force`, and nothing is written in the home or the library.
 
 With `--folder`, muman writes what the zip would hold into the new or
 empty folder `-o` names, for a card or a player to read as it is. It
-refuses a folder holding anything, so nothing in it is written over.
+refuses a folder holding anything, and keeps a link or a mount point.
 
 The zip's `songs.toml` keeps the song list's commands, which whoever
 runs muman on it is [asked to trust](configuration.md#commands-servers-and-secrets).

@@ -351,7 +351,8 @@ Write the song list and the library, as the last run left them, into one zip, or
 ```text
 Examples:
   --codec mp3 --set audio.mp3_bitrate=192kb/s
-                     Every song in MP3 at 192 kb/s
+                     Every song in MP3: an MP3 copied as it is, any other
+                     encoded at 192 kb/s
   --template '{{ artist }} - {{ title }}' --set library.restrict=ascii
                      One folder of songs, named in ASCII
   --set loudness.mode=audio
@@ -366,6 +367,7 @@ written as the library holds it, and said.
 
 * `-o`, `--output <PATH>` — The zip to write, or a folder to write muman.zip in; with --folder, the folder to make, new or empty [default: muman.zip, or muman with --folder]
 * `--folder` — Write a folder holding what the zip would, rather than the zip
+* `--force` — Write over the zip at the path given, when a file is there; never one in the home or the library
 * `--max-size <SIZE>` — The most the export may take, such as 4GiB or 700MB; in a folder, each file counts whole blocks of `[library] block_size`
 * `--codec <CODEC>` — Write every song in this lossy codec, lossless songs too: sets `[audio] codecs`, `lossy` and `lossless` to it
 

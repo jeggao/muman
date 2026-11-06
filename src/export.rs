@@ -53,12 +53,21 @@
 //! is in, so an export made anew needs about its own size free beside it,
 //! not twice that.
 //!
+//! **Where it goes.** The zip or folder is checked before any song is
+//! resolved: none is written in the home or the library, where the song
+//! list, the state, the sources and muman's songs are, and a zip takes
+//! the place of a file there already only with `--force`. A zip made in
+//! scratch is placed under a second name for it, which no filesystem
+//! gives over a file made there meanwhile.
+//!
 //! **A folder.** `--folder` writes what the zip would hold as files, for
-//! a card or a player. It is made whole in the scratch folder beside it,
-//! the files encoded for it moved in and the library's copied with their
-//! times, each flushed to the disk, then renamed into place: a run killed
-//! partway leaves no folder half written. A folder there already is taken
-//! only when empty, so no file of another's is written over or mixed in.
+//! a card or a player. It is made whole in a scratch folder inside the
+//! folder named, the files encoded for it moved in and the library's
+//! copied with their times, each flushed to the disk, then its song list
+//! and library renamed up into place. The folder named is never removed
+//! or replaced, so a link to it or a card's mount point stays; one there
+//! already is taken only when empty, so no file of another's is written
+//! over or mixed in.
 //! Each file counts whole blocks of `[library] block_size`, as the
 //! library does, since a card's filesystem spends them.
 
@@ -175,6 +184,9 @@ pub struct Options<'a> {
     pub settings: &'a [Override],
     /// Write the song list with its secrets replaced ([`crate::redact`]).
     pub redact: bool,
+    /// Write over a zip there already, never a file of the home or the
+    /// library.
+    pub force: bool,
 }
 
 /// `KEY=VALUE` as `--set` reads it: a setting of `TABLES`, its value
@@ -432,10 +444,8 @@ pub fn export<R: Runner, W: Write>(
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
     let (output, target) = target_of(options, settings.as_ref().unwrap_or(&manifest.settings))?;
-    let beside = output
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    guard(&output, dirs, options.force)?;
+    let (beside, _made) = scratch_beside(target, &output)?;
 
     let (songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
     let audio = settings
@@ -445,7 +455,7 @@ pub fn export<R: Runner, W: Write>(
         .iter()
         .map(|s| held_entries(&dirs.library, s))
         .collect();
-    let scratch = crate::atomic::Scratch::within(beside)?;
+    let scratch = crate::atomic::Scratch::within(&beside)?;
     let list_entry = list_entry(list, options.redact, scratch.path(), out)?;
     let (choice, mut made) = if let Some(max) = options.max_size {
         let fixed = entries_size(target, std::slice::from_ref(&list_entry)) + target.end();
@@ -476,6 +486,7 @@ pub fn export<R: Runner, W: Write>(
         target,
         scratch.path(),
         &output,
+        options.force,
         std::iter::once(&list_entry).chain(&entries),
     )?;
     crate::ui::success(
@@ -562,14 +573,15 @@ fn target_of(options: &Options<'_>, settings: &Settings) -> Result<(PathBuf, Tar
 }
 
 /// Write `entries` as `target` at `output`, made in `scratch` so a run
-/// killed partway leaves it where the next clears it. Returns what it
-/// takes.
+/// killed partway leaves it where the next clears it; a zip takes the
+/// place of a file there only when `force`. Returns what it takes.
 // Renames the finished zip from scratch into place.
 #[expect(clippy::disallowed_methods)]
 fn write<'a>(
     target: Target,
     scratch: &Path,
     output: &Path,
+    force: bool,
     entries: impl Iterator<Item = &'a Entry>,
 ) -> Result<u64> {
     if let Target::Folder { .. } = target {
@@ -583,8 +595,18 @@ fn write<'a>(
     }
     let part = scratch.join("export.zip.part");
     write_zip(&part, entries)?;
-    crate::atomic::rename(&part, output)
-        .with_context(|| format!("renaming {} to {}", part.display(), output.display()))?;
+    let placed = if force {
+        crate::atomic::rename(&part, output)
+    } else {
+        crate::atomic::place_new(&part, output)
+    };
+    match placed {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(there_already(output).into());
+        }
+        placed => placed
+            .with_context(|| format!("renaming {} to {}", part.display(), output.display()))?,
+    }
     Ok(size_of(output))
 }
 
@@ -841,6 +863,16 @@ struct Fitted {
 /// folder. A folder that is not there is refused rather than made, as a
 /// typo would make one.
 fn zip_at(output: &Path) -> Result<PathBuf> {
+    let named_folder = output
+        .as_os_str()
+        .to_string_lossy()
+        .ends_with(std::path::is_separator);
+    if named_folder && !output.is_dir() {
+        bail!(
+            "{} is no folder; make it first, or name the zip to write",
+            output.display()
+        );
+    }
     let zip = if output.is_dir() {
         output.join("muman.zip")
     } else {
@@ -857,6 +889,65 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
         );
     }
     Ok(zip)
+}
+
+/// The folder the export is made in: beside a zip, and inside a folder,
+/// made now if need be, so the folder is never replaced and a link to it
+/// or a card's mount point stays as it is.
+fn scratch_beside(target: Target, output: &Path) -> Result<(PathBuf, MadeFolder)> {
+    if let Target::Zip = target {
+        let beside = output
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        return Ok((beside.to_path_buf(), MadeFolder(None)));
+    }
+    let made = (!output.exists()).then(|| output.to_path_buf());
+    fs::create_dir_all(output).with_context(|| format!("creating {}", output.display()))?;
+    Ok((output.to_path_buf(), MadeFolder(made)))
+}
+
+/// A folder an export made to fill, removed again if left empty, as by
+/// an export that failed.
+struct MadeFolder(Option<PathBuf>);
+
+impl Drop for MadeFolder {
+    // Removes the folder only while it is empty.
+    #[expect(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        if let Some(folder) = &self.0 {
+            let _ = fs::remove_dir(folder);
+        }
+    }
+}
+
+/// Refuse `output` where writing it would lose a file: inside the home
+/// or the library, where the song list, the state, the sources and the
+/// songs muman wrote are, whatever `force` says; or a file there
+/// already, unless `force`.
+fn guard(output: &Path, dirs: &Dirs, force: bool) -> Result<()> {
+    for (folder, what) in [(&dirs.home, "the home"), (&dirs.library, "the library")] {
+        if crate::platform::within(output, folder) {
+            return Err(crate::errors::Refused(format!(
+                "{} is in {what}, {}; write the export elsewhere",
+                output.display(),
+                folder.display()
+            ))
+            .into());
+        }
+    }
+    if !force && output.is_file() {
+        return Err(there_already(output).into());
+    }
+    Ok(())
+}
+
+/// The refusal of a file there already.
+fn there_already(output: &Path) -> crate::errors::Refused {
+    crate::errors::Refused(format!(
+        "{} is there already; --force writes over it",
+        output.display()
+    ))
 }
 
 /// The folder `output` names, to be made: one not there, in a folder
@@ -1259,12 +1350,16 @@ fn write_folder<'a>(
             .and_then(|f| f.sync_all())
             .map_err(made)?;
     }
-    // Windows renames no folder onto another, even an empty one.
-    if to.is_dir() {
-        fs::remove_dir(to).with_context(|| format!("replacing {}", to.display()))?;
+    for entry in fs::read_dir(staging).with_context(|| format!("reading {}", staging.display()))? {
+        let from = entry?.path();
+        let Some(name) = from.file_name() else {
+            continue;
+        };
+        let into = to.join(name);
+        crate::atomic::rename(&from, &into)
+            .with_context(|| format!("renaming {} to {}", from.display(), into.display()))?;
     }
-    crate::atomic::rename(staging, to)
-        .with_context(|| format!("renaming {} to {}", staging.display(), to.display()))
+    Ok(())
 }
 
 /// Write `entries` into a new zip at `path`, each stored as it is.

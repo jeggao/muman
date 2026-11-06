@@ -301,7 +301,8 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.";
 const EXPORT_HELP: &str = "\
 Examples:
   --codec mp3 --set audio.mp3_bitrate=192kb/s
-                     Every song in MP3 at 192 kb/s
+                     Every song in MP3: an MP3 copied as it is, any other
+                     encoded at 192 kb/s
   --template '{{ artist }} - {{ title }}' --set library.restrict=ascii
                      One folder of songs, named in ASCII
   --set loudness.mode=audio
@@ -571,6 +572,11 @@ pub enum Command {
         /// Write a folder holding what the zip would, rather than the zip.
         #[arg(long)]
         folder: bool,
+
+        /// Write over the zip at the path given, when a file is there;
+        /// never one in the home or the library.
+        #[arg(long)]
+        force: bool,
 
         /// The most the export may take, such as 4GiB or 700MB; in a
         /// folder, each file counts whole blocks of `[library] block_size`.
