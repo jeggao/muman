@@ -61,6 +61,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **`undo` finds a purged file of a decomposed name put back.** A file
+  of your own named decomposed, as a Mac names one, was recorded by its
+  composed key when `remove --purge` trashed it, and `undo` looked for
+  that name only, so it asked for the file back however often it was
+  put back. It now finds the file by any spelling that composes alike.
 - **`check` and a sync agree on what a source that reads as none
   builds.** A sync holds the song of a source whose file reads as
   none, while `check` resolved it from that source and found nothing

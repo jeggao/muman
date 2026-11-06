@@ -4888,6 +4888,24 @@ fn a_purge_stopped_at_any_step_still_asks_for_its_file_back_from_the_trash() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn undo_of_a_purge_finds_a_file_of_a_decomposed_name_put_back() {
+    let s = Setup::new();
+    let given = s.file("home/sources/manual/cafe\u{301}.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(
+        &flacs(),
+        &["remove", "-y", "--purge", "manual:caf\u{e9}.flac"],
+    );
+    assert!(ok && !Path::new(&given).exists(), "{text}");
+    s.file("home/sources/manual/cafe\u{301}.flac");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs().len(), 1, "{text}");
+}
+
 #[test]
 fn restore_of_a_purged_song_waits_for_its_files_back_from_the_trash() {
     let s = Setup::new();
