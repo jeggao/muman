@@ -81,7 +81,7 @@ impl Setup {
         path
     }
 
-    fn run(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
+    fn run<R: Runner>(&self, fake: &R, args: &[&str]) -> (bool, String) {
         let mut out = Vec::new();
         let _guard = crate::kill::guard_library(&self.job(args).dirs.library);
         let ok = run_with(
@@ -4246,24 +4246,55 @@ fn restore_puts_removed_songs_back_where_they_were() {
     }
 }
 
+/// Edit the song list `s` holds, `from` as `to`, returning it as it was.
+fn edit_list(s: &Setup, from: &str, to: &str) -> String {
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    assert!(listed.contains(from), "{listed}");
+    std::fs::write(&songs, listed.replacen(from, to, 1)).unwrap();
+    listed
+}
+
 #[test]
 fn one_undo_takes_back_a_run_killed_partway_and_the_run_that_finished_it() {
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    one_undo_takes_back_a_sync_killed_at_any_step(
+        &|s| {
+            s.file("home/sources/manual/a.flac");
+            s.file("home/sources/manual/b.flac");
+        },
+        &|s| edit_list(s, &default, "template = \"{{ title }} {{ id }}\""),
+    );
+}
+
+#[test]
+fn one_undo_takes_back_a_sync_killed_as_it_kept_files_it_writes_over() {
+    one_undo_takes_back_a_sync_killed_at_any_step(
+        &|s| {
+            s.file("home/sources/manual/a.flac");
+            s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+        },
+        &|s| {
+            edit_list(
+                s,
+                "format = \"lrc\"\nwhen = \"any\"",
+                "format = \"txt\"\nwhen = \"any\"",
+            )
+        },
+    );
+}
+
+/// A sync after `edit`, of a home `prepare` fills and a sync builds,
+/// killed at each step, then synced to its end: one undo puts back the
+/// song list and the library as they were before it.
+fn one_undo_takes_back_a_sync_killed_at_any_step(
+    sources: &dyn Fn(&Setup),
+    edit: &dyn Fn(&Setup) -> String,
+) {
     let prepare = |s: &Setup| {
-        s.file("home/sources/manual/a.flac");
-        s.file("home/sources/manual/b.flac");
+        sources(s);
         let (ok, text) = s.run(&flacs(), &["sync"]);
         assert!(ok, "{text}");
-    };
-    let edit = |s: &Setup| {
-        let songs = s.dir.path().join("home/songs.toml");
-        let listed = std::fs::read_to_string(&songs).unwrap();
-        let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
-        std::fs::write(
-            &songs,
-            listed.replace(&default, "template = \"{{ title }} {{ id }}\""),
-        )
-        .unwrap();
-        listed
     };
     let whole = Setup::new();
     prepare(&whole);

@@ -323,6 +323,32 @@ fn held(dir: &Path) -> u64 {
         .sum()
 }
 
+/// What the stopped run `record` holds made of each output it recorded,
+/// by the outputs as `home`'s state holds them now: the output, if new,
+/// and each file beside it its song lists now but did not then. A run
+/// going on with it keeps none of them, as it would keep a file it found.
+fn made_by(record: &Record, home: &Path) -> BTreeSet<PathBuf> {
+    if record.before.is_empty() {
+        return BTreeSet::new();
+    }
+    let now = State::load(home).map(|s| s.outputs).unwrap_or_default();
+    let files = |rel: &Path, w: Option<&Written>| -> BTreeSet<PathBuf> {
+        w.map(|w| w.files(rel).map(Path::to_path_buf).collect())
+            .unwrap_or_default()
+    };
+    (record.before.iter())
+        .flat_map(|(rel, was)| {
+            let then = files(rel, was.as_ref());
+            let mut made = files(rel, now.get(rel));
+            if was.is_none() {
+                made.insert(rel.clone());
+            }
+            made.retain(|f| !then.contains(f));
+            made
+        })
+        .collect()
+}
+
 impl Run {
     /// Begin recording, with the song list as it is before anything.
     pub fn begin(home: &Path) -> Result<Self> {
@@ -421,10 +447,7 @@ impl Run {
             ),
         };
         let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
-        let made_before = (record.before.iter())
-            .filter(|(_, was)| was.is_none())
-            .map(|(rel, _)| rel.clone())
-            .collect();
+        let made_before = made_by(&record, home);
         Ok(Self {
             dir,
             record,
@@ -548,6 +571,13 @@ impl Run {
         let to = self.dir.join("files").join(rel);
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
+        // A stopped run this one goes on with may have kept it already,
+        // its record not yet saying so; a copy onto that link would empty
+        // the library's file too.
+        match std::fs::remove_file(&to) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Ok(()),
+            _ => {}
         }
         let kept = std::fs::hard_link(&from, &to)
             .or_else(|_| std::fs::copy(&from, &to).map(drop))
