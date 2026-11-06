@@ -44,7 +44,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 1;
+pub const WRITING: u32 = 2;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -969,20 +969,22 @@ pub(crate) fn lrc_time(s: &str) -> Option<(i64, &str)> {
 }
 
 /// A time at the start of `s`, closed by the first of `closers` after it,
-/// and where that closer is. A time holds only digits, `:` and `.`, so it
-/// is read without looking past them: a line of a thousand `<` reads each
-/// in a step, not to the line's end.
+/// and where that closer is. A time holds only digits, `:`, `.` and `,`,
+/// so it is read without looking past them: a line of a thousand `<`
+/// reads each in a step, not to the line's end. Its seconds are under
+/// 60, as no tool writes more; minutes run on.
 fn time_closed_by(s: &str, closers: &[char]) -> Option<(i64, usize)> {
-    let close = s.find(|c: char| !(c.is_ascii_digit() || c == ':' || c == '.'))?;
+    let close = s.find(|c: char| !(c.is_ascii_digit() || matches!(c, ':' | '.' | ',')))?;
     if !s[close..].starts_with(closers) {
         return None;
     }
     let tag = &s[..close];
     let (min, sec) = tag.split_once(':')?;
-    // `[01:02.50]`, or `[01:02:50]` as some tools write it.
-    let (whole, frac) = sec.split_once(['.', ':']).unwrap_or((sec, "0"));
+    // `[01:02.50]`, `[01:02:50]` as some tools write it, or `[01:02,50]`
+    // with a decimal comma.
+    let (whole, frac) = sec.split_once(['.', ':', ',']).unwrap_or((sec, "0"));
     let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
-    if !(digits(min) && digits(whole) && digits(frac)) {
+    if !(digits(min) && digits(whole) && digits(frac)) || whole.parse::<u32>().ok()? >= 60 {
         return None;
     }
     let frac_ms = match frac.len() {
@@ -1102,6 +1104,10 @@ mod tests {
     fn a_time_with_a_colon_before_its_fraction_reads() {
         assert_eq!(lrc_time("01:02:50]x"), Some((62_500, "x")));
         assert_eq!(lrc_time("01:02.50]x"), Some((62_500, "x")));
+        assert_eq!(lrc_time("00:03,50]x"), Some((3_500, "x")));
+        assert_eq!(lrc_time("01:59.99]x"), Some((119_990, "x")));
+        assert_eq!(lrc_time("99:99.99]x"), None);
+        assert_eq!(lrc_time("00:60.00]x"), None);
     }
 
     #[test]

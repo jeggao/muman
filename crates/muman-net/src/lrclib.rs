@@ -120,7 +120,9 @@ impl Record {
     }
 
     /// The `.lrc` it is kept as: timed lines when it has them, its
-    /// length stated, so a song of another length is told apart.
+    /// length stated, so a song of another length is told apart. A
+    /// length the lyrics state of their own gives way to the record's, so
+    /// the file states one.
     #[must_use]
     pub fn lrc(&self) -> String {
         let mut text = String::new();
@@ -139,7 +141,17 @@ impl Record {
         } else {
             self.plain_lyrics.as_deref()
         };
-        text.push_str(body.unwrap_or_default());
+        let length = |line: &str| {
+            line.trim_start()
+                .get(..8)
+                .is_some_and(|l| l.eq_ignore_ascii_case("[length:"))
+        };
+        for line in body.unwrap_or_default().lines() {
+            if !(self.duration.is_some() && length(line)) {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
         if !text.ends_with('\n') {
             text.push('\n');
         }
@@ -366,6 +378,16 @@ mod tests {
             r.lrc(),
             "[length:05:53.00]\n[00:00.15] Is the harbor still awake?\n"
         );
+    }
+
+    #[test]
+    fn a_record_s_own_length_gives_way_to_its_duration() {
+        let r: Record = serde_json::from_str(
+            r#"{"id": 1, "duration": 353.0,
+                "syncedLyrics": "[LENGTH: 04:00]\n[00:01.00]Paper comets"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.lrc(), "[length:05:53.00]\n[00:01.00]Paper comets\n");
     }
 
     fn found(records: &str) -> Found {

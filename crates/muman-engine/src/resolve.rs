@@ -1131,7 +1131,33 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
     ranked
         .min_by(|a, b| a.0.cmp(&b.0))
         .map(|(_, key, why)| (key, why))
-        .ok_or_else(|| anyhow::anyhow!("no source of this song has audio that reads"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no source of this song has audio that reads: {}",
+                unheard(input).join("; ")
+            )
+        })
+}
+
+/// Why each of the song's sources gives it no audio: gone from the
+/// sources, not read, or holding none.
+fn unheard(input: &Input<'_>) -> Vec<String> {
+    input
+        .song
+        .sources
+        .iter()
+        .map(|k| {
+            if input.on_disk.is_some_and(|d| !d.contains(k)) {
+                format!("{k} is not in the sources")
+            } else {
+                match input.facts.get(k) {
+                    None => format!("{k} could not be read"),
+                    Some(f) if f.audio.is_none() => format!("{k} holds no audio"),
+                    Some(_) => format!("{k} reads"),
+                }
+            }
+        })
+        .collect()
 }
 
 /// What breaks a tie between sources the measures score alike, most

@@ -1792,6 +1792,13 @@ fn decide_sheet<W: Write>(
         .iter()
         .filter_map(|(r, j)| j.as_ref().map(|j| (*r, j.song)))
         .collect();
+    if fitting.is_empty() && (ask.yes || ask.prompter.is_none()) {
+        ask.warn(&format!(
+            "{}: no track fits a song; not added. Name the songs it is of with --to",
+            item.label
+        ))?;
+        return Ok(Decision::LeftOut);
+    }
     if ask.yes {
         let led: Vec<(usize, usize)> = fits
             .iter()
@@ -1811,13 +1818,6 @@ fn decide_sheet<W: Write>(
             ))?;
         }
         return Ok(tagged(&led, unsure > 0));
-    }
-    if fitting.is_empty() && ask.prompter.is_none() {
-        ask.warn(&format!(
-            "{}: no track fits a song; not added. Name the songs it is of with --to",
-            item.label
-        ))?;
-        return Ok(Decision::LeftOut);
     }
     let Some(p) = ask.prompter.as_deref_mut() else {
         let unsure = fitting.len() - sure.len();

@@ -43,8 +43,9 @@ the home and brings the library in line with the song list:
    saving progress as it goes.
 1. Compare the audio of each pair of a song's sources.
 1. Resolve each song to a plan: the best source for each of its parts.
-1. Find each song's file: the one made from most of its sources, one
-   file to a song, wherever it is now.
+1. Find each song's file: the one the last run recorded, made from
+   most of its sources, one file to a song. A file you move becomes
+   yours, and the song is written again at its path.
 1. Move each song whose path changed, if its file differs from its
    plan at most in its tags. Nothing is encoded again.
 1. Write new tags into each file whose plan changed only in its tags.

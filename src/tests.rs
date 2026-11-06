@@ -496,7 +496,7 @@ fn lyrics_changed_by_hand_are_neither_written_over_nor_removed() {
     std::fs::write(&list, off).unwrap();
     let (_, text) = s.run(&flacs(), &["sync"]);
     assert!(
-        text.contains("Artist/Record/02 Song.lrc is not muman's"),
+        text.contains("Artist/Record/02 Song.lrc changed since muman wrote it"),
         "{text}"
     );
     assert_eq!(std::fs::read_to_string(&lrc).unwrap(), mended);
@@ -3366,6 +3366,70 @@ fn a_state_damaged_or_emptied_is_named_and_not_read_as_new() {
     std::fs::write(&db, b"").unwrap();
     let e = s.trusting(&flacs(), &["check"], None).unwrap_err();
     assert!(format!("{e:#}").contains("is empty"), "{e:#}");
+}
+
+#[test]
+fn what_undo_puts_back_is_counted_and_promised_only_while_runs_are_kept() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let (_, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
+    assert!(text.contains("`muman undo` puts it back"), "{text}");
+    let (_, text) = s.run(&flacs(), &["restore", "-y", "manual:a.flac"]);
+    assert!(text.contains("`muman undo` takes it out again"), "{text}");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let at = listed.find("[history]").unwrap();
+    let runs = at + listed[at..].find("runs = ").unwrap();
+    let end = runs + listed[runs..].find('\n').unwrap();
+    std::fs::write(
+        &songs,
+        format!("{}runs = 0{}", &listed[..runs], &listed[end..]),
+    )
+    .unwrap();
+    s.run(&flacs(), &["sync"]);
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+        &["restore", "-y", "manual:a.flac"],
+    ] {
+        let (_, text) = s.run(&flacs(), args);
+        assert!(!text.contains("`muman undo` puts"), "{args:?}: {text}");
+        assert!(!text.contains("`muman undo` takes"), "{args:?}: {text}");
+        assert!(text.contains("runs = 0"), "{args:?}: {text}");
+    }
+}
+
+#[test]
+fn lyrics_muman_wrote_and_the_user_changed_are_said_to_be_so() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = s.dir.path().join("lib/Artist/Record/02 Song.lrc");
+    assert!(lrc.exists(), "{text}");
+    std::fs::write(&lrc, "[00:01.00]Paper comets, by hand\n").unwrap();
+    let (_, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "lyrics_offset=1s"],
+    );
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    assert!(!text.contains("not muman's"), "{text}");
+}
+
+#[test]
+fn a_song_whose_source_is_gone_says_which() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    std::fs::remove_file(&a).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("manual:a.flac is not in the sources"),
+        "{text}"
+    );
 }
 
 #[test]

@@ -47,6 +47,14 @@ pub(super) fn foreign(
         .collect()
 }
 
+/// Whether `rel`, a [`foreign`] file, is one muman wrote, a song's or
+/// one beside it, that the user changed since: said so, not as a file
+/// muman never wrote.
+pub(super) fn changed_since_muman(old: &BTreeMap<PathBuf, Written>, rel: &Path) -> bool {
+    old.iter()
+        .any(|(p, w)| p == rel || w.sidecars.iter().any(|s| s.path == rel))
+}
+
 /// [`foreign`] files that keep the song from being written: all but its
 /// folder's, which a song leaves alone and is written beside
 /// ([`crate::folder`]).

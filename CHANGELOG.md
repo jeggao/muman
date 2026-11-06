@@ -20,6 +20,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **The guide says where a sync looks for a song's file.** It said
+  "wherever it is now"; a sync finds the file the last run recorded,
+  and a file you move becomes yours.
+- **A song with no audio says why of each source.** "No source of this
+  song has audio that reads" now names each source and whether it is
+  gone from the sources, could not be read, or holds no audio.
+- **A file muman wrote and the user changed is said to be so.** A
+  library `.lrc` edited by hand was called "not muman's" by a sync,
+  while `check` called it changed since muman wrote it; both now say
+  the latter.
+- **A disc or track total with no number is read back as written.**
+  WavPack and MP3 songs with a total but no disc or track number
+  warned "tags not held as written" at each write: the total was
+  written under its Vorbis name, and read back only from the number's
+  own frame.
+- **`max_size` is said whole while a failed song's file is kept.** The
+  limit was compared with, and printed as, what the kept file left of
+  it, so a library under its limit was warned of as over it, sync after
+  sync.
+- **What `undo` puts back is said as it is.** A change promised
+  "`muman undo` puts it back" under `[history] runs = 0`, which keeps
+  no run to undo; it now says the change cannot be undone. Removing or
+  restoring one song said "them".
+- **Lyrics from LRCLIB state one length.** An answer whose lyrics
+  carried their own `[length:]` was kept with two that disagreed; the
+  record's duration is now the one stated.
+- **An LRC time reads as its tool wrote it.** `[00:03,50]`, with a
+  decimal comma, was not read, and a time past 59 seconds, as
+  `[99:99.99]`, was carried into the minutes; the one now reads, the
+  other is not taken for a time. Every song's lyrics are written again
+  once.
+- **`add album.cue -y` says when no track fits a song.** It set nothing
+  and said nothing, and exited 0; it now leaves the sheet out and says
+  so, as it does without `-y`.
 - **`export --redact` leaves no tracker passkey, proxy login or query
   secret.** It kept a `passkey=` in `--bt-tracker`, a passkey in a
   tracker's path, a proxy's login given without a scheme, and an

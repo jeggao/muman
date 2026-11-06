@@ -229,13 +229,21 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
             Fate::Alone,
             "left alone, changed since muman wrote it".to_string(),
         ),
-        Doing::Unowned { by } => (
+        Doing::Unowned { by, edited } => (
             Fate::Alone,
-            format!("left alone, {} not muman's", crate::relpath::show(by)),
+            format!(
+                "left alone, {} {}",
+                crate::relpath::show(by),
+                whose(*edited)
+            ),
         ),
-        Doing::Blocked { by, .. } => (
+        Doing::Blocked { by, edited, .. } => (
             Fate::Alone,
-            format!("left where it is, {} not muman's", crate::relpath::show(by)),
+            format!(
+                "left where it is, {} {}",
+                crate::relpath::show(by),
+                whose(*edited)
+            ),
         ),
         Doing::Held { .. } => (
             Fate::Alone,
@@ -440,4 +448,14 @@ pub(super) fn status<W: Write>(
         crate::ui::info(out, &format!("Unused: {}", path.display()))?;
     }
     Ok(())
+}
+
+/// Whose a file in a song's way is: muman's, changed since it wrote it,
+/// when `edited`, or another's.
+fn whose(edited: bool) -> &'static str {
+    if edited {
+        "changed since muman wrote it"
+    } else {
+        "not muman's"
+    }
 }

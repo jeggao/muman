@@ -578,6 +578,8 @@ fn a_sheet_of_tracks_not_surely_songs_is_left_out_without_a_terminal() {
     );
     let said = s.not_added(&fake, &["add", &cue]);
     assert!(said.contains("no track fits a song"), "{said}");
+    let said = s.not_added(&fake, &["add", "-y", &cue]);
+    assert!(said.contains("no track fits a song"), "-y: {said}");
     let maybe = s.written(
         "dl/maybe.cue",
         "PERFORMER \"Marlo Venn\"\nFILE \"t0.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n",
