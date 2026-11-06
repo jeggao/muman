@@ -54,7 +54,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A line whose time reads as none is no lyric.** A line opened by a
   time that cannot be read, as `[00:-3.00]`, `[01:00:00.00]` or
   `[00:1e1]`, was written into the library's `.lrc` as sung text,
-  brackets and all; it is now left out.
+  brackets and all; it is now left out, and the sync that writes the
+  song says how many lines of its lyrics it left out.
+- **An `.lrc` tag given twice is read once.** Lyrics with two `[ar:]`
+  or two `[offset:]` lines kept both in the library's `.lrc`; the
+  offset moved the lines by the last and was read as the first. The
+  first of each is kept and moves the lines, and every song with
+  lyrics is written again.
+- **A template naming no field is refused up front.** A misspelt
+  `{{ albm }}` failed every song one by one, after the sync had fetched
+  and looked up; the sync now refuses it before anything is done (exit
+  5), naming the variable and those a template may name. `list`,
+  `edit` and `check` still read the songs.
+- **`set` shows and stores a value as it takes effect.**
+  `tracknumber=07` said `→ 07` and stored `07`, read as 7; it now says
+  and stores `7`, and setting it again changes nothing. A value that
+  reads as nothing, as `date=` given only a mark that turns text
+  around, said `→ ` and stored an empty value; it now clears the tag,
+  as `date!` does, and says so.
 - **`add album.cue -y` says when no track fits a song.** It set nothing
   and said nothing, and exited 0; it now leaves the sheet out and says
   so, as it does without `-y`.

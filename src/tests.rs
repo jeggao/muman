@@ -3120,6 +3120,25 @@ fn lyrics_named_decomposed_come_with_a_song_named_composed() {
 }
 
 #[test]
+fn lyrics_lines_left_out_as_damaged_are_said_when_the_song_is_written() {
+    let s = Setup::new();
+    let song = s.file("rips/a.flac");
+    s.written(
+        "rips/a.lrc",
+        "[00:01.00]Paper comets\n[00:-3.00]Lantern\n[00:02.00]Kessler Row\n",
+    );
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("lyrics of manual:a.flac: 1 line(s) left out"),
+        "{text}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("left out"), "said once, as written: {text}");
+}
+
+#[test]
 fn a_folder_named_by_where_it_ends_is_copied_under_its_own_name() {
     let s = Setup::new();
     s.file("rips/One/Disc/a.flac");
@@ -3691,7 +3710,7 @@ fn check_reports_a_song_no_sync_can_build() {
     let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
     std::fs::write(
         &songs,
-        listed.replace(&default, "template = \"{{ nosuch }}{{ title }}\""),
+        listed.replace(&default, "template = \"{{ title | truncate('x') }}\""),
     )
     .unwrap();
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -3700,6 +3719,30 @@ fn check_reports_a_song_no_sync_can_build() {
     assert!(!ok, "{report}");
     assert!(report.contains("No sync can build it"), "{report}");
     assert!(!report.contains("No problems found"), "{report}");
+}
+
+#[test]
+fn a_template_naming_no_field_is_refused_before_the_sync_while_songs_still_list() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &songs,
+        listed.replace(&default, "template = \"{{ albm }}/{{ title }}\""),
+    )
+    .unwrap();
+    s.file("home/sources/manual/b.flac");
+    let e = s.refused(&["sync"]);
+    assert!(e.contains("names albm"), "{e}");
+    assert_eq!(library_of(&s), before);
+    assert!(!std::fs::read_to_string(&songs).unwrap().contains("b.flac"));
+    assert!(s.listed(&["list"]).contains("manual:a.flac"));
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok && report.contains("names albm"), "{report}");
 }
 
 #[test]
@@ -4293,6 +4336,39 @@ fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
         &["set", "-y", "manual:a.flac", "track=3/12", "date=2024-05"],
     );
     assert!(ok, "{text}");
+}
+
+#[test]
+fn set_shows_and_stores_each_value_as_it_takes_effect() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let tags = || -> BTreeMap<String, Vec<String>> {
+        let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+        m.songs[0].tags.iter().cloned().collect()
+    };
+    let (ok, text) = s.run(
+        &flacs(),
+        &[
+            "set",
+            "-y",
+            "manual:a.flac",
+            "tracknumber=07",
+            "date=2019-07-04 10:00",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ 7\n"), "{text}");
+    assert!(text.contains("→ 2019-07-04\n"), "{text}");
+    let songs = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(songs.contains("tracknumber = \"7\""), "{songs}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "tracknumber=07"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Nothing changed"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "date=\u{200f}"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("→ what the sources offer"), "{text}");
+    assert!(!tags().contains_key("date"), "{:?}", tags());
 }
 
 #[test]
