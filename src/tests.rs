@@ -2138,6 +2138,50 @@ fn a_fetched_source_keeps_none_of_the_cookies_it_was_fetched_with() {
 }
 
 #[test]
+fn a_download_that_does_not_read_is_fetched_again() {
+    let s = Setup::new();
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\
+         [providers.youtube-music]\nenabled = false\n\
+         [providers.youtube]\nenabled = false\n\
+         [providers.lrclib]\nenabled = false\n\
+         [providers.acoustid]\nenabled = false\n\
+         [providers.musicbrainz]\nenabled = false\n\
+         [providers.coverart]\nenabled = false\n\
+         [[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    s.written("home/sources/yt-dlp/youtube.com/aaaaaaaaaaa.mkv", "garbage");
+    let info =
+        r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "title": "Song", "uploader": "Chan"}"#;
+    let _ = run_with(
+        &s.job(&["sync", "--offline"]),
+        &Unprobed(Fake::default().info("aaaaaaaaaaa", info)),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    let key = SourceKey::youtube("aaaaaaaaaaa");
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Measure)
+    );
+    let mut out = Vec::new();
+    let _ = run_with(
+        &s.job(&["sync"]),
+        &Fake::default().info("aaaaaaaaaaa", info),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("damaged source(s) again"), "{text}");
+}
+
+#[test]
 fn a_damaged_download_is_fetched_again_and_its_whole_copy_taken() {
     let s = Setup::new();
     s.written(
