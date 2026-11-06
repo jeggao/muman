@@ -356,7 +356,8 @@ pub fn remove<W: Write>(
         }
     }
     let own = doomed.iter().filter(|(_, own)| *own).count();
-    let (said, ask) = removal(picked.len(), deleted, doomed.len() - own, own);
+    let runs = read.manifest.settings.history.runs;
+    let (said, ask) = removal(picked.len(), (deleted, doomed.len() - own, own), runs);
     crate::ui::info(out, &said)?;
     if !confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
@@ -389,18 +390,39 @@ pub fn remove<W: Write>(
     Ok(true)
 }
 
+/// What `muman undo` would do to the `n` things just named, `does` and
+/// `after` around `it` or `them`, as `("puts", " back")`; or, with
+/// `[history] runs = 0`, that no run is kept to undo it by.
+pub(crate) fn undo_note(runs: usize, n: usize, (does, after): (&str, &str)) -> String {
+    if runs == 0 {
+        return "`[history] runs = 0` keeps no run, so this cannot be undone".to_string();
+    }
+    let them = if n == 1 { "it" } else { "them" };
+    format!("`muman undo` {does} {them}{after}")
+}
+
 /// What removing `songs` does, with `deleted` library files and
 /// `fetched` files of fetched sources deleted and `own` files of the
-/// user's own trashed, and what to ask before.
-fn removal(songs: usize, deleted: usize, fetched: usize, own: usize) -> (String, Ask) {
+/// user's own trashed, `runs` kept to undo it by, and what to ask
+/// before.
+fn removal(
+    songs: usize,
+    (deleted, fetched, own): (usize, usize, usize),
+    runs: usize,
+) -> (String, Ask) {
     let named = counted(songs, "song");
     let leave = if songs == 1 { "leaves" } else { "leave" };
     let gone = counted(deleted + fetched, "file");
     if own > 0 {
         let trashed = counted(own, "file");
+        let undo = if runs == 0 {
+            undo_note(runs, songs, ("puts", " back"))
+        } else {
+            let them = if own == 1 { "it" } else { "them" };
+            format!("`muman undo` waits until you put {them} back")
+        };
         let said = format!(
-            "{named} {leave} the list, {gone} deleted, {trashed} of yours to the trash. \
-             `muman undo` waits until you put them back"
+            "{named} {leave} the list, {gone} deleted, {trashed} of yours to the trash. {undo}"
         );
         let question = format!("Type {songs} to remove {named} and trash {trashed} of yours:");
         return (
@@ -412,9 +434,13 @@ fn removal(songs: usize, deleted: usize, fetched: usize, own: usize) -> (String,
         );
     }
     let undo = if fetched > 0 {
-        "`muman undo` lists them again, and a sync fetches what was deleted"
+        undo_note(
+            runs,
+            songs,
+            ("lists", " again, and a sync fetches what was deleted"),
+        )
     } else {
-        "`muman undo` puts them back"
+        undo_note(runs, songs, ("puts", " back"))
     };
     (
         format!("{named} {leave} the list, {gone} deleted. {undo}"),
@@ -477,10 +503,15 @@ pub fn restore<W: Write>(
         crate::ui::line(out, &format!("  + {}", named(&views[*n])))?;
     }
     let songs = counted(picked.len(), "song");
+    let undo = undo_note(
+        manifest.settings.history.runs,
+        picked.len(),
+        ("takes", " out again"),
+    );
     crate::ui::info(
         out,
         &format!(
-            "{songs} {} to the list. `muman undo` takes them out again",
+            "{songs} {} to the list. {undo}",
             if picked.len() == 1 {
                 "comes back"
             } else {
@@ -702,20 +733,11 @@ pub(crate) fn rewrite<W: Write>(
     Ok(songs)
 }
 
-/// Say that `n` songs change, and that `undo` puts them back.
-pub(crate) fn say_changed<W: Write>(n: usize, out: &mut W) -> Result<()> {
-    let (change, them) = if n == 1 {
-        ("changes", "it")
-    } else {
-        ("change", "them")
-    };
-    crate::ui::info(
-        out,
-        &format!(
-            "{} {change}. `muman undo` puts {them} back",
-            counted(n, "song")
-        ),
-    )?;
+/// Say that `n` songs change, and what `undo` does, `runs` kept.
+pub(crate) fn say_changed<W: Write>(n: usize, runs: usize, out: &mut W) -> Result<()> {
+    let change = if n == 1 { "changes" } else { "change" };
+    let undo = undo_note(runs, n, ("puts", " back"));
+    crate::ui::info(out, &format!("{} {change}. {undo}", counted(n, "song")))?;
     Ok(())
 }
 
@@ -755,7 +777,7 @@ pub fn set<W: Write>(
         return Ok(false);
     }
     let changed = counted(songs.len(), "song");
-    say_changed(songs.len(), out)?;
+    say_changed(songs.len(), read.manifest.settings.history.runs, out)?;
     let mut names: Vec<&str> = Vec::new();
     for a in &assigns {
         if !names.contains(&a.name()) {

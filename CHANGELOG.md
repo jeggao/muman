@@ -20,6 +20,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **What `undo` puts back is said as it is.** A change promised
+  "`muman undo` puts it back" under `[history] runs = 0`, which keeps
+  no run to undo; it now says the change cannot be undone. Removing or
+  restoring one song said "them".
 - **Lyrics from LRCLIB state one length.** An answer whose lyrics
   carried their own `[length:]` was kept with two that disagreed; the
   record's duration is now the one stated.

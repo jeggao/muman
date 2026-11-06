@@ -3369,6 +3369,38 @@ fn a_state_damaged_or_emptied_is_named_and_not_read_as_new() {
 }
 
 #[test]
+fn what_undo_puts_back_is_counted_and_promised_only_while_runs_are_kept() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let (_, text) = s.run(&flacs(), &["remove", "-y", "manual:a.flac"]);
+    assert!(text.contains("`muman undo` puts it back"), "{text}");
+    let (_, text) = s.run(&flacs(), &["restore", "-y", "manual:a.flac"]);
+    assert!(text.contains("`muman undo` takes it out again"), "{text}");
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let at = listed.find("[history]").unwrap();
+    let runs = at + listed[at..].find("runs = ").unwrap();
+    let end = runs + listed[runs..].find('\n').unwrap();
+    std::fs::write(
+        &songs,
+        format!("{}runs = 0{}", &listed[..runs], &listed[end..]),
+    )
+    .unwrap();
+    s.run(&flacs(), &["sync"]);
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+        &["restore", "-y", "manual:a.flac"],
+    ] {
+        let (_, text) = s.run(&flacs(), args);
+        assert!(!text.contains("`muman undo` puts"), "{args:?}: {text}");
+        assert!(!text.contains("`muman undo` takes"), "{args:?}: {text}");
+        assert!(text.contains("runs = 0"), "{args:?}: {text}");
+    }
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

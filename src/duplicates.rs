@@ -625,10 +625,15 @@ fn apply<W: Write>(
             }
         }
     }
+    let undo = change::undo_note(
+        found.manifest.settings.history.runs,
+        fewer,
+        ("puts", " back"),
+    );
     crate::ui::info(
         out,
         &format!(
-            "{} fewer in the list. `muman undo` puts them back",
+            "{} fewer in the list. {undo}",
             change::counted(fewer, "song")
         ),
     )?;

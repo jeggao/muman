@@ -244,7 +244,7 @@ pub(super) fn apply<R: Runner, W: Write>(
         .collect();
     let due = due(planned, &doing);
     let (mut pending, claims) = before_writing(job, &due, state, ledger, force, out)?;
-    say_left(&doing, out)?;
+    say_left(&doing, job.manifest.settings.history.runs, out)?;
     let mut outputs = kept(planned, &doing, job.manifest, &old);
     let wrote = render_due(
         job,
@@ -461,8 +461,9 @@ fn kept_beside(library: &Path, old: &BTreeMap<PathBuf, Written>, r: &Resolved) -
         .collect()
 }
 
-/// Say which songs' files a sync leaves alone, and why.
-fn say_left<W: Write>(doing: &[Doing], out: &mut W) -> Result<()> {
+/// Say which songs' files a sync leaves alone, and why, `runs` kept to
+/// undo it by.
+fn say_left<W: Write>(doing: &[Doing], runs: usize, out: &mut W) -> Result<()> {
     let mut unowned = Vec::new();
     for d in doing {
         match d {
@@ -485,11 +486,16 @@ fn say_left<W: Write>(doing: &[Doing], out: &mut W) -> Result<()> {
             _ => {}
         }
     }
+    let undo = if runs == 0 {
+        ""
+    } else {
+        ", and `undo` puts it back"
+    };
     for path in unowned.iter().take(NAMED) {
         crate::ui::warning(
             out,
             &format!(
-                "Left alone, not muman's: {} (`sync --force` writes over it, and `undo` puts it back)",
+                "Left alone, not muman's: {} (`sync --force` writes over it{undo})",
                 crate::relpath::show(path)
             ),
         )?;

@@ -108,7 +108,7 @@ pub fn edit<W: Write>(
             return Ok(false);
         }
         if !songs.is_empty() {
-            change::say_changed(songs.len(), out)?;
+            change::say_changed(songs.len(), read.manifest.settings.history.runs, out)?;
         }
         let whose = match picked.as_slice() {
             [one] => read.views[*one].name(),
