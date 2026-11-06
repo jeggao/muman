@@ -23,6 +23,7 @@ pub use muman_media::clean;
 pub mod cli;
 pub use muman_core::defaults;
 pub use muman_core::dirs;
+pub use muman_engine::diagnose;
 pub use muman_engine::due;
 pub use muman_media::codec;
 pub use muman_media::cue;
@@ -409,7 +410,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 query,
                 all: *all,
             };
-            reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report)).map(|s| s.ok)
+            let ok = reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))?.ok;
+            let problems = diagnose::diagnose(dirs)?.problems();
+            if problems > 0 {
+                ui::warning(
+                    out,
+                    &format!("{problems} problem(s) found; `muman check` lists them"),
+                )?;
+            }
+            Ok(ok)
         }
         Command::Info { state: true } => {
             state::State::dump(&dirs.home, data)?;

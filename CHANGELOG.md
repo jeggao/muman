@@ -61,6 +61,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   offset moved the lines by the last and was read as the first. The
   first of each is kept and moves the lines, and every song with
   lyrics is written again.
+- **`check` and a sync agree on what a source that reads as none
+  builds.** A sync holds the song of a source whose file reads as
+  none, while `check` resolved it from that source and found nothing
+  wrong. Both now read the same sources, so `check` names the song no
+  sync can build. `status` ends with how many problems `check` would
+  list.
 - **`check` names a song the last sync could not write.** A song whose
   file failed to be written, as by a disk gone full, was said only by
   that sync; `check` then found no problem. The state records it until

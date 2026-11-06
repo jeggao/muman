@@ -7,30 +7,24 @@
 //! source as its song records, downloading nothing: of a source a site
 //! re-encoded or took down, the copy in the store is the one to keep.
 //!
-//! Each song is resolved as a sync resolves it, from what was measured,
-//! so a song no sync can build is reported though no run recorded it; a
-//! failure recorded is reported while it still applies, and while a run
-//! holds the home, a file it may be moving or writing is not.
+//! What it reports without running a tool is [`crate::diagnose`]'s,
+//! which `status` counts too.
 
-use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::diagnose::Said;
 use crate::dirs::Dirs;
 use crate::held::{Held, Upstream};
 use crate::manifest::Manifest;
 use crate::parallel;
 use crate::runner::{Line, Runner};
 use crate::source::SourceKey;
-use crate::state::State;
 use crate::store::{self, Kind, Store};
 
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
-// Each check in the order the report lists its problems.
-#[expect(clippy::too_many_lines)]
 pub fn check<R: Runner, W: Write, D: Write>(
     runner: &R,
     dirs: &Dirs,
@@ -38,259 +32,25 @@ pub fn check<R: Runner, W: Write, D: Write>(
     out: &mut W,
     report: &mut D,
 ) -> Result<bool> {
-    let manifest = Manifest::load(&dirs.home)?;
-    for line in crate::migrate::notices(&manifest.renamed, manifest.respelled_notice()) {
-        crate::ui::info(report, &line)?;
-    }
-    for line in crate::settings::stale_warnings(&manifest.stale_defaults)
-        .into_iter()
-        .chain(manifest.misspelled())
-    {
-        crate::ui::warning(report, &line)?;
-    }
-    let mut state = State::load(&dirs.home)?;
-    let store = Store::scan(dirs)?;
-    let library = &dirs.library;
-    crate::reconcile::vouch_for_copies(library, &mut state);
-    // As the next sync reads it: a file a stopped run moved before the
-    // state could say so is where it went, and no file is missing.
-    crate::history::follow_moves(
-        &dirs.home,
-        library,
-        &mut state,
-        crate::history::Moves::Foresee,
-    );
-    // What a run under way is writing is no run's leftover.
-    let busy = crate::atomic::Lock::busy(&dirs.home);
-    if busy {
-        crate::ui::info(
-            report,
-            "A muman run is under way: the files it is writing, moving or removing are not \
-             reported",
-        )?;
-    }
+    let crate::diagnose::Diagnosis {
+        said,
+        manifest,
+        state,
+        store,
+    } = crate::diagnose::diagnose(dirs)?;
     let mut problems = 0_usize;
     let mut problem = |out: &mut D, text: String| {
         problems += 1;
         crate::ui::warning(out, &text)
     };
-    for (n, hook) in manifest.hooks.iter().enumerate() {
-        if let Some(why) = &hook.refused {
-            problem(report, format!("Hook {} is never run: {why}", n + 1))?;
+    for line in said {
+        match line {
+            Said::Info(line) => crate::ui::info(report, &line)?,
+            Said::Warning(line) => crate::ui::warning(report, &line)?,
+            Said::Problem(line) => problem(report, line)?,
         }
     }
-    if !busy && crate::history::undo_stopped(&dirs.home) {
-        problem(
-            report,
-            "Left by an interrupted run: an undo stopped partway, the library not yet as it \
-             puts it back; `undo` finishes it"
-                .to_string(),
-        )?;
-    }
-
-    let mut owned: BTreeSet<PathBuf> = BTreeSet::new();
-    for (path, written) in &state.outputs {
-        owned.insert(path.clone());
-        owned.extend(written.sidecar_paths().cloned());
-        let file = library.join(path);
-        match std::fs::metadata(&file) {
-            // A run under way may be moving it, or about to write it.
-            _ if busy && !file.is_file() => {}
-            Err(_) => problem(
-                report,
-                format!(
-                    "Missing, `sync` writes it again: {}",
-                    crate::relpath::show(path)
-                ),
-            )?,
-            Ok(m) if m.len() == 0 => problem(
-                report,
-                format!(
-                    "Empty, `sync` writes it again: {}",
-                    crate::relpath::show(path)
-                ),
-            )?,
-            Ok(_)
-                if written.plan.is_some()
-                    && written.sidecar_paths().any(|s| !library.join(s).exists()) =>
-            {
-                for missing in written
-                    .sidecar_paths()
-                    .filter(|s| !library.join(s).exists())
-                {
-                    problem(
-                        report,
-                        format!(
-                            "Missing beside its song, `sync` writes it again: {}",
-                            crate::relpath::show(missing)
-                        ),
-                    )?;
-                }
-            }
-            Ok(_) if written.plan.is_none() && busy => {}
-            Ok(_) if written.plan.is_none() => problem(
-                report,
-                format!(
-                    "Not finished by an interrupted run, `sync` writes it again: {}",
-                    crate::relpath::show(path)
-                ),
-            )?,
-            Ok(_) => {
-                let changed = written
-                    .stamp
-                    .as_ref()
-                    .is_some_and(|s| store::stamp_text(&file).as_ref() != Some(s));
-                let beside = written
-                    .sidecars
-                    .iter()
-                    .filter(|s| !crate::reconcile::sidecar_as_written(library, s))
-                    .map(|s| &s.path);
-                for changed in std::iter::once(path).filter(|_| changed).chain(beside) {
-                    problem(
-                        report,
-                        format!(
-                            "Changed since muman wrote it, so left alone: {} (`sync --force` writes it again)",
-                            crate::relpath::show(changed)
-                        ),
-                    )?;
-                }
-            }
-        }
-    }
-    for file in store::files_below(library, usize::MAX, |_| true)? {
-        let Ok(rel) = file.strip_prefix(library) else {
-            continue;
-        };
-        if rel
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("part"))
-        {
-            if !busy {
-                problem(
-                    report,
-                    format!("Left by an interrupted run: {}", file.display()),
-                )?;
-            }
-            continue;
-        }
-        let hidden = rel
-            .components()
-            .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-        if !hidden && !owned.contains(rel) && !busy {
-            crate::ui::info(
-                report,
-                &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
-            )?;
-        }
-    }
-
     let listed = manifest.keys();
-    let unread: std::collections::BTreeSet<&str> = listed
-        .iter()
-        .filter_map(|k| match k {
-            SourceKey::Torrent(t) if !store.has_metainfo(t.hash()) => Some(t.hash()),
-            _ => None,
-        })
-        .collect();
-    for hash in unread {
-        problem(
-            report,
-            format!(
-                "The metainfo of torrent {hash} is gone from sources/torrent: its files bring \
-                 no lyrics or pictures and are not checked piece by piece until its .torrent \
-                 or a magnet link of it is given to `add` again"
-            ),
-        )?;
-    }
-    for key in &listed {
-        if !store.has(key) {
-            let page = manifest
-                .song_with(key)
-                .and_then(|s| s.held.get(key))
-                .is_some_and(|h| h.url.is_some());
-            let fetchable = manifest.settings.sites.fetch_url(key).is_some()
-                || page
-                || crate::provider::is_kept(key)
-                || matches!(key, SourceKey::Torrent(_));
-            let others = manifest
-                .song_with(key)
-                .is_some_and(|s| s.sources.iter().any(|k| k != key && store.has(k)));
-            let how = if fetchable {
-                "`sync` fetches it again"
-            } else if others {
-                "its song is made from its other sources"
-            } else {
-                "its song cannot be written"
-            };
-            problem(report, format!("Missing from sources, {how}: {key}"))?;
-        }
-    }
-    for (key, f) in listed.iter().filter_map(|k| {
-        let rev = store.locate(k)?.rev();
-        Some((k, state.facts.get(k).filter(|f| f.holds_for(&rev))?))
-    }) {
-        if let Some(damage) = f.damage() {
-            problem(report, format!("Damaged audio: {}", damage.describe(key)))?;
-        }
-    }
-    for (key, failure) in &state.failures {
-        if !failure.applies(store.locate(key).as_ref(), state.facts.get(key)) {
-            continue;
-        }
-        problem(
-            report,
-            format!(
-                "Failed {} time(s) to {}: {key}: {}",
-                failure.count,
-                match failure.step {
-                    crate::state::Step::Measure => "read",
-                    crate::state::Step::Fetch => "fetch",
-                    crate::state::Step::Refetch => "fetch again",
-                    crate::state::Step::Mend => "mend",
-                },
-                failure.error
-            ),
-        )?;
-    }
-    // Each song as a sync would resolve it from what was measured, so a
-    // song no sync can build, as by a template naming no field, is said.
-    // One whose source is missing, which `sync` fetches again, waits.
-    let (on_disk, waiting): (BTreeSet<SourceKey>, BTreeSet<SourceKey>) =
-        listed.iter().cloned().partition(|k| store.has(k));
-    let resolution = crate::reconcile::resolve_songs(
-        &manifest,
-        &manifest.settings,
-        &state,
-        library,
-        Some(&on_disk),
-        &waiting,
-    );
-    match resolution {
-        Ok(r) => {
-            for (n, e) in &r.unresolved {
-                let song = manifest.songs[*n]
-                    .id()
-                    .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
-                problem(report, format!("No sync can build it: {song}: {e:#}"))?;
-            }
-        }
-        Err(e) => problem(report, format!("No sync can build the songs: {e:#}"))?,
-    }
-    for song in &manifest.songs {
-        let Some((id, f)) = song
-            .id()
-            .and_then(|id| Some((id, state.song_failures.get(id)?)))
-        else {
-            continue;
-        };
-        problem(
-            report,
-            format!(
-                "The last {} sync(s) could not write it: {id}: {}",
-                f.count, f.error
-            ),
-        )?;
-    }
     let media: Vec<_> = listed
         .iter()
         .filter_map(|k| store.locate(k))
@@ -643,7 +403,7 @@ mod tests {
         std::fs::write(dirs.library.join("A/notes.txt"), "x").unwrap();
         std::fs::write(dirs.library.join("A/.hidden"), "x").unwrap();
         std::fs::write(dirs.library.join("A/half.opus.part"), "x").unwrap();
-        let mut state = State::default();
+        let mut state = crate::state::State::default();
         let written = |stamp: Option<String>| Written {
             sources: Vec::new(),
             sidecars: Vec::new(),

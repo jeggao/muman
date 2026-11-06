@@ -3783,6 +3783,36 @@ fn check_names_a_song_the_last_sync_could_not_write_until_one_writes_it() {
     assert!(ok && !report.contains("could not write"), "{report}");
 }
 
+#[test]
+fn check_and_sync_agree_a_song_whose_source_reads_as_none_is_not_built_and_status_counts_it() {
+    let s = Setup::new();
+    let a = s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    std::fs::write(&a, "garbage").unwrap();
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &Unprobed(flacs()),
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!ok, "{}", String::from_utf8_lossy(&out));
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(!ok, "{report}");
+    assert!(
+        report.contains("No sync can build it: manual:a.flac"),
+        "{report}"
+    );
+    let (_, text) = s.run(&flacs(), &["status"]);
+    assert!(
+        text.contains("problem(s) found; `muman check` lists them"),
+        "{text}"
+    );
+}
+
 /// The fake, but ffprobe is stopped by a signal once.
 struct StoppedOnce(Fake, std::sync::atomic::AtomicBool);
 
