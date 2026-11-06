@@ -20,6 +20,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`export --redact` leaves no tracker passkey, proxy login or query
+  secret.** It kept a `passkey=` in `--bt-tracker`, a passkey in a
+  tracker's path, a proxy's login given without a scheme, and an
+  address's `?token=` or `?client=`, and it read some options as
+  secret that a trace did not, and the other way. Both now read one
+  table; an address a proxy or tracker option takes keeps its scheme
+  and host alone; and every string of the song list loses an address's
+  login and its secret query values.
 - **`add` takes no file for another named alike.** Two files whose
   names differ only in how an accent is written (NFC and NFD), or a
   file under the other spelling of a name the sources hold, were taken
