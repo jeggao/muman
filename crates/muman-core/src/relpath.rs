@@ -16,12 +16,42 @@
 //! drive such as `C:x`, which a join takes in place of the whole path. A
 //! `state.json` or a run's record edited by hand or by someone else then
 //! fails to read, naming the file, rather than reach outside its folder.
+//!
+//! A recorded path names a file by its key, not by the bytes it was
+//! written with, so a file of a decomposed name is found under `root` by
+//! [`on_disk`], which reads each folder for the name that composes alike.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use unicode_normalization::UnicodeNormalization;
+
+/// Where the file the recorded `rel` names is under `root`, by any
+/// spelling of each part's name that composes as the record's: Linux and
+/// NTFS open a name only by the bytes it was written with. None where no
+/// such file is.
+#[must_use]
+pub fn on_disk(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut at = root.to_path_buf();
+    for part in rel.components() {
+        let Component::Normal(name) = part else {
+            return None;
+        };
+        let direct = at.join(name);
+        if direct.exists() {
+            at = direct;
+            continue;
+        }
+        let want: String = name.to_string_lossy().nfc().collect();
+        at = std::fs::read_dir(&at)
+            .ok()?
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().nfc().eq(want.chars()))?
+            .path();
+    }
+    Some(at)
+}
 
 /// `path` with `/` between its parts, in NFC.
 #[must_use]

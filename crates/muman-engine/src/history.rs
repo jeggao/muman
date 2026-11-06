@@ -935,7 +935,7 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
     let gone: Vec<String> = record
         .trashed
         .iter()
-        .filter(|rel| !home.join(rel).exists())
+        .filter(|rel| crate::relpath::on_disk(home, rel).is_none())
         .map(|rel| format!("  {}", home.join(rel).display()))
         .collect();
     if !gone.is_empty() {
