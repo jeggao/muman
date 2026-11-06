@@ -852,10 +852,12 @@ impl UndoPlan {
         self.record.songs_before.as_deref()
     }
 
-    /// Whether `other` undoes the same run.
+    /// Whether `other` undoes the same run in the same way: its record
+    /// and what it would do, not only its folder.
     #[must_use]
     pub fn same_run(&self, other: &Self) -> bool {
-        self.dir == other.dir
+        let record = |p: &Self| serde_json::to_vec(&p.record).ok();
+        self.dir == other.dir && self.lines == other.lines && record(self) == record(other)
     }
 }
 

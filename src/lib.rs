@@ -519,6 +519,10 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             export::export(runner, dirs, &options, out)
         }
         Command::Undo { yes, dry_run } => {
+            // Before planning, as a run holds it, so a run under way is
+            // waited for rather than read as stopped, and no run begins
+            // between the undo and its sync.
+            let runs = Lock::runs(&dirs.home)?;
             let planned = history::plan(dirs)?;
             ui::info(out, "Undoing the last run:")?;
             for line in planned.lines() {
@@ -538,11 +542,9 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             if !trust::gate(&dirs.home, &held, job.trust, prompter, out)? {
                 return Ok(true);
             }
-            // As a run holds it, so no run begins between the undo and its sync.
-            let runs = Lock::runs(&dirs.home)?;
             let undone = {
                 let _lock = Lock::folder(&dirs.home)?;
-                let _library = Lock::library(&dirs.library, dirs.lock_folder()?);
+                let _library = Lock::library(&dirs.library, dirs.lock_folder()?)?;
                 let again = history::plan(dirs)?;
                 if !again.same_run(&planned) {
                     return Err(change::Refused(

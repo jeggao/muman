@@ -20,6 +20,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`undo` during a run waits for it to end.** It planned at once, so a
+  sync under way was said to have "stopped before it ended", one in its
+  first seconds was taken for a hand edit, and `undo -y` could then
+  carry out a plan other than the one it showed. It now takes the
+  home's run lock before it plans, refuses a record changed since it
+  showed its plan, and stops when it cannot lock the library.
 - **`export -o` writes over no file unasked.** It wrote its zip over
   whatever `-o` named: the song list, `state.db`, a source, a song of
   the library, or a zip of the user's. Nothing is now written in the
