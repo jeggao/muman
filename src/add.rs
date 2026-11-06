@@ -1159,6 +1159,14 @@ pub(crate) fn copy_new(
     to: &Path,
     copied: &mut Vec<PathBuf>,
 ) -> Result<()> {
+    if copied.iter().any(|c| c == to) {
+        return Err(change::Refused(format!(
+            "{} and another file given are both named {} once composed; rename one of them first",
+            from.display(),
+            to.display()
+        ))
+        .into());
+    }
     if to.exists() {
         return Err(change::Refused(format!(
             "{} exists already, the name {} takes once composed; rename one of them first",

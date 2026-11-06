@@ -2994,6 +2994,7 @@ fn add_refuses_two_files_named_alike_once_normalized_and_copies_neither() {
         .trusting(&flacs(), &["add", &nfc, &nfd], None)
         .unwrap_err();
     assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(format!("{e:#}").contains("another file given"), "{e:#}");
     assert!(manual_files(&s).is_empty(), "{:?}", manual_files(&s));
 }
 
@@ -3008,6 +3009,7 @@ fn add_refuses_another_file_under_another_spelling_of_a_name_held() {
     let second = s.written("two/cafe\u{301}.flac", "another recording");
     let e = s.trusting(&flacs(), &["add", &second], None).unwrap_err();
     assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(format!("{e:#}").contains("exists already"), "{e:#}");
     assert_eq!(library_of(&s), before);
     assert_eq!(manual_files(&s), ["caf\u{e9}.flac"]);
 }
