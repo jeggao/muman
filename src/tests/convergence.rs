@@ -4,13 +4,17 @@
 //! A case is 8 to 12 steps over four songs of one's own: add one, retitle
 //! one, remove or restore one, undo the last run, edit a setting a build
 //! reads (the template, the codec lossless audio is written in, the
-//! lyrics' format, the loudness mode), or sync. A step may be killed at one of its first
+//! lyrics' format, the loudness mode), break a song's source so it reads
+//! as none or mend it, or sync. A step may be killed at one of its first
 //! changes to a file, as a crash would stop it, then an undo stopped
 //! partway is run again and a sync recovers.
 //! After each step and a sync, which lists again the sources of one's own
 //! an undo left unlisted, one more sync changes nothing, and the library
-//! is the one a new home holding the same sources and song list builds in
-//! one sync; [`crate::reconcile::invariant`] holds after every run.
+//! is the one a new home holding the same sources, mended, and song list
+//! builds in one sync, but for the files of the songs broken, which stay
+//! byte for byte as they were while they are; every file recorded has
+//! the plan it was made from, and [`crate::reconcile::invariant`] holds
+//! after every run.
 //!
 //! The runner reads no `PROPTEST_*` variable and writes no file: its
 //! config is built whole here, never from `Config::default`, which reads
@@ -57,6 +61,9 @@ enum Op {
     Restore(usize),
     Undo,
     Edit(usize),
+    /// The song's source made to read as none.
+    Break(usize),
+    Mend(usize),
     Sync,
 }
 
@@ -69,7 +76,9 @@ fn op() -> impl Strategy<Value = Op> {
         song.clone().prop_map(Op::Add),
         (song.clone(), any::<bool>()).prop_map(|(n, b)| Op::Retitle(n, b)),
         song.clone().prop_map(Op::Remove),
-        song.prop_map(Op::Restore),
+        song.clone().prop_map(Op::Restore),
+        song.clone().prop_map(Op::Break),
+        song.prop_map(Op::Mend),
         Just(Op::Undo),
         (0..EDITS.len()).prop_map(Op::Edit),
         Just(Op::Sync),
@@ -80,17 +89,82 @@ fn steps() -> impl Strategy<Value = Vec<Step>> {
     prop::collection::vec((op(), prop::option::weighted(0.25, 1..30_usize)), 8..=12)
 }
 
+/// What a broken source holds.
+const GARBAGE: &[u8] = b"garbage";
+
+fn source(n: usize) -> String {
+    format!("home/sources/manual/{}.flac", SONGS[n])
+}
+
+/// The fake, but a tool given a file that holds [`GARBAGE`] fails, as
+/// ffprobe fails on bytes that are no audio.
+struct Breakable(Fake);
+
+impl Breakable {
+    fn refuses(cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        if cmd
+            .iter()
+            .any(|a| std::fs::read(a).is_ok_and(|b| b == GARBAGE))
+        {
+            anyhow::bail!("Invalid data found when processing input");
+        }
+        Ok(())
+    }
+}
+
+impl Runner for Breakable {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        Self::refuses(cmd)?;
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        Self::refuses(cmd)?;
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        Self::refuses(cmd)?;
+        self.0.stream(cmd, on_line)
+    }
+}
+
 /// Each song's probe: its own title and track, so no two share a path.
-fn fake() -> Fake {
-    SONGS
-        .iter()
-        .enumerate()
-        .fold(Fake::default(), |fake, (n, name)| {
-            let probe = FLAC
-                .replace("\"TITLE\": \"Song\"", &format!("\"TITLE\": \"{name}\""))
-                .replace("\"track\": \"2\"", &format!("\"track\": \"{}\"", n + 1));
-            fake.probe(&format!("{name}.flac"), &probe)
-        })
+fn fake() -> Breakable {
+    Breakable(
+        SONGS
+            .iter()
+            .enumerate()
+            .fold(Fake::default(), |fake, (n, name)| {
+                let probe = FLAC
+                    .replace("\"TITLE\": \"Song\"", &format!("\"TITLE\": \"{name}\""))
+                    .replace("\"track\": \"2\"", &format!("\"track\": \"{}\"", n + 1));
+                fake.probe(&format!("{name}.flac"), &probe)
+            }),
+    )
+}
+
+/// Whether song `n`'s source is broken.
+fn broken(s: &Setup, n: usize) -> bool {
+    std::fs::read(s.dir.path().join(source(n))).is_ok_and(|b| b == GARBAGE)
+}
+
+/// Each file of song `n` the state records, and what it holds.
+fn files_of(s: &Setup, n: usize) -> BTreeMap<PathBuf, Vec<u8>> {
+    let key = SourceKey::parse(&key(n)).unwrap();
+    let Ok(state) = crate::state::State::load(&s.dir.path().join("home")) else {
+        return BTreeMap::new();
+    };
+    let lib = s.dir.path().join("lib");
+    (state.outputs.iter())
+        .filter(|(_, w)| w.sources.contains(&key))
+        .flat_map(|(p, w)| w.files(p).map(Path::to_path_buf).collect::<Vec<_>>())
+        .filter_map(|f| Some((f.clone(), std::fs::read(lib.join(&f)).ok()?)))
+        .collect()
 }
 
 fn key(n: usize) -> String {
@@ -116,6 +190,19 @@ fn command(s: &Setup, op: &Op) -> Vec<String> {
             );
             words(&["set", "-y", &key(*n), &format!("title={title}")])
         }
+        Op::Break(n) => {
+            let path = s.dir.path().join(source(*n));
+            if path.exists() {
+                std::fs::write(path, GARBAGE).unwrap();
+            }
+            words(&["sync"])
+        }
+        Op::Mend(n) => {
+            if broken(s, *n) {
+                s.file(&source(*n));
+            }
+            words(&["sync"])
+        }
         Op::Remove(n) => words(&["remove", "-y", &key(*n)]),
         Op::Restore(n) => words(&["restore", "-y", &key(*n)]),
         Op::Undo => words(&["undo", "-y"]),
@@ -137,7 +224,7 @@ fn command(s: &Setup, op: &Op) -> Vec<String> {
 
 /// Run `args` on `s` as [`Setup::run`] does, a command refused, such
 /// as a restore of a song listed, being one outcome among others.
-fn attempt(s: &Setup, fake: &Fake, args: &[&str]) {
+fn attempt(s: &Setup, fake: &Breakable, args: &[&str]) {
     let _guard = crate::kill::guard_library(&s.job(args).dirs.library);
     let _ = run_with(
         &s.job(args),
@@ -160,7 +247,7 @@ fn attempt(s: &Setup, fake: &Fake, args: &[&str]) {
 /// `an_undo_survives_a_kill_anywhere_and_finishes_when_run_again` has it,
 /// since a sync alone leaves what it put back beside what it had not yet
 /// removed; a sync then recovers.
-fn take(s: &Setup, fake: &Fake, (op, kill): &Step) {
+fn take(s: &Setup, fake: &Breakable, (op, kill): &Step) {
     let args = command(s, op);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let Some(at) = kill else {
@@ -202,16 +289,22 @@ fn undoing(s: &Setup) -> bool {
         })
 }
 
-/// The library one sync of `s`'s sources and song list builds in a new
-/// home.
-fn built_at_once(s: &Setup, fake: &Fake) -> BTreeMap<PathBuf, Vec<u8>> {
+/// The library one sync of `s`'s sources, mended, and song list builds in
+/// a new home, and `s`'s, both without the files of the songs broken.
+type Libraries = (BTreeMap<PathBuf, Vec<u8>>, BTreeMap<PathBuf, Vec<u8>>);
+
+fn built_at_once(s: &Setup, fake: &Breakable) -> Libraries {
     let fresh = Setup::new();
     let sources = s.dir.path().join("home/sources/manual");
     for source in crate::store::files_below(&sources, usize::MAX, |_| true).unwrap() {
         let rel = source.strip_prefix(s.dir.path()).unwrap();
         let to = fresh.dir.path().join(rel);
         std::fs::create_dir_all(to.parent().unwrap()).unwrap();
-        std::fs::copy(&source, &to).unwrap();
+        if std::fs::read(&source).is_ok_and(|b| b == GARBAGE) {
+            fresh.file(&rel.to_string_lossy());
+        } else {
+            std::fs::copy(&source, &to).unwrap();
+        }
     }
     std::fs::copy(
         s.dir.path().join("home/songs.toml"),
@@ -219,7 +312,16 @@ fn built_at_once(s: &Setup, fake: &Fake) -> BTreeMap<PathBuf, Vec<u8>> {
     )
     .unwrap();
     fresh.run(fake, &["sync"]);
-    library_of(&fresh)
+    let without = |home: &Setup| {
+        let mut library = library_of(home);
+        for n in (0..SONGS.len()).filter(|&n| broken(s, n)) {
+            for file in files_of(home, n).keys() {
+                library.remove(file);
+            }
+        }
+        library
+    };
+    (without(&fresh), without(s))
 }
 
 /// Fails unless every step of `steps`, from two songs synced, leaves the
@@ -232,6 +334,10 @@ fn converges(steps: &[Step]) {
     s.file("home/sources/manual/Birch.flac");
     s.run(&fake, &["sync"]);
     for (n, step) in steps.iter().enumerate() {
+        let held: Vec<(usize, BTreeMap<PathBuf, Vec<u8>>)> = (0..SONGS.len())
+            .filter(|&n| broken(&s, n))
+            .map(|n| (n, files_of(&s, n)))
+            .collect();
         take(&s, &fake, step);
         // A song list put back by undo leaves sources of one's own unlisted,
         // which the next sync lists again.
@@ -243,10 +349,32 @@ fn converges(steps: &[Step]) {
                 "step {n}, {step:?}: a sync after changed: {text}"
             );
         }
+        let (fresh, now) = built_at_once(&s, &fake);
         assert!(
-            library_of(&s) == built_at_once(&s, &fake),
+            fresh == now,
             "step {n}, {step:?}: the library is not the one its song list builds"
         );
+        // An undo puts back, a remove takes away and a restore brings back
+        // a broken song's files; nothing else changes them.
+        if !matches!(step.0, Op::Undo | Op::Remove(_) | Op::Restore(_)) {
+            for (song, files) in &held {
+                if broken(&s, *song) {
+                    assert_eq!(
+                        &files_of(&s, *song),
+                        files,
+                        "step {n}, {step:?}: a broken song's files changed"
+                    );
+                }
+            }
+        }
+        let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+        for (path, written) in &state.outputs {
+            assert!(
+                written.plan.is_some(),
+                "step {n}, {step:?}: {} has no plan",
+                path.display()
+            );
+        }
     }
 }
 

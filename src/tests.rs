@@ -81,7 +81,7 @@ impl Setup {
         path
     }
 
-    fn run(&self, fake: &Fake, args: &[&str]) -> (bool, String) {
+    fn run<R: Runner>(&self, fake: &R, args: &[&str]) -> (bool, String) {
         let mut out = Vec::new();
         let _guard = crate::kill::guard_library(&self.job(args).dirs.library);
         let ok = run_with(
