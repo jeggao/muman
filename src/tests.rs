@@ -3463,6 +3463,24 @@ fn a_lyrics_offset_past_an_hour_is_refused_before_it_is_shown() {
 }
 
 #[test]
+fn check_during_a_run_reports_no_file_it_is_moving() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let lib = s.dir.path().join("lib");
+    let from = lib.join("Artist/Record/02 Song.flac");
+    let to = lib.join("Elsewhere/02 Song.flac");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    let held = Lock::runs(&s.dir.path().join("home")).unwrap();
+    std::fs::rename(&from, &to).unwrap();
+    let (_, report) = s.report(&flacs(), &["check"]);
+    drop(held);
+    assert!(report.contains("run is under way"), "{report}");
+    assert!(!report.contains("Missing"), "{report}");
+    assert!(!report.contains("Not muman's"), "{report}");
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

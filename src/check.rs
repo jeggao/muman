@@ -47,12 +47,21 @@ pub fn check<R: Runner, W: Write, D: Write>(
     let store = Store::scan(dirs)?;
     let library = &dirs.library;
     crate::reconcile::vouch_for_copies(library, &mut state);
+    // As the next sync reads it: a file a stopped run moved before the
+    // state could say so is where it went, and no file is missing.
+    crate::history::follow_moves(
+        &dirs.home,
+        library,
+        &mut state,
+        crate::history::Moves::Foresee,
+    );
     // What a run under way is writing is no run's leftover.
     let busy = crate::atomic::Lock::busy(&dirs.home);
     if busy {
         crate::ui::info(
             report,
-            "A muman run is under way: the files it is writing are not reported",
+            "A muman run is under way: the files it is writing, moving or removing are not \
+             reported",
         )?;
     }
     let mut problems = 0_usize;
@@ -80,6 +89,8 @@ pub fn check<R: Runner, W: Write, D: Write>(
         owned.extend(written.sidecar_paths().cloned());
         let file = library.join(path);
         match std::fs::metadata(&file) {
+            // A run under way may be moving it, or about to write it.
+            _ if busy && !file.is_file() => {}
             Err(_) => problem(
                 report,
                 format!(
@@ -160,7 +171,7 @@ pub fn check<R: Runner, W: Write, D: Write>(
         let hidden = rel
             .components()
             .any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-        if !hidden && !owned.contains(rel) {
+        if !hidden && !owned.contains(rel) && !busy {
             crate::ui::info(
                 report,
                 &format!("Not muman's, left alone: {}", crate::relpath::show(rel)),
