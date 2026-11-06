@@ -2967,6 +2967,92 @@ fn audio_that_does_not_read_is_not_copied_in_or_listed() {
     assert!(Path::new(&good).exists());
 }
 
+/// The files `sources/manual` holds, by their names on disk.
+fn manual_files(s: &Setup) -> Vec<String> {
+    let manual = s.dir.path().join("home/sources/manual");
+    let mut names: Vec<String> = crate::store::files_below(&manual, usize::MAX, |_| true)
+        .unwrap_or_default()
+        .iter()
+        .map(|f| {
+            f.strip_prefix(&manual)
+                .unwrap_or(f)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn add_refuses_two_files_named_alike_once_normalized_and_copies_neither() {
+    let s = Setup::new();
+    let nfc = s.file("rips/caf\u{e9}.flac");
+    let nfd = s.written("rips/other/cafe\u{301}.flac", "another recording");
+    let e = s
+        .trusting(&flacs(), &["add", &nfc, &nfd], None)
+        .unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(manual_files(&s).is_empty(), "{:?}", manual_files(&s));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn add_refuses_another_file_under_another_spelling_of_a_name_held() {
+    let s = Setup::new();
+    let first = s.file("one/caf\u{e9}.flac");
+    let (ok, text) = s.run(&flacs(), &["add", &first]);
+    assert!(ok, "{text}");
+    let before = library_of(&s);
+    let second = s.written("two/cafe\u{301}.flac", "another recording");
+    let e = s.trusting(&flacs(), &["add", &second], None).unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert_eq!(library_of(&s), before);
+    assert_eq!(manual_files(&s), ["caf\u{e9}.flac"]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn add_refuses_a_name_that_is_no_text() {
+    use std::os::unix::ffi::OsStrExt;
+    let s = Setup::new();
+    let folder = s.dir.path().join("rips/Album");
+    std::fs::create_dir_all(&folder).unwrap();
+    let odd = folder.join(std::ffi::OsStr::from_bytes(b"caf\xe9.flac"));
+    std::fs::write(&odd, "one").unwrap();
+    s.file("rips/Album/b.flac");
+    let e = s
+        .trusting(&flacs(), &["add", &folder.to_string_lossy()], None)
+        .unwrap_err();
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert!(format!("{e:#}").contains("UTF-8"), "{e:#}");
+    assert!(manual_files(&s).is_empty(), "{:?}", manual_files(&s));
+}
+
+#[test]
+fn a_file_given_a_decomposed_name_is_copied_composed_and_undone() {
+    let s = Setup::new();
+    let given = s.file("rips/cafe\u{301}.flac");
+    let (ok, text) = s.run(&flacs(), &["add", &given]);
+    assert!(ok, "{text}");
+    assert_eq!(manual_files(&s), ["caf\u{e9}.flac"]);
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(manual_files(&s).is_empty(), "{:?}", manual_files(&s));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn lyrics_named_decomposed_come_with_a_song_named_composed() {
+    let s = Setup::new();
+    let song = s.file("rips/caf\u{e9}.flac");
+    s.written("rips/cafe\u{301}.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    assert_eq!(manual_files(&s), ["caf\u{e9}.flac", "caf\u{e9}.lrc"]);
+}
+
 #[test]
 fn a_folder_named_by_where_it_ends_is_copied_under_its_own_name() {
     let s = Setup::new();

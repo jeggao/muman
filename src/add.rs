@@ -306,12 +306,36 @@ pub(crate) fn split_loose<'a>(
 /// yt-dlp fetched into the store under its key, anything else into the
 /// manual folder with the lyrics and pictures named as it is; a folder's
 /// files that are no song, lyrics or picture are left out and named,
-/// since nothing would read them there. Never moves or overwrites; a
-/// name already taken is an error. Each song file
-/// copied is noted in `beside` with where it came from, for the loose
-/// files given with it, and every file copied in `copied`, for `undo`,
-/// those copied before an error too.
+/// since nothing would read them there. Never moves or overwrites: a
+/// name already taken, once composed, is refused, and an add that fails
+/// partway removes the copies it made. Each song file copied is noted in
+/// `beside` with where it came from, for the loose files given with it,
+/// and every file copied in `copied`, for `undo`.
+// Removes again the copies an add refused partway made.
+#[expect(clippy::disallowed_methods)]
 pub(crate) fn import<R: Runner, W: Write>(
+    runner: &R,
+    dirs: &Dirs,
+    sites: &crate::sites::Sites,
+    paths: &[&String],
+    (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Vec<PathBuf>),
+    unread: &mut Vec<String>,
+    out: &mut W,
+) -> Result<Vec<Proposal>> {
+    let start = copied.len();
+    let imported = import_all(runner, dirs, sites, paths, (beside, copied), unread, out);
+    if imported.is_err() {
+        // An add refused partway, as by two names one once composed,
+        // leaves none of its copies for the next sync to list.
+        for file in copied.drain(start..).rev() {
+            atomic::remove(&file).with_context(|| format!("removing {}", file.display()))?;
+        }
+    }
+    imported
+}
+
+/// [`import`], its copies kept whatever becomes of it.
+fn import_all<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     sites: &crate::sites::Sites,
@@ -354,7 +378,7 @@ pub(crate) fn import<R: Runner, W: Write>(
             originals_in.bring_into(dirs, given, key, (out, copied), &mut brought)?;
             continue;
         }
-        let to = dirs.manual().join(name);
+        let to = dirs.manual().join(composed(Path::new(&name), path)?);
         if hidden(path) {
             not_read.push(format!(
                 "{}, which is hidden, its name starting with a dot, and muman reads no hidden \
@@ -449,7 +473,8 @@ fn copy_with_sidecars<W: Write>(
         .or_insert_with(|| files_in(&within));
     for sidecar in sidecars_among(path, &listed.files) {
         if let Some(n) = sidecar.file_name() {
-            copy_new(&within, &sidecar, &dirs.manual().join(n), copied)?;
+            let to = dirs.manual().join(composed(Path::new(n), &sidecar)?);
+            copy_new(&within, &sidecar, &to, copied)?;
         }
     }
     let all: Vec<PathBuf> = listed
@@ -1135,7 +1160,12 @@ pub(crate) fn copy_new(
     copied: &mut Vec<PathBuf>,
 ) -> Result<()> {
     if to.exists() {
-        bail!("{} exists already; rename one of them first", to.display());
+        return Err(change::Refused(format!(
+            "{} exists already, the name {} takes once composed; rename one of them first",
+            to.display(),
+            from.display()
+        ))
+        .into());
     }
     if let Some(dir) = to.parent() {
         crate::create(dir)?;
@@ -1155,15 +1185,34 @@ pub(crate) fn copy_tree(
     copied: &mut Vec<PathBuf>,
 ) -> Result<()> {
     if to.exists() {
-        bail!("{} exists already; rename one of them first", to.display());
+        return Err(change::Refused(format!(
+            "{} exists already; rename one of them first",
+            to.display()
+        ))
+        .into());
     }
     for file in files {
         if keep(file) {
             let rel = file.strip_prefix(from.path()).unwrap_or(file);
-            copy_new(from, file, &to.join(rel), copied)?;
+            copy_new(from, file, &to.join(composed(rel, file)?), copied)?;
         }
     }
     Ok(())
+}
+
+/// `name`, the name a copy of `from` takes in the sources, in NFC, as the
+/// key it is listed under is: so the copy, its key and the run's record
+/// of it are one name, on a filesystem that keeps names as given too.
+/// A name that is no text is refused, as no key could name it.
+fn composed(name: &Path, from: &Path) -> Result<PathBuf> {
+    if name.to_str().is_none() {
+        return Err(change::Refused(format!(
+            "{} has a name that is no UTF-8 text; rename it first",
+            from.display()
+        ))
+        .into());
+    }
+    Ok(crate::relpath::normalized(name))
 }
 
 /// Whether ffprobe reads an audio stream in `file`, so a file that holds

@@ -20,6 +20,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`add` takes no file for another named alike.** Two files whose
+  names differ only in how an accent is written (NFC and NFD), or a
+  file under the other spelling of a name the sources hold, were taken
+  for one: one was dropped unsaid, or replaced the song already listed.
+  Each copy is now named as its key is, composed, so such a pair is
+  refused, and a name that is no UTF-8 text is too. A refused add
+  leaves none of its copies for the next sync to list, `undo` takes out
+  a copy given a decomposed name, and lyrics or a picture named
+  decomposed come with a song named composed.
 - **A damaged `state.db` is named.** Its error said only "file is not
   a database"; it now names the file and what moving it aside costs. An
   emptied one, in a home whose history keeps runs, is refused rather
