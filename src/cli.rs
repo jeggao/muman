@@ -598,9 +598,10 @@ pub enum Command {
         lyrics: Option<String>,
 
         /// Write the song list with each secret it holds replaced by
-        /// `<redacted>`: AcoustID's key, the passwords, user names and
-        /// headers in yt-dlp's and aria2c's arguments, tokens in yt-dlp's
-        /// extractor arguments, and the credentials in any address.
+        /// `<redacted>`: AcoustID's key, the passwords, user names,
+        /// headers and proxies in yt-dlp's and aria2c's arguments, all
+        /// after a tracker's host, tokens in yt-dlp's extractor arguments,
+        /// and the credentials and secret query values in any address.
         #[arg(long)]
         redact: bool,
 

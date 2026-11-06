@@ -8,8 +8,8 @@
 //!
 //! The command line is any user's to see (`ps`), so an option of `args`
 //! that carries a login, a password, a header or an address that may
-//! hold them ([`ARIA2C_SECRET`]) goes to a config file of the run's own
-//! instead, its owner's alone ([`crate::atomic`]), named by `--conf-path`
+//! hold them ([`crate::runner::ARIA2C_SECRET`]) goes to a config file of
+//! the run's own instead, its owner's alone ([`crate::atomic`]), named by `--conf-path`
 //! in place of `--no-conf`: aria2c then reads that file and no other. aria2c reads
 //! the file's options before the command line's, but muman sets none of
 //! these, and a `header` there adds to those given elsewhere, as on the
@@ -133,7 +133,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-use crate::runner::{ARIA2C_SECRET, Line, Runner};
+use crate::runner::{Line, Runner, aria2c_secret};
 use crate::source::{SourceKey, TorrentKey};
 use crate::torrent::{File, Magnet, Metainfo};
 use crate::units::serde_as;
@@ -270,13 +270,13 @@ fn input_file(entries: &[Entry]) -> Result<Vec<u8>> {
     Ok(text)
 }
 
-/// The config file of a run's [`ARIA2C_SECRET`] options, beside its input
-/// file.
+/// The config file of a run's [`crate::runner::ARIA2C_SECRET`] options,
+/// beside its input file.
 const CONF: &str = "aria2.conf";
 
 /// `[torrent] args` apart: those for the command line, and each option
-/// of [`ARIA2C_SECRET`] with its value, as `--name=value` or
-/// `--name value` give it.
+/// of [`crate::runner::ARIA2C_SECRET`] with its value, as `--name=value`
+/// or `--name value` give it.
 fn secrets_apart(args: &[String]) -> (Vec<OsString>, Vec<(&str, &str)>) {
     let (mut kept, mut secret) = (Vec::new(), Vec::new());
     let mut args = args.iter();
@@ -285,10 +285,10 @@ fn secrets_apart(args: &[String]) -> (Vec<OsString>, Vec<(&str, &str)>) {
             .strip_prefix("--")
             .map(|o| o.split_once('=').unwrap_or((o, "")));
         match option {
-            Some((name, value)) if ARIA2C_SECRET.contains(&name) && arg.contains('=') => {
+            Some((name, value)) if aria2c_secret(name) && arg.contains('=') => {
                 secret.push((name, value));
             }
-            Some((name, _)) if ARIA2C_SECRET.contains(&name) => match args.next() {
+            Some((name, _)) if aria2c_secret(name) => match args.next() {
                 Some(value) => secret.push((name, value.as_str())),
                 None => kept.push(arg.into()),
             },

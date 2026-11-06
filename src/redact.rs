@@ -9,16 +9,23 @@
 //! | `[ytdlp] args` | The value of each option in [`YTDLP`] |
 //! | `[ytdlp] extractor_args`, and `--extractor-args` in `args` | Each argument that holds a token, a password or a session, as `po_token` |
 //! | `[torrent] args` | The value of each option in [`ARIA2C`] |
-//! | Those, `[[hook]]`, `[tools]`, `[providers]` and `[sites]` | The user name and password in an address, as `https://user:pass@host` |
+//! | `[torrents.*] trackers` | All after each tracker's host, where a passkey may be |
+//! | Every string | The user name and password in an address, as `https://user:pass@host`, and each query value named as a secret is, as `?token=` or `&client=` |
 //!
-//! An option's value is replaced given apart (`--password x`), joined by
-//! `=` (`--password=x`), or, for a short option, joined on (`-px`). A
-//! header keeps its field's name, so `--add-header Cookie:x` says which
-//! header was sent. A path is no secret: `--cookies` and `--load-cookies`
-//! name a file the export does not hold, and `--netrc-cmd` a command
-//! that prints one. A hook's or a program's own options are not known,
-//! so of their words only an address's credentials can be told apart;
-//! any other secret in them stays, which the docs say.
+//! The options are the ones a trace hides, read from one table
+//! ([`crate::runner::YTDLP_SECRET`], [`crate::runner::ARIA2C_SECRET`]),
+//! so the two never disagree. An option's value is replaced given apart
+//! (`--password x`), joined by `=` (`--password=x`), or, for a short
+//! option, joined on (`-px`). A header keeps its field's name, so
+//! `--add-header Cookie:x` says which header was sent. An address an
+//! option takes, as a proxy or a tracker, keeps its scheme and host
+//! alone, with or without a scheme, as `user:pass@proxy:3128`: a
+//! tracker's passkey may be in its path. A path is no secret: `--cookies`
+//! and `--load-cookies` name a file the export does not hold, and
+//! `--netrc-cmd` a command that prints one. A hook's or a program's own
+//! options are not known, so of their words only an address's
+//! credentials and query can be told apart; any other secret in them
+//! stays, which the docs say.
 
 use std::sync::LazyLock;
 
@@ -29,56 +36,8 @@ use toml_edit::{DocumentMut, Item, TableLike, Value};
 /// What a secret is replaced by.
 pub const PLACEHOLDER: &str = "<redacted>";
 
-/// What follows an option that takes a secret.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Takes {
-    /// A secret whole: a password, a user name, a token.
-    Secret,
-    /// `Field:value`, the field kept.
-    Header,
-    /// `extractor:key=value;...`, as yt-dlp's `--extractor-args`.
-    ExtractorArgs,
-}
-
-/// yt-dlp's options that take a secret: its account, two-factor and TV
-/// provider logins, a video's password, a client certificate's password,
-/// headers sent, and extractor arguments.
-pub const YTDLP: &[(&str, Takes)] = &[
-    ("--username", Takes::Secret),
-    ("-u", Takes::Secret),
-    ("--password", Takes::Secret),
-    ("-p", Takes::Secret),
-    ("--twofactor", Takes::Secret),
-    ("-2", Takes::Secret),
-    ("--video-password", Takes::Secret),
-    ("--ap-username", Takes::Secret),
-    ("--ap-password", Takes::Secret),
-    ("--client-certificate-password", Takes::Secret),
-    ("--add-header", Takes::Header),
-    ("--add-headers", Takes::Header),
-    ("--extractor-args", Takes::ExtractorArgs),
-];
-
-/// aria2c's options that take a secret: HTTP, FTP and proxy logins, the
-/// RPC interface's secret and login, and headers sent.
-pub const ARIA2C: &[(&str, Takes)] = &[
-    ("--http-user", Takes::Secret),
-    ("--http-passwd", Takes::Secret),
-    ("--ftp-user", Takes::Secret),
-    ("--ftp-passwd", Takes::Secret),
-    ("--all-proxy-user", Takes::Secret),
-    ("--all-proxy-passwd", Takes::Secret),
-    ("--http-proxy-user", Takes::Secret),
-    ("--http-proxy-passwd", Takes::Secret),
-    ("--https-proxy-user", Takes::Secret),
-    ("--https-proxy-passwd", Takes::Secret),
-    ("--ftp-proxy-user", Takes::Secret),
-    ("--ftp-proxy-passwd", Takes::Secret),
-    ("--rpc-secret", Takes::Secret),
-    ("--rpc-user", Takes::Secret),
-    ("--rpc-passwd", Takes::Secret),
-    ("--header", Takes::Header),
-];
+pub use crate::runner::Takes;
+use crate::runner::{ARIA2C_SECRET as ARIA2C, YTDLP_SECRET as YTDLP, extractor_secret};
 
 /// `text`, a song list, with each secret replaced, and how many were.
 pub fn redact(text: &str) -> Result<(String, usize)> {
@@ -111,10 +70,19 @@ pub fn redact(text: &str) -> Result<(String, usize)> {
             }
         }
     }
-    for name in ["providers", "hook", "tools", "sites"] {
-        if let Some(item) = doc.get_mut(name) {
-            n += strings(item, &mut address);
+    if let Some(torrents) = table(&mut doc, "torrents") {
+        for (_, torrent) in torrents.iter_mut() {
+            if let Some(trackers) = torrent
+                .as_table_like_mut()
+                .and_then(|t| t.get_mut("trackers"))
+            {
+                n += strings(trackers, &mut address_value);
+            }
         }
+    }
+    // Every string, as a secret's shape is the same wherever it is.
+    for (_, item) in doc.iter_mut() {
+        n += strings(item, &mut address);
     }
     Ok((doc.to_string(), n))
 }
@@ -188,11 +156,11 @@ fn redact_words(words: &mut [String], known: &[(&str, Takes)]) -> usize {
         let word = words[i].clone();
         if let Some((_, takes)) = known.iter().find(|(o, _)| *o == word) {
             if let Some(next) = words.get_mut(i + 1) {
-                n += takes.redact(next);
+                n += redact_value(*takes, next);
                 i += 1;
             }
         } else if let Some((option, takes, mut value)) = joined(&word, known) {
-            n += takes.redact(&mut value);
+            n += redact_value(takes, &mut value);
             words[i] = format!("{option}{value}");
         }
         i += 1;
@@ -214,28 +182,69 @@ fn joined(word: &str, known: &[(&str, Takes)]) -> Option<(String, Takes, String)
     })
 }
 
-impl Takes {
-    fn redact(self, value: &mut String) -> usize {
-        match self {
-            Self::Secret => *value = PLACEHOLDER.into(),
-            Self::Header => {
-                *value = match value.split_once(':') {
-                    Some((field, _)) => format!("{field}:{PLACEHOLDER}"),
-                    None => PLACEHOLDER.into(),
-                };
-            }
-            Self::ExtractorArgs => {
-                let Some((extractor, args)) = value.split_once(':') else {
-                    return 0;
-                };
-                let mut args = args.to_string();
-                let n = extractor_args(&mut args);
-                *value = format!("{extractor}:{args}");
-                return n;
-            }
+/// `value`, given to an option that `takes` it, with its secret
+/// replaced; how many were.
+fn redact_value(takes: Takes, value: &mut String) -> usize {
+    match takes {
+        Takes::Secret => *value = PLACEHOLDER.into(),
+        Takes::Header => {
+            *value = match value.split_once(':') {
+                Some((field, _)) => format!("{field}:{PLACEHOLDER}"),
+                None => PLACEHOLDER.into(),
+            };
         }
-        1
+        Takes::ExtractorArgs => {
+            let Some((extractor, args)) = value.split_once(':') else {
+                return 0;
+            };
+            let mut args = args.to_string();
+            let n = extractor_args(&mut args);
+            *value = format!("{extractor}:{args}");
+            return n;
+        }
+        Takes::Address => return address_value(value),
     }
+    1
+}
+
+/// `value`, addresses split by `,` as aria2c's `--bt-tracker` takes
+/// them, each with its login and all after its host replaced, with or
+/// without a scheme: a tracker's passkey may be in its path. How many
+/// were.
+fn address_value(value: &mut String) -> usize {
+    let mut n = 0;
+    let parts: Vec<String> = value
+        .split(',')
+        .map(|part| {
+            let (scheme, rest) = match part.find("://") {
+                Some(at) => part.split_at(at + 3),
+                None => ("", part),
+            };
+            let (login, rest) = match rest.rsplit_once('@') {
+                Some((login, rest)) if !login.contains('/') => (Some(login), rest),
+                _ => (None, rest),
+            };
+            let (host, after) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+            let login = login.filter(|l| *l != PLACEHOLDER);
+            let after = (!after.is_empty() && after != format!("/{PLACEHOLDER}")).then_some(after);
+            if login.is_some() || after.is_some() {
+                n += 1;
+            }
+            let login = if login.is_some() || rest.len() < part.len() - scheme.len() {
+                format!("{PLACEHOLDER}@")
+            } else {
+                String::new()
+            };
+            let after = if after.is_some() || rest.len() > host.len() {
+                format!("/{PLACEHOLDER}")
+            } else {
+                String::new()
+            };
+            format!("{scheme}{login}{host}{after}")
+        })
+        .collect();
+    *value = parts.join(",");
+    n
 }
 
 /// yt-dlp's extractor arguments, `key=value` pairs split by `;`, with
@@ -245,7 +254,7 @@ fn extractor_args(text: &mut String) -> usize {
     let parts: Vec<String> = text
         .split(';')
         .map(|part| match part.split_once('=') {
-            Some((key, _)) if secret_argument(key) => {
+            Some((key, _)) if extractor_secret(key) => {
                 n += 1;
                 format!("{key}={PLACEHOLDER}")
             }
@@ -256,29 +265,30 @@ fn extractor_args(text: &mut String) -> usize {
     n
 }
 
-/// Whether an extractor argument named `key` holds a secret: a token, as
-/// YouTube's `po_token`, a password or a cookie, or what names a
-/// signed-in account's session, YouTube's `visitor_data` and
-/// `data_sync_id`.
-fn secret_argument(key: &str) -> bool {
-    let key = key.trim().to_ascii_lowercase();
-    ["token", "password", "secret", "cookie", "api_key"]
-        .iter()
-        .any(|s| key.contains(s))
-        || ["visitor_data", "data_sync_id"].contains(&key.as_str())
-}
-
-/// `word` with the user name and password of each address in it
-/// replaced; how many were.
+/// `word` with each address's user name and password replaced, and the
+/// value of each of its query's parameters named as a secret is, as
+/// `?token=` or `&client=`; how many were.
 fn address(word: &mut String) -> usize {
     static CREDENTIALS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"([A-Za-z][A-Za-z0-9+.-]*://)([^/?#@\s]+)@").expect("valid"));
+    static QUERY: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)([?&](?:[a-z0-9_.-]*(?:token|key|secret|passw(?:or)?d|pass|auth|session|sig|signature)|client|client_id|passkey|apikey|uid)=)([^&#\s]*)",
+        )
+        .expect("valid")
+    });
     let mut n = 0;
     let replaced = CREDENTIALS.replace_all(word, |c: &regex::Captures<'_>| {
         if &c[2] != PLACEHOLDER {
             n += 1;
         }
         format!("{}{PLACEHOLDER}@", &c[1])
+    });
+    let replaced = QUERY.replace_all(&replaced, |c: &regex::Captures<'_>| {
+        if &c[2] != PLACEHOLDER {
+            n += 1;
+        }
+        format!("{}{PLACEHOLDER}", &c[1])
     });
     if n > 0 {
         *word = replaced.into_owned();
@@ -337,8 +347,80 @@ mod tests {
     #[test]
     fn an_address_loses_its_credentials_only() {
         let given = "--proxy=socks5://marlo:pw@proxy.example:1080/x https://tunes.example/a@b";
-        let want = "--proxy=socks5://<redacted>@proxy.example:1080/x https://tunes.example/a@b";
-        assert_eq!(args(given, YTDLP), (want.to_string(), 1));
+        let want = "--proxy=socks5://<redacted>@proxy.example:1080/<redacted> \
+                    https://tunes.example/a@b";
+        assert_eq!(args(given, YTDLP), (want.to_string(), 2));
+    }
+
+    /// A song list with a marked secret in each form a secret takes.
+    const CANARIES: &str = r#"version = 4
+[ytdlp]
+args = ["--username", "canary01", "--password=canary02", "-pcanary03",
+        "--proxy", "canary04:pw@proxy.example:3128", "--add-header", "X-Key:canary05",
+        "--extractor-args", "youtube:po_token=canary06",
+        "--geo-verification-proxy=https://canary07@geo.example"]
+extractor_args = { youtube = "data_sync_id=canary08;player_client=web" }
+
+[torrent]
+args = ["--bt-tracker=https://tracker.example/announce?passkey=canary09",
+        "--bt-tracker", "https://tracker.example/canary10/announce",
+        "--all-proxy=marlo:canary11@proxy.example:3128", "--http-passwd", "canary12",
+        "--http-proxy", "http://canary13:x@proxy.example"]
+
+[providers.acoustid]
+key = "canary14"
+url = "https://aid.example/v2?client=canary15&format=json"
+
+[[hook]]
+on = "changed"
+run = ["curl", "https://hooks.example/ping?token=canary16",
+       "https://marlo:canary17@hooks.example/"]
+"#;
+
+    #[test]
+    fn an_address_an_option_takes_keeps_its_scheme_and_host() {
+        let cases = [
+            (
+                "https://tracker.example/announce?passkey=x",
+                "https://tracker.example/<redacted>",
+                1,
+            ),
+            (
+                "marlo:pw@proxy.example:3128",
+                "<redacted>@proxy.example:3128",
+                1,
+            ),
+            ("proxy.example:3128", "proxy.example:3128", 0),
+            (
+                "https://tracker.example/a@b",
+                "https://tracker.example/<redacted>",
+                1,
+            ),
+            (
+                "udp://a.example:80/x,udp://b.example:80",
+                "udp://a.example:80/<redacted>,udp://b.example:80",
+                1,
+            ),
+        ];
+        for (given, want, n) in cases {
+            let mut value = given.to_string();
+            assert_eq!(address_value(&mut value), n, "{given}");
+            assert_eq!(value, want, "{given}");
+            assert_eq!(address_value(&mut value), 0, "again: {given}");
+            assert_eq!(value, want, "again: {given}");
+        }
+    }
+
+    #[test]
+    fn no_secret_of_any_form_is_left() {
+        let (text, n) = redact(CANARIES).unwrap();
+        assert!(!text.contains("canary"), "{text}");
+        assert!(n >= 17, "{n}: {text}");
+        assert!(
+            text.contains("proxy.example:3128"),
+            "the host stays: {text}"
+        );
+        assert!(text.contains("format=json"), "{text}");
     }
 
     #[test]

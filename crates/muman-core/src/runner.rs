@@ -496,54 +496,93 @@ impl<R: Runner> Runner for Traced<R> {
 /// The path of an output ffmpeg writes to its stdout.
 pub const PIPE: &str = "pipe:1";
 
-/// aria2c's options that carry a login, a password, a header or an
-/// address that may hold either: a trace hides each one's value, and
-/// given in `[torrent] args`, each goes to the run's config file rather
-/// than its command line (`aria2.rs`).
-pub const ARIA2C_SECRET: [&str; 21] = [
-    "header",
-    "http-user",
-    "http-passwd",
-    "ftp-user",
-    "ftp-passwd",
-    "all-proxy",
-    "all-proxy-user",
-    "all-proxy-passwd",
-    "http-proxy",
-    "http-proxy-user",
-    "http-proxy-passwd",
-    "https-proxy",
-    "https-proxy-user",
-    "https-proxy-passwd",
-    "ftp-proxy",
-    "ftp-proxy-user",
-    "ftp-proxy-passwd",
-    "rpc-user",
-    "rpc-passwd",
-    "rpc-secret",
-    "bt-tracker",
+/// What follows an option whose value is, or may hold, a secret, so a
+/// trace and an export's redaction hide alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Takes {
+    /// A secret whole: a password, a user name, a token.
+    Secret,
+    /// `Field:value`, the field kept.
+    Header,
+    /// `extractor:key=value;...`, as yt-dlp's `--extractor-args`, of which
+    /// the arguments [`extractor_secret`] names.
+    ExtractorArgs,
+    /// An address, of which all after its host may name a login or a
+    /// tracker's passkey, in its path or its query.
+    Address,
+}
+
+/// yt-dlp's options whose value is, or may hold, a secret: its account,
+/// two-factor and TV provider logins, a video's password, a client
+/// certificate's password, headers sent, extractor arguments, and
+/// proxies.
+pub const YTDLP_SECRET: &[(&str, Takes)] = &[
+    ("--username", Takes::Secret),
+    ("-u", Takes::Secret),
+    ("--password", Takes::Secret),
+    ("-p", Takes::Secret),
+    ("--twofactor", Takes::Secret),
+    ("-2", Takes::Secret),
+    ("--video-password", Takes::Secret),
+    ("--ap-username", Takes::Secret),
+    ("--ap-password", Takes::Secret),
+    ("--client-certificate-password", Takes::Secret),
+    ("--add-header", Takes::Header),
+    ("--add-headers", Takes::Header),
+    ("--extractor-args", Takes::ExtractorArgs),
+    ("--proxy", Takes::Address),
+    ("--geo-verification-proxy", Takes::Address),
 ];
 
-/// yt-dlp's options, by their long names, whose value is a login, a
-/// password, a header or an address that may hold one; aria2c's are
+/// aria2c's options whose value is, or may hold, a secret: HTTP, FTP and
+/// proxy logins, proxies, the RPC interface's secret and login, headers
+/// sent, and trackers. Given in `[torrent] args`, each goes to the run's
+/// config file rather than its command line (`aria2.rs`).
+pub const ARIA2C_SECRET: &[(&str, Takes)] = &[
+    ("--header", Takes::Header),
+    ("--http-user", Takes::Secret),
+    ("--http-passwd", Takes::Secret),
+    ("--ftp-user", Takes::Secret),
+    ("--ftp-passwd", Takes::Secret),
+    ("--all-proxy", Takes::Address),
+    ("--all-proxy-user", Takes::Secret),
+    ("--all-proxy-passwd", Takes::Secret),
+    ("--http-proxy", Takes::Address),
+    ("--http-proxy-user", Takes::Secret),
+    ("--http-proxy-passwd", Takes::Secret),
+    ("--https-proxy", Takes::Address),
+    ("--https-proxy-user", Takes::Secret),
+    ("--https-proxy-passwd", Takes::Secret),
+    ("--ftp-proxy", Takes::Address),
+    ("--ftp-proxy-user", Takes::Secret),
+    ("--ftp-proxy-passwd", Takes::Secret),
+    ("--rpc-user", Takes::Secret),
+    ("--rpc-passwd", Takes::Secret),
+    ("--rpc-secret", Takes::Secret),
+    ("--bt-tracker", Takes::Address),
+];
+
+/// Whether aria2c's long option `name`, without its dashes, is one of
 /// [`ARIA2C_SECRET`].
-const SECRET: [&str; 11] = [
-    "username",
-    "password",
-    "twofactor",
-    "video-password",
-    "ap-username",
-    "ap-password",
-    "client-certificate-password",
-    "add-header",
-    "add-headers",
-    "proxy",
-    "geo-verification-proxy",
-];
+#[must_use]
+pub fn aria2c_secret(name: &str) -> bool {
+    ARIA2C_SECRET
+        .iter()
+        .any(|(o, _)| o.strip_prefix("--") == Some(name))
+}
 
-/// yt-dlp's short options of [`SECRET`]: `--username`, `--password` and
-/// `--twofactor`.
-const SECRET_SHORT: [&str; 3] = ["-u", "-p", "-2"];
+/// Whether an extractor argument named `key` holds a secret: a token, as
+/// YouTube's `po_token`, a password or a cookie, or what names a
+/// signed-in account's session, YouTube's `visitor_data` and
+/// `data_sync_id`.
+#[must_use]
+pub fn extractor_secret(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    ["token", "password", "secret", "cookie", "api_key"]
+        .iter()
+        .any(|s| key.contains(s))
+        || ["visitor_data", "data_sync_id"].contains(&key.as_str())
+}
 
 /// What stands for a value hidden.
 const HIDDEN: &str = "<hidden>";
@@ -554,7 +593,17 @@ const HIDDEN: &str = "<hidden>";
 /// data, which stand for a session.
 fn redacted(cmd: &[OsString]) -> Vec<String> {
     let ytdlp = cmd.first().is_some_and(|p| p == "yt-dlp");
-    let secret = |name: &str| SECRET.contains(&name) || ARIA2C_SECRET.contains(&name);
+    let secret = |name: &str| {
+        YTDLP_SECRET
+            .iter()
+            .chain(ARIA2C_SECRET)
+            .any(|(o, _)| o.strip_prefix("--") == Some(name))
+    };
+    let short = |arg: &str| {
+        YTDLP_SECRET
+            .iter()
+            .any(|(o, _)| o.len() == 2 && arg.get(..2) == Some(*o))
+    };
     let mut said = Vec::new();
     let mut next: Option<String> = None;
     let mut options = true;
@@ -573,14 +622,14 @@ fn redacted(cmd: &[OsString]) -> Vec<String> {
                 options = false;
                 said.push(arg.into_owned());
             }
-            (Some(name), Some(value)) if secret(name) || name == "extractor-args" => {
+            (Some(name), Some(value)) if secret(name) => {
                 said.push(format!("--{name}={}", hidden(name, value)));
             }
-            (Some(name), None) if secret(name) || name == "extractor-args" => {
+            (Some(name), None) if secret(name) => {
                 next = Some(name.to_string());
                 said.push(arg.into_owned());
             }
-            (None, _) if ytdlp && options && SECRET_SHORT.contains(&arg.get(..2).unwrap_or("")) => {
+            (None, _) if ytdlp && options && short(&arg) => {
                 if arg.len() == 2 {
                     next = Some(arg.to_string());
                     said.push(arg.into_owned());
@@ -596,13 +645,20 @@ fn redacted(cmd: &[OsString]) -> Vec<String> {
 
 /// The value of the option `name` as a trace says it.
 fn hidden(name: &str, value: &str) -> String {
-    static SESSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"\b(po_token|visitor_data)=[^;]*").expect("valid")
-    });
     match name {
-        "extractor-args" => SESSION
-            .replace_all(value, format!("${{1}}={HIDDEN}"))
-            .into_owned(),
+        "extractor-args" => match value.split_once(':') {
+            Some((extractor, args)) => {
+                let args: Vec<String> = args
+                    .split(';')
+                    .map(|part| match part.split_once('=') {
+                        Some((key, _)) if extractor_secret(key) => format!("{key}={HIDDEN}"),
+                        _ => part.to_string(),
+                    })
+                    .collect();
+                format!("{extractor}:{}", args.join(";"))
+            }
+            None => value.to_string(),
+        },
         "header" | "add-header" | "add-headers" => match value.split_once(':') {
             Some((header, _)) => format!("{header}: {HIDDEN}"),
             None => HIDDEN.to_string(),
@@ -707,6 +763,24 @@ mod tests {
         assert!(!said.contains("000"), "{said}");
         assert!(said.contains("--header=Cookie: <hidden>"), "{said}");
         assert!(said.contains(" -p "), "an option of aria2c's own: {said}");
+        let ytdlp = cmd(&[
+            "yt-dlp",
+            "--proxy",
+            "canary01:pw@proxy.example:3128",
+            "--geo-verification-proxy=https://canary02@geo.example",
+            "--extractor-args",
+            "youtube:data_sync_id=canary03;player_client=web",
+        ]);
+        let aria2c = cmd(&[
+            "aria2c",
+            "--all-proxy=marlo:canary04@proxy.example:3128",
+            "--https-proxy",
+            "http://canary05@proxy.example",
+        ]);
+        for said in [redacted(&ytdlp), redacted(&aria2c)] {
+            let said = said.join(" ");
+            assert!(!said.contains("canary"), "{said}");
+        }
     }
 
     #[test]
