@@ -1,12 +1,12 @@
 # muman
 
-muman (Music Manager) builds a music library the way a compiler builds a
-program. You write `songs.toml`, a declarative list of the songs you
-want, and muman works out how to get them. Each song names its sources,
-the copies it can be made from: a YouTube upload, its release on YouTube
-Music, a CD you ripped, a track in a torrent. `muman sync` is the build,
-and the library is its output. Change the list and sync again, and muman
-rebuilds only the songs that changed.
+muman, or Music Manager, is a compiler for your music collection. It
+resolves `songs.toml`, a declarative list of the songs you want,
+figuring out where to get and how to render them. Each song is made up
+of sources: a YouTube upload, its release on YouTube Music, a track in
+a torrent, or a file you ripped. `muman sync` is the build, and the
+library is its output. Change the list and sync again, and muman edits
+the songs that changed.
 
 Copies of one song are seldom equal, so muman measures what each really
 holds: a music video's intro counts against it, a FLAC made from an MP3
@@ -17,7 +17,7 @@ record does the same, keeping the cleanest disc, the sharpest sleeve and
 the only lyric sheet.
 
 The build is deterministic: one list and its sources make one library on
-any machine. It never deletes or writes over a file it did not write.
+any machine.
 
 ## What it does
 
