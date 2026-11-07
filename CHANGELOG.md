@@ -20,6 +20,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A name cut after a period and an ideographic space ends on
+  neither.** A folder cut at `max_folder_bytes` right after `.　`, as a
+  Japanese title can hold, lost the space but kept the period, which
+  Windows drops.
+- **An album of dots and spaces alone is "Unknown Album".** An album
+  tagged `. .` lost its album folder, and its songs landed in the
+  artist's; `...` already fell back.
+- **A tag that shows nothing names no folder.** An album or artist of
+  soft hyphens, Hangul fillers, the blank Braille pattern, or a
+  zero-width space before a dot named a folder with no name to see; it
+  is "Unknown Album" or "Unknown Artist" now, as a blank one is.
+- **The Arabic letter mark is dropped as other bidi controls are.**
+  U+061C was kept in names, tags and a torrent's stored files while
+  the marks beside it went; a song whose name held it moves once.
 - **The guide says where a sync looks for a song's file.** It said
   "wherever it is now"; a sync finds the file the last run recorded,
   and a file you move becomes yours.
