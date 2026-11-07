@@ -252,12 +252,8 @@ impl Stream {
     /// The image type of a picture stream: by the codec ffmpeg reads its
     /// bytes as, over the type its tag says, which a file may get wrong.
     fn picture_type(&self) -> Option<String> {
-        let read = match self.codec_name.as_str() {
-            "mjpeg" => Some("image/jpeg"),
-            "png" => Some("image/png"),
-            "webp" => Some("image/webp"),
-            _ => None,
-        };
+        let read = crate::picture::ImageFormat::of_codec(&self.codec_name)
+            .map(crate::picture::ImageFormat::mimetype);
         let said = self.tag("mimetype").filter(|m| m.starts_with("image/"));
         if said.is_none() && self.disposition.get("attached_pic") != Some(&1) {
             return None;

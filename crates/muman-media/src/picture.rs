@@ -301,6 +301,60 @@ pub fn alike(a: &Look, b: &Look) -> Alike {
     }
 }
 
+/// A picture format a cover is kept or written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFormat {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+/// Each format, in its order, with the extension of a file of it, its
+/// media type and the codec ffprobe names a stream of it by.
+const FORMATS: [(ImageFormat, &str, &str, &str); 3] = [
+    (ImageFormat::Jpeg, "jpg", "image/jpeg", "mjpeg"),
+    (ImageFormat::Png, "png", "image/png", "png"),
+    (ImageFormat::Webp, "webp", "image/webp", "webp"),
+];
+
+impl ImageFormat {
+    /// The extension of a file of it.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        FORMATS[self as usize].1
+    }
+
+    /// Its media type.
+    #[must_use]
+    pub fn mimetype(self) -> &'static str {
+        FORMATS[self as usize].2
+    }
+
+    /// The format of the media type `mimetype`.
+    #[must_use]
+    pub fn of_mimetype(mimetype: &str) -> Option<Self> {
+        FORMATS.iter().find(|f| f.2 == mimetype).map(|f| f.0)
+    }
+
+    /// The format a file named with `extension` is in, by any case, `jpeg`
+    /// as well as `jpg`.
+    #[must_use]
+    pub fn of_extension(extension: &str) -> Option<Self> {
+        let extension = extension.to_ascii_lowercase();
+        if extension == "jpeg" {
+            return Some(Self::Jpeg);
+        }
+        FORMATS.iter().find(|f| f.1 == extension).map(|f| f.0)
+    }
+
+    /// The format of a stream ffprobe reads with `codec`.
+    #[must_use]
+    pub fn of_codec(codec: &str) -> Option<Self> {
+        FORMATS.iter().find(|f| f.3 == codec).map(|f| f.0)
+    }
+}
+
 /// The media type of a picture by its first bytes, whatever its name or
 /// its container says: JPEG, PNG, WebP, GIF or BMP; `None` for any other.
 #[must_use]
@@ -387,6 +441,18 @@ pub fn named_other(stem: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_format_is_one_row_read_any_way() {
+        for (i, (format, extension, mimetype, codec)) in FORMATS.into_iter().enumerate() {
+            assert_eq!(format as usize, i);
+            assert_eq!(ImageFormat::of_extension(extension), Some(format));
+            assert_eq!(ImageFormat::of_mimetype(mimetype), Some(format));
+            assert_eq!(ImageFormat::of_codec(codec), Some(format));
+        }
+        assert_eq!(ImageFormat::of_extension("JPEG"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::of_mimetype("image/gif"), None);
+    }
 
     #[test]
     fn an_mp4_cover_of_implicit_type_is_read() {

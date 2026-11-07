@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
+use icu_casemap::CaseMapper;
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::clean;
 use crate::info::VideoInfo;
@@ -2002,10 +2004,7 @@ pub fn decorations(value: &str) -> usize {
         .iter()
         .filter(|s| lower.contains(*s))
         .count();
-    count += value
-        .chars()
-        .filter(|c| matches!(u32::from(*c), 0x1F300..=0x1FAFF | 0x2600..=0x27BF))
-        .count();
+    count += value.graphemes(true).filter(|g| clean::is_emoji(g)).count();
     count
 }
 
@@ -2013,12 +2012,12 @@ pub fn decorations(value: &str) -> usize {
 /// whether two sources agree.
 #[must_use]
 pub fn normalized(values: &[String]) -> String {
-    values
+    let kept: String = values
         .iter()
         .flat_map(|v| v.chars())
         .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
+        .collect();
+    CaseMapper::new().fold_string(&kept).into()
 }
 
 #[cfg(test)]
@@ -2454,6 +2453,10 @@ mod tests {
         assert_eq!(
             normalized(&["Lu5ivo!".into()]),
             normalized(&["lu5ivo".into()])
+        );
+        assert_eq!(
+            normalized(&["GLASSTRASSE".into()]),
+            normalized(&["Glasstraße".into()])
         );
     }
 

@@ -39,8 +39,9 @@
 //! - an alias after a slash goes from a derived artist always, a channel
 //!   having one owner, but from a structured one only when the two read as
 //!   one person's, so a duet `Paper Comets / Marlo Venn` stays whole;
-//! - the ideographic space, and symbols below U+2700 such as `☆` and `♪`,
-//!   are part of a name;
+//! - the ideographic space, and a symbol before the Dingbats block shown
+//!   as text, as `☆`, `♪` or a `♥` not asked to show as an emoji, are
+//!   part of a name;
 //! - an en or em dash stays as written, as in `1971–1975`.
 //!
 //! MusicBrainz writes `’`, `“ ”` and the hyphen U+2010, where files and
@@ -57,7 +58,11 @@
 
 use std::collections::BTreeSet;
 
+use icu_properties::props::{Emoji, EmojiPresentation, ExtendedPictographic, Script};
+use icu_properties::script::ScriptWithExtensions;
+use icu_properties::{CodePointMapData, CodePointSetData};
 use serde::Deserialize;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::tags::{Field, Offer, Offers};
 
@@ -551,20 +556,32 @@ fn normalize(s: &str) -> String {
         .collect()
 }
 
-fn is_cjk(c: char) -> bool {
-    matches!(u32::from(c),
-        0x3040..=0x30FF | 0x31F0..=0x31FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
-        | 0xF900..=0xFAFF | 0xAC00..=0xD7AF | 0xFF66..=0xFF9F)
+/// Whether `c` is a letter of Chinese, Japanese or Korean: Han, kana or
+/// Hangul by its script extensions, so `ー`, which kana share, counts, and
+/// `、`, which is no letter, does not.
+fn is_cjk_letter(c: char) -> bool {
+    let scripts = ScriptWithExtensions::new();
+    c.is_alphabetic()
+        && [
+            Script::Han,
+            Script::Hiragana,
+            Script::Katakana,
+            Script::Hangul,
+        ]
+        .into_iter()
+        .any(|s| scripts.has_script(c, s))
 }
 
 fn has_cjk(s: &str) -> bool {
-    s.chars().any(is_cjk)
+    s.chars().any(is_cjk_letter)
 }
 
-/// Letters only from the Latin alphabets, and at least one.
+/// Letters only of the Latin script, and at least one: Vietnamese and
+/// full-width ones too.
 fn latin_only(s: &str) -> bool {
+    let script = CodePointMapData::<Script>::new();
     let mut letters = s.chars().filter(|c| c.is_alphabetic()).peekable();
-    letters.peek().is_some() && letters.all(|c| u32::from(c) <= 0x24F)
+    letters.peek().is_some() && letters.all(|c| script.get(c) == Script::Latin)
 }
 
 /// The first letter of each word, splitting at spaces, punctuation and a
@@ -909,12 +926,29 @@ fn video_tags(v: &str, _: &At<'_>) -> Option<Vec<String>> {
     changed(v, out)
 }
 
-fn is_emoji(c: char) -> bool {
-    matches!(u32::from(c), 0x1F000..=0x1FAFF | 0x2700..=0x27BF | 0xFE0F | 0x200D)
+/// Whether `grapheme` is a picture an uploader drew beside a name: an
+/// emoji Unicode presents so by default, as `🎵` or a flag, or one asked
+/// to by U+FE0F, as `♥️`; a dingbat, as `❆`, which no emoji property
+/// holds; or a pictograph past U+1F000, which systems draw as emoji
+/// either way. A symbol shown as text is part of a name, as the module
+/// says.
+#[must_use]
+pub fn is_emoji(grapheme: &str) -> bool {
+    grapheme.chars().next().is_some_and(|first| {
+        CodePointSetData::new::<EmojiPresentation>().contains(first)
+            || (CodePointSetData::new::<Emoji>().contains(first) && grapheme.contains('\u{FE0F}'))
+            || ('\u{2700}'..='\u{27BF}').contains(&first)
+            || (first >= '\u{1F000}'
+                && CodePointSetData::new::<ExtendedPictographic>().contains(first))
+    })
 }
 
 fn emoji(v: &str, _: &At<'_>) -> Option<Vec<String>> {
-    changed(v, v.trim_matches(|c: char| is_emoji(c) || is_space(c)))
+    let parts: Vec<&str> = v.graphemes(true).collect();
+    let kept = |g: &&str| !is_emoji(g) && !g.chars().all(is_space);
+    let start = parts.iter().position(kept).unwrap_or(parts.len());
+    let end = parts.iter().rposition(kept).map_or(start, |i| i + 1);
+    changed(v, parts[start..end].concat())
 }
 
 fn pipe_tail(v: &str, at: &At<'_>) -> Option<Vec<String>> {

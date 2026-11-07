@@ -257,16 +257,12 @@ fn digest(name: &str, value: &str) -> String {
     crate::hash::hex(&hash[..16])
 }
 
-/// `text` with each control character, and each mark that reorders or
-/// hides text, written as an escape: a terminal shows them as nothing,
-/// or acts on them.
+/// `text` with each control character, and each that draws nothing or
+/// reorders text ([`crate::portable::ignorable`]), written as an escape:
+/// a terminal shows them as nothing, or acts on them.
 fn escaped(text: &str) -> String {
     text.chars().fold(String::new(), |mut out, c| {
-        let hidden = matches!(
-            c,
-            '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
-        );
-        if c.is_control() || hidden {
+        if c.is_control() || crate::portable::ignorable(c) {
             let _ = write!(out, "\\u{{{:04x}}}", u32::from(c));
         } else {
             out.push(c);
@@ -397,6 +393,7 @@ run = ["mpc", "update"]
     fn what_could_hide_part_of_a_value_is_shown_escaped() {
         assert_eq!(escaped("a\u{1b}[2Kb"), "a\\u{001b}[2Kb");
         assert_eq!(escaped("x\u{202e}y\u{9b}"), "x\\u{202e}y\\u{009b}");
+        assert_eq!(escaped("a\u{61c}b\u{ad}c"), "a\\u{061c}b\\u{00ad}c");
         assert_eq!(escaped("Lumo Fenn é"), "Lumo Fenn é");
     }
 

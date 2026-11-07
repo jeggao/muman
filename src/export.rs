@@ -1286,27 +1286,7 @@ fn encode<R: Runner>(
 /// second, beside the extended timestamp that says it is; none before
 /// 1980, which MS-DOS time cannot say.
 fn zip_time(time: std::time::SystemTime) -> Option<zip::DateTime> {
-    let secs = time.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    let (days, of_day) = (secs / 86_400, secs % 86_400);
-    // Days since 1970 as a civil date, after Howard Hinnant's algorithm.
-    let z = i64::try_from(days).ok()? + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    zip::DateTime::from_date_and_time(
-        u16::try_from(year).ok()?,
-        u8::try_from(month).ok()?,
-        u8::try_from(day).ok()?,
-        u8::try_from(of_day / 3_600).ok()?,
-        u8::try_from(of_day % 3_600 / 60).ok()?,
-        u8::try_from(of_day % 60).ok()?,
-    )
-    .ok()
+    zip::DateTime::try_from(chrono::DateTime::<chrono::Utc>::from(time).naive_utc()).ok()
 }
 
 /// Write `entries` into a new folder `staging`, then rename it to `to`:

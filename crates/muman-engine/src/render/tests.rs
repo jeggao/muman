@@ -4,6 +4,7 @@ use lofty::id3::v2::Id3v2Tag;
 use lofty::mp4::Mp4File;
 use lofty::mpeg::MpegFile;
 use lofty::ogg::{OpusFile, VorbisFile};
+use lofty::picture::MimeType;
 use lofty::tag::Accessor;
 
 use super::cover::*;

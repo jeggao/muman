@@ -809,18 +809,11 @@ fn mimetype_of(path: &Path) -> String {
     if let Some(sniffed) = crate::picture::sniff_file(path) {
         return sniffed.to_string();
     }
-    match path
-        .extension()
+    path.extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        _ => "image/unknown",
-    }
-    .to_string()
+        .and_then(picture::ImageFormat::of_extension)
+        .map_or("image/unknown", picture::ImageFormat::mimetype)
+        .to_string()
 }
 
 fn measure_image(pam: &Path) -> (Option<ImageQuality>, Option<Look>) {

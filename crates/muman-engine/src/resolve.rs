@@ -464,36 +464,7 @@ impl Default for CoverPlace {
     }
 }
 
-/// A picture format a cover is written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ImageFormat {
-    Jpeg,
-    Png,
-    Webp,
-}
-
-impl ImageFormat {
-    /// The extension of a file of it.
-    #[must_use]
-    pub fn extension(self) -> &'static str {
-        match self {
-            Self::Jpeg => "jpg",
-            Self::Png => "png",
-            Self::Webp => "webp",
-        }
-    }
-
-    /// Its media type.
-    #[must_use]
-    pub fn mimetype(self) -> &'static str {
-        match self {
-            Self::Jpeg => "image/jpeg",
-            Self::Png => "image/png",
-            Self::Webp => "image/webp",
-        }
-    }
-}
+pub use crate::picture::ImageFormat;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LyricsRef {

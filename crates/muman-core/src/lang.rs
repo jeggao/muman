@@ -7,9 +7,9 @@
 //! own. Each is read into one canonical tag by Unicode's rules (UTS #35,
 //! through ICU4X), so `ger`, `deu` and `de` are one language, as are `iw`
 //! and `he`, and `tl` is `fil`. `ID3v2` and the `LANGUAGE` tag take ISO
-//! 639-2's terminologic code instead, [`Lang::iso639_2`]: the table of
-//! two-letter codes and their three-letter ones is ISO 639-2's own list,
-//! as the Library of Congress publishes it.
+//! 639-2's terminologic code instead, [`Lang::iso639_2`], read from
+//! isolang's ISO 639-3 table: for each language with a two-letter code,
+//! its ISO 639-3 code is ISO 639-2's terminologic one.
 //!
 //! A preference matches a language as RFC 4647's lookup does, refined by
 //! CLDR's likely subtags ([`Lang::fit`]). A bare language takes any of its
@@ -95,10 +95,8 @@ impl Lang {
     #[must_use]
     pub fn iso639_2(&self) -> String {
         let code = self.0.language.as_str();
-        ISO639_1
-            .lines()
-            .find_map(|pair| pair.strip_prefix(code)?.strip_prefix(' '))
-            .unwrap_or(code)
+        isolang::Language::from_639_1(code)
+            .map_or(code, |l| l.to_639_3())
             .to_string()
     }
 
@@ -234,192 +232,6 @@ impl<'de> serde::Deserialize<'de> for Lang {
     }
 }
 
-/// Each ISO 639-1 code and its ISO 639-2 terminologic one, a pair a line.
-const ISO639_1: &str = "\
-aa aar
-ab abk
-ae ave
-af afr
-ak aka
-am amh
-an arg
-ar ara
-as asm
-av ava
-ay aym
-az aze
-ba bak
-be bel
-bg bul
-bi bis
-bm bam
-bn ben
-bo bod
-br bre
-bs bos
-ca cat
-ce che
-ch cha
-co cos
-cr cre
-cs ces
-cu chu
-cv chv
-cy cym
-da dan
-de deu
-dv div
-dz dzo
-ee ewe
-el ell
-en eng
-eo epo
-es spa
-et est
-eu eus
-fa fas
-ff ful
-fi fin
-fj fij
-fo fao
-fr fra
-fy fry
-ga gle
-gd gla
-gl glg
-gn grn
-gu guj
-gv glv
-ha hau
-he heb
-hi hin
-ho hmo
-hr hrv
-ht hat
-hu hun
-hy hye
-hz her
-ia ina
-id ind
-ie ile
-ig ibo
-ii iii
-ik ipk
-io ido
-is isl
-it ita
-iu iku
-ja jpn
-jv jav
-ka kat
-kg kon
-ki kik
-kj kua
-kk kaz
-kl kal
-km khm
-kn kan
-ko kor
-kr kau
-ks kas
-ku kur
-kv kom
-kw cor
-ky kir
-la lat
-lb ltz
-lg lug
-li lim
-ln lin
-lo lao
-lt lit
-lu lub
-lv lav
-mg mlg
-mh mah
-mi mri
-mk mkd
-ml mal
-mn mon
-mr mar
-ms msa
-mt mlt
-my mya
-na nau
-nb nob
-nd nde
-ne nep
-ng ndo
-nl nld
-nn nno
-no nor
-nr nbl
-nv nav
-ny nya
-oc oci
-oj oji
-om orm
-or ori
-os oss
-pa pan
-pi pli
-pl pol
-ps pus
-pt por
-qu que
-rm roh
-rn run
-ro ron
-ru rus
-rw kin
-sa san
-sc srd
-sd snd
-se sme
-sg sag
-si sin
-sk slk
-sl slv
-sm smo
-sn sna
-so som
-sq sqi
-sr srp
-ss ssw
-st sot
-su sun
-sv swe
-sw swa
-ta tam
-te tel
-tg tgk
-th tha
-ti tir
-tk tuk
-tl tgl
-tn tsn
-to ton
-tr tur
-ts tso
-tt tat
-tw twi
-ty tah
-ug uig
-uk ukr
-ur urd
-uz uzb
-ve ven
-vi vie
-vo vol
-wa wln
-wo wol
-xh xho
-yi yid
-yo yor
-za zha
-zh zho
-zu zul";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,6 +266,10 @@ mod tests {
             ("ja", "jpn"),
             ("de-AT", "deu"),
             ("ger", "deu"),
+            ("fa", "fas"),
+            ("sq", "sqi"),
+            ("hy", "hye"),
+            ("ms", "msa"),
             ("zh-Hant", "zho"),
             ("nb", "nob"),
             ("fil", "fil"),
@@ -461,18 +277,6 @@ mod tests {
         ] {
             assert_eq!(lang(text).iso639_2(), code, "{text}");
         }
-    }
-
-    #[test]
-    fn the_table_pairs_each_two_letter_code_with_one_of_three() {
-        let pairs: Vec<&str> = ISO639_1.lines().collect();
-        assert_eq!(pairs.len(), 183);
-        assert!(
-            pairs
-                .iter()
-                .all(|p| p.len() == 6 && p.as_bytes()[2] == b' ')
-        );
-        assert!(pairs.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

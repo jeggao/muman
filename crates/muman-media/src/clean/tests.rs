@@ -723,3 +723,34 @@ fn packaging_words_never_outweigh_another_recording() {
     assert!(!is_packaging("feat. Kiri"));
     assert!(!is_packaging("Cover"));
 }
+
+#[test]
+fn letters_are_told_by_their_script() {
+    for cjk in ['々', 'ー', '𠮷', 'ｱ', 'ㅎ'] {
+        assert!(is_cjk_letter(cjk), "{cjk}");
+    }
+    assert!(!is_cjk_letter('、') && !is_cjk_letter('a'));
+    for latin in ["Nguyễn Văn", "ＡＢＣ", "Marlo Venn"] {
+        assert!(latin_only(latin), "{latin}");
+    }
+    assert!(!latin_only("星屑") && !latin_only("123") && !latin_only("Kiri 星"));
+}
+
+#[test]
+fn an_emoji_is_what_shows_as_one() {
+    for shown in [
+        "🎵",
+        "✨",
+        "⚡",
+        "♥\u{FE0F}",
+        "❆",
+        "🕊",
+        "🇯🇵",
+        "👩\u{200D}🎤",
+    ] {
+        assert!(is_emoji(shown), "{shown}");
+    }
+    for text in ["☆", "♪", "♥", "★", "1", "a"] {
+        assert!(!is_emoji(text), "{text}");
+    }
+}
