@@ -132,6 +132,27 @@ fn blank_names_fall_back() {
 }
 
 #[test]
+fn an_album_of_dots_and_spaces_falls_back() {
+    let n = naming(&Library::default());
+    for album in [". .", " . . ", ".\u{3000}."] {
+        assert_eq!(
+            n.stem(&tags("A", album, "Song")).unwrap(),
+            path(&["A", "Unknown Album", "Song"]),
+            "{album:?}"
+        );
+    }
+}
+
+#[test]
+fn a_folder_cut_after_a_dot_and_a_wide_space_ends_on_neither() {
+    let artist = format!("{}.\u{3000}Quiet Hours", "a".repeat(116));
+    let stem = naming(&Library::default())
+        .stem(&tags(&artist, "B", "Song"))
+        .unwrap();
+    assert_eq!(stem, path(&[&"a".repeat(116), "B", "Song"]));
+}
+
+#[test]
 fn the_original_year_is_the_album_s_first_else_the_song_s_own() {
     let custom = Library {
         template: "{{ original_year }} {{ year }}/{{ title }}".into(),

@@ -20,6 +20,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A name cut after a period and an ideographic space ends on
+  neither.** A folder cut at `max_folder_bytes` right after `.　`, as a
+  Japanese title can hold, lost the space but kept the period, which
+  Windows drops.
+- **An album of dots and spaces alone is "Unknown Album".** An album
+  tagged `. .` lost its album folder, and its songs landed in the
+  artist's; `...` already fell back.
 - **The guide says where a sync looks for a song's file.** It said
   "wherever it is now"; a sync finds the file the last run recorded,
   and a file you move becomes yours.
