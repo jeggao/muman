@@ -1,0 +1,62 @@
+name: Bug report
+description: muman did something wrong, failed or crashed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Paste what muman printed rather than describing it. Before you
+        paste, take out anything you would not publish: API keys,
+        passwords, tokens and private paths. `-v` already hides logins,
+        passwords, headers and tokens in the commands it shows.
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: The command line, and what you did before it if that matters.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What muman printed, from a run with `-v` if you can, and its exit code.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: muman version
+      description: What `muman --version` prints.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: textarea
+    id: programs
+    attributes:
+      label: Programs
+      description: The versions of ffmpeg, ffprobe, yt-dlp and aria2c, as `muman info` lists them.
+      render: text
+  - type: textarea
+    id: songs
+    attributes:
+      label: Song list
+      description: The part of `songs.toml` that matters, if the bug follows from a song or a setting.
+      render: toml

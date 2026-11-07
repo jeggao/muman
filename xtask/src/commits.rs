@@ -4,14 +4,25 @@
 //!
 //! A subject is `<scope>: <imperative summary>`, lowercase, no period,
 //! at most 72 characters; a ` (#123)` GitHub appends on a squash merge
-//! is not counted. A body follows a blank line, wrapped at 72, and is
-//! required: a change with nothing to say about why is rare, and the
-//! bodies that were missing were the largest changes'. A body made of a
-//! branch's commit subjects, `* scope: summary` lines, is refused: a
-//! squash merge writes the description, so the description is written
-//! as one body. Trailers (`Key: value` at the end) and lines holding a
-//! URL may run long. Merge commits and commits by bots are not checked:
-//! Dependabot's bodies are its own.
+//! is not counted. A body follows a blank line, wrapped at 72. A missing
+//! body is flagged: a change with nothing to say about why is rare, and
+//! the bodies that were missing were the largest changes'. So is a body
+//! made of a branch's commit subjects, `* scope: summary` lines: a squash
+//! merge writes the description, so the description is written as one
+//! body. Trailers (`Key: value` at the end) and lines holding a URL may
+//! run long. The pull request template's `<!-- -->` comments are left out
+//! of the body and flagged, as a squash merge would write them to main.
+//! Merge commits and commits by bots are not checked: Dependabot's bodies
+//! are its own.
+//!
+//! Only a message file can fail, and only on its subject. A squash merge
+//! writes a pull request's title and description to main and drops the
+//! branch's commits, so a branch's commits are only warned about, as is
+//! main, where a merged message can no longer be fixed. The body rules
+//! warn even in a pull request: its description is written in a web
+//! editor that does not wrap, and a missing or long-lined body should not
+//! keep a contributor's change out. The subject is one line, easy to fix
+//! in the title, and what `git log --oneline` shows ever after.
 
 use std::path::Path;
 use std::process::Command;
@@ -23,9 +34,27 @@ use regex::Regex;
 const MAX_SUBJECT: usize = 72;
 const MAX_BODY_LINE: usize = 72;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl Severity {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     pub rule: &'static str,
+    /// How the rule weighs in a pull request's message; elsewhere every
+    /// problem is a warning.
+    pub severity: Severity,
     pub message: String,
 }
 
@@ -40,7 +69,7 @@ pub struct Commit {
 
 /// Check the commits `diff_base..HEAD` adds, HEAD alone without a base,
 /// or the message in `message_file` as written by `author`. Returns how
-/// many problems were printed.
+/// many errors were printed.
 pub fn run(
     root: &Path,
     diff_base: Option<&str>,
@@ -57,26 +86,38 @@ pub fn run(
         }],
         None => commits(root, diff_base)?,
     };
-    let mut total = 0;
+    let (mut errors, mut warnings) = (0, 0);
     for commit in &commits {
         for p in check(commit) {
-            total += 1;
+            let severity = if message_file.is_some() {
+                p.severity
+            } else {
+                Severity::Warning
+            };
+            match severity {
+                Severity::Error => errors += 1,
+                Severity::Warning => warnings += 1,
+            }
+            let severity = severity.as_str();
             if annotations {
                 println!(
-                    "::error title=commits/{}::{}: {}",
+                    "::{severity} title=commits/{}::{}: {}",
                     p.rule,
                     commit.name,
                     p.message.replace('\n', "%0A")
                 );
             } else {
-                println!("{}: {}: {}", commit.name, p.rule, p.message);
+                println!("{}: {severity}[{}]: {}", commit.name, p.rule, p.message);
             }
         }
     }
     if !annotations {
-        println!("commits: {total} problem(s) in {} commit(s)", commits.len());
+        println!(
+            "commits: {errors} error(s), {warnings} warning(s) in {} commit(s)",
+            commits.len()
+        );
     }
-    Ok(total)
+    Ok(errors)
 }
 
 /// The commits of `base..HEAD`, merges left out, or HEAD alone.
@@ -124,30 +165,49 @@ pub fn check(commit: &Commit) -> Vec<Problem> {
         LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z-]*: \S").unwrap());
     static SQUASHED: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\* [a-z0-9][a-z0-9_./-]*(, [a-z0-9_./-]+)*: ").unwrap());
+    static COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
     if commit.author.contains("[bot]") {
         return Vec::new();
     }
-    let problem = |rule, message: String| Problem { rule, message };
+    let error = |rule, message: String| Problem {
+        rule,
+        severity: Severity::Error,
+        message,
+    };
+    let warning = |rule, message: String| Problem {
+        rule,
+        severity: Severity::Warning,
+        message,
+    };
     let mut out = Vec::new();
     let text = commit.message.replace("\r\n", "\n");
+    if COMMENT.is_match(&text) {
+        out.push(warning(
+            "body-template",
+            "the message holds the pull request template's comments, which a squash \
+             merge writes to main; replace them with the body"
+                .into(),
+        ));
+    }
+    let text = COMMENT.replace_all(&text, "");
     let mut lines = text.lines();
     let subject = lines.next().unwrap_or_default().trim_end();
     let subject = SUFFIX.replace(subject, "");
     let len = subject.chars().count();
     if len > MAX_SUBJECT {
-        out.push(problem(
+        out.push(error(
             "subject-length",
             format!("the subject is {len} characters; the most is {MAX_SUBJECT}"),
         ));
     }
     if subject.ends_with('.') {
-        out.push(problem(
+        out.push(error(
             "subject-period",
             "the subject ends in a period".into(),
         ));
     }
     if !FORM.is_match(&subject) {
-        out.push(problem(
+        out.push(error(
             "subject-form",
             format!("`{subject}` does not read `<scope>: <imperative summary>`, lowercase"),
         ));
@@ -159,7 +219,7 @@ pub fn check(commit: &Commit) -> Vec<Problem> {
         .skip_while(|l| l.trim().is_empty())
         .collect();
     if !rest.is_empty() && !rest[0].trim().is_empty() {
-        out.push(problem(
+        out.push(warning(
             "body-blank-line",
             "a blank line separates the subject from the body".into(),
         ));
@@ -171,7 +231,7 @@ pub fn check(commit: &Commit) -> Vec<Problem> {
         body_end -= 1;
     }
     if body_end == 0 {
-        out.push(problem(
+        out.push(warning(
             "body-missing",
             "a body says why before what, then `-` bullets led by the file or area".into(),
         ));
@@ -179,13 +239,13 @@ pub fn check(commit: &Commit) -> Vec<Problem> {
     for line in &body[..body_end] {
         let count = line.chars().count();
         if count > MAX_BODY_LINE && !line.contains("://") {
-            out.push(problem(
+            out.push(warning(
                 "body-wrap",
                 format!("a body line is {count} characters; wrap at {MAX_BODY_LINE}: `{line}`"),
             ));
         }
         if SQUASHED.is_match(line) {
-            out.push(problem(
+            out.push(warning(
                 "body-squashed-subjects",
                 format!("`{line}` lists a branch's commits; write the body as one"),
             ));
@@ -244,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn a_body_is_required_blank_separated_and_wrapped() {
+    fn a_body_is_expected_blank_separated_and_wrapped() {
         assert_eq!(rules("docs: fix a link\n"), ["body-missing"]);
         assert_eq!(
             rules("docs: fix a link\n\nCo-Authored-By: Someone <s@example.com>\n"),
@@ -261,12 +321,49 @@ mod tests {
     }
 
     #[test]
-    fn a_body_of_squashed_subjects_is_refused_once() {
+    fn a_body_of_squashed_subjects_is_flagged_once() {
         let msg = "sync: judge damaged audio\n\n\
                    * progress: show nothing of a step with nothing to do\n\n\
                    A step begun with no items printed a plain line.\n\n\
                    * settings: add a missing key without a hint\n";
         assert_eq!(rules(msg), ["body-squashed-subjects"]);
+    }
+
+    #[test]
+    fn only_the_subject_rules_are_errors() {
+        let wide = format!("Docs: fix a link.\n{}\n", "w".repeat(73));
+        let found = check(&Commit {
+            name: "abc1234".into(),
+            author: "Someone".into(),
+            message: wide,
+        });
+        let errors: Vec<_> = found
+            .iter()
+            .filter(|p| p.severity == Severity::Error)
+            .map(|p| p.rule)
+            .collect();
+        let warnings: Vec<_> = found
+            .iter()
+            .filter(|p| p.severity == Severity::Warning)
+            .map(|p| p.rule)
+            .collect();
+        assert_eq!(errors, ["subject-period", "subject-form"]);
+        assert_eq!(warnings, ["body-blank-line", "body-wrap"]);
+    }
+
+    #[test]
+    fn the_template_comments_are_no_body() {
+        let template = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(".github")
+                .join("pull_request_template.md"),
+        )
+        .unwrap();
+        let untouched = format!("docs: fix a link\n\n{template}");
+        assert_eq!(rules(&untouched), ["body-template", "body-missing"]);
+        let filled = format!("docs: fix a link\n\n{template}\nWhy.\n");
+        assert_eq!(rules(&filled), ["body-template"]);
     }
 
     #[test]

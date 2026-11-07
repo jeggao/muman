@@ -37,7 +37,8 @@ enum Task {
         github_annotations: bool,
     },
     /// Check commit messages against the rules of AGENTS.md: HEAD's, or
-    /// every commit since a ref, or one message in a file.
+    /// every commit since a ref, or one message in a file. Only a broken
+    /// subject in a message file fails; the rest is warned about.
     Commits {
         /// Check every commit this branch adds over this git ref, such as
         /// `origin/main`.

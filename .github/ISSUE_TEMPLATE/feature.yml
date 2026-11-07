@@ -1,0 +1,21 @@
+name: Feature request
+description: Something muman should do, or do differently.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task or the library you want, and where muman falls short of it today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: A command, a flag or a setting, if you have one in mind; an example of its use helps.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do now
+      description: How you get by without it, if you do.

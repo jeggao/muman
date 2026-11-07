@@ -29,6 +29,7 @@ what is not about one module.
 | Each setting's default | [crates/muman-core/src/new.toml](crates/muman-core/src/new.toml) |
 | Why a module works as it does | That module's `//!` docs |
 | How to work in this repository | [AGENTS.md](AGENTS.md) |
+| What a pull request's description holds | [.github/pull_request_template.md](.github/pull_request_template.md) |
 | What changed in each release | [CHANGELOG.md](CHANGELOG.md) |
 
 Do not create other Markdown files unless asked.
