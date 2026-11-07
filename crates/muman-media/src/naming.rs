@@ -28,13 +28,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use icu_properties::CodePointSetData;
-use icu_properties::props::DefaultIgnorableCodePoint;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::portable::{LOOKALIKES, reorders, reserved};
+use crate::portable::{LOOKALIKES, ignorable, reorders, reserved};
 use crate::template::{Fields, Template};
 
 /// What Windows refuses in a name, besides control characters.
@@ -364,14 +362,11 @@ fn trim_dots(text: &str) -> &str {
         .trim_end()
 }
 
-/// Whether `c` shows nothing of its own: a space; one Unicode lets a
-/// renderer ignore, as a zero-width or formatting character, a variation
-/// selector, a soft hyphen or a Hangul filler; or the blank Braille
-/// pattern, which Unicode counts as a symbol though it draws no dot.
+/// Whether `c` shows nothing of its own: a space, an [`ignorable`]
+/// character, or the blank Braille pattern, which Unicode counts as a
+/// symbol though it draws no dot.
 fn invisible(c: char) -> bool {
-    c.is_whitespace()
-        || c == '\u{2800}'
-        || CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c)
+    c.is_whitespace() || c == '\u{2800}' || ignorable(c)
 }
 
 /// The number in a `TRACKNUMBER` or `DISCNUMBER` such as `3` or `3/12`.

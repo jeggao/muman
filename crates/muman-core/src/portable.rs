@@ -6,7 +6,7 @@
 //! by these.
 
 use icu_properties::CodePointSetData;
-use icu_properties::props::BidiControl;
+use icu_properties::props::{BidiControl, DefaultIgnorableCodePoint};
 
 /// Each character Windows refuses in a name, besides control
 /// characters, and its full-width lookalike.
@@ -28,6 +28,15 @@ pub const LOOKALIKES: [(&str, &str); 9] = [
 #[must_use]
 pub fn reorders(c: char) -> bool {
     CodePointSetData::new::<BidiControl>().contains(c)
+}
+
+/// Whether `c` draws nothing of its own, by Unicode's
+/// `Default_Ignorable_Code_Point`: a zero-width or formatting character, a
+/// variation selector, a soft hyphen, a Hangul filler, and each one that
+/// [`reorders`] text.
+#[must_use]
+pub fn ignorable(c: char) -> bool {
+    CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c)
 }
 
 /// The full-width lookalike of a character Windows refuses in a name.
@@ -70,5 +79,15 @@ mod tests {
             assert!(reorders(c), "{c:?}");
         }
         assert!(!reorders('a') && !reorders('\u{200B}') && !reorders('\u{3000}'));
+    }
+
+    #[test]
+    fn what_draws_nothing_is_ignorable() {
+        for c in [
+            '\u{AD}', '\u{200B}', '\u{2060}', '\u{3164}', '\u{FE0F}', '\u{202E}',
+        ] {
+            assert!(ignorable(c), "{c:?}");
+        }
+        assert!(!ignorable('a') && !ignorable(' ') && !ignorable('\u{2800}'));
     }
 }

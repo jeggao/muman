@@ -17,6 +17,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   take `{library}`, `{written}`, `{moved}` and `{removed}` alone, so no
   title reaches a command line, and a hook may run muman on its own
   home; a muman a hook starts runs no hook.
+- **An emoji is told as Unicode tells it.** The emoji trimmed from a
+  title's ends and those that mark a source as decorated are one set: a
+  symbol shown as an emoji, by default or asked by U+FE0F, as `⚡` or
+  `♥️`, a dingbat, as `❆`, and a pictograph past U+1F000. A symbol shown
+  as text, as `☆`, `♪` or `♥`, is part of the name. The two had
+  disagreed, and `⚡` stayed on a title.
 
 ### Fixed
 
@@ -34,6 +40,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **The Arabic letter mark is dropped as other bidi controls are.**
   U+061C was kept in names, tags and a torrent's stored files while
   the marks beside it went; a song whose name held it moves once.
+- **The trust prompt shows every character that hides text.** U+061C,
+  soft hyphens and invisible operators in a song list's command or
+  server printed as nothing; they are escapes now.
+- **Every Chinese, Japanese, Korean and Latin letter counts as one.** A
+  title of `々`, `ー` or an ideograph past U+20000 read as holding none,
+  and Vietnamese and full-width letters as not Latin, so a romanization
+  after such a title was not known as its romanization, nor an artist
+  spelled in both scripts as one person.
+- **Folders are compared as a case-blind filesystem compares them.** On
+  Windows and macOS, two paths to one folder that differed only by a
+  Greek final sigma were taken for two folders.
+- **Sources agree on a value however its case folds.** `Straße` and
+  `STRASSE` were two values when sources were asked whether they agree.
 - **The guide says where a sync looks for a song's file.** It said
   "wherever it is now"; a sync finds the file the last run recorded,
   and a file you move becomes yours.

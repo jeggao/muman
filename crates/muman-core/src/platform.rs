@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use unicode_normalization::UnicodeNormalization;
+
 /// The folder name under each platform's data and music folders.
 const NAME: &str = "muman";
 
@@ -82,14 +84,23 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+/// `path`, root and drive kept, as a filesystem blind to case and
+/// composition tells it apart: in NFC and upper case, as
+/// [`crate::relpath::folded`] says why.
+fn folded(path: &Path) -> String {
+    path.to_string_lossy()
+        .nfc()
+        .collect::<String>()
+        .to_uppercase()
+}
+
 /// Whether `inner` is `outer` or a folder within it, resolved and
 /// compared as [`same_path`] compares.
 #[must_use]
 pub fn within(inner: &Path, outer: &Path) -> bool {
     let (inner, outer) = (resolved(inner), resolved(outer));
     if cfg!(any(windows, target_os = "macos")) {
-        let fold = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
-        fold(&inner).starts_with(fold(&outer))
+        PathBuf::from(folded(&inner)).starts_with(folded(&outer))
     } else {
         inner.starts_with(outer)
     }
@@ -102,7 +113,7 @@ pub fn within(inner: &Path, outer: &Path) -> bool {
 pub fn same_path(a: &Path, b: &Path) -> bool {
     let (a, b) = (resolved(a), resolved(b));
     if cfg!(any(windows, target_os = "macos")) {
-        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        folded(&a) == folded(&b)
     } else {
         a == b
     }
@@ -151,6 +162,13 @@ mod tests {
             &dir.path().join("x").join("..").join("lib")
         ));
         assert!(!same_path(&lib, dir.path()));
+    }
+
+    #[test]
+    fn a_path_folds_as_a_case_blind_filesystem_does() {
+        assert_eq!(folded(Path::new("Οδός")), folded(Path::new("οδόσ")));
+        assert_eq!(folded(Path::new("Cafe\u{301}")), folded(Path::new("CAFÉ")));
+        assert_ne!(folded(Path::new("Song")), folded(Path::new("Songs")));
     }
 
     #[cfg(any(windows, target_os = "macos"))]
