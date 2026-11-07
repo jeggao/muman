@@ -24,6 +24,7 @@ dunce = "1"
 filetime = "0.2"
 icu_locale = "2.3"
 icu_properties = "2.3"
+isolang = { version = "2.4", default-features = false }
 indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
 minijinja = { version = "3", features = ["serde"] }

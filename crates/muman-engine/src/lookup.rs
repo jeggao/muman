@@ -290,17 +290,12 @@ fn tag_of(r: &Resolved, f: Field) -> Option<String> {
 
 /// The day `secs` after the Unix epoch falls on, in UTC, as `2026-11-04`.
 fn date_of(secs: u64) -> String {
-    // Civil from days, after Howard Hinnant's `civil_from_days`.
-    let z = i64::try_from(secs / 86_400).unwrap_or(i64::MAX / 2) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
+    i64::try_from(secs)
+        .ok()
+        .and_then(|s| chrono::DateTime::<chrono::Utc>::from_timestamp(s, 0))
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 /// Every lookup due, a song's for each provider at most once.

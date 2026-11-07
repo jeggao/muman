@@ -20,6 +20,7 @@ muman-net.workspace = true
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
 ctrlc = { version = "3.5.2", features = ["termination"] }
@@ -39,7 +40,7 @@ toml = "1"
 toml_edit = "0.25"
 unicode-width = "0.2"
 which = "8"
-zip = { version = "9", default-features = false }
+zip = { version = "9", default-features = false, features = ["chrono"] }
 
 [features]
 # For tests alone: the hooks a test stops or watches a run by
