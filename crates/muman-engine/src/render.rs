@@ -112,7 +112,7 @@ use lofty::id3::v2::{
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
-use lofty::picture::{MimeType, Picture, PictureType};
+use lofty::picture::{Picture, PictureType};
 use lofty::tag::items::{Lang, Timestamp, UNKNOWN_LANGUAGE};
 use lofty::tag::{Accessor, ItemKey, ItemValue, TagExt, TagType};
 
@@ -121,7 +121,7 @@ use crate::chapters::Chapter;
 use crate::codec::{Codec, Container};
 use crate::ffmpeg::{self, Output};
 use crate::library::Owned;
-use crate::resolve::Format;
+use crate::resolve::{Format, ImageFormat};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::store::Located;
@@ -1579,10 +1579,10 @@ fn ape_tag(tags: &[(String, Vec<String>)], picture: Option<Picture>) -> ApeTag {
         }
     }
     if let Some(mut picture) = picture {
-        let extension = match picture.mime_type() {
-            Some(MimeType::Png) => "png",
-            _ => "jpg",
-        };
+        let extension = picture
+            .mime_type()
+            .and_then(|m| ImageFormat::of_mimetype(m.as_str()))
+            .map_or("jpg", ImageFormat::extension);
         picture.set_description(Some(format!("cover.{extension}")));
         let key = PictureType::CoverFront
             .as_ape_key()

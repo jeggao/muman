@@ -32,11 +32,7 @@ pub(super) struct CoverPlan {
 /// The format of a picture of `mimetype` that may be kept as its own
 /// bytes: JPEG or PNG.
 pub(super) fn kept(mimetype: &str) -> Option<ImageFormat> {
-    match mimetype {
-        "image/jpeg" => Some(ImageFormat::Jpeg),
-        "image/png" => Some(ImageFormat::Png),
-        _ => None,
-    }
+    ImageFormat::of_mimetype(mimetype).filter(|f| *f != ImageFormat::Webp)
 }
 
 /// How a cover ffmpeg converts is made, raised whenever the bytes it

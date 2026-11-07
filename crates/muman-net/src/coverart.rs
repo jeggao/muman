@@ -93,12 +93,9 @@ impl Cover {
 /// The extension of an image by its first bytes, if it is a JPEG, PNG
 /// or WebP.
 fn image_extension(b: &[u8]) -> Option<&'static str> {
-    match crate::picture::sniff(b)? {
-        "image/jpeg" => Some("jpg"),
-        "image/png" => Some("png"),
-        "image/webp" => Some("webp"),
-        _ => None,
-    }
+    crate::picture::sniff(b)
+        .and_then(crate::picture::ImageFormat::of_mimetype)
+        .map(crate::picture::ImageFormat::extension)
 }
 
 /// The archive, asked through `transport` at the pace of `throttle`,
