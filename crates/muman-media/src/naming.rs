@@ -7,8 +7,9 @@
 //! replaced, `/` by `⧸` and the rest by their full-width lookalikes as
 //! yt-dlp does (`：？＊＂＜＞｜⧹`); control characters go, and those that
 //! reorder the text around them, which can make a name read as another;
-//! a value of nothing visible, or of dots and spaces alone, counts as
-//! none; leading dots (hidden files) and trailing dots and spaces (which
+//! a value that would name nothing visible, as dots and spaces alone or
+//! a zero-width space before a dot Windows drops, counts as none;
+//! leading dots (hidden files) and trailing dots and spaces (which
 //! Windows drops) are trimmed with every space among them, an ideographic
 //! one too; and a reserved device name such as `CON` or `nul.txt` gets a
 //! `_`. Limits are counted in UTF-8 bytes, which no filesystem's own
@@ -27,6 +28,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use icu_properties::CodePointSetData;
+use icu_properties::props::DefaultIgnorableCodePoint;
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
@@ -199,8 +202,9 @@ impl Naming {
         let safe = |s: Option<&str>| {
             let v = self.value(s.unwrap_or_default());
             let v = trim_dots(&v);
-            // Nothing a reader sees, as a lone zero-width space, is blank.
-            if v.chars().all(invisible) {
+            // Blank when the name it makes shows nothing, as once a trailing dot
+            // is trimmed from a zero-width space.
+            if self.component(v, usize::MAX).chars().all(invisible) {
                 String::new()
             } else {
                 v.to_string()
@@ -360,12 +364,14 @@ fn trim_dots(text: &str) -> &str {
         .trim_end()
 }
 
-/// Whether `c` shows nothing of its own: a space, a zero-width or
-/// formatting character, or a variation selector.
+/// Whether `c` shows nothing of its own: a space; one Unicode lets a
+/// renderer ignore, as a zero-width or formatting character, a variation
+/// selector, a soft hyphen or a Hangul filler; or the blank Braille
+/// pattern, which Unicode counts as a symbol though it draws no dot.
 fn invisible(c: char) -> bool {
     c.is_whitespace()
-        || reorders(c)
-        || matches!(c, '\u{200B}'..='\u{200D}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}' | '\u{FE00}'..='\u{FE0F}' | '\u{180E}')
+        || c == '\u{2800}'
+        || CodePointSetData::new::<DefaultIgnorableCodePoint>().contains(c)
 }
 
 /// The number in a `TRACKNUMBER` or `DISCNUMBER` such as `3` or `3/12`.

@@ -132,9 +132,19 @@ fn blank_names_fall_back() {
 }
 
 #[test]
-fn an_album_of_dots_and_spaces_falls_back() {
+fn an_album_that_shows_nothing_falls_back() {
     let n = naming(&Library::default());
-    for album in [". .", " . . ", ".\u{3000}."] {
+    let blank = [
+        ". .",
+        " . . ",
+        ".\u{3000}.",
+        "\u{AD}",
+        "\u{3164}",
+        "\u{115F}\u{1160}",
+        "\u{2800}",
+        "\u{200B}.",
+    ];
+    for album in blank {
         assert_eq!(
             n.stem(&tags("A", album, "Song")).unwrap(),
             path(&["A", "Unknown Album", "Song"]),

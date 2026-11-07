@@ -5,6 +5,9 @@
 //! a torrent's files in the store ([`crate::torrent`]) are both spelled
 //! by these.
 
+use icu_properties::CodePointSetData;
+use icu_properties::props::BidiControl;
+
 /// Each character Windows refuses in a name, besides control
 /// characters, and its full-width lookalike.
 pub const LOOKALIKES: [(&str, &str); 9] = [
@@ -20,10 +23,11 @@ pub const LOOKALIKES: [(&str, &str); 9] = [
 ];
 
 /// Whether `c` reorders the text around it, as `U+202E` makes a name
-/// ending in `gpj.exe` read as one ending in `exe.jpg`.
+/// ending in `gpj.exe` read as one ending in `exe.jpg`: Unicode's
+/// `Bidi_Control` set, the marks, embeddings, overrides and isolates.
 #[must_use]
 pub fn reorders(c: char) -> bool {
-    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    CodePointSetData::new::<BidiControl>().contains(c)
 }
 
 /// The full-width lookalike of a character Windows refuses in a name.
@@ -56,5 +60,15 @@ mod tests {
     fn reserved_device_names_get_an_underscore() {
         assert!(reserved("CON") && reserved("nul.txt") && reserved("COM1") && reserved("lpt²"));
         assert!(!reserved("CONTACT") && !reserved("COM") && !reserved("Console.opus"));
+    }
+
+    #[test]
+    fn every_bidi_control_reorders() {
+        for c in [
+            '\u{61C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}',
+        ] {
+            assert!(reorders(c), "{c:?}");
+        }
+        assert!(!reorders('a') && !reorders('\u{200B}') && !reorders('\u{3000}'));
     }
 }
