@@ -64,7 +64,7 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use crate::codec::{Codec, Shape};
+use crate::codec::{Codec, Layout, Shape};
 use crate::resolve::Format;
 use crate::settings::Audio;
 
@@ -221,6 +221,14 @@ fn per_minute(source: &Source, format: Format) -> f64 {
 pub fn loss(source: &Source, first: Format, format: Format) -> f64 {
     let minutes = crate::units::minutes_of_seconds(source.seconds);
     ((per_minute(source, format) - per_minute(source, first)) * minutes).max(0.0)
+}
+
+/// The layout audio of `shape` is mixed into when it is lowered, if it
+/// is: the formats of [`lower`] all take it, and its loudness is measured
+/// as mixed so, as the song is levelled.
+#[must_use]
+pub fn lowered_mix(shape: &Shape<'_>, audio: &Audio) -> Option<Layout> {
+    audio.written_in(audio.lossy, shape).0
 }
 
 /// The formats below `first` a song may be lowered to: `[audio] lossy`

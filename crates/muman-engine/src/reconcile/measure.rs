@@ -518,8 +518,10 @@ pub(super) fn analyze<R: Runner, W: Write>(
 }
 
 /// Analyze the audio of every source in `keys` that `audio` mixes into
-/// another layout, as mixed, where it is not already. Returns whether any
-/// was.
+/// another layout, as mixed, where it is not already: into the layout of
+/// its best format, and under `[library] max_size` into the one it is
+/// lowered into, whether or not fitting lowers it, so what is measured
+/// never hangs on the fit. Returns whether any was.
 pub(super) fn analyze_mixes<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
@@ -543,13 +545,22 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
         .filter_map(|k| store.locate(k))
         .filter_map(|l| {
             let f = state.facts.get(&l.key).filter(|f| f.holds_for(&l.rev()))?;
-            let audio = f.audio.as_ref()?;
-            let layout = crate::resolve::Format::encoded(audio, &settings.audio).mix()?;
-            let rev = f.audio_rev();
-            let unmixed = state
-                .mix(&rev, layout)
-                .is_none_or(|a| !a.stale(&wanted).is_empty());
-            unmixed.then(|| (l, audio.clone(), rev, layout))
+            Some((l, f.audio.as_ref()?, f.audio_rev()))
+        })
+        .flat_map(|(l, audio, rev)| {
+            let best = crate::resolve::Format::encoded(audio, &settings.audio).mix();
+            let lowered = (settings.library.max_size.is_some())
+                .then(|| crate::fit::lowered_mix(&audio.shape(), &settings.audio))
+                .flatten();
+            let layouts: BTreeSet<crate::codec::Layout> = best.into_iter().chain(lowered).collect();
+            let unmixed = |layout: &crate::codec::Layout| {
+                state
+                    .mix(&rev, *layout)
+                    .is_none_or(|a| !a.stale(&wanted).is_empty())
+            };
+            (layouts.into_iter().filter(unmixed))
+                .map(|layout| (l.clone(), audio.clone(), rev.clone(), layout))
+                .collect::<Vec<_>>()
         })
         .collect();
     if due.is_empty() {

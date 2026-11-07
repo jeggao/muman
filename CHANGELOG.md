@@ -26,6 +26,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song mixed to fit `max_size` is levelled by its mix.** A 5.1 song
+  lowered into MP3 was mixed into stereo but kept the gains and peaks
+  measured on its six channels, so it played about 9 dB too quiet, and
+  the songs of its album were pooled with the 5.1 too. The next sync
+  levels such songs again and writes them anew.
 - **A name cut after a period and an ideographic space ends on
   neither.** A folder cut at `max_folder_bytes` right after `.　`, as a
   Japanese title can hold, lost the space but kept the period, which

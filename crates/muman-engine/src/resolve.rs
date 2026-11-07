@@ -700,6 +700,17 @@ impl Plan {
         plan
     }
 
+    /// This plan with no gains and no loudness tags: all it holds but how
+    /// it is levelled.
+    #[must_use]
+    pub fn unlevelled(&self) -> Self {
+        let mut plan = self.clone();
+        plan.loudness = None;
+        plan.tags
+            .retain(|(k, _)| !Field::named(k).is_some_and(Field::is_loudness));
+        plan
+    }
+
     /// The ISO 639-2 code of the language its lyrics are in, if known.
     #[must_use]
     pub fn lyrics_language(&self) -> Option<&str> {

@@ -17,7 +17,7 @@ use crate::clean::Albums;
 use crate::facts::Facts;
 use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
-use crate::resolve::{self, Input, Resolved};
+use crate::resolve::{self, Format, Input, Resolved, Why};
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::tags::Field;
@@ -395,6 +395,54 @@ pub fn resolve_songs(
     on_disk: Option<&BTreeSet<SourceKey>>,
     waiting: &BTreeSet<SourceKey>,
 ) -> Result<Resolution> {
+    let fitted = BTreeMap::new();
+    resolve_fitted(
+        manifest,
+        settings,
+        state,
+        library,
+        (on_disk, waiting),
+        &fitted,
+    )
+}
+
+/// Level every song of `planned` again at the format fitting gave it,
+/// as resolving levels a song at its best: a song lowered into another
+/// layout is levelled by its mix, and its album's songs by their pool
+/// with it. A song keeps its path and why it was lowered.
+pub(super) fn level_as_fitted(
+    manifest: &Manifest,
+    state: &State,
+    library: &Path,
+    found: (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    planned: &mut Planned,
+) -> Result<()> {
+    let fitted: BTreeMap<usize, Format> =
+        planned.iter().map(|(n, r)| (*n, r.plan.format)).collect();
+    let again = resolve_fitted(manifest, &manifest.settings, state, library, found, &fitted)?;
+    let mut again: BTreeMap<usize, Resolved> = again.planned.into_iter().collect();
+    for (n, r) in planned.iter_mut() {
+        if let Some(levelled) = again.remove(n).filter(|a| a.plan.format == r.plan.format) {
+            r.plan = levelled.plan;
+            r.why = Why {
+                fit: r.why.fit.take(),
+                ..levelled.why
+            };
+        }
+    }
+    Ok(())
+}
+
+/// [`resolve_songs`], each song of `fitted` levelled at the format given
+/// there rather than at its best.
+fn resolve_fitted(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    (on_disk, waiting): (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    fitted: &BTreeMap<usize, Format>,
+) -> Result<Resolution> {
     let resolver = Resolver::new(manifest, settings, state, library)?;
     let mut resolution = Resolution {
         planned: Vec::new(),
@@ -419,6 +467,11 @@ pub fn resolve_songs(
             .count();
     }
     let held = held(manifest, state, &resolution.unresolved);
+    for (n, r) in &mut resolution.planned {
+        if let Some(format) = fitted.get(n) {
+            r.plan = r.plan.with_format(*format);
+        }
+    }
     crate::levels::settle(&mut resolution.planned, &held, state, settings);
     separate(
         &mut resolution.planned,
