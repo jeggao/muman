@@ -269,6 +269,6 @@ that package manager is skipped.
   release pull request apart.
 - **Merging:** squash and merge, every time. A rebase merge puts a
   branch's authors and half-made commits on `main`.
-- `cargo xtask commits` checks the subject and body rules; CI runs it
-  on a pull request's commits and on its title and description, and on
-  each push to `main`.
+- `cargo xtask commits` checks these rules on a pull request's commits,
+  title and description, and each push to `main`; only a broken title
+  fails, and the rest warns.
