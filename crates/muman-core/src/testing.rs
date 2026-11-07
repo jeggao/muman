@@ -108,6 +108,9 @@ pub struct Fake {
     /// The WAV an analysis decodes to its pipe, by path fragment; a short
     /// quiet tone otherwise.
     pub wavs: Vec<(String, Vec<u8>)>,
+    /// The WAV an analysis of a mix decodes, by path fragment; its
+    /// `wavs` otherwise.
+    pub mixed: Vec<(String, Vec<u8>)>,
     /// The size of every picture decoded to gray, by path fragment.
     pub pictures: Vec<(String, (u32, u32))>,
     /// The design a picture decodes to, by path fragment: two paths given
@@ -514,7 +517,11 @@ impl Runner for Fake {
             .and_then(|n| inputs.get(n))
             .cloned()
             .unwrap_or_default();
-        let bytes = find(&self.wavs, &input).cloned().unwrap_or_else(quiet_wav);
+        let mixing = args.iter().any(|a| a.starts_with("aresample=ochl="));
+        let bytes = (find(&self.mixed, &input).filter(|_| mixing))
+            .or_else(|| find(&self.wavs, &input))
+            .cloned()
+            .unwrap_or_else(quiet_wav);
         let mut rest = bytes.as_slice();
         for size in [5, 40, 999].into_iter().cycle() {
             if rest.is_empty() {

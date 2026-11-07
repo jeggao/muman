@@ -180,6 +180,11 @@ That exactness costs time:
   toward the limit. It keeps what it learns in its state, so a sync
   that changes nothing renders nothing, and a song rendered to be
   measured moves into the library rather than being rendered twice.
+- A song lowered into a codec that holds fewer of its channels, as 5.1
+  into MP3, is mixed, and levelled on that mix as any mixed song is,
+  with its album pooled on it. muman measures that mix for each such
+  song under `max_size`, lowered or not, and renders a song again when
+  the mix changes its gains or its album's.
 
 Each file counts as whole `[library] block_size` blocks. Set
 `block_size` to the allocation unit of the filesystem the library is

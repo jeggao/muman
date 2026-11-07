@@ -2417,6 +2417,113 @@ fn a_song_mixed_is_levelled_by_its_mix() {
     );
 }
 
+/// A home holding one manual FLAC in 5.1 under `settings`, and a fake
+/// whose stereo mix of it is far quieter than its six channels.
+fn surround_home(settings: &str) -> (Home, Fake) {
+    let h = flac_home(settings);
+    let surround = crate::testing::FLAC.replace(
+        r#""channels": 2, "sample_rate": "44100""#,
+        r#""channels": 6, "channel_layout": "5.1", "sample_rate": "48000""#,
+    );
+    let fake = Fake {
+        packets: vec![("Song.flac".into(), 30_000_000)],
+        wavs: vec![("Song.flac".into(), tone(0.4))],
+        mixed: vec![("Song.flac".into(), tone(0.05))],
+        ..Fake::default()
+    }
+    .probe(".flac", &surround);
+    (h, fake)
+}
+
+#[test]
+fn a_song_mixed_to_fit_max_size_is_levelled_by_its_mix() {
+    for mode in ["tags", "audio"] {
+        let loudness = format!("[loudness]\nmode = \"{mode}\"\n");
+        let (by_codec, fake) = surround_home(&format!(
+            "{loudness}[audio]\ncodecs = [\"mp3\"]\nlossless = \"mp3\"\n"
+        ));
+        let (ok, text) = by_codec.run(&fake, Options::default());
+        assert!(ok, "{text}");
+        let mixed = plans(&by_codec)[0].clone();
+        assert!(mixed.format.mix().is_some(), "{mixed:?}");
+
+        let (h, fake) = surround_home(&format!(
+            "{loudness}[library]\nmax_size = \"10 MB\"\n[audio]\nlossy = \"mp3\"\n"
+        ));
+        let (ok, text) = h.run(&fake, Options::default());
+        assert!(ok, "{text}");
+        let fitted = plans(&h)[0].clone();
+        assert_eq!(fitted.format.mix(), mixed.format.mix(), "{fitted:?}");
+        assert_eq!(
+            fitted.loudness.map(|g| g.track),
+            mixed.loudness.map(|g| g.track),
+            "{mode}: levelled by the stereo it is written in"
+        );
+        assert_eq!(
+            tag(&fitted, "REPLAYGAIN_TRACK_GAIN"),
+            tag(&mixed, "REPLAYGAIN_TRACK_GAIN")
+        );
+        assert_eq!(fitted.chain(), mixed.chain(), "{mode}");
+        let encodes: Vec<Vec<String>> = (fake.calls().into_iter())
+            .filter(|c| c.iter().any(|a| a == "libmp3lame"))
+            .collect();
+        let gain = fitted.chain().gain;
+        assert_eq!(gain != 0, mode == "audio", "{fitted:?}");
+        let volume = format!("volume={}dB", crate::units::Level(gain).decimal());
+        let written = encodes.last().unwrap();
+        assert_eq!(
+            written.iter().any(|a| a.contains(&volume)),
+            gain != 0,
+            "{mode}: the file written takes the gain levelled: {written:?}"
+        );
+        let (ok, again) = h.run(&fake, Options::default());
+        assert!(ok && again.contains("Up to date: 1"), "{mode}: {again}");
+        assert!(!again.contains("Rendering"), "{mode}: {again}");
+        let manifest = Manifest::load(&h.dirs.home).unwrap();
+        let state = State::load(&h.dirs.home).unwrap();
+        let views = crate::query::resolved_views(&manifest, &state, &h.dirs.library).unwrap();
+        let shown = views[0].1.as_ref().map(|r| &r.plan);
+        assert_eq!(shown, Some(&fitted), "{mode}: shown as written");
+    }
+}
+
+#[test]
+fn a_song_mixed_to_fit_max_size_is_pooled_by_its_mix_in_its_album() {
+    let home_of = |settings: &str| {
+        let (h, fake) = surround_home(settings);
+        let path = h.dirs.manual().join("Other.flac");
+        std::fs::write(&path, "other").unwrap();
+        h.songs(&format!(
+            "{settings}\n[[song]]\nsources = [\"manual:Song.flac\"]\n\
+             [[song]]\nsources = [\"manual:Other.flac\"]\n"
+        ));
+        let other = crate::testing::FLAC.replace(r#""track": "2""#, r#""track": "3""#);
+        let mut fake = fake.probe("Other.flac", &other);
+        fake.probes.rotate_right(1);
+        fake.wavs.push(("Other.flac".into(), tone(0.2)));
+        fake.packets.push(("Other.flac".into(), 1_000_000));
+        (h, fake)
+    };
+    let album = |h: &Home| {
+        let plans = plans(h);
+        let other = plans.iter().find(|p| tag(p, "TRACKNUMBER") == Some("3"));
+        other.and_then(|p| p.loudness?.album)
+    };
+    let (by_codec, fake) = home_of("[audio]\ncodecs = [\"mp3\"]\nlossless = \"mp3\"\n");
+    let (ok, text) = by_codec.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    let (h, fake) = home_of("[library]\nmax_size = \"12 MB\"\n[audio]\nlossy = \"mp3\"\n");
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(ok, "{text}");
+    assert!(
+        plans(&h).iter().any(|p| p.format.mix().is_some()),
+        "{:?}",
+        plans(&h)
+    );
+    assert!(album(&h).is_some());
+    assert_eq!(album(&h), album(&by_codec), "{text}");
+}
+
 /// The source the one song of `curves`' uploads is written from, each
 /// given its loudness curve, and why, as `status --all` says it.
 fn chosen(curves: &[(&str, Vec<f64>)]) -> (SourceKey, String) {

@@ -33,6 +33,16 @@
 //! size of the plan its file was written from until it is written and
 //! measured.
 //!
+//! **Levels.** A song is levelled at its best format, and fitting
+//! renders its lower rungs with those gains. A rung that mixes it into
+//! another layout, as 5.1 into MP3's stereo, measures otherwise, and so
+//! does the pool of its album; so once fitting has chosen, every song is
+//! levelled again at the format chosen, and a song rendered to be
+//! measured whose plan that changes is rendered again before it is
+//! written. Under `max_size` the layout a song is lowered into is
+//! measured whether or not fitting lowers it, so what is measured never
+//! hangs on the fit.
+//!
 //! **Too little room.** When even the songs' lowest rungs, measured,
 //! cannot fit, songs are left out, the last listed first, until the rest
 //! fit. A song left out is not written, and its
@@ -619,7 +629,8 @@ pub fn fit_library<R: Runner, W: Write>(
 
 /// Give each planned song the format its file was last written in, when
 /// it differs from its best only by fitting: what `list` and `info` show
-/// is the library as it stands.
+/// is the library as it stands. A song lowered into another layout is
+/// levelled by its mix, so it is shown levelled as its file was.
 pub fn as_written(manifest: &Manifest, state: &State, planned: &mut Planned) {
     if manifest.settings.library.max_size.is_none() {
         return;
@@ -632,10 +643,15 @@ pub fn as_written(manifest: &Manifest, state: &State, planned: &mut Planned) {
             .flatten()
             .find_map(|(_, w)| {
                 let plan = w.plan.as_ref()?;
-                (plan.with_format(r.plan.format) == r.plan).then_some(plan.format)
+                if plan.with_format(r.plan.format) == r.plan {
+                    return Some(r.plan.with_format(plan.format));
+                }
+                let remixed = plan.format.mix() != r.plan.format.mix()
+                    && plan.unlevelled().with_format(r.plan.format) == r.plan.unlevelled();
+                remixed.then(|| plan.clone())
             });
-        if let Some(format) = fitted {
-            r.plan = r.plan.with_format(format);
+        if let Some(plan) = fitted {
+            r.plan = plan;
         }
     }
 }

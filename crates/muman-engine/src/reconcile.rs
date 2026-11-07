@@ -371,9 +371,21 @@ pub fn reconcile_into<R: Runner, W: Write>(
             kept: limit::kept(&state, &dirs.library, &failed, block),
             force: opts.force,
         };
-        let fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
+        let mut fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
         if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {
             persist(home, &state, opts.dry_run, &lock)?;
+        }
+        if let Some((_, made)) = fitted.as_mut().filter(|(f, _)| f.lowered > 0) {
+            let as_fitted: BTreeMap<usize, crate::resolve::Plan> =
+                planned.iter().map(|(n, r)| (*n, r.plan.clone())).collect();
+            let found = (Some(&on_disk), &to_fetch);
+            plan::level_as_fitted(&manifest, &state, &dirs.library, found, &mut planned)?;
+            // A song rendered at the gains it had before is rendered again.
+            for (n, r) in &planned {
+                if as_fitted.get(n) != Some(&r.plan) {
+                    made.remove(n);
+                }
+            }
         }
         if let Some((f, _)) = fitted.as_ref().filter(|(f, _)| !f.left_out.is_empty()) {
             ok = false;
