@@ -49,6 +49,13 @@ block_size = "4 KiB"
 # titles, artists, albums and genres: "typographic" as ’ “ ” and ‐, as
 # MusicBrainz does, or "ascii" as ' " and -. En and em dashes stay.
 typography = "typographic"
+# Which kind of source is believed first: for a song's artists when its
+# sources credit different ones, and for how a value they agree on is
+# spelled. "musicbrainz-first" puts a MusicBrainz record its vetting
+# believes first, then a file's own tags, a site's release and an upload;
+# "files-first" puts files before records; "sources" takes the order of
+# each song's `sources`.
+believe = "musicbrainz-first"
 
 [lyrics]
 # The languages you read, best first, as language tags: "en", "pt-BR",

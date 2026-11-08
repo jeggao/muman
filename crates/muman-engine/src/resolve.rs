@@ -24,7 +24,17 @@
 //!   from a source whose audio is the same recording as the chosen
 //!   audio, covering most of it.
 //! - Tags: each offer cleaned first; a structured field over one read
-//!   off a title, plain over decorated, agreed on over alone; the
+//!   off a title, plain over decorated, agreed on over alone, offers that
+//!   mean one value agreeing as one ([`groups`]: alike in their letters,
+//!   or names [`similar::agree`] reads alike that name the same
+//!   versions); for credits, the kind of source `[tags] believe` puts
+//!   first before decorations count; the value spelled as the source
+//!   believed first among those that agree spells it, so a file's typo
+//!   gives way to MusicBrainz's spelling while a file's `Song (Live)`
+//!   stays apart from MusicBrainz's `Song`, and of two such the one
+//!   naming the version wins whatever their order. A field won by the
+//!   order of `sources` alone over another value is contested, which
+//!   `status` and `check` name. The
 //!   release fields come together from one source so a song's release
 //!   never mixes with another's. Each field's [`tags::Scope`] says which
 //!   it is. A source [`crate::vet`] finds names another recording gives
@@ -161,6 +171,7 @@ use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
+use crate::similar;
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
@@ -839,6 +850,9 @@ pub struct Why {
     /// Each value dropped for saying nothing of the song
     /// ([`crate::detect`]), as `<FIELD> “<value>” from <key>: <why>`.
     pub dropped: Vec<String>,
+    /// Each field whose value won by the order of `sources` alone over
+    /// another its sources offer.
+    pub contested: Vec<String>,
     /// Each other audio source of another recording than the chosen
     /// audio's, or at another speed than the rest of its own
     /// ([`vet::recordings`]), as `<key>: <which>`.
@@ -970,6 +984,8 @@ pub struct Input<'a> {
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
     pub typography: clean::Typography,
+    /// Which kind of source is believed first.
+    pub believe: clean::Believe,
     /// What the other songs' sources show: their albums and watermarks.
     pub known: &'a Known,
     pub naming: &'a Naming,
@@ -1041,9 +1057,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         None => bail!("no source of this song has audio"),
     };
     let vets = vetted(input, &candidates, ms_of(facts));
-    for (field, all) in &mut candidates {
-        all.retain(|c| vets.gives(c.key, *field));
-    }
+    believe_vetted(&mut candidates, &vets);
     let cover = pick_cover(input, &vets);
     let (mut tags, mut tag_why, artists) =
         resolve_tags(input, &candidates, &audio_key, format.mix().is_some());
@@ -1121,8 +1135,26 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             set_aside: vets.set_aside(),
             recordings,
             dropped: dropped(input),
+            contested: [Field::Title, Field::Artist]
+                .iter()
+                .filter_map(|f| contested(&candidates, *f))
+                .collect(),
         },
     })
+}
+
+/// `candidates` as `vets` leaves them: what each source gives, a source
+/// vetting is unsure of ranked after every kind.
+fn believe_vetted(candidates: &mut BTreeMap<Field, Vec<Candidate<'_>>>, vets: &Vets) {
+    for (field, all) in candidates {
+        all.retain(|c| vets.gives(c.key, *field));
+        for c in all
+            .iter_mut()
+            .filter(|c| vets.verdict(c.key) == Verdict::Unsure)
+        {
+            c.rank = UNSURE_RANK;
+        }
+    }
 }
 
 /// The vetting of the song's sources ([`crate::vet`]) by their cleaned
@@ -1934,6 +1966,83 @@ struct Candidate<'a> {
     cleaned: Vec<&'static str>,
     /// As the source offered it.
     raw: &'a Offer,
+    /// How far `[tags] believe` believes its kind of source, least first.
+    rank: u8,
+    /// Whether offers that mean one value group, as every `believe` but
+    /// `sources` asks.
+    grouping: bool,
+}
+
+/// The group `i` joins, its members' first.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+/// A source's rank once vetting is unsure of it: after every kind.
+const UNSURE_RANK: u8 = 4;
+
+/// How far `believe` believes `key`'s kind of source, least first: a
+/// MusicBrainz record, a file's own tags, a site's release, an upload.
+fn believed(believe: clean::Believe, key: &SourceKey, facts: &Facts) -> u8 {
+    let kind = match key {
+        SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ => 0,
+        SourceKey::Torrent(_) | SourceKey::Manual(_) => 1,
+        SourceKey::Remote { .. } if facts.release => 2,
+        SourceKey::Remote { .. } => 3,
+    };
+    match believe {
+        clean::Believe::MusicbrainzFirst => kind,
+        clean::Believe::FilesFirst => [1, 0, 2, 3][usize::from(kind)],
+        clean::Believe::Sources => 0,
+    }
+}
+
+/// The fields whose offers are names, which group by [`similar::agree`]
+/// as well as by their letters.
+const NAMED: [Field; 5] = [
+    Field::Title,
+    Field::Artist,
+    Field::Artists,
+    Field::Album,
+    Field::AlbumArtist,
+];
+
+/// Which of `offers` mean one value, as a group number each: offers alike
+/// in their letters, and for a name, two [`similar::agree`] reads alike
+/// that name the same versions, so `Song (Live)` keeps apart from `Song`.
+/// Groups are connected, so the order offers come in changes none.
+fn groups(offers: &[&Candidate<'_>], field: Field) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..offers.len()).collect();
+    let letters: Vec<String> = offers
+        .iter()
+        .map(|c| tags::normalized(&c.offer.values))
+        .collect();
+    let by_name = NAMED.contains(&field) && offers.iter().all(|c| c.grouping);
+    let names: Vec<Option<(similar::Name, BTreeSet<&'static str>)>> = offers
+        .iter()
+        .map(|c| {
+            by_name.then(|| {
+                let joined = c.offer.values.join("; ");
+                (similar::Name::new(&joined), similar::versions_in(&joined))
+            })
+        })
+        .collect();
+    for i in 0..offers.len() {
+        for j in i + 1..offers.len() {
+            let alike = letters[i] == letters[j]
+                || matches!((&names[i], &names[j]), (Some((a, va)), Some((b, vb)))
+                    if va == vb && similar::agree(a, b) == Some(true));
+            if alike {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    (0..offers.len()).map(|i| root(&mut parent, i)).collect()
 }
 
 /// Every source's offer for every field, cleaned against the names the
@@ -1997,6 +2106,8 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
                 },
                 cleaned: c.rules,
                 raw,
+                rank: believed(input.believe, key, facts),
+                grouping: input.believe != clean::Believe::Sources,
             });
         }
     }
@@ -2063,26 +2174,102 @@ fn best_offer_then<'c, 'a, K: Ord>(
         .iter()
         .filter(|c| from(c.key))
         .collect();
-    let agreeing = |o: &Offer| {
-        let mine = tags::normalized(&o.values);
-        offers
-            .iter()
-            .filter(|c| tags::normalized(&c.offer.values) == mine)
-            .count()
+    let group = groups(&offers, field);
+    let ranked = ranked(&offers, &group, field, &then);
+    let best = *ranked.first()?;
+    let spelled = (0..offers.len())
+        .filter(|&i| group[i] == group[best])
+        .min_by_key(|&i| {
+            let c = offers[i];
+            (!c.offer.structured, c.rank, decorated(c), then(c.key), c.n)
+        })?;
+    Some(offers[spelled])
+}
+
+/// How much packaging an offer's values carry ([`tags::decorations`]).
+fn decorated(c: &Candidate<'_>) -> usize {
+    c.offer.values.iter().map(|v| tags::decorations(v)).sum()
+}
+
+/// How `offers[i]` ranks, before the order of `sources`: a field kept for
+/// it over one read off a title; for credits, the kind of source `[tags]
+/// believe` puts first; plain over decorated; agreed on by more offers of
+/// its `group`; as `then` ranks its source; a source vetting is unsure of
+/// last; and, where offers group, one naming more versions first, so a
+/// file's `Song (Live)` keeps its version against MusicBrainz's `Song`.
+fn rank_of<K: Ord>(
+    offers: &[&Candidate<'_>],
+    group: &[usize],
+    field: Field,
+    then: &impl Fn(&SourceKey) -> K,
+    i: usize,
+) -> (
+    bool,
+    u8,
+    usize,
+    std::cmp::Reverse<usize>,
+    K,
+    bool,
+    std::cmp::Reverse<usize>,
+) {
+    let c = offers[i];
+    let credits = matches!(field, Field::Artist | Field::Artists);
+    let agreeing = group.iter().filter(|g| **g == group[i]).count();
+    let versions = if c.grouping {
+        similar::versions_in(&c.offer.values.join("; ")).len()
+    } else {
+        0
     };
-    offers.iter().copied().min_by_key(|c| {
-        (
-            !c.offer.structured,
-            c.offer
-                .values
-                .iter()
-                .map(|v| tags::decorations(v))
-                .sum::<usize>(),
-            std::cmp::Reverse(agreeing(&c.offer)),
-            then(c.key),
-            c.n,
-        )
-    })
+    (
+        !c.offer.structured,
+        if credits { c.rank } else { 0 },
+        decorated(c),
+        std::cmp::Reverse(agreeing),
+        then(c.key),
+        c.rank == UNSURE_RANK,
+        std::cmp::Reverse(versions),
+    )
+}
+
+/// `offers`' indices, best first: as [`rank_of`] ranks them, then by the
+/// order of `sources`.
+fn ranked<K: Ord>(
+    offers: &[&Candidate<'_>],
+    group: &[usize],
+    field: Field,
+    then: &impl Fn(&SourceKey) -> K,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..offers.len()).collect();
+    order.sort_by_cached_key(|&i| (rank_of(offers, group, field, then, i), offers[i].n));
+    order
+}
+
+/// Why the best offer for `field` won only by the order of `sources`,
+/// where another group of offers ranks alike in all else; none where
+/// nothing else came so close, or where offers do not group, as `believe
+/// = "sources"` asks.
+fn contested(candidates: &BTreeMap<Field, Vec<Candidate<'_>>>, field: Field) -> Option<String> {
+    let offers: Vec<&Candidate<'_>> = candidates.get(&field)?.iter().collect();
+    if !offers.iter().all(|c| c.grouping) {
+        return None;
+    }
+    let group = groups(&offers, field);
+    let none = |_: &SourceKey| ();
+    let ranked = ranked(&offers, &group, field, &none);
+    let (&best, rest) = ranked.split_first()?;
+    let alike = |i: usize| rank_of(&offers, &group, field, &none, i);
+    let runner = rest
+        .iter()
+        .copied()
+        .find(|&i| group[i] != group[best] && alike(i) == alike(best))?;
+    Some(format!(
+        "{} “{}” from {} over “{}” from {}, by the order of `sources`",
+        field.vorbis(),
+        offers[best].offer.values.join("; "),
+        offers[best].key,
+        offers[runner].offer.values.join("; "),
+        offers[runner].key,
+    ))
 }
 
 /// The best date of a song with no release's: a field kept for it, or an
@@ -2111,7 +2298,7 @@ fn date_of<'c, 'a>(
             .filter(|c| c.key == key && !c.offer.structured)
             .any(|c| {
                 let channel: Vec<&str> = c.offer.values.iter().map(String::as_str).collect();
-                crate::similar::credits_agree(&channel, &artist) == Some(true)
+                similar::credits_agree(&channel, &artist) == Some(true)
             });
         structured || uploaded_by_artist
     };

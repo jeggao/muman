@@ -341,6 +341,24 @@ pub enum Typography {
     Ascii,
 }
 
+/// Which kind of source a song believes first, as `[tags] believe` says:
+/// for its artists when its sources credit different ones, and for how a
+/// value they agree on is spelled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Believe {
+    /// A MusicBrainz record its vetting believes, then a file's own tags,
+    /// a site's release, an upload.
+    #[default]
+    MusicbrainzFirst,
+    /// A file's own tags, then a MusicBrainz record, a site's release, an
+    /// upload.
+    FilesFirst,
+    /// No kind before another: the order of the song's `sources`, as
+    /// muman picked before it grouped values that agree.
+    Sources,
+}
+
 /// What a rule may look at besides the value: the song's names, the
 /// library's albums, the source's other offers, and how punctuation is
 /// written.

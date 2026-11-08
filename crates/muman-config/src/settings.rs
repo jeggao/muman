@@ -1103,6 +1103,7 @@ impl From<WrittenTools> for Tools {
 #[serde(default, deny_unknown_fields)]
 pub struct Tags {
     pub typography: crate::clean::Typography,
+    pub believe: crate::clean::Believe,
 }
 
 /// Which lyrics a song takes, by their language: see `resolve`.
