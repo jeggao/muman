@@ -88,14 +88,22 @@ never what the record itself gave the song. muman compares:
 - an ISRC or MusicBrainz recording ID another source holds too, which
   outweighs every name;
 - the length it states, against the audio's;
-- its album and album artist, against those the song's files name.
+- its album and album artist, against those the song's files name;
+- its release, against the one its album is on: songs that came in one
+  folder under one album name, a disc's folder and a closing `CD 2`
+  taken as the album's, are on the release more than half of them are
+  on; those of one `[[album]]` on the one most of them are on.
 
 A record whose title and artists both disagree names another song: it
 gives the song nothing, and neither does the Cover Art Archive's cover
 of its album. One that may name another, as a cover act's record whose
 title agrees but whose artist and album do not, gives no release field
-and no ID. One whose artists share no name with the song's gives no ID,
-though it may give its album, as a concert's record crediting each
+and no ID, and so does one on another release than its album, unless
+its album is the files' own, as a concert's video beside its album, or
+the files name none. A record on its album's release is believed
+though its title is spelled otherwise, as `3 Lanterns` for `Three
+Lanterns`. One whose artists share no name with the song's gives no
+ID, though it may give its album, as a concert's record crediting each
 singer. A source with audio of its own, a pinned source and the tags
 you set by hand are never set aside. An AcoustID lookup refuses such a
 recording from the start: one whose title and first artist both

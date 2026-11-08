@@ -115,6 +115,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A video's upload date dates a song only when its uploader is the
   song's artist.** A song shared by someone else is no longer dated by
   the day they uploaded it.
+- **The songs of one album hold each other's MusicBrainz records to
+  their release.** Songs that came in one folder under one album name
+  are an album on the release more than half of them are on, and those
+  of one `[[album]]` on the one most of them are on. A record on its
+  album's release is believed though its title is spelled otherwise, and
+  one on another release gives no album, track, date or ID unless its
+  album is the files' own or the files name none, so a song a box set
+  or a compilation claimed stays on the album it came in. `muman status`
+  names the release among the reasons a record is set aside.
 - **A title cut short agrees with the title it is the start of**, three
   words or more, so a file's title cut by a tag's length no longer sets
   the song's MusicBrainz record aside.
