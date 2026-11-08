@@ -143,7 +143,7 @@ tags.genre = ""
 
 The file also holds the [settings](configuration.md#settings-in-the-song-list),
 the cleaning switches under `[tags.clean.*]` and `[lyrics.clean.*]`
-([cleaning](library.md#cleaning)), the providers under `[providers.*]`
+([cleaning](metadata.md#cleaning)), the providers under `[providers.*]`
 ([lookups](library.md#lookups)) and the [`[[hook]]`](library.md#hooks)
 tables.
 
