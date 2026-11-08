@@ -15,6 +15,8 @@
 //!   compared whole, case aside, or a credit that names a soundtrack
 //!   rather than anyone, ending in `OST` and perhaps its volume: files
 //!   tagged by album, their artist filled with the album's short name.
+//!   A release country that is no two-letter code, as a group's name
+//!   written there, stands for none too.
 //! - A **watermark** is a value of a field naming the work rather than
 //!   the files ([`PER_WORK`]) that
 //!   1. stands as a tag in its torrent's name, in brackets or after a
@@ -93,7 +95,15 @@ pub fn placeholder(field: Field, value: &str) -> bool {
     let listed = [None, Some(field)]
         .iter()
         .any(|f| PLACEHOLDERS.get(f).is_some_and(|set| set.contains(&lower)));
-    listed || (CREDITS.contains(&field) && names_a_soundtrack(value))
+    listed
+        || (CREDITS.contains(&field) && names_a_soundtrack(value))
+        || (field == Field::ReleaseCountry && !is_country(value.trim()))
+}
+
+/// Whether `code` is written as a country is: two letters, as `GB`, or
+/// MusicBrainz's `XW` for the whole world.
+fn is_country(code: &str) -> bool {
+    code.len() == 2 && code.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// Whether a credit names a soundtrack rather than anyone: `Show OST`,
@@ -263,6 +273,8 @@ mod tests {
         assert!(!placeholder(Field::AlbumArtist, "Various Artists"));
         assert!(placeholder(Field::Artist, "Various Artists"));
         assert!(!placeholder(Field::Label, "Glass Orchard Records"));
+        assert!(placeholder(Field::ReleaseCountry, "GRP"), "no country");
+        assert!(!placeholder(Field::ReleaseCountry, "XW"));
     }
 
     #[test]

@@ -121,8 +121,9 @@ against another source:
 
 - **Placeholders**, which stand for no value: MusicBrainz's `[unknown]`,
   `[no label]` and `[non-album tracks]`, a tagger's `Unknown Artist`, a
-  video site's category given as a genre, and an artist that is a
-  soundtrack's short name, as `Night Ferry OST 2`.
+  video site's category given as a genre, an artist that is a
+  soundtrack's short name, as `Night Ferry OST 2`, and a release country
+  that is no two-letter code.
 - **Watermarks**, the name of whoever shared the files, written into
   the work, label, copyright, comment or grouping: a value that stands as
   a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
