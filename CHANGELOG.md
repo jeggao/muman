@@ -80,6 +80,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Lyrics from subtitles lose the uploader's notes and the sounds.**
+  Notes around the lyrics, as `These captions are designed for desktop`
+  or `English Subtitles`, and descriptions of sounds in square brackets,
+  as `[Quiet buzzing]`, are dropped, and one line wrapped over two lines
+  of a cue is joined again. `[lyrics.clean.packaging] commentary` and
+  `sound` and `[lyrics.clean.structure] wrapped` turn each off. Every
+  song with lyrics is written again.
 - **An instrumental takes no lyrics, and lyrics of another cut no
   longer stick.** A song MusicBrainz marks as sung in no language, or
   titled as an instrumental or a karaoke take, takes none, and lyrics
