@@ -963,12 +963,17 @@ fn says_nothing(input: &Input<'_>, key: &SourceKey, field: Field, value: &str) -
 }
 
 /// Each value of the song's sources that says nothing of it, as
-/// `<FIELD> “<value>” from <key>: <why>`.
+/// `<FIELD> “<value>” from <key>: <why>`, but in a field set by hand,
+/// which no source's value fills.
 fn dropped(input: &Input<'_>) -> Vec<String> {
+    let by_hand: BTreeSet<Field> = (input.song.tags.iter())
+        .chain(input.album.iter().flat_map(|a| &a.tags))
+        .filter_map(|(name, _)| Field::named(name))
+        .collect();
     let mut out = Vec::new();
     for (_, key, facts) in input.present() {
         for (field, offer) in &facts.tags {
-            if *field == Field::Comment && !input.source_comments {
+            if (*field == Field::Comment && !input.source_comments) || by_hand.contains(field) {
                 continue;
             }
             for value in &offer.values {
@@ -1116,6 +1121,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         key: get(Field::InitialKey),
         id: &id,
     })?;
+    let contested = contested_unset(&candidates, &tag_why);
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1148,22 +1154,21 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             set_aside: vets.set_aside(),
             recordings,
             dropped: dropped(input),
-            contested: [Field::Title, Field::Artist]
-                .iter()
-                .filter_map(|f| contested(&candidates, *f))
-                .collect(),
+            contested,
         },
     })
 }
 
 /// `candidates` as `vets` leaves them: what each source gives, a source
-/// vetting is unsure of ranked after every kind.
+/// vetting is unsure of ranked after every kind, and so are the credits
+/// of one crediting no one the others do ([`Vets::credits`]).
 fn believe_vetted(candidates: &mut BTreeMap<Field, Vec<Candidate<'_>>>, vets: &Vets) {
     for (field, all) in candidates {
         all.retain(|c| vets.gives(c.key, *field));
+        let credit = matches!(field, Field::Artist | Field::Artists);
         for c in all
             .iter_mut()
-            .filter(|c| vets.verdict(c.key) == Verdict::Unsure)
+            .filter(|c| vets.verdict(c.key) == Verdict::Unsure || (credit && !vets.credits(c.key)))
         {
             c.rank = UNSURE_RANK;
         }
@@ -1221,6 +1226,11 @@ fn ms_of(facts: &Facts) -> Option<i64> {
 
 /// A ranking: smaller is better, compared in order.
 type Rank = Vec<i64>;
+
+/// Where a [`Rank`] holds whether a source came from its album's folder,
+/// which sways the audio a song plays but not the audio a lookup was
+/// asked with.
+const FROM_ALBUM: usize = 2;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
@@ -1381,14 +1391,19 @@ fn recordings_of(
     candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
     scored: &[Scored<'_>],
 ) -> Recordings {
-    let best = scored.iter().map(|s| &s.rank).min();
+    let unswayed = |s: &Scored<'_>| -> Rank {
+        let mut rank = s.rank.clone();
+        rank.remove(FROM_ALBUM);
+        rank
+    };
+    let best = scored.iter().map(unswayed).min();
     let audible: Vec<recordings::Audible<'_>> = scored
         .iter()
         .map(|s| recordings::Audible {
             key: s.key,
             ms: ms_of(s.facts),
             digest: s.facts.audio.as_ref().and_then(|a| a.digest.as_deref()),
-            first: Some(&s.rank) == best,
+            first: Some(unswayed(s)) == best,
         })
         .collect();
     if audible.len() < 2 {
@@ -1616,7 +1631,8 @@ fn lyrics_why(role: Option<Role>, timing: Option<lyrics::Timing>, own: Option<i6
 const FIT_GRACE_MS: i32 = 2_000;
 
 /// Whether `tags` say the song sings no words: MusicBrainz's language
-/// `zxx` alone, or a title naming an instrumental or a karaoke take.
+/// `zxx` alone, or a title whose decoration names an instrumental or a
+/// karaoke take, as `(Instrumental)`.
 fn instrumental(tags: &Comments) -> bool {
     let value = |field: Field| {
         tags.iter()
@@ -1628,7 +1644,7 @@ fn instrumental(tags: &Comments) -> bool {
     let unsung = !languages.is_empty() && languages.iter().all(|c| c == "zxx");
     let versions = value(Field::Title)
         .iter()
-        .flat_map(|t| similar::versions_in(t))
+        .flat_map(|t| similar::Name::new(t).versions().0)
         .collect::<BTreeSet<_>>();
     unsung || versions.contains("instrumental") || versions.contains("karaoke")
 }
@@ -2365,6 +2381,22 @@ fn ranked<K: Ord>(
     order
 }
 
+/// The title and artist [`contested`], but where set by hand.
+fn contested_unset(
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    tag_why: &[TagWhy],
+) -> Vec<String> {
+    [Field::Title, Field::Artist]
+        .iter()
+        .filter(|f| {
+            !tag_why.iter().any(|w| {
+                w.key == f.vorbis() && matches!(w.from.as_str(), "song.tags" | "album.tags")
+            })
+        })
+        .filter_map(|f| contested(candidates, *f))
+        .collect()
+}
+
 /// Why the best offer for `field` won only by the order of `sources`,
 /// where another group of offers ranks alike in all else; none where
 /// nothing else came so close, or where offers do not group, as `believe
@@ -2395,8 +2427,9 @@ fn contested(candidates: &BTreeMap<Field, Vec<Candidate<'_>>>, field: Field) -> 
 
 /// The best date of a song with no release's: a field kept for it, or an
 /// upload's date where the upload's channel is the song's artist, set by
-/// hand or `offered`. An upload's date is the day it went up, the
-/// release's only where its uploader is the artist releasing it.
+/// hand or `offered` by another source than the upload. An upload's date
+/// is the day it went up, the release's only where its uploader is the
+/// artist releasing it, which its own channel's name cannot say.
 fn date_of<'c, 'a>(
     input: &Input<'_>,
     candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
@@ -2412,11 +2445,15 @@ fn date_of<'c, 'a>(
         .flatten()
         .map(String::as_str)
         .collect();
+    let credited_by = offered
+        .filter(|_| by_hand.is_none())
+        .map(|s| s.from.as_str());
     let dated_so = |key: &SourceKey| {
         let structured = (candidates.get(&Field::Date).into_iter().flatten())
             .any(|c| c.key == key && c.offer.structured);
+        let itself = credited_by.is_some_and(|from| from == key.to_string());
         let uploaded_by_artist = (candidates.get(&Field::Artist).into_iter().flatten())
-            .filter(|c| c.key == key && !c.offer.structured)
+            .filter(|c| c.key == key && !c.offer.structured && !itself)
             .any(|c| {
                 let channel: Vec<&str> = c.offer.values.iter().map(String::as_str).collect();
                 similar::credits_agree(&channel, &artist) == Some(true)

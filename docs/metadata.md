@@ -61,14 +61,15 @@ The kind believed first decides:
   way to MusicBrainz's spelling;
 - which artists a song credits when its sources credit others, so a
   concert's record crediting each singer wins over a file crediting its
-  star; a record vetting is unsure of never does.
+  star; a record vetting is unsure of never does, nor one crediting no
+  one the others do whose album is not the files' own, as a cover act's.
 
 Other fields rank as before: a field kept for it over one read off a
 video's title, plain over decorated, agreed on by more sources; and of
 two titles that differ only by a version one names, as `(Live)`, the one
-naming it, whatever their order. A field still won by the order of
-`sources` alone is contested: `muman status` and `muman check` name it,
-so you can set it or reorder `sources`.
+naming it, whatever their order. A title or artist still won by the
+order of `sources` alone is contested: `muman status` and `muman check`
+name it, so you can set it by hand.
 
 ## Sources set aside
 
@@ -81,8 +82,8 @@ never what the record itself gave the song. muman compares:
 - its title, in any two scripts a rule bridges, so a title in kanji
   against one in Latin letters says nothing either way, read as files
   write theirs, as `Kiri Hoshino / Night Ferry`; a take or a date in
-  brackets tells nothing apart, and a recording the record calls live is
-  not the files' studio one;
+  brackets tells nothing apart, and a recording whose title the record
+  names live is not the files' studio one;
 - its artists, by one whole name in common or a MusicBrainz artist ID:
   `Marlo Venn Tribute Band` holds `Marlo Venn` but is not that artist;
 - an ISRC or MusicBrainz recording ID another source holds too, which
@@ -139,8 +140,10 @@ torrent:…: a watermark of torrent:…`. `[tags.clean.packaging]
 placeholder` and `watermark` turn each off.
 
 A video's upload date is when it went up, so it dates a song only when
-the channel that uploaded it is the song's artist, as one releasing its
-own music; a date from anyone else's upload is left out.
+the channel that uploaded it is the song's artist, as another source or
+a tag you set names it, one releasing its own music; a date from anyone
+else's upload, or from an upload only its own channel credits, is left
+out.
 
 ## Cleaning
 
