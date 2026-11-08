@@ -533,6 +533,7 @@ pub struct AudioPick {
     pub bandwidth: Bandwidth,
     pub stereo: Stereo,
     pub clipping: Clipping,
+    pub dynamics: Dynamics,
 }
 
 impl AudioPick {
@@ -540,6 +541,7 @@ impl AudioPick {
         let steps = [
             ("purity.step", f64::from(self.purity.step_ms)),
             ("bandwidth.step", f64::from(self.bandwidth.step_hz)),
+            ("dynamics.step", f64::from(self.dynamics.step_cdb)),
         ];
         let cutoffs = self
             .clipping
@@ -885,6 +887,31 @@ impl Default for Stereo {
     }
 }
 
+/// How far the audio's peaks stand above its loudness, which a master
+/// squeezed louder lowers. Off unless set: a matter of taste, and it
+/// weighs an older master on a lossy upload against a louder one on a
+/// CD. Sources of other recordings rank apart before it counts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Dynamics {
+    pub enabled: bool,
+    pub weight: u32,
+    /// In hundredths of a dB: wider than the tenth of a dB a lossy
+    /// encoding of one master moves it by.
+    #[serde(rename = "step", deserialize_with = "serde_as::db")]
+    pub step_cdb: i32,
+}
+
+impl Default for Dynamics {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            weight: 100,
+            step_cdb: 100,
+        }
+    }
+}
+
 /// Samples clipped at full scale.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -982,7 +1009,7 @@ macro_rules! weighed {
 }
 
 weighed!(
-    Purity, Bandwidth, Stereo, Clipping, Square, Resolution, Blockiness
+    Purity, Bandwidth, Stereo, Clipping, Dynamics, Square, Resolution, Blockiness
 );
 
 /// The programs muman runs: `[tools.ffmpeg]`, `[tools.ffprobe]`,

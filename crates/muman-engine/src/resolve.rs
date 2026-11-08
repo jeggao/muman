@@ -1325,6 +1325,10 @@ fn pick_audio(
                     w.clipping.weight(),
                     q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
                 ),
+                (
+                    w.dynamics.weight(),
+                    dynamics_of(facts).map(|cdb| -cdb.div_euclid(i64::from(w.dynamics.step_cdb))),
+                ),
             ]);
             let rank: Rank = vec![
                 unknown,
@@ -1485,6 +1489,13 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
         .join(", "),
         None => "not measured".to_string(),
     };
+    let why = match dynamics_of(facts).filter(|_| input.audio.pick.dynamics.enabled) {
+        Some(cdb) => format!(
+            "{why}, peaks {:.1} dB over its loudness",
+            cdb as f64 / 100.0
+        ),
+        None => why,
+    };
     let why = if from_album(input, chosen.key) {
         format!("{why}, from its album's folder")
     } else {
@@ -1496,6 +1507,15 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
         Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
         None => why,
     }
+}
+
+/// How far `facts`' true peak stands above its integrated loudness, in
+/// hundredths of a dB, as its loudness was measured.
+fn dynamics_of(facts: &Facts) -> Option<i64> {
+    let measure = facts.audio.as_ref()?.analysis.loudness()?;
+    let peak = 20.0 * measure.true_peak.log10();
+    let range = (peak - measure.lufs()?) * 100.0;
+    range.is_finite().then(|| range.round() as i64)
 }
 
 /// Why each of the song's sources gives it no audio: gone from the

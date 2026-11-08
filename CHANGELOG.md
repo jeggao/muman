@@ -9,6 +9,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[audio.pick.dynamics]` prefers the master whose peaks stand
+  highest over its loudness**, from the loudness muman already
+  measures, so a master squeezed louder ranks after an older one of the
+  same recording. It is off until turned on, and `muman status` gives
+  the chosen audio's figure when it is.
+
 - **`[release] prefer` puts the songs of one album on one release.**
   Songs that came in one folder under one album name, or in one
   `[[album]]`, are put on the release three in five of them or more are

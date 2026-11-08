@@ -16,7 +16,7 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | The song's recording; least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping |
+| Audio | The song's recording; least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping; peaks highest over its loudness, where that counts |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
@@ -60,6 +60,10 @@ ranked](configuration.md#how-sources-are-ranked)).
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
   past full scale, only those at its own peak count.
+- **Dynamics** is how far the true peak stands over the loudness, which
+  a master squeezed louder lowers. It counts only where
+  `[audio.pick.dynamics]` is on, a matter of taste: it puts an older
+  master on a lossy upload ahead of a louder one on a CD.
 
 muman measures every channel as it is, never mixed into two. Of audio
 scored alike, lossless beats lossy, then the more bits its samples use,
