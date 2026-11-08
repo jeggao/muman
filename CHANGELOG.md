@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+### Added
+
+- **`muman info --changes` lists what a sync would change in each
+  song, value by value.** Each tag, the path, audio, format, cover and
+  lyrics a sync would write otherwise is shown as the file holds it and
+  as it would be, with the reason `status` gives, then how many songs
+  each field changes in. Naming fields, as `--changes album title`,
+  shows those alone. It reads only what earlier runs recorded and
+  changes nothing, so a new setting or a new muman can be checked on a
+  whole library before a sync writes it.
+
 ### Changed
 
 - **A hook runs only once a command has changed the library, after it
