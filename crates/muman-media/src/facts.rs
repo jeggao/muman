@@ -166,9 +166,10 @@ pub struct Facts {
 /// again, decoding nothing, as [`hash`] does.
 pub const HASH_METHOD: &str = "hash/2";
 
-/// What a MusicBrainz record's facts keep beside its tags: its length
-/// and the artists it credits.
-pub const RECORD_METHOD: &str = "record/2";
+/// What a MusicBrainz record's facts keep beside its tags, its length and
+/// the artists it credits, and what its tags hold: since record/3, its
+/// genres ([`crate::genres`]).
+pub const RECORD_METHOD: &str = "record/3";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
 /// it sings are Latin alone.

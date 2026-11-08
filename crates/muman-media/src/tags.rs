@@ -1413,6 +1413,7 @@ pub fn from_record(record: &crate::record::Record) -> Offers {
         true,
     );
     offer(&mut o, Field::Language, record.languages.clone(), true);
+    offer(&mut o, Field::Genre, crate::genres::of(record), true);
     if let Some(r) = &record.release {
         offer_release(&mut o, r);
     }

@@ -1,0 +1,16 @@
+# How a MusicBrainz genre is written where capitalizing each word would
+# spell it otherwise, one a line as `name<tab>written`. MusicBrainz names
+# genres in lower case: https://musicbrainz.org/genres
+r&b	R&B
+contemporary r&b	Contemporary R&B
+alternative r&b	Alternative R&B
+edm	EDM
+idm	IDM
+ebm	EBM
+aor	AOR
+mpb	MPB
+uk garage	UK Garage
+uk drill	UK Drill
+uk funky	UK Funky
+uk bass	UK Bass
+uk hardcore	UK Hardcore

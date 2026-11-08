@@ -9,6 +9,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **A song takes the genres MusicBrainz's users voted for**: its
+  recording's, else its release group's, its release's or its artists',
+  the most voted, three at most, written as `Alternative Rock` or `R&B`.
+  A file's own genre is taken where no record gives one, or first under
+  `[tags] believe = "files-first"`. Records are read again, quickly,
+  for them; a record kept before muman asked for genres gains them with
+  `sync --rematch`.
+
 - **An artist is spelled one way on every song crediting it alone.**
   Names are grouped across the library by MusicBrainz's artist ID and
   by the name folded, never by names merely alike, and each group with
