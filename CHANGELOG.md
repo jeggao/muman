@@ -80,6 +80,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An instrumental takes no lyrics, and lyrics of another cut no
+  longer stick.** A song MusicBrainz marks as sung in no language, or
+  titled as an instrumental or a karaoke take, takes none, and lyrics
+  timed past the song's end, another cut's, rank after any that fit. Latin lyrics
+  that state no language are a romanization of a song sung in another
+  script, ranked as `[lyrics] prefer` ranks one. A pin takes lyrics
+  whatever these say; `[lyrics.clean.structure] instrumental` and `fit`
+  and `[lyrics.clean.guesswork] script` turn each off. Lyrics files are
+  read again once, quickly, for their letters.
 - **The songs of one album show one cover and play from one rip.** A
   song showing another design than most of its album's songs takes
   theirs from a source of its own that holds it, and between sources its

@@ -110,6 +110,12 @@ impl Lang {
         })
     }
 
+    /// Whether it is written in Latin letters, where its script is known.
+    #[must_use]
+    pub fn latin(&self) -> Option<bool> {
+        self.script().map(|s| s.as_str() == "Latn")
+    }
+
     fn same_language(&self, other: &Self) -> bool {
         let norwegian = |l: Language| matches!(l.as_str(), "no" | "nb");
         let (a, b) = (self.0.language, other.0.language);

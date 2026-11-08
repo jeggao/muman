@@ -87,6 +87,7 @@ fn lyrics(f: &mut Facts, at: LyricsAt, code: &str, lines: usize) {
         stated_ms: None,
         digest: None,
         sings: Some(true),
+        latin: None,
     });
 }
 
@@ -3394,5 +3395,130 @@ fn audio_its_measures_rank_alike_comes_from_its_album_s_folder() {
         r.why.audio.contains("from its album's folder"),
         "{}",
         r.why.audio
+    );
+}
+
+/// A song's file, sung in `language`, titled `title`, and a lyrics file
+/// with no audio whose lines, Latin or not, run to `last_ms`.
+fn sung_with_lyrics_file(
+    title: &str,
+    language: &str,
+    latin: bool,
+    last_ms: i64,
+) -> (Song, BTreeMap<SourceKey, Facts>) {
+    let (file, words) = (manual("a.flac"), manual("a.lrc"));
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &[title], true);
+    tag(&mut f, Field::Language, &[language], true);
+    let mut l = Facts::unreadable("l".into());
+    l.lyrics.push(LyricsFacts {
+        at: LyricsAt::File,
+        language: Language::Unstated,
+        timing: Some(Timing {
+            lines: 20,
+            first_ms: 10_000,
+            last_ms,
+        }),
+        stated_ms: None,
+        digest: None,
+        sings: Some(true),
+        latin: Some(latin),
+    });
+    let facts = BTreeMap::from([(file.clone(), f), (words.clone(), l)]);
+    (song(&[file, words]), facts)
+}
+
+fn run_lyrics(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) -> Resolved {
+    let lyrics = crate::settings::Lyrics {
+        read: vec![Lang::parse("en").unwrap()],
+        ..english()
+    };
+    resolve(&Input {
+        song,
+        album: None,
+        facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &lyrics,
+        clean,
+        typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
+        known: &Known::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn an_instrumental_takes_no_lyrics_unless_its_switch_is_off() {
+    let (s, facts) = sung_with_lyrics_file("Night Ferry (Instrumental)", "eng", true, 180_000);
+    assert!(
+        run_lyrics(&s, &facts, &Settings::default())
+            .plan
+            .lyrics
+            .is_none()
+    );
+    let mut off = Settings::default();
+    off.set(clean::lyrics::INSTRUMENTAL, false);
+    assert!(run_lyrics(&s, &facts, &off).plan.lyrics.is_some());
+}
+
+#[test]
+fn latin_lyrics_of_a_song_sung_in_kana_are_its_romanization() {
+    let (s, facts) = sung_with_lyrics_file("夜の船", "jpn", true, 180_000);
+    let r = run_lyrics(&s, &facts, &Settings::default());
+    assert!(
+        r.why
+            .lyrics
+            .as_deref()
+            .is_some_and(|w| w.starts_with("a romanization")),
+        "{:?}",
+        r.why.lyrics
+    );
+    let (s, facts) = sung_with_lyrics_file("夜の船", "jpn", false, 180_000);
+    let r = run_lyrics(&s, &facts, &Settings::default());
+    assert!(
+        r.why
+            .lyrics
+            .as_deref()
+            .is_some_and(|w| w.starts_with("timed"))
+    );
+}
+
+#[test]
+fn lyrics_timed_past_the_song_s_end_rank_after_those_that_fit() {
+    let (mut s, mut facts) = sung_with_lyrics_file("Night Ferry", "eng", true, 260_000);
+    let r = run_lyrics(&s, &facts, &Settings::default());
+    assert!(
+        r.why
+            .lyrics
+            .as_deref()
+            .is_some_and(|w| w.ends_with("timed past the audio's end")),
+        "taken where nothing fits: {:?}",
+        r.why.lyrics
+    );
+    let fits = manual("b.lrc");
+    let mut b = facts[&manual("a.lrc")].clone();
+    b.rev = "b".into();
+    b.lyrics[0].timing = Some(Timing {
+        lines: 20,
+        first_ms: 10_000,
+        last_ms: 180_000,
+    });
+    facts.insert(fits.clone(), b);
+    s.sources.push(fits.clone());
+    let r = run_lyrics(&s, &facts, &Settings::default());
+    assert_eq!(r.plan.lyrics.map(|l| l.key), Some(fits.clone()));
+    let mut off = Settings::default();
+    off.set(clean::lyrics::FIT, false);
+    let r = run_lyrics(&s, &facts, &off);
+    assert_eq!(
+        r.plan.lyrics.map(|l| l.key),
+        Some(manual("a.lrc")),
+        "by place, the switch off"
     );
 }
