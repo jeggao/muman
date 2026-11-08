@@ -369,11 +369,11 @@ them again and leaves the song's own file as it is.
 
 Each measure of [how the best source wins](library.md#how-the-best-source-wins)
 has a table under its part's `pick`: `[audio.pick.purity]`, `stereo`,
-`bandwidth` and `clipping` rank audio, and `[cover.pick.square]`,
-`resolution` and `blockiness` rank covers. In each, `enabled` and
-`weight` say whether and how much it counts, and the other keys how it
-is cut into steps. muman sums each source's steps times their weights,
-and the lowest sum wins.
+`bandwidth` and `clipping` rank audio, `[cover.pick.square]`,
+`resolution` and `blockiness` covers. In each, `enabled` and `weight`
+say whether and how much it counts, the other keys how it is cut into
+steps; the lowest sum of steps times weights wins. The song's recording,
+`[audio.pick.recording]`, takes `enabled` alone and ranks ahead of sums.
 
 ```toml
 # Mono costs as much as 2.5 kHz of bandwidth: 50 against 10 for each

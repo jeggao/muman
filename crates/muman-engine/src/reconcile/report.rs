@@ -77,6 +77,9 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
         out,
         format!("  audio   {}: {}", r.plan.audio.key, r.why.audio),
     )?;
+    for why in &r.why.recordings {
+        line(out, format!("  recording  {why}"))?;
+    }
     if let Some(why) = &r.why.fit {
         line(out, format!("  format  {why}"))?;
     }

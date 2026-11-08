@@ -131,6 +131,11 @@ step = "500 Hz"
 enabled = true
 weight = 1
 cutoffs = ["0.1 %", "1 %"]
+[audio.pick.recording]
+# Ahead of every measure above, a source of another recording than the
+# song's ranks after every source of the song's: the recording its
+# record's length fits, else the one most of its sources align as.
+enabled = true
 
 [loudness]
 # How each song is levelled to `target`, measured as EBU R128 measures:

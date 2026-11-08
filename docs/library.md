@@ -16,7 +16,7 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | Least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping |
+| Audio | The song's recording; least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
@@ -32,6 +32,17 @@ ranked](configuration.md#how-sources-are-ranked)).
 
 ### Audio
 
+- **The song's recording** comes first, ahead of every measure. Sources
+  whose audio aligns, or that hold the same audio, are one recording.
+  Where a song holds several, as a live take beside the studio cut, its
+  recording is the one whose length fits its MusicBrainz record, else
+  the one most of its sources hold; sources of another rank after every
+  source of it. A record counts only for a recording that holds none of
+  the audio the lookup asked with, unless a file names its ID. With no
+  record and no recording holding the most sources, nothing changes.
+  `status` names each source of another recording, and one playing more
+  than 0.5% faster or slower than the rest of its own.
+  `[audio.pick.recording] enabled = false` turns this off.
 - **Sound beyond the song** is how long a source plays outside the
   stretch it shares with another source of the song. A music video's
   intro counts; silence does not. An excerpt lacks the rest of the

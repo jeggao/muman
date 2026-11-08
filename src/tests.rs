@@ -389,7 +389,12 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
     assert!(ok, "{text}");
     let list = s.dir.path().join("home/songs.toml");
     let now = std::fs::read_to_string(&list).unwrap();
+    // Edition 5 knew no [audio.pick.recording]; a sync adds it back.
+    let (at, end) = ("[audio.pick.recording]", "enabled = true\n");
+    let at = now.find(at).unwrap();
+    let recording = &now[at..at + now[at..].find(end).unwrap() + end.len()];
     let old = now
+        .replace(recording, "")
         .replace(
             &format!("edition = {}", crate::migrate::EDITION),
             "edition = 5",
@@ -408,7 +413,9 @@ fn a_song_list_naming_the_old_tables_is_moved_and_writes_no_song_again() {
         "{text}"
     );
     assert!(text.contains("Up to date: 1 song(s)"), "{text}");
-    assert_eq!(std::fs::read_to_string(&list).unwrap(), now);
+    let filled = std::fs::read_to_string(&list).unwrap();
+    assert!(filled.contains(recording), "{filled}");
+    assert_eq!(filled.replace(recording, ""), now.replace(recording, ""));
 }
 
 #[test]
@@ -5048,6 +5055,55 @@ fn a_record_of_another_song_is_set_aside_and_status_says_why() {
             "  set aside  musicbrainz:{MBID}: titled \"Night Ferry\" by Kiri Hoshino on \
              \"Harbor Lights\": no title or credit in common"
         )),
+        "{report}"
+    );
+}
+
+#[test]
+fn status_names_a_source_of_another_recording_than_the_song_s() {
+    let s = Setup::new();
+    for name in ["a", "b"] {
+        s.file(&format!("home/sources/manual/{name}.flac"));
+    }
+    s.written(
+        &format!("home/sources/musicbrainz/{MBID}.json"),
+        &format!(
+            r#"{{"id": "{MBID}", "title": "Song", "artists": ["Artist"], "length_ms": 200500}}"#
+        ),
+    );
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 1\n\n[[song]]\nsources = [\"manual:b.flac\", \"manual:a.flac\", \
+             \"musicbrainz:{MBID}\"]\n"
+        ),
+    );
+    let named = FLAC.replace(
+        r#""track": "2""#,
+        &format!(r#""MUSICBRAINZ_TRACKID": "{MBID}""#),
+    );
+    let fake = || {
+        let mut fake = Fake::default()
+            .probe("b.flac", &FLAC.replace("200.0", "231.0"))
+            .probe(".flac", &named);
+        fake.pcm = vec![
+            ("a.flac".into(), pcm(&words(4000, 2))),
+            ("b.flac".into(), pcm(&words(4000, 3))),
+        ];
+        fake
+    };
+    let (_, report) = s.report(&fake(), &["status", "--all"]);
+    assert!(
+        report.contains(
+            "audio   manual:a.flac: the song's recording by its record: aligns with none"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "recording  manual:b.flac: another recording than the song's 1 other: aligns with \
+             none, 31 s longer than its record"
+        ),
         "{report}"
     );
 }
