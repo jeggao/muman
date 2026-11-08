@@ -79,6 +79,31 @@ disagree with the song's is no match.
 musicbrainz:…: titled "Night Ferry" by Kiri Hoshino: no title or credit
 in common`. `[tags.clean.structure] vetting = false` turns this off.
 
+## Values that say nothing
+
+Some values a source's tags carry name nothing about the song, and
+muman drops them before ranking, so they neither win a field nor count
+against another source:
+
+- **Placeholders**, which stand for no value: MusicBrainz's `[unknown]`,
+  `[no label]` and `[non-album tracks]`, a tagger's `Unknown Artist`, a
+  video site's category given as a genre, and an artist that is a
+  soundtrack's short name, as `Night Ferry OST 2`.
+- **Watermarks**, the name of whoever shared the files, written into
+  the work, label, copyright, comment or grouping: a value that stands as
+  a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
+  [GRP]`; one a file writes in two of those fields; or a work shared by
+  ten titles or more across three albums or more of one torrent, which no
+  piece of music is. A label a discography's albums share stays.
+
+`muman status` names each value dropped, as `dropped  WORK “GRP” from
+torrent:…: a watermark of torrent:…`. `[tags.clean.packaging]
+placeholder` and `watermark` turn each off.
+
+A video's upload date is when it went up, so it dates a song only when
+the channel that uploaded it is the song's artist, as one releasing its
+own music; a date from anyone else's upload is left out.
+
 ## Cleaning
 
 muman cleans every tag a source offers before ranking it, so `Paper

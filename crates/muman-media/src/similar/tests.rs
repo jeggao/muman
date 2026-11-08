@@ -299,6 +299,21 @@ fn names_agree_alike_disagree_apart_and_say_nothing_between_or_across_scripts() 
     );
     assert_eq!(agree("Night Ferry", "Paper Comets"), Some(false));
     assert_eq!(
+        agree("Lanterns Over Harbor", "Lanterns Over Harbor Wall at Dusk"),
+        Some(true),
+        "a title cut short"
+    );
+    assert_eq!(
+        agree("Night Ferry", "Night Ferry Wreck at Dawn"),
+        Some(false),
+        "two words are no cut"
+    );
+    assert_eq!(
+        agree("Glass Orchard Nights", "Glass Orchard Nights, Volume 2"),
+        Some(false),
+        "another of a series"
+    );
+    assert_eq!(
         agree("Lantern Weather", "Lantern Weather [Live at the Pier]"),
         Some(true),
         "its version is the caller's to weigh"

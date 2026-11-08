@@ -732,12 +732,37 @@ pub const ALIKE: i64 = 200;
 /// between [`ALIKE`] and this, they neither agree nor disagree.
 pub const APART: i64 = 500;
 
+/// How many words a title cut short keeps at least, to agree with the
+/// title it is the start of: a tag field's limit or a file name's cuts a
+/// long title, and three words are seldom the start of another song's.
+pub const CUT_WORDS: usize = 3;
+
+/// Words that, after a name's start, make it another of a series rather
+/// than the name cut short, as `Night Ferry, Volume 2` is another album
+/// than `Night Ferry`.
+const SERIES: [&str; 8] = ["volume", "vol", "part", "pt", "disc", "cd", "book", "act"];
+
 /// Whether `a` and `b` name one thing, as vetting asks it, by their
-/// cores: `Some(true)` within [`ALIKE`], `Some(false)` past [`APART`] or
-/// numbered otherwise; `None` between the two, or where no rule compares
-/// them, as kanji and kana.
+/// cores: `Some(true)` within [`ALIKE`], or when one is the other cut
+/// short after [`CUT_WORDS`] words or more, unless what the other adds
+/// numbers it or names it one of a series ([`SERIES`]); `Some(false)`
+/// past [`APART`] or numbered otherwise; `None` between the two, or where
+/// no rule compares them, as kanji and kana.
 #[must_use]
 pub fn agree(a: &Name, b: &Name) -> Option<bool> {
+    let (wa, wb) = (tokens(&a.core), tokens(&b.core));
+    let (short, long) = if wa.len() <= wb.len() {
+        (&wa, &wb)
+    } else {
+        (&wb, &wa)
+    };
+    let numbered = |w: &String| w.chars().any(char::is_numeric) || SERIES.contains(&w.as_str());
+    if short.len() >= CUT_WORDS
+        && long.starts_with(short)
+        && !long[short.len()..].iter().any(numbered)
+    {
+        return Some(true);
+    }
     let cores = compare(&Name::new(&a.core), &Name::new(&b.core))?;
     let thousandths = (cores.distance * 1000.0).round() as i64;
     if !cores.conflicts.is_empty() || thousandths > APART {

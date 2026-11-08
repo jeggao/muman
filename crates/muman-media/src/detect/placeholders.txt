@@ -1,0 +1,40 @@
+# Values sources write where they know none, by the field they stand in,
+# one a line as `FIELD<tab>value`; `*` stands for every field. A value is
+# compared whole, case aside, so `[unknown]` is no placeholder for a song
+# titled `Unknown`.
+#
+# MusicBrainz's special purpose artists, label and release, which stand
+# for no artist, no label and no album:
+# https://musicbrainz.org/doc/Style/Unknown_and_untitled/Special_purpose_artist
+# https://musicbrainz.org/doc/Style/Unknown_and_untitled/Special_purpose_label
+*	[unknown]
+ARTIST	[anonymous]
+ARTIST	[no artist]
+ARTISTS	[anonymous]
+ARTISTS	[no artist]
+ALBUMARTIST	[anonymous]
+ALBUMARTIST	[no artist]
+LABEL	[no label]
+ALBUM	[non-album tracks]
+TITLE	[untitled]
+# What taggers and players write for a field left empty.
+ARTIST	Unknown Artist
+ARTISTS	Unknown Artist
+ALBUMARTIST	Unknown Artist
+ALBUM	Unknown Album
+ARTIST	Various Artists
+ARTISTS	Various Artists
+ARTIST	佚名
+ARTISTS	佚名
+ALBUMARTIST	佚名
+ARTIST	未知
+ARTISTS	未知
+ALBUMARTIST	未知
+ARTIST	未知艺术家
+ALBUMARTIST	未知艺术家
+GENRE	Other
+GENRE	Unknown
+# A video site's categories, given where its extractor names a genre.
+GENRE	音楽・サウンド
+GENRE	エンターテイメント
+GENRE	その他

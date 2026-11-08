@@ -22,6 +22,7 @@ pub mod clean;
 pub mod codec;
 pub mod cue;
 pub mod cues;
+pub mod detect;
 pub mod facts;
 pub mod ffmpeg;
 pub mod info;
