@@ -12,6 +12,11 @@
 //!   is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
 //!   lossless, then the most bits used, then the lowest rate.
+//!   Lossless audio cut off as lossy audio is counts as lossy, padded
+//!   audio by the bits it uses, and upsampled audio by the rate it
+//!   declares, which its bytes take: ranked by the rate its sound needs,
+//!   a 96 kHz file made from a CD would beat a 48 kHz copy scored alike,
+//!   at twice its size ([`crate::quality::Flags`]).
 //! - Cover: square content, then effective resolution, then fewest
 //!   block artifacts; borders a video frame adds are cropped off.
 //! - Lyrics: by `[lyrics] prefer`, their role and whether timed, then
@@ -1271,16 +1276,24 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
             }
         }
     };
-    let why = match facts.audio.as_ref().and_then(|a| a.quality) {
-        Some(q) => format!(
+    let why = match facts
+        .audio
+        .as_ref()
+        .zip(facts.audio.as_ref().and_then(|a| a.quality))
+    {
+        Some((audio, q)) => [format!(
             "{heard}, {:.1} kHz, {}, {:.2}% clipped",
             units::khz_of_hz(q.bandwidth_hz),
             speakers(
-                facts.audio.as_ref(),
+                Some(audio),
                 q.is_stereo(input.audio.pick.stereo.incoherence)
             ),
             q.clipping * 100.0
-        ),
+        )]
+        .into_iter()
+        .chain(flagged(audio))
+        .collect::<Vec<_>>()
+        .join(", "),
         None => "not measured".to_string(),
     };
     match facts.damage() {
@@ -1313,12 +1326,42 @@ fn unheard(input: &Input<'_>) -> Vec<String> {
 }
 
 /// What breaks a tie between sources the measures score alike, most
-/// first: lossless audio, then the bits it uses. A rate past what its
-/// bandwidth needs holds nothing more, so of two the lower wins next.
+/// first: lossless audio, then the bits it uses, so a padded file counts
+/// the bits it uses rather than those it declares; lossless audio cut off
+/// as lossy audio is was made from it and counts as lossy
+/// ([`crate::quality::Flags`]). A rate past what its bandwidth needs holds
+/// nothing more, so of two the lower wins next.
 fn tie_break(audio: Option<&AudioFacts>) -> i64 {
     audio
-        .filter(|a| a.is_lossless())
+        .filter(|a| a.is_lossless() && !a.flags().band_limited)
         .map_or(0, |a| 1 + i64::from(a.quality.map_or(0, |q| q.bits)))
+}
+
+/// What lossless `audio` holds less of than it declares, in words:
+/// `96 kHz, upsampled: nothing above 22.1 kHz`, `lossless, cut off at
+/// 16.0 kHz as lossy audio is`, `24-bit, 16 used`.
+fn flagged(audio: &AudioFacts) -> Vec<String> {
+    let (flags, Some(q)) = (audio.flags(), audio.quality) else {
+        return Vec::new();
+    };
+    let khz = units::khz_of_hz(q.bandwidth_hz);
+    let rate = units::khz_of_hz(f64::from(audio.sample_rate));
+    let rate = if rate.fract() == 0.0 {
+        format!("{rate:.0}")
+    } else {
+        format!("{rate:.1}")
+    };
+    let upsampled = format!("{rate} kHz, upsampled: nothing above {khz:.1} kHz");
+    let band_limited = format!("lossless, cut off at {khz:.1} kHz as lossy audio is");
+    let padded = format!("{}-bit, {} used", audio.bits, q.bits);
+    [
+        (flags.upsampled, upsampled),
+        (flags.band_limited, band_limited),
+        (flags.padded, padded),
+    ]
+    .into_iter()
+    .filter_map(|(on, said)| on.then_some(said))
+    .collect()
 }
 
 /// The speakers audio plays on in words: its layout past two channels,

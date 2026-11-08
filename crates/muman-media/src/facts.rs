@@ -455,6 +455,16 @@ impl AudioFacts {
         crate::codec::is_lossless_name(&self.codec, self.profile.as_deref())
     }
 
+    /// What its measures show it holds less of than it declares, where it
+    /// is lossless ([`crate::quality::Flags`]).
+    #[must_use]
+    pub fn flags(&self) -> crate::quality::Flags {
+        match self.quality {
+            Some(q) if self.is_lossless() => q.flags(self.sample_rate, self.bits),
+            _ => crate::quality::Flags::default(),
+        }
+    }
+
     /// What decides which codecs can hold this audio.
     #[must_use]
     pub fn shape(&self) -> crate::codec::Shape<'_> {
