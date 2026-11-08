@@ -35,8 +35,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   as text, as `☆`, `♪` or `♥`, is part of the name. The two had
   disagreed, and `⚡` stayed on a title.
 
+- **MusicBrainz records keep the length of their recording.** The next
+  sync reads each record kept again, from the store alone, opening no
+  media file.
+
 ### Fixed
 
+- **An AcoustID lookup no longer takes a recording of another song.** A
+  recording whose title and first artist both disagree with the song's,
+  as a print submitted with another song names, is no match whatever
+  its score, and a cover act whose name holds the artist's is not the
+  artist. This holds for new lookups, and for songs already looked up
+  only once `sync --rematch` asks again.
 - **A song mixed to fit `max_size` is levelled by its mix.** A 5.1 song
   lowered into MP3 was mixed into stereo but kept the gains and peaks
   measured on its six channels, so it played about 9 dB too quiet, and

@@ -76,6 +76,24 @@
 //! finds, run together; a kana entry, written in hiragana, matches only
 //! katakana, as the loanword is written, so デモ is a demo and でも
 //! ("but") is not, nor is the ライブ inside ドライブ ("drive").
+//!
+//! Whether a source names the song's recording at all ([`agree`],
+//! [`titles_agree`], [`credits_agree`]) is read in three bands, so a near miss counts
+//! neither way: alike within [`ALIKE`], another's past [`APART`] or
+//! numbered otherwise, and unknown between them or where no rule
+//! compares the two. Only the cores are measured, and their numbers: a
+//! take, a date or a version in a decoration, as `(take 2, 1/13/1965)`
+//! against `[Live, Alternate version]`, tells two releases of one song
+//! apart more often than two songs, and MusicBrainz keeps `live` out of
+//! a title altogether, so how far a version counts is the caller's
+//! ([`versions_in`]). A spelling, as `Harbor` and `Harbour`, stands
+//! under a tenth apart; `Song One` and `Song Four`, a title and a longer
+//! one that holds it, or one cut short, stand a third to a half apart,
+//! which proves nothing either way; two titles with no word in common
+//! stand nearly a whole apart. Credits agree only on a whole name,
+//! folded, after splitting each credit where `&`, `and`, a comma or
+//! `feat.` joins two names: holding a name is not naming it, so a
+//! tribute act's `Marlo Venn Tribute Band` never credits `Marlo Venn`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
@@ -703,6 +721,198 @@ pub fn compare(a: &Name, b: &Name) -> Option<Compared> {
         distance: (by_edits.min(by_words) + cost).min(1.0),
         conflicts,
     })
+}
+
+/// The distance, in thousandths, two names are alike within, as the
+/// vetting of a source and an AcoustID match read them: a spelling, a
+/// soft version word or a decoration apart.
+pub const ALIKE: i64 = 200;
+
+/// The distance, in thousandths, past which two names are another's:
+/// between [`ALIKE`] and this, they neither agree nor disagree.
+pub const APART: i64 = 500;
+
+/// Whether `a` and `b` name one thing, as vetting asks it, by their
+/// cores: `Some(true)` within [`ALIKE`], `Some(false)` past [`APART`] or
+/// numbered otherwise; `None` between the two, or where no rule compares
+/// them, as kanji and kana.
+#[must_use]
+pub fn agree(a: &Name, b: &Name) -> Option<bool> {
+    let cores = compare(&Name::new(&a.core), &Name::new(&b.core))?;
+    let thousandths = (cores.distance * 1000.0).round() as i64;
+    if !cores.conflicts.is_empty() || thousandths > APART {
+        Some(false)
+    } else {
+        (thousandths <= ALIKE).then_some(true)
+    }
+}
+
+/// The versions [`VERSIONS`] names anywhere in `text`, its core too, as
+/// a title cut off inside its bracket holds them.
+#[must_use]
+pub fn versions_in(text: &str) -> BTreeSet<&'static str> {
+    let words = words_of(text);
+    VERSIONS
+        .iter()
+        .filter(|(_, entries)| entries.iter().any(|e| holds(&words, e)))
+        .map(|(kind, _)| *kind)
+        .collect()
+}
+
+/// What joins two names in one credit, as `Marlo Venn & Kiri Hoshino`
+/// or `Marlo Venn feat. Kiri Hoshino`.
+static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s*[&＆,、;/×]\s*|\s+(?:feat\.?|ft\.?|featuring|vs\.?|with|and|x|-)\s+")
+        .expect("a valid pattern")
+});
+
+/// The names one credit holds, folded: the whole, and each name what
+/// joins credits parts in it, each also without its apostrophes, as
+/// `Fool's Garden` is written `Fools Garden`.
+#[must_use]
+pub fn credited(credit: &str) -> BTreeSet<String> {
+    std::iter::once(credit)
+        .chain(JOINERS.split(credit))
+        .flat_map(|n| [fold(n), fold(&n.replace(['\'', '’', 'ʼ'], ""))])
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// Whether two credits, each a list of values, name someone in common:
+/// `Some(true)` where a name one holds, folded, is one the other holds,
+/// never by one name holding the other, so `Marlo Venn Tribute Band` is
+/// not `Marlo Venn`; `Some(false)` where none is and some two values
+/// compare at all; `None` where none do, as names in kanji and in Latin
+/// letters.
+#[must_use]
+pub fn credits_agree(a: &[&str], b: &[&str]) -> Option<bool> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let folded =
+        |side: &[&str]| -> BTreeSet<String> { side.iter().flat_map(|v| credited(v)).collect() };
+    if !folded(a).is_disjoint(&folded(b)) {
+        return Some(true);
+    }
+    let split = |side: &[&str]| -> Vec<Name> { side.iter().map(|v| Name::new(v)).collect() };
+    let (a, b) = (split(a), split(b));
+    a.iter()
+        .any(|x| b.iter().any(|y| compare(x, y).is_some()))
+        .then_some(false)
+}
+
+/// Whether `mine`, a source's title or album, names what one of
+/// `theirs`, each another source's values, names, read every way files
+/// write a title, as [`agree`] reads each pair: `Some(true)` where one
+/// pair agrees; `Some(false)` where every pair disagrees, so a reading
+/// that proves nothing, or one no rule compares, says nothing. `sides`
+/// reads `mine` at ` / `, ` - `, ` | ` and `: ` too, as an album's name,
+/// where a title read so could agree by a movement alone. A version
+/// `mine` names that a source never names makes the two disagree; one
+/// only the source names does not, since MusicBrainz keeps `live` out of
+/// its titles.
+#[must_use]
+pub fn titles_agree(mine: &[&str], theirs: &[Vec<&str>], sides: bool) -> Option<bool> {
+    let versions = |values: &[&str]| -> BTreeSet<&'static str> {
+        values.iter().flat_map(|v| versions_in(v)).collect()
+    };
+    let named_versions = versions(mine);
+    let mine: Vec<Name> = readings(mine, sides).iter().map(|m| Name::new(m)).collect();
+    let (mut compared, mut apart, mut versioned) = (false, true, false);
+    for source in theirs {
+        let alike = named_versions.is_subset(&versions(source));
+        for t in readings(source, true).iter().map(|t| Name::new(t)) {
+            for m in &mine {
+                compared = true;
+                match agree(m, &t) {
+                    Some(true) if alike => return Some(true),
+                    Some(true) => versioned = true,
+                    Some(false) => {}
+                    None => apart = false,
+                }
+            }
+        }
+    }
+    (versioned || compared && apart).then_some(false)
+}
+
+/// What joins a credit, a part or a context to a title in one value, as
+/// `Marlo Venn / Night Ferry` or `1st Set: Night Ferry`.
+const SIDES: [&str; 4] = [" / ", " - ", " | ", ": "];
+
+/// What opens a title's decoration to [`readings`], past those [`OPENS`]
+/// holds: a bracket a title cut off left open, or one written `<…>`.
+const READ_OPENS: [char; 8] = ['(', '[', '<', '＜', '（', '【', '〈', '「'];
+
+/// What closes one of [`READ_OPENS`].
+const READ_CLOSES: [char; 8] = [')', ']', '>', '＞', '）', '】', '〉', '」'];
+
+/// Each way `values`, one source's, may name a song: each value; all of
+/// them joined, as a work and its movement given as two; each with its
+/// brackets and [`SIDES`] read as spaces, as `Soliloquy (Night Ferry)`
+/// names `Night Ferry: Soliloquy`; what comes before its first bracket,
+/// even one cut off unclosed, or before a ` -` opening `-Kiri Version-`;
+/// a disc closing an album
+/// ([`without_disc`]); and with `sides`, each side of a [`SIDES`], as a
+/// file that names its performer before the title.
+fn readings(values: &[&str], sides: bool) -> Vec<String> {
+    let mut all: Vec<String> = values.iter().map(|v| (*v).to_string()).collect();
+    if values.len() > 1 {
+        all.push(values.join(" "));
+    }
+    for v in values {
+        if sides {
+            for side in SIDES.iter().filter(|s| v.contains(**s)) {
+                all.extend(v.split(side).map(str::to_string));
+            }
+        }
+        let flat = SIDES.iter().fold(
+            v.replace(READ_OPENS, " ").replace(READ_CLOSES, " "),
+            |f, s| f.replace(s, " "),
+        );
+        all.push(flat);
+        for at in [v.find(READ_OPENS), v.find(" -")].into_iter().flatten() {
+            all.push(v[..at].to_string());
+        }
+        all.extend(without_disc(v).map(str::to_string));
+    }
+    all.retain(|r| !r.trim().is_empty());
+    all.sort();
+    all.dedup();
+    all
+}
+
+/// The names `title` gives beside the song's, as `Marlo Venn / Night
+/// Ferry` names its performer.
+pub fn performers(title: &str) -> impl Iterator<Item = &str> {
+    SIDES[..3]
+        .iter()
+        .filter(|s| title.contains(**s))
+        .flat_map(|s| title.split(s))
+}
+
+/// `album` without a disc closing it unbracketed, as `Live CD1` or
+/// `Live - Disc 2`, which cleaning leaves.
+fn without_disc(album: &str) -> Option<&str> {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let kinds = ["cd", "disc", "disk"];
+    let (rest, last) = album.trim_end().rsplit_once(' ')?;
+    let last = last.to_ascii_lowercase();
+    let rest = if kinds
+        .iter()
+        .any(|k| last.strip_prefix(k).is_some_and(digits))
+    {
+        rest
+    } else if digits(&last) {
+        let (before, kind) = rest.trim_end().rsplit_once(' ')?;
+        if !kinds.contains(&kind.to_ascii_lowercase().as_str()) {
+            return None;
+        }
+        before
+    } else {
+        return None;
+    };
+    Some(rest.trim_end_matches([' ', '-', '–']))
 }
 
 /// A name put back together, for romanizing.

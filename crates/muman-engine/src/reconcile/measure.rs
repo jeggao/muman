@@ -20,7 +20,6 @@ use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::{self, Aligned, State, Step};
 use crate::store::{Kind, Located, Store};
-use crate::tags;
 
 use super::plan::Planned;
 use super::{CHECKPOINT, Sub};
@@ -275,7 +274,7 @@ pub(super) fn retag<R: Runner, W: Write>(
             state
                 .facts
                 .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()) && !f.tags_hold())
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.tags_hold(l.kind))
         })
         .collect();
     if due.is_empty() {
@@ -293,7 +292,8 @@ pub(super) fn retag<R: Runner, W: Write>(
                     f.editions = read.editions;
                     f.release = read.release;
                     f.chapters = read.chapters;
-                    f.tags_method = tags::METHOD.to_string();
+                    f.tags_method = facts::tags_method(located.kind);
+                    f.length_ms = read.length_ms;
                     f.lyrics.retain(|l| l.at != facts::LyricsAt::Tag);
                     f.lyrics.extend(read.lyrics);
                 }

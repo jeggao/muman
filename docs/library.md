@@ -249,7 +249,9 @@ its recording. muman sends AcoustID the fingerprint of the audio's
 first two minutes and its length. AcoustID answers with the MusicBrainz
 recordings submitted with prints like it. A result counts when its
 score is at least 0.5 and the recording's length is within 10 s of the
-song's, or it states none and two prints name it. Of those, one named
+song's, or it states none and two prints name it, unless its title and
+first artist both disagree with the song's: a tribute act whose name
+holds the artist's is not the artist. Of those, one named
 as the song is wins, then one within 3 s, then further, then stating
 none, then the one with the most prints submitted, then one on a
 release that is no compilation, live album or soundtrack. It is
