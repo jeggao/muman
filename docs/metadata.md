@@ -206,6 +206,31 @@ a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
 out.
 
+## Overrides by torrent or channel
+
+One rip tags every file the same wrong way, and one channel titles
+every upload one way. A `[[tags.from]]` in the song list says what the
+sources of one torrent, by its info hash, or of one channel, by the
+name its uploads credit where they name no artist of their own, are
+not believed for, before any rule cleans them:
+
+```toml
+[[tags.from]]
+torrent = "0123456789abcdef0123456789abcdef01234567"
+drop = ["work", "label"]
+credits = false
+
+[[tags.from]]
+channel = "Orchard Archive"
+title = "%artist% - %title% (%dummy%)"
+```
+
+`drop` leaves out the fields named; `credits = false` leaves out the
+artist, artists and album artist; `title` reads each title by a
+pattern of `%title%`, `%artist%`, `%album%`, `%track%` and `%dummy%`,
+a stretch read as nothing, each part taken as a field of the source's
+own. A title the pattern does not fit is left as it is.
+
 ## Cleaning
 
 muman cleans every tag a source offers before ranking it, so `Paper

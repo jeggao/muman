@@ -1490,10 +1490,12 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
         bail!("{left}");
     }
     only.retain(|table, _| TABLES.contains(&table));
-    // Their cleaning switches are the song list's own, read apart.
+    // Their cleaning switches and the tags' overrides are the song
+    // list's own, read apart.
     for aspect in ["tags", "lyrics"] {
         if let Some(table) = only.get_mut(aspect).and_then(Item::as_table_like_mut) {
             table.remove("clean");
+            table.remove("from");
         }
     }
     for o in overrides {

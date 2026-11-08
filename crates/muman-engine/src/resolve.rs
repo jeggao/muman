@@ -160,6 +160,7 @@
 //! alone, so a mode that changes only Opus files writes only those again.
 
 use crate::units;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -2128,8 +2129,8 @@ struct Candidate<'a> {
     key: &'a SourceKey,
     offer: Offer,
     cleaned: Vec<&'static str>,
-    /// As the source offered it.
-    raw: &'a Offer,
+    /// As the source offered it, or as a `[[tags.from]]` read it.
+    raw: Cow<'a, Offer>,
     /// How far `[tags] believe` believes its kind of source, least first.
     rank: u8,
     /// Whether offers that mean one value group, as every `believe` but
@@ -2252,31 +2253,33 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             .filter(|(k, _)| k == key && moved.is_none())
             .and_then(|(_, at)| facts.editions.get(*at));
         let another = moved.is_some_and(|o| o.contains_key(&Field::MusicBrainzTrackId));
-        let own = facts.tags.iter().filter(|(field, _)| {
-            let release = (edition.is_some() || moved.is_some()) && field.scope() == Scope::Release;
-            let recording = another
-                && matches!(
-                    field,
-                    Field::MusicBrainzTrackId | Field::Isrc | Field::MusicBrainzWorkId
-                );
-            !release && !recording
-        });
-        let given = edition
+        let own = offers_of(input, key, facts)
             .into_iter()
-            .flatten()
-            .chain(moved.into_iter().flatten());
+            .filter(|(field, _)| {
+                let release =
+                    (edition.is_some() || moved.is_some()) && field.scope() == Scope::Release;
+                let recording = another
+                    && matches!(
+                        field,
+                        Field::MusicBrainzTrackId | Field::Isrc | Field::MusicBrainzWorkId
+                    );
+                !release && !recording
+            });
+        let given = (edition.into_iter().flatten())
+            .chain(moved.into_iter().flatten())
+            .map(|(field, offer)| (*field, Cow::Borrowed(offer)));
         for (field, raw) in own.chain(given) {
-            if *field == Field::Comment && !input.source_comments {
+            if field == Field::Comment && !input.source_comments {
                 continue;
             }
-            let c = clean::clean(*field, raw, &ctx, input.clean);
+            let c = clean::clean(field, &raw, &ctx, input.clean);
             let values: Vec<String> = (c.values.into_iter())
-                .filter(|v| says_nothing(input, key, *field, v).is_none())
+                .filter(|v| says_nothing(input, key, field, v).is_none())
                 .collect();
             if values.is_empty() {
                 continue;
             }
-            all.entry(*field).or_default().push(Candidate {
+            all.entry(field).or_default().push(Candidate {
                 n,
                 key,
                 offer: Offer {
@@ -2291,6 +2294,40 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         }
     }
     all
+}
+
+/// What `key`, a source with `facts`, offers, as the `[[tags.from]]`
+/// naming it leave it ([`clean::Settings::from`]): its title read by a
+/// pattern, then fields dropped and credits left out.
+fn offers_of<'f>(
+    input: &Input<'_>,
+    key: &SourceKey,
+    facts: &'f Facts,
+) -> Vec<(Field, Cow<'f, Offer>)> {
+    let mut offers: BTreeMap<Field, Cow<'f, Offer>> = (facts.tags.iter())
+        .map(|(f, o)| (*f, Cow::Borrowed(o)))
+        .collect();
+    for o in input
+        .clean
+        .from
+        .iter()
+        .filter(|o| o.names(key, &facts.tags))
+    {
+        let title = offers
+            .get(&Field::Title)
+            .and_then(|t| t.values.first().cloned());
+        let read = (o.title.as_ref()).and_then(|p| p.read(title.as_deref()?));
+        for (field, value) in read.into_iter().flatten() {
+            let offer = Offer {
+                values: vec![value],
+                structured: true,
+            };
+            offers.insert(field, Cow::Owned(offer));
+        }
+        let credit = |f: Field| matches!(f, Field::Artist | Field::Artists | Field::AlbumArtist);
+        offers.retain(|f, _| !o.drop.contains(f) && (o.credits || !credit(*f)));
+    }
+    offers.into_iter().collect()
 }
 
 /// The best offer for one field among the song's sources `from` takes,

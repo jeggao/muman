@@ -124,7 +124,8 @@ const HEADER: &str = "\
 #   Cleaning: [tags.clean.*] turns each rule cleaning what the sources
 #             offer on or off, [lyrics.clean.*] each cleaning the lyrics;
 #             `muman status` names the rules that changed a tag. Tags set
-#             by hand are never cleaned.
+#             by hand are never cleaned. [[tags.from]] says what one
+#             torrent's or channel's sources are not believed for.
 #   Held:     held.\"<source>\" records the audio, cover, lyrics and tags
 #             each source held when the song was built. A fetched source
 #             that holds otherwise after a fetch again leaves the song as
@@ -1928,7 +1929,74 @@ fn clean_of(doc: &DocumentMut) -> Result<Settings> {
             }
         }
     }
+    settings.from = overrides_of(doc)?;
     Ok(settings)
+}
+
+/// Each `[[tags.from]]`: what the song list says of one torrent's or
+/// channel's sources ([`crate::overrides`]).
+fn overrides_of(doc: &DocumentMut) -> Result<Vec<crate::overrides::Override>> {
+    let Some(item) = doc.get("tags").and_then(|t| t.get("from")) else {
+        return Ok(Vec::new());
+    };
+    let tables = item
+        .as_array_of_tables()
+        .context("`tags.from` must be tables, each `[[tags.from]]`")?;
+    tables.iter().map(override_of).collect()
+}
+
+fn override_of(table: &Table) -> Result<crate::overrides::Override> {
+    let text = |key: &str| -> Result<Option<String>> {
+        table
+            .get(key)
+            .map(|i| {
+                i.as_str()
+                    .map(str::to_string)
+                    .with_context(|| format!("`[[tags.from]] {key}` must be text"))
+            })
+            .transpose()
+    };
+    for (key, _) in table {
+        if !["torrent", "channel", "drop", "credits", "title"].contains(&key) {
+            bail!("`[[tags.from]]` takes no key `{key}`");
+        }
+    }
+    let drop = match table.get("drop") {
+        None => Vec::new(),
+        Some(item) => item
+            .as_array()
+            .context("`[[tags.from]] drop` must be a list of tag names")?
+            .iter()
+            .map(|v| {
+                let name = v.as_str().unwrap_or_default();
+                crate::tags::Field::named(name)
+                    .with_context(|| format!("`[[tags.from]] drop`: no tag is named `{name}`"))
+            })
+            .collect::<Result<_>>()?,
+    };
+    let credits = match table.get("credits") {
+        None => true,
+        Some(item) => item
+            .as_bool()
+            .context("`[[tags.from]] credits` must be true or false")?,
+    };
+    let title = text("title")?
+        .map(|t| {
+            crate::overrides::Pattern::parse(&t)
+                .map_err(|e| anyhow::anyhow!("`[[tags.from]] title` {e}"))
+        })
+        .transpose()?;
+    let (torrent, channel) = (text("torrent")?, text("channel")?);
+    if torrent.is_none() && channel.is_none() {
+        bail!("a `[[tags.from]]` names no `torrent` or `channel`");
+    }
+    Ok(crate::overrides::Override {
+        torrent,
+        channel,
+        drop,
+        credits,
+        title,
+    })
 }
 
 /// The switches `table` holds, of the rules of `tier`.

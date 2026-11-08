@@ -235,6 +235,9 @@ pub struct Settings {
     /// Keys under `[tags.clean]` and `[lyrics.clean]` naming no rule, as
     /// written.
     pub unknown: Vec<String>,
+    /// What `[[tags.from]]` says of each torrent's or channel's sources,
+    /// before any rule cleans them.
+    pub from: Vec<crate::overrides::Override>,
 }
 
 impl Settings {
@@ -265,6 +268,7 @@ impl Settings {
         Self {
             off: switch_names().chain(lyrics::switch_names()).collect(),
             unknown: Vec::new(),
+            from: Vec::new(),
         }
     }
 }

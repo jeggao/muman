@@ -3859,3 +3859,41 @@ fn a_reissue_is_dated_as_its_album_first_came_out_when_asked() {
     assert_eq!(get(&r, "DATE").as_deref(), Some("1973-05-01"));
     assert_eq!(why(&r, "DATE").from, s.sources[1].to_string());
 }
+
+#[test]
+fn a_torrent_s_override_drops_its_fields_and_reads_its_titles() {
+    let key = SourceKey::parse(&format!("torrent:{}/01.flac", "a".repeat(40))).unwrap();
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Marlo Venn - Night Ferry"], true);
+    tag(&mut f, Field::Artist, &["Glass Rips"], true);
+    tag(&mut f, Field::Work, &["Glass Rips Collection"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let s = song(std::slice::from_ref(&key));
+    let mut clean = Settings::default();
+    clean.from = vec![muman_media::overrides::Override {
+        torrent: Some("a".repeat(40)),
+        channel: None,
+        drop: vec![Field::Work],
+        credits: false,
+        title: Some(muman_media::overrides::Pattern::parse("%artist% - %title%").unwrap()),
+    }];
+    let r = resolve(&Input {
+        clean: &clean,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "TITLE").as_deref(), Some("Night Ferry"));
+    assert_eq!(get(&r, "ARTIST"), None, "credits = false");
+    assert_eq!(get(&r, "WORK"), None);
+    clean.from[0].credits = true;
+    let r = resolve(&Input {
+        clean: &clean,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Marlo Venn"),
+        "read off its title"
+    );
+}
