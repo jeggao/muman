@@ -129,6 +129,10 @@ pub struct Facts {
     /// none for any other source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_ms: Option<u64>,
+    /// The artists a MusicBrainz record credits, by their own names and
+    /// aliases; none for any other source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<crate::record::CreditedArtist>,
     /// A YouTube Music release, by its info: a track name, or a " - Topic"
     /// channel; read with the tags.
     #[serde(default)]
@@ -162,8 +166,9 @@ pub struct Facts {
 /// again, decoding nothing, as [`hash`] does.
 pub const HASH_METHOD: &str = "hash/2";
 
-/// What a MusicBrainz record's facts keep beside its tags: its length.
-pub const RECORD_METHOD: &str = "record/1";
+/// What a MusicBrainz record's facts keep beside its tags: its length
+/// and the artists it credits.
+pub const RECORD_METHOD: &str = "record/2";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
 /// it sings are Latin alone.
@@ -409,6 +414,7 @@ impl Facts {
             editions: Vec::new(),
             tags_method: tags::METHOD.to_string(),
             length_ms: None,
+            artists: Vec::new(),
             release: false,
             chapters: Vec::new(),
             print: None,
@@ -678,6 +684,7 @@ pub fn gather<R: Runner>(
             facts.tags_digest = digest_file(&located.path);
             facts.tags_method = tags_method(Kind::Tags);
             facts.length_ms = record.length_ms;
+            facts.artists = record.credited_artists;
         }
         Kind::Media => media(runner, located, scratch, wanted, &mut facts)?,
     }
@@ -693,6 +700,8 @@ pub struct Reread {
     pub chapters: Vec<Chapter>,
     /// The length a record says its recording plays, in ms.
     pub length_ms: Option<u64>,
+    /// The artists a record credits.
+    pub artists: Vec<crate::record::CreditedArtist>,
     /// The lyrics its tags hold, or a lyrics file's own.
     pub lyrics: Option<LyricsFacts>,
 }
@@ -709,6 +718,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
                 tags: tags::from_record(&record),
                 editions: tags::editions(&record),
                 length_ms: record.length_ms,
+                artists: record.credited_artists,
                 ..Reread::default()
             });
         }

@@ -294,6 +294,7 @@ pub(super) fn retag<R: Runner, W: Write>(
                     f.chapters = read.chapters;
                     f.tags_method = facts::tags_method(located.kind);
                     f.length_ms = read.length_ms;
+                    f.artists = read.artists;
                     let read_at = read.lyrics.as_ref().map(|l| l.at.clone());
                     f.lyrics.retain(|l| {
                         l.at != facts::LyricsAt::Tag && Some(&l.at) != read_at.as_ref()

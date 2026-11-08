@@ -71,6 +71,25 @@ naming it, whatever their order. A title or artist still won by the
 order of `sources` alone is contested: `muman status` and `muman check`
 name it, so you can set it by hand.
 
+## One name for each artist
+
+Sources spell one artist their own ways: a record as its release
+credits it, a file as its tagger wrote it, an upload by its channel's
+name. Once every song is resolved, the names crediting one artist alone
+are grouped across the library by MusicBrainz's artist ID, and by the
+name folded, as `The Marlo Venn` folds as `MARLO VENN` does, never by
+names merely alike; a name two artists share joins neither. Each group
+holding an ID is written one way, as `[tags] script` says: `original`,
+the artist's own name in its own script; `latin`, a name of theirs in
+Latin letters where MusicBrainz knows one. With neither known, the
+spelling most of the group's records credit in that script is written,
+one in another script only where none spells it so, and a song already
+spelled as another as common keeps it. A group with no
+ID, a credit naming several artists and a tag you set stay as they are.
+`muman status` names the spelling's source, as `ARTIST マルロ・ヴェン
+(musicbrainz artist …'s own name)`. Records keep artists' own names and
+aliases once fetched again, with `muman sync --rematch`.
+
 ## Sources set aside
 
 A MusicBrainz record comes to a song by a lookup, and a fingerprint

@@ -392,10 +392,19 @@ fn agree_on_albums(
         .map(|(n, _)| *n)
         .collect();
     again(planned, &picks, &moved);
+    let spelled = crate::names::spell(planned, &state.facts, resolver.settings.tags.script);
+    let respelled: BTreeSet<usize> = spelled.keys().copied().collect();
+    for (n, values) in spelled {
+        picks.entry(n).or_default().agreed = values;
+    }
+    again(planned, &picks, &respelled);
     let agreed = crate::album::agree(planned);
     let settled: BTreeSet<usize> = agreed.keys().copied().collect();
     for (n, values) in agreed {
-        picks.entry(n).or_default().agreed = values;
+        let pick = picks.entry(n).or_default();
+        pick.agreed
+            .retain(|a| !values.iter().any(|v| v.field == a.field));
+        pick.agreed.extend(values);
     }
     again(planned, &picks, &settled);
     let consistent = crate::album::consistent(planned, &manifest.songs, &state.facts);
