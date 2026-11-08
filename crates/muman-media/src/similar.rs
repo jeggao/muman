@@ -82,7 +82,7 @@
 //! neither way: alike within [`ALIKE`], another's past [`APART`] or
 //! numbered otherwise, and unknown between them or where no rule
 //! compares the two. Only the cores are measured, and their numbers: a
-//! take, a date or a version in a decoration, as `(take 2, 1/13/1965)`
+//! take, a date or a version in a decoration, as `(take 2, 3/14/1999)`
 //! against `[Live, Alternate version]`, tells two releases of one song
 //! apart more often than two songs, and MusicBrainz keeps `live` out of
 //! a title altogether, so how far a version counts is the caller's
@@ -538,26 +538,33 @@ impl Name {
         (hard, soft)
     }
 
-    /// The numbers it names, but for those in a decoration that names a
-    /// version, as a remaster's year.
+    /// The numbers it names, in digits or as [`roman`] numerals, but for
+    /// those in a decoration that names a version, as a remaster's year.
     fn numbers(&self) -> BTreeSet<String> {
-        let numbered = |s: &str| -> Vec<String> {
-            s.split(|c: char| !c.is_ascii_digit())
-                .filter(|n| !n.is_empty())
-                .map(|n| n.trim_start_matches('0').to_string())
-                .collect()
-        };
-        let mut out: BTreeSet<String> = numbered(&self.core).into_iter().collect();
+        let mut out: BTreeSet<String> = numbered(&self.core, &tokens(&self.core))
+            .into_iter()
+            .collect();
         for (d, words) in self.decorations.iter().zip(&self.decoration_words) {
             let versioned = VERSIONS
                 .iter()
                 .flat_map(|(_, e)| e.iter())
                 .chain(&SOFT_VERSIONS);
             if !versioned.into_iter().any(|e| holds(words, e)) {
-                out.extend(numbered(d));
+                out.extend(numbered(d, words));
             }
         }
         out
+    }
+
+    /// The numbers its decorations give it as one of a series, as `(Part
+    /// 2)` or `[Pt. II]`.
+    fn series(&self) -> BTreeSet<String> {
+        self.decorations
+            .iter()
+            .zip(&self.decoration_words)
+            .filter(|(_, words)| words.iter().any(|w| SERIES.contains(&w.as_str())))
+            .flat_map(|(d, words)| numbered(d, words))
+            .collect()
     }
 }
 
@@ -742,22 +749,58 @@ pub const CUT_WORDS: usize = 3;
 /// than `Night Ferry`.
 const SERIES: [&str; 8] = ["volume", "vol", "part", "pt", "disc", "cd", "book", "act"];
 
+/// The Roman numerals a title numbers a part with, `I` to `XX`.
+const ROMAN: [&str; 20] = [
+    "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii", "xiii", "xiv", "xv",
+    "xvi", "xvii", "xviii", "xix", "xx",
+];
+
+/// The numbers `text`, whose words are `words`, names: each run of
+/// digits, and each [`ROMAN`] numeral but `I` and `V`, which count only
+/// after a word naming one of a series, as `Part I`, since alone they are
+/// a word or a letter.
+fn numbered(text: &str, words: &[String]) -> Vec<String> {
+    let digits = text
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|n| !n.is_empty())
+        .map(|n| n.trim_start_matches('0').to_string());
+    let roman = words.iter().enumerate().filter_map(|(at, w)| {
+        let n = ROMAN.iter().position(|r| r == w)? + 1;
+        let after_series = at
+            .checked_sub(1)
+            .is_some_and(|p| SERIES.contains(&words[p].as_str()));
+        (!matches!(n, 1 | 5) || after_series).then(|| n.to_string())
+    });
+    digits.chain(roman).collect()
+}
+
 /// Whether `a` and `b` name one thing, as vetting asks it, by their
 /// cores: `Some(true)` within [`ALIKE`], or when one is the other cut
-/// short after [`CUT_WORDS`] words or more, unless what the other adds
-/// numbers it or names it one of a series ([`SERIES`]); `Some(false)`
-/// past [`APART`] or numbered otherwise; `None` between the two, or where
-/// no rule compares them, as kanji and kana.
+/// short after [`CUT_WORDS`] words or more apart by spaces, unless what
+/// the other adds numbers it or names it one of a series ([`SERIES`]);
+/// `Some(false)` past [`APART`], numbered otherwise, or numbered as
+/// another part of a series in a decoration, as `(Part 1)` against
+/// `(Part 2)`; `None` between the two, or where no rule compares them,
+/// as kanji and kana.
 #[must_use]
 pub fn agree(a: &Name, b: &Name) -> Option<bool> {
+    let (sa, sb) = (a.series(), b.series());
+    if !sa.is_empty() && !sb.is_empty() && sa != sb {
+        return Some(false);
+    }
     let (wa, wb) = (tokens(&a.core), tokens(&b.core));
-    let (short, long) = if wa.len() <= wb.len() {
-        (&wa, &wb)
+    let (short, long, spaced) = if wa.len() <= wb.len() {
+        (&wa, &wb, &a.core)
     } else {
-        (&wb, &wa)
+        (&wb, &wa, &b.core)
     };
-    let numbered = |w: &String| w.chars().any(char::is_numeric) || SERIES.contains(&w.as_str());
+    let numbered = |w: &String| {
+        w.chars().any(char::is_numeric)
+            || SERIES.contains(&w.as_str())
+            || ROMAN.contains(&w.as_str())
+    };
     if short.len() >= CUT_WORDS
+        && spaced.split_whitespace().count() >= CUT_WORDS
         && long.starts_with(short)
         && !long[short.len()..].iter().any(numbered)
     {
@@ -793,12 +836,16 @@ static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
 
 /// The names one credit holds, folded: the whole, and each name what
 /// joins credits parts in it, each also without its apostrophes, as
-/// `Fool's Garden` is written `Fools Garden`.
+/// `Marlo's Lanterns` is written `Marlos Lanterns`, and without its
+/// spaces, as `星野 キリ` is written `星野キリ`.
 #[must_use]
 pub fn credited(credit: &str) -> BTreeSet<String> {
     std::iter::once(credit)
         .chain(JOINERS.split(credit))
-        .flat_map(|n| [fold(n), fold(&n.replace(['\'', '’', 'ʼ'], ""))])
+        .flat_map(|n| {
+            let bare = fold(&n.replace(['\'', '’', 'ʼ'], ""));
+            [fold(n), bare.replace(' ', ""), bare]
+        })
         .filter(|n| !n.is_empty())
         .collect()
 }
