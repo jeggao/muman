@@ -9,6 +9,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[release] prefer` puts the songs of one album on one release.**
+  Songs that came in one folder under one album name, or in one
+  `[[album]]`, are put on the release three in five of them or more are
+  on, of every release AcoustID found their recordings on, each on the
+  track it is there, rather than one on the album and another on a
+  compilation; `original` puts each song on the first album its
+  recording came out on, and `avoid` names kinds of release, as
+  `compilation`, taken only where nothing else would be. `muman status`
+  names the release a song was moved to. Songs looked up before keep
+  their release until `muman sync --rematch`.
+
 - **`[tags] believe` says which kind of source a song believes first.**
   `musicbrainz-first`, the default, spells a value its sources agree on
   as a MusicBrainz record does, so a file's typo gives way, and credits

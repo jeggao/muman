@@ -39,6 +39,7 @@ pub mod lookup;
 pub mod outputs;
 pub mod query;
 pub mod reconcile;
+pub mod release;
 pub mod render;
 pub mod resolve;
 pub mod rows;

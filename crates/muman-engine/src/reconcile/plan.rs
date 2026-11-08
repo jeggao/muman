@@ -351,17 +351,22 @@ fn agree_on_albums(
     state: &State,
     on_disk: Option<&BTreeSet<SourceKey>>,
 ) {
-    let mut picks: BTreeMap<usize, crate::album::Pick> =
-        crate::album::editions(planned, &manifest.songs, &state.facts)
-            .into_iter()
-            .map(|(n, edition)| {
-                let pick = crate::album::Pick {
-                    edition: Some(edition),
-                    ..crate::album::Pick::default()
-                };
-                (n, pick)
-            })
-            .collect();
+    let mut picks: BTreeMap<usize, crate::album::Pick> = crate::release::choose(
+        planned,
+        &manifest.songs,
+        &state.facts,
+        &|song, record| state.candidates(&song.sources, record),
+        &resolver.settings.release,
+    )
+    .into_iter()
+    .map(|(n, release)| {
+        let pick = crate::album::Pick {
+            release: Some(release),
+            ..crate::album::Pick::default()
+        };
+        (n, pick)
+    })
+    .collect();
     let again = |planned: &mut Planned,
                  picks: &BTreeMap<usize, crate::album::Pick>,
                  of: &BTreeSet<usize>| {
@@ -375,7 +380,16 @@ fn agree_on_albums(
             }
         }
     };
-    let moved: BTreeSet<usize> = picks.keys().copied().collect();
+    let released: BTreeSet<usize> = picks.keys().copied().collect();
+    again(planned, &picks, &released);
+    for (n, edition) in crate::album::editions(planned, &manifest.songs, &state.facts) {
+        picks.entry(n).or_default().edition = Some(edition);
+    }
+    let moved: BTreeSet<usize> = picks
+        .iter()
+        .filter(|(_, p)| p.edition.is_some())
+        .map(|(n, _)| *n)
+        .collect();
     again(planned, &picks, &moved);
     let agreed = crate::album::agree(planned);
     let settled: BTreeSet<usize> = agreed.keys().copied().collect();

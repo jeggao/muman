@@ -89,6 +89,9 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
     if let (Some(l), Some(why)) = (&r.plan.lyrics, &r.why.lyrics) {
         line(out, format!("  lyrics  {}: {why}", l.key))?;
     }
+    if let Some(why) = &r.why.release {
+        line(out, format!("  release  {why}"))?;
+    }
     for why in &r.why.set_aside {
         line(out, format!("  set aside  {why}"))?;
     }

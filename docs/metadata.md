@@ -115,6 +115,36 @@ no match.
 musicbrainz:…: titled "Night Ferry" by Kiri Hoshino: no title or credit
 in common`. `[tags.clean.structure] vetting = false` turns this off.
 
+## Which release
+
+A MusicBrainz record holds one release of its recording, the one
+MusicBrainz ranks first, so songs that came together land on the
+album, a compilation and a box set side by side. An AcoustID lookup
+keeps every recording a song's print names with the releases each is
+on, and `[release] prefer` chooses among them:
+
+- `album` puts the songs of one album, those that came in one folder
+  under one album name or in one `[[album]]`, on the one release that
+  holds most of them, three in five at least: of those, the one holding
+  the most, then whose title is the album's, whose track numbers are the
+  files' own, that lacks the fewest tracks, an album before an EP, a
+  single or a compilation, then the earliest. Each song takes the track
+  it is on there, two songs never one track.
+- `original` puts each song on the first album its recording came out
+  on.
+
+A release of a kind `[release] avoid` names, as `"compilation"`, is
+chosen only where no other would be. A song moved takes the album,
+date, country, types, track and disc numbers and IDs its place on the
+release has, and the label, catalog number and barcode the album's
+other songs on it have; its record's own release fields are left out.
+A song whose album you set is left where it is. Songs looked up before
+this muman kept no such recordings until `muman sync --rematch` asks
+again. `muman status` names the release a song was moved to and why,
+as `release  musicbrainz:…: on "Rooms of Salt", the release 11 of its
+album's 12 songs are on`. [new.toml](../crates/muman-core/src/new.toml)
+holds the defaults.
+
 ## Values that say nothing
 
 Some values a source's tags carry name nothing about the song, and

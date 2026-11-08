@@ -57,6 +57,17 @@ typography = "typographic"
 # each song's `sources`.
 believe = "musicbrainz-first"
 
+[release]
+# Which release a song is on, of those its recording is on: "album"
+# keeps songs that came together, in one folder under one album name or
+# in one [[album]], on the release most of them are on; "original" puts
+# each song on the first album its recording came out on.
+prefer = "album"
+# The kinds of release a song is put on only when no other holds it, as
+# MusicBrainz names a release group's types: "compilation", "live",
+# "soundtrack", "remix", "dj-mix", "demo".
+avoid = []
+
 [lyrics]
 # The languages you read, best first, as language tags: "en", "pt-BR",
 # "zh-Hant". A translation is taken only into one of these.

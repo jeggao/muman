@@ -865,6 +865,9 @@ pub struct Why {
     /// audio's, or at another speed than the rest of its own
     /// ([`vet::recordings`]), as `<key>: <which>`.
     pub recordings: Vec<String>,
+    /// The release it was moved to and why ([`crate::release`]), as
+    /// `<key>: <why>`.
+    pub release: Option<String>,
 }
 
 /// Where a written tag's value came from.
@@ -1155,6 +1158,8 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             recordings,
             dropped: dropped(input),
             contested,
+            release: (input.pick.and_then(|p| p.release.as_ref()))
+                .map(|r| format!("{}: {}", r.key, r.why)),
         },
     })
 }
@@ -2214,16 +2219,31 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             offers: &facts.tags,
             typography: input.typography,
         };
+        let moved = input
+            .pick
+            .and_then(|p| p.release.as_ref())
+            .filter(|r| &r.key == key)
+            .map(|r| &r.offers);
         let edition = input
             .pick
             .and_then(|p| p.edition.as_ref())
-            .filter(|(k, _)| k == key)
+            .filter(|(k, _)| k == key && moved.is_none())
             .and_then(|(_, at)| facts.editions.get(*at));
-        let own = facts
-            .tags
-            .iter()
-            .filter(|(field, _)| edition.is_none() || field.scope() != Scope::Release);
-        for (field, raw) in own.chain(edition.into_iter().flatten()) {
+        let another = moved.is_some_and(|o| o.contains_key(&Field::MusicBrainzTrackId));
+        let own = facts.tags.iter().filter(|(field, _)| {
+            let release = (edition.is_some() || moved.is_some()) && field.scope() == Scope::Release;
+            let recording = another
+                && matches!(
+                    field,
+                    Field::MusicBrainzTrackId | Field::Isrc | Field::MusicBrainzWorkId
+                );
+            !release && !recording
+        });
+        let given = edition
+            .into_iter()
+            .flatten()
+            .chain(moved.into_iter().flatten());
+        for (field, raw) in own.chain(given) {
             if *field == Field::Comment && !input.source_comments {
                 continue;
             }
@@ -2285,13 +2305,17 @@ fn best_album<'c, 'a>(
 }
 
 /// The album of the source the release fields come whole from: the one
-/// giving the edition its album's songs share, else the best album.
+/// giving the release or the edition its album's songs share, else the
+/// best album.
 fn release_of<'c, 'a>(
     input: &Input<'_>,
     candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
 ) -> Option<&'c Candidate<'a>> {
-    match input.pick.and_then(|p| p.edition.as_ref()) {
-        Some((key, _)) => candidates
+    let picked = input
+        .pick
+        .and_then(|p| (p.release.as_ref().map(|r| &r.key)).or(p.edition.as_ref().map(|(k, _)| k)));
+    match picked {
+        Some(key) => candidates
             .get(&Field::Album)
             .and_then(|all| all.iter().find(|c| c.key == key)),
         None => best_album(candidates),
