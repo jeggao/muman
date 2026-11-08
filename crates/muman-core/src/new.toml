@@ -63,6 +63,10 @@ believe = "musicbrainz-first"
 # in one [[album]], on the release most of them are on; "original" puts
 # each song on the first album its recording came out on.
 prefer = "album"
+# The date a song on a release is written with, and so the `year` its
+# path takes: "release", the release's own, as a reissue's; "original",
+# the first release of its album, one for every edition of it.
+date = "release"
 # The kinds of release a song is put on only when no other holds it, as
 # MusicBrainz names a release group's types: "compilation", "live",
 # "soundtrack", "remix", "dj-mix", "demo".

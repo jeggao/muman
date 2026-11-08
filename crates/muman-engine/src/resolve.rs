@@ -1006,6 +1006,8 @@ pub struct Input<'a> {
     pub typography: clean::Typography,
     /// Which kind of source is believed first.
     pub believe: clean::Believe,
+    /// The `[release]` table: which date a song on a release takes.
+    pub release: &'a crate::settings::Release,
     /// What the other songs' sources show: their albums and watermarks.
     pub known: &'a Known,
     pub naming: &'a Naming,
@@ -2747,18 +2749,13 @@ fn resolve_tags(
     if let Some(c) = best_offer(candidates, Field::Language, &sung_so) {
         fields.insert(Field::Language, Slot::of(c));
     }
-    let heard = |k: &SourceKey| !mixed && k == audio;
-    let album_heard = |k: &SourceKey| heard(k) && release.is_some_and(|r| r.key == audio);
-    for (scope, from) in [
-        (Scope::Loudness, &heard as &dyn Fn(&SourceKey) -> bool),
-        (Scope::AlbumLoudness, &album_heard),
-    ] {
-        for field in Field::of(scope) {
-            if let Some(c) = best_offer(candidates, field, from) {
-                fields.insert(field, Slot::of(c));
-            }
-        }
-    }
+    let album_heard = release.is_some_and(|r| r.key == audio);
+    loudness_fields(
+        candidates,
+        (!mixed).then_some(audio),
+        album_heard,
+        &mut fields,
+    );
     if !fields.contains_key(&Field::Date)
         && let Some(c) = date_of(input, candidates, fields.get(&Field::Artist))
     {
@@ -2767,6 +2764,11 @@ fn resolve_tags(
     let mut artists = joined_artists(&mut fields);
     for agreed in input.pick.iter().flat_map(|p| &p.agreed) {
         fields.insert(agreed.field, Slot::agreed(agreed));
+    }
+    if input.release.date == crate::settings::ReleaseDate::Original
+        && let Some(first) = fields.get(&Field::OriginalDate).cloned()
+    {
+        fields.insert(Field::Date, first);
     }
 
     let mut written: Vec<(String, Slot)> = Field::ALL
@@ -2795,6 +2797,29 @@ fn resolve_tags(
         why,
         artists,
     )
+}
+
+/// The loudness fields of `heard`, the source the song's audio is when
+/// it is not mixed, and its album's where its release fields come from
+/// it too, `album_heard`.
+fn loudness_fields(
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    heard: Option<&SourceKey>,
+    album_heard: bool,
+    fields: &mut BTreeMap<Field, Slot>,
+) {
+    let from = |k: &SourceKey| heard == Some(k);
+    let album = |k: &SourceKey| album_heard && from(k);
+    for (scope, from) in [
+        (Scope::Loudness, &from as &dyn Fn(&SourceKey) -> bool),
+        (Scope::AlbumLoudness, &album),
+    ] {
+        for field in Field::of(scope) {
+            if let Some(c) = best_offer(candidates, field, from) {
+                fields.insert(field, Slot::of(c));
+            }
+        }
+    }
 }
 
 /// The artists one by one, the artist joined as it is written: an

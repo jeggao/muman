@@ -9,6 +9,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[release] date = "original"` dates a song as its album first came
+  out**, by MusicBrainz's `ORIGINALDATE`, rather than as the reissue it
+  is on did, so a path's `year` is one for every edition of an album.
+
 - **`[audio.pick.dynamics]` prefers the master whose peaks stand
   highest over its loudness**, from the loudness muman already
   measures, so a master squeezed louder ranks after an older one of the

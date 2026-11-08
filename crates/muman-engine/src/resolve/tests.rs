@@ -10,6 +10,8 @@ static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 static COVER: std::sync::LazyLock<Cover> = std::sync::LazyLock::new(Cover::default);
 static KNOWN: std::sync::LazyLock<Known> = std::sync::LazyLock::new(Known::default);
+static RELEASE: std::sync::LazyLock<crate::settings::Release> =
+    std::sync::LazyLock::new(crate::settings::Release::default);
 static CLEAN: std::sync::LazyLock<Settings> = std::sync::LazyLock::new(Settings::default);
 static ENGLISH: std::sync::LazyLock<crate::settings::Lyrics> = std::sync::LazyLock::new(english);
 
@@ -26,6 +28,7 @@ fn defaults<'a>(song: &'a Song, facts: &'a BTreeMap<SourceKey, Facts>) -> Input<
         clean: &CLEAN,
         typography: clean::Typography::default(),
         believe: clean::Believe::default(),
+        release: &RELEASE,
         known: &KNOWN,
         naming: &NAMING,
         audio: &AUDIO,
@@ -237,6 +240,7 @@ fn run_reading(
         clean: &Settings::default(),
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio,
@@ -338,6 +342,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         clean: &off,
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -795,6 +800,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         clean: &clean,
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -866,6 +872,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         clean: &Settings::default(),
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known {
             albums,
             ..Known::default()
@@ -976,6 +983,7 @@ fn hand_set_tags_and_the_album_win_last() {
         clean: &Settings::default(),
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -1285,6 +1293,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         clean,
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -1429,6 +1438,7 @@ fn a_record_on_the_release_most_of_its_album_is_on_gives_its_release() {
         clean: &Settings::default(),
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known {
             units,
             ..Known::default()
@@ -1641,6 +1651,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             clean: &Settings::default(),
             typography: clean::Typography::default(),
             believe: clean::Believe::Sources,
+            release: &RELEASE,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -2279,6 +2290,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             clean: &Settings::default(),
             typography: clean::Typography::default(),
             believe: clean::Believe::Sources,
+            release: &RELEASE,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -2773,6 +2785,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             clean: &Settings::default(),
             typography: clean::Typography::default(),
             believe: clean::Believe::Sources,
+            release: &RELEASE,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -3034,6 +3047,7 @@ fn run_knowing(
         clean,
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known,
         naming: &NAMING,
         audio: &AUDIO,
@@ -3190,6 +3204,7 @@ fn run_believing(
         clean: &Settings::default(),
         typography: clean::Typography::default(),
         believe,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -3399,6 +3414,7 @@ fn run_picked(
             clean: &Settings::default(),
             typography: clean::Typography::default(),
             believe: clean::Believe::Sources,
+            release: &RELEASE,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -3545,6 +3561,7 @@ fn run_lyrics(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings)
         clean,
         typography: clean::Typography::default(),
         believe: clean::Believe::Sources,
+        release: &RELEASE,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -3815,4 +3832,30 @@ fn a_master_squeezed_louder_loses_only_where_dynamics_count() {
         "{}",
         r.why.audio
     );
+}
+
+#[test]
+fn a_reissue_is_dated_as_its_album_first_came_out_when_asked() {
+    let (s, mut facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    tag(
+        facts.get_mut(&s.sources[1]).unwrap(),
+        Field::OriginalDate,
+        &["1973-05-01"],
+        true,
+    );
+    assert_eq!(
+        get(&resolve(&defaults(&s, &facts)).unwrap(), "DATE").as_deref(),
+        Some("2011-03-04")
+    );
+    let original = crate::settings::Release {
+        date: crate::settings::ReleaseDate::Original,
+        ..crate::settings::Release::default()
+    };
+    let r = resolve(&Input {
+        release: &original,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "DATE").as_deref(), Some("1973-05-01"));
+    assert_eq!(why(&r, "DATE").from, s.sources[1].to_string());
 }

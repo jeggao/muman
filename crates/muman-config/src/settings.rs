@@ -1140,6 +1140,7 @@ pub struct Tags {
 #[serde(default, deny_unknown_fields)]
 pub struct Release {
     pub prefer: ReleasePrefer,
+    pub date: ReleaseDate,
     /// The kinds of release a song is put on only when no other holds
     /// it, as a release group's types name them, any case: `compilation`,
     /// `live`.
@@ -1155,6 +1156,18 @@ pub enum ReleasePrefer {
     #[default]
     Album,
     /// The first album its recording came out on.
+    Original,
+}
+
+/// Which date a song on a release is written with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleaseDate {
+    /// The release's own, as a reissue's year.
+    #[default]
+    Release,
+    /// The album's first release's, `ORIGINALDATE`, where known, one for
+    /// every edition of the album.
     Original,
 }
 

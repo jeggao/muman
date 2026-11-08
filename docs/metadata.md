@@ -142,8 +142,14 @@ A song whose album you set is left where it is. Songs looked up before
 this muman kept no such recordings until `muman sync --rematch` asks
 again. `muman status` names the release a song was moved to and why,
 as `release  musicbrainz:…: on "Rooms of Salt", the release 11 of its
-album's 12 songs are on`. [new.toml](../crates/muman-core/src/new.toml)
-holds the defaults.
+album's 12 songs are on`.
+
+A song on a reissue is dated as the reissue came out, and its path's
+`year` with it. `[release] date = "original"` dates it as its album
+first came out, by MusicBrainz's `ORIGINALDATE`, so every edition of an
+album shares one year and one folder; a song with no such date keeps
+its own. [new.toml](../crates/muman-core/src/new.toml) holds the
+defaults.
 
 ## Values that say nothing
 
