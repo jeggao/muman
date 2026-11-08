@@ -97,11 +97,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   and `[lyrics.clean.guesswork] script` turn each off. Lyrics files are
   read again once, quickly, for their letters.
 - **The songs of one album show one cover and play from one rip.** A
-  song showing another design than most of its album's songs takes
-  theirs from a source of its own that holds it, and between sources its
-  measures rank alike it takes the one from the folder most of its
-  album's audio comes from. A banner, more than twice as wide as tall,
-  is never a cover. An album's name closed by a disc after a space or a
+  song showing another design than a pinned cover of its album, else
+  than most of its album's songs, takes theirs from a source of its own
+  that holds it, and between sources its measures rank alike it takes
+  the one from the folder most of its album's audio comes from. A
+  banner, more than twice as wide as tall, is never a cover unless
+  pinned. An album's name closed by a disc after a space or a
   slash, as `Live CD 2` or `Live / CD 1`, loses it as `Live (CD2)` does.
 - **A torrent group's name, written into the files' work, label or
   copyright, is no longer written as the song's.** muman finds such a

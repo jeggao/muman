@@ -91,11 +91,12 @@ between them.
 A picture whose file says it is no front cover, by its picture type (a
 back, a disc, a booklet) or its name (`back.jpg`, `cd.png`), is taken
 only when there is no other picture, and one more than twice as wide as
-it is tall, or as tall as wide, is a banner and never a cover. The songs
-of one album show one design, the one most of their covers show: a
-song showing another takes that design from a source of its own where
-one holds it, before any picture that measures better. A picture is known by its bytes,
-never its name, so a PNG named `.jpg` is written as PNG.
+it is tall, or as tall as wide, is a banner and never a cover, unless
+pinned. The songs of one album show one design, a pinned cover's, else
+the one most of their covers show: a song showing another takes that
+design from a source of its own where one holds it, before any picture
+that measures better. A picture is known by its bytes, never its name,
+so a PNG named `.jpg` is written as PNG.
 [`[[cover.out]]`](configuration.md#where-the-cover-goes) says where
 the cover goes.
 

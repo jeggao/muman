@@ -37,10 +37,11 @@
 //!   have it, a song lacking one taking it; a song on none in an album of
 //!   at most one release takes its date alone.
 //!
-//! - The cover and the audio ([`consistent`]): the design most of an
-//!   album's songs show ([`crate::picture::alike`]), which a song
-//!   showing another shows too from a source of its own that holds it;
-//!   and the folder most of their audio comes from ([`origin_of`]), a
+//! - The cover and the audio ([`consistent`]): the design a pinned cover
+//!   shows, else the one most of an album's songs show
+//!   ([`crate::picture::alike`]), which a song showing another shows too
+//!   from a source of its own that holds it; and the folder most of their
+//!   audio comes from ([`origin_of`]), a
 //!   disc's folder counting as its album's, which wins a song's audio
 //!   between sources its measures rank alike, so an album plays from one
 //!   rip, gapless and levelled alike. A song takes nothing from another
@@ -333,7 +334,15 @@ pub fn consistent(
     let mut out: BTreeMap<usize, (Option<Look>, Option<String>)> = BTreeMap::new();
     for album in albums(&all).iter().filter(|a| a.len() > 1) {
         let shown: Vec<Option<(Look, u32)>> = album.iter().map(|m| shown(m.r, facts)).collect();
-        if let Some(design) = design(&shown) {
+        let pinned: Vec<Option<(Look, u32)>> = album
+            .iter()
+            .zip(&shown)
+            .map(|(m, look)| {
+                let pin = songs.get(m.n).and_then(|s| s.cover.as_ref());
+                look.filter(|_| pin.is_some() && pin == m.r.plan.cover.as_ref().map(|c| &c.key))
+            })
+            .collect();
+        if let Some(design) = design(&pinned).or_else(|| design(&shown)) {
             for (m, look) in album.iter().zip(&shown) {
                 let alike = look.is_some_and(|(l, _)| picture::alike(&l, &design) == Alike::Same);
                 let holds = || {
@@ -1004,6 +1013,56 @@ mod tests {
         assert_eq!(of(&["a", "a", "b"]).as_deref(), Some("a"));
         assert_eq!(of(&["a", "b"]), None, "no value twice");
         assert_eq!(of(&["a", "a", "b", "b"]), None, "a tie");
+    }
+
+    #[test]
+    fn a_pinned_cover_is_its_album_s_design() {
+        use crate::facts::{CoverAt, CoverFacts};
+        let key = |n: usize| SourceKey::parse(&format!("manual:a{n}.flac")).unwrap();
+        let (a, b) = (look(0), look(u64::MAX));
+        let (mut facts, mut songs, mut planned) = (BTreeMap::new(), Vec::new(), Vec::new());
+        for n in 0..3 {
+            let mut f = Facts::unreadable("r".into());
+            for (index, look) in [(1, a), (2, b)] {
+                f.covers.push(CoverFacts {
+                    at: CoverAt::Picture { index },
+                    mimetype: "image/jpeg".into(),
+                    quality: None,
+                    digest: None,
+                    look: Some(look),
+                    other: false,
+                });
+            }
+            facts.insert(key(n), f);
+            let mut song = on(n, FIRST, "2001", "musicbrainz:x");
+            song.1.plan.cover = Some(crate::resolve::CoverRef {
+                key: key(n),
+                rev: "r".into(),
+                at: CoverAt::Picture {
+                    index: if n == 0 { 1 } else { 2 },
+                },
+                mimetype: "image/jpeg".into(),
+                crop: None,
+                made: None,
+                out: None,
+            });
+            planned.push(song);
+            songs.push(Song {
+                sources: vec![key(n)],
+                cover: (n == 0).then(|| key(n)),
+                ..Song::default()
+            });
+        }
+        let picked = consistent(&planned, &songs, &facts);
+        assert_eq!(picked.get(&1).and_then(|p| p.0), Some(a));
+        assert_eq!(picked.get(&2).and_then(|p| p.0), Some(a));
+        songs[0].cover = None;
+        let picked = consistent(&planned, &songs, &facts);
+        assert_eq!(
+            picked.get(&0).and_then(|p| p.0),
+            Some(b),
+            "unpinned, the most"
+        );
     }
 
     #[test]
