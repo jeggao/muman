@@ -15,6 +15,7 @@ use anyhow::Result;
 
 use crate::dirs::Dirs;
 use crate::manifest::Manifest;
+use crate::resolve::Doubt;
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{self, Store};
@@ -290,16 +291,44 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                     .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
                 said.problem(format!("No sync can build it: {song}: {e:#}"))?;
             }
+            let mut set_aside = 0;
             for (n, resolved) in &r.planned {
                 let song = manifest.songs[*n]
                     .id()
                     .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
-                for why in &resolved.why.contested {
-                    said.warning(format!(
-                        "Won by its place in `sources` alone: {song}: {why}; \
-                         set the tag to settle it"
-                    ))?;
+                for doubt in &resolved.why.doubts {
+                    match doubt {
+                        Doubt::Contested { why, .. } => said.warning(format!(
+                            "Won by its place in `sources` alone: {song}: {why}; \
+                             set the tag to settle it"
+                        ))?,
+                        Doubt::Recording { key, why } => said.warning(format!(
+                            "Holds more than one recording: {song}: {key}: {why}"
+                        ))?,
+                        Doubt::Length { key, why } => said.warning(format!(
+                            "Plays another length than its record says: {song}: {key}: {why}"
+                        ))?,
+                        Doubt::SetAside { .. } => {}
+                    }
                 }
+                if (resolved.why.doubts.iter()).any(|d| matches!(d, Doubt::SetAside { .. })) {
+                    set_aside += 1;
+                }
+            }
+            if set_aside > 0 {
+                said.warning(format!(
+                    "A source set aside as another recording's: {set_aside} song(s); \
+                     `muman status` says why for each"
+                ))?;
+            }
+            for spellings in crate::names::suggestions(&r.planned, &state.facts) {
+                let said_so: Vec<String> = (spellings.iter())
+                    .map(|(name, n)| format!("“{name}” on {n}"))
+                    .collect();
+                said.warning(format!(
+                    "One name spelled more than one way, no MusicBrainz artist to tell which: {}",
+                    said_so.join(", ")
+                ))?;
             }
         }
         Err(e) => said.problem(format!("No sync can build the songs: {e:#}"))?,

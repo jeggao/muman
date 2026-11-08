@@ -395,12 +395,24 @@ impl Vets {
     /// Each source set aside and why, as `status` shows it.
     #[must_use]
     pub fn set_aside(&self) -> Vec<String> {
+        self.aside()
+            .into_iter()
+            .map(|(key, why)| format!("{key}: {why}"))
+            .collect()
+    }
+
+    /// Each source set aside, and what of it and why.
+    #[must_use]
+    pub fn aside(&self) -> Vec<(&SourceKey, String)> {
         self.0
             .iter()
-            .map(|(key, vet)| match vet.verdict {
-                Verdict::Same => format!("{key}: its IDs, {}", vet.why),
-                Verdict::Unsure => format!("{key}: its release and IDs, {}", vet.why),
-                Verdict::Other => format!("{key}: {}", vet.why),
+            .map(|(key, vet)| {
+                let why = match vet.verdict {
+                    Verdict::Same => format!("its IDs, {}", vet.why),
+                    Verdict::Unsure => format!("its release and IDs, {}", vet.why),
+                    Verdict::Other => vet.why.clone(),
+                };
+                (key, why)
             })
             .collect()
     }
