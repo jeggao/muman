@@ -6,8 +6,10 @@
 //!
 //! Each lookup is recorded in the state by the source it was made from,
 //! the provider looked up and that provider's `method`, with when and
-//! what came of it. A song's record of a provider is the newest made from
-//! any of its sources. It is made again:
+//! what came of it; an AcoustID lookup that found a record keeps too every
+//! recording AcoustID named, with the releases each is on
+//! ([`State::candidates`]), which no pick reads. A song's record of a
+//! provider is the newest made from any of its sources. It is made again:
 //!
 //! | Recorded | Made again |
 //! |---|---|
@@ -684,8 +686,9 @@ enum Hit {
     Upload(Entry, Alignment),
     Lyrics(Box<Record>),
     Instrumental,
-    /// A MusicBrainz recording.
-    Tags(Box<musicbrainz::Record>),
+    /// A MusicBrainz recording, and every recording AcoustID named when
+    /// it found it by a print.
+    Tags(Box<musicbrainz::Record>, Vec<acoustid::Candidate>),
     /// The front of the song's album.
     Cover(Box<coverart::Cover>),
     Nothing,
@@ -846,22 +849,23 @@ fn look<R: Runner>(
                 }
                 None => clients.musicbrainz.find(query()?)?,
             };
-            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
+            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r), Vec::new()))
         }
         Provider::AcoustId => {
             let q = asked
                 .print
                 .context("the song's audio has no print or length")?;
+            let candidates = clients.acoustid.find(q)?;
             let mut found = None;
-            for id in clients.acoustid.find(q)?.iter().take(MIX_TRIES) {
-                if let Some(r) = clients.musicbrainz.by_id(id, q.album.as_deref())?
+            for c in candidates.iter().take(MIX_TRIES) {
+                if let Some(r) = clients.musicbrainz.by_id(&c.id, q.album.as_deref())?
                     && !musicbrainz::other_mix(&r.comment, q.mono)
                 {
                     found = Some(r);
                     break;
                 }
             }
-            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r)))
+            found.map_or(Hit::Nothing, |r| Hit::Tags(Box::new(r), candidates))
         }
         Provider::CoverArt => {
             let found = match &d.again {
@@ -1179,6 +1183,7 @@ pub fn run<R: Runner, W: Write>(
                 continue;
             }
             let mut unchanged = 0;
+            let mut candidates = Vec::new();
             let outcome = match hit {
                 // No yt-dlp fails every lookup alike; the run stops and
                 // says so, rather than putting each song off for a week.
@@ -1247,7 +1252,8 @@ pub fn run<R: Runner, W: Write>(
                     }
                     Outcome::Found(key)
                 }
-                Ok(Hit::Tags(record)) => {
+                Ok(Hit::Tags(record, named)) => {
+                    candidates = named;
                     let key = SourceKey::Remote {
                         site: MUSICBRAINZ.to_string(),
                         id: record.id.to_string(),
@@ -1402,6 +1408,7 @@ pub fn run<R: Runner, W: Write>(
             };
             let mut looked = Looked::now(d.from.clone(), d.find, outcome);
             looked.unchanged = unchanged;
+            looked.candidates = candidates;
             records.push(looked);
         }
         for key in renewed {

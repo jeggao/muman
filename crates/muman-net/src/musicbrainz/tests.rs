@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use super::*;
 use crate::http::TransportError;
 use crate::lrclib::testing::Server;
+use crate::record::{Alias, CreditedArtist};
 
 const REC: &str = "00000000-0000-0000-0000-00000000000";
 
@@ -366,6 +367,24 @@ fn a_record_is_kept_and_read_back() {
         editions: Vec::new(),
         original_date: Some("2001-05-03".into()),
         languages: vec!["eng".into()],
+        credited_artists: vec![CreditedArtist {
+            id: format!("{REC}a"),
+            name: "Paper Comets".into(),
+            sort_name: "Comets, Paper".into(),
+            aliases: vec![Alias {
+                name: "ペーパー・コメッツ".into(),
+                sort_name: String::new(),
+                locale: Some("ja".into()),
+                primary: true,
+                kind: Some("Artist name".into()),
+                ended: false,
+            }],
+            genres: Vec::new(),
+        }],
+        genres: vec![Genre {
+            name: "dream pop".into(),
+            count: 2,
+        }],
     };
     let path = keep(dir.path(), &record).unwrap();
     assert_eq!(path, path_of(dir.path(), &record.id));
@@ -519,4 +538,150 @@ fn a_comment_names_a_mix_by_the_word() {
     assert!(!other_mix("mono and stereo", Some(true)));
     assert!(!other_mix("monologue", Some(false)));
     assert!(!other_mix("stereo mix", None));
+}
+
+/// Paper Comets, credited with the aliases and genres a lookup asking for
+/// them lists, in no order.
+fn credited_with_aliases() -> String {
+    format!(
+        r#"[{{"name": "Paper Comets", "joinphrase": "",
+            "artist": {{"id": "{REC}a", "name": "Paper Comets", "sort-name": "Comets, Paper",
+                "aliases": [
+                    {{"name": "Paper Commets", "sort-name": "Paper Commets", "locale": null,
+                      "primary": null, "type": "Search hint", "ended": false}},
+                    {{"name": "ペーパー・コメッツ", "sort-name": "ペーパー・コメッツ", "locale": "ja",
+                      "primary": true, "type": "Artist name", "ended": false}},
+                    {{"name": "Comets of Paper", "sort-name": "Comets of Paper", "locale": null,
+                      "primary": null, "type": null, "ended": true}}],
+                "genres": [{{"name": "dream pop", "id": "{REC}c", "count": 1, "disambiguation": ""}},
+                           {{"name": "shoegaze", "id": "{REC}d", "count": 3, "disambiguation": ""}}]}}}}]"#
+    )
+}
+
+#[test]
+fn a_lookup_by_id_asks_for_aliases_and_genres_and_keeps_them() {
+    let body = format!(
+        r#"{{"id": "{REC}7", "title": "Lantern Weather", "length": 354000,
+            "artist-credit": {},
+            "genres": [{{"name": "indie rock", "count": 2}}, {{"name": "ambient", "count": 2}}],
+            "releases": [{}]}}"#,
+        credited_with_aliases(),
+        release(1, "Rooms of Salt", "Album", "", "2003")
+    );
+    let looked = format!(
+        r#"{{"id": "{REL}1", "artist-credit": {},
+            "genres": [{{"name": "noise pop", "count": 1}}],
+            "release-group": {{"first-release-date": "2003", "genres": [{{"name": "shoegaze", "count": 4}}]}}}}"#,
+        credited_with_aliases()
+    );
+    let server = Server::default()
+        .answer(&format!("/ws/2/recording/{REC}7?"), &body)
+        .answer("/ws/2/release/", &looked);
+    let throttle = Throttle::none();
+    let record = client(&server, &throttle)
+        .by_id(&mbid("7"), None)
+        .unwrap()
+        .unwrap();
+    let asked = server.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2, "no request added: {asked:?}");
+    assert!(
+        asked[0].contains("?inc=work-rels+artist-credits+aliases+genres+releases+"),
+        "{}",
+        asked[0]
+    );
+    assert!(
+        asked[1].ends_with("?inc=labels+release-groups+artist-credits+aliases+genres&fmt=json"),
+        "{}",
+        asked[1]
+    );
+    let genre = |name: &str, count: i32| Genre {
+        name: name.into(),
+        count,
+    };
+    assert_eq!(
+        record.genres,
+        [genre("ambient", 2), genre("indie rock", 2)],
+        "the most voted first, then by name"
+    );
+    let artist = &record.credited_artists[0];
+    assert_eq!(
+        (
+            artist.id.as_str(),
+            artist.name.as_str(),
+            artist.sort_name.as_str()
+        ),
+        (format!("{REC}a").as_str(), "Paper Comets", "Comets, Paper")
+    );
+    let aliases: Vec<&str> = artist.aliases.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        aliases,
+        ["ペーパー・コメッツ", "Comets of Paper", "Paper Commets"],
+        "primary first, then of a locale, then any but a search hint"
+    );
+    let primary = &artist.aliases[0];
+    assert_eq!(
+        (
+            primary.locale.as_deref(),
+            primary.primary,
+            primary.kind.as_deref()
+        ),
+        (Some("ja"), true, Some("Artist name"))
+    );
+    assert!(artist.aliases[1].ended);
+    assert_eq!(artist.genres, [genre("shoegaze", 3), genre("dream pop", 1)]);
+    let details = record.release.unwrap().details;
+    assert_eq!(details.credited_artists, record.credited_artists);
+    assert_eq!(details.genres, [genre("noise pop", 1)]);
+    assert_eq!(details.group_genres, [genre("shoegaze", 4)]);
+}
+
+#[test]
+fn a_search_s_record_gains_aliases_and_genres_from_the_lookups_it_makes() {
+    let body = search(&[recording(
+        1,
+        "Lantern Weather",
+        355_000,
+        &release(1, "Rooms of Salt", "Album", "", "2003"),
+    )]);
+    let looked = format!(
+        r#"{{"id": "{REC}1", "artist-credit": {},
+            "genres": [{{"name": "dream pop", "count": 5}}],
+            "relations": [{{"work": {{"languages": ["eng"]}}}}]}}"#,
+        credited_with_aliases()
+    );
+    let server = Server::default()
+        .answer("/ws/2/recording?", &body)
+        .answer("/ws/2/recording/", &looked)
+        .answer("/ws/2/release/", r#"{"id": "x"}"#);
+    let throttle = Throttle::none();
+    let record = client(&server, &throttle).find(&query()).unwrap().unwrap();
+    let asked = server.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 3, "no request added: {asked:?}");
+    assert!(
+        asked[2].ends_with("?inc=work-rels+artist-credits+aliases+genres&fmt=json"),
+        "{}",
+        asked[2]
+    );
+    assert_eq!(record.languages, ["eng"]);
+    assert_eq!(record.genres[0].name, "dream pop");
+    assert_eq!(record.credited_artists[0].aliases.len(), 3);
+    let details = record.release.unwrap().details;
+    assert!(
+        details.credited_artists.is_empty() && details.group_genres.is_empty(),
+        "a release answered without them still reads"
+    );
+}
+
+#[test]
+fn a_record_kept_before_aliases_and_genres_reads_without_them() {
+    let json = format!(
+        r#"{{"id": "{REC}1", "title": "Lantern Weather", "artists": ["Paper Comets"],
+            "release": {{"id": "{REL}1", "title": "Rooms of Salt", "artists": ["Paper Comets"],
+                "labels": ["Harbor Lights Records"]}}}}"#
+    );
+    let record: Record = serde_json::from_str(&json).unwrap();
+    assert!(record.credited_artists.is_empty() && record.genres.is_empty());
+    let release = record.release.unwrap();
+    assert_eq!(release.details.labels, ["Harbor Lights Records"]);
+    assert_eq!(release.details.genres, []);
 }

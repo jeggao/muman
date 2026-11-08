@@ -18,6 +18,19 @@
 //! these from when it is next fetched again. A recording's credits, its
 //! performers, producer and the like, are not asked for.
 //!
+//! The lookups of a recording and of its release ask too for what a
+//! song's names and genres are to be chosen by, kept on the record as
+//! [`crate::record`] says, which no pick reads: the recording's, by
+//! [`RECORDING_INC`], its genres and its credited artists with their
+//! aliases and genres; the release's, by [`RELEASE_INC`], its genres,
+//! its release group's, and its credited artists'. With
+//! `artist-credits`, `aliases` and `genres` answer them for every artist
+//! a credit names, as well as for the entity looked up, so no request is
+//! added. A lookup by ID answers at most 25 releases, each crediting its
+//! artists with their aliases again: measured on musicbrainz.org, a
+//! recording on 16 releases answered 37 kB without them and 266 kB with
+//! them, still one request.
+//!
 //! A record keeps the artists credited together joined as the credit
 //! joins them, by its join phrases, as `Marlo Venn & The Glass Orchards`,
 //! for the recording and for its release; the recording's comment, which
@@ -94,6 +107,13 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 /// search scores a famous song's many recordings alike, its original
 /// among the last as often as the first.
 const LIMIT: usize = 100;
+/// What a lookup of a recording asks for beyond itself, whatever else it
+/// asks: its works, its genres, and its artists with their aliases and
+/// genres.
+const RECORDING_INC: &str = "work-rels+artist-credits+aliases+genres";
+/// What a lookup of a release asks for: its labels, its release group,
+/// their genres, and its artists with their aliases and genres.
+const RELEASE_INC: &str = "labels+release-groups+artist-credits+aliases+genres";
 
 /// The spacing musicbrainz.org asks of a client: a second between
 /// requests, and 2 s held back after a refusal, doubling.
@@ -106,12 +126,15 @@ pub fn throttle() -> Throttle {
 /// album ask for its release once.
 pub type Releases = std::sync::Mutex<std::collections::BTreeMap<String, Option<Details>>>;
 
-/// A release as `/ws/2/release/<id>?inc=labels+release-groups` answers
-/// it.
+/// A release as [`RELEASE_INC`] answers it.
 #[derive(Debug, Deserialize)]
 struct Looked {
     #[serde(default, rename = "release-group")]
     group: Option<FirstReleased>,
+    #[serde(default, rename = "artist-credit", deserialize_with = "or_default")]
+    credit: Vec<Credit>,
+    #[serde(default, deserialize_with = "or_default")]
+    genres: Vec<Genre>,
     #[serde(default)]
     barcode: Option<String>,
     #[serde(default)]
@@ -126,6 +149,8 @@ struct Looked {
 struct FirstReleased {
     #[serde(default, rename = "first-release-date")]
     date: Option<String>,
+    #[serde(default, deserialize_with = "or_default")]
+    genres: Vec<Genre>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,11 +176,17 @@ struct Named {
 impl Looked {
     fn details(self) -> Details {
         let text = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let (first, group_genres) = self
+            .group
+            .map_or((None, Vec::new()), |g| (g.date, genres(&g.genres)));
         let mut details = Details {
             barcode: text(self.barcode),
             asin: text(self.asin),
             script: text(self.text.and_then(|t| t.script)),
-            original_date: text(self.group.and_then(|g| g.date)),
+            original_date: text(first),
+            credited_artists: credited_artists(&self.credit),
+            genres: genres(&self.genres),
+            group_genres,
             ..Details::default()
         };
         for info in self.labels {
@@ -281,8 +312,7 @@ impl Client<'_> {
     /// release picked as a search picks it for a song on `album`.
     pub fn by_id(&self, id: &Mbid, album: Option<&str>) -> Result<Option<Record>> {
         let path = format!(
-            "/ws/2/recording/{}?inc=artist-credits+releases+release-groups+media+isrcs+work-rels\
-             &fmt=json",
+            "/ws/2/recording/{}?inc={RECORDING_INC}+releases+release-groups+media+isrcs&fmt=json",
             crate::http::percent_encode(id.as_str())
         );
         let Some(body) = self.get(&path)? else {
@@ -310,7 +340,7 @@ impl Client<'_> {
             details
         } else {
             let path = format!(
-                "/ws/2/release/{}?inc=labels+release-groups&fmt=json",
+                "/ws/2/release/{}?inc={RELEASE_INC}&fmt=json",
                 crate::http::percent_encode(&release.id)
             );
             let looked = match self.get(&path)? {
@@ -362,27 +392,25 @@ impl Client<'_> {
         let mut record = best.and_then(|r| r.record(album));
         if let Some(record) = record.as_mut() {
             self.detail(record)?;
-            self.works(record)?;
+            self.recording(record)?;
         }
         Ok(record)
     }
 
-    /// `record` given its works' lyrics languages, which a search does not
-    /// answer: a lookup that fails fails the record's, as [`Self::detail`]'s.
-    fn works(&self, record: &mut Record) -> Result<()> {
-        #[derive(Deserialize)]
-        struct Related {
-            #[serde(default, deserialize_with = "or_default")]
-            relations: Vec<Relation>,
-        }
+    /// `record` given what a search does not answer of its recording: its
+    /// works' lyrics languages, its genres and its artists' aliases. A
+    /// lookup that fails fails the record's, as [`Self::detail`]'s.
+    fn recording(&self, record: &mut Record) -> Result<()> {
         let path = format!(
-            "/ws/2/recording/{}?inc=work-rels&fmt=json",
+            "/ws/2/recording/{}?inc={RECORDING_INC}&fmt=json",
             crate::http::percent_encode(record.id.as_str())
         );
         if let Some(body) = self.get(&path)? {
-            let related: Related = serde_json::from_str(&body)
-                .context("reading MusicBrainz's answer for a recording's works")?;
-            record.languages = languages(&related.relations);
+            let looked: Recording = serde_json::from_str(&body)
+                .context("reading MusicBrainz's answer for a recording")?;
+            record.languages = languages(&looked.relations);
+            record.credited_artists = credited_artists(&looked.credit);
+            record.genres = genres(&looked.genres);
         }
         Ok(())
     }
@@ -458,8 +486,8 @@ fn phrase(text: &str) -> String {
 }
 
 use crate::record::{
-    Credit, Found, Recording, Relation, credited, date_key, languages, names, or_default,
-    parse_recording, same,
+    Credit, Found, Genre, Recording, credited, credited_artists, date_key, genres, languages,
+    names, or_default, parse_recording, same,
 };
 pub use crate::record::{Details, Mbid, Record, Release, keep, path_of, read};
 pub use crate::source::is_mbid;

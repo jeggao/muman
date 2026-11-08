@@ -8,10 +8,11 @@
 //! `/v2/lookup` is asked with the print of the song's audio as
 //! [`crate::fingerprint::Print::encoded`] writes it, the audio's length in
 //! whole seconds, and muman's application key, or the one
-//! `[providers.acoustid] key` sets. A result fits when its score is at
-//! least [`MIN_SCORE`]; of its recordings, those whose length is within
-//! [`LOOSE_GAP_S`] of the song's, or that state none but were submitted
-//! with at least [`MIN_UNTIMED_SOURCES`] prints, rank by:
+//! `[providers.acoustid] key` sets, for the `meta` values [`META`] names,
+//! as AcoustID's web service documents them. A result fits when its
+//! score is at least [`MIN_SCORE`]; of its recordings, those whose length
+//! is within [`LOOSE_GAP_S`] of the song's, or that state none but were
+//! submitted with at least [`MIN_UNTIMED_SOURCES`] prints, rank by:
 //!
 //! 1. Titled as the song is, when it has a title.
 //! 1. Its length: within [`crate::musicbrainz::MAX_GAP_S`] of the song's,
@@ -40,10 +41,19 @@
 //! or artist no rule compares with the song's, as kanji with Latin
 //! letters, disagrees with nothing.
 //!
-//! [`Client::find`] answers every recording that fits, best first: the
-//! lookup takes the first whose MusicBrainz comment does not name the
-//! other mix than the song's audio is ([`crate::musicbrainz::other_mix`]),
-//! as a mono rip whose print matches the stereo recording too.
+//! [`Client::find`] answers the recordings that fit, best first, at most
+//! [`KEPT`]: the lookup takes the first whose MusicBrainz comment does not
+//! name the other mix than the song's audio is
+//! ([`crate::musicbrainz::other_mix`]), as a mono rip whose print matches
+//! the stereo recording too, and keeps them all with its row in the state
+//! ([`Candidate`]), so an album's release can be chosen among every
+//! recording its songs' prints name, not only the one taken; no pick
+//! reads them. Each keeps its title, artists, length, score and prints,
+//! and the releases it is on, each with its group, title, first date and
+//! country, the group's types, and the disc and track it is on, at most
+//! [`KEPT_RELEASES`]: a famous recording is on hundreds, nearly all
+//! compilations, so those titled as the song's album come first, then
+//! those whose group has no secondary type, then the earliest.
 //!
 //! AcoustID allows three requests a second from a client; every request
 //! waits its turn on one [`Throttle`], and a refusal holds every later
@@ -54,11 +64,12 @@
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::fingerprint::Print;
 use crate::http::{HttpTransport, Service, Throttle, TransportError};
 use crate::musicbrainz::{MAX_GAP_S, Mbid, first_artist, is_mbid};
+use crate::record::date_key;
 
 /// muman's application key, which AcoustID asks every client to send.
 pub const KEY: &str = "EHCiWFI8Ce";
@@ -71,6 +82,15 @@ pub const LOOSE_GAP_S: f64 = 10.0;
 /// The prints a recording that states no length must have been submitted
 /// with: one names a stub as surely as a mistake.
 pub const MIN_UNTIMED_SOURCES: u32 = 2;
+/// The recordings a lookup keeps at most, best first.
+pub const KEPT: usize = 8;
+/// The releases kept of each recording at most, as many as MusicBrainz
+/// lists of a recording looked up by its ID.
+pub const KEPT_RELEASES: usize = 25;
+/// What a lookup asks AcoustID to answer of each recording: its release
+/// groups, their releases, the tracks it is on, and the prints submitted
+/// with it.
+const META: &str = "recordings+releasegroups+releases+tracks+sources";
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The spacing AcoustID asks of a client: three requests a second, and
@@ -147,7 +167,122 @@ struct Artist {
 #[derive(Debug, Deserialize)]
 struct Group {
     #[serde(default)]
+    id: String,
+    #[serde(default, rename = "type")]
+    primary: Option<String>,
+    #[serde(default)]
     secondarytypes: Vec<String>,
+    #[serde(default)]
+    releases: Vec<Released>,
+}
+
+/// A release as `meta=releases+tracks` lists it, its first release event
+/// on it.
+#[derive(Debug, Deserialize)]
+struct Released {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(default)]
+    date: Option<Date>,
+    #[serde(default)]
+    medium_count: Option<u32>,
+    /// The mediums holding the recording, each with its tracks of it.
+    #[serde(default)]
+    mediums: Vec<Medium>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Date {
+    #[serde(default)]
+    year: Option<u32>,
+    #[serde(default)]
+    month: Option<u32>,
+    #[serde(default)]
+    day: Option<u32>,
+}
+
+impl Date {
+    /// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, as a MusicBrainz date is written.
+    fn text(&self) -> Option<String> {
+        let year = self.year.filter(|y| *y > 0)?;
+        Some(
+            match (self.month.filter(|m| *m > 0), self.day.filter(|d| *d > 0)) {
+                (Some(m), Some(d)) => format!("{year:04}-{m:02}-{d:02}"),
+                (Some(m), None) => format!("{year:04}-{m:02}"),
+                _ => format!("{year:04}"),
+            },
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Medium {
+    #[serde(default)]
+    position: Option<u32>,
+    #[serde(default)]
+    track_count: Option<u32>,
+    #[serde(default)]
+    tracks: Vec<Track>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Track {
+    #[serde(default)]
+    position: Option<u32>,
+}
+
+/// A recording AcoustID named for a song's print, as its lookup keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Candidate {
+    pub id: Mbid,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artists: Vec<String>,
+    #[serde(default)]
+    pub length_ms: Option<u64>,
+    /// The result's score, in thousandths.
+    #[serde(default)]
+    pub score: u32,
+    /// Prints submitted with it.
+    #[serde(default)]
+    pub sources: u32,
+    /// The releases it is on, at most [`KEPT_RELEASES`], best first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<CandidateRelease>,
+}
+
+/// A release a [`Candidate`] is on, and where on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateRelease {
+    /// The release's MBID.
+    pub id: String,
+    #[serde(default)]
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub title: String,
+    /// `YYYY`, `YYYY-MM` or `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// The release group's primary type and its secondary ones, as
+    /// `Album`, `Compilation`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disc: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<u32>,
+    /// The tracks on the recording's disc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<u32>,
 }
 
 impl Recording {
@@ -221,6 +356,71 @@ fn thousandths(score: f64) -> i64 {
     (score * 1000.0).round() as i64
 }
 
+impl Recording {
+    /// What a lookup keeps of it, given its result's `score`; `None` when
+    /// its ID is no MBID.
+    fn candidate(&self, q: &Query, score: f64) -> Option<Candidate> {
+        let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+        let mut releases: Vec<(bool, bool, CandidateRelease)> = Vec::new();
+        for group in &self.releasegroups {
+            let types: Vec<String> = group
+                .primary
+                .iter()
+                .chain(&group.secondarytypes)
+                .filter_map(|t| text(t))
+                .collect();
+            for r in group.releases.iter().filter(|r| is_mbid(&r.id)) {
+                let medium = r
+                    .mediums
+                    .iter()
+                    .filter(|m| !m.tracks.is_empty())
+                    .min_by_key(|m| m.position);
+                let release = CandidateRelease {
+                    id: r.id.clone(),
+                    group_id: Some(group.id.clone()).filter(|g| is_mbid(g)),
+                    title: r.title.trim().to_string(),
+                    date: r.date.as_ref().and_then(Date::text),
+                    country: r.country.as_deref().and_then(text),
+                    types: types.clone(),
+                    disc: medium.and_then(|m| m.position),
+                    discs: r.medium_count,
+                    track: medium.and_then(|m| m.tracks.iter().filter_map(|t| t.position).min()),
+                    tracks: medium.and_then(|m| m.track_count),
+                };
+                let elsewhere = q
+                    .album
+                    .as_deref()
+                    .is_some_and(|a| crate::similar::names_match(&release.title, a).is_none());
+                if !releases.iter().any(|(_, _, k)| k.id == release.id) {
+                    releases.push((elsewhere, !group.secondarytypes.is_empty(), release));
+                }
+            }
+        }
+        releases.sort_by(|(a_off, a_sec, a), (b_off, b_sec, b)| {
+            (a_off, a_sec)
+                .cmp(&(b_off, b_sec))
+                .then_with(|| date_key(a.date.as_deref()).cmp(&date_key(b.date.as_deref())))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Some(Candidate {
+            id: Mbid::parse(&self.id)?,
+            title: self.title.trim().to_string(),
+            artists: self.artists.iter().filter_map(|a| text(&a.name)).collect(),
+            length_ms: self
+                .duration
+                .filter(|d| *d >= 0.0)
+                .map(|d| crate::units::ms_of_seconds(d).round() as u64),
+            score: thousandths(score).clamp(0, 1000) as u32,
+            sources: self.sources,
+            releases: releases
+                .into_iter()
+                .take(KEPT_RELEASES)
+                .map(|(_, _, r)| r)
+                .collect(),
+        })
+    }
+}
+
 /// One AcoustID server, asked through `transport` at the pace of
 /// `throttle` with the application key `key`.
 pub struct Client<'a> {
@@ -245,13 +445,13 @@ fn message(body: &str) -> Option<String> {
 }
 
 impl Client<'_> {
-    /// The MBIDs of the recordings that fit the song, best first, each
-    /// once; none when no result fits.
-    pub fn find(&self, q: &Query) -> Result<Vec<Mbid>> {
+    /// The recordings that fit the song, best first, each once and at
+    /// most [`KEPT`]; none when no result fits.
+    pub fn find(&self, q: &Query) -> Result<Vec<Candidate>> {
         // Clamped to 0 first, so no sign is lost.
         let seconds = q.seconds.round().max(0.0) as u64;
         let url = format!(
-            "{}/v2/lookup?client={}&format=json&meta=recordings+releasegroups+sources&duration={seconds}&fingerprint={}",
+            "{}/v2/lookup?client={}&format=json&meta={META}&duration={seconds}&fingerprint={}",
             self.base.trim_end_matches('/'),
             crate::http::percent_encode(self.key),
             q.print.encoded()
@@ -291,13 +491,16 @@ impl Client<'_> {
             .filter(|(rec, _)| rec.fits(q.seconds) && !rec.another_song(q))
             .collect();
         fitting.sort_by_cached_key(|(rec, score)| rec.rank(q, *score));
-        let mut ids: Vec<Mbid> = Vec::new();
-        for id in fitting.iter().filter_map(|(rec, _)| Mbid::parse(&rec.id)) {
-            if !ids.contains(&id) {
-                ids.push(id);
+        let mut found: Vec<Candidate> = Vec::new();
+        for (rec, score) in fitting {
+            if found.len() < KEPT
+                && !found.iter().any(|c| c.id.as_str() == rec.id)
+                && let Some(candidate) = rec.candidate(q, score)
+            {
+                found.push(candidate);
             }
         }
-        Ok(ids)
+        Ok(found)
     }
 }
 

@@ -5164,6 +5164,51 @@ fn a_song_on_no_album_finds_its_album_on_musicbrainz_once() {
 }
 
 #[test]
+fn an_acoustid_lookup_keeps_every_recording_it_named_with_its_releases() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let fake = flacs().print("a.flac", words(1600, 1));
+    let other = "00000000-0000-4000-8000-000000000002";
+    let answer = format!(
+        r#"{{"status": "ok", "results": [{{"id": "x", "score": 0.95, "recordings": [
+            {{"id": "{MBID}", "title": "Song", "duration": 200, "sources": 9,
+              "artists": [{{"name": "Artist"}}],
+              "releasegroups": [{{"id": "00000000-0000-4000-8000-00000000000b", "type": "Album",
+                "releases": [{{"id": "00000000-0000-4000-8000-00000000000a",
+                  "title": "Glass Orchards", "date": {{"year": 2011}},
+                  "mediums": [{{"position": 1, "track_count": 9, "tracks": [{{"position": 4}}]}}]}}]}}]}},
+            {{"id": "{other}", "title": "Song", "duration": 201, "sources": 2,
+              "artists": [{{"name": "Artist"}}]}}]}}]}}"#
+    );
+    let server = Server::default()
+        .answer("/v2/lookup?", &answer)
+        .answer(&format!("/ws/2/recording/{MBID}?"), &recording("tracks"));
+    let mut out = Vec::new();
+    let ok = run_with(
+        &s.job(&["sync"]),
+        &fake,
+        &server,
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(ok, "{text}");
+    assert!(text.contains("by its fingerprint on AcoustID"), "{text}");
+    let state = State::load(&s.dir.path().join("home")).unwrap();
+    let record = SourceKey::parse(&format!("musicbrainz:{MBID}")).unwrap();
+    let candidates = state.candidates(&[SourceKey::Manual("a.flac".into())], &record);
+    let ids: Vec<String> = candidates.iter().map(|c| c.id.to_string()).collect();
+    assert_eq!(ids, [MBID, other], "{text}");
+    let release = &candidates[0].releases[0];
+    assert_eq!(
+        (release.title.as_str(), release.track, release.tracks),
+        ("Glass Orchards", Some(4), Some(9))
+    );
+}
+
+#[test]
 fn a_song_that_has_what_until_names_asks_nothing_of_musicbrainz() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
