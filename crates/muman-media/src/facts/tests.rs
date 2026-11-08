@@ -189,6 +189,7 @@ fn a_standalone_lrc_is_lyrics_only() {
     assert_eq!(fake.calls(), Vec::<Vec<String>>::new());
     assert_eq!(facts.lyrics[0].at, LyricsAt::File);
     assert!(facts.audio.is_none());
+    assert!(facts.tags_hold(Kind::Lyrics), "never read again");
 }
 
 #[test]
