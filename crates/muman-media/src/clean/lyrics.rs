@@ -618,9 +618,14 @@ const SOUNDS: [&str; 24] = [
     "thunder",
 ];
 
+/// Words a line sung says and a description of a sound never does, as it
+/// tells of others: `I`, `you`, `let`.
+const SUNG: [&str; 9] = ["i", "me", "my", "you", "your", "we", "us", "our", "let"];
+
 /// Whether a subtitle's line describes a sound or warns of what the video
-/// shows: wholly in square brackets, opening with `TW:` or `CW:` or
-/// holding one of [`SOUNDS`]. `[Toxic Lanterns!]`, sung, holds none.
+/// shows: wholly in square brackets, opening with `TW:` or `CW:`, or
+/// holding one of [`SOUNDS`] and none of [`SUNG`]. `[Toxic Lanterns!]`
+/// holds no sound, and `[Let the music play]`, sung, one of [`SUNG`].
 fn is_sound(words: &str) -> bool {
     let Some(inner) = words
         .trim()
@@ -630,11 +635,13 @@ fn is_sound(words: &str) -> bool {
         return false;
     };
     let lower = inner.trim().to_lowercase();
+    let said: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
     lower.starts_with("tw:")
         || lower.starts_with("cw:")
-        || lower
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| SOUNDS.contains(&w))
+        || (said.iter().any(|w| SOUNDS.contains(w)) && !said.iter().any(|w| SUNG.contains(w)))
 }
 
 /// A subtitle's lines describing sounds dropped: the captions a video
@@ -652,7 +659,8 @@ fn sound(l: &mut Lyrics, ctx: &Context<'_>) {
 }
 
 /// What marks a subtitle's line as a note on the video or its subtitles
-/// rather than a line sung, lower-case.
+/// rather than a line sung, lower-case, whole words: `http` alone marks
+/// any link.
 const COMMENTARY: [&str; 15] = [
     "captions",
     "caption",
@@ -682,7 +690,15 @@ fn commentary(l: &mut Lyrics, ctx: &Context<'_>) {
     let words = word_lines(l);
     let note = |w: &str| {
         let lower = w.to_lowercase();
-        COMMENTARY.iter().any(|c| lower.contains(c))
+        let said: Vec<&str> = lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+        lower.contains("http")
+            || COMMENTARY.iter().any(|c| {
+                let phrase: Vec<&str> = c.split(' ').collect();
+                said.windows(phrase.len()).any(|w| w == phrase.as_slice())
+            })
     };
     let mut doomed = BTreeSet::new();
     for (i, w) in &words {
