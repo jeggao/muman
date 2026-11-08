@@ -2695,6 +2695,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             values: vec!["Harbor Lights".into()],
             from: "musicbrainz:x, as 2 of its album's 3 songs have it".into(),
         }],
+        ..crate::album::Pick::default()
     };
     let r = resolve(&Input {
         pick: Some(&pick),
@@ -3278,5 +3279,120 @@ fn the_order_of_sources_changes_no_pick_but_a_contested_one() {
             "TITLE “Lanterns Ovr the Harbor” from manual:a.flac over “Paper Comets” \
           from manual:b.flac, by the order of `sources`"
         ]
+    );
+}
+
+fn run_picked(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    pick: &crate::album::Pick,
+) -> Resolved {
+    resolve(&Input {
+        pick: Some(pick),
+        ..Input {
+            song,
+            album: None,
+            facts,
+            on_disk: None,
+            alignments: &[],
+            lyrics: &none_read(),
+            clean: &Settings::default(),
+            typography: clean::Typography::default(),
+            believe: clean::Believe::Sources,
+            known: &Known::default(),
+            naming: &NAMING,
+            audio: &AUDIO,
+            cover: &COVER,
+            source_comments: false,
+            pick: None,
+        }
+    })
+    .unwrap()
+}
+
+fn design(seed: u64) -> crate::picture::Look {
+    crate::picture::Look {
+        content: crate::picture::Hashes { p: seed, d: seed },
+        square: None,
+        frame: None,
+        flat: false,
+    }
+}
+
+#[test]
+fn a_banner_is_no_cover() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    cover(
+        &mut f,
+        CoverAt::Picture { index: 1 },
+        image(800, 100, full(800, 100), 100),
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    assert!(run(&song(&[key]), &facts, &[]).plan.cover.is_none());
+}
+
+#[test]
+fn a_song_shows_its_album_s_design_from_a_source_of_its_own() {
+    let (a, b) = (manual("a.flac"), manual("b.flac"));
+    let mut fa = audio("flac", 22.0);
+    fa.rev = "a".into();
+    cover(
+        &mut fa,
+        CoverAt::Picture { index: 1 },
+        image(1400, 1400, full(1400, 1400), 1400),
+    );
+    fa.covers[0].look = Some(design(0));
+    let mut fb = audio("flac", 22.0);
+    fb.rev = "b".into();
+    cover(
+        &mut fb,
+        CoverAt::Picture { index: 1 },
+        image(600, 600, full(600, 600), 600),
+    );
+    fb.covers[0].look = Some(design(u64::MAX));
+    let facts = BTreeMap::from([(a.clone(), fa), (b.clone(), fb)]);
+    let s = song(&[a.clone(), b.clone()]);
+    let alone = run_picked(&s, &facts, &crate::album::Pick::default());
+    assert_eq!(alone.plan.cover.map(|c| c.key), Some(a));
+    let pick = crate::album::Pick {
+        cover: Some(design(u64::MAX)),
+        ..crate::album::Pick::default()
+    };
+    let r = run_picked(&s, &facts, &pick);
+    assert_eq!(r.plan.cover.map(|c| c.key), Some(b));
+    assert!(
+        r.why
+            .cover
+            .unwrap()
+            .ends_with("the design its album's songs show"),
+        "status says why"
+    );
+}
+
+#[test]
+fn audio_its_measures_rank_alike_comes_from_its_album_s_folder() {
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{}/{p}", "a".repeat(40))).unwrap();
+    let (one, other) = (
+        key("Glass Weather/01 Song.flac"),
+        key("Harbor Nights/01 Song.flac"),
+    );
+    let (mut f1, mut f2) = (audio("flac", 22.0), audio("flac", 22.0));
+    f1.rev = "1".into();
+    f2.rev = "2".into();
+    let facts = BTreeMap::from([(one.clone(), f1), (other.clone(), f2)]);
+    let s = song(&[one.clone(), other.clone()]);
+    let alone = run_picked(&s, &facts, &crate::album::Pick::default());
+    assert_eq!(alone.plan.audio.key, one);
+    let pick = crate::album::Pick {
+        audio_from: crate::album::origin_of(&other),
+        ..crate::album::Pick::default()
+    };
+    let r = run_picked(&s, &facts, &pick);
+    assert_eq!(r.plan.audio.key, other);
+    assert!(
+        r.why.audio.contains("from its album's folder"),
+        "{}",
+        r.why.audio
     );
 }

@@ -11,14 +11,17 @@
 //!   then least that is not the song (a video's intro or skit) or
 //!   is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
+//!   from the folder most of its album's audio comes from, then
 //!   lossless, then the most bits used, then the lowest rate.
 //!   Lossless audio cut off as lossy audio is counts as lossy, padded
 //!   audio by the bits it uses, and upsampled audio by the rate it
 //!   declares, which its bytes take: ranked by the rate its sound needs,
 //!   a 96 kHz file made from a CD would beat a 48 kHz copy scored alike,
 //!   at twice its size ([`crate::quality::Flags`]).
-//! - Cover: square content, then effective resolution, then fewest
-//!   block artifacts; borders a video frame adds are cropped off.
+//! - Cover: the design its album's songs show ([`crate::album`]), then
+//!   square content, then effective resolution, then fewest block
+//!   artifacts; borders a video frame adds are cropped off, and a banner,
+//!   more than twice as wide as tall or as tall as wide, is no cover.
 //! - Lyrics: by `[lyrics] prefer`, their role and whether timed, then
 //!   in the language read first, originals in none after those in one,
 //!   from a source whose audio is the same recording as the chosen
@@ -169,6 +172,7 @@ use crate::loudness::Gains;
 use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
+use crate::picture::{self, Alike};
 use crate::quality::{ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
@@ -1297,6 +1301,7 @@ fn pick_audio(
             let rank: Rank = vec![
                 unknown,
                 sum,
+                i64::from(!from_album(input, key)),
                 -tie_break(facts.audio.as_ref()),
                 facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
             ];
@@ -1337,6 +1342,22 @@ fn pick_audio(
     };
     let why = audio_why(input, chosen, &recordings);
     Ok((chosen.key.clone(), why, recordings.others(chosen.key)))
+}
+
+/// Whether `key`'s file came from the folder most of the song's album's
+/// audio comes from ([`crate::album::consistent`]).
+fn from_album(input: &Input<'_>, key: &SourceKey) -> bool {
+    input
+        .pick
+        .and_then(|p| p.audio_from.as_deref())
+        .is_some_and(|from| crate::album::origin_of(key).as_deref() == Some(from))
+}
+
+/// Whether a picture's content is more than twice as wide as tall, or as
+/// tall as wide: a banner or a strip, no album's cover.
+fn is_banner(content: Rect) -> bool {
+    let (w, h) = (u64::from(content.width), u64::from(content.height));
+    w > 2 * h || h > 2 * w
 }
 
 /// The song's audio sources in recordings ([`vet::recordings`]), held to
@@ -1430,6 +1451,11 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
         .collect::<Vec<_>>()
         .join(", "),
         None => "not measured".to_string(),
+    };
+    let why = if from_album(input, chosen.key) {
+        format!("{why}, from its album's folder")
+    } else {
+        why
     };
     match facts.damage() {
         Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
@@ -1622,6 +1648,9 @@ fn pick_cover(input: &Input<'_>, vets: &Vets) -> Option<(CoverRef, String)> {
         for cover in &facts.covers {
             order += 1;
             let q = cover.quality;
+            if q.is_some_and(|q| is_banner(q.content)) {
+                continue;
+            }
             let w = &input.cover.pick;
             let [unknown, sum] = score(&[
                 (
@@ -1637,13 +1666,24 @@ fn pick_cover(input: &Input<'_>, vets: &Vets) -> Option<(CoverRef, String)> {
                     q.map(|q| q.blockiness_bucket(w.blockiness.step)),
                 ),
             ]);
+            let album_s = input.pick.and_then(|p| p.cover.as_ref()).map(|design| {
+                cover
+                    .look
+                    .is_some_and(|l| picture::alike(&l, design) == Alike::Same)
+            });
             // A back cover, a disc or a booklet is no song's cover while
             // any other picture is.
-            let rank: Rank = vec![i64::from(cover.other), unknown, sum, order];
+            let rank: Rank = vec![
+                i64::from(cover.other),
+                i64::from(album_s == Some(false)),
+                unknown,
+                sum,
+                order,
+            ];
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
-            let why = q.map_or_else(
+            let mut why = q.map_or_else(
                 || "not measured".to_string(),
                 |q| {
                     format!(
@@ -1660,6 +1700,9 @@ fn pick_cover(input: &Input<'_>, vets: &Vets) -> Option<(CoverRef, String)> {
                     )
                 },
             );
+            if album_s == Some(true) {
+                why.push_str(", the design its album's songs show");
+            }
             best = Some((
                 rank,
                 {
