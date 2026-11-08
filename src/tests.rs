@@ -5019,6 +5019,40 @@ fn recording(tracks: &str) -> String {
 }
 
 #[test]
+fn a_record_of_another_song_is_set_aside_and_status_says_why() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written(
+        &format!("home/sources/musicbrainz/{MBID}.json"),
+        &format!(
+            r#"{{"id": "{MBID}", "title": "Night Ferry", "artists": ["Kiri Hoshino"],
+                "release": {{"id": "00000000-0000-4000-8000-00000000000a",
+                "title": "Harbor Lights", "artists": ["Kiri Hoshino"], "track": 3}}}}"#
+        ),
+    );
+    s.written(
+        "home/songs.toml",
+        &format!(
+            "version = 1\n\n[[song]]\nsources = [\"manual:a.flac\", \"musicbrainz:{MBID}\"]\n"
+        ),
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        s.dir.path().join("lib/Artist/Record/02 Song.flac").exists(),
+        "the file's own album: {text}"
+    );
+    let (_, report) = s.report(&flacs(), &["status", "a.flac"]);
+    assert!(
+        report.contains(&format!(
+            "  set aside  musicbrainz:{MBID}: titled \"Night Ferry\" by Kiri Hoshino on \
+             \"Harbor Lights\": no title or credit in common"
+        )),
+        "{report}"
+    );
+}
+
+#[test]
 fn a_song_makes_one_lookup_a_provider_a_run_whatever_its_recheck() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

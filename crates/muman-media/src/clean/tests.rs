@@ -580,12 +580,14 @@ fn a_rule_never_empties_a_value() {
 #[test]
 fn every_switch_belongs_to_a_tier() {
     let switches: Vec<_> = switches().collect();
-    assert_eq!(switches.len(), RULES.len());
+    assert_eq!(switches.len(), RULES.len() + OTHERS.len());
     assert!(
         switches
             .iter()
             .all(|(tier, _)| TIERS.iter().any(|(t, _)| t == tier))
     );
+    let mut settings = Settings::default();
+    assert!(settings.set(VETTING, false) && !settings.is_on(VETTING));
 }
 
 /// A field kept for it, cleaned with every rule `settings` leaves on and

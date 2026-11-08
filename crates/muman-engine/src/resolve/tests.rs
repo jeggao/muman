@@ -488,7 +488,7 @@ fn square_detail_beats_pixel_count_and_borders_are_cropped() {
     );
     let facts = BTreeMap::from([(a.clone(), fa), (b.clone(), fb), (c.clone(), fc)]);
     let r = run(&song(&[a.clone(), b.clone()]), &facts, &[]);
-    assert_eq!(r.plan.cover.unwrap().key, b, "detail, not pixels");
+    assert_eq!(r.plan.cover.as_ref().unwrap().key, b, "detail, not pixels");
     let r = run(&song(&[a, b, c.clone()]), &facts, &[]);
     let cover = r.plan.cover.unwrap();
     assert_eq!(cover.key, c);
@@ -1015,9 +1015,9 @@ fn a_record_titled_otherwise_lends_no_recording_ids() {
         SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
     );
     let mut fa = audio("flac", 22.0);
-    tag(&mut fa, Field::Title, &["Song Four"], true);
+    tag(&mut fa, Field::Title, &["Lantern Weather"], true);
     let mut fmb = Facts::unreadable("mb".into());
-    tag(&mut fmb, Field::Title, &["Song One"], true);
+    tag(&mut fmb, Field::Title, &["Night Ferry"], true);
     tag(&mut fmb, Field::Isrc, &["XX0000000001"], true);
     tag(
         &mut fmb,
@@ -1026,19 +1026,170 @@ fn a_record_titled_otherwise_lends_no_recording_ids() {
         true,
     );
     let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb.clone())]);
-    let r = run(&song(&[a.clone(), mb.clone()]), &facts, &[]);
     let has = |r: &Resolved, k: &str| r.plan.tags.iter().any(|(t, _)| t == k);
-    assert!(
-        !has(&r, "ISRC") && !has(&r, "MUSICBRAINZ_TRACKID"),
-        "{:?}",
-        r.plan.tags
-    );
+    let mut off = Settings::default();
+    off.set(clean::VETTING, false);
+    for clean in [Settings::default(), off.clone()] {
+        let r = run_clean(&song(&[a.clone(), mb.clone()]), &facts, &clean);
+        assert!(
+            !has(&r, "ISRC") && !has(&r, "MUSICBRAINZ_TRACKID"),
+            "{:?}",
+            r.plan.tags
+        );
+    }
 
     let mut fa = audio("flac", 22.0);
-    tag(&mut fa, Field::Title, &["song one"], true);
+    tag(&mut fa, Field::Title, &["night ferry"], true);
     let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb)]);
-    let r = run(&song(&[a, mb.clone()]), &facts, &[]);
-    assert_eq!(why(&r, "ISRC").from, mb.to_string(), "titled alike");
+    for clean in [Settings::default(), off] {
+        let r = run_clean(&song(&[a.clone(), mb.clone()]), &facts, &clean);
+        assert_eq!(why(&r, "ISRC").from, mb.to_string(), "titled alike");
+    }
+}
+
+fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) -> Resolved {
+    resolve(&Input {
+        song,
+        album: None,
+        facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &english(),
+        clean,
+        typography: clean::Typography::default(),
+        albums: &Albums::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    })
+    .unwrap()
+}
+
+const GROUP: &str = "00000000-0000-0000-0000-0000000000b1";
+
+/// A song's FLAC, `Lantern Weather` by Marlo Venn on `Rooms of Salt`
+/// with a small cover, a MusicBrainz record offering `title` by
+/// `artist` on `album`, track 3 of release group [`GROUP`], and that
+/// group's large front from the Cover Art Archive.
+fn file_record_and_cover(
+    title: &str,
+    artist: &str,
+    album: &str,
+) -> (Song, BTreeMap<SourceKey, Facts>) {
+    let (a, mb, caa) = (
+        manual("a.flac"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+        SourceKey::parse(&format!("coverart:{GROUP}")).unwrap(),
+    );
+    let mut fa = audio("flac", 22.0);
+    tag(&mut fa, Field::Title, &["Lantern Weather"], true);
+    tag(&mut fa, Field::Artist, &["Marlo Venn"], true);
+    tag(&mut fa, Field::Album, &["Rooms of Salt"], true);
+    tag(&mut fa, Field::AlbumArtist, &["Marlo Venn"], true);
+    cover(
+        &mut fa,
+        CoverAt::Picture { index: 1 },
+        image(300, 300, full(300, 300), 300),
+    );
+    let mut fmb = Facts::unreadable("mb".into());
+    tag(&mut fmb, Field::Title, &[title], true);
+    tag(&mut fmb, Field::Artist, &[artist], true);
+    tag(&mut fmb, Field::Album, &[album], true);
+    tag(&mut fmb, Field::AlbumArtist, &[artist], true);
+    tag(&mut fmb, Field::Track, &["3"], true);
+    tag(&mut fmb, Field::Date, &["2011-03-04"], true);
+    tag(&mut fmb, Field::MusicBrainzReleaseGroupId, &[GROUP], true);
+    tag(
+        &mut fmb,
+        Field::MusicBrainzTrackId,
+        &["00000000-0000-0000-0000-000000000001"],
+        true,
+    );
+    let mut fc = Facts::unreadable("caa".into());
+    cover(
+        &mut fc,
+        CoverAt::File,
+        image(1200, 1200, full(1200, 1200), 1200),
+    );
+    let facts = BTreeMap::from([(a.clone(), fa), (mb.clone(), fmb), (caa.clone(), fc)]);
+    (song(&[a, mb, caa]), facts)
+}
+
+#[test]
+fn a_record_of_another_song_lends_neither_its_album_nor_its_cover() {
+    let (s, facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
+    let r = run(&s, &facts, &[]);
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt"));
+    assert_eq!(get(&r, "TRACKNUMBER"), None);
+    assert_eq!(get(&r, "MUSICBRAINZ_RELEASEGROUPID"), None);
+    assert_eq!(get(&r, "MUSICBRAINZ_TRACKID"), None);
+    assert_eq!(
+        r.plan.cover.as_ref().unwrap().key,
+        s.sources[0],
+        "the file's own"
+    );
+    assert_eq!(r.why.set_aside.len(), 2, "{:?}", r.why.set_aside);
+    assert!(
+        r.why.set_aside[1].starts_with(&format!(
+            "{}: titled \"Night Ferry\" by Kiri Hoshino on \"Harbor Lights\": no title or credit",
+            s.sources[1]
+        )),
+        "{:?}",
+        r.why.set_aside
+    );
+
+    let mut off = Settings::default();
+    off.set(clean::VETTING, false);
+    let r = run_clean(&s, &facts, &off);
+    assert_eq!(
+        get(&r, "ALBUM").as_deref(),
+        Some("Harbor Lights"),
+        "as before"
+    );
+    assert_eq!(get(&r, "TRACKNUMBER").as_deref(), Some("3"));
+    assert_eq!(r.plan.cover.as_ref().unwrap().key, s.sources[2]);
+    assert_eq!(r.why.set_aside, Vec::<String>::new());
+}
+
+#[test]
+fn a_tribute_act_s_record_gives_its_title_but_no_release() {
+    let (s, facts) = file_record_and_cover(
+        "Lantern Weather",
+        "Marlo Venn Tribute Band",
+        "A Tribute to Marlo Venn",
+    );
+    let r = run(&s, &facts, &[]);
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt"));
+    assert_eq!(get(&r, "ARTIST").as_deref(), Some("Marlo Venn"));
+    assert_eq!(get(&r, "DATE"), None);
+    assert_eq!(get(&r, "MUSICBRAINZ_TRACKID"), None);
+    assert_eq!(r.plan.cover.as_ref().unwrap().key, s.sources[0]);
+}
+
+#[test]
+fn a_record_in_another_script_is_believed() {
+    let (s, facts) = file_record_and_cover("夜の船", "マルロ・ヴェン", "塩の部屋");
+    let r = run(&s, &facts, &[]);
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("塩の部屋"));
+    assert_eq!(why(&r, "TRACKNUMBER").from, s.sources[1].to_string());
+    assert_eq!(
+        why(&r, "MUSICBRAINZ_TRACKID").from,
+        s.sources[1].to_string()
+    );
+    assert_eq!(r.plan.cover.as_ref().unwrap().key, s.sources[2]);
+    assert_eq!(r.why.set_aside, Vec::<String>::new());
+}
+
+#[test]
+fn a_pinned_cover_is_never_set_aside() {
+    let (mut s, facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
+    s.cover = Some(s.sources[2].clone());
+    let r = run(&s, &facts, &[]);
+    assert_eq!(r.plan.cover.as_ref().unwrap().key, s.sources[2]);
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt"));
+    assert_eq!(r.why.set_aside.len(), 1, "{:?}", r.why.set_aside);
 }
 
 #[test]

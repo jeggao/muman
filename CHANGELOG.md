@@ -35,12 +35,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   as text, as `☆`, `♪` or `♥`, is part of the name. The two had
   disagreed, and `⚡` stayed on a title.
 
+- **A MusicBrainz record's ISRC and IDs no longer need its title
+  spelled as the song's.** A record that names the song's recording,
+  its title alike but for a take, a date or a script no rule compares,
+  gives them; one whose artists share no name with the song's gives
+  none. The next sync writes them into such songs, or takes them out.
 - **MusicBrainz records keep the length of their recording.** The next
   sync reads each record kept again, from the store alone, opening no
   media file.
 
 ### Fixed
 
+- **A MusicBrainz record of another song no longer files a song under
+  its album.** A record whose title and artists both disagree with the
+  song's other sources and the tags set by hand gives the song nothing,
+  and neither does the Cover Art Archive's cover of its album; one
+  whose artist and album disagree, as a tribute act's, gives no album,
+  track, date or ID. `muman status` names each source set aside and
+  why, and `[tags.clean.structure] vetting = false` turns it off. The
+  next sync moves such songs to their files' album.
 - **An AcoustID lookup no longer takes a recording of another song.** A
   recording whose title and first artist both disagree with the song's,
   as a print submitted with another song names, is no match whatever
