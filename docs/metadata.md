@@ -127,9 +127,11 @@ against another source:
 - **Watermarks**, the name of whoever shared the files, written into
   the work, label, copyright, comment or grouping: a value that stands as
   a tag in its torrent's name, as `GRP` in `Marlo Venn - Discography
-  [GRP]`; one a file writes in two of those fields; or a work shared by
-  ten titles or more across three albums or more of one torrent, which no
-  piece of music is. A label a discography's albums share stays.
+  [GRP]`; one a file writes in two of those fields, but for a work it
+  writes as its grouping too or a label as its copyright; or a work
+  shared by ten titles or more across three albums or more of one
+  torrent, an album's discs counting as one, which no piece of music is.
+  A label a discography's albums share stays.
 
 `muman status` names each value dropped, as `dropped  WORK “GRP” from
 torrent:…: a watermark of torrent:…`. `[tags.clean.packaging]
