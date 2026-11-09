@@ -297,7 +297,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                 for why in &resolved.why.contested {
                     said.warning(format!(
                         "Won by its place in `sources` alone: {song}: {why}; \
-                         set the tag or reorder `sources` to settle it"
+                         set the tag to settle it"
                     ))?;
                 }
             }

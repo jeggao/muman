@@ -38,6 +38,11 @@
 //! nothing with `Marlo Venn`. A performer a file's title names before
 //! ` / ` is one of its credits ([`similar::performers`]).
 //!
+//! A field the song's audio sources or tags set by hand claim is held to
+//! those alone; only a field none of them claims is held to the other
+//! vetted sources, since two records one lookup found may well name one
+//! wrong song together.
+//!
 //! - **Other**, giving the song nothing: a title and credits that both
 //!   disagree, with no identifier shared, whatever led the lookup to it;
 //!   or points at or under [`OTHER_AT`].
@@ -276,6 +281,10 @@ struct Vet {
     /// Whether it gives recording IDs, as a source believed does unless
     /// its credits share no name with the others'.
     ids: bool,
+    /// Whether its credits count as a believed source's: not where they
+    /// share no name with the others' and its album is not the files'
+    /// own, as a cover act's.
+    credits: bool,
     /// Why, in words.
     why: String,
 }
@@ -301,9 +310,16 @@ impl Vets {
             let e = evidence(s, &others, hand, audio_ms, units);
             let verdict = e.verdict();
             let ids = verdict == Verdict::Same && e.credits != Some(false);
+            let credits = ids || (verdict == Verdict::Same && e.release == Some(true));
             if !ids {
                 let why = describe(s, e);
-                vets.insert(s.key.clone(), Vet { verdict, ids, why });
+                let vet = Vet {
+                    verdict,
+                    ids,
+                    credits,
+                    why,
+                };
+                vets.insert(s.key.clone(), vet);
             }
         }
         let mut vets = Self(vets);
@@ -338,6 +354,7 @@ impl Vets {
                 let vet = Vet {
                     verdict: Verdict::Other,
                     ids: false,
+                    credits: false,
                     why: format!("the cover of the album {by} names"),
                 };
                 self.0.insert(s.key.clone(), vet);
@@ -348,6 +365,15 @@ impl Vets {
     #[must_use]
     pub fn verdict(&self, key: &SourceKey) -> Verdict {
         self.0.get(key).map_or(Verdict::Same, |v| v.verdict)
+    }
+
+    /// Whether `key`'s credits rank as a believed source's: a record
+    /// crediting no one the others do is believed for its artists only
+    /// where its album is the files' own, as a concert's crediting each
+    /// singer.
+    #[must_use]
+    pub fn credits(&self, key: &SourceKey) -> bool {
+        self.0.get(key).is_none_or(|v| v.credits)
     }
 
     /// Whether `key` gives the song `field`: nothing once it names another
@@ -396,12 +422,21 @@ fn evidence(
             .collect()
     };
     let each = |field: Field| -> Vec<Vec<&str>> {
-        others
-            .iter()
-            .map(|o| o.values(field).collect::<Vec<_>>())
-            .chain([by_hand(field)])
-            .filter(|v| !v.is_empty())
-            .collect()
+        let of = |vetted: bool| -> Vec<Vec<&str>> {
+            let hand = (!vetted).then(|| by_hand(field));
+            (others.iter())
+                .filter(|o| o.vetted == vetted)
+                .map(|o| o.values(field).collect::<Vec<_>>())
+                .chain(hand)
+                .filter(|v| !v.is_empty())
+                .collect()
+        };
+        let anchored = of(false);
+        if anchored.is_empty() {
+            of(true)
+        } else {
+            anchored
+        }
     };
     let theirs = |field: Field| -> Vec<&str> { each(field).into_iter().flatten().collect() };
     let shares = |field: Field| {

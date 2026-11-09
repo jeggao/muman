@@ -9,6 +9,31 @@ static NAMING: std::sync::LazyLock<Naming> = std::sync::LazyLock::new(|| {
 });
 static AUDIO: std::sync::LazyLock<Audio> = std::sync::LazyLock::new(Audio::default);
 static COVER: std::sync::LazyLock<Cover> = std::sync::LazyLock::new(Cover::default);
+static KNOWN: std::sync::LazyLock<Known> = std::sync::LazyLock::new(Known::default);
+static CLEAN: std::sync::LazyLock<Settings> = std::sync::LazyLock::new(Settings::default);
+static ENGLISH: std::sync::LazyLock<crate::settings::Lyrics> = std::sync::LazyLock::new(english);
+
+/// What a new song list resolves `song` with: `[tags] believe` and every
+/// switch as they come.
+fn defaults<'a>(song: &'a Song, facts: &'a BTreeMap<SourceKey, Facts>) -> Input<'a> {
+    Input {
+        song,
+        album: None,
+        facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &ENGLISH,
+        clean: &CLEAN,
+        typography: clean::Typography::default(),
+        believe: clean::Believe::default(),
+        known: &KNOWN,
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    }
+}
 use crate::facts::{AudioFacts, CoverFacts, LyricsFacts};
 use crate::lyrics::{Language, Timing};
 use crate::quality::{AudioQuality, ImageQuality};
@@ -3061,6 +3086,16 @@ fn a_watermark_and_a_placeholder_say_nothing_and_status_names_them() {
         ]
     );
 
+    let mut labelled = song(std::slice::from_ref(&key));
+    labelled.tags = vec![("label".into(), vec!["Glass Orchard Records".into()])];
+    let r = run_knowing(&labelled, &facts, &known, &Settings::default());
+    assert_eq!(
+        r.why.dropped.len(),
+        3,
+        "a label set by hand: {:?}",
+        r.why.dropped
+    );
+
     let mut off = Settings::default();
     off.set(clean::WATERMARK, false);
     off.set(clean::PLACEHOLDER, false);
@@ -3125,9 +3160,18 @@ fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
         (upload.clone(), shared_by("Marlo Venn")),
     ]);
     assert_eq!(
-        written(&run(&song(&[file, upload]), &facts, &[]), Field::Date),
+        written(
+            &run(&song(&[file, upload.clone()]), &facts, &[]),
+            Field::Date
+        ),
         Some(&["2023-01-23".to_string()][..]),
         "one of the credited artists uploaded it"
+    );
+    let facts = BTreeMap::from([(upload.clone(), shared_by("Orchard Archive"))]);
+    assert_eq!(
+        written(&run(&song(&[upload]), &facts, &[]), Field::Date),
+        None,
+        "an upload credited by its channel alone"
     );
 }
 
@@ -3241,18 +3285,31 @@ fn credits_follow_the_kind_believed_first_but_never_an_unsure_record() {
         &[
             (Field::Title, "Night Ferry"),
             (Field::Artist, "Kiri Hoshino"),
+            (Field::Album, "Harbor Songs"),
         ],
     );
     let s = song(&[file.clone(), record.clone()]);
-    let artist = |b| value(&run_believing(&s, &facts, b), Field::Artist);
+    let artist =
+        |b, facts: &BTreeMap<SourceKey, Facts>| value(&run_believing(&s, facts, b), Field::Artist);
     assert_eq!(
-        artist(clean::Believe::MusicbrainzFirst).as_deref(),
+        artist(clean::Believe::MusicbrainzFirst, &facts).as_deref(),
         Some("Kiri Hoshino"),
         "the record credits who sings it, as a concert's does"
     );
     assert_eq!(
-        artist(clean::Believe::FilesFirst).as_deref(),
+        artist(clean::Believe::FilesFirst, &facts).as_deref(),
         Some("Marlo Venn")
+    );
+    let mut on_no_album = facts.clone();
+    on_no_album
+        .get_mut(&record)
+        .unwrap()
+        .tags
+        .remove(&Field::Album);
+    assert_eq!(
+        artist(clean::Believe::MusicbrainzFirst, &on_no_album).as_deref(),
+        Some("Marlo Venn"),
+        "a cover act's, for all its album says"
     );
 
     let (file, record, facts) = file_and_record(
@@ -3308,7 +3365,7 @@ fn the_order_of_sources_changes_no_pick_but_a_contested_one() {
     more.insert(other.clone(), o);
     more.remove(&record);
     let r = run_believing(
-        &song(&[file, other]),
+        &song(&[file, other.clone()]),
         &more,
         clean::Believe::MusicbrainzFirst,
     );
@@ -3319,6 +3376,10 @@ fn the_order_of_sources_changes_no_pick_but_a_contested_one() {
           from manual:b.flac, by the order of `sources`"
         ]
     );
+    let mut settled = song(&[manual("a.flac"), other]);
+    settled.tags = vec![("title".into(), vec!["Paper Comets".into()])];
+    let r = run_believing(&settled, &more, clean::Believe::MusicbrainzFirst);
+    assert!(r.why.contested.is_empty(), "set by hand");
 }
 
 fn run_picked(
@@ -3506,6 +3567,14 @@ fn an_instrumental_takes_no_lyrics_unless_its_switch_is_off() {
     let mut off = Settings::default();
     off.set(clean::lyrics::INSTRUMENTAL, false);
     assert!(run_lyrics(&s, &facts, &off).plan.lyrics.is_some());
+    let (s, facts) = sung_with_lyrics_file("Karaoke Lanterns", "eng", true, 180_000);
+    assert!(
+        run_lyrics(&s, &facts, &Settings::default())
+            .plan
+            .lyrics
+            .is_some(),
+        "a title naming karaoke outside its brackets"
+    );
 }
 
 #[test]
@@ -3562,4 +3631,81 @@ fn lyrics_timed_past_the_song_s_end_rank_after_those_that_fit() {
         Some(manual("a.lrc")),
         "by place, the switch off"
     );
+}
+
+#[test]
+fn the_album_s_folder_never_turns_a_record_against_the_audio_its_lookup_had() {
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{}/{p}", "a".repeat(40))).unwrap();
+    let (a, b) = (
+        key("Harbor Nights/01 Night Ferry.flac"),
+        key("Glass Weather/01 Night Ferry.flac"),
+    );
+    let mb = SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap();
+    let (mut fa, mut fb) = (audio("flac", 22.0), audio("flac", 22.0));
+    (fa.rev, fb.rev, fb.duration) = ("a".into(), "b".into(), Some(231.0));
+    let mut fmb = Facts::unreadable("mb".into());
+    for f in [&mut fa, &mut fb, &mut fmb] {
+        tag(f, Field::Title, &["Night Ferry"], true);
+        tag(f, Field::Artist, &["Marlo Venn"], true);
+    }
+    fmb.length_ms = Some(231_000);
+    let facts = BTreeMap::from([(a.clone(), fa), (b.clone(), fb), (mb.clone(), fmb)]);
+    let s = song(&[a.clone(), b, mb]);
+    let pick = crate::album::Pick {
+        audio_from: crate::album::origin_of(&a),
+        ..crate::album::Pick::default()
+    };
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(r.plan.audio.key, a, "{}", r.why.audio);
+}
+
+#[test]
+fn two_records_of_another_song_never_vouch_for_each_other() {
+    let file = manual("a.flac");
+    let mut fa = audio("flac", 22.0);
+    for (field, value) in [
+        (Field::Title, "Lantern Weather"),
+        (Field::Artist, "Marlo Venn"),
+        (Field::Album, "Rooms of Salt"),
+    ] {
+        tag(&mut fa, field, &[value], true);
+    }
+    let mut facts = BTreeMap::from([(file.clone(), fa)]);
+    let mut s = song(&[file]);
+    for n in 1..=2 {
+        let key = SourceKey::parse(&format!(
+            "musicbrainz:00000000-0000-0000-0000-00000000000{n}"
+        ))
+        .unwrap();
+        let mut f = Facts::unreadable(format!("mb{n}"));
+        tag(&mut f, Field::Title, &["Night Ferry"], true);
+        tag(&mut f, Field::Artist, &["Kiri Hoshino"], true);
+        tag(&mut f, Field::Album, &["Harbor Lights"], true);
+        facts.insert(key.clone(), f);
+        s.sources.push(key);
+    }
+    let r = resolve(&defaults(&s, &facts)).unwrap();
+    assert_eq!(get(&r, "TITLE").as_deref(), Some("Lantern Weather"));
+    assert_eq!(r.why.set_aside.len(), 2, "{:?}", r.why.set_aside);
+}
+
+#[test]
+fn a_cover_act_s_record_never_credits_a_video_s_song() {
+    let (video, mb) = (
+        yt("vid00000001"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+    );
+    let mut v = audio("opus", 20.0);
+    tag(&mut v, Field::Title, &["Night Ferry"], true);
+    tag(&mut v, Field::Artist, &["Marlo Venn"], true);
+    let mut r = Facts::unreadable("mb".into());
+    tag(&mut r, Field::Title, &["Night Ferry"], true);
+    tag(&mut r, Field::Artist, &["Kiri Hoshino"], true);
+    let facts = BTreeMap::from([(video.clone(), v), (mb.clone(), r)]);
+    let r = resolve(&defaults(&song(&[video, mb]), &facts)).unwrap();
+    assert_eq!(get(&r, "ARTIST").as_deref(), Some("Marlo Venn"));
 }

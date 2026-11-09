@@ -16,8 +16,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `sources` keeps the order of each song's `sources`. Offers alike but
   for a spelling or a decoration now agree, a title naming a version, as
   `(Live)`, keeps it against one that does not whatever their order, and
-  a field still won by the order of `sources` alone is named by `muman
-  status` and `muman check`.
+  a title or artist still won by the order of `sources` alone is named
+  by `muman status` and `muman check` until it is set by hand.
 
 - **`muman info --changes` lists what a sync would change in each
   song, value by value.** Each tag, the path, audio, format, cover and
