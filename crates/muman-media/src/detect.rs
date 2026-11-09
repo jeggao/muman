@@ -161,7 +161,7 @@ impl Watermarks {
                 .offers
                 .get(&Field::Album)
                 .and_then(|o| o.values.first())
-                .map(|a| fold(crate::clean::disc_in(a).map_or(a.as_str(), |(at, _)| &a[..at])))
+                .map(|a| fold(crate::parts::album(a).name))
                 .unwrap_or_default();
             let title = first(Field::Title);
             let tags = source.name.map(name_tags).unwrap_or_default();

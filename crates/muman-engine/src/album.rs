@@ -502,10 +502,7 @@ pub fn units_of(song: &Song, facts: &BTreeMap<SourceKey, Facts>) -> BTreeSet<Str
             .get(key)
             .and_then(|f| f.tags.get(&Field::Album))
             .and_then(|o| o.values.first());
-        let album = named.map_or_else(String::new, |a| {
-            let at = crate::clean::disc_in(a).map_or(a.len(), |(at, _)| at);
-            similar::fold(&a[..at])
-        });
+        let album = named.map_or_else(String::new, |a| similar::fold(crate::parts::album(a).name));
         units.insert(format!("{origin}\u{1f}{album}"));
     }
     units
