@@ -326,6 +326,12 @@ fn a_subtitle_loses_its_notes_and_sounds_and_joins_its_wrapped_lines() {
         7,
         "lyrics of no subtitle"
     );
+    let sung = "[00:01.00]Lamps along the quay\n[00:02.00][Let the music play]\n";
+    assert_eq!(
+        clean(sung, &subtitle(), &[]).text,
+        sung,
+        "a line sung in brackets"
+    );
     let lower = "[00:01.00]why are you\n[00:01.00]drifting there\n";
     assert_eq!(
         clean(lower, &subtitle(), &[]).text,
