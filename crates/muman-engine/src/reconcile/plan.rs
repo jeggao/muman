@@ -304,7 +304,7 @@ impl<'a> Resolver<'a> {
             settings,
             state,
             naming: settings.library.naming(library)?.with_tail(settings.tail()),
-            known: Known::of(manifest, &state.facts),
+            known: Known::of(manifest, &state.facts, &state.lookups),
         })
     }
 

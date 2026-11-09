@@ -44,8 +44,10 @@
 //! wrong song together.
 //!
 //! - **Other**, giving the song nothing: a title and credits that both
-//!   disagree, with no identifier shared, whatever led the lookup to it;
-//!   or points at or under [`OTHER_AT`].
+//!   disagree, or a title naming an instrumental or a karaoke take that
+//!   no other source's title names ([`VOICELESS`]), with no identifier
+//!   shared, whatever led the lookup to it; or points at or under
+//!   [`OTHER_AT`].
 //! - **Unsure**, giving no release fields and no recording IDs, which
 //!   name what it describes: points at or under [`UNSURE_AT`]; credits
 //!   that disagree while its album is not the files', as a cover act's
@@ -129,6 +131,11 @@ pub const UNIT_APART: i64 = -7;
 pub const UNSURE_AT: i64 = -3;
 /// The points at or under which a source names another recording.
 pub const OTHER_AT: i64 = -10;
+/// The versions of a sung song that are other recordings whatever else
+/// agrees: a single holds its instrumental beside the song, by the same
+/// artist, as long and on the same album, and AcoustID may link the two
+/// takes' prints, so the title alone tells them apart.
+pub const VOICELESS: [&str; 2] = ["instrumental", "karaoke"];
 /// How near a stated length is to agree: a release's length and a rip's
 /// differ by a second or two.
 pub const CLOSE_MS: i64 = 3_000;
@@ -191,6 +198,9 @@ struct Evidence {
     /// unless each unit is on one, and against none where the files name
     /// no album, which setting its release aside would leave the song.
     unit: Option<bool>,
+    /// Its title names one of [`VOICELESS`] that none of the titles it
+    /// is held to names.
+    voiceless: bool,
 }
 
 impl Evidence {
@@ -211,7 +221,7 @@ impl Evidence {
     fn verdict(self) -> Verdict {
         let points = self.points();
         let unnamed = self.title == Some(false) && self.credits == Some(false);
-        if (unnamed && !self.identifier) || points <= OTHER_AT {
+        if ((unnamed || self.voiceless) && !self.identifier) || points <= OTHER_AT {
             Verdict::Other
         } else if points <= UNSURE_AT
             || (self.credits == Some(false) && self.release == Some(false))
@@ -249,6 +259,9 @@ impl Evidence {
                     .to_string()
                 }));
             }
+        }
+        if self.voiceless {
+            said.push("an instrumental or karaoke take no other title names".to_string());
         }
         said.extend(self.length.map(|l| {
             if l {
@@ -503,6 +516,14 @@ fn evidence(
             .collect()
     };
     let mine = |field: Field| -> Vec<&str> { s.values(field).collect() };
+    let voiceless = |titles: &[&str]| -> BTreeSet<&'static str> {
+        (titles.iter())
+            .flat_map(|t| similar::versions_in(t))
+            .filter(|v| VOICELESS.contains(v))
+            .collect()
+    };
+    let unsung = voiceless(&mine(Field::Title));
+    let held_to = each(Field::Title);
     let release = match similar::titles_agree(&mine(Field::Album), &of_files(Field::Album), true) {
         Some(false) => {
             let artists: Vec<&str> = of_files(Field::AlbumArtist).concat();
@@ -513,7 +534,7 @@ fn evidence(
     };
     Evidence {
         identifier: shares(Field::Isrc) || shares(Field::MusicBrainzTrackId),
-        title: similar::titles_agree(&mine(Field::Title), &each(Field::Title), false),
+        title: similar::titles_agree(&mine(Field::Title), &held_to, false),
         credits: if shares(Field::MusicBrainzArtistId) {
             Some(true)
         } else {
@@ -539,6 +560,9 @@ fn evidence(
                 (named && units.iter().all(Option::is_some)).then_some(false)
             }
         },
+        voiceless: !unsung.is_empty()
+            && !held_to.is_empty()
+            && held_to.iter().all(|t| voiceless(t).is_disjoint(&unsung)),
     }
 }
 
@@ -721,6 +745,61 @@ mod tests {
         assert!(
             vet(&FILE, None, &[], &[]).set_aside().is_empty(),
             "never held to itself"
+        );
+    }
+
+    #[test]
+    fn a_record_of_an_instrumental_no_other_title_names_names_another_recording() {
+        let instrumental = [
+            (Field::Title, "Lantern Weather (Instrumental)"),
+            (Field::Artist, "Marlo Venn"),
+            (Field::Album, "Rooms of Salt"),
+        ];
+        let vets = vet(&instrumental, Some(241_000), &FILE, &[]);
+        assert_eq!(
+            vets.verdict(&record()),
+            Verdict::Other,
+            "whatever its artist, album and length say"
+        );
+        assert!(
+            vets.set_aside()[0].contains("an instrumental or karaoke take no other title names"),
+            "{:?}",
+            vets.set_aside()
+        );
+        let hangul = [
+            (Field::Title, "랜턴 웨더 (Instrumental)"),
+            (Field::Artist, "마를로"),
+            (Field::Album, "Rooms of Salt"),
+        ];
+        assert_eq!(
+            vet(&hangul, Some(241_000), &FILE, &[]).verdict(&record()),
+            Verdict::Other,
+            "a title in other letters"
+        );
+        let off_vocal = [
+            (Field::Title, "Lantern Weather (Off Vocal)"),
+            FILE[1],
+            FILE[2],
+        ];
+        assert_eq!(
+            vet(&instrumental, Some(241_000), &off_vocal, &[]).verdict(&record()),
+            Verdict::Same,
+            "the files' own instrumental"
+        );
+        let isrc = (Field::Isrc, "XX0000000001");
+        let (shared, tagged) = (
+            [&instrumental[..], &[isrc]].concat(),
+            [&FILE[..], &[isrc]].concat(),
+        );
+        assert_ne!(
+            vet(&shared, Some(241_000), &tagged, &[]).verdict(&record()),
+            Verdict::Other,
+            "an identifier in common"
+        );
+        assert_eq!(
+            vet(&instrumental, Some(241_000), &[], &[]).verdict(&record()),
+            Verdict::Same,
+            "no title to hold it to"
         );
     }
 

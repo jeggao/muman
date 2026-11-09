@@ -142,6 +142,7 @@ pub const VERSIONS: [(&str, &[&str]); 7] = [
         &[
             "instrumental",
             "inst",
+            "instru",
             "off vocal",
             "おふぼーかる",
             "伴奏",

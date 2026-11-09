@@ -124,7 +124,11 @@ never what the record itself gave the song. muman compares:
 
 A record whose title and artists both disagree names another song: it
 gives the song nothing, and neither does the Cover Art Archive's cover
-of its album. One that may name another, as a cover act's record whose
+of its album. So does a record titled as an instrumental or a karaoke
+take, `(Instrumental)`, `(Off Vocal)`, when no other source's title
+says so: a single holds its instrumental beside the song, by the same
+artist and as long, so only the title tells them apart. One that may
+name another, as a cover act's record whose
 title agrees but whose artist and album do not, gives no release field
 and no ID, and so does one on another release than its album, unless
 its album is the files' own, as a concert's video beside its album, or

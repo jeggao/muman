@@ -61,13 +61,19 @@ pub enum Language {
 impl Language {
     /// The languages it may be: each code the info JSON gives the
     /// stream's display name, or the stream's tag; none for a file.
+    /// YouTube lists its original track again as `<code>-orig`, and a
+    /// second track in one language under the language and the track's
+    /// ID, as `en-Ab1-Cd2Ef3g`, which is no language tag: such a code is
+    /// read by its language alone.
     #[must_use]
     pub fn langs(&self) -> Vec<Lang> {
         match self {
-            // YouTube lists its original track again as `<code>-orig`.
             Self::Codes(codes) => codes
                 .iter()
-                .filter_map(|c| Lang::parse(c.strip_suffix("-orig").unwrap_or(c)))
+                .filter_map(|c| {
+                    let c = c.strip_suffix("-orig").unwrap_or(c);
+                    Lang::parse(c).or_else(|| Lang::parse(c.split('-').next()?))
+                })
                 .collect(),
             Self::Tag(tag) => Lang::parse(tag).into_iter().collect(),
             Self::Unstated => Vec::new(),
@@ -1276,6 +1282,17 @@ mod tests {
             pick(&prefs(&["zh"]), &subs, &info).map(|s| s.index),
             Some(2)
         );
+    }
+
+    #[test]
+    fn a_second_track_in_one_language_reads_as_that_language() {
+        let codes = |c: &[&str]| Language::Codes(c.iter().map(|c| (*c).to_string()).collect());
+        assert_eq!(codes(&["en-Ab1-Cd2Ef3g"]).langs(), prefs(&["en"]));
+        assert_eq!(
+            codes(&["zh-Hant", "pt-orig"]).langs(),
+            prefs(&["zh-Hant", "pt"])
+        );
+        assert_eq!(codes(&["und-Ab1-Cd2Ef3g"]).langs(), Vec::<Lang>::new());
     }
 
     #[test]

@@ -134,6 +134,7 @@ fn version_words_name_conflicts_in_any_language() {
         ["instrumental"]
     );
     assert_eq!(conflicts("바람 (Inst.)", "바람"), ["instrumental"]);
+    assert_eq!(conflicts("바람 (Instru)", "바람"), ["instrumental"]);
     assert_eq!(conflicts("夜行 (現場)", "夜行"), ["live version"]);
     assert_eq!(conflicts("でもね", "でもね"), [] as [&str; 0]);
     assert_eq!(conflicts("夜行 (デモ)", "夜行"), ["demo"]);

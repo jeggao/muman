@@ -934,8 +934,9 @@ pub struct Resolved {
 }
 
 /// What resolving a song reads of the library's other sources: every
-/// album they hold, for cleaning, and the watermarks of each source
-/// group among the sources the song list names ([`crate::detect`]).
+/// album they hold, for cleaning, the watermarks of each source group
+/// among the sources the song list names ([`crate::detect`]), and the
+/// sources each record was looked up from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Known {
     pub albums: Albums,
@@ -943,15 +944,21 @@ pub struct Known {
     /// The release group most songs of each album unit are on
     /// ([`crate::album::unit_groups`]).
     pub units: BTreeMap<String, String>,
+    /// The sources the lookups that found each record were made from.
+    pub found_from: BTreeMap<SourceKey, BTreeSet<SourceKey>>,
 }
 
 impl Known {
-    /// The library `manifest` lists, of `facts`: albums from every source
-    /// measured, as cleaning has always read them, and watermarks from the
-    /// sources a song lists alone, so a source no song lists any more
-    /// changes no pick.
+    /// The library `manifest` lists, of `facts` and `lookups`: albums
+    /// from every source measured, as cleaning has always read them, and
+    /// watermarks from the sources a song lists alone, so a source no
+    /// song lists any more changes no pick.
     #[must_use]
-    pub fn of(manifest: &Manifest, facts: &BTreeMap<SourceKey, Facts>) -> Self {
+    pub fn of(
+        manifest: &Manifest,
+        facts: &BTreeMap<SourceKey, Facts>,
+        lookups: &[crate::state::Looked],
+    ) -> Self {
         let listed = manifest.keys();
         let groups: Vec<(String, Option<&str>, &tags::Offers)> = listed
             .iter()
@@ -966,7 +973,17 @@ impl Known {
                 Some((group_of(key), name, &facts.get(key)?.tags))
             })
             .collect();
+        let mut found_from: BTreeMap<SourceKey, BTreeSet<SourceKey>> = BTreeMap::new();
+        for l in lookups {
+            if let crate::state::Outcome::Found(record) = &l.outcome {
+                found_from
+                    .entry(record.clone())
+                    .or_default()
+                    .insert(l.from.clone());
+            }
+        }
         Self {
+            found_from,
             units: crate::album::unit_groups(&manifest.songs, facts),
             albums: Albums::of(facts.values().map(|f| &f.tags)),
             watermarks: Watermarks::of(groups.iter().map(|(group, name, offers)| detect::Source {
@@ -1521,6 +1538,13 @@ fn recordings_of(
                 key,
                 ms: i64::try_from(facts.length_ms?).ok()?,
                 named: ids(facts).iter().any(|id| named.contains(id)),
+                from: input
+                    .known
+                    .found_from
+                    .get(key)
+                    .into_iter()
+                    .flatten()
+                    .collect(),
             })
         })
         .collect();

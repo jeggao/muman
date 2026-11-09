@@ -38,7 +38,9 @@ ranked](configuration.md#how-sources-are-ranked)).
   recording is the one whose length fits its MusicBrainz record, else
   the one most of its sources hold; sources of another rank after every
   source of it. A record counts only for a recording that holds none of
-  the audio the lookup asked with, unless a file names its ID. With no
+  the audio the lookup asked with and not the source it was made from,
+  unless a file names its ID, so a music video's own lookup never makes
+  the video's cut the song's. With no
   record and no recording holding the most sources, nothing changes.
   `status` names each source of another recording, and one playing more
   than 0.5% faster or slower than the rest of its own.
