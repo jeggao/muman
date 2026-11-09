@@ -1049,9 +1049,53 @@ impl State {
         sources: &[SourceKey],
         record: &SourceKey,
     ) -> &[crate::acoustid::Candidate] {
-        self.lookups
+        Self::found_by(
+            self.lookups
+                .iter()
+                .filter(|l| l.find == Provider::AcoustId.name() && sources.contains(&l.from)),
+            record,
+        )
+    }
+
+    /// The newest AcoustID lookup made from each source, for
+    /// [`State::candidates_in`] to read many songs' candidates from without
+    /// going through every lookup for each.
+    #[must_use]
+    pub fn acoustid_lookups(&self) -> BTreeMap<&SourceKey, &Looked> {
+        let mut newest: BTreeMap<&SourceKey, &Looked> = BTreeMap::new();
+        for l in self
+            .lookups
             .iter()
-            .filter(|l| l.find == Provider::AcoustId.name() && sources.contains(&l.from))
+            .filter(|l| l.find == Provider::AcoustId.name())
+        {
+            let at = newest.entry(&l.from).or_insert(l);
+            if l.at > at.at {
+                *at = l;
+            }
+        }
+        newest
+    }
+
+    /// [`State::candidates`], read from `lookups`, as
+    /// [`State::acoustid_lookups`] gives them.
+    #[must_use]
+    pub fn candidates_in<'a>(
+        lookups: &BTreeMap<&SourceKey, &'a Looked>,
+        sources: &[SourceKey],
+        record: &SourceKey,
+    ) -> &'a [crate::acoustid::Candidate] {
+        Self::found_by(
+            sources.iter().filter_map(|k| lookups.get(k).copied()),
+            record,
+        )
+    }
+
+    /// The candidates of the newest of `lookups`, when it found `record`.
+    fn found_by<'a>(
+        lookups: impl Iterator<Item = &'a Looked>,
+        record: &SourceKey,
+    ) -> &'a [crate::acoustid::Candidate] {
+        lookups
             .max_by_key(|l| l.at)
             .filter(|l| matches!(&l.outcome, Outcome::Found(k) if k == record))
             .map_or(&[], |l| l.candidates.as_slice())

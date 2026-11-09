@@ -3901,19 +3901,19 @@ fn a_torrent_s_override_drops_its_fields_and_reads_its_titles() {
     })
     .unwrap();
     assert_eq!(get(&r, "TITLE").as_deref(), Some("Night Ferry"));
-    assert_eq!(get(&r, "ARTIST"), None, "credits = false");
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Marlo Venn"),
+        "read off its title, its own credit left out"
+    );
     assert_eq!(get(&r, "WORK"), None);
-    clean.from[0].credits = true;
+    clean.from[0].title = None;
     let r = resolve(&Input {
         clean: &clean,
         ..defaults(&s, &facts)
     })
     .unwrap();
-    assert_eq!(
-        get(&r, "ARTIST").as_deref(),
-        Some("Marlo Venn"),
-        "read off its title"
-    );
+    assert_eq!(get(&r, "ARTIST"), None, "credits = false");
 }
 
 #[test]
@@ -3995,4 +3995,116 @@ fn a_song_is_written_in_the_house_style_but_a_tag_set_by_hand() {
         Some("Night Ferry [Live]"),
         "set by hand"
     );
+}
+
+/// A release pick moving the record `key` to release `id`, titled `album`,
+/// of release group `group`.
+fn moved_to(key: &SourceKey, album: &str, id: &str, group: &str) -> crate::album::Pick {
+    let offers: Offers = [
+        (Field::Album, album),
+        (Field::MusicBrainzAlbumId, id),
+        (Field::MusicBrainzReleaseGroupId, group),
+        (Field::Track, "4"),
+        (Field::Date, "2015"),
+    ]
+    .into_iter()
+    .map(|(f, v)| {
+        let offer = crate::tags::Offer {
+            values: vec![v.to_string()],
+            structured: true,
+            also: Vec::new(),
+        };
+        (f, offer)
+    })
+    .collect();
+    crate::album::Pick {
+        release: Some(crate::release::Pick {
+            key: key.clone(),
+            offers,
+            why: format!("on \"{album}\", the release 9 of its album's 10 songs are on"),
+        }),
+        ..crate::album::Pick::default()
+    }
+}
+
+#[test]
+fn a_record_set_aside_and_moved_leaves_the_song_its_files_album() {
+    let (s, facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
+    let other = "00000000-0000-0000-0000-0000000000c2";
+    let pick = moved_to(
+        &s.sources[1],
+        "Harbor Lights",
+        "00000000-0000-0000-0000-0000000000c1",
+        other,
+    );
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "ALBUM").as_deref(),
+        Some("Rooms of Salt"),
+        "no single"
+    );
+    assert_eq!(r.why.release, None, "no move to say");
+}
+
+#[test]
+fn a_record_moved_to_another_release_of_its_group_keeps_the_group_s_fields() {
+    let (s, mut facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    let record = facts.get_mut(&s.sources[1]).unwrap();
+    tag(record, Field::AlbumArtist, &["Various Artists"], true);
+    tag(record, Field::OriginalDate, &["1999"], true);
+    tag(record, Field::Label, &["Glass Orchard Records"], true);
+    let original = crate::settings::Release {
+        date: crate::settings::ReleaseDate::Original,
+        ..crate::settings::Release::default()
+    };
+    let pick = moved_to(
+        &s.sources[1],
+        "Rooms of Salt (Deluxe)",
+        "00000000-0000-0000-0000-0000000000c1",
+        GROUP,
+    );
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        release: &original,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt (Deluxe)"));
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Various Artists"));
+    assert_eq!(
+        get(&r, "DATE").as_deref(),
+        Some("1999"),
+        "its album's first"
+    );
+    assert_eq!(get(&r, "LABEL"), None, "the old release's own");
+}
+
+#[test]
+fn a_record_moved_to_another_group_is_held_to_its_release_not_its_old_one() {
+    let (s, facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    let known = Known {
+        units: (crate::album::units_of(&s, &facts).into_iter())
+            .map(|u| (u, GROUP.to_string()))
+            .collect(),
+        ..Known::default()
+    };
+    let other = "00000000-0000-0000-0000-0000000000c2";
+    let pick = moved_to(
+        &s.sources[1],
+        "Complete Harbor Works",
+        "00000000-0000-0000-0000-0000000000c1",
+        other,
+    );
+    let r = resolve(&Input {
+        known: &known,
+        pick: Some(&pick),
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Complete Harbor Works"));
+    assert!(r.why.release.is_some());
 }

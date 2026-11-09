@@ -252,7 +252,7 @@ fn a_kind_avoided_is_taken_only_where_nothing_else_would_be() {
 #[test]
 fn two_songs_never_share_a_track() {
     let lib = library(
-        &[BEST_OF, BEST_OF],
+        &[BEST_OF, VIDEO],
         vec![
             vec![recording(0, &[(ALBUM, "Harbor Nights", &["Album"], 1)])],
             vec![
@@ -334,4 +334,44 @@ fn a_song_pinned_to_a_release_goes_on_it_and_counts_for_no_album() {
     assert_eq!(picks.keys().copied().collect::<Vec<_>>(), [2]);
     assert_eq!(value(&picks[&2], Field::MusicBrainzAlbumId), Some(BEST_OF));
     assert!(picks[&2].why.ends_with("the release it is pinned to"));
+}
+
+#[test]
+fn an_album_on_one_release_stays_on_it_and_a_stray_joins_it() {
+    let only_best_of = |n: usize| {
+        let track = u32::try_from(n).unwrap() + 1;
+        recording(
+            n,
+            &[(BEST_OF, "Harbor Nights", &["Album", "Compilation"], track)],
+        )
+    };
+    let lib = library(
+        &[ALBUM, ALBUM, ALBUM],
+        vec![
+            vec![only_best_of(0)],
+            vec![only_best_of(1)],
+            vec![only_best_of(2)],
+        ],
+    );
+    assert!(
+        choose_in(&lib, &Release::default()).is_empty(),
+        "none names its release"
+    );
+    let both = |n: usize| {
+        let track = u32::try_from(n).unwrap() + 1;
+        recording(
+            n,
+            &[
+                (BEST_OF, "Best Of", &["Album", "Compilation"], 9),
+                (ALBUM, "Harbor Nights", &["Album"], track),
+            ],
+        )
+    };
+    let lib = library(
+        &[ALBUM, ALBUM, BEST_OF],
+        vec![vec![both(0)], vec![both(1)], vec![both(2)]],
+    );
+    let picks = choose_in(&lib, &Release::default());
+    assert_eq!(picks.keys().copied().collect::<Vec<_>>(), [2]);
+    assert_eq!(value(&picks[&2], Field::MusicBrainzAlbumId), Some(ALBUM));
 }

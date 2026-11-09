@@ -353,11 +353,12 @@ fn agree_on_albums(
     state: &State,
     on_disk: Option<&BTreeSet<SourceKey>>,
 ) {
+    let lookups = state.acoustid_lookups();
     let mut picks: BTreeMap<usize, crate::album::Pick> = crate::release::choose(
         planned,
         &manifest.songs,
         &state.facts,
-        &|song, record| state.candidates(&song.sources, record),
+        &|song, record| State::candidates_in(&lookups, &song.sources, record),
         &resolver.settings.release,
     )
     .into_iter()

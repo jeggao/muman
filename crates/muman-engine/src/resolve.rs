@@ -885,8 +885,13 @@ pub enum Doubt {
         key: SourceKey,
         why: String,
     },
-    /// A source vetting set aside, in part or whole ([`crate::vet`]).
-    SetAside { key: SourceKey, why: String },
+    /// A source vetting set aside, in part or whole ([`crate::vet`]):
+    /// `release`, whether it still gives its release.
+    SetAside {
+        key: SourceKey,
+        why: String,
+        release: bool,
+    },
     /// An audio source of another recording than the chosen audio's, or
     /// at another speed.
     Recording { key: SourceKey, why: String },
@@ -900,7 +905,7 @@ impl Doubt {
     pub fn line(&self) -> String {
         match self {
             Self::Contested { why, .. } => format!("contested: {why}"),
-            Self::SetAside { key, why } => format!("set aside: {key}: {why}"),
+            Self::SetAside { key, why, .. } => format!("set aside: {key}: {why}"),
             Self::Recording { key, why } => format!("another recording: {key}: {why}"),
             Self::Length { key, why } => format!("another length: {key}: {why}"),
         }
@@ -1167,6 +1172,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     })?;
     let contested = contested_unset(&candidates, &tag_why);
     let doubts = doubts_of(input, &vets, &recordings, &contested, ms_of(facts));
+    let release = moved(input, &tag_why);
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1201,8 +1207,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             dropped: dropped(input),
             contested: contested.into_iter().map(|(_, _, why)| why).collect(),
             doubts,
-            release: (input.pick.and_then(|p| p.release.as_ref()))
-                .map(|r| format!("{}: {}", r.key, r.why)),
+            release,
         },
     })
 }
@@ -1260,10 +1265,19 @@ fn vetted(
         .chain(&input.song.tags)
         .filter_map(|(name, values)| Some((Field::named(name)?, values.clone())))
         .collect();
-    let units: Vec<Option<&str>> = crate::album::units_of(input.song, input.facts)
-        .iter()
-        .map(|u| input.known.units.get(u).map(String::as_str))
-        .collect();
+    // A song moved to a release is held to that release, its album's by
+    // the release pass, rather than to the one its records were on.
+    let moved_to = (input.pick.and_then(|p| p.release.as_ref()))
+        .and_then(|r| r.offers.get(&Field::MusicBrainzReleaseGroupId))
+        .and_then(|o| o.values.first())
+        .map(String::as_str);
+    let units: Vec<Option<&str>> = match moved_to {
+        Some(group) => vec![Some(group)],
+        None => crate::album::units_of(input.song, input.facts)
+            .iter()
+            .map(|u| input.known.units.get(u).map(String::as_str))
+            .collect(),
+    };
     Vets::of(&claims, &hand, audio_ms, &units)
 }
 
@@ -2305,11 +2319,23 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             .filter(|(k, _)| k == key && moved.is_none())
             .and_then(|(_, at)| facts.editions.get(*at));
         let another = moved.is_some_and(|o| o.contains_key(&Field::MusicBrainzTrackId));
+        // A release of the record's own group shares its group's fields.
+        let same_group = moved.is_some_and(|o| {
+            let group = |offers: &crate::tags::Offers| {
+                (offers.get(&Field::MusicBrainzReleaseGroupId))
+                    .and_then(|o| o.values.first().cloned())
+            };
+            group(o).is_some() && group(o) == group(&facts.tags)
+        });
         let own = offers_of(input, key, facts)
             .into_iter()
             .filter(|(field, _)| {
-                let release =
-                    (edition.is_some() || moved.is_some()) && field.scope() == Scope::Release;
+                let kept = same_group
+                    && moved.is_some_and(|o| !o.contains_key(field))
+                    && GROUP_WIDE.contains(field);
+                let release = (edition.is_some() || moved.is_some())
+                    && field.scope() == Scope::Release
+                    && !kept;
                 let recording = another
                     && matches!(
                         field,
@@ -2350,8 +2376,8 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
 }
 
 /// What `key`, a source with `facts`, offers, as the `[[tags.from]]`
-/// naming it leave it ([`clean::Settings::from`]): its title read by a
-/// pattern, then fields dropped and credits left out.
+/// naming it leave it ([`clean::Settings::from`]): fields dropped and
+/// credits left out, then its title as it came read by a pattern.
 fn offers_of<'f>(
     input: &Input<'_>,
     key: &SourceKey,
@@ -2369,6 +2395,8 @@ fn offers_of<'f>(
         let title = offers
             .get(&Field::Title)
             .and_then(|t| t.values.first().cloned());
+        let credit = |f: Field| matches!(f, Field::Artist | Field::Artists | Field::AlbumArtist);
+        offers.retain(|f, _| !o.drop.contains(f) && (o.credits || !credit(*f)));
         let read = (o.title.as_ref()).and_then(|p| p.read(title.as_deref()?));
         for (field, value) in read.into_iter().flatten() {
             let offer = Offer {
@@ -2378,8 +2406,6 @@ fn offers_of<'f>(
             };
             offers.insert(field, Cow::Owned(offer));
         }
-        let credit = |f: Field| matches!(f, Field::Artist | Field::Artists | Field::AlbumArtist);
-        offers.retain(|f, _| !o.drop.contains(f) && (o.credits || !credit(*f)));
     }
     offers.into_iter().collect()
 }
@@ -2417,22 +2443,47 @@ fn best_album<'c, 'a>(
     .filter(|c| c.offer.structured)
 }
 
+/// The release the song was moved to and why ([`crate::release`]), as
+/// `<key>: <why>`, where its album came from the record moved.
+fn moved(input: &Input<'_>, tag_why: &[TagWhy]) -> Option<String> {
+    let r = input.pick.and_then(|p| p.release.as_ref())?;
+    let from = r.key.to_string();
+    (tag_why.iter())
+        .any(|w| w.key == Field::Album.vorbis() && w.from == from)
+        .then(|| format!("{from}: {}", r.why))
+}
+
+/// The fields a release shares with every release of its group, which a
+/// record moved to another release of its own group keeps.
+const GROUP_WIDE: [Field; 4] = [
+    Field::AlbumArtist,
+    Field::AlbumArtistSort,
+    Field::MusicBrainzAlbumArtistId,
+    Field::OriginalDate,
+];
+
 /// The album of the source the release fields come whole from: the one
 /// giving the release or the edition its album's songs share, else the
-/// best album.
+/// best album, as where vetting left the source picked no album.
 fn release_of<'c, 'a>(
     input: &Input<'_>,
     candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
 ) -> Option<&'c Candidate<'a>> {
-    let picked = input
-        .pick
-        .and_then(|p| (p.release.as_ref().map(|r| &r.key)).or(p.edition.as_ref().map(|(k, _)| k)));
-    match picked {
-        Some(key) => candidates
-            .get(&Field::Album)
-            .and_then(|all| all.iter().find(|c| c.key == key)),
-        None => best_album(candidates),
-    }
+    picked_album(input, candidates).or_else(|| best_album(candidates))
+}
+
+/// The album of the source a release or an edition pick names, where it
+/// still offers one.
+fn picked_album<'c, 'a>(
+    input: &Input<'_>,
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+) -> Option<&'c Candidate<'a>> {
+    let picked = input.pick.and_then(|p| {
+        (p.release.as_ref().map(|r| &r.key)).or(p.edition.as_ref().map(|(k, _)| k))
+    })?;
+    candidates
+        .get(&Field::Album)
+        .and_then(|all| all.iter().find(|c| c.key == picked))
 }
 
 /// [`best_offer`], with offers that rank alike ranked by `then`, least
@@ -2555,10 +2606,13 @@ fn doubts_of(
             why: why.clone(),
         })
         .collect();
-    doubts.extend(vets.aside().into_iter().map(|(key, why)| Doubt::SetAside {
-        key: key.clone(),
-        why,
-    }));
+    doubts.extend(
+        (vets.aside().into_iter()).map(|(key, why, release)| Doubt::SetAside {
+            key: key.clone(),
+            why,
+            release,
+        }),
+    );
     doubts.extend(recordings.iter().map(|(key, why)| Doubt::Recording {
         key: key.clone(),
         why: why.clone(),
