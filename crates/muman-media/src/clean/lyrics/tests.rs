@@ -229,12 +229,18 @@ fn a_rule_switched_off_does_nothing_and_each_rule_says_what_it_changed() {
 #[test]
 fn every_rule_is_a_switch_of_a_tier() {
     let tiers: Vec<&str> = super::super::TIERS.iter().map(|(t, _)| *t).collect();
-    assert_eq!(switches().count(), names().count());
+    assert_eq!(switches().count(), switch_names().count());
     for (tier, key) in switches() {
         assert!(tiers.contains(&tier));
+        let name = format!("lyrics.{tier}.{key}");
         let mut s = Settings::default();
-        assert!(s.set(&format!("lyrics.{tier}.{key}"), false));
-        assert_eq!(off(&s), [format!("lyrics.{tier}.{key}")]);
+        assert!(s.set(&name, false));
+        let named: Vec<String> = if names().any(|n| n == name) {
+            vec![name.clone()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(off(&s), named, "a plan names the rules alone");
     }
 }
 

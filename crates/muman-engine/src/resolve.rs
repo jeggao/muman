@@ -25,7 +25,11 @@
 //! - Lyrics: by `[lyrics] prefer`, their role and whether timed, then
 //!   in the language read first, originals in none after those in one,
 //!   from a source whose audio is the same recording as the chosen
-//!   audio, covering most of it.
+//!   audio, covering most of it. None for a song sung in no language or
+//!   titled as an instrumental or karaoke take; lyrics timed past the
+//!   chosen audio's end, another cut's, after every pair that fits; Latin
+//!   lyrics that state no language a romanization of a song sung in
+//!   another script.
 //! - Tags: each offer cleaned first; a structured field over one read
 //!   off a title, plain over decorated, agreed on over alone, offers that
 //!   mean one value agreeing as one ([`groups`]: alike in their letters,
@@ -1084,7 +1088,8 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         });
         sung.push(own);
     }
-    let lyrics = pick_lyrics(input, &audio_key, &sung, &vets);
+    let instrumental = instrumental(&tags);
+    let lyrics = pick_lyrics(input, &audio_key, &sung, instrumental, &vets);
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -1571,7 +1576,68 @@ struct Fitting {
 /// are what someone chose to keep. A translation is taken only into a
 /// language read; the song's own lyrics in no language read rank after
 /// those in one.
-fn lyrics_fit(sung: &[Lang], read: &[Lang], language: &Language, at: &LyricsAt) -> Option<Fitting> {
+/// Whether lyrics timed so, moved `offset` earlier, have a line past the
+/// song's audio, `duration_ms` long, and its grace.
+fn runs_past(timing: Option<lyrics::Timing>, offset: i64, duration_ms: f64) -> bool {
+    // A song's milliseconds are far below 2^52, held exactly.
+    duration_ms > 0.0
+        && timing
+            .is_some_and(|t| (t.last_ms - offset) as f64 > duration_ms + f64::from(FIT_GRACE_MS))
+}
+
+/// Why lyrics of `role` and `timing` were taken, `own` none for lyrics
+/// of the chosen audio and the offset they move by for another source's.
+fn lyrics_why(role: Option<Role>, timing: Option<lyrics::Timing>, own: Option<i64>) -> String {
+    let timing = match timing {
+        None => "untimed".to_string(),
+        Some(t) => format!(
+            "timed, {} line(s), {} the chosen audio",
+            t.lines,
+            own.map_or_else(|| "from".to_string(), |offset| format!("{offset} ms from"))
+        ),
+    };
+    match role {
+        Some(Role::Original) | None => timing,
+        Some(Role::Romanization) => format!("a romanization, {timing}"),
+        Some(Role::Translation) => format!("a translation, {timing}"),
+    }
+}
+
+/// How far past the song's audio a timed line may start and its lyrics
+/// still be the song's: a fade or a rip's tail apart.
+const FIT_GRACE_MS: i32 = 2_000;
+
+/// Whether `tags` say the song sings no words: MusicBrainz's language
+/// `zxx` alone, or a title naming an instrumental or a karaoke take.
+fn instrumental(tags: &Comments) -> bool {
+    let value = |field: Field| {
+        tags.iter()
+            .find(|(k, _)| k == field.vorbis())
+            .map(|(_, v)| v.as_slice())
+            .unwrap_or_default()
+    };
+    let languages = value(Field::Language);
+    let unsung = !languages.is_empty() && languages.iter().all(|c| c == "zxx");
+    let versions = value(Field::Title)
+        .iter()
+        .flat_map(|t| similar::versions_in(t))
+        .collect::<BTreeSet<_>>();
+    unsung || versions.contains("instrumental") || versions.contains("karaoke")
+}
+
+/// Whether a song sung in `sung` is written in other letters than Latin
+/// alone, so Latin lyrics of it are a romanization.
+fn sung_unromanized(sung: &[Lang]) -> bool {
+    !sung.is_empty() && sung.iter().all(|l| l.latin() == Some(false))
+}
+
+fn lyrics_fit(
+    sung: &[Lang],
+    read: &[Lang],
+    language: &Language,
+    at: &LyricsAt,
+    romanized: bool,
+) -> Option<Fitting> {
     let wide = |n: usize| i64::try_from(n).unwrap_or(UNKNOWN);
     let unread = wide(read.len()) * 2;
     let read_rank = |language: &Language| {
@@ -1585,10 +1651,16 @@ fn lyrics_fit(sung: &[Lang], read: &[Lang], language: &Language, at: &LyricsAt) 
             rank: read_rank(language).or(kept)?,
         });
     }
-    // Lyrics that say nothing of their language are taken as the song's.
+    // Lyrics that say nothing of their language are taken as the song's,
+    // or as its romanization where their letters say so.
     let (role, rank) = if *language == Language::Unstated {
         let codes = sung.iter().map(ToString::to_string).collect();
-        (Role::Original, read_rank(&Language::Codes(codes)))
+        let role = if romanized {
+            Role::Romanization
+        } else {
+            Role::Original
+        };
+        (role, read_rank(&Language::Codes(codes)))
     } else {
         let role = language
             .langs()
@@ -1832,6 +1904,7 @@ fn pick_lyrics(
     input: &Input<'_>,
     audio: &SourceKey,
     sung: &[Lang],
+    instrumental: bool,
     vets: &Vets,
 ) -> Option<(LyricsRef, String)> {
     let pin = match &input.song.lyrics {
@@ -1839,6 +1912,11 @@ fn pick_lyrics(
         Some(LyricsPin::From(k)) => Some(k),
         None => None,
     };
+    if instrumental && pin.is_none() && input.clean.is_on(clean::lyrics::INSTRUMENTAL) {
+        return None;
+    }
+    let by_script = input.clean.is_on(clean::lyrics::SCRIPT) && sung_unromanized(sung);
+    let fitting = input.clean.is_on(clean::lyrics::FIT) && pin.is_none();
     let duration_ms = input
         .facts
         .get(audio)
@@ -1863,7 +1941,8 @@ fn pick_lyrics(
         // A subtitle of only `♪` writes no lyrics, so is none.
         for l in facts.lyrics.iter().filter(|l| l.sings_any()) {
             let read = &input.lyrics.read;
-            let Some(fit) = lyrics_fit(sung, read, &l.language, &l.at) else {
+            let romanized = by_script && l.latin == Some(true);
+            let Some(fit) = lyrics_fit(sung, read, &l.language, &l.at, romanized) else {
                 continue;
             };
             if fit.role.is_some_and(|r| !input.lyrics.takes(r)) {
@@ -1879,7 +1958,11 @@ fn pick_lyrics(
                 }
                 _ => confidence,
             };
-            let mut rank: Rank = preferred(&input.lyrics.prefer, &fit, l.timing.is_some());
+            // Lines past the audio's end are timed to another cut: such
+            // lyrics rank after every pair that fits, yet beat none at all.
+            let past = fitting && runs_past(l.timing, offset, duration_ms);
+            let mut rank: Rank = vec![i64::from(past)];
+            rank.extend(preferred(&input.lyrics.prefer, &fit, l.timing.is_some()));
             rank.extend([
                 fit.rank,
                 -((confidence * 20.0).floor() as i64),
@@ -1889,25 +1972,12 @@ fn pick_lyrics(
             if best.as_ref().is_some_and(|(r, _, _)| *r <= rank) {
                 continue;
             }
-            let timing = match l.timing {
-                None => "untimed".to_string(),
-                Some(t) => format!(
-                    "timed, {} line(s), {} the chosen audio",
-                    t.lines,
-                    if key == audio {
-                        "from".to_string()
-                    } else {
-                        format!("{offset} ms from")
-                    }
-                ),
-            };
             let (placement, files, inside, end_ms) =
                 lyrics_outputs(input, audio, l.timing.is_some());
-            let why = match fit.role {
-                Some(Role::Original) | None => timing,
-                Some(Role::Romanization) => format!("a romanization, {timing}"),
-                Some(Role::Translation) => format!("a translation, {timing}"),
-            };
+            let mut why = lyrics_why(fit.role, l.timing, (key != audio).then_some(offset));
+            if past {
+                why.push_str(", timed past the audio's end");
+            }
             best = Some((
                 rank,
                 LyricsRef {

@@ -240,7 +240,10 @@ pub struct Settings {
 impl Settings {
     /// Turn the rule named `<tier>.<key>` on or off; whether there is one.
     pub fn set(&mut self, name: &str, on: bool) -> bool {
-        let Some(rule) = switch_names().chain(lyrics::names()).find(|r| *r == name) else {
+        let Some(rule) = switch_names()
+            .chain(lyrics::switch_names())
+            .find(|r| *r == name)
+        else {
             return false;
         };
         if on {
@@ -260,7 +263,7 @@ impl Settings {
     #[must_use]
     pub fn none() -> Self {
         Self {
-            off: switch_names().chain(lyrics::names()).collect(),
+            off: switch_names().chain(lyrics::switch_names()).collect(),
             unknown: Vec::new(),
         }
     }
@@ -615,7 +618,7 @@ fn has_cjk(s: &str) -> bool {
 
 /// Letters only of the Latin script, and at least one: Vietnamese and
 /// full-width ones too.
-fn latin_only(s: &str) -> bool {
+pub(crate) fn latin_only(s: &str) -> bool {
     let script = CodePointMapData::<Script>::new();
     let mut letters = s.chars().filter(|c| c.is_alphabetic()).peekable();
     letters.peek().is_some() && letters.all(|c| script.get(c) == Script::Latin)

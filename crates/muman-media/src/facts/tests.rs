@@ -696,3 +696,11 @@ fn facts_of_files_holding_the_same_bytes_move_to_their_new_revision() {
     earlier.content = None;
     assert!(earlier.moved_to("11:30", None).is_none(), "no digest kept");
 }
+
+#[test]
+fn lyrics_know_whether_they_sing_in_latin_letters_alone() {
+    let latin = |text: &str| lyrics_of(LyricsAt::File, text).latin;
+    assert_eq!(latin("[00:01.00]yoru no fune ga\n"), Some(true));
+    assert_eq!(latin("[00:01.00]夜の船が\n"), Some(false));
+    assert_eq!(latin("[00:01.00]Night ferry, 夜の船\n"), Some(false));
+}

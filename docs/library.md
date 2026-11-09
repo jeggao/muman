@@ -114,7 +114,15 @@ text is LRC: `USLT` in MP3, `LYRICS` or `UNSYNCEDLYRICS` in a Vorbis
 comment, `©lyr` in MP4, `Lyrics` in APEv2. A `.lrc` with no audio of
 its own is taken as timed for the song. One that states its length, as
 LRCLIB's do, is trusted as far as that length agrees with the chosen
-audio's.
+audio's, and lyrics timed past the audio's end are another cut's, taken
+only where no lyrics fit. A song sung in no language, as MusicBrainz marks one
+(`zxx`), or titled as an instrumental or a karaoke take, takes no lyrics.
+Lyrics that state no language are the song's own, unless their letters
+are Latin alone and the song is sung in another script: then they are
+its romanization, ranked as `[lyrics] prefer` ranks one. A pin, as
+`lyrics = "<source>"`, takes lyrics whatever these say;
+`[lyrics.clean.structure] instrumental` and `fit` and
+`[lyrics.clean.guesswork] script` turn each check off.
 
 Lyrics are [cleaned](metadata.md#cleaning) of cues such as `[Music]`, credits and
 what a site wrapped around them. A line in brackets of other words is a

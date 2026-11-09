@@ -428,6 +428,7 @@ fn with_lyrics(timed: bool) -> (tempfile::TempDir, Manifest, State, Planned, Sou
         stated_ms: None,
         digest: None,
         sings: Some(true),
+        latin: None,
     }];
     s.facts.insert(record.clone(), facts);
     // Its MusicBrainz and cover lookups are not what these tests ask.

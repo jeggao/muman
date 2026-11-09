@@ -165,14 +165,20 @@ pub const HASH_METHOD: &str = "hash/2";
 /// What a MusicBrainz record's facts keep beside its tags: its length.
 pub const RECORD_METHOD: &str = "record/1";
 
+/// What a lyrics file's facts keep beside its lines: whether the letters
+/// it sings are Latin alone.
+pub const LYRICS_METHOD: &str = "lyrics/1";
+
 /// How the tags of a source of `kind` are read: `tags::METHOD`, and for
-/// a record [`RECORD_METHOD`] too, so a record alone is read again when
-/// only what its facts keep of it changes.
+/// a record [`RECORD_METHOD`] too, or for a lyrics file [`LYRICS_METHOD`],
+/// so such a file alone is read again when only what its facts keep of it
+/// changes, a few kilobytes of text and no audio.
 #[must_use]
 pub fn tags_method(kind: Kind) -> String {
     match kind {
         Kind::Tags => format!("{}+{RECORD_METHOD}", tags::METHOD),
-        Kind::Media | Kind::Lyrics | Kind::Image => tags::METHOD.to_string(),
+        Kind::Lyrics => format!("{}+{LYRICS_METHOD}", tags::METHOD),
+        Kind::Media | Kind::Image => tags::METHOD.to_string(),
     }
 }
 
@@ -550,6 +556,11 @@ pub struct LyricsFacts {
     /// `None` where measured before muman asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sings: Option<bool>,
+    /// Whether the letters they sing are Latin alone, which for a song
+    /// sung in another script makes them its romanization; `None` where
+    /// measured before muman asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latin: Option<bool>,
 }
 
 impl LyricsFacts {
@@ -564,6 +575,11 @@ impl LyricsFacts {
 /// Whether lyrics or a subtitle sing any word.
 fn sings(text: &str) -> bool {
     !lyrics::sung(text).trim().is_empty()
+}
+
+/// Whether the letters lyrics or a subtitle sing are Latin alone.
+fn latin(text: &str) -> bool {
+    crate::clean::latin_only(&lyrics::sung(text))
 }
 
 /// The digests of what one source offers, by where each part sits.
@@ -676,7 +692,7 @@ pub struct Reread {
     pub chapters: Vec<Chapter>,
     /// The length a record says its recording plays, in ms.
     pub length_ms: Option<u64>,
-    /// The lyrics its tags hold.
+    /// The lyrics its tags hold, or a lyrics file's own.
     pub lyrics: Option<LyricsFacts>,
 }
 
@@ -695,7 +711,17 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
                 ..Reread::default()
             });
         }
-        Kind::Lyrics | Kind::Image => return Ok(Reread::default()),
+        Kind::Lyrics => {
+            let text = read_text(&located.path)?;
+            return Ok(Reread {
+                lyrics: Some(LyricsFacts {
+                    digest: digest_file(&located.path),
+                    ..lyrics_of(LyricsAt::File, &text)
+                }),
+                ..Reread::default()
+            });
+        }
+        Kind::Image => return Ok(Reread::default()),
     }
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
     let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
@@ -827,6 +853,7 @@ fn lyrics_of(at: LyricsAt, text: &str) -> LyricsFacts {
         stated_ms: lyrics::stated_length(text),
         digest: None,
         sings: Some(sings(text)),
+        latin: Some(latin(text)),
     }
 }
 
@@ -1298,6 +1325,7 @@ fn media<R: Runner>(
                         stated_ms: None,
                         digest: None,
                         sings: Some(sings(&text)),
+                        latin: Some(latin(&text)),
                     });
                 }
             }

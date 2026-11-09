@@ -29,6 +29,17 @@
 //! title, unless the lines around it are credits, it is quoted as the
 //! title, or it names the artist with it.
 //!
+//! Three switches are no rule over the lines but choose what lyrics a
+//! song takes, so a plan names none of them: [`INSTRUMENTAL`], keeping
+//! lyrics off a song sung in no language or titled as an instrumental or
+//! karaoke take; [`FIT`], ranking lyrics timed past the song's audio
+//! after those that fit;
+//! and [`SCRIPT`], reading Latin lyrics that state no language as the
+//! romanization of a song sung in another script. Measured on a library
+//! of about two thousand songs, LRCLIB gave a film score's instrumental
+//! a page of Korean text and another instrumental 48 timed lines, and
+//! three songs sung in Japanese took romanized lyrics as their own.
+//!
 //! What the rules leave alone matters as much as what they take:
 //!
 //! - emoji and kaomoji an uploader drew, `♪` beside words, all-caps and
@@ -82,16 +93,38 @@ const RULES: [(&str, Edit); 10] = [
 /// song renamed is cleaned again while one of them is on.
 pub const NAMED: [&str; 2] = ["lyrics.packaging.title", "lyrics.packaging.credits"];
 
+/// The switch keeping lyrics off a song sung in no language, as
+/// MusicBrainz marks one, or titled as an instrumental or karaoke take.
+pub const INSTRUMENTAL: &str = "lyrics.structure.instrumental";
+
+/// The switch ranking lyrics whose lines run past the song's audio after
+/// every pair that fits: they are timed to another cut.
+pub const FIT: &str = "lyrics.structure.fit";
+
+/// The switch reading the role of lyrics that state no language by their
+/// letters: Latin letters for a song sung in another script are its
+/// romanization, not its own words.
+pub const SCRIPT: &str = "lyrics.guesswork.script";
+
+/// The switches that are no rule over the lines, which choose what lyrics
+/// a song takes rather than what they hold, so a plan names none of them.
+const OTHERS: [&str; 3] = [INSTRUMENTAL, FIT, SCRIPT];
+
 /// Every rule's name, `lyrics.<tier>.<key>`, in the order run.
 pub fn names() -> impl Iterator<Item = &'static str> {
     RULES.iter().map(|(name, _)| *name)
+}
+
+/// Every switch's name: the rules', then the others'.
+pub fn switch_names() -> impl Iterator<Item = &'static str> {
+    names().chain(OTHERS)
 }
 
 /// Every switch as `(tier, key)`, grouped by tier in the order of
 /// [`super::TIERS`], and within one in the order run.
 pub fn switches() -> impl Iterator<Item = (&'static str, &'static str)> {
     super::TIERS.iter().flat_map(|(tier, _)| {
-        names()
+        switch_names()
             .filter_map(|n| n.strip_prefix("lyrics.")?.split_once('.'))
             .filter(move |(t, _)| t == tier)
     })
