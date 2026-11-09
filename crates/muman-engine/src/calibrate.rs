@@ -521,7 +521,7 @@ pub fn lines(c: &Calibration) -> Vec<String> {
             "release",
             (crate::vet::RELEASE_ALIKE, crate::vet::RELEASE_APART),
         ),
-        ("unit", (crate::vet::UNIT_ALIKE, 0)),
+        ("unit", (crate::vet::UNIT_ALIKE, crate::vet::UNIT_APART)),
     ]);
     let mut out = vec![format!(
         "Records labelled: {} the same recording, {} another",

@@ -145,8 +145,12 @@ song whose audio plays 30 s or more from what a record it believes
 says, and each name spelled two ways that no artist ID tells apart.
 `[tags.clean.structure] vetting = false` turns this off.
 
-The points vetting gives each kind of evidence were set by hand. `muman
-check --calibrate` counts, on your library, how often each agreed,
+The points vetting gives each kind of evidence were set by hand, but an
+album's and its unit's, which `check --calibrate` fitted together on one
+library: a record on another release than its album's counts against
+it, as one in twenty of its songs' own records were and two in three of
+other songs'. `muman check --calibrate` counts, on your library, how
+often each agreed,
 disagreed or said nothing for records of a song's recording and for
 records of another, and prints the points those counts suggest beside
 the ones vetting gives; it changes nothing. A record is the song's where

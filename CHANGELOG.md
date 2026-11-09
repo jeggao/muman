@@ -199,8 +199,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   album's release is believed though its title is spelled otherwise, and
   one on another release gives no album, track, date or ID unless its
   album is the files' own or the files name none, so a song a box set
-  or a compilation claimed stays on the album it came in. `muman status`
-  names the release among the reasons a record is set aside.
+  or a compilation claimed stays on the album it came in, and counts
+  against the record, by points `muman check --calibrate` fitted on one
+  library. `muman status` names the release among the reasons a record
+  is set aside.
 - **A title cut short agrees with the title it is the start of**, three
   words or more, so a file's title cut by a tag's length no longer sets
   the song's MusicBrainz record aside.
