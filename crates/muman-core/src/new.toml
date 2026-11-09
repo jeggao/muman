@@ -139,6 +139,13 @@ step = "2 s"
 enabled = true
 weight = 5000
 incoherence = "1 %"
+[audio.pick.dynamics]
+# How far the audio's peaks stand above its loudness, a step per `step`
+# less: a master squeezed louder stands less. Off, as a matter of taste:
+# on, an older master on a lossy upload wins over a louder one on a CD.
+enabled = false
+weight = 100
+step = "1 dB"
 [audio.pick.bandwidth]
 # Where a lowpass cuts the audio off, a step per `step` lower.
 enabled = true

@@ -3766,3 +3766,53 @@ fn a_song_moved_to_another_release_takes_its_fields_in_place_of_its_record_s() {
             .is_some_and(|w| w.ends_with("10 songs are on"))
     );
 }
+
+/// Facts of a FLAC whose true peak is `peak` of full scale and whose
+/// blocks are all as loud, `momentary` giving the histogram as stored.
+fn mastered(rev: &str, peak: f64, momentary: &str) -> Facts {
+    let mut f = audio("flac", 22.0);
+    f.rev = rev.into();
+    let measure = serde_json::json!({
+        "momentary": momentary,
+        "short_term": "",
+        "true_peak": peak,
+        "sample_peak": peak,
+    });
+    f.audio.as_mut().unwrap().analysis.loudness = Some(crate::analysis::Measured {
+        method: crate::loudness::METHOD.into(),
+        value: Some(serde_json::from_value(measure).unwrap()),
+    });
+    f
+}
+
+/// Fifty blocks at −10 LUFS, and at −20 LUFS, as a histogram is stored.
+const LOUD: &str = "2AQy";
+const OPEN: &str = "9AMy";
+
+#[test]
+fn a_master_squeezed_louder_loses_only_where_dynamics_count() {
+    let (loud, open) = (manual("loud.flac"), manual("open.flac"));
+    let facts = BTreeMap::from([
+        (loud.clone(), mastered("loud", 0.5, LOUD)),
+        (open.clone(), mastered("open", 0.9, OPEN)),
+    ]);
+    let s = song(&[loud.clone(), open.clone()]);
+    assert_eq!(
+        resolve(&defaults(&s, &facts)).unwrap().plan.audio.key,
+        loud,
+        "off"
+    );
+    let mut audio = Audio::default();
+    audio.pick.dynamics.enabled = true;
+    let r = resolve(&Input {
+        audio: &audio,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(r.plan.audio.key, open);
+    assert!(
+        r.why.audio.contains("peaks 19.0 dB over its loudness"),
+        "{}",
+        r.why.audio
+    );
+}
