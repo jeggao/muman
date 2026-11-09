@@ -810,7 +810,7 @@ pub fn versions_in(text: &str) -> BTreeSet<&'static str> {
 
 /// What joins two names in one credit, as `Marlo Venn & Kiri Hoshino`
 /// or `Marlo Venn feat. Kiri Hoshino`.
-static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\s*[&＆,、;/×]\s*|\s+(?:feat\.?|ft\.?|featuring|vs\.?|with|and|x|-)\s+")
         .expect("a valid pattern")
 });
@@ -819,11 +819,7 @@ static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
 /// them: one for a credit naming one artist.
 #[must_use]
 pub fn names_in(credit: &str) -> Vec<&str> {
-    JOINERS
-        .split(credit)
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .collect()
+    crate::parts::credit(credit).names
 }
 
 /// The names one credit holds, folded: the whole, and each name what
@@ -833,7 +829,7 @@ pub fn names_in(credit: &str) -> Vec<&str> {
 #[must_use]
 pub fn credited(credit: &str) -> BTreeSet<String> {
     std::iter::once(credit)
-        .chain(JOINERS.split(credit))
+        .chain(crate::parts::credit(credit).names)
         .flat_map(|n| {
             let bare = fold(&n.replace(['\'', '’', 'ʼ'], ""));
             [fold(n), bare.replace(' ', ""), bare]
