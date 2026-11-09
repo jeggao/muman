@@ -36,6 +36,7 @@ unicode-segmentation = "1"
 
 [dev-dependencies]
 muman-core = { workspace = true, features = ["testing"] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
