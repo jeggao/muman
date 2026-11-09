@@ -1386,6 +1386,44 @@ fn a_record_in_another_script_is_believed() {
 }
 
 #[test]
+fn a_record_on_the_release_most_of_its_album_is_on_gives_its_release() {
+    let (s, facts) = file_record_and_cover("Night Ferry", "マルロ", "Rooms of Salt");
+    let r = run(&s, &facts, &[]);
+    assert_eq!(get(&r, "TRACKNUMBER"), None, "{:?}", r.why.set_aside);
+    let units = crate::album::units_of(&s, &facts)
+        .into_iter()
+        .map(|u| (u, GROUP.to_string()))
+        .collect();
+    let r = resolve(&Input {
+        song: &s,
+        album: None,
+        facts: &facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &english(),
+        clean: &Settings::default(),
+        typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
+        known: &Known {
+            units,
+            ..Known::default()
+        },
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    })
+    .unwrap();
+    assert_eq!(get(&r, "TRACKNUMBER").as_deref(), Some("3"));
+    assert_eq!(
+        get(&r, "MUSICBRAINZ_RELEASEGROUPID").as_deref(),
+        Some(GROUP)
+    );
+    assert!(r.why.set_aside.is_empty(), "{:?}", r.why.set_aside);
+}
+
+#[test]
 fn a_pinned_cover_is_never_set_aside() {
     let (mut s, facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
     s.cover = Some(s.sources[2].clone());

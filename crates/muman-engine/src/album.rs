@@ -469,6 +469,72 @@ pub fn origin_of(key: &SourceKey) -> Option<String> {
     Some(format!("{scheme}/{}", parts.join("/")))
 }
 
+/// What opens the album unit of an `[[album]]`.
+const LISTED: &str = "album:";
+
+/// The album units a song's files came in: each file's folder
+/// ([`origin_of`]) with the album its tags name, a disc closing it left
+/// out, and the `[[album]]` the song list holds it under. Songs of one
+/// unit came together, one rip of one album.
+#[must_use]
+pub fn units_of(song: &Song, facts: &BTreeMap<SourceKey, Facts>) -> BTreeSet<String> {
+    let mut units = BTreeSet::new();
+    if let Some(album) = &song.album {
+        units.insert(format!("{LISTED}{album}"));
+    }
+    for key in &song.sources {
+        let Some(origin) = origin_of(key) else {
+            continue;
+        };
+        let named = facts
+            .get(key)
+            .and_then(|f| f.tags.get(&Field::Album))
+            .and_then(|o| o.values.first());
+        let album = named.map_or_else(String::new, |a| {
+            let at = crate::clean::disc_in(a).map_or(a.len(), |(at, _)| at);
+            similar::fold(&a[..at])
+        });
+        units.insert(format!("{origin}\u{1f}{album}"));
+    }
+    units
+}
+
+/// The release group each album unit is on by its songs' MusicBrainz
+/// records: of an `[[album]]`, the one most of them are on, two or more
+/// and no other as many; of a folder, only one more than half of them
+/// are on, since a folder of singles is no album. A record of another
+/// release group in the unit is held to it ([`crate::vet`]).
+#[must_use]
+pub fn unit_groups(songs: &[Song], facts: &BTreeMap<SourceKey, Facts>) -> BTreeMap<String, String> {
+    let mut tally: BTreeMap<String, (Vec<Option<String>>, usize)> = BTreeMap::new();
+    for song in songs {
+        let records = song.sources.iter().filter(
+            |k| matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ),
+        );
+        let groups: BTreeSet<&str> = records
+            .filter_map(|k| facts.get(k)?.tags.get(&Field::MusicBrainzReleaseGroupId))
+            .filter_map(|o| o.values.first())
+            .map(String::as_str)
+            .collect();
+        if groups.is_empty() {
+            continue;
+        }
+        for unit in units_of(song, facts) {
+            let (votes, songs) = tally.entry(unit).or_default();
+            votes.extend(groups.iter().map(|g| Some((*g).to_string())));
+            *songs += 1;
+        }
+    }
+    tally
+        .into_iter()
+        .filter_map(|(unit, (votes, songs))| {
+            let group = most(&votes)?;
+            let on = votes.iter().flatten().filter(|g| **g == group).count();
+            (unit.starts_with(LISTED) || on * 2 > songs).then_some((unit, group))
+        })
+        .collect()
+}
+
 /// Whether a folder's name names one disc of a set: `CD1`, `Disc 2`.
 fn is_disc_folder(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -852,6 +918,84 @@ mod tests {
         assert_ne!(disc_1, origin_of(&key("Glass Weather/01 Song.flac")));
         assert_eq!(origin_of(&SourceKey::youtube("vid00000001")), None);
         assert!(!is_disc_folder("Discotheque"));
+    }
+
+    #[test]
+    fn songs_of_one_folder_and_album_are_one_unit_on_the_release_most_are_on() {
+        let (songs, facts) = albums_of(&[
+            ("Harbor Nights/CD1/01.flac", "Harbor Nights CD1", GROUP),
+            ("Harbor Nights/CD2/01.flac", "Harbor Nights CD 2", GROUP),
+            ("Harbor Nights/CD2/02.flac", "harbor nights", LATER),
+            ("Glass Weather/01.flac", "Glass Weather", LATER),
+        ]);
+        let units: Vec<_> = songs.iter().map(|s| units_of(s, &facts)).collect();
+        assert_eq!(
+            units[0], units[2],
+            "a disc's folder and name are its album's"
+        );
+        assert_eq!(units[0].len(), 1);
+        assert_ne!(units[0], units[3]);
+        let groups = unit_groups(&songs, &facts);
+        let unit = units[0].first().unwrap();
+        assert_eq!(groups.get(unit).map(String::as_str), Some(GROUP));
+        assert_eq!(groups.len(), 1, "a release one song is on leads no unit");
+    }
+
+    #[test]
+    fn a_folder_is_on_a_release_more_than_half_its_songs_are_on_and_a_listed_album_on_the_most() {
+        let (mut songs, facts) = albums_of(&[
+            ("Singles/01.flac", "", GROUP),
+            ("Singles/02.flac", "", GROUP),
+            ("Singles/03.flac", "", FIRST),
+            ("Singles/04.flac", "", LATER),
+        ]);
+        assert!(unit_groups(&songs, &facts).is_empty(), "two of four");
+        let listed = file("Singles/album.cue");
+        for song in &mut songs {
+            song.album = Some(listed.clone());
+        }
+        let groups = unit_groups(&songs, &facts);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups.get(&format!("{LISTED}{listed}")).map(String::as_str),
+            Some(GROUP)
+        );
+    }
+
+    fn file(path: &str) -> SourceKey {
+        SourceKey::parse(&format!("torrent:{}/{path}", "a".repeat(40))).unwrap()
+    }
+
+    /// A song for each file at a path, with the album its tags name, and
+    /// a MusicBrainz record on a release group.
+    fn albums_of(files: &[(&str, &str, &str)]) -> (Vec<Song>, BTreeMap<SourceKey, Facts>) {
+        let offering = |field: Field, value: &str| {
+            let mut f = Facts::unreadable("r".into());
+            let offer = Offer {
+                values: vec![value.to_string()],
+                structured: true,
+            };
+            f.tags.insert(field, offer);
+            f
+        };
+        let mut facts = BTreeMap::new();
+        let mut songs = Vec::new();
+        for (n, (path, album, group)) in files.iter().enumerate() {
+            let record = format!("musicbrainz:00000000-0000-0000-0000-00000000000{n}");
+            let record = SourceKey::parse(&record).unwrap();
+            if !album.is_empty() {
+                facts.insert(file(path), offering(Field::Album, album));
+            }
+            facts.insert(
+                record.clone(),
+                offering(Field::MusicBrainzReleaseGroupId, group),
+            );
+            songs.push(Song {
+                sources: vec![file(path), record],
+                ..Song::default()
+            });
+        }
+        (songs, facts)
     }
 
     #[test]

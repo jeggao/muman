@@ -891,6 +891,9 @@ pub struct Resolved {
 pub struct Known {
     pub albums: Albums,
     pub watermarks: Watermarks,
+    /// The release group most songs of each album unit are on
+    /// ([`crate::album::unit_groups`]).
+    pub units: BTreeMap<String, String>,
 }
 
 impl Known {
@@ -915,6 +918,7 @@ impl Known {
             })
             .collect();
         Self {
+            units: crate::album::unit_groups(&manifest.songs, facts),
             albums: Albums::of(facts.values().map(|f| &f.tags)),
             watermarks: Watermarks::of(groups.iter().map(|(group, name, offers)| detect::Source {
                 group,
@@ -1203,7 +1207,11 @@ fn vetted(
         .chain(&input.song.tags)
         .filter_map(|(name, values)| Some((Field::named(name)?, values.clone())))
         .collect();
-    Vets::of(&claims, &hand, audio_ms)
+    let units: Vec<Option<&str>> = crate::album::units_of(input.song, input.facts)
+        .iter()
+        .map(|u| input.known.units.get(u).map(String::as_str))
+        .collect();
+    Vets::of(&claims, &hand, audio_ms, &units)
 }
 
 /// How long a source's audio plays, in whole ms.

@@ -29,6 +29,7 @@
 //! | Its credits against the others', a name or an artist ID shared | [`CREDIT_SHARED`] | [`NO_CREDIT_SHARED`] |
 //! | The length it states against the chosen audio's | [`LENGTH_CLOSE`] | [`LENGTH_FAR`] |
 //! | Its album against the album the song's files name | [`RELEASE_ALIKE`] | [`RELEASE_APART`] |
+//! | Its release group against its album's ([`crate::album::unit_groups`]) | [`UNIT_ALIKE`] | nothing, but unsure |
 //!
 //! Titles and albums are compared as [`similar::titles_agree`] reads
 //! them, as files write them, so one no rule compares, as kanji with
@@ -41,9 +42,11 @@
 //!   disagree, with no identifier shared, whatever led the lookup to it;
 //!   or points at or under [`OTHER_AT`].
 //! - **Unsure**, giving no release fields and no recording IDs, which
-//!   name what it describes: points at or under [`UNSURE_AT`], or credits
+//!   name what it describes: points at or under [`UNSURE_AT`]; credits
 //!   that disagree while its album is not the files', as a cover act's
-//!   record whose title agrees.
+//!   record whose title agrees; or another release group than its
+//!   album's, unless its album is the files' own or they name none, as a
+//!   box set's record of a song that came in its own album.
 //! - **Same** otherwise, and for a source with nothing to compare; yet
 //!   with no recording IDs while its credits share no name with the
 //!   others': an ID names a recording, and another artist's of the same
@@ -101,6 +104,14 @@ pub const LENGTH_FAR: i64 = -3;
 pub const RELEASE_ALIKE: i64 = 3;
 /// An album, and an album artist, apart from those the song's files name.
 pub const RELEASE_APART: i64 = -2;
+/// The release group the song's album unit is on, the songs of one
+/// folder and album or of one `[[album]]` ([`crate::album::unit_groups`]):
+/// enough to outweigh a title that disagrees, as one a tag cut short or
+/// spelled a number in, but not a title and credits that both do. One on
+/// another release group gives no release field, unless its album is the
+/// files' own, as a concert's video beside its album; it costs nothing,
+/// since the recording may be on both.
+pub const UNIT_ALIKE: i64 = 6;
 /// The points at or under which a source may name another recording.
 pub const UNSURE_AT: i64 = -3;
 /// The points at or under which a source names another recording.
@@ -163,6 +174,10 @@ struct Evidence {
     credits: Option<bool>,
     length: Option<bool>,
     release: Option<bool>,
+    /// Its release group against those its album units are on: unknown
+    /// unless each unit is on one, and against none where the files name
+    /// no album, which setting its release aside would leave the song.
+    unit: Option<bool>,
 }
 
 impl Evidence {
@@ -177,6 +192,7 @@ impl Evidence {
             + side(self.credits, CREDIT_SHARED, NO_CREDIT_SHARED)
             + side(self.length, LENGTH_CLOSE, LENGTH_FAR)
             + side(self.release, RELEASE_ALIKE, RELEASE_APART)
+            + side(self.unit, UNIT_ALIKE, 0)
     }
 
     fn verdict(self) -> Verdict {
@@ -186,6 +202,7 @@ impl Evidence {
             Verdict::Other
         } else if points <= UNSURE_AT
             || (self.credits == Some(false) && self.release == Some(false))
+            || (self.unit == Some(false) && self.release != Some(true))
         {
             Verdict::Unsure
         } else {
@@ -236,6 +253,14 @@ impl Evidence {
             }
             .to_string()
         }));
+        said.extend(self.unit.map(|u| {
+            if u {
+                "on the release its album is on"
+            } else {
+                "on another release than its album's"
+            }
+            .to_string()
+        }));
         said
     }
 }
@@ -258,12 +283,14 @@ struct Vet {
 impl Vets {
     /// Each of `sources` held to the others' claims and to `hand`, the
     /// tags set by hand; a stated length to `audio_ms`, the chosen
-    /// audio's.
+    /// audio's; a release group to `units`, the release group each of the
+    /// song's album units is on, if any.
     #[must_use]
     pub fn of(
         sources: &[Claims<'_>],
         hand: &BTreeMap<Field, Vec<String>>,
         audio_ms: Option<i64>,
+        units: &[Option<&str>],
     ) -> Self {
         let mut vets = BTreeMap::new();
         for s in sources
@@ -271,7 +298,7 @@ impl Vets {
             .filter(|s| s.vetted && (!s.offers.is_empty() || s.length_ms.is_some()))
         {
             let others: Vec<&Claims<'_>> = sources.iter().filter(|o| o.key != s.key).collect();
-            let e = evidence(s, &others, hand, audio_ms);
+            let e = evidence(s, &others, hand, audio_ms, units);
             let verdict = e.verdict();
             let ids = verdict == Verdict::Same && e.credits != Some(false);
             if !ids {
@@ -359,6 +386,7 @@ fn evidence(
     others: &[&Claims<'_>],
     hand: &BTreeMap<Field, Vec<String>>,
     audio_ms: Option<i64>,
+    units: &[Option<&str>],
 ) -> Evidence {
     let by_hand = |field: Field| -> Vec<&str> {
         hand.get(&field)
@@ -426,6 +454,17 @@ fn evidence(
             }
         }),
         release,
+        unit: {
+            let groups = mine(Field::MusicBrainzReleaseGroupId);
+            if groups.is_empty() || units.is_empty() {
+                None
+            } else if units.iter().flatten().any(|u| groups.contains(u)) {
+                Some(true)
+            } else {
+                let named = !of_files(Field::Album).is_empty();
+                (named && units.iter().all(Option::is_some)).then_some(false)
+            }
+        },
     }
 }
 
@@ -490,6 +529,17 @@ mod tests {
         file: &[(Field, &str)],
         hand: &[(Field, &str)],
     ) -> Vets {
+        vet_in(offers, length_ms, file, hand, &[])
+    }
+
+    /// [`vet`] in album units on `units`.
+    fn vet_in(
+        offers: &[(Field, &str)],
+        length_ms: Option<u64>,
+        file: &[(Field, &str)],
+        hand: &[(Field, &str)],
+        units: &[Option<&str>],
+    ) -> Vets {
         let values = |fields: &[(Field, &str)]| -> Vec<(Field, Vec<String>)> {
             fields
                 .iter()
@@ -505,7 +555,7 @@ mod tests {
         if !file.is_empty() {
             all.push(claims(&the_file, &file, false, None));
         }
-        Vets::of(&all, &hand.into_iter().collect(), Some(241_000))
+        Vets::of(&all, &hand.into_iter().collect(), Some(241_000), units)
     }
 
     #[test]
@@ -615,6 +665,63 @@ mod tests {
         assert_eq!(
             vet(&other, None, &FILE, &[]).verdict(&record()),
             Verdict::Unsure
+        );
+    }
+
+    #[test]
+    fn the_release_its_album_is_on_counts_both_ways() {
+        let cut_short = [
+            (Field::Title, "Night Ferry"),
+            (Field::Artist, "マルロ"),
+            (Field::Album, "Rooms of Salt"),
+            (Field::MusicBrainzReleaseGroupId, GROUP),
+        ];
+        let alone = vet(&cut_short, Some(241_000), &FILE, &[]);
+        assert_eq!(alone.verdict(&record()), Verdict::Unsure);
+        let held = vet_in(&cut_short, Some(241_000), &FILE, &[], &[Some(GROUP)]);
+        assert_eq!(held.verdict(&record()), Verdict::Same, "its unit's release");
+
+        let named = [
+            FILE.as_slice(),
+            &[(Field::MusicBrainzReleaseGroupId, GROUP)],
+        ]
+        .concat();
+        let elsewhere = "00000000-0000-0000-0000-0000000000c2";
+        let harbor = [FILE[0], FILE[1], (Field::Album, "Harbor Lights")];
+        let apart = vet_in(&named, None, &harbor, &[], &[Some(elsewhere)]);
+        assert_eq!(apart.verdict(&record()), Verdict::Unsure);
+        assert!(apart.gives(&record(), Field::Title));
+        assert!(!apart.gives(&record(), Field::Album));
+        assert_eq!(
+            apart.verdict(&cover()),
+            Verdict::Other,
+            "its release's cover"
+        );
+        assert!(
+            apart.set_aside()[1].ends_with("on another release than its album's"),
+            "{:?}",
+            apart.set_aside()
+        );
+        for (file, units, why) in [
+            (
+                &FILE[..],
+                &[Some(elsewhere)][..],
+                "its album the files' own",
+            ),
+            (
+                &harbor[..],
+                &[Some(elsewhere), None],
+                "another unit on no release",
+            ),
+            (&FILE[..2], &[Some(elsewhere)], "files naming no album"),
+        ] {
+            let vets = vet_in(&named, None, file, &[], units);
+            assert_eq!(vets.verdict(&record()), Verdict::Same, "{why}");
+        }
+        assert_eq!(
+            vet_in(&FILE, None, &FILE[..2], &[], &[Some(elsewhere)]).verdict(&record()),
+            Verdict::Same,
+            "a record naming no release group"
         );
     }
 }
