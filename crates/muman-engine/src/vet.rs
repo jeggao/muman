@@ -270,9 +270,10 @@ impl Evidence {
     }
 }
 
-/// The vetting of each of a song's sources set aside, even in part.
+/// The vetting of each of a song's sources set aside, even in part, and
+/// the evidence each vetted source was weighed by.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Vets(BTreeMap<SourceKey, Vet>);
+pub struct Vets(BTreeMap<SourceKey, Vet>, BTreeMap<SourceKey, Evidence>);
 
 /// What vetting made of one source set aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,13 +302,14 @@ impl Vets {
         audio_ms: Option<i64>,
         units: &[Option<&str>],
     ) -> Self {
-        let mut vets = BTreeMap::new();
+        let (mut vets, mut weighed) = (BTreeMap::new(), BTreeMap::new());
         for s in sources
             .iter()
             .filter(|s| s.vetted && (!s.offers.is_empty() || s.length_ms.is_some()))
         {
             let others: Vec<&Claims<'_>> = sources.iter().filter(|o| o.key != s.key).collect();
             let e = evidence(s, &others, hand, audio_ms, units);
+            weighed.insert(s.key.clone(), e);
             let verdict = e.verdict();
             let ids = verdict == Verdict::Same && e.credits != Some(false);
             let credits = ids || (verdict == Verdict::Same && e.release == Some(true));
@@ -322,9 +324,25 @@ impl Vets {
                 vets.insert(s.key.clone(), vet);
             }
         }
-        let mut vets = Self(vets);
+        let mut vets = Self(vets, weighed);
         vets.covers(sources);
         vets
+    }
+
+    /// Each vetted source and how each kind of evidence compared for it,
+    /// by name, an identifier in common aside: `Some(true)` agreed,
+    /// `Some(false)` disagreed, `None` said nothing.
+    pub fn weighed(&self) -> impl Iterator<Item = (&SourceKey, [(&'static str, Option<bool>); 5])> {
+        self.1.iter().map(|(key, e)| {
+            let sides = [
+                ("title", e.title),
+                ("credits", e.credits),
+                ("length", e.length),
+                ("release", e.release),
+                ("unit", e.unit),
+            ];
+            (key, sides)
+        })
     }
 
     /// Set aside the vetted Cover Art Archive front of each release group

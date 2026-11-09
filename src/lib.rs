@@ -505,9 +505,12 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             "--upstream asks each site, and --offline reaches none".into(),
         )
         .into()),
-        Command::Check { decode, upstream } => {
-            check::check(runner, dirs, (*decode, *upstream), out, data)
-        }
+        Command::Check {
+            calibrate: true, ..
+        } => check::calibrate(dirs, data),
+        Command::Check {
+            decode, upstream, ..
+        } => check::check(runner, dirs, (*decode, *upstream), out, data),
         Command::Export {
             output,
             folder,
@@ -878,7 +881,9 @@ pub(crate) fn traits(command: &Command) -> Traits {
             steps: &["Measuring", "Comparing"],
             ..reads
         },
-        Command::Check { decode, upstream } => Traits {
+        Command::Check {
+            decode, upstream, ..
+        } => Traits {
             gated: *decode || *upstream,
             ffmpeg: *decode,
             steps: &["Decoding"],

@@ -336,6 +336,7 @@ Check the library against what muman recorded: files missing, empty or changed s
 
 * `--decode` — Decode every source in full again, to find audio cut off or missing in a file changed since it was measured
 * `--upstream` — Also ask each site whether it still serves each fetched source as its song records, downloading nothing: a source re-encoded, no longer served in its format, or taken down
+* `--calibrate` — Print how often each kind of evidence vetting weighs agrees for records of a song's recording, by its files' IDs or its own AcoustID lookup, and for records of other songs, with the points those counts suggest; checks and changes nothing else
 
 
 

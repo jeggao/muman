@@ -1216,6 +1216,14 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     })
 }
 
+/// The vetting `input`'s song is resolved with, its evidence for each
+/// source included, as calibration reads it ([`crate::calibrate`]).
+pub fn weigh(input: &Input<'_>) -> Result<Vets> {
+    let candidates = candidates(input);
+    let (audio, _, _) = pick_audio(input, &candidates)?;
+    Ok(vetted(input, &candidates, ms_of(&input.facts[&audio])))
+}
+
 /// `candidates` as `vets` leaves them: what each source gives, a source
 /// vetting is unsure of ranked after every kind, and so are the credits
 /// of one crediting no one the others do ([`Vets::credits`]).

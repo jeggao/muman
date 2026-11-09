@@ -23,6 +23,20 @@ use crate::runner::{Line, Runner};
 use crate::source::SourceKey;
 use crate::store::{self, Kind, Store};
 
+/// Print how often each kind of evidence vetting weighs agrees for the
+/// library's records, labelled by ID, and the points those counts
+/// suggest ([`muman_engine::calibrate`]); nothing is checked or changed.
+pub fn calibrate<D: Write>(dirs: &Dirs, data: &mut D) -> Result<bool> {
+    let manifest = crate::manifest::Manifest::load(&dirs.home)?;
+    let state = crate::state::State::load(&dirs.home)?;
+    let c =
+        muman_engine::calibrate::calibrate(&manifest, &manifest.settings, &state, &dirs.library)?;
+    for line in muman_engine::calibrate::lines(&c) {
+        crate::ui::line(data, &line)?;
+    }
+    Ok(true)
+}
+
 /// Say every problem found to `report`, and what it is doing to `out`.
 /// Returns whether there was none.
 pub fn check<R: Runner, W: Write, D: Write>(
