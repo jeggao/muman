@@ -138,14 +138,14 @@ const HEADER: &str = "\
 #             lookups.<provider> = false to ask that one nothing.
 #   Hooks:    [[hook]] runs a command, on = \"changed\", once a run wrote,
 #             moved or removed any file.
-#   Settings: [library], [tags], [lyrics], [audio], [loudness],
-#             [cover], [ytdlp], [torrent], [tools], [history] and
-#             [sites.*] lay out and name the library, spell quotes and
-#             hyphens in tags, set encoding, loudness, how
-#             [audio.pick] and [cover.pick] rank sources, fetching and
-#             the programs run, size `undo` and describe the sites
-#             fetched from; sizes, bitrates, times
-#             and shares take a unit, as \"2 GiB\" or \"1 %\". `edition`
+#   Settings: [library], [tags], [release], [lyrics], [audio],
+#             [loudness], [cover], [ytdlp], [torrent], [tools], [history]
+#             and [sites.*] lay out and name the library, spell quotes
+#             and hyphens in tags, choose releases, set encoding,
+#             loudness, how [audio.pick] and [cover.pick] rank sources,
+#             fetching and the programs run, size `undo` and describe
+#             the sites fetched from; sizes, bitrates, times and shares
+#             take a unit, as \"2 GiB\" or \"1 %\". `edition`
 #             names the settings' names and defaults the file was written
 #             to: muman renames old names itself, and `muman sync
 #             --update-defaults` moves settings still at an older default

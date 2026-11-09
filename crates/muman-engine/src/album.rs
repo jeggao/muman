@@ -68,6 +68,9 @@ pub struct Pick {
     /// The source its release fields come from and the edition of that
     /// source's record they come from, by its place in the source's facts.
     pub edition: Option<(SourceKey, usize)>,
+    /// The release it is moved to, of those its recording is on
+    /// ([`crate::release`]), which an edition gives way to.
+    pub release: Option<crate::release::Pick>,
     /// Values set over its own, as its album's songs agree on them.
     pub agreed: Vec<Agreed>,
     /// The design of the cover most of its album's songs show, which it

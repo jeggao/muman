@@ -74,16 +74,17 @@ use crate::units::serde_as;
 
 /// The tables read here; every other top-level key belongs to the song
 /// list proper.
-pub const TABLES: [&str; 11] = [
-    "library", "tags", "lyrics", "audio", "loudness", "cover", "ytdlp", "torrent", "tools",
-    "history", "sites",
+pub const TABLES: [&str; 12] = [
+    "library", "tags", "release", "lyrics", "audio", "loudness", "cover", "ytdlp", "torrent",
+    "tools", "history", "sites",
 ];
 
 /// The tables `new.toml` writes that [`fill`] keeps written out in every
 /// song list: the settings' and the providers' (`crate::provider`).
-pub const WRITTEN: [&str; 12] = [
+pub const WRITTEN: [&str; 13] = [
     "library",
     "tags",
+    "release",
     "lyrics",
     "audio",
     "loudness",
@@ -101,6 +102,7 @@ pub const WRITTEN: [&str; 12] = [
 pub struct Settings {
     pub library: Library,
     pub tags: Tags,
+    pub release: Release,
     pub lyrics: Lyrics,
     pub audio: Audio,
     pub loudness: Loudness,
@@ -1104,6 +1106,29 @@ impl From<WrittenTools> for Tools {
 pub struct Tags {
     pub typography: crate::clean::Typography,
     pub believe: crate::clean::Believe,
+}
+
+/// Which release a song is on, of those its recording is on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Release {
+    pub prefer: ReleasePrefer,
+    /// The kinds of release a song is put on only when no other holds
+    /// it, as a release group's types name them, any case: `compilation`,
+    /// `live`.
+    pub avoid: Vec<String>,
+}
+
+/// Which of the releases its recording is on a song is put on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleasePrefer {
+    /// The one most songs it came with are on, as a folder's under one
+    /// album name, or an `[[album]]`'s.
+    #[default]
+    Album,
+    /// The first album its recording came out on.
+    Original,
 }
 
 /// Which lyrics a song takes, by their language: see `resolve`.

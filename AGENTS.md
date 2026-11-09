@@ -58,7 +58,7 @@ src/
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
 crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
-  album.rs          the songs of one album made to agree: one edition, spelling, release
+  album.rs, release.rs   the songs of one album made to agree: one release, spelling, cover
   state.rs          the state: files written, measures, comparisons; state/db.rs, state.db, the
                     store it moves into: schema, transactions; state/json.rs, an old state.json, read once
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches

@@ -3709,3 +3709,60 @@ fn a_cover_act_s_record_never_credits_a_video_s_song() {
     let r = resolve(&defaults(&song(&[video, mb]), &facts)).unwrap();
     assert_eq!(get(&r, "ARTIST").as_deref(), Some("Marlo Venn"));
 }
+
+#[test]
+fn a_song_moved_to_another_release_takes_its_fields_in_place_of_its_record_s() {
+    let (s, facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    let mut with_label = facts.clone();
+    tag(
+        with_label.get_mut(&s.sources[1]).unwrap(),
+        Field::Label,
+        &["Glass Orchard Records"],
+        true,
+    );
+    let offers: Offers = [
+        (Field::Album, "Rooms of Salt (Live)"),
+        (
+            Field::MusicBrainzAlbumId,
+            "00000000-0000-0000-0000-0000000000c1",
+        ),
+        (Field::Track, "7"),
+    ]
+    .into_iter()
+    .map(|(f, v)| {
+        let offer = crate::tags::Offer {
+            values: vec![v.to_string()],
+            structured: true,
+        };
+        (f, offer)
+    })
+    .collect();
+    let pick = crate::album::Pick {
+        release: Some(crate::release::Pick {
+            key: s.sources[1].clone(),
+            offers,
+            why: "on \"Rooms of Salt (Live)\", the release 9 of its album's 10 songs are on".into(),
+        }),
+        ..crate::album::Pick::default()
+    };
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        ..defaults(&s, &with_label)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt (Live)"));
+    assert_eq!(get(&r, "TRACKNUMBER").as_deref(), Some("7"));
+    assert_eq!(get(&r, "LABEL"), None, "the record's own release's");
+    assert_eq!(get(&r, "MUSICBRAINZ_RELEASEGROUPID"), None);
+    assert_eq!(
+        get(&r, "MUSICBRAINZ_TRACKID").as_deref(),
+        Some("00000000-0000-0000-0000-000000000001"),
+        "the same recording"
+    );
+    assert!(
+        r.why
+            .release
+            .as_deref()
+            .is_some_and(|w| w.ends_with("10 songs are on"))
+    );
+}
