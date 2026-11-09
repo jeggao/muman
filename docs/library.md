@@ -67,7 +67,10 @@ then the lower sample rate, which an upsample would only waste. Lossless
 audio whose sound stops under 19 kHz, as lossy audio's does, was made
 from lossy audio and counts as lossy. `status` names it, a file above
 48 kHz whose sound stops at 24.5 kHz or lower, which was upsampled, and
-one whose samples use fewer bits than it declares. A file
+one whose samples use fewer bits than it declares. Of sources ranked
+alike, a song on an album takes the one from the folder most of its
+album's audio comes from, a disc's folder counting as its album's, so
+the album plays from one rip. A file
 with several audio streams is made from its best: lossless before
 lossy, then the most channels, then the highest rate.
 
@@ -87,7 +90,11 @@ between them.
 
 A picture whose file says it is no front cover, by its picture type (a
 back, a disc, a booklet) or its name (`back.jpg`, `cd.png`), is taken
-only when there is no other picture. A picture is known by its bytes,
+only when there is no other picture, and one more than twice as wide as
+it is tall, or as tall as wide, is a banner and never a cover. The songs
+of one album show one design, the one most of their covers show: a
+song showing another takes that design from a source of its own where
+one holds it, before any picture that measures better. A picture is known by its bytes,
 never its name, so a PNG named `.jpg` is written as PNG.
 [`[[cover.out]]`](configuration.md#where-the-cover-goes) says where
 the cover goes.

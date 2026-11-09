@@ -37,6 +37,16 @@
 //!   have it, a song lacking one taking it; a song on none in an album of
 //!   at most one release takes its date alone.
 //!
+//! - The cover and the audio ([`consistent`]): the design most of an
+//!   album's songs show ([`crate::picture::alike`]), which a song
+//!   showing another shows too from a source of its own that holds it;
+//!   and the folder most of their audio comes from ([`origin_of`]), a
+//!   disc's folder counting as its album's, which wins a song's audio
+//!   between sources its measures rank alike, so an album plays from one
+//!   rip, gapless and levelled alike. A song takes nothing from another
+//!   song's sources: what each source held when its song was built stays
+//!   that song's own record.
+//!
 //! A tag set by hand is never changed and never counts, and a song whose
 //! album is set by hand is left out. A song resolved alone, as songs
 //! merged in memory, takes nothing from its album.
@@ -45,6 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::facts::Facts;
 use crate::manifest::Song;
+use crate::picture::{self, Alike, Look};
 use crate::resolve::{self, Resolved};
 use crate::similar;
 use crate::source::SourceKey;
@@ -58,6 +69,12 @@ pub struct Pick {
     pub edition: Option<(SourceKey, usize)>,
     /// Values set over its own, as its album's songs agree on them.
     pub agreed: Vec<Agreed>,
+    /// The design of the cover most of its album's songs show, which it
+    /// shows too from a source of its own that holds it.
+    pub cover: Option<Look>,
+    /// The folder most of its album's audio comes from ([`origin_of`]),
+    /// which wins between its sources its measures rank alike.
+    pub audio_from: Option<String>,
 }
 
 /// One field's value as an album's songs agree on it.
@@ -291,14 +308,191 @@ fn album_source<'a>(
 #[must_use]
 pub fn agree(planned: &[(usize, Resolved)]) -> BTreeMap<usize, Vec<Agreed>> {
     let all = members(planned);
+    let albums = albums(&all);
+    let mut agreed: BTreeMap<usize, Vec<Agreed>> = BTreeMap::new();
+    for album in albums.iter().filter(|a| a.len() > 1) {
+        agree_on(album, &mut agreed);
+    }
+    agreed
+}
+
+/// What each song on an album takes from the album as a whole, where that
+/// changes its pick, by its place in the song list: the design of the
+/// cover most of the album's songs show, for a song showing another that
+/// a source of its own holds that design in; and the folder most of the
+/// album's audio comes from, for a song whose audio comes from another
+/// that has a source in it. A song takes nothing from another song's
+/// sources, so what each holds stays its own.
+#[must_use]
+pub fn consistent(
+    planned: &[(usize, Resolved)],
+    songs: &[Song],
+    facts: &BTreeMap<SourceKey, Facts>,
+) -> BTreeMap<usize, (Option<Look>, Option<String>)> {
+    let all = members(planned);
+    let mut out: BTreeMap<usize, (Option<Look>, Option<String>)> = BTreeMap::new();
+    for album in albums(&all).iter().filter(|a| a.len() > 1) {
+        let shown: Vec<Option<(Look, u32)>> = album.iter().map(|m| shown(m.r, facts)).collect();
+        if let Some(design) = design(&shown) {
+            for (m, look) in album.iter().zip(&shown) {
+                let alike = look.is_some_and(|(l, _)| picture::alike(&l, &design) == Alike::Same);
+                let holds = || {
+                    own(songs, m.n, facts)
+                        .flat_map(|f| &f.covers)
+                        .filter_map(|c| c.look)
+                        .any(|l| picture::alike(&l, &design) == Alike::Same)
+                };
+                if !alike && holds() {
+                    out.entry(m.n).or_default().0 = Some(design);
+                }
+            }
+        }
+        let origins: Vec<Option<String>> = album
+            .iter()
+            .map(|m| origin_of(&m.r.plan.audio.key))
+            .collect();
+        if let Some(origin) = most(&origins) {
+            for (m, from) in album.iter().zip(&origins) {
+                let holds = songs.get(m.n).is_some_and(|s| {
+                    s.sources.iter().any(|k| {
+                        facts.get(k).is_some_and(|f| f.audio.is_some())
+                            && origin_of(k).as_deref() == Some(origin.as_str())
+                    })
+                });
+                if from.as_deref() != Some(origin.as_str()) && holds {
+                    out.entry(m.n).or_default().1 = Some(origin.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The facts of each source song `n` lists.
+fn own<'f>(
+    songs: &'f [Song],
+    n: usize,
+    facts: &'f BTreeMap<SourceKey, Facts>,
+) -> impl Iterator<Item = &'f Facts> {
+    songs
+        .get(n)
+        .into_iter()
+        .flat_map(|s| &s.sources)
+        .filter_map(|k| facts.get(k))
+}
+
+/// How the cover `r` takes looks, and its detail in pixels.
+fn shown(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<(Look, u32)> {
+    let cover = r.plan.cover.as_ref()?;
+    let c = facts
+        .get(&cover.key)?
+        .covers
+        .iter()
+        .find(|c| c.at == cover.at)?;
+    Some((c.look?, c.quality.map_or(0, |q| q.effective)))
+}
+
+/// The design most of an album's covers show, `shown` as each song shows
+/// one: covers grouped by [`picture::alike`] reading them one design; of
+/// groups alike in size, the one holding the most detail; its sharpest
+/// cover stands for it.
+fn design(shown: &[Option<(Look, u32)>]) -> Option<Look> {
+    let mut group: Vec<usize> = (0..shown.len()).collect();
+    for i in 0..shown.len() {
+        for j in i + 1..shown.len() {
+            if let (Some((a, _)), Some((b, _))) = (shown[i], shown[j])
+                && picture::alike(&a, &b) == Alike::Same
+            {
+                let (gi, gj) = (group[i], group[j]);
+                let low = gi.min(gj);
+                for g in &mut group {
+                    if *g == gi || *g == gj {
+                        *g = low;
+                    }
+                }
+            }
+        }
+    }
+    let has = |i: usize| shown[i].is_some();
+    let size = |g: usize| {
+        (0..shown.len())
+            .filter(|&i| has(i) && group[i] == g)
+            .count()
+    };
+    let sharpest = |g: usize| {
+        (0..shown.len())
+            .filter(|&i| group[i] == g)
+            .filter_map(|i| shown[i])
+            .max_by_key(|(_, detail)| *detail)
+    };
+    let best = (0..shown.len())
+        .filter(|&i| has(i))
+        .map(|i| group[i])
+        .max_by_key(|&g| (size(g), sharpest(g).map(|(_, d)| d), std::cmp::Reverse(g)))?;
+    sharpest(best).map(|(look, _)| look)
+}
+
+/// The value most of `values` are, where two or more are and no other is
+/// as common.
+fn most(values: &[Option<String>]) -> Option<String> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for v in values.iter().flatten() {
+        *counts.entry(v).or_default() += 1;
+    }
+    let top = counts.values().copied().max()?;
+    let mut leaders = counts.iter().filter(|(_, n)| **n == top);
+    let (first, _) = leaders.next()?;
+    (top >= 2 && leaders.next().is_none()).then(|| (*first).to_string())
+}
+
+/// The folder a file of a torrent or of the manual folder came in, a
+/// disc's folder taken as its album's, so one rip's songs share it; none
+/// for what a site served.
+#[must_use]
+pub fn origin_of(key: &SourceKey) -> Option<String> {
+    let (scheme, path) = match key {
+        SourceKey::Torrent(t) => (format!("torrent:{}", t.hash()), t.path()),
+        SourceKey::Manual(m) => ("manual:".to_string(), m.path()),
+        SourceKey::Remote { .. } => return None,
+    };
+    let mut folder = path.parent()?;
+    if folder
+        .file_name()
+        .is_some_and(|n| is_disc_folder(&n.to_string_lossy()))
+    {
+        folder = folder.parent()?;
+    }
+    let parts: Vec<String> = folder
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    Some(format!("{scheme}/{}", parts.join("/")))
+}
+
+/// Whether a folder's name names one disc of a set: `CD1`, `Disc 2`.
+fn is_disc_folder(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let rest = ["cd", "disc", "disk"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p));
+    rest.is_some_and(|r| {
+        let digits = r.trim_start_matches([' ', '_', '-', '.']);
+        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// The songs on albums its sources name, album by album: a MusicBrainz
+/// release group, else the one release group of its folded album artist
+/// and album, else that name in one year.
+fn albums<'m>(all: &'m [Member<'m>]) -> Vec<Vec<&'m Member<'m>>> {
     let mut named: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
-    for m in &all {
+    for m in all {
         if let Some(group) = m.first(Field::MusicBrainzReleaseGroupId) {
             named.entry(m.name()).or_default().insert(group);
         }
     }
     let mut albums: BTreeMap<(String, String, String), Vec<&Member<'_>>> = BTreeMap::new();
-    for m in &all {
+    for m in all {
         let name = m.name();
         let key = match m.first(Field::MusicBrainzReleaseGroupId) {
             Some(group) => (group.to_string(), String::new(), String::new()),
@@ -322,53 +516,53 @@ pub fn agree(planned: &[(usize, Resolved)]) -> BTreeMap<usize, Vec<Agreed>> {
         };
         albums.entry(key).or_default().push(m);
     }
-    let mut agreed: BTreeMap<usize, Vec<Agreed>> = BTreeMap::new();
-    for album in albums.values().filter(|a| a.len() > 1) {
-        for field in [Field::Album, Field::AlbumArtist] {
-            let mut spellings: BTreeMap<String, Vec<&Member<'_>>> = BTreeMap::new();
-            for m in album.iter().filter(|m| !m.by_hand(field)) {
-                if let Some((v, _)) = m.tag(field) {
-                    spellings
-                        .entry(similar::fold(&v.join(" ")))
-                        .or_default()
-                        .push(m);
-                }
-            }
-            for alike in spellings.values() {
-                settle(field, alike, alike, album.len(), &mut agreed);
-            }
-        }
-        let releases: BTreeSet<&str> = album
-            .iter()
-            .filter_map(|m| m.first(Field::MusicBrainzAlbumId))
-            .collect();
-        for release in &releases {
-            let on: Vec<&Member<'_>> = album
-                .iter()
-                .copied()
-                .filter(|m| m.first(Field::MusicBrainzAlbumId) == Some(release))
-                .collect();
-            for field in WHOLE.into_iter().skip(2) {
-                let free: Vec<&Member<'_>> =
-                    on.iter().copied().filter(|m| !m.by_hand(field)).collect();
-                settle(field, &free, &free, album.len(), &mut agreed);
+    albums.into_values().collect()
+}
+
+/// The values the songs of `album` agree on, each song's into `agreed`.
+fn agree_on(album: &[&Member<'_>], agreed: &mut BTreeMap<usize, Vec<Agreed>>) {
+    for field in [Field::Album, Field::AlbumArtist] {
+        let mut spellings: BTreeMap<String, Vec<&Member<'_>>> = BTreeMap::new();
+        for m in album.iter().filter(|m| !m.by_hand(field)) {
+            if let Some((v, _)) = m.tag(field) {
+                spellings
+                    .entry(similar::fold(&v.join(" ")))
+                    .or_default()
+                    .push(m);
             }
         }
-        if releases.len() <= 1 {
-            let free: Vec<&Member<'_>> = album
-                .iter()
-                .copied()
-                .filter(|m| !m.by_hand(Field::Date))
-                .collect();
-            let off: Vec<&Member<'_>> = free
-                .iter()
-                .copied()
-                .filter(|m| m.first(Field::MusicBrainzAlbumId).is_none())
-                .collect();
-            settle(Field::Date, &free, &off, album.len(), &mut agreed);
+        for alike in spellings.values() {
+            settle(field, alike, alike, album.len(), agreed);
         }
     }
-    agreed
+    let releases: BTreeSet<&str> = album
+        .iter()
+        .filter_map(|m| m.first(Field::MusicBrainzAlbumId))
+        .collect();
+    for release in &releases {
+        let on: Vec<&Member<'_>> = album
+            .iter()
+            .copied()
+            .filter(|m| m.first(Field::MusicBrainzAlbumId) == Some(release))
+            .collect();
+        for field in WHOLE.into_iter().skip(2) {
+            let free: Vec<&Member<'_>> = on.iter().copied().filter(|m| !m.by_hand(field)).collect();
+            settle(field, &free, &free, album.len(), agreed);
+        }
+    }
+    if releases.len() <= 1 {
+        let free: Vec<&Member<'_>> = album
+            .iter()
+            .copied()
+            .filter(|m| !m.by_hand(Field::Date))
+            .collect();
+        let off: Vec<&Member<'_>> = free
+            .iter()
+            .copied()
+            .filter(|m| m.first(Field::MusicBrainzAlbumId).is_none())
+            .collect();
+        settle(Field::Date, &free, &off, album.len(), agreed);
+    }
 }
 
 /// `field` given the value most of `voters` have, the first breaking a
@@ -638,5 +832,48 @@ mod tests {
             }
         }
         assert!(agree(&planned).is_empty());
+    }
+
+    fn look(seed: u64) -> Look {
+        Look {
+            content: picture::Hashes { p: seed, d: seed },
+            square: None,
+            frame: None,
+            flat: false,
+        }
+    }
+
+    #[test]
+    fn a_disc_s_folder_is_its_album_s() {
+        let key = |p: &str| SourceKey::parse(&format!("torrent:{}/{p}", "a".repeat(40))).unwrap();
+        let disc_1 = origin_of(&key("Harbor Nights/CD1/01 Song.flac"));
+        assert_eq!(disc_1, origin_of(&key("Harbor Nights/Disc 2/01 Song.flac")));
+        assert_eq!(disc_1, origin_of(&key("Harbor Nights/03 Song.flac")));
+        assert_ne!(disc_1, origin_of(&key("Glass Weather/01 Song.flac")));
+        assert_eq!(origin_of(&SourceKey::youtube("vid00000001")), None);
+        assert!(!is_disc_folder("Discotheque"));
+    }
+
+    #[test]
+    fn the_most_common_value_leads_only_alone_and_twice_or_more() {
+        let of = |v: &[&str]| most(&v.iter().map(|s| Some((*s).to_string())).collect::<Vec<_>>());
+        assert_eq!(of(&["a", "a", "b"]).as_deref(), Some("a"));
+        assert_eq!(of(&["a", "b"]), None, "no value twice");
+        assert_eq!(of(&["a", "a", "b", "b"]), None, "a tie");
+    }
+
+    #[test]
+    fn an_album_s_design_is_the_one_most_songs_show() {
+        let (a, b) = (look(0), look(u64::MAX));
+        assert_eq!(
+            design(&[Some((a, 600)), Some((b, 1400)), Some((a, 300))]),
+            Some(a)
+        );
+        assert_eq!(
+            design(&[Some((a, 600)), Some((b, 1400))]),
+            Some(b),
+            "of groups alike in size, the sharpest"
+        );
+        assert_eq!(design(&[None, None]), None);
     }
 }

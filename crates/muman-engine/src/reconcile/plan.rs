@@ -357,7 +357,7 @@ fn agree_on_albums(
             .map(|(n, edition)| {
                 let pick = crate::album::Pick {
                     edition: Some(edition),
-                    agreed: Vec::new(),
+                    ..crate::album::Pick::default()
                 };
                 (n, pick)
             })
@@ -383,6 +383,13 @@ fn agree_on_albums(
         picks.entry(n).or_default().agreed = values;
     }
     again(planned, &picks, &settled);
+    let consistent = crate::album::consistent(planned, &manifest.songs, &state.facts);
+    let swayed: BTreeSet<usize> = consistent.keys().copied().collect();
+    for (n, (cover, audio)) in consistent {
+        let pick = picks.entry(n).or_default();
+        (pick.cover, pick.audio_from) = (cover, audio);
+    }
+    again(planned, &picks, &swayed);
 }
 
 /// Resolve every song under `settings`, each with a path of its own,

@@ -1192,8 +1192,9 @@ fn album_as_artist(v: &str, at: &At<'_>) -> Option<Vec<String>> {
     (album != owner && at.ctx.albums.has(&owner, &album)).then(|| vec![artist.clone()])
 }
 
-/// The disc an album's name says it is, `Live (CD2)` or `Live - Disc 2`,
-/// and where that begins.
+/// The disc an album's name says it is, `Live (CD2)`, `Live - Disc 2`,
+/// `Live / CD 2` or `Live CD2` closing it, and where that begins, a
+/// separator before it included.
 #[must_use]
 pub fn disc_in(album: &str) -> Option<(usize, u32)> {
     let disc = |text: &str| -> Option<u32> {
@@ -1222,8 +1223,36 @@ pub fn disc_in(album: &str) -> Option<(usize, u32)> {
     {
         return Some((last.start, n));
     }
-    let (at, sep) = rfind_top(trimmed, &DASHES)?;
-    disc(&trimmed[at + sep.len()..]).map(|n| (at, n))
+    if let Some((at, sep)) = rfind_top(trimmed, &DASHES)
+        && let Some(n) = disc(&trimmed[at + sep.len()..])
+    {
+        return Some((at, n));
+    }
+    // A disc a folder's name or a tag closes the album with, after a space
+    // or a slash, as `Live 1966 CD 2`; the album's name must be left, and
+    // a bracket is never cut into.
+    if BRACKETS.iter().any(|(_, close)| trimmed.ends_with(*close)) {
+        return None;
+    }
+    let last_word = |s: &str| {
+        s.char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(i, c)| i + c.len_utf8())
+    };
+    let last = last_word(trimmed);
+    let before = last_word(trimmed[..last].trim_end());
+    let (start, n) = match disc(&trimmed[before..]) {
+        Some(n) if before < last => (before, n),
+        _ => (last, disc(&trimmed[last..])?),
+    };
+    if inside(&spans(trimmed), start) {
+        return None;
+    }
+    let kept = trimmed[..start].trim_end_matches(|c: char| {
+        c.is_whitespace() || matches!(c, '/' | '／' | '⧸' | '⧹' | '\\' | '|' | '｜')
+    });
+    (!kept.is_empty() && kept.len() < start).then_some((kept.len(), n))
 }
 
 fn disc_in_album(v: &str, _: &At<'_>) -> Option<Vec<String>> {

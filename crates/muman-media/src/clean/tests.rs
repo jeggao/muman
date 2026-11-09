@@ -438,6 +438,25 @@ fn albums_lose_a_disc_and_keep_their_edition() {
     assert_eq!(disc_in("Paper Tides Of Ostrel (CD2)"), Some((22, 2)));
     assert_eq!(disc_in("Disco Lighthouse"), None);
     assert_eq!(
+        kept(Field::Album, "Harbor Nights (The Pier Concert) CD 2"),
+        ["Harbor Nights (The Pier Concert)"]
+    );
+    assert_eq!(
+        kept(Field::Album, "Night Ferry Soundtrack / CD 1"),
+        ["Night Ferry Soundtrack"]
+    );
+    assert_eq!(
+        kept(Field::Album, "The Lantern Concert CD1"),
+        ["The Lantern Concert"]
+    );
+    assert_eq!(disc_in("CD 2"), None, "nothing of the album left");
+    assert_eq!(disc_in("Disco 2"), None);
+    assert_eq!(
+        disc_in("Harbor Nights [2010 Mono Reissue CD 2]"),
+        None,
+        "a bracket is never cut into"
+    );
+    assert_eq!(
         disc_in("Discotheque Moons (Disc 1)").map(|(_, n)| n),
         Some(1)
     );
