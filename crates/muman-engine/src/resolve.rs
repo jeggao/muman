@@ -1728,7 +1728,7 @@ fn pick_cover(input: &Input<'_>, vets: &Vets) -> Option<(CoverRef, String)> {
         for cover in &facts.covers {
             order += 1;
             let q = cover.quality;
-            if q.is_some_and(|q| is_banner(q.content)) {
+            if q.is_some_and(|q| is_banner(q.content)) && input.song.cover.as_ref() != Some(key) {
                 continue;
             }
             let w = &input.cover.pick;

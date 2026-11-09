@@ -3368,7 +3368,10 @@ fn a_banner_is_no_cover() {
         image(800, 100, full(800, 100), 100),
     );
     let facts = BTreeMap::from([(key.clone(), f)]);
-    assert!(run(&song(&[key]), &facts, &[]).plan.cover.is_none());
+    let mut s = song(std::slice::from_ref(&key));
+    assert!(run(&s, &facts, &[]).plan.cover.is_none());
+    s.cover = Some(key);
+    assert!(run(&s, &facts, &[]).plan.cover.is_some(), "pinned");
 }
 
 #[test]
