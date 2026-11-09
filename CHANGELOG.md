@@ -9,6 +9,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`muman check --calibrate` counts how well vetting's evidence tells
+  records apart on your library**: for records of a song's recording, by
+  your files' IDs or the song's own AcoustID lookup, and records of
+  other songs sharing a title or a credit, how often a title, credits,
+  length, album and album unit agreed, each counted only where it did
+  not choose the record, with the points those counts suggest beside the
+  ones vetting gives. It changes nothing.
+
 - **`[tags] featured`, `versions` and `context` set a house style** for
   titles and artists: a featured artist moved into the title or the
   credit, versions written in one kind of bracket, and a note on where a

@@ -145,6 +145,21 @@ song whose audio plays 30 s or more from what a record it believes
 says, and each name spelled two ways that no artist ID tells apart.
 `[tags.clean.structure] vetting = false` turns this off.
 
+The points vetting gives each kind of evidence were set by hand. `muman
+check --calibrate` counts, on your library, how often each agreed,
+disagreed or said nothing for records of a song's recording and for
+records of another, and prints the points those counts suggest beside
+the ones vetting gives; it changes nothing. A record is the song's where
+your files carry its recording ID, or its ISRC and no ID, or where an
+AcoustID lookup of the song's own audio found it; another where your
+files carry other IDs, or where another song lists it and shares a title
+or a credit with the song. Each counts only for what never chose it: the
+lookup ranks by title, credits and length, so its find counts for the
+album and album unit alone, or for all but length where it was the only
+candidate, which only lookups made since this version keep (`muman sync
+--rematch` asks again); a record chosen for its title never counts for
+titles.
+
 ## Which release
 
 A MusicBrainz record holds one release of its recording, the one

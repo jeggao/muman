@@ -26,6 +26,7 @@ use muman_net::{acoustid, coverart, download, lrclib, music, musicbrainz, ytdlp_
 pub mod acquire;
 pub mod album;
 pub mod artifact;
+pub mod calibrate;
 pub mod diagnose;
 pub mod due;
 pub mod fit;

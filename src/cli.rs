@@ -550,6 +550,13 @@ pub enum Command {
         /// no longer served in its format, or taken down.
         #[arg(long)]
         upstream: bool,
+
+        /// Print how often each kind of evidence vetting weighs agrees for
+        /// records of a song's recording, by its files' IDs or its own
+        /// AcoustID lookup, and for records of other songs, with the points
+        /// those counts suggest; checks and changes nothing else.
+        #[arg(long, conflicts_with_all = ["decode", "upstream"])]
+        calibrate: bool,
     },
     /// Say what a sync would write, and for each song where each of its
     /// aspects comes from and why; the song list and the library are left
