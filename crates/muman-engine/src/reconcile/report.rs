@@ -92,6 +92,9 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
     for why in &r.why.set_aside {
         line(out, format!("  set aside  {why}"))?;
     }
+    for why in &r.why.dropped {
+        line(out, format!("  dropped  {why}"))?;
+    }
     let width = r.plan.tags.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     for ((key, values), why) in r.plan.tags.iter().zip(&r.why.tags) {
         let cleaned = if why.cleaned.is_empty() {

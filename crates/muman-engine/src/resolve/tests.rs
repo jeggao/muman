@@ -210,7 +210,7 @@ fn run_reading(
         lyrics,
         clean: &Settings::default(),
         typography: clean::Typography::default(),
-        albums: &Albums::default(),
+        known: &Known::default(),
         naming: &NAMING,
         audio,
         cover,
@@ -310,7 +310,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         lyrics: &english(),
         clean: &off,
         typography: clean::Typography::default(),
-        albums: &Albums::default(),
+        known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
@@ -766,7 +766,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         lyrics: &none_read(),
         clean: &clean,
         typography: clean::Typography::default(),
-        albums: &Albums::default(),
+        known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
@@ -836,7 +836,10 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
-        albums: &albums,
+        known: &Known {
+            albums,
+            ..Known::default()
+        },
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
@@ -942,7 +945,7 @@ fn hand_set_tags_and_the_album_win_last() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
-        albums: &Albums::default(),
+        known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
@@ -1250,7 +1253,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         lyrics: &english(),
         clean,
         typography: clean::Typography::default(),
-        albums: &Albums::default(),
+        known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
         cover: &COVER,
@@ -1567,7 +1570,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
-            albums: &Albums::default(),
+            known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
             cover: &COVER,
@@ -2204,7 +2207,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
-            albums: &Albums::default(),
+            known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
             cover: &COVER,
@@ -2696,7 +2699,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
-            albums: &Albums::default(),
+            known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
             cover: &COVER,
@@ -2938,5 +2941,142 @@ fn each_part_of_a_plan_changes_what_is_stored_and_the_audio_s_the_key() {
             "loudness.album",
             "loudness.opus_gain"
         ]
+    );
+}
+
+fn run_knowing(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    known: &Known,
+    clean: &Settings,
+) -> Resolved {
+    resolve(&Input {
+        song,
+        album: None,
+        facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &none_read(),
+        clean,
+        typography: clean::Typography::default(),
+        known,
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_watermark_and_a_placeholder_say_nothing_and_status_names_them() {
+    let key = manual("Discography/a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Night Ferry"], true);
+    tag(&mut f, Field::Album, &["The Glass Orchards"], true);
+    tag(&mut f, Field::Work, &["GRP"], true);
+    tag(&mut f, Field::Copyright, &["GRP"], true);
+    tag(&mut f, Field::Label, &["[no label]"], true);
+    tag(&mut f, Field::Artist, &["Night Ferry OST 2"], true);
+    let known = Known {
+        watermarks: Watermarks::of([detect::Source {
+            group: "manual:Discography",
+            name: None,
+            offers: &f.tags,
+        }]),
+        ..Known::default()
+    };
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_knowing(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &known,
+        &Settings::default(),
+    );
+    for field in [Field::Work, Field::Copyright, Field::Label, Field::Artist] {
+        assert_eq!(written(&r, field), None, "{field:?}: {:?}", r.why.dropped);
+    }
+    assert_eq!(
+        written(&r, Field::Title),
+        Some(&["Night Ferry".to_string()][..])
+    );
+    assert_eq!(
+        r.why.dropped,
+        [
+            "ARTIST “Night Ferry OST 2” from manual:Discography/a.flac: a placeholder",
+            "LABEL “[no label]” from manual:Discography/a.flac: a placeholder",
+            "WORK “GRP” from manual:Discography/a.flac: a watermark of manual:Discography",
+            "COPYRIGHT “GRP” from manual:Discography/a.flac: a watermark of manual:Discography",
+        ]
+    );
+
+    let mut off = Settings::default();
+    off.set(clean::WATERMARK, false);
+    off.set(clean::PLACEHOLDER, false);
+    let r = run_knowing(&song(&[key]), &facts, &known, &off);
+    assert_eq!(written(&r, Field::Work), Some(&["GRP".to_string()][..]));
+    assert_eq!(
+        written(&r, Field::Label),
+        Some(&["[no label]".to_string()][..])
+    );
+    assert_eq!(r.why.dropped, Vec::<String>::new());
+}
+
+#[test]
+fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
+    let (file, upload) = (manual("a.flac"), yt("vid00000001"));
+    let mut f = audio("flac", 22.0);
+    f.rev = "f".into();
+    tag(&mut f, Field::Title, &["Night Ferry"], true);
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    let shared_by = |channel: &str| {
+        let mut v = audio("opus", 20.0);
+        v.rev = "v".into();
+        tag(&mut v, Field::Title, &["Marlo Venn - Night Ferry"], false);
+        tag(&mut v, Field::Artist, &[channel], false);
+        tag(&mut v, Field::Date, &["2023-01-23"], false);
+        v
+    };
+    let date = |channel: &str, with_file: bool| {
+        let mut facts = BTreeMap::from([(upload.clone(), shared_by(channel))]);
+        let mut s = song(std::slice::from_ref(&upload));
+        if with_file {
+            facts.insert(file.clone(), f.clone());
+            s.sources.insert(0, file.clone());
+        } else {
+            s.tags = vec![("artist".into(), vec!["Marlo Venn".into()])];
+        }
+        written(&run(&s, &facts, &[]), Field::Date).map(<[String]>::to_vec)
+    };
+    assert_eq!(date("Orchard Archive", true), None, "shared by another");
+    assert_eq!(
+        date("Orchard Archive", false),
+        None,
+        "the artist set by hand"
+    );
+    assert_eq!(
+        date("Marlo Venn", true),
+        Some(vec!["2023-01-23".to_string()])
+    );
+    assert_eq!(
+        date("Marlo Venn", false),
+        Some(vec!["2023-01-23".to_string()])
+    );
+    let mut both = f.clone();
+    tag(
+        &mut both,
+        Field::Artist,
+        &["Kiri Hoshino & Marlo Venn"],
+        true,
+    );
+    let facts = BTreeMap::from([
+        (file.clone(), both),
+        (upload.clone(), shared_by("Marlo Venn")),
+    ]);
+    assert_eq!(
+        written(&run(&song(&[file, upload]), &facts, &[]), Field::Date),
+        Some(&["2023-01-23".to_string()][..]),
+        "one of the credited artists uploaded it"
     );
 }

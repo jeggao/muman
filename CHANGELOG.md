@@ -70,6 +70,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A torrent group's name, written into the files' work, label or
+  copyright, is no longer written as the song's.** muman finds such a
+  watermark across the song list's sources: a value that stands as a tag
+  in its torrent's name, one a file writes in two such fields, or a work
+  shared by many titles of several albums. Placeholders, as `[no label]`,
+  `Unknown Artist`, a site's category given as a genre and an artist that
+  is a soundtrack's short name, are dropped too. `muman status` names
+  each value dropped; `[tags.clean.packaging] placeholder` and
+  `watermark` turn each off.
+- **A video's upload date dates a song only when its uploader is the
+  song's artist.** A song shared by someone else is no longer dated by
+  the day they uploaded it.
+- **A title cut short agrees with the title it is the start of**, three
+  words or more, so a file's title cut by a tag's length no longer sets
+  the song's MusicBrainz record aside.
 - **A MusicBrainz record of another song no longer files a song under
   its album.** A record whose title and artists both disagree with the
   song's other sources and the tags set by hand gives the song nothing,

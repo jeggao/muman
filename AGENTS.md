@@ -94,6 +94,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   integrity.rs      whether a source's audio is all there: cut off or missing
   loudness.rs       EBU R128 loudness and a song's gains
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
+  detect.rs         values that say nothing of a song: placeholders and watermarks
   lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names, through the path template

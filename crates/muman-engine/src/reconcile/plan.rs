@@ -13,11 +13,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::clean::Albums;
 use crate::facts::Facts;
 use crate::manifest::{Manifest, Song};
 use crate::naming::{self, Naming};
-use crate::resolve::{self, Format, Input, Resolved, Why};
+use crate::resolve::{self, Format, Input, Known, Resolved, Why};
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::tags::Field;
@@ -290,7 +289,7 @@ pub struct Resolver<'a> {
     settings: &'a crate::settings::Settings,
     state: &'a State,
     naming: Naming,
-    albums: Albums,
+    known: Known,
 }
 
 impl<'a> Resolver<'a> {
@@ -305,7 +304,7 @@ impl<'a> Resolver<'a> {
             settings,
             state,
             naming: settings.library.naming(library)?.with_tail(settings.tail()),
-            albums: Albums::of(state.facts.values().map(|f| &f.tags)),
+            known: Known::of(manifest, &state.facts),
         })
     }
 
@@ -326,7 +325,7 @@ impl<'a> Resolver<'a> {
             lyrics: &settings.lyrics,
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             typography: settings.tags.typography,
-            albums: &self.albums,
+            known: &self.known,
             naming: &self.naming,
             audio: &settings.audio,
             cover: &settings.cover,

@@ -36,7 +36,12 @@
 //!   vetting off, a recording's ISRC and MusicBrainz IDs come only from a
 //!   source that titles it as the song is titled, as before it. A
 //!   source's comment is taken only with `[library] source_comments`:
-//!   most are a store's or an uploader's words, not the song's.
+//!   most are a store's or an uploader's words, not the song's. A value
+//!   that says nothing of the song, a placeholder or a watermark, is
+//!   dropped before any offer is ranked ([`crate::detect`]), watermarks
+//!   found across the sources the song list names ([`Known`]). An
+//!   upload's date, the day it went up, dates the song only where the
+//!   upload's channel is the song's artist, set by hand or offered.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -146,12 +151,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
 use crate::codec::{Adapt, Chain, Codec, Container, Layout};
+use crate::detect::{self, Watermarks};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
 use crate::lang::{Fit, Lang, Role, Writing};
 use crate::loudness::Gains;
 use crate::lyrics::{self, Language};
-use crate::manifest::{Album, LyricsPin, Song};
+use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::quality::{ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
@@ -830,6 +836,9 @@ pub struct Why {
     pub fit: Option<String>,
     /// Each source set aside ([`crate::vet`]), as `<key>: <why>`.
     pub set_aside: Vec<String>,
+    /// Each value dropped for saying nothing of the song
+    /// ([`crate::detect`]), as `<FIELD> “<value>” from <key>: <why>`.
+    pub dropped: Vec<String>,
     /// Each other audio source of another recording than the chosen
     /// audio's, or at another speed than the rest of its own
     /// ([`vet::recordings`]), as `<key>: <which>`.
@@ -853,6 +862,99 @@ pub struct Resolved {
     pub why: Why,
 }
 
+/// What resolving a song reads of the library's other sources: every
+/// album they hold, for cleaning, and the watermarks of each source
+/// group among the sources the song list names ([`crate::detect`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Known {
+    pub albums: Albums,
+    pub watermarks: Watermarks,
+}
+
+impl Known {
+    /// The library `manifest` lists, of `facts`: albums from every source
+    /// measured, as cleaning has always read them, and watermarks from the
+    /// sources a song lists alone, so a source no song lists any more
+    /// changes no pick.
+    #[must_use]
+    pub fn of(manifest: &Manifest, facts: &BTreeMap<SourceKey, Facts>) -> Self {
+        let listed = manifest.keys();
+        let groups: Vec<(String, Option<&str>, &tags::Offers)> = listed
+            .iter()
+            .filter_map(|key| {
+                let name = match key {
+                    SourceKey::Torrent(t) => manifest
+                        .torrents
+                        .get(t.hash())
+                        .and_then(|t| t.name.as_deref()),
+                    _ => None,
+                };
+                Some((group_of(key), name, &facts.get(key)?.tags))
+            })
+            .collect();
+        Self {
+            albums: Albums::of(facts.values().map(|f| &f.tags)),
+            watermarks: Watermarks::of(groups.iter().map(|(group, name, offers)| detect::Source {
+                group,
+                name: *name,
+                offers,
+            })),
+        }
+    }
+}
+
+/// The group a source's files were shared in, which watermarks are told
+/// within: its torrent, its folder under the manual folder, or its site.
+fn group_of(key: &SourceKey) -> String {
+    match key {
+        SourceKey::Torrent(t) => format!("torrent:{}", t.hash()),
+        SourceKey::Manual(m) => {
+            let first = m.path().components().next();
+            format!(
+                "manual:{}",
+                first.map_or_else(String::new, |c| {
+                    c.as_os_str().to_string_lossy().into_owned()
+                })
+            )
+        }
+        SourceKey::Remote { site, .. } => site.clone(),
+    }
+}
+
+/// Why a value `key` offers for `field` says nothing of the song, as a
+/// placeholder or a watermark of its group, where the switch for it is on.
+fn says_nothing(input: &Input<'_>, key: &SourceKey, field: Field, value: &str) -> Option<String> {
+    if input.clean.is_on(clean::PLACEHOLDER) && detect::placeholder(field, value) {
+        return Some("a placeholder".into());
+    }
+    if input.clean.is_on(clean::WATERMARK) && detect::PER_WORK.contains(&field) {
+        let group = group_of(key);
+        if input.known.watermarks.holds(&group, value) {
+            return Some(format!("a watermark of {group}"));
+        }
+    }
+    None
+}
+
+/// Each value of the song's sources that says nothing of it, as
+/// `<FIELD> “<value>” from <key>: <why>`.
+fn dropped(input: &Input<'_>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (_, key, facts) in input.present() {
+        for (field, offer) in &facts.tags {
+            if *field == Field::Comment && !input.source_comments {
+                continue;
+            }
+            for value in &offer.values {
+                if let Some(why) = says_nothing(input, key, *field, value) {
+                    out.push(format!("{} “{value}” from {key}: {why}", field.vorbis()));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// What resolving a song reads.
 #[derive(Debug, Clone, Copy)]
 pub struct Input<'a> {
@@ -868,8 +970,8 @@ pub struct Input<'a> {
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
     pub typography: clean::Typography,
-    /// Every album the library holds, for cleaning.
-    pub albums: &'a Albums,
+    /// What the other songs' sources show: their albums and watermarks.
+    pub known: &'a Known,
     pub naming: &'a Naming,
     pub audio: &'a Audio,
     pub cover: &'a crate::settings::Cover,
@@ -1018,6 +1120,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             fit: None,
             set_aside: vets.set_aside(),
             recordings,
+            dropped: dropped(input),
         },
     })
 }
@@ -1861,7 +1964,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
     for (n, key, facts) in input.present() {
         let ctx = clean::Context {
             names: &names,
-            albums: input.albums,
+            albums: &input.known.albums,
             offers: &facts.tags,
             typography: input.typography,
         };
@@ -1879,11 +1982,17 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
                 continue;
             }
             let c = clean::clean(*field, raw, &ctx, input.clean);
+            let values: Vec<String> = (c.values.into_iter())
+                .filter(|v| says_nothing(input, key, *field, v).is_none())
+                .collect();
+            if values.is_empty() {
+                continue;
+            }
             all.entry(*field).or_default().push(Candidate {
                 n,
                 key,
                 offer: Offer {
-                    values: c.values,
+                    values,
                     structured: raw.structured,
                 },
                 cleaned: c.rules,
@@ -1974,6 +2083,39 @@ fn best_offer_then<'c, 'a, K: Ord>(
             c.n,
         )
     })
+}
+
+/// The best date of a song with no release's: a field kept for it, or an
+/// upload's date where the upload's channel is the song's artist, set by
+/// hand or `offered`. An upload's date is the day it went up, the
+/// release's only where its uploader is the artist releasing it.
+fn date_of<'c, 'a>(
+    input: &Input<'_>,
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+    offered: Option<&Slot>,
+) -> Option<&'c Candidate<'a>> {
+    let by_hand = (input.song.tags.iter())
+        .chain(input.album.iter().flat_map(|a| &a.tags))
+        .find(|(name, values)| Field::named(name) == Some(Field::Artist) && !values.is_empty())
+        .map(|(_, values)| values.as_slice());
+    let artist: Vec<&str> = by_hand
+        .or(offered.map(|s| s.values.as_slice()))
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    let dated_so = |key: &SourceKey| {
+        let structured = (candidates.get(&Field::Date).into_iter().flatten())
+            .any(|c| c.key == key && c.offer.structured);
+        let uploaded_by_artist = (candidates.get(&Field::Artist).into_iter().flatten())
+            .filter(|c| c.key == key && !c.offer.structured)
+            .any(|c| {
+                let channel: Vec<&str> = c.offer.values.iter().map(String::as_str).collect();
+                crate::similar::credits_agree(&channel, &artist) == Some(true)
+            });
+        structured || uploaded_by_artist
+    };
+    best_offer(candidates, Field::Date, &dated_so)
 }
 
 /// Where the album of a song on none comes from: its own title.
@@ -2229,7 +2371,7 @@ fn resolve_tags(
         }
     }
     if !fields.contains_key(&Field::Date)
-        && let Some(c) = best_offer(candidates, Field::Date, &any)
+        && let Some(c) = date_of(input, candidates, fields.get(&Field::Artist))
     {
         fields.insert(Field::Date, Slot::of(c));
     }

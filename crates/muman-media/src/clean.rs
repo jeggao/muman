@@ -11,11 +11,13 @@
 //! Lyrics have rules of their own, in [`lyrics`], switched under
 //! `[lyrics.clean.<tier>]` in the same tiers.
 //!
-//! One switch is no rule over a value: [`VETTING`], which lets the
+//! Three switches are no rule over a value: [`VETTING`], which lets the
 //! resolver set aside a source that names another recording than the
 //! song's other sources, so a MusicBrainz record of another song lends
-//! the song nothing. It is switched with the rules so the song list
-//! lists it beside them and `status` names it as it names them.
+//! the song nothing; and [`PLACEHOLDER`] and [`WATERMARK`], which drop a
+//! value standing for none and one naming whoever shared the files
+//! ([`crate::detect`]). They are switched with the rules so the song list
+//! lists them beside them and `status` names them as it names them.
 //!
 //! Offers are cleaned at each resolve, never when read: the raw offers
 //! stay in the state, so changing a rule or a switch needs nothing read
@@ -199,9 +201,17 @@ pub const DISC_IN_ALBUM: &str = "structure.disc_in_album";
 /// that names another recording.
 pub const VETTING: &str = "structure.vetting";
 
+/// The switch dropping a value that stands for no value, as `[no label]`
+/// ([`crate::detect::placeholder`]).
+pub const PLACEHOLDER: &str = "packaging.placeholder";
+
+/// The switch dropping a value naming whoever shared the files, written
+/// into a field naming the work ([`crate::detect::Watermarks`]).
+pub const WATERMARK: &str = "packaging.watermark";
+
 /// The switches that are no rule over a value, after the rules of their
 /// tier.
-const OTHERS: [&str; 1] = [VETTING];
+const OTHERS: [&str; 3] = [VETTING, PLACEHOLDER, WATERMARK];
 
 /// Every tag rule's name and every other switch's, `<tier>.<key>`.
 fn switch_names() -> impl Iterator<Item = &'static str> {
