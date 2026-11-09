@@ -46,6 +46,11 @@
 //! known by the digest of its text; facts made before muman read it
 //! learn it when their tags are read again, by [`retag`].
 //!
+//! A MusicBrainz record's facts keep the length it says its recording
+//! plays beside its tags, which the vetting of a song's sources holds
+//! against the audio; records read before muman kept it are read again
+//! by [`retag`], as [`tags_method`] names, which opens no media file.
+//!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the gray pixels its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
@@ -117,9 +122,13 @@ pub struct Facts {
     /// album, in place of its release's fields ([`tags::editions`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub editions: Vec<Offers>,
-    /// The `tags::METHOD` the tags were read by.
+    /// The [`tags_method`] the tags were read by.
     #[serde(default)]
     pub tags_method: String,
+    /// The length a MusicBrainz record says its recording plays, in ms;
+    /// none for any other source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_ms: Option<u64>,
     /// A YouTube Music release, by its info: a track name, or a " - Topic"
     /// channel; read with the tags.
     #[serde(default)]
@@ -152,6 +161,20 @@ pub struct Facts {
 /// What a source's digests are of; facts hashed otherwise are hashed
 /// again, decoding nothing, as [`hash`] does.
 pub const HASH_METHOD: &str = "hash/2";
+
+/// What a MusicBrainz record's facts keep beside its tags: its length.
+pub const RECORD_METHOD: &str = "record/1";
+
+/// How the tags of a source of `kind` are read: `tags::METHOD`, and for
+/// a record [`RECORD_METHOD`] too, so a record alone is read again when
+/// only what its facts keep of it changes.
+#[must_use]
+pub fn tags_method(kind: Kind) -> String {
+    match kind {
+        Kind::Tags => format!("{}+{RECORD_METHOD}", tags::METHOD),
+        Kind::Media | Kind::Lyrics | Kind::Image => tags::METHOD.to_string(),
+    }
+}
 
 /// The format a site served a source in, by yt-dlp's info.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,10 +381,11 @@ impl Facts {
         self.picture_method = picture::METHOD.to_string();
     }
 
-    /// Whether the tags were read the way they are now.
+    /// Whether the tags of a source of `kind` were read the way they are
+    /// now.
     #[must_use]
-    pub fn tags_hold(&self) -> bool {
-        self.tags_method == tags::METHOD
+    pub fn tags_hold(&self, kind: Kind) -> bool {
+        self.tags_method == tags_method(kind)
     }
 
     /// Facts of a file that could not be read at all.
@@ -378,6 +402,7 @@ impl Facts {
             tags: Offers::new(),
             editions: Vec::new(),
             tags_method: tags::METHOD.to_string(),
+            length_ms: None,
             release: false,
             chapters: Vec::new(),
             print: None,
@@ -624,6 +649,8 @@ pub fn gather<R: Runner>(
             facts.tags = tags::from_record(&record);
             facts.editions = tags::editions(&record);
             facts.tags_digest = digest_file(&located.path);
+            facts.tags_method = tags_method(Kind::Tags);
+            facts.length_ms = record.length_ms;
         }
         Kind::Media => media(runner, located, scratch, wanted, &mut facts)?,
     }
@@ -637,6 +664,8 @@ pub struct Reread {
     pub editions: Vec<Offers>,
     pub release: bool,
     pub chapters: Vec<Chapter>,
+    /// The length a record says its recording plays, in ms.
+    pub length_ms: Option<u64>,
     /// The lyrics its tags hold.
     pub lyrics: Option<LyricsFacts>,
 }
@@ -652,6 +681,7 @@ pub fn retag<R: Runner>(runner: &R, located: &Located, scratch: &Path) -> Result
             return Ok(Reread {
                 tags: tags::from_record(&record),
                 editions: tags::editions(&record),
+                length_ms: record.length_ms,
                 ..Reread::default()
             });
         }

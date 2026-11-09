@@ -32,6 +32,14 @@
 //! print submitted with it. So a stated length within a looser margin
 //! ranks first, and a stub one person's print alone names is no match.
 //!
+//! A recording whose title and first artist both disagree with the
+//! song's, as [`crate::similar::titles_agree`] and
+//! [`crate::similar::credits_agree`] read them, never fits: a print
+//! submitted with another song names that song, whatever its score, and
+//! a cover act's name holding the artist's is not the artist's. A title
+//! or artist no rule compares with the song's, as kanji with Latin
+//! letters, disagrees with nothing.
+//!
 //! [`Client::find`] answers every recording that fits, best first: the
 //! lookup takes the first whose MusicBrainz comment does not name the
 //! other mix than the song's audio is ([`crate::musicbrainz::other_mix`]),
@@ -149,6 +157,17 @@ impl Recording {
                 Some(d) => (d - seconds).abs() <= LOOSE_GAP_S,
                 None => self.sources >= MIN_UNTIMED_SOURCES,
             }
+    }
+
+    /// Whether its title and first artist both disagree with the song's.
+    fn another_song(&self, q: &Query) -> bool {
+        let (Some(title), Some(artist)) = (q.title.as_deref(), q.artist.as_deref()) else {
+            return false;
+        };
+        let names: Vec<&str> = self.artists.iter().map(|a| a.name.as_str()).collect();
+        let titled = crate::similar::titles_agree(&[self.title.as_str()], &[vec![title]], false);
+        titled == Some(false)
+            && crate::similar::credits_agree(&names, &[first_artist(artist)]) == Some(false)
     }
 
     /// How sure its length is, smaller first: within [`MAX_GAP_S`] of
@@ -269,7 +288,7 @@ impl Client<'_> {
             .iter()
             .filter(|r| r.score >= MIN_SCORE)
             .flat_map(|r| r.recordings.iter().map(move |rec| (rec, r.score)))
-            .filter(|(rec, _)| rec.fits(q.seconds))
+            .filter(|(rec, _)| rec.fits(q.seconds) && !rec.another_song(q))
             .collect();
         fitting.sort_by_cached_key(|(rec, score)| rec.rank(q, *score));
         let mut ids: Vec<Mbid> = Vec::new();

@@ -116,6 +116,38 @@ fn a_low_score_or_another_length_is_no_match() {
     assert_eq!(find(&answer(&[]), &query()).0, None);
 }
 
+#[test]
+fn a_recording_of_another_title_by_another_artist_never_fits() {
+    let by = |n: u32, title: &str, artist: &str| {
+        recording(n, title, 241.0, 90, "").replace("Paper Comets", artist)
+    };
+    let body = answer(&[(
+        0.97,
+        &[
+            by(1, "Night Ferry", "Kiri Hoshino"),
+            by(2, "Lantern Weather", "Paper Comets Tribute Band"),
+        ],
+    )]);
+    let server = Server::default().answer("/v2/lookup?", &body);
+    let throttle = Throttle::none();
+    let found = client(&server, &throttle).find(&query()).unwrap();
+    assert_eq!(
+        found.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        [format!("{REC}2")],
+        "a cover act whose title agrees still fits"
+    );
+    let body = answer(&[(0.97, &[by(1, "Night Ferry", "Kiri Hoshino")])]);
+    let q = Query {
+        artist: None,
+        ..query()
+    };
+    assert_eq!(
+        find(&body, &q).0,
+        Some(format!("{REC}1")),
+        "no artist to hold it to"
+    );
+}
+
 /// Answers every GET with AcoustID's 400 for a key it does not know.
 struct Refuses;
 

@@ -610,7 +610,7 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
                     .state
                     .facts
                     .get(key)
-                    .is_some_and(|f| f.holds_for(&l.rev()) && f.tags_hold());
+                    .is_some_and(|f| f.holds_for(&l.rev()) && f.tags_hold(l.kind));
                 if !holds {
                     to_measure.add(&key.to_string());
                 }

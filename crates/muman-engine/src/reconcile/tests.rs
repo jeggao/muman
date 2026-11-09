@@ -475,7 +475,42 @@ fn tags_read_another_way_are_read_again_without_measuring() {
     assert!(text.contains("Up to date: 1 song(s)"), "{text}");
     let state = State::load(&h.dirs.home).unwrap();
     assert_eq!(state.facts[&key].tags, tags);
-    assert!(state.facts[&key].tags_hold());
+    assert!(state.facts[&key].tags_hold(crate::store::Kind::Media));
+}
+
+#[test]
+fn a_record_read_before_its_length_was_kept_is_read_again_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let id = "00000000-0000-0000-0000-000000000001";
+    std::fs::create_dir_all(h.dirs.musicbrainz()).unwrap();
+    std::fs::write(
+        h.dirs.musicbrainz().join(format!("{id}.json")),
+        format!(
+            r#"{{"id": "{id}", "title": "Song", "artists": ["Hoshi7ne"], "length_ms": 241000}}"#
+        ),
+    )
+    .unwrap();
+    h.songs(&format!(
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\", \"musicbrainz:{id}\"]\n"
+    ));
+    let (ok, text) = h.run(&infos(&["aaaaaaaaaaa"]), Options::default());
+    assert!(ok, "{text}");
+    let key = SourceKey::parse(&format!("musicbrainz:{id}")).unwrap();
+    let mut state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].length_ms, Some(241_000));
+    let facts = state.facts.get_mut(&key).unwrap();
+    facts.tags_method = crate::tags::METHOD.to_string();
+    facts.length_ms = None;
+    state.save(&h.dirs.home).unwrap();
+
+    let again = infos(&["aaaaaaaaaaa"]);
+    let (ok, text) = h.run(&again, Options::default());
+    assert!(ok, "{text}");
+    assert!(text.contains("Reading the tags of 1 source(s)"), "{text}");
+    let state = State::load(&h.dirs.home).unwrap();
+    assert_eq!(state.facts[&key].length_ms, Some(241_000));
+    assert!(state.facts[&key].tags_hold(crate::store::Kind::Tags));
 }
 
 #[test]

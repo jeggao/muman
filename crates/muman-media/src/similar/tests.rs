@@ -288,3 +288,126 @@ fn names_match_exactly_before_one_holds_the_other() {
     assert_eq!(names_match("Second Tune", "Lantern Weather"), None);
     assert_eq!(names_match("", "Lantern Weather"), None);
 }
+
+#[test]
+fn names_agree_alike_disagree_apart_and_say_nothing_between_or_across_scripts() {
+    let agree = |a: &str, b: &str| super::agree(&Name::new(a), &Name::new(b));
+    assert_eq!(agree("Harbor Lights", "Harbour Lights"), Some(true));
+    assert_eq!(
+        agree("Lantern Weather", "Lantern Weather (Radio Edit)"),
+        Some(true)
+    );
+    assert_eq!(agree("Night Ferry", "Paper Comets"), Some(false));
+    assert_eq!(
+        agree("Lantern Weather", "Lantern Weather [Live at the Pier]"),
+        Some(true),
+        "its version is the caller's to weigh"
+    );
+    assert_eq!(
+        versions_in("Lantern Weather [Live at the Pier]"),
+        BTreeSet::from(["live version"])
+    );
+    assert_eq!(
+        versions_in("Live Forever"),
+        BTreeSet::from(["live version"])
+    );
+    assert_eq!(
+        agree(
+            "Idiot Wind (take 1, 9/16/74)",
+            "Idiot Wind (Alternate Take 5)"
+        ),
+        Some(true),
+        "a take or a date tells releases apart, not songs"
+    );
+    assert_eq!(agree("Song 2", "Song"), Some(false), "another number");
+    assert_eq!(agree("Song One", "Song Four"), None, "neither");
+    assert_eq!(
+        agree("夜の船", "Night Ferry"),
+        None,
+        "no rule compares them"
+    );
+}
+
+#[test]
+fn credits_agree_on_a_whole_name_never_on_one_holding_another() {
+    assert_eq!(
+        credits_agree(&["Marlo Venn & Kiri Hoshino"], &["The Marlo Venn"]),
+        Some(true)
+    );
+    assert_eq!(
+        credits_agree(&["Kiri Hoshino feat. MARLO VENN"], &["Marlo Venn"]),
+        Some(true)
+    );
+    assert_eq!(
+        credits_agree(&["Marlo Venn and the Glass Orchards"], &["Glass Orchards"]),
+        Some(true)
+    );
+    assert_eq!(
+        credits_agree(&["Marlo Venn Tribute Band"], &["Marlo Venn"]),
+        Some(false)
+    );
+    assert_eq!(
+        credits_agree(&["Marlo’s Garden"], &["Marlos Garden"]),
+        Some(true)
+    );
+    assert_eq!(credits_agree(&["マルロ"], &["Marlo Venn"]), None);
+    assert_eq!(credits_agree(&[], &["Marlo Venn"]), None);
+}
+
+#[test]
+fn titles_are_read_as_files_write_them_and_a_version_counts_where_the_record_names_it() {
+    let title = |record: &str, file: &str| titles_agree(&[record], &[vec![file]], false);
+    assert_eq!(title("Night Ferry", "Marlo Venn / Night Ferry"), Some(true));
+    assert_eq!(title("Night Ferry", "1st Set: Night Ferry"), Some(true));
+    assert_eq!(
+        title(
+            "Night Ferry",
+            "Night Ferry [Live at the Pier, Harbor Town - May 1..."
+        ),
+        Some(true),
+        "cut off inside its bracket"
+    );
+    assert_eq!(
+        title("Night Ferry", "Night Ferry (Live)"),
+        Some(true),
+        "a record keeps live out of its title"
+    );
+    assert_eq!(
+        title("Night Ferry (live at the Pier)", "Night Ferry"),
+        Some(false)
+    );
+    assert_eq!(
+        titles_agree(
+            &["Night Ferry Suite: II. Dusk"],
+            &[vec!["Night Ferry Suite", "II. Dusk"]],
+            false
+        ),
+        Some(true),
+        "a work and its movement"
+    );
+    assert_ne!(
+        titles_agree(
+            &["Night Ferry Suite: II. Dusk"],
+            &[vec!["Harbor Suite: II. Dusk"]],
+            false
+        ),
+        Some(true),
+        "never by the movement alone"
+    );
+    assert_eq!(
+        title("NIGHT FERRY <Kiri Version>", "Night Ferry (Kiri)"),
+        Some(true)
+    );
+    assert_eq!(
+        title("Night Ferry: Soliloquy", "Soliloquy (Night Ferry)"),
+        Some(true)
+    );
+    assert_eq!(title("Dusk / Dawn", "Dusk - Dawn"), Some(true), "a medley");
+    assert_eq!(title("夜の船", "Night Ferry"), None);
+    assert_eq!(title("Rooms of Salt", "Rooms of Salt CD1"), Some(true));
+    assert_eq!(
+        without_disc("Rooms of Salt - Disc 2"),
+        Some("Rooms of Salt")
+    );
+    assert_eq!(without_disc("Rooms of Salt 2"), None);
+}
