@@ -654,8 +654,14 @@ pub enum Command {
         /// Print what muman keeps of the library and its sources instead,
         /// as JSON: the files it wrote and what each was made from, and
         /// what it measured.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "changes")]
         state: bool,
+        /// Print instead each value a sync would change in each song, as
+        /// its file holds it and as it would be written, with why; only
+        /// the FIELDs named, when any: a tag, or path, audio, format,
+        /// cover or lyrics.
+        #[arg(long, value_name = "FIELD", num_args = 0..)]
+        changes: Option<Vec<String>>,
     },
     /// Write a script that completes muman's commands, flags and values
     /// in a shell, for the shell to load.

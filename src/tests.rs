@@ -3405,6 +3405,51 @@ fn info_counts_no_notice_of_the_song_list_as_a_song() {
 }
 
 #[test]
+fn info_changes_names_each_value_a_sync_would_change_and_why() {
+    let s = Setup::new();
+    s.file("home/sources/manual/Song.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let changes = |fields: &[&str]| {
+        let args: Vec<&str> = ["info", "--changes"]
+            .iter()
+            .chain(fields)
+            .copied()
+            .collect();
+        let (ok, report) = s.report(&flacs(), &args);
+        assert!(ok, "{report}");
+        crate::ui::plain(&report)
+    };
+    assert_eq!(changes(&[]), "No song would change\n");
+
+    let list = s.dir.path().join("home/songs.toml");
+    let text = std::fs::read_to_string(&list).unwrap();
+    assert!(text.contains("tags.title = \"\""), "{text}");
+    std::fs::write(
+        &list,
+        text.replace("tags.title = \"\"", "tags.title = \"Lantern\""),
+    )
+    .unwrap();
+    assert_eq!(
+        changes(&[]),
+        "manual:Song.flac — Lantern — Artist\n  \
+         path  Artist/Record/02 Song.flac → Artist/Record/02 Lantern.flac\n  \
+         TITLE Song → Lantern (song.tags)\n\
+         1 song(s) would change: TITLE 1, path 1\n"
+    );
+    assert_eq!(
+        changes(&["title"]),
+        "manual:Song.flac — Lantern — Artist\n  TITLE Song → Lantern (song.tags)\n\
+         1 song(s) would change: TITLE 1\n",
+        "a tag named as the song list names it"
+    );
+    assert!(
+        s.refused(&["info", "--changes", "colour"])
+            .contains("No song is written with `colour`")
+    );
+}
+
+#[test]
 fn status_of_a_song_a_sync_would_fetch_says_so_and_fails_nothing() {
     let s = Setup::new();
     std::fs::create_dir_all(s.dir.path().join("home")).unwrap();

@@ -420,11 +420,18 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             }
             Ok(ok)
         }
-        Command::Info { state: true } => {
+        Command::Info { state: true, .. } => {
             state::State::dump(&dirs.home, data)?;
             Ok(true)
         }
-        Command::Info { state: false } => {
+        Command::Info {
+            changes: Some(fields),
+            ..
+        } => {
+            overview::changes(dirs, fields, data)?;
+            Ok(true)
+        }
+        Command::Info { .. } => {
             overview::info(dirs, job.verbose, data)?;
             let found: Vec<tools::Status> = tools::TOOLS
                 .iter()

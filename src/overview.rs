@@ -6,6 +6,15 @@
 //! the library is in step is what a sync would do with each song, by the
 //! decisions a sync makes (`reconcile::foresee`), on the state as a
 //! sync would take it, so `info`, `status` and `sync` never disagree.
+//!
+//! `--changes` answers what those songs would change into, value by
+//! value: each song's plan as its file was written, the one a state
+//! entry keeps, against the plan a sync would make now, with the reason
+//! `status` gives for the new value. It is how a change to picking or
+//! cleaning is checked on a whole library before a sync writes it: a
+//! song in step, or not written yet, has nothing to compare. Tags are
+//! named by their Vorbis comment, as written; `path`, `audio`, `format`,
+//! `cover` and `lyrics` name the rest.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -22,7 +31,7 @@ use crate::lookup;
 use crate::manifest::{LyricsPin, Manifest};
 use crate::quality::SOFT_COVER;
 use crate::reconcile;
-use crate::resolve::{Resolved, SINGLE};
+use crate::resolve::{Plan, Resolved, SINGLE};
 use crate::source::SourceKey;
 use crate::state;
 use crate::state::State;
@@ -77,6 +86,17 @@ impl Context<'_> {
 /// Write the library's statistics, its status against the song list,
 /// and its health, every song behind a count when `verbose`.
 pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
+    let c = context(dirs, verbose)?;
+    folders(&c, out)?;
+    library(&c, out)?;
+    sources(&c, out)?;
+    status(&c, out)?;
+    health(&c, out)
+}
+
+/// The song list, the state as a sync takes it and each song planned as
+/// a sync would plan it, for every section to read.
+fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
     let manifest = Manifest::load(&dirs.home)?;
     // The state as a sync takes it, in memory: a library folder named
     // anew followed, copies with new times vouched for.
@@ -114,7 +134,7 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
             format!("{name}: {e:#}")
         })
         .collect();
-    let c = Context {
+    Ok(Context {
         dirs,
         verbose,
         manifest,
@@ -123,12 +143,182 @@ pub fn info<W: Write>(dirs: &Dirs, verbose: bool, out: &mut W) -> Result<()> {
         planned,
         unresolved,
         moved_from,
+    })
+}
+
+/// What a changes view names besides tags.
+const ASPECTS: [&str; 5] = ["path", "audio", "format", "cover", "lyrics"];
+
+/// Write each value a sync would change in each song: the value its file
+/// holds now, the one it would hold and why, for `fields` alone when any
+/// are named, then how many songs each field changes in.
+pub fn changes<W: Write>(dirs: &Dirs, fields: &[String], out: &mut W) -> Result<()> {
+    let c = context(dirs, false)?;
+    let wanted = wanted(&c, fields)?;
+    let foreseen = reconcile::foresee(
+        &c.manifest,
+        &c.state,
+        &c.planned,
+        &c.dirs.library,
+        (false, false),
+    );
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut changed, mut unwritten) = (0, 0);
+    for (n, r) in &c.planned {
+        let file = foreseen.files.get(n);
+        let Some((file, was)) =
+            file.and_then(|f| Some((f, c.state.outputs.get(f)?.plan.as_ref()?)))
+        else {
+            unwritten += 1;
+            continue;
+        };
+        let differ: Vec<(String, String)> = differences(file, was, r)
+            .into_iter()
+            .filter(|(field, _)| wanted.is_empty() || wanted.contains(field))
+            .collect();
+        if differ.is_empty() {
+            continue;
+        }
+        changed += 1;
+        heading(out, &c.name(*n, r))?;
+        let width = differ.iter().map(|(f, _)| f.len()).max().unwrap_or(0);
+        for (field, change) in &differ {
+            crate::ui::line(out, &format!("  {field:<width$} {change}"))?;
+            *counts.entry(field.clone()).or_default() += 1;
+        }
+    }
+    if changed == 0 {
+        crate::ui::line(out, "No song would change")?;
+    } else {
+        let mut by_count: Vec<(&String, &usize)> = counts.iter().collect();
+        by_count.sort_by_key(|(field, n)| (std::cmp::Reverse(**n), *field));
+        let said: Vec<String> = by_count.iter().map(|(f, n)| format!("{f} {n}")).collect();
+        crate::ui::line(
+            out,
+            &format!("{changed} song(s) would change: {}", said.join(", ")),
+        )?;
+    }
+    if unwritten > 0 {
+        crate::ui::line(out, &format!("{unwritten} song(s) not written yet"))?;
+    }
+    if !c.unresolved.is_empty() {
+        crate::ui::line(
+            out,
+            &format!("{} song(s) cannot be made", c.unresolved.len()),
+        )?;
+    }
+    Ok(())
+}
+
+/// `fields` as the changes view names them, refused when one names
+/// nothing a song is written with.
+fn wanted(c: &Context<'_>, fields: &[String]) -> Result<BTreeSet<String>> {
+    let written: BTreeSet<&str> = (c.planned.iter().map(|(_, r)| &r.plan))
+        .chain(c.state.outputs.values().filter_map(|w| w.plan.as_ref()))
+        .flat_map(|p| p.tags.iter().map(|(k, _)| k.as_str()))
+        .collect();
+    let mut wanted = BTreeSet::new();
+    for field in fields {
+        let lower = field.to_ascii_lowercase();
+        let name = if ASPECTS.contains(&lower.as_str()) {
+            lower
+        } else {
+            crate::tags::vorbis_key(field)
+        };
+        if !ASPECTS.contains(&name.as_str())
+            && Field::named(field).is_none()
+            && !written.contains(name.as_str())
+        {
+            return Err(crate::change::Refused(format!(
+                "No song is written with `{field}`: a tag such as title, artist, album, \
+                 album_artist, genre or date, or one of {}",
+                ASPECTS.join(", ")
+            ))
+            .into());
+        }
+        wanted.insert(name);
+    }
+    Ok(wanted)
+}
+
+/// Each field whose value differs between the plan `was`, written at
+/// `file`, and `r`: the field and its value before and after, with why.
+fn differences(file: &Path, was: &Plan, r: &Resolved) -> Vec<(String, String)> {
+    let now = &r.plan;
+    let mut differ = Vec::new();
+    let mut add = |field: &str, before: &str, after: &str, why: &str| {
+        let why = if why.is_empty() {
+            String::new()
+        } else {
+            format!(" ({why})")
+        };
+        differ.push((field.to_string(), format!("{before} → {after}{why}")));
     };
-    folders(&c, out)?;
-    library(&c, out)?;
-    sources(&c, out)?;
-    status(&c, out)?;
-    health(&c, out)
+    let path = reconcile::path_of(r);
+    if file != path {
+        add(
+            "path",
+            &crate::relpath::show(file),
+            &crate::relpath::show(&path),
+            "",
+        );
+    }
+    if was.audio.key != now.audio.key {
+        let (before, after) = (was.audio.key.to_string(), now.audio.key.to_string());
+        add("audio", &before, &after, &r.why.audio);
+    }
+    if was.format != now.format {
+        add("format", &was.format.describe(), &now.format.describe(), "");
+    }
+    let key = |k: Option<&SourceKey>| k.map_or_else(|| "none".to_string(), ToString::to_string);
+    let (before, after) = (
+        key(was.cover.as_ref().map(|c| &c.key)),
+        key(now.cover.as_ref().map(|c| &c.key)),
+    );
+    if before != after {
+        add(
+            "cover",
+            &before,
+            &after,
+            r.why.cover.as_deref().unwrap_or(""),
+        );
+    }
+    let (before, after) = (
+        key(was.lyrics.as_ref().map(|l| &l.key)),
+        key(now.lyrics.as_ref().map(|l| &l.key)),
+    );
+    if before != after {
+        add(
+            "lyrics",
+            &before,
+            &after,
+            r.why.lyrics.as_deref().unwrap_or(""),
+        );
+    } else if was.lyrics != now.lyrics {
+        add("lyrics", &before, "written again", "");
+    }
+    let values = |tags: &[(String, Vec<String>)], k: &str| {
+        tags.iter()
+            .find(|(t, _)| t == k)
+            .map_or_else(|| "none".to_string(), |(_, v)| v.join("; "))
+    };
+    for ((k, _), why) in now.tags.iter().zip(&r.why.tags) {
+        let (before, after) = (values(&was.tags, k), values(&now.tags, k));
+        if before != after {
+            let cleaned = if why.cleaned.is_empty() {
+                String::new()
+            } else {
+                format!(", cleaned: {}", why.cleaned.join(", "))
+            };
+            add(k, &before, &after, &format!("{}{cleaned}", why.from));
+        }
+    }
+    for (k, v) in &was.tags {
+        if !now.tags.iter().any(|(t, _)| t == k) {
+            add(k, &v.join("; "), "none", "");
+        }
+    }
+    differ
 }
 
 /// Each program muman runs as it was found: its version and path, or

@@ -429,6 +429,7 @@ Count what the library holds, whether it is in step with the song list, the look
 **Options:**
 
 * `--state` — Print what muman keeps of the library and its sources instead, as JSON: the files it wrote and what each was made from, and what it measured
+* `--changes <FIELD>` — Print instead each value a sync would change in each song, as its file holds it and as it would be written, with why; only the FIELDs named, when any: a tag, or path, audio, format, cover or lyrics
 
 
 
