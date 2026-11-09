@@ -108,7 +108,7 @@ bitrate, a time, a loudness or a level needs its unit.
 | Table | Sets |
 |---|---|
 | `[library]` | The library folder, the [path template](#the-path-template), [safe names](#safe-names-on-every-system), fallback names, whether sources' comments are written, and [the most the library may take](audio.md#library-size) |
-| `[tags]` | How [cleaning](library.md#cleaning) writes quotes, apostrophes and hyphens: typographic, as MusicBrainz does, or ASCII |
+| `[tags]` | How [cleaning](metadata.md#cleaning) writes quotes, apostrophes and hyphens: typographic, as MusicBrainz does, or ASCII |
 | `[lyrics]` | The languages you read, [which lyrics a song takes](#which-lyrics-a-song-takes) and [where they go](#where-lyrics-go) |
 | `[audio]` | [The codecs](audio.md#codecs) copied as they are, what the rest is encoded to, each encoder's bitrate, and the speaker layouts kept |
 | `[audio.pick.*]` | [How audio sources are ranked](#how-sources-are-ranked) |
@@ -121,7 +121,7 @@ bitrate, a time, a loudness or a level needs its unit.
 | `[sites.*]` | The [sites](#sites) yt-dlp fetches from |
 
 The song list's other tables are described where they are used:
-`[tags.clean.*]` and `[lyrics.clean.*]` in [cleaning](library.md#cleaning),
+`[tags.clean.*]` and `[lyrics.clean.*]` in [cleaning](metadata.md#cleaning),
 `[providers.*]` in [lookups](library.md#lookups), and `[[hook]]` in
 [hooks](library.md#hooks).
 

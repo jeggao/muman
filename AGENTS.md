@@ -48,33 +48,28 @@ src/
   add.rs, sync.rs   the add and sync commands, and the network steps they share
   cli.rs            the command line (clap derive), exit codes
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
-  export.rs         the song list and the library into one zip
-  redact.rs         the song list with its secrets replaced, for export --redact
+  export.rs, redact.rs   the song list and the library into one zip; its secrets replaced, for --redact
   change.rs, editor.rs   list, set, edit, remove, restore
   guided.rs         set with a query alone: songs changed field by field
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
-  purge.rs          fetched sources and records no song uses, deleted
-  trust.rs          the song list's commands and servers, run only once trusted
+  purge.rs, trust.rs   sources and records no song uses, deleted; commands and servers run once trusted
   tests.rs, tests/attaching.rs   the crate's end-to-end tests, over the fakes
   tests/convergence.rs   random runs, each held to the library one sync builds
   */tests.rs        a module's tests, when they outgrow it
 crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
   album.rs          the songs of one album made to agree: one edition, spelling, release
-  state.rs          the state: files written, measures, comparisons
-  state/json.rs     state.json, as an earlier muman wrote it, read once
-  state/db.rs       state.db, the store the state moves into: schema, transactions
+  state.rs          the state: files written, measures, comparisons; state/db.rs, state.db, the
+                    store it moves into: schema, transactions; state/json.rs, an old state.json, read once
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
   identify.rs       new sources to songs, by fingerprint
   lookup.rs         lookups due, each provider asked until a song has what it names
-  reconcile.rs      the offline phase, its steps in order, each a module of its own:
-                    measure.rs, keys.rs, damage.rs, plan.rs, decide.rs, owned.rs,
-                    write.rs, prune.rs, report.rs
+  reconcile.rs      the offline phase, a module a step, in order: measure.rs, keys.rs,
+                    damage.rs, plan.rs, decide.rs, owned.rs, write.rs, prune.rs, report.rs
   resolve.rs, levels.rs   one song's facts to the plan it is written from; songs levelled
   artifact.rs       the part of a plan each library file is made from, and its name
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
-  outputs.rs        the files beside a song: their names, and where a move takes them
-  folder.rs         the cover file a folder holds once, and the song that holds it
+  outputs.rs, folder.rs   the files beside a song, named and moved; the cover file a folder holds once
   library.rs        the ledger: every move and removal in the library
   fit.rs, limit.rs  songs fitted into a size, least audible loss first; [library] max_size
   history.rs, query.rs   run records and undo; a query held against the songs
@@ -88,12 +83,10 @@ crates/muman-config/src/   the config layer: the song list, its settings, editio
 crates/muman-net/src/   the network layer: yt-dlp and aria2c fetches, and lookups
   download.rs, ytdlp_log.rs   yt-dlp's arguments and the files it reports; its output
   aria2.rs          aria2c fetching a torrent's files: its arguments and its lines
-  music.rs          YouTube Music search
-  plugins.rs        yt-dlp plugins shipped in the binary, from assets/yt-dlp/
+  music.rs, plugins.rs   YouTube Music search; yt-dlp plugins shipped in the binary, from assets/yt-dlp/
   lrclib.rs, musicbrainz.rs, acoustid.rs, coverart.rs   the providers looked up
 crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
-  similar.rs        names and texts compared in any script
-  picture.rs        perceptual hashes of covers
+  similar.rs, picture.rs   names and texts compared in any script; perceptual hashes of covers
   tagfile.rs, cue.rs   tag files and cue sheets read into hand tags
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   analysis.rs       the whole of a source's audio, one decode, every analyzer
@@ -110,8 +103,7 @@ crates/muman-core/src/   the lowest layer, which every other module builds on
   units.rs          sizes, bitrates, times, frequencies, shares (uom)
   new.toml          a new home's song list, the reference for every setting
   platform.rs, dirs.rs   default folders per OS, path identity; a run's folders
-  relpath.rs        recorded paths, written with / and in NFC
-  runner.rs         the subprocess seam
+  relpath.rs, runner.rs   recorded paths, written with / and in NFC; the subprocess seam
   tools.rs          ffmpeg, ffprobe, yt-dlp and aria2c: where found, version, floor
   sites.rs          the song list's [sites]: how each site names and fetches
   torrent.rs        torrent metainfo and magnet links: what a torrent: key names
@@ -128,7 +120,8 @@ testdata/           tiny audio and picture fixtures; editions/, the song list
                     each earlier edition wrote for a new home
 xtask/              cargo xtask comments | commits | docs | layers
 packaging/          the Homebrew, Scoop and AUR entries each release fills in
-docs/               guide.md, library.md, songs.md, configuration.md, audio.md, cli.md (generated)
+docs/               guide.md, library.md, metadata.md, songs.md, configuration.md, audio.md,
+                    cli.md (generated)
 ```
 
 A module's `//!` docs hold its design and the reasons for its constants.
@@ -246,7 +239,7 @@ that package manager is skipped.
 | A setting added, removed or renamed, or a default changed | `settings.rs`, `new.toml`, [docs/configuration.md](docs/configuration.md), or [docs/audio.md](docs/audio.md) for `[audio]` and `[loudness]`; a rename or a changed default, an edition in `migrate.rs` and the `new.toml` it replaces as `testdata/editions/<N>.toml` |
 | A template variable or filter | `template.rs` docs, [docs/configuration.md](docs/configuration.md) |
 | How the song list or sources behave for a user | [docs/guide.md](docs/guide.md) |
-| How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md) |
+| How picking, lookups, status, export or hooks behave for a user | [docs/library.md](docs/library.md), or [docs/metadata.md](docs/metadata.md) for tags and cleaning |
 | How queries, changing songs or duplicates behave for a user | [docs/songs.md](docs/songs.md) |
 | A module's design or a constant's reason | That module's `//!` docs |
 | A measure, renderer or writer changes what it makes, or a dependency bump changes a digest | Raise its version constant and record the digest its test prints, or, for a bump that leaves saved results valid, re-record the digest and say why |

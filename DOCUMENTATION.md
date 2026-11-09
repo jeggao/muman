@@ -22,6 +22,7 @@ what is not about one module.
 | What muman is, installing it, a first run | [README.md](README.md) |
 | Using it: the home, the song list and its sources | [docs/guide.md](docs/guide.md) |
 | Picking, lookups, status, export, hooks | [docs/library.md](docs/library.md) |
+| Where each tag comes from, and cleaning tags and lyrics | [docs/metadata.md](docs/metadata.md) |
 | Queries, changing songs, duplicates | [docs/songs.md](docs/songs.md) |
 | Folders, programs, settings, templates, safe names | [docs/configuration.md](docs/configuration.md) |
 | Codecs, encoding, loudness and the size limit | [docs/audio.md](docs/audio.md) |
