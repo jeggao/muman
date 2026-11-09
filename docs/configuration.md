@@ -108,7 +108,7 @@ bitrate, a time, a loudness or a level needs its unit.
 | Table | Sets |
 |---|---|
 | `[library]` | The library folder, the [path template](#the-path-template), [safe names](#safe-names-on-every-system), fallback names, whether sources' comments are written, and [the most the library may take](audio.md#library-size) |
-| `[tags]`, `[release]` | [Which kind of source is believed](metadata.md#which-source-is-believed) first, [which release](metadata.md#which-release) a song is on and its date, [how an artist is spelled](metadata.md#one-name-for-each-artist), and how [cleaning](metadata.md#cleaning) writes quotes, apostrophes and hyphens |
+| `[tags]`, `[release]` | [Which kind of source is believed](metadata.md#which-source-is-believed) first, [which release](metadata.md#which-release) a song is on and its date, [how an artist is spelled](metadata.md#one-name-for-each-artist), [overrides by torrent or channel](metadata.md#overrides-by-torrent-or-channel), and how [cleaning](metadata.md#cleaning) writes quotes, apostrophes and hyphens |
 | `[lyrics]` | The languages you read, [which lyrics a song takes](#which-lyrics-a-song-takes) and [where they go](#where-lyrics-go) |
 | `[audio]` | [The codecs](audio.md#codecs) copied as they are, what the rest is encoded to, each encoder's bitrate, and the speaker layouts kept |
 | `[audio.pick.*]` | [How audio sources are ranked](#how-sources-are-ranked) |

@@ -9,6 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[[tags.from]]` says what one torrent's or one channel's sources
+  are not believed for**: fields to leave out, `credits = false` to
+  leave out their artists, and a `title` pattern, as `%artist% -
+  %title%`, to read their titles by, before any cleaning rule.
+
 - **A song takes the genres MusicBrainz's users voted for**: its
   recording's, else its release group's, its release's or its artists',
   the most voted, three at most, written as `Alternative Rock` or `R&B`.

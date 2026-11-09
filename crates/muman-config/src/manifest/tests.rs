@@ -713,6 +713,45 @@ fn an_unknown_cleaning_switch_is_kept_and_reported() {
 }
 
 #[test]
+fn an_override_of_a_torrent_s_or_channel_s_sources_is_read_and_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let list = format!(
+        "[[tags.from]]\ntorrent = \"{}\"\ndrop = [\"work\", \"LABEL\"]\ncredits = false\n\n\
+         [[tags.from]]\nchannel = \"Orchard Archive\"\ntitle = \"%artist% - %title%\"\n",
+        "a".repeat(40)
+    );
+    write(dir.path(), &list);
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let [torrent, channel] = &m.clean.from[..] else {
+        panic!("{:?}", m.clean.from);
+    };
+    assert_eq!(
+        torrent.drop,
+        [crate::tags::Field::Work, crate::tags::Field::Label]
+    );
+    assert!(!torrent.credits);
+    assert_eq!(channel.channel.as_deref(), Some("Orchard Archive"));
+    assert_eq!(
+        channel
+            .title
+            .as_ref()
+            .map(crate::overrides::Pattern::as_str),
+        Some("%artist% - %title%")
+    );
+    m.save().unwrap();
+    assert!(text(dir.path()).contains("title = \"%artist% - %title%\""));
+    for bad in [
+        "[[tags.from]]\ndrop = [\"work\"]\n",
+        "[[tags.from]]\nchannel = \"x\"\ndrop = [\"wrok\"]\n",
+        "[[tags.from]]\nchannel = \"x\"\ntitle = \"%name%\"\n",
+        "[[tags.from]]\nchannel = \"x\"\nkeep = true\n",
+    ] {
+        write(dir.path(), bad);
+        assert!(Manifest::load(dir.path()).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     write(
