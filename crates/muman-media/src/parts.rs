@@ -72,7 +72,9 @@ pub struct Title {
 }
 
 /// The words that open a featured artist's decoration.
-const FEATURING: [&str; 4] = ["feat", "ft", "featuring", "with"];
+/// A title's decoration opening with one of these features an artist;
+/// `(With You)` is a subtitle, so `with` is no such word here.
+const FEATURING: [&str; 3] = ["feat", "ft", "featuring"];
 
 impl Decoration {
     fn new(text: &str, brackets: Option<(char, char)>) -> Self {
@@ -116,6 +118,9 @@ pub struct Credit<'a> {
     /// Where the featured names begin, after `feat.`; none where the
     /// credit features no one.
     pub featured: Option<usize>,
+    /// Where in the credit, in bytes, the joiner opening the featured
+    /// names begins, so the lead credit is what comes before it.
+    pub featured_at: Option<usize>,
 }
 
 /// `s` read as a credit's parts, as the module says.
@@ -125,12 +130,13 @@ pub fn credit(s: &str) -> Credit<'_> {
         names: Vec::new(),
         joiners: Vec::new(),
         featured: None,
+        featured_at: None,
     };
     let mut joined = None;
     let mut start = 0;
     for m in similar::JOINERS.find_iter(s) {
         push(&mut parts, &mut joined, s[start..m.start()].trim());
-        joined = Some(m.as_str().trim());
+        joined = Some((m.as_str().trim(), m.start()));
         start = m.end();
     }
     push(&mut parts, &mut joined, s[start..].trim());
@@ -139,14 +145,15 @@ pub fn credit(s: &str) -> Credit<'_> {
 
 /// `name` added to `parts`, the last joiner met, `joined`, joining it to
 /// the name before; an empty name, between two joiners, adds nothing.
-fn push<'a>(parts: &mut Credit<'a>, joined: &mut Option<&'a str>, name: &'a str) {
+fn push<'a>(parts: &mut Credit<'a>, joined: &mut Option<(&'a str, usize)>, name: &'a str) {
     if name.is_empty() {
         return;
     }
     if !parts.names.is_empty() {
-        let before = joined.unwrap_or_default();
-        if parts.featured.is_none() && FEATURING[..3].iter().any(|f| starts_word(before, f)) {
+        let (before, at) = joined.unwrap_or_default();
+        if parts.featured.is_none() && FEATURING.iter().any(|f| starts_word(before, f)) {
             parts.featured = Some(parts.names.len());
+            parts.featured_at = Some(at);
         }
         parts.joiners.push(before);
     }

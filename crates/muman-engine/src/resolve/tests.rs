@@ -4145,3 +4145,65 @@ fn an_upload_whose_title_reads_two_ways_is_in_doubt_until_a_source_settles_it() 
         "its artist credited"
     );
 }
+
+#[test]
+fn a_featured_artist_moved_into_a_band_s_credit_leaves_the_band_whole() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(
+        &mut f,
+        Field::Title,
+        &["Night Ferry (feat. Ada Quill)"],
+        true,
+    );
+    tag(&mut f, Field::Artist, &["Salt & Pepper"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let mut s = song(std::slice::from_ref(&key));
+    let styled = style::Style {
+        featured: style::Featured::Artist,
+        ..style::Style::default()
+    };
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Salt & Pepper feat. Ada Quill")
+    );
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Salt & Pepper"));
+    s.tags = vec![("artist".into(), vec!["Salt & Pepper".into()])];
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry (feat. Ada Quill)"),
+        "the artist set by hand, nothing moved"
+    );
+}
+
+#[test]
+fn a_title_set_by_hand_settles_how_an_upload_reads() {
+    let upload = yt("vid00000001");
+    let mut u = audio("opus", 20.0);
+    tag(
+        &mut u,
+        Field::Title,
+        &["Paper Comets - Glass Orchard"],
+        false,
+    );
+    let facts = BTreeMap::from([(upload.clone(), u)]);
+    let mut s = song(std::slice::from_ref(&upload));
+    s.tags = vec![("title".into(), vec!["Glass Orchard".into()])];
+    let r = resolve(&defaults(&s, &facts)).unwrap();
+    assert!(
+        !r.why
+            .doubts
+            .iter()
+            .any(|d| matches!(d, Doubt::Reading { .. }))
+    );
+}

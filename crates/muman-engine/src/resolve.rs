@@ -2457,20 +2457,32 @@ fn best_album<'c, 'a>(
 
 /// Each upload of the song whose title, read off it as its channel
 /// wrote it, reads more than one way with none clear of the rest, held
-/// to the titles and credits its other sources and the tags set by hand
-/// give ([`crate::readings`]).
+/// to the titles and credits its other sources give ([`crate::readings`]);
+/// none where the title or artist is set by hand, nor for an upload a
+/// `[[tags.from]]` title pattern reads.
 fn readings_of(input: &Input<'_>) -> Vec<Doubt> {
     let present: Vec<(&SourceKey, &Facts)> = input.present().map(|(_, k, f)| (k, f)).collect();
+    let set = (input.song.tags.iter()).chain(input.album.iter().flat_map(|a| &a.tags));
     let hand = |field: Field| {
-        (input.song.tags.iter())
+        set.clone()
             .filter(move |(name, _)| Field::named(name) == Some(field))
             .flat_map(|(_, values)| values.iter().map(String::as_str))
     };
+    // A title or artist set by hand settles how the song is named.
+    if hand(Field::Title).next().is_some() || hand(Field::Artist).next().is_some() {
+        return Vec::new();
+    }
     let mut doubts = Vec::new();
     for (key, facts) in &present {
         let Some(title) = facts.tags.get(&Field::Title).filter(|o| !o.structured) else {
             continue;
         };
+        // A `[[tags.from]]` pattern settles how its sources' titles read.
+        let read_by_pattern =
+            (input.clean.from.iter()).any(|o| o.title.is_some() && o.names(key, &facts.tags));
+        if read_by_pattern {
+            continue;
+        }
         let others = present.iter().filter(|(k, _)| k != key).map(|(_, f)| f);
         let structured = |field: Field| {
             others
@@ -2512,12 +2524,13 @@ fn readings_of(input: &Input<'_>) -> Vec<Doubt> {
 }
 
 /// The release the song was moved to and why ([`crate::release`]), as
-/// `<key>: <why>`, where its album came from the record moved.
+/// `<key>: <why>`, where its album came from the record moved, its
+/// spelling agreed by the album's songs or not (which appends how many).
 fn moved(input: &Input<'_>, tag_why: &[TagWhy]) -> Option<String> {
     let r = input.pick.and_then(|p| p.release.as_ref())?;
     let from = r.key.to_string();
     (tag_why.iter())
-        .any(|w| w.key == Field::Album.vorbis() && w.from == from)
+        .any(|w| w.key == Field::Album.vorbis() && w.from.starts_with(&from))
         .then(|| format!("{from}: {}", r.why))
 }
 
@@ -3030,7 +3043,7 @@ fn resolve_tags(
     }
     let mut artists = joined_artists(&mut fields);
     settle(input, &mut fields, &mut artists);
-    restyle(input.style, &mut fields, &mut artists);
+    restyle(input, &mut fields, &mut artists);
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()
@@ -3060,9 +3073,19 @@ fn resolve_tags(
     )
 }
 
-/// The title and artist in `style`, its artists one by one with them;
-/// a value restyled names `style` among the rules that changed it.
-fn restyle(style: style::Style, fields: &mut BTreeMap<Field, Slot>, artists: &mut Vec<String>) {
+/// The title and artist in `input`'s style, its artists one by one with
+/// them, a name moved out of the credit left out and one moved in added;
+/// a value restyled names `style` among the rules that changed it. No
+/// featured artist moves where the title or the artist is set by hand,
+/// so one is never written in both.
+fn restyle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut Vec<String>) {
+    let mut style = input.style;
+    let by_hand = (input.song.tags.iter())
+        .chain(input.album.iter().flat_map(|a| &a.tags))
+        .any(|(name, _)| matches!(Field::named(name), Some(Field::Title | Field::Artist)));
+    if by_hand {
+        style.featured = style::Featured::Keep;
+    }
     if style.keeps() {
         return;
     }
@@ -3073,21 +3096,18 @@ fn restyle(style: style::Style, fields: &mut BTreeMap<Field, Slot>, artists: &mu
             .unwrap_or_default()
     };
     let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
-    let (styled_title, styled_artist) = style.apply(&title, &artist);
+    let styled = style.apply(&title, &artist);
+    if styled.artist != artist {
+        artists.retain(|a| !styled.removed.iter().any(|r| r.eq_ignore_ascii_case(a)));
+        artists.extend(styled.added.iter().cloned());
+    }
     for (field, was, now) in [
-        (Field::Title, &title, styled_title),
-        (Field::Artist, &artist, styled_artist),
+        (Field::Title, &title, styled.title),
+        (Field::Artist, &artist, styled.artist),
     ] {
         if now != *was
             && let Some(slot) = fields.get_mut(&field)
         {
-            if field == Field::Artist {
-                *artists = crate::parts::credit(&now)
-                    .names
-                    .iter()
-                    .map(|n| (*n).to_string())
-                    .collect();
-            }
             slot.values = vec![now];
             slot.cleaned.push("style");
         }

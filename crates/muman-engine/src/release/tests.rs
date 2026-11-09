@@ -375,3 +375,45 @@ fn an_album_on_one_release_stays_on_it_and_a_stray_joins_it() {
     assert_eq!(picks.keys().copied().collect::<Vec<_>>(), [2]);
     assert_eq!(value(&picks[&2], Field::MusicBrainzAlbumId), Some(ALBUM));
 }
+
+#[test]
+fn a_release_holding_more_of_an_album_beats_the_one_most_of_it_is_on() {
+    let album_only = |n: usize| {
+        recording(
+            n,
+            &[(
+                ALBUM,
+                "Harbor Nights",
+                &["Album"],
+                u32::try_from(n).unwrap() + 1,
+            )],
+        )
+    };
+    let on_both = |n: usize| {
+        let track = u32::try_from(n).unwrap() + 1;
+        recording(
+            n,
+            &[
+                (BEST_OF, "Best Of", &["Album", "Compilation"], track),
+                (ALBUM, "Harbor Nights", &["Album"], track),
+            ],
+        )
+    };
+    let lib = library(
+        &[BEST_OF, BEST_OF, BEST_OF, VIDEO, VIDEO],
+        vec![
+            vec![on_both(0)],
+            vec![on_both(1)],
+            vec![on_both(2)],
+            vec![album_only(3)],
+            vec![album_only(4)],
+        ],
+    );
+    let picks = choose_in(&lib, &Release::default());
+    assert_eq!(picks.len(), 5, "all on the album, which holds every song");
+    assert!(
+        picks
+            .values()
+            .all(|p| value(p, Field::MusicBrainzAlbumId) == Some(ALBUM))
+    );
+}
