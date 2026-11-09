@@ -108,8 +108,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   watermark across the song list's sources: a value that stands as a tag
   in its torrent's name, one a file writes in two such fields, or a work
   shared by many titles of several albums. Placeholders, as `[no label]`,
-  `Unknown Artist`, a site's category given as a genre and an artist that
-  is a soundtrack's short name, are dropped too. `muman status` names
+  `Unknown Artist`, a site's category given as a genre, an artist that
+  is a soundtrack's short name and a release country that is no
+  two-letter code, are dropped too. `muman status` names
   each value dropped; `[tags.clean.packaging] placeholder` and
   `watermark` turn each off.
 - **A video's upload date dates a song only when its uploader is the
