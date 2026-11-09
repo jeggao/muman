@@ -50,7 +50,7 @@ src/
   attach.rs         lyrics, pictures and tag files given to `add`, to their songs
   export.rs, redact.rs   the song list and the library into one zip; its secrets replaced, for --redact
   change.rs, editor.rs   list, set, edit, remove, restore
-  guided.rs         set with a query alone: songs changed field by field
+  guided.rs, review.rs   set with a query alone: songs changed field by field; songs in doubt walked
   check.rs, overview.rs            check and info
   duplicates.rs     songs listed apart that are one recording; duplicates/merge.rs, merged
   purge.rs, trust.rs   sources and records no song uses, deleted; commands and servers run once trusted

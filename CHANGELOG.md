@@ -9,6 +9,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`muman review` walks each song in doubt and settles it.** On a
+  terminal, each song whose picks `muman check` finds in doubt is shown
+  with why, and you change its tags and pins, pin it to one of the
+  releases its recording is on with a new `release` key, or leave a
+  contested field out of everything its torrent or channel offers, each
+  change saved as you make it and taken back by `undo`.
+
 - **`muman check` lists picks in doubt**: the songs holding a source set
   aside, each song holding two recordings or playing 30 s or more from
   what a record it believes says, and each name spelled two ways that

@@ -877,8 +877,13 @@ pub struct Why {
 /// `review` walks: each holds what it is about and why, in words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Doubt {
-    /// Its title or artist, won by the order of `sources` alone.
-    Contested { field: Field, why: String },
+    /// Its title or artist, won by the order of `sources` alone from the
+    /// source `key`.
+    Contested {
+        field: Field,
+        key: SourceKey,
+        why: String,
+    },
     /// A source vetting set aside, in part or whole ([`crate::vet`]).
     SetAside { key: SourceKey, why: String },
     /// An audio source of another recording than the chosen audio's, or
@@ -1191,7 +1196,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             set_aside: vets.set_aside(),
             recordings: keyed(&recordings),
             dropped: dropped(input),
-            contested: contested.into_iter().map(|(_, why)| why).collect(),
+            contested: contested.into_iter().map(|(_, _, why)| why).collect(),
             doubts,
             release: (input.pick.and_then(|p| p.release.as_ref()))
                 .map(|r| format!("{}: {}", r.key, r.why)),
@@ -2512,7 +2517,7 @@ fn ranked<K: Ord>(
 fn contested_unset(
     candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
     tag_why: &[TagWhy],
-) -> Vec<(Field, String)> {
+) -> Vec<(Field, SourceKey, String)> {
     [Field::Title, Field::Artist]
         .iter()
         .filter(|f| {
@@ -2520,7 +2525,10 @@ fn contested_unset(
                 w.key == f.vorbis() && matches!(w.from.as_str(), "song.tags" | "album.tags")
             })
         })
-        .filter_map(|f| Some((*f, contested(candidates, *f)?)))
+        .filter_map(|f| {
+            let (key, why) = contested(candidates, *f)?;
+            Some((*f, key, why))
+        })
         .collect()
 }
 
@@ -2532,12 +2540,13 @@ fn doubts_of(
     input: &Input<'_>,
     vets: &Vets,
     recordings: &[(SourceKey, String)],
-    contested: &[(Field, String)],
+    contested: &[(Field, SourceKey, String)],
     audio_ms: Option<i64>,
 ) -> Vec<Doubt> {
     let mut doubts: Vec<Doubt> = (contested.iter())
-        .map(|(field, why)| Doubt::Contested {
+        .map(|(field, key, why)| Doubt::Contested {
             field: *field,
+            key: key.clone(),
             why: why.clone(),
         })
         .collect();
@@ -2573,7 +2582,10 @@ fn doubts_of(
 /// where another group of offers ranks alike in all else; none where
 /// nothing else came so close, or where offers do not group, as `believe
 /// = "sources"` asks.
-fn contested(candidates: &BTreeMap<Field, Vec<Candidate<'_>>>, field: Field) -> Option<String> {
+fn contested(
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    field: Field,
+) -> Option<(SourceKey, String)> {
     let offers: Vec<&Candidate<'_>> = candidates.get(&field)?.iter().collect();
     if !offers.iter().all(|c| c.grouping) {
         return None;
@@ -2587,14 +2599,15 @@ fn contested(candidates: &BTreeMap<Field, Vec<Candidate<'_>>>, field: Field) -> 
         .iter()
         .copied()
         .find(|&i| group[i] != group[best] && alike(i) == alike(best))?;
-    Some(format!(
+    let why = format!(
         "{} “{}” from {} over “{}” from {}, by the order of `sources`",
         field.vorbis(),
         offers[best].offer.values.join("; "),
         offers[best].key,
         offers[runner].offer.values.join("; "),
         offers[runner].key,
-    ))
+    );
+    Some((offers[best].key.clone(), why))
 }
 
 /// The best date of a song with no release's: a field kept for it, or an

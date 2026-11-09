@@ -24,7 +24,9 @@
 //!
 //! A release whose types `[release] avoid` names is chosen only where no
 //! other would be. A song whose album or release is set by hand is left
-//! out, and so is a song on the release chosen already.
+//! out, and so is a song on the release chosen already. A song whose
+//! `release` pins it to one of its recording's releases is put on it,
+//! and counts for no album unit.
 //!
 //! A song moved takes the release fields this pass knows from its
 //! record's place on the release ([`Pick::offers`]): album, release and
@@ -92,6 +94,8 @@ struct Member<'a> {
     ms: Option<i64>,
     /// The recording its record is.
     recording: Option<&'a str>,
+    /// The release its `release` pins it to.
+    pin: Option<&'a str>,
 }
 
 /// The release each song of `planned` is moved to, by its place in the
@@ -109,13 +113,25 @@ pub fn choose<'a>(
         .iter()
         .filter_map(|(n, r)| member(*n, r, songs.get(*n)?, facts, candidates))
         .collect();
-    match settings.prefer {
+    let mut picks = match settings.prefer {
         ReleasePrefer::Album => by_album(&members, songs, facts, settings),
         ReleasePrefer::Original => members
             .iter()
+            .filter(|m| m.pin.is_none())
             .filter_map(|m| Some((m.n, original(m, settings)?)))
             .collect(),
+    };
+    for m in members.iter().filter(|m| m.pin.is_some() && m.on != m.pin) {
+        let pinned = (m.places.iter()).find(|p| Some(p.release.id.as_str()) == m.pin);
+        if let Some(place) = pinned {
+            let why = format!(
+                "on \"{}\", the release it is pinned to",
+                place.release.title
+            );
+            picks.insert(m.n, pick(m, place, why));
+        }
     }
+    picks
 }
 
 fn member<'a>(
@@ -186,6 +202,7 @@ fn member<'a>(
         numbered,
         ms,
         recording,
+        pin: song.release.as_deref(),
     })
 }
 
@@ -241,7 +258,7 @@ fn by_album(
     settings: &Release,
 ) -> BTreeMap<usize, Pick> {
     let mut units: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (i, m) in members.iter().enumerate() {
+    for (i, m) in members.iter().enumerate().filter(|(_, m)| m.pin.is_none()) {
         for unit in songs
             .get(m.n)
             .map(|s| crate::album::units_of(s, facts))

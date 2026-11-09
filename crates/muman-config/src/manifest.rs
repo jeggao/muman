@@ -117,7 +117,8 @@ const HEADER: &str = "\
 #             measuring each.
 #   Pin one:  audio = \"<source>\", cover = \"<source>\", lyrics = \"<source>\";
 #             lyrics = false for none. lyrics_offset = \"120 ms\" moves
-#             them later, a negative time earlier.
+#             them later, a negative time earlier. release = \"<ID>\"
+#             puts it on that MusicBrainz release of its recording.
 #   Tags:     fill in tags.<name>; an empty value keeps what the sources
 #             offer. Any other Vorbis comment name works too; a list sets
 #             several. `muman status` shows what was picked and why.
@@ -190,6 +191,9 @@ pub struct Song {
     pub held: BTreeMap<SourceKey, crate::held::Held>,
     /// The providers its `lookups` turns off.
     pub lookups_off: LookupsOff,
+    /// The MusicBrainz release its `release` pins it to, among those its
+    /// recording is on.
+    pub release: Option<String>,
 }
 
 /// The providers a song's `lookups` turns off: `lookups = false` all of
@@ -299,6 +303,19 @@ pub enum Edit {
     /// Tags set in the `tags` of the album `source` names, as
     /// [`Edit::Tag`] sets a song's.
     AlbumTags { source: SourceKey, tags: Tags },
+    /// The song listing `key` pinned to the MusicBrainz release `release`,
+    /// or no longer pinned to one.
+    Release {
+        key: SourceKey,
+        release: Option<String>,
+    },
+    /// `drop` added to what the `[[tags.from]]` of the torrent or channel
+    /// named leaves out, a new one where none names it.
+    TagsFrom {
+        torrent: Option<String>,
+        channel: Option<String>,
+        drop: Vec<String>,
+    },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
     Remove { key: SourceKey, note: String },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
@@ -987,6 +1004,16 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             tags: tags_of(t.get("tags"), &what)?,
             held: crate::held::read(t, &sources, &what)?,
             lookups_off: lookups_off(t, &what)?,
+            release: match t.get("release") {
+                None => None,
+                Some(item) => Some(
+                    item.as_str()
+                        .filter(|r| !r.trim().is_empty())
+                        .with_context(|| format!("{what}: `release` must be a release's ID"))?
+                        .trim()
+                        .to_string(),
+                ),
+            },
             sources,
         };
         let pinned = [
@@ -1416,6 +1443,27 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
                 set_tags(song, tags);
             }
         }
+        Edit::Release { key, release } => {
+            let text = key.to_string();
+            let song = doc
+                .get_mut("song")
+                .and_then(Item::as_array_of_tables_mut)
+                .and_then(|list| list.iter_mut().find(|t| listed_keys(t).contains(&text)))
+                .with_context(|| format!("no song lists {text}"))?;
+            match release {
+                Some(id) => {
+                    song.insert("release", value(id.as_str()));
+                }
+                None => {
+                    song.remove("release");
+                }
+            }
+        }
+        Edit::TagsFrom {
+            torrent,
+            channel,
+            drop,
+        } => tags_from(doc, torrent.as_deref(), channel.as_deref(), drop)?,
         Edit::AlbumTags { source, tags } => {
             let text = source.to_string();
             let album = doc
@@ -1719,6 +1767,55 @@ fn lift(doc: &mut DocumentMut, keys: &[String]) {
 
 /// Set `tags` in a song table's `tags`, over any it sets under
 /// another spelling of their names; a tag with no values is cleared.
+/// `drop` added to the `[[tags.from]]` naming `torrent` or `channel`, or
+/// to a new one after the others.
+fn tags_from(
+    doc: &mut DocumentMut,
+    torrent: Option<&str>,
+    channel: Option<&str>,
+    drop: &[String],
+) -> Result<()> {
+    let tags = doc
+        .entry("tags")
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .context("`tags` in the song list is no table")?;
+    let list = tags
+        .entry("from")
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .context("`tags.from` must be tables, each `[[tags.from]]`")?;
+    let names = |t: &Table, key: &str, want: Option<&str>| {
+        want.is_some_and(|w| t.get(key).and_then(Item::as_str) == Some(w))
+    };
+    let at = list
+        .iter()
+        .position(|t| names(t, "torrent", torrent) || names(t, "channel", channel));
+    let at = at.unwrap_or_else(|| {
+        let mut t = Table::new();
+        if let Some(hash) = torrent {
+            t.insert("torrent", value(hash));
+        }
+        if let Some(name) = channel {
+            t.insert("channel", value(name));
+        }
+        list.push(t);
+        list.len() - 1
+    });
+    let table = list.get_mut(at).context("a `[[tags.from]]` went missing")?;
+    let dropped = table
+        .entry("drop")
+        .or_insert(value(Array::new()))
+        .as_array_mut()
+        .context("`[[tags.from]] drop` must be a list of tag names")?;
+    for name in drop {
+        if !dropped.iter().any(|v| v.as_str() == Some(name.as_str())) {
+            dropped.push(name.as_str());
+        }
+    }
+    Ok(())
+}
+
 pub fn set_tags(song: &mut Table, tags: &[(String, Vec<String>)]) {
     let table = song
         .entry("tags")

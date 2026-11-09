@@ -162,7 +162,8 @@ on, and `[release] prefer` chooses among them:
   on.
 
 A release of a kind `[release] avoid` names, as `"compilation"`, is
-chosen only where no other would be. A song moved takes the album,
+chosen only where no other would be, and a song's `release` key pins
+it to one release of its recording, as `muman review` writes it. A song moved takes the album,
 date, country, types, track and disc numbers and IDs its place on the
 release has, and the label, catalog number and barcode the album's
 other songs on it have; its record's own release fields are left out.
