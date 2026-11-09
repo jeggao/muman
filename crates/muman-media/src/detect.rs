@@ -23,11 +23,12 @@
 //!      final dash, as `GRP` in `Marlo Venn - Discography [GRP]` or
 //!      `Night Ferry (2019) FLAC-GRP`;
 //!   2. one source writes in two of those fields, a work and a label
-//!      alike; or
+//!      alike, but for a work and a grouping, or a label and a
+//!      copyright, which name one thing ([`kind_of`]); or
 //!   3. is the `WORK` of songs of [`ALBUMS`] albums or more and [`TITLES`]
 //!      titles or more of one source group: a work is one piece, whose
 //!      movements span one album's few titles, or a few albums' same
-//!      titles.
+//!      titles, the discs of one album counting as one.
 //!
 //!   A value found so is a watermark in every such field of its group.
 //!   A label shared by a discography's albums is no watermark: a label
@@ -156,9 +157,15 @@ impl Watermarks {
                     .map(|v| fold(v))
                     .unwrap_or_default()
             };
-            let (album, title) = (first(Field::Album), first(Field::Title));
+            let album = source
+                .offers
+                .get(&Field::Album)
+                .and_then(|o| o.values.first())
+                .map(|a| fold(crate::clean::disc_in(a).map_or(a.as_str(), |(at, _)| &a[..at])))
+                .unwrap_or_default();
+            let title = first(Field::Title);
             let tags = source.name.map(name_tags).unwrap_or_default();
-            let mut fields_of: BTreeMap<String, usize> = BTreeMap::new();
+            let mut kinds_of: BTreeMap<String, BTreeSet<Field>> = BTreeMap::new();
             for field in PER_WORK {
                 let Some(offer) = source.offers.get(&field) else {
                     continue;
@@ -174,15 +181,15 @@ impl Watermarks {
                     if tags.contains(&value) {
                         found.insert(key.clone());
                     }
-                    *fields_of.entry(value).or_default() += 1;
+                    kinds_of.entry(value).or_default().insert(kind_of(field));
                     let s = seen.entry(key).or_default();
                     s.albums.insert(album.clone());
                     s.titles.insert(title.clone());
                     s.as_work |= field == Field::Work;
                 }
             }
-            for (value, n) in fields_of {
-                if n >= 2 {
+            for (value, kinds) in kinds_of {
+                if kinds.len() >= 2 {
                     found.insert((source.group.to_string(), value));
                 }
             }
@@ -200,6 +207,18 @@ impl Watermarks {
     #[must_use]
     pub fn holds(&self, group: &str, value: &str) -> bool {
         self.0.contains(&(group.to_string(), fold(value)))
+    }
+}
+
+/// The field of [`PER_WORK`] a value in `field` names the same thing as:
+/// a grouping holds a work as taggers of classical music write it, and a
+/// copyright names its label, so a value in both of one pair is no
+/// watermark.
+fn kind_of(field: Field) -> Field {
+    match field {
+        Field::Grouping => Field::Work,
+        Field::Copyright => Field::Label,
+        other => other,
     }
 }
 
@@ -328,9 +347,24 @@ mod tests {
         let w = found(&[(
             "t1",
             None,
-            offers(&[(Field::Label, "GRP"), (Field::Copyright, "GRP")]),
+            offers(&[(Field::Work, "GRP"), (Field::Copyright, "GRP")]),
         )]);
         assert!(w.holds("t1", "GRP"));
+        let named_alike = found(&[(
+            "t1",
+            None,
+            offers(&[
+                (Field::Work, "Night Ferry Suite"),
+                (Field::Grouping, "Night Ferry Suite"),
+                (Field::Label, "Glass Orchard Records"),
+                (Field::Copyright, "Glass Orchard Records"),
+            ]),
+        )]);
+        assert_eq!(
+            named_alike,
+            Watermarks::default(),
+            "a grouping and a copyright"
+        );
     }
 
     #[test]
@@ -367,6 +401,22 @@ mod tests {
             })
             .collect();
         assert!(!found(&movements).holds("t1", "Symphony No. 2"));
+        let scenes: Vec<_> = (0..12)
+            .map(|n| {
+                let album = format!("Night Ferry Opera CD {}", n % 3 + 1);
+                let title = format!("Scene {n}");
+                let tags = offers(&[
+                    (Field::Album, album.as_str()),
+                    (Field::Title, title.as_str()),
+                    (Field::Work, "Night Ferry Opera"),
+                ]);
+                ("t1", None, tags)
+            })
+            .collect();
+        assert!(
+            !found(&scenes).holds("t1", "Night Ferry Opera"),
+            "one album's discs"
+        );
     }
 
     #[test]
