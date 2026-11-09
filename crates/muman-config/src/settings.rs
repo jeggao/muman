@@ -1134,6 +1134,21 @@ pub struct Tags {
     pub typography: crate::clean::Typography,
     pub believe: crate::clean::Believe,
     pub script: crate::clean::Spelling,
+    pub featured: crate::style::Featured,
+    pub versions: crate::style::Versions,
+    pub context: crate::style::Context,
+}
+
+impl Tags {
+    /// The house style its `featured`, `versions` and `context` make.
+    #[must_use]
+    pub fn style(&self) -> crate::style::Style {
+        crate::style::Style {
+            featured: self.featured,
+            versions: self.versions,
+            context: self.context,
+        }
+    }
 }
 
 /// Which release a song is on, of those its recording is on.

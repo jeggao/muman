@@ -14,7 +14,9 @@ use muman_core::{
     atomic, defaults, dirs, errors, hash, http, lang, provider, runner, sites, source, store,
     template, tools, torrent, ui, units,
 };
-use muman_media::{clean, codec, cues, facts, info, loudness, naming, overrides, quality, tags};
+use muman_media::{
+    clean, codec, cues, facts, info, loudness, naming, overrides, quality, style, tags,
+};
 use muman_net::{acoustid, aria2, download};
 
 pub mod held;
