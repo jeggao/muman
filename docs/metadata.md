@@ -13,7 +13,13 @@ Each field describes either the recording or the release.
 - **The recording's fields**, the title, artist, genre, ISRC and the
   recording's and artists' MusicBrainz IDs, each come from whichever
   source offers it best. A source [set aside](#sources-set-aside), even
-  in part, gives no ISRC or ID.
+  in part, gives no ISRC or ID. A MusicBrainz record offers the genres
+  MusicBrainz's users voted for, the recording's, else its release
+  group's, its release's or its artists', the most voted, three at most
+  and none with under half the votes of the first, each word
+  capitalized, as `J-Pop`, but for those
+  [genres/spelled.txt](../crates/muman-media/src/genres/spelled.txt)
+  spells otherwise, as `R&B`.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
   album ranks best. So one release's IDs never mix with another's. Of
