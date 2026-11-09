@@ -269,6 +269,7 @@ mod tests {
                     Offer {
                         values: vec![(*v).to_string()],
                         structured: true,
+                        also: Vec::new(),
                     },
                 )
             })

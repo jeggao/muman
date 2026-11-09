@@ -53,6 +53,7 @@ fn offer(value: &str) -> Offer {
     Offer {
         values: vec![value.to_string()],
         structured: true,
+        also: Vec::new(),
     }
 }
 

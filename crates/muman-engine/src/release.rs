@@ -520,6 +520,7 @@ fn pick(m: &Member<'_>, place: &Place<'_>, why: String) -> Pick {
                 Offer {
                     values,
                     structured: true,
+                    also: Vec::new(),
                 },
             );
         }

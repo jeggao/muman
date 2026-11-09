@@ -749,6 +749,7 @@ mod tests {
                 let offer = Offer {
                     values: vec![(*v).to_string()],
                     structured: true,
+                    also: Vec::new(),
                 };
                 (*f, offer)
             })
@@ -986,6 +987,7 @@ mod tests {
             let offer = Offer {
                 values: vec![value.to_string()],
                 structured: true,
+                also: Vec::new(),
             };
             f.tags.insert(field, offer);
             f

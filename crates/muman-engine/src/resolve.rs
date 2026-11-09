@@ -2334,6 +2334,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
                 offer: Offer {
                     values,
                     structured: raw.structured,
+                    also: Vec::new(),
                 },
                 cleaned: c.rules,
                 raw,
@@ -2370,6 +2371,7 @@ fn offers_of<'f>(
             let offer = Offer {
                 values: vec![value],
                 structured: true,
+                also: Vec::new(),
             };
             offers.insert(field, Cow::Owned(offer));
         }

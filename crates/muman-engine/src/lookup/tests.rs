@@ -188,6 +188,7 @@ fn a_print_is_asked_about_by_the_names_its_own_sources_give() {
     let offer = crate::tags::Offer {
         values: vec!["Lantern Weathr".into()],
         structured: true,
+        also: Vec::new(),
     };
     s.facts
         .get_mut(&key)

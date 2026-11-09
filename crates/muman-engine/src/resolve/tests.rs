@@ -125,6 +125,7 @@ fn tag(f: &mut Facts, field: Field, values: &[&str], structured: bool) {
         Offer {
             values: values.iter().map(|v| (*v).to_string()).collect(),
             structured,
+            also: Vec::new(),
         },
     );
 }
@@ -2755,6 +2756,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             Offer {
                 values: vec![value.to_string()],
                 structured: true,
+                also: Vec::new(),
             },
         );
     }
@@ -3750,6 +3752,7 @@ fn a_song_moved_to_another_release_takes_its_fields_in_place_of_its_record_s() {
         let offer = crate::tags::Offer {
             values: vec![v.to_string()],
             structured: true,
+            also: Vec::new(),
         };
         (f, offer)
     })

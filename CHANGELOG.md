@@ -85,6 +85,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **Every source's tags are read again once**, as each value a source
+  offers for a field is now kept, a video's title beside its track name,
+  for later readings to weigh. No pick changes.
+
 - **A song holding two recordings takes its audio from its own.**
   Sources whose audio aligns are one recording; where a song holds
   several, as a live take beside the studio cut, the one whose length

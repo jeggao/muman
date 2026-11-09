@@ -705,3 +705,18 @@ fn lyrics_know_whether_they_sing_in_latin_letters_alone() {
     assert_eq!(latin("[00:01.00]夜の船が\n"), Some(false));
     assert_eq!(latin("[00:01.00]Night ferry, 夜の船\n"), Some(false));
 }
+
+#[test]
+fn a_facts_row_an_earlier_muman_wrote_reads_and_writes_back_as_it_was() {
+    let row = r#"{"rev":"r","method":"m","duration":200.0,"audio":null,"covers":[],"lyrics":[],"tags":{"title":{"values":["Lantern Weather"],"structured":true}},"tags_method":"tags/12","release":false}"#;
+    let facts: Facts = serde_json::from_str(row).unwrap();
+    let title = &facts.tags[&crate::tags::Field::Title];
+    assert_eq!(title.also, []);
+    assert_eq!(facts.artists, []);
+    let written = serde_json::to_string(&facts).unwrap();
+    assert!(!written.contains("\"also\""), "{written}");
+    assert!(
+        !facts.tags_hold(Kind::Media),
+        "read again for what it lacks"
+    );
+}
