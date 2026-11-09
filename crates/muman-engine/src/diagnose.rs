@@ -318,7 +318,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             if set_aside > 0 {
                 said.warning(format!(
                     "A source set aside as another recording's: {set_aside} song(s); \
-                     `muman status` says why for each"
+                     `muman status` says why for each, and `muman review` walks them"
                 ))?;
             }
             for spellings in crate::names::suggestions(&r.planned, &state.facts) {

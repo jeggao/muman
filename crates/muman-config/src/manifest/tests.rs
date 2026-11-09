@@ -752,6 +752,45 @@ fn an_override_of_a_torrent_s_or_channel_s_sources_is_read_and_kept() {
 }
 
 #[test]
+fn a_release_pin_and_a_field_left_out_of_a_channel_are_written_and_read() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
+    );
+    let mut m = Manifest::load(dir.path()).unwrap();
+    let release = "00000000-0000-0000-0000-0000000000c1".to_string();
+    m.edit(Edit::Release {
+        key: yt("aaaaaaaaaaa"),
+        release: Some(release.clone()),
+    });
+    for drop in ["title", "work"] {
+        m.edit(Edit::TagsFrom {
+            torrent: None,
+            channel: Some("Orchard Archive".into()),
+            drop: vec![drop.into()],
+        });
+    }
+    m.save().unwrap();
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].release.as_deref(), Some(release.as_str()));
+    let [channel] = &m.clean.from[..] else {
+        panic!("{:?}", m.clean.from);
+    };
+    assert_eq!(
+        channel.drop,
+        [crate::tags::Field::Title, crate::tags::Field::Work]
+    );
+    let mut m = m;
+    m.edit(Edit::Release {
+        key: yt("aaaaaaaaaaa"),
+        release: None,
+    });
+    m.save().unwrap();
+    assert!(!text(dir.path()).contains(&release), "the pin taken away");
+}
+
+#[test]
 fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     write(

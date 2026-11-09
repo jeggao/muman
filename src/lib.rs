@@ -82,6 +82,7 @@ pub use muman_engine::reconcile;
 pub use muman_media::quality;
 pub use muman_media::record;
 pub mod redact;
+pub mod review;
 pub use muman_config::settings;
 pub use muman_core::relpath;
 pub use muman_core::runner;
@@ -670,6 +671,24 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             })();
             finished(job, runner, run, done, &due, out)
         }
+        Command::Review { query } => {
+            let mut run = Run::begin(&dirs.home)?;
+            let mut due = hooks::Due::default();
+            let done = (|| {
+                if !review::review(dirs, query, prompter, out)? {
+                    return Ok(true);
+                }
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Some(&mut run),
+                    &mut due,
+                    out,
+                )
+            })();
+            finished(job, runner, run, done, &due, out)
+        }
         Command::Set { terms, confirm } => {
             let mut run = Run::begin(&dirs.home)?;
             let mut due = hooks::Due::default();
@@ -839,7 +858,10 @@ pub(crate) fn traits(command: &Command) -> Traits {
     match command {
         Command::Add { .. } | Command::Sync { .. } => edits(SYNC),
         Command::Restore { .. } => edits(&["Fetching", "Measuring", "Comparing", "Writing"]),
-        Command::Remove { .. } | Command::Set { .. } | Command::Edit { .. } => edits(CHANGE),
+        Command::Remove { .. }
+        | Command::Set { .. }
+        | Command::Edit { .. }
+        | Command::Review { .. } => edits(CHANGE),
         Command::Undo { .. } => Traits {
             apart: true,
             ffmpeg: true,

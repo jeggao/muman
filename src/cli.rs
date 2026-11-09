@@ -474,6 +474,16 @@ pub enum Command {
         #[command(flatten)]
         confirm: Confirm,
     },
+    /// Walk each song a query matches whose picks are in doubt, as `check`
+    /// lists them, and settle it: change its tags and pins, pin its
+    /// release, or leave a field out of what one torrent or channel
+    /// offers. Needs a terminal.
+    #[command(after_help = QUERY_HELP)]
+    Review {
+        /// Terms every song reviewed matches; none reviews every song.
+        #[arg(value_name = "QUERY")]
+        query: Vec<String>,
+    },
     /// Set tags, pins or the lyrics offset on the songs a query matches:
     /// each `NAME=VALUE` sets, `NAME!` clears, the other words query.
     #[command(after_help = SET_HELP)]

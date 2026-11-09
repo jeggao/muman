@@ -306,3 +306,31 @@ fn least_cost_places_every_row_it_can_once() {
     assert_eq!(least_cost(&[vec![None, Some(3)]]), [Some(1)]);
     assert_eq!(least_cost(&[]), Vec::<Option<usize>>::new());
 }
+
+#[test]
+fn a_song_pinned_to_a_release_goes_on_it_and_counts_for_no_album() {
+    let on_both = |n: usize| {
+        let track = u32::try_from(n).unwrap() + 1;
+        recording(
+            n,
+            &[
+                (ALBUM, "Harbor Nights", &["Album"], track),
+                (
+                    BEST_OF,
+                    "The Best of Marlo Venn",
+                    &["Album", "Compilation"],
+                    9,
+                ),
+            ],
+        )
+    };
+    let mut lib = library(
+        &[ALBUM, ALBUM, ALBUM],
+        vec![vec![on_both(0)], vec![on_both(1)], vec![on_both(2)]],
+    );
+    lib.songs[2].release = Some(BEST_OF.into());
+    let picks = choose_in(&lib, &Release::default());
+    assert_eq!(picks.keys().copied().collect::<Vec<_>>(), [2]);
+    assert_eq!(value(&picks[&2], Field::MusicBrainzAlbumId), Some(BEST_OF));
+    assert!(picks[&2].why.ends_with("the release it is pinned to"));
+}

@@ -6992,7 +6992,7 @@ fn each_command_is_classified_as_it_runs() {
         steps,
     };
     let free = |t: Traits| Traits { locks: false, ..t };
-    let table: [(&[&str], Traits); 21] = [
+    let table: [(&[&str], Traits); 22] = [
         (&["add", "manual:a.flac"], is(true, true, true, true, SYNC)),
         (&["sync"], is(true, true, true, true, SYNC)),
         (&["list"], free(is(false, false, false, false, &[]))),
@@ -7000,6 +7000,7 @@ fn each_command_is_classified_as_it_runs() {
         (&["restore", "a"], is(true, true, true, true, RESTORE)),
         (&["set", "a", "title=b"], is(true, true, true, true, CHANGE)),
         (&["edit"], is(true, true, true, true, CHANGE)),
+        (&["review"], is(true, true, true, true, CHANGE)),
         (&["undo"], is(true, false, false, true, CHANGE)),
         (&["purge"], is(true, false, false, false, &[])),
         (&["check"], is(false, false, false, false, &["Decoding"])),

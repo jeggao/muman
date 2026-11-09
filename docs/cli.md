@@ -37,6 +37,7 @@ Exit codes:
 * `list` — List the songs a query matches, one per line: its first key, then its artist, title and album, separated by tabs
 * `remove` — Remove the songs a query matches: their library files go, and they are kept under `[[removed]]` so no playlist or dropped file lists them again
 * `restore` — List again the removed songs a query matches, fetching any source purged
+* `review` — Walk each song a query matches whose picks are in doubt, as `check` lists them, and settle it: change its tags and pins, pin its release, or leave a field out of what one torrent or channel offers. Needs a terminal
 * `set` — Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
@@ -211,6 +212,31 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 * `-y`, `--yes` — Make the change without asking; needed without a terminal
 * `--all` — Act on every song the query matches, without picking among them
 * `-n`, `--dry-run` — Say what would change; change nothing
+
+
+
+### `muman review`
+
+Walk each song a query matches whose picks are in doubt, as `check` lists them, and settle it: change its tags and pins, pin its release, or leave a field out of what one torrent or channel offers. Needs a terminal
+
+**Usage:** `muman review [QUERY]...`
+
+```text
+Query:
+  lumo fenn             Every word in the title, artist, album or album
+                        artist, or a source's ID or file name whole
+  artist:fenn           A field containing the text
+  'artist:=Lumo Fenn'   A field equal to the text, quoted with spaces
+  title::^one           A field matching a regular expression
+  ^lyrics:yes           Not matching the term
+  youtube.com:<id>      The song listing that source
+Fields are any tag, and key, path, format (the extension: opus, ogg,
+flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
+```
+
+**Arguments:**
+
+* `<QUERY>` — Terms every song reviewed matches; none reviews every song
 
 
 

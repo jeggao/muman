@@ -65,6 +65,15 @@ song when negated.
   on the album itself, for its songs and any added later, which clears
   each song's own. Nothing is saved until "Review and save", which says
   each change and asks.
+- **`review`**, on a terminal, steps through each song whose picks
+  `muman check` finds in doubt, a query limiting it, and shows why:
+  a title won by the order of `sources`, a source set aside, two
+  recordings, another length than its record's. You change its tags
+  and pins as `set` with a query does; pin it to one of the releases
+  AcoustID found its recording on, its `release` key, which takes it
+  out of its album's choice; or leave the contested field out of
+  everything its torrent or channel offers, a `[[tags.from]]`. Each
+  change is saved as you make it, and `undo` takes back the run.
 - **`edit`** opens the songs' entries in `$VISUAL`, else `$EDITOR`,
   else `vi`, or Notepad on Windows. Delete a table to remove its song.
   Move a key into another table to join two songs, or into a new table
