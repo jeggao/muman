@@ -313,6 +313,23 @@ fn names_agree_alike_disagree_apart_and_say_nothing_between_or_across_scripts() 
         Some(false),
         "another of a series"
     );
+    for (a, b) in [
+        ("Night Ferry (Part 1)", "Night Ferry (Part 2)"),
+        ("Night Ferry [Pt. 1]", "Night Ferry [Pt. 2]"),
+        ("Night Ferry Part I", "Night Ferry Part II"),
+        ("Night Ferry (Part I)", "Night Ferry (Part 2)"),
+    ] {
+        assert_eq!(agree(a, b), Some(false), "{a} against {b}");
+    }
+    assert_eq!(
+        agree("Night Ferry Part II", "Night Ferry Part 2"),
+        Some(true)
+    );
+    assert_eq!(
+        agree("夜の船", "夜の船の歌"),
+        None,
+        "words no space parts are no cut"
+    );
     assert_eq!(
         agree("Lantern Weather", "Lantern Weather [Live at the Pier]"),
         Some(true),
@@ -323,18 +340,22 @@ fn names_agree_alike_disagree_apart_and_say_nothing_between_or_across_scripts() 
         BTreeSet::from(["live version"])
     );
     assert_eq!(
-        versions_in("Live Forever"),
+        versions_in("Live Lanterns"),
         BTreeSet::from(["live version"])
     );
     assert_eq!(
         agree(
-            "Idiot Wind (take 1, 9/16/74)",
-            "Idiot Wind (Alternate Take 5)"
+            "Lantern Weather (take 1, 9/16/04)",
+            "Lantern Weather (Alternate Take 5)"
         ),
         Some(true),
         "a take or a date tells releases apart, not songs"
     );
-    assert_eq!(agree("Song 2", "Song"), Some(false), "another number");
+    assert_eq!(
+        agree("Night Ferry 2", "Night Ferry"),
+        Some(false),
+        "another number"
+    );
     assert_eq!(agree("Song One", "Song Four"), None, "neither");
     assert_eq!(
         agree("夜の船", "Night Ferry"),
@@ -365,6 +386,7 @@ fn credits_agree_on_a_whole_name_never_on_one_holding_another() {
         credits_agree(&["Marlo’s Garden"], &["Marlos Garden"]),
         Some(true)
     );
+    assert_eq!(credits_agree(&["星野 キリ"], &["星野キリ"]), Some(true));
     assert_eq!(credits_agree(&["マルロ"], &["Marlo Venn"]), None);
     assert_eq!(credits_agree(&[], &["Marlo Venn"]), None);
 }
