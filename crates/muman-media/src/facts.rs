@@ -658,6 +658,7 @@ pub fn gather<R: Runner>(
                 digest: digest_file(&located.path),
                 ..lyrics_of(LyricsAt::File, &text)
             });
+            facts.tags_method = tags_method(Kind::Lyrics);
         }
         Kind::Image => {
             let (quality, look) = image_file(runner, located, scratch);
