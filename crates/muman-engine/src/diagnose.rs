@@ -290,6 +290,17 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                     .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
                 said.problem(format!("No sync can build it: {song}: {e:#}"))?;
             }
+            for (n, resolved) in &r.planned {
+                let song = manifest.songs[*n]
+                    .id()
+                    .map_or_else(|| format!("song {}", n + 1), ToString::to_string);
+                for why in &resolved.why.contested {
+                    said.warning(format!(
+                        "Won by its place in `sources` alone: {song}: {why}; \
+                         set the tag or reorder `sources` to settle it"
+                    ))?;
+                }
+            }
         }
         Err(e) => said.problem(format!("No sync can build the songs: {e:#}"))?,
     }

@@ -210,6 +210,7 @@ fn run_reading(
         lyrics,
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known::default(),
         naming: &NAMING,
         audio,
@@ -310,6 +311,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         lyrics: &english(),
         clean: &off,
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -766,6 +768,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         lyrics: &none_read(),
         clean: &clean,
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -836,6 +839,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known {
             albums,
             ..Known::default()
@@ -945,6 +949,7 @@ fn hand_set_tags_and_the_album_win_last() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -1253,6 +1258,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         lyrics: &english(),
         clean,
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known: &Known::default(),
         naming: &NAMING,
         audio: &AUDIO,
@@ -1570,6 +1576,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            believe: clean::Believe::Sources,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -2207,6 +2214,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            believe: clean::Believe::Sources,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -2699,6 +2707,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            believe: clean::Believe::Sources,
             known: &Known::default(),
             naming: &NAMING,
             audio: &AUDIO,
@@ -2959,6 +2968,7 @@ fn run_knowing(
         lyrics: &none_read(),
         clean,
         typography: clean::Typography::default(),
+        believe: clean::Believe::Sources,
         known,
         naming: &NAMING,
         audio: &AUDIO,
@@ -3078,5 +3088,195 @@ fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
         written(&run(&song(&[file, upload]), &facts, &[]), Field::Date),
         Some(&["2023-01-23".to_string()][..]),
         "one of the credited artists uploaded it"
+    );
+}
+
+fn run_believing(
+    song: &Song,
+    facts: &BTreeMap<SourceKey, Facts>,
+    believe: clean::Believe,
+) -> Resolved {
+    resolve(&Input {
+        song,
+        album: None,
+        facts,
+        on_disk: None,
+        alignments: &[],
+        lyrics: &none_read(),
+        clean: &Settings::default(),
+        typography: clean::Typography::default(),
+        believe,
+        known: &Known::default(),
+        naming: &NAMING,
+        audio: &AUDIO,
+        cover: &COVER,
+        source_comments: false,
+        pick: None,
+    })
+    .unwrap()
+}
+
+/// A file of the song, and a MusicBrainz record of it with the tags given.
+fn file_and_record(
+    file_tags: &[(Field, &str)],
+    record_tags: &[(Field, &str)],
+) -> (SourceKey, SourceKey, BTreeMap<SourceKey, Facts>) {
+    let file = manual("a.flac");
+    let record = SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap();
+    let mut f = audio("flac", 22.0);
+    for (field, value) in file_tags {
+        tag(&mut f, *field, &[value], true);
+    }
+    let mut r = Facts::unreadable("r".into());
+    for (field, value) in record_tags {
+        tag(&mut r, *field, &[value], true);
+    }
+    let facts = BTreeMap::from([(file.clone(), f), (record.clone(), r)]);
+    (file, record, facts)
+}
+
+fn value(r: &Resolved, field: Field) -> Option<String> {
+    written(r, field).map(|v| v.join("; "))
+}
+
+#[test]
+fn values_alike_spell_as_the_source_believed_first() {
+    let (file, record, facts) = file_and_record(
+        &[
+            (Field::Title, "Lanterns Ovr the Harbor"),
+            (Field::Artist, "Marlo Venn"),
+        ],
+        &[
+            (Field::Title, "Lanterns Over the Harbor"),
+            (Field::Artist, "Marlo Venn"),
+        ],
+    );
+    let s = song(&[file, record]);
+    let title = |b| value(&run_believing(&s, &facts, b), Field::Title);
+    assert_eq!(
+        title(clean::Believe::MusicbrainzFirst).as_deref(),
+        Some("Lanterns Over the Harbor")
+    );
+    assert_eq!(
+        title(clean::Believe::FilesFirst).as_deref(),
+        Some("Lanterns Ovr the Harbor")
+    );
+    assert_eq!(
+        title(clean::Believe::Sources).as_deref(),
+        Some("Lanterns Ovr the Harbor"),
+        "the first of `sources`, as before"
+    );
+}
+
+#[test]
+fn a_version_one_title_names_keeps_it_whatever_the_order() {
+    let (file, record, facts) = file_and_record(
+        &[
+            (Field::Title, "Night Ferry (Live 1975)"),
+            (Field::Artist, "Marlo Venn"),
+        ],
+        &[(Field::Title, "Night Ferry"), (Field::Artist, "Marlo Venn")],
+    );
+    for sources in [
+        [file.clone(), record.clone()],
+        [record.clone(), file.clone()],
+    ] {
+        let r = run_believing(&song(&sources), &facts, clean::Believe::MusicbrainzFirst);
+        assert_eq!(
+            value(&r, Field::Title).as_deref(),
+            Some("Night Ferry (Live 1975)")
+        );
+        assert!(r.why.contested.is_empty(), "{:?}", r.why.contested);
+    }
+}
+
+#[test]
+fn credits_follow_the_kind_believed_first_but_never_an_unsure_record() {
+    let (file, record, facts) = file_and_record(
+        &[
+            (Field::Title, "Night Ferry"),
+            (Field::Artist, "Marlo Venn"),
+            (Field::Album, "Harbor Songs"),
+        ],
+        &[
+            (Field::Title, "Night Ferry"),
+            (Field::Artist, "Kiri Hoshino"),
+        ],
+    );
+    let s = song(&[file.clone(), record.clone()]);
+    let artist = |b| value(&run_believing(&s, &facts, b), Field::Artist);
+    assert_eq!(
+        artist(clean::Believe::MusicbrainzFirst).as_deref(),
+        Some("Kiri Hoshino"),
+        "the record credits who sings it, as a concert's does"
+    );
+    assert_eq!(
+        artist(clean::Believe::FilesFirst).as_deref(),
+        Some("Marlo Venn")
+    );
+
+    let (file, record, facts) = file_and_record(
+        &[
+            (Field::Title, "Night Ferry"),
+            (Field::Artist, "Marlo Venn"),
+            (Field::Album, "Harbor Songs"),
+            (Field::AlbumArtist, "Marlo Venn"),
+        ],
+        &[
+            (Field::Title, "Night Ferry"),
+            (Field::Artist, "Marlo Venn Tribute Band"),
+            (Field::Album, "Tribute to Marlo Venn"),
+            (Field::AlbumArtist, "Marlo Venn Tribute Band"),
+        ],
+    );
+    let r = run_believing(
+        &song(&[file, record]),
+        &facts,
+        clean::Believe::MusicbrainzFirst,
+    );
+    assert_eq!(value(&r, Field::Artist).as_deref(), Some("Marlo Venn"));
+}
+
+#[test]
+fn the_order_of_sources_changes_no_pick_but_a_contested_one() {
+    let (file, record, facts) = file_and_record(
+        &[
+            (Field::Title, "Lanterns Ovr the Harbor"),
+            (Field::Artist, "Marlo Venn"),
+        ],
+        &[
+            (Field::Title, "Lanterns Over the Harbor"),
+            (Field::Artist, "Kiri Hoshino"),
+        ],
+    );
+    let picks = |sources: [SourceKey; 2]| {
+        let r = run_believing(&song(&sources), &facts, clean::Believe::MusicbrainzFirst);
+        (r.plan.tags.clone(), r.why.contested.clone())
+    };
+    let (a, b) = (
+        picks([file.clone(), record.clone()]),
+        picks([record.clone(), file.clone()]),
+    );
+    assert_eq!(a.0, b.0);
+    assert!(a.1.is_empty() && b.1.is_empty());
+
+    let (other, mut more) = (manual("b.flac"), facts.clone());
+    let mut o = audio("flac", 22.0);
+    o.rev = "o".into();
+    tag(&mut o, Field::Title, &["Paper Comets"], true);
+    tag(&mut o, Field::Artist, &["Marlo Venn"], true);
+    more.insert(other.clone(), o);
+    more.remove(&record);
+    let r = run_believing(
+        &song(&[file, other]),
+        &more,
+        clean::Believe::MusicbrainzFirst,
+    );
+    assert_eq!(
+        r.why.contested,
+        [
+            "TITLE “Lanterns Ovr the Harbor” from manual:a.flac over “Paper Comets” \
+          from manual:b.flac, by the order of `sources`"
+        ]
     );
 }

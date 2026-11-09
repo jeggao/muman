@@ -9,6 +9,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[tags] believe` says which kind of source a song believes first.**
+  `musicbrainz-first`, the default, spells a value its sources agree on
+  as a MusicBrainz record does, so a file's typo gives way, and credits
+  the artists a record vetting believes; `files-first` puts files first;
+  `sources` keeps the order of each song's `sources`. Offers alike but
+  for a spelling or a decoration now agree, a title naming a version, as
+  `(Live)`, keeps it against one that does not whatever their order, and
+  a field still won by the order of `sources` alone is named by `muman
+  status` and `muman check`.
+
 - **`muman info --changes` lists what a sync would change in each
   song, value by value.** Each tag, the path, audio, format, cover and
   lyrics a sync would write otherwise is shown as the file holds it and

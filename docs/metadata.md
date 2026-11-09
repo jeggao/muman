@@ -44,6 +44,32 @@ a date that is none, or a value over 4 KiB, counts as offered by no
 source. Control characters, and characters that reorder text, are
 dropped from every value.
 
+## Which source is believed
+
+Offers that mean one value count as one: alike in their letters, or
+names alike but for a spelling or a decoration that name the same
+versions, so `Lanterns Ovr the Harbor` agrees with `Lanterns Over the
+Harbor` while `Night Ferry (Live 1975)` keeps apart from `Night Ferry`.
+`[tags] believe` says which kind of source is believed first:
+`musicbrainz-first`, the default, puts a MusicBrainz record that
+vetting believes before a file's own tags, a site's release such as a
+YouTube Music track, and an upload; `files-first` puts files first;
+`sources` takes the order of each song's `sources`, as muman did before.
+The kind believed first decides:
+
+- how a value its sources agree on is spelled, so a file's typo gives
+  way to MusicBrainz's spelling;
+- which artists a song credits when its sources credit others, so a
+  concert's record crediting each singer wins over a file crediting its
+  star; a record vetting is unsure of never does.
+
+Other fields rank as before: a field kept for it over one read off a
+video's title, plain over decorated, agreed on by more sources; and of
+two titles that differ only by a version one names, as `(Live)`, the one
+naming it, whatever their order. A field still won by the order of
+`sources` alone is contested: `muman status` and `muman check` name it,
+so you can set it or reorder `sources`.
+
 ## Sources set aside
 
 A MusicBrainz record comes to a song by a lookup, and a fingerprint
