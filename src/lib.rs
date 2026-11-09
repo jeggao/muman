@@ -882,6 +882,9 @@ pub(crate) fn traits(command: &Command) -> Traits {
             ..reads
         },
         Command::Check {
+            calibrate: true, ..
+        } => reads,
+        Command::Check {
             decode, upstream, ..
         } => Traits {
             gated: *decode || *upstream,

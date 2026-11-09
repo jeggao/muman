@@ -17,7 +17,8 @@
 //!   most often the files' own, that lacks the fewest tracks, an album
 //!   before an EP before a single and one of no secondary type first,
 //!   then the earliest; a unit [`MAJORITY`] of whose songs are on one
-//!   release already stays on it. Each song takes the track it is on there, songs
+//!   release already stays on it, unless another holds more of them or
+//!   `avoid` names its kind. Each song takes the track it is on there, songs
 //!   matched to tracks by least cost ([`assign`]), its track numbers and
 //!   the recording's length the costs, so two songs never share a track.
 //! - `original`: each song is put on the first album its recording came
@@ -289,14 +290,21 @@ fn by_album(
         if unit.len() < 2 {
             continue;
         }
-        let settled = settled(&unit).map(|on| known(&unit, on));
-        let chosen = match settled {
-            // A unit on a release of a kind `avoid` names is moved as any.
-            Some(Some((release, _))) if avoided(release, settings) => {
-                best(&unit, songs, facts, settings)
-            }
-            Some(on) => on,
-            None => best(&unit, songs, facts, settings),
+        let best = best(&unit, songs, facts, settings);
+        // A unit on one release already stays, unless another holds more
+        // of it or `avoid` names the kind it is on.
+        let chosen = match settled(&unit) {
+            None => best,
+            Some((on, count)) => match known(&unit, on) {
+                Some((release, held))
+                    if !avoided(release, settings) && best.is_none_or(|(_, more)| more <= held) =>
+                {
+                    Some((release, held))
+                }
+                Some(_) => best,
+                None if best.is_some_and(|(_, more)| more > count) => best,
+                None => continue,
+            },
         };
         let Some((release, held)) = chosen else {
             continue;
@@ -316,16 +324,15 @@ fn by_album(
     picks
 }
 
-/// The release [`MAJORITY`] of `unit` or more are on already, which the
-/// unit stays on, whether or not another holds more of its recordings.
-fn settled<'a>(unit: &[&Member<'a>]) -> Option<&'a str> {
+/// The release [`MAJORITY`] of `unit` or more are on already, and how
+/// many are.
+fn settled<'a>(unit: &[&Member<'a>]) -> Option<(&'a str, usize)> {
     let mut on: BTreeMap<&str, usize> = BTreeMap::new();
     for release in unit.iter().filter_map(|m| m.on) {
         *on.entry(release).or_default() += 1;
     }
     on.into_iter()
         .find(|(_, n)| n * 100 >= MAJORITY * unit.len())
-        .map(|(release, _)| release)
 }
 
 /// Release `id` as the places of `unit` know it, with how many of its

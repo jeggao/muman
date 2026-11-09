@@ -1057,9 +1057,10 @@ impl State {
         )
     }
 
-    /// The newest AcoustID lookup made from each source, for
-    /// [`State::candidates_in`] to read many songs' candidates from without
-    /// going through every lookup for each.
+    /// The newest AcoustID lookup made from each source, the last of equal
+    /// times as [`State::candidates`] takes it, for [`State::candidates_in`]
+    /// to read many songs' candidates from without going through every
+    /// lookup for each.
     #[must_use]
     pub fn acoustid_lookups(&self) -> BTreeMap<&SourceKey, &Looked> {
         let mut newest: BTreeMap<&SourceKey, &Looked> = BTreeMap::new();
@@ -1069,7 +1070,7 @@ impl State {
             .filter(|l| l.find == Provider::AcoustId.name())
         {
             let at = newest.entry(&l.from).or_insert(l);
-            if l.at > at.at {
+            if l.at >= at.at {
                 *at = l;
             }
         }

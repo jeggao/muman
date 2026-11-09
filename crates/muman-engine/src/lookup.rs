@@ -288,10 +288,13 @@ pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Optio
 /// asking again could only ever refuse the right recording.
 fn own_tag(r: &Resolved, audio: &Facts, f: Field) -> Option<String> {
     let own = r.why.tags.iter().find(|w| w.key == f.vorbis()).is_none_or(|w| {
-        matches!(w.from.as_str(), "song.tags" | "album.tags")
+        // A value written in the house style is the style's, not a source's.
+        let styled = w.cleaned.contains(&"style");
+        let sourced = matches!(w.from.as_str(), "song.tags" | "album.tags")
             || SourceKey::parse(&w.from).is_ok_and(
                 |k| !matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ),
-            )
+            );
+        !styled && sourced
     });
     if own {
         return tag_of(r, f);

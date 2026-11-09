@@ -15,12 +15,12 @@
 //!
 //! | Evidence | Points |
 //! |---|---|
-//! | The artist side is a name the song's sources credit | [`CREDITED`] |
+//! | The artist side, whole, is a name the song's sources credit | [`CREDITED`] |
 //! | The artist side is the channel's name | [`CHANNEL`] |
 //! | The artist side names someone featured, after `feat.` | [`FEATURING`] |
 //! | The title side names a version, as `(Live)` | [`VERSIONED`] |
 //! | The title side is quoted, as `「夜の船」` or `"Night Ferry"` | [`QUOTED`] |
-//! | The title side is a title the song's sources give | [`TITLED`] |
+//! | The title side is a title the song's sources give | [`TITLED`], or [`TITLED_ALIKE`] for one alike |
 //! | The whole title, where nothing splits it | [`WHOLE`] |
 //!
 //! The reading scoring most is the song's where it leads the next by
@@ -39,8 +39,10 @@ pub const FEATURING: i64 = 2;
 pub const VERSIONED: i64 = 2;
 /// A quoted title side.
 pub const QUOTED: i64 = 3;
-/// A title side the song's sources give as its title.
+/// A title side the song's sources give as its title, folded alike.
 pub const TITLED: i64 = 5;
+/// A title side alike to one the song's sources give, as one cut short.
+pub const TITLED_ALIKE: i64 = 2;
 /// The whole title, unsplit.
 pub const WHOLE: i64 = 1;
 /// How far the best reading must lead the next to be taken.
@@ -134,11 +136,10 @@ pub fn read(title: &str, evidence: &Evidence<'_>) -> Read {
 }
 
 fn as_artist(side: &str, evidence: &Evidence<'_>) -> i64 {
-    let names = similar::credited(side);
-    let credited = evidence
-        .credited
-        .iter()
-        .any(|c| !similar::credited(c).is_disjoint(&names));
+    // The side whole, never what joiners split out of it: a side holding
+    // a credit and a title, as `Marlo Venn - Night Ferry`, names no one.
+    let whole = similar::fold(side);
+    let credited = (evidence.credited.iter()).any(|c| similar::credited(c).contains(&whole));
     let channel = evidence
         .channel
         .is_some_and(|c| similar::fold(c) == similar::fold(side));
@@ -156,10 +157,14 @@ fn as_title(side: &str, evidence: &Evidence<'_>) -> i64 {
 
 /// [`TITLED`] where `side` is a title the song's sources give.
 fn titled(side: &str, evidence: &Evidence<'_>) -> i64 {
+    let folded = similar::fold(side);
+    if (evidence.titles.iter()).any(|t| similar::fold(t) == folded) {
+        return TITLED;
+    }
     let mine = similar::Name::new(side);
-    let given = (evidence.titles.iter())
+    let alike = (evidence.titles.iter())
         .any(|t| similar::agree(&mine, &similar::Name::new(t)) == Some(true));
-    i64::from(given) * TITLED
+    i64::from(alike) * TITLED_ALIKE
 }
 
 /// `side` without the quotes around it, where it is quoted whole.
@@ -214,5 +219,25 @@ mod tests {
         let r = read("Marlo Venn - 「夜の船」", &evidence);
         assert!(r.clear, "{r:?}");
         assert_eq!(r.best().unwrap().title, "夜の船");
+    }
+
+    #[test]
+    fn a_title_the_sources_give_whole_and_a_credit_of_two_read_clear() {
+        let titles = ["Night Ferry - Harbor Session"];
+        let given = Evidence {
+            titles: &titles,
+            ..Evidence::default()
+        };
+        let r = read("Night Ferry - Harbor Session", &given);
+        assert!(r.clear, "{r:?}");
+        assert_eq!(r.best().unwrap().artist, None);
+        let credited = ["Marlo Venn & Kiri Hoshino"];
+        let both = Evidence {
+            credited: &credited,
+            ..Evidence::default()
+        };
+        let r = read("Marlo Venn - Kiri Hoshino - Night Ferry", &both);
+        assert!(r.clear, "{r:?}");
+        assert_eq!(r.best().unwrap().artist.as_deref(), Some("Marlo Venn"));
     }
 }

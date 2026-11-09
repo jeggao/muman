@@ -182,7 +182,8 @@ A release of a kind `[release] avoid` names, as `"compilation"`, is
 chosen only where no other would be, and a song's `release` key pins
 it to one release of its recording, as `muman review` writes it. An
 album three in five of whose songs are on one release already stays on
-it, a stray joining it where its recording is on it. A song moved takes
+it, a stray joining it where its recording is on it, unless another
+release holds more of its songs or `avoid` names the kind it is on. A song moved takes
 the album, date, country, types, track and disc numbers and IDs its
 place on the release has, and the label, catalog number and barcode the
 album's other songs on it have; its record's own release fields are
@@ -240,8 +241,8 @@ weighed by what the song's other sources and the tags you set say: a
 side they credit, the channel's name, a quoted side, a side naming a
 version or a title they give. Where no reading leads the next clearly,
 `muman check` names the song, as `A title read more than one way`, and
-`muman review` walks it, for you to set the title or a `[[tags.from]]`
-pattern for the channel.
+`muman review` walks it; a title or artist you set, or a
+`[[tags.from]]` title pattern for the channel, settles it.
 
 ## House style
 
@@ -252,16 +253,19 @@ each their own way: `Night Ferry (feat. Kiri Hoshino)` beside
 
 - `featured`: `title` moves a featured artist the credit names into the
   title, as `(feat. Kiri Hoshino)`; `artist` moves one the title names
-  into the credit, after `feat.`; a name already there is not written
-  twice.
+  into the credit, after `feat.`. A name already there is not written
+  twice, one featured list takes them all, and `(With You)` is a
+  subtitle, featuring no one.
 - `versions`: `parentheses` or `brackets` writes each version, as
   `(Live)` or `(Radio Edit)`, in the one kind.
 - `context`: `drop` takes out a note on where the song is from, as
-  `(From "Harbor Lights")`.
+  `(From "Harbor Lights")` or `(from the film Harbor Lights)`, though
+  not a subtitle as `(From Me to You)`.
 
-`keep` leaves values as their sources wrote them; a tag set by hand is
-never restyled, and `muman status` names `style` among what changed a
-value.
+`keep` leaves values as their sources wrote them, and a title nothing
+changes is left as written. A tag set by hand is never restyled, and no
+featured artist moves where you set the title or the artist; `muman
+status` names `style` among what changed a value.
 
 ## Overrides by torrent or channel
 
