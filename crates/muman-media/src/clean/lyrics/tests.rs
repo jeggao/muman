@@ -271,7 +271,7 @@ fn every_rule_reading_the_song_is_named() {
 }
 
 /// Lyrics every rule changes something in.
-const SAMPLES: [&str; 7] = [
+const SAMPLES: [&str; 8] = [
     "\n[00:01.00] <b>Paper comets</b>\\h \n[00:00.50]\"Paper Comets\"\n[00:00.60]Art: @someone\n",
     "[length:03:00]\n[Chorus]\nTurn your h\u{435}ad\n\n\nLyrics posted by Ada Quill\n",
     "[by:someone]\n[00:01.00]Lantern\n[00:01.03]Lantern\n[00:03.00](Spoken) Quay &amp; lamps\n[00:02.00]Pier\n",
@@ -279,14 +279,16 @@ const SAMPLES: [&str; 7] = [
     "[00:01.00]Marlo Venn feat. Ada Quill\n[00:02.00]Voice  Rin Hollow\n[00:03.00]The lamps\n",
     "[00:01.00]灯台の夢\u{3000}雨\u{200b}\n[00:02.00]*GuitarSolo*\n[00:03.00]詞：ほしのきり\n",
     "[ar:Lantern Hollow]\n[ar:Marlo Venn]\n[00:01.00]Paper comets\n",
+    "[00:00.00]These captions are made for desktop players.\n[00:01.00]Why are you\n\
+     [00:01.00]drifting there?\n[00:02.00][Quiet buzzing of a lamp]\n[00:03.00]The lamps along the quay\n",
 ];
 
 /// What the rules write of [`SAMPLES`], with [`EDITION`]. A change to any
 /// rule's output changes it: raise [`EDITION`], so every song with lyrics
 /// is written again, then record the new digest here.
 const WRITTEN: (u32, &str) = (
-    3,
-    "62c2cdc65209375b1758520fb623ae38b7db9caa19e0fa340c0d066c47446830",
+    4,
+    "fbbeab0617bb3a80139e6b94e9f7252161dff4319c2bfd750674ed05040a7326",
 );
 
 #[test]
@@ -305,5 +307,29 @@ fn the_edition_rises_with_what_the_rules_write() {
         (EDITION, digest.as_str()),
         WRITTEN,
         "the lyric rules write otherwise: raise clean::lyrics::EDITION and record the digest"
+    );
+}
+
+#[test]
+fn a_subtitle_loses_its_notes_and_sounds_and_joins_its_wrapped_lines() {
+    let text = "[00:00.00]These captions are made for desktop players.\n\
+                [00:01.00]Why are you\n[00:01.00]drifting there?\n\
+                [00:02.00][Quiet buzzing of a lamp]\n[00:02.50][Toxic Lanterns!]\n\
+                [00:03.00]The lamps along the quay\n[00:04.00]English Subtitles\n";
+    assert_eq!(
+        clean(text, &subtitle(), &[]).text,
+        "[00:01.00]Why are you drifting there?\n[00:02.50][Toxic Lanterns!]\n\
+         [00:03.00]The lamps along the quay\n"
+    );
+    assert_eq!(
+        clean(text, &song(), &[]).text.lines().count(),
+        7,
+        "lyrics of no subtitle"
+    );
+    let lower = "[00:01.00]why are you\n[00:01.00]drifting there\n";
+    assert_eq!(
+        clean(lower, &subtitle(), &[]).text,
+        lower,
+        "two lines in small letters may be two lines sung"
     );
 }

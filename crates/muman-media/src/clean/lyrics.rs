@@ -8,7 +8,11 @@
 //! lyrics converted from subtitles came with markup, `\h`, zero-width
 //! spaces around every line, one line written again for every frame it
 //! showed, lines typed out as they grow, and credits and the song's
-//! title around the lyrics. A few LRCLIB records carried a Cyrillic
+//! title around the lyrics; some also with an uploader's notes around
+//! them, as `These captions are designed for desktop` or `English
+//! Subtitles`, descriptions of sounds in square brackets for those who
+//! cannot hear them, and one line sung wrapped over two lines of one cue.
+//! A few LRCLIB records carried a Cyrillic
 //! `е` inside English words, one in about twenty-five lines, as a
 //! scraper's mark.
 //!
@@ -44,7 +48,12 @@
 //!
 //! - emoji and kaomoji an uploader drew, `♪` beside words, all-caps and
 //!   self-censored words: they are the text;
-//! - two lines at one time, as a subtitle of two lines is;
+//! - two lines at one time, as a subtitle of two lines is, unless the
+//!   first opens in capitals and closes no sentence and the second opens
+//!   in small letters: then they are one line wrapped;
+//! - a line in square brackets that names no sound, as a sung `[Run!]`;
+//! - a note on the video between two lines sung, too like a line of the
+//!   song to tell apart;
 //! - a line repeated 400 ms after itself or later, as a stutter is
 //!   sung; a run of one line under 250 ms apart is one subtitle's frames;
 //! - lines that grow from LRCLIB, where `I want you`, `I want you so
@@ -67,23 +76,27 @@ use crate::lyrics::{self, Kind};
 
 /// What the rules write, raised whenever a rule writes otherwise than
 /// before, so every song with lyrics is written again.
-pub const EDITION: u32 = 3;
+pub const EDITION: u32 = 4;
 
 /// One rule: what it does to the lyrics, knowing the song.
 type Edit = fn(&mut Lyrics, &Context<'_>);
 
 /// In the order run: markup goes before spacing, so the spaces a tag
 /// leaves are tidied; a heading is read while the credits beside it
-/// still say what it is; lines are put in order before frames merge.
-const RULES: [(&str, Edit); 10] = [
+/// still say what it is; lines are put in order before frames merge, and
+/// a wrapped line is joined before frames compare whole lines.
+const RULES: [(&str, Edit); 13] = [
     ("lyrics.tidy.markup", markup),
     ("lyrics.tidy.spacing", spacing),
     ("lyrics.tidy.homoglyphs", homoglyphs),
     ("lyrics.packaging.cues", cues),
+    ("lyrics.packaging.sound", sound),
+    ("lyrics.packaging.commentary", commentary),
     ("lyrics.packaging.title", title),
     ("lyrics.packaging.credits", credits),
     ("lyrics.packaging.headers", headers),
     ("lyrics.structure.order", order),
+    ("lyrics.structure.wrapped", wrapped),
     ("lyrics.structure.frames", frames),
     ("lyrics.guesswork.typing", typing),
 ];
@@ -573,6 +586,168 @@ fn cues(l: &mut Lyrics, _: &Context<'_>) {
         });
         opened.unwrap_or_else(|| text.to_string())
     });
+}
+
+/// Words naming a sound rather than words sung, lower-case: a subtitle's
+/// line in square brackets that holds one describes a sound for those who
+/// cannot hear it.
+const SOUNDS: [&str; 24] = [
+    "buzzing",
+    "music",
+    "applause",
+    "laughing",
+    "laughs",
+    "laughter",
+    "sighs",
+    "sighing",
+    "breathing",
+    "silence",
+    "static",
+    "beeping",
+    "ringing",
+    "noise",
+    "sound",
+    "sounds",
+    "flashing",
+    "footsteps",
+    "cheering",
+    "screaming",
+    "gasps",
+    "gasping",
+    "clapping",
+    "thunder",
+];
+
+/// Whether a subtitle's line describes a sound or warns of what the video
+/// shows: wholly in square brackets, opening with `TW:` or `CW:` or
+/// holding one of [`SOUNDS`]. `[Toxic Lanterns!]`, sung, holds none.
+fn is_sound(words: &str) -> bool {
+    let Some(inner) = words
+        .trim()
+        .strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+    else {
+        return false;
+    };
+    let lower = inner.trim().to_lowercase();
+    lower.starts_with("tw:")
+        || lower.starts_with("cw:")
+        || lower
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| SOUNDS.contains(&w))
+}
+
+/// A subtitle's lines describing sounds dropped: the captions a video
+/// gives those who cannot hear it, not its lyrics.
+fn sound(l: &mut Lyrics, ctx: &Context<'_>) {
+    if !ctx.subtitle {
+        return;
+    }
+    let doomed: BTreeSet<usize> = word_lines(l)
+        .into_iter()
+        .filter(|(_, w)| is_sound(w))
+        .map(|(i, _)| i)
+        .collect();
+    drop_lines(l, &doomed);
+}
+
+/// What marks a subtitle's line as a note on the video or its subtitles
+/// rather than a line sung, lower-case.
+const COMMENTARY: [&str; 15] = [
+    "captions",
+    "caption",
+    "subtitles",
+    "subtitle",
+    "translated by",
+    "translation by",
+    "translations by",
+    "timed by",
+    "storyboard",
+    "character design",
+    "music video",
+    "thanks for watching",
+    "on youtube",
+    "on tiktok",
+    "http",
+];
+
+/// A subtitle's notes on the video dropped where they open or close it,
+/// as `These captions are designed for desktop` or `English Subtitles`:
+/// an uploader's words around the lyrics. A note between two lines sung
+/// is left, being too like a line of the song to tell apart.
+fn commentary(l: &mut Lyrics, ctx: &Context<'_>) {
+    if !ctx.subtitle {
+        return;
+    }
+    let words = word_lines(l);
+    let note = |w: &str| {
+        let lower = w.to_lowercase();
+        COMMENTARY.iter().any(|c| lower.contains(c))
+    };
+    let mut doomed = BTreeSet::new();
+    for (i, w) in &words {
+        if !note(w) {
+            break;
+        }
+        doomed.insert(*i);
+    }
+    for (i, w) in words.iter().rev() {
+        if !note(w) {
+            break;
+        }
+        doomed.insert(*i);
+    }
+    drop_lines(l, &doomed);
+}
+
+/// What a line in sentence case may end with to close its sentence.
+const CLOSES: [char; 10] = ['.', '!', '?', '…', '。', '！', '？', '"', '”', ')'];
+
+/// Whether `second`, at one time with `first`, is the rest of its line, as
+/// a subtitle wraps one long line in two: `first` opens in capitals and
+/// closes no sentence, and `second` opens in small letters.
+fn continues(first: &str, second: &str) -> bool {
+    let opens = |s: &str| s.chars().find(|c| c.is_alphabetic());
+    let first = first.trim();
+    opens(first).is_some_and(char::is_uppercase)
+        && first.chars().last().is_some_and(|c| !CLOSES.contains(&c))
+        && opens(second).is_some_and(char::is_lowercase)
+}
+
+/// A subtitle's line wrapped in two at one time joined again, as `"Why
+/// are you` and `doing that?"` are one line sung; two lines a cue shows
+/// together that each open a sentence stay two.
+fn wrapped(l: &mut Lyrics, ctx: &Context<'_>) {
+    if !ctx.subtitle {
+        return;
+    }
+    let mut i = 0;
+    while i + 1 < l.0.len() {
+        let joined = match (&l.0[i], &l.0[i + 1]) {
+            (
+                Line::Timed {
+                    ms: a, text: first, ..
+                },
+                Line::Timed {
+                    ms: b,
+                    text: second,
+                    ..
+                },
+            ) if a == b && a.len() == 1 && continues(first, second) => {
+                Some(format!("{} {}", first.trim_end(), second.trim_start()))
+            }
+            _ => None,
+        };
+        match joined {
+            Some(text) => {
+                if let Line::Timed { text: t, .. } = &mut l.0[i] {
+                    *t = text;
+                }
+                l.0.remove(i + 1);
+            }
+            None => i += 1,
+        }
+    }
 }
 
 /// What a line of words is among the rest.
