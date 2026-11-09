@@ -220,3 +220,20 @@ fn records_spelling_an_artist_in_its_own_script_win_over_more_in_latin_letters()
         "a tie"
     );
 }
+
+#[test]
+fn names_spelled_more_than_one_way_with_no_id_are_suggested() {
+    let planned = vec![
+        song(0, &[(Field::Artist, "Glass Orchard", "manual:a.flac")]),
+        song(1, &[(Field::Artist, "Glass Orchard", "manual:b.flac")]),
+        song(2, &[(Field::Artist, "GLASS ORCHARD", "manual:c.flac")]),
+        song(3, &[(Field::Artist, "Paper Comets", "manual:d.flac")]),
+    ];
+    assert_eq!(
+        suggestions(&planned, &BTreeMap::new()),
+        [vec![
+            ("Glass Orchard".to_string(), 2),
+            ("GLASS ORCHARD".to_string(), 1)
+        ]]
+    );
+}

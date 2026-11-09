@@ -218,16 +218,16 @@ impl Recordings {
     }
 
     /// Each source but `chosen` of another recording than its, or at
-    /// another speed than the rest of its own, as `<key>: <which>`.
+    /// another speed than the rest of its own, with which it is.
     #[must_use]
-    pub fn others(&self, chosen: &SourceKey) -> Vec<String> {
+    pub fn others(&self, chosen: &SourceKey) -> Vec<(SourceKey, String)> {
         let mine = self.of.get(chosen).map(|p| p.group);
         self.of
             .iter()
             .filter(|(key, place)| {
                 *key != chosen && (Some(place.group) != mine || self.speed(key).is_some())
             })
-            .map(|(key, _)| format!("{key}: {}", self.describe(key)))
+            .map(|(key, _)| (key.clone(), self.describe(key)))
             .collect()
     }
 
@@ -421,7 +421,7 @@ mod tests {
             heard.describe(d),
             "another recording than the song's 3 others: aligns with none"
         );
-        assert_eq!(heard.others(a), [format!("{d}: {}", heard.describe(d))]);
+        assert_eq!(heard.others(a), [(d.clone(), heard.describe(d))]);
     }
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
             r.aside(&b).as_deref(),
             Some("plays 0.6% faster than the rest of its recording")
         );
-        assert_eq!(r.others(&b), [format!("{c}: {}", r.describe(&c))]);
+        assert_eq!(r.others(&b), [(c.clone(), r.describe(&c))]);
         assert_eq!(
             r.describe(&c),
             "the same recording as the song's 1 other: plays 0.6% slower than the rest of \

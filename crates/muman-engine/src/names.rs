@@ -66,11 +66,8 @@ pub fn spell(
         .iter()
         .flat_map(|(n, r)| credits_of(*n, r))
         .collect();
-    let mut known: BTreeMap<&str, &CreditedArtist> = BTreeMap::new();
-    for artist in facts.values().flat_map(|f| &f.artists) {
-        known.entry(artist.id.as_str()).or_insert(artist);
-    }
-    let groups = groups(&credits, &known);
+    let known = known(facts);
+    let (groups, _) = groups(&credits, &known);
     let mut out: BTreeMap<usize, Vec<Agreed>> = BTreeMap::new();
     for (id, members) in groups {
         let Some((name, from, ties)) = spelled(id, &members, &credits, known.get(id), spelling)
@@ -88,6 +85,50 @@ pub fn spell(
         }
     }
     out
+}
+
+/// The names credited more than one way that no artist ID tells one
+/// artist's, as `check` suggests them: each spelling with how many
+/// credits spell it so, most first, then by name.
+#[must_use]
+pub fn suggestions(
+    planned: &[(usize, Resolved)],
+    facts: &BTreeMap<SourceKey, Facts>,
+) -> Vec<Vec<(String, usize)>> {
+    let credits: Vec<Credit<'_>> = planned
+        .iter()
+        .flat_map(|(n, r)| credits_of(*n, r))
+        .collect();
+    let (_, left) = groups(&credits, &known(facts));
+    let mut by_key: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
+    for c in left.iter().map(|&i| &credits[i]) {
+        *by_key
+            .entry(similar::fold(c.name))
+            .or_default()
+            .entry(c.name)
+            .or_default() += 1;
+    }
+    by_key
+        .into_values()
+        .filter(|spellings| spellings.len() > 1)
+        .map(|spellings| {
+            let mut all: Vec<(String, usize)> = spellings
+                .into_iter()
+                .map(|(s, n)| (s.to_string(), n))
+                .collect();
+            all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            all
+        })
+        .collect()
+}
+
+/// Each artist the records in `facts` credit, by its ID.
+fn known(facts: &BTreeMap<SourceKey, Facts>) -> BTreeMap<&str, &CreditedArtist> {
+    let mut known: BTreeMap<&str, &CreditedArtist> = BTreeMap::new();
+    for artist in facts.values().flat_map(|f| &f.artists) {
+        known.entry(artist.id.as_str()).or_insert(artist);
+    }
+    known
 }
 
 /// The credits of one artist `r` writes, but those set by hand.
@@ -130,11 +171,11 @@ fn credits_of(n: usize, r: &Resolved) -> Vec<Credit<'_>> {
 
 /// The credits of each artist ID, by their place in `credits`: those
 /// naming it, and those whose name folds as a name it is known by does,
-/// where no other ID is known by that name.
+/// where no other ID is known by that name; and the credits of none.
 fn groups<'c>(
     credits: &[Credit<'c>],
     known: &BTreeMap<&'c str, &'c CreditedArtist>,
-) -> BTreeMap<&'c str, Vec<usize>> {
+) -> (BTreeMap<&'c str, Vec<usize>>, Vec<usize>) {
     let mut ids_of: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for c in credits {
         if let Some(id) = c.id {
@@ -147,17 +188,18 @@ fn groups<'c>(
             ids_of.entry(similar::fold(name)).or_default().insert(*id);
         }
     }
-    let mut groups: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    let (mut groups, mut left): (BTreeMap<&str, Vec<usize>>, Vec<usize>) = Default::default();
     for (i, c) in credits.iter().enumerate() {
         let id = c.id.or_else(|| match ids_of.get(&similar::fold(c.name)) {
             Some(ids) if ids.len() == 1 => ids.first().copied(),
             _ => None,
         });
-        if let Some(id) = id {
-            groups.entry(id).or_default().push(i);
+        match id {
+            Some(id) => groups.entry(id).or_default().push(i),
+            None => left.push(i),
         }
     }
-    groups
+    (groups, left)
 }
 
 /// How the group of artist `id` is spelled, why, and the spellings as

@@ -138,7 +138,10 @@ no match.
 
 `muman status` names each source set aside and why, as `set aside
 musicbrainz:…: titled "Night Ferry" by Kiri Hoshino: no title or credit
-in common`. `[tags.clean.structure] vetting = false` turns this off.
+in common`, and `muman check` counts the songs holding one, names each
+song whose audio plays 30 s or more from what a record it believes
+says, and each name spelled two ways that no artist ID tells apart.
+`[tags.clean.structure] vetting = false` turns this off.
 
 ## Which release
 

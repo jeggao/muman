@@ -866,9 +866,39 @@ pub struct Why {
     /// audio's, or at another speed than the rest of its own
     /// ([`vet::recordings`]), as `<key>: <which>`.
     pub recordings: Vec<String>,
+    /// What its picks leave in doubt, for `check` and `review`.
+    pub doubts: Vec<Doubt>,
     /// The release it was moved to and why ([`crate::release`]), as
     /// `<key>: <why>`.
     pub release: Option<String>,
+}
+
+/// Something a song's picks leave in doubt, which `check` lists and
+/// `review` walks: each holds what it is about and why, in words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Doubt {
+    /// Its title or artist, won by the order of `sources` alone.
+    Contested { field: Field, why: String },
+    /// A source vetting set aside, in part or whole ([`crate::vet`]).
+    SetAside { key: SourceKey, why: String },
+    /// An audio source of another recording than the chosen audio's, or
+    /// at another speed.
+    Recording { key: SourceKey, why: String },
+    /// A record it believes, stating a length far from its audio's.
+    Length { key: SourceKey, why: String },
+}
+
+impl Doubt {
+    /// It in one line, as `check` and `review` say it.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Self::Contested { why, .. } => format!("contested: {why}"),
+            Self::SetAside { key, why } => format!("set aside: {key}: {why}"),
+            Self::Recording { key, why } => format!("another recording: {key}: {why}"),
+            Self::Length { key, why } => format!("another length: {key}: {why}"),
+        }
+    }
 }
 
 /// Where a written tag's value came from.
@@ -1128,6 +1158,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         id: &id,
     })?;
     let contested = contested_unset(&candidates, &tag_why);
+    let doubts = doubts_of(input, &vets, &recordings, &contested, ms_of(facts));
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1158,9 +1189,10 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             tags: tag_why,
             fit: None,
             set_aside: vets.set_aside(),
-            recordings,
+            recordings: keyed(&recordings),
             dropped: dropped(input),
-            contested,
+            contested: contested.into_iter().map(|(_, why)| why).collect(),
+            doubts,
             release: (input.pick.and_then(|p| p.release.as_ref()))
                 .map(|r| format!("{}: {}", r.key, r.why)),
         },
@@ -1269,12 +1301,24 @@ struct Scored<'a> {
     lacks: i64,
 }
 
+/// Each audio source of another recording than the chosen audio's, or at
+/// another speed, with which it is.
+type Others = Vec<(SourceKey, String)>;
+
+/// `others` as `status` says each, `<key>: <which>`.
+fn keyed(others: &Others) -> Vec<String> {
+    others
+        .iter()
+        .map(|(key, which)| format!("{key}: {which}"))
+        .collect()
+}
+
 /// The audio the song takes, why, and each other source the recording it
 /// holds names ([`vet::recordings`]).
 fn pick_audio(
     input: &Input<'_>,
     candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
-) -> Result<(SourceKey, String, Vec<String>)> {
+) -> Result<(SourceKey, String, Others)> {
     let audible: Vec<(usize, &SourceKey, &Facts)> = input
         .present()
         .filter(|(_, _, f)| f.audio.is_some())
@@ -2468,7 +2512,7 @@ fn ranked<K: Ord>(
 fn contested_unset(
     candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
     tag_why: &[TagWhy],
-) -> Vec<String> {
+) -> Vec<(Field, String)> {
     [Field::Title, Field::Artist]
         .iter()
         .filter(|f| {
@@ -2476,8 +2520,53 @@ fn contested_unset(
                 w.key == f.vorbis() && matches!(w.from.as_str(), "song.tags" | "album.tags")
             })
         })
-        .filter_map(|f| contested(candidates, *f))
+        .filter_map(|f| Some((*f, contested(candidates, *f)?)))
         .collect()
+}
+
+/// What the song's picks leave in doubt: its fields contested, its
+/// sources set aside, its audio sources of another recording, and each
+/// record it believes whose length is [`vet::FAR_MS`] or more from
+/// `audio_ms`, the chosen audio's.
+fn doubts_of(
+    input: &Input<'_>,
+    vets: &Vets,
+    recordings: &[(SourceKey, String)],
+    contested: &[(Field, String)],
+    audio_ms: Option<i64>,
+) -> Vec<Doubt> {
+    let mut doubts: Vec<Doubt> = (contested.iter())
+        .map(|(field, why)| Doubt::Contested {
+            field: *field,
+            why: why.clone(),
+        })
+        .collect();
+    doubts.extend(vets.aside().into_iter().map(|(key, why)| Doubt::SetAside {
+        key: key.clone(),
+        why,
+    }));
+    doubts.extend(recordings.iter().map(|(key, why)| Doubt::Recording {
+        key: key.clone(),
+        why: why.clone(),
+    }));
+    for (_, key, facts) in input.present() {
+        let (Some(stated), Some(heard)) = (facts.length_ms, audio_ms) else {
+            continue;
+        };
+        let apart = i64::try_from(stated).unwrap_or(i64::MAX) - heard;
+        if apart.abs() >= vet::FAR_MS && vets.verdict(key) == Verdict::Same {
+            let side = if apart > 0 { "shorter" } else { "longer" };
+            let why = format!(
+                "the audio plays {} s {side} than its record says",
+                apart.abs() / 1000
+            );
+            doubts.push(Doubt::Length {
+                key: key.clone(),
+                why,
+            });
+        }
+    }
+    doubts
 }
 
 /// Why the best offer for `field` won only by the order of `sources`,

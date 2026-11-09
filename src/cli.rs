@@ -525,7 +525,10 @@ pub enum Command {
     },
     /// Check the library against what muman recorded: files missing,
     /// empty or changed since written, left by an interrupted run, or
-    /// not muman's; sources missing, unreadable or damaged.
+    /// not muman's; sources missing, unreadable or damaged; and picks in
+    /// doubt: a title won by the order of sources, a source set aside, a
+    /// song holding two recordings or playing another length than its
+    /// record, a name spelled two ways.
     Check {
         /// Decode every source in full again, to find audio cut off or
         /// missing in a file changed since it was measured.

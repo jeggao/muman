@@ -3897,3 +3897,42 @@ fn a_torrent_s_override_drops_its_fields_and_reads_its_titles() {
         "read off its title"
     );
 }
+
+#[test]
+fn a_song_s_doubts_name_its_sources_set_aside_and_a_record_of_another_length() {
+    let (s, mut facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
+    let r = resolve(&defaults(&s, &facts)).unwrap();
+    let aside: Vec<&SourceKey> = (r.why.doubts.iter())
+        .filter_map(|d| match d {
+            Doubt::SetAside { key, .. } => Some(key),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        aside,
+        [&s.sources[2], &s.sources[1]],
+        "the record and its cover"
+    );
+    let (s, _) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    facts.get_mut(&s.sources[1]).unwrap().length_ms = Some(160_000);
+    for (field, value) in [
+        (Field::Title, "Lantern Weather"),
+        (Field::Artist, "Marlo Venn"),
+        (Field::Album, "Rooms of Salt"),
+        (Field::AlbumArtist, "Marlo Venn"),
+    ] {
+        tag(facts.get_mut(&s.sources[1]).unwrap(), field, &[value], true);
+    }
+    let r = resolve(&defaults(&s, &facts)).unwrap();
+    let lengths: Vec<String> = (r.why.doubts.iter())
+        .filter(|d| matches!(d, Doubt::Length { .. }))
+        .map(Doubt::line)
+        .collect();
+    assert_eq!(
+        lengths,
+        [format!(
+            "another length: {}: the audio plays 40 s longer than its record says",
+            s.sources[1]
+        )]
+    );
+}
