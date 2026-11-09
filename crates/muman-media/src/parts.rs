@@ -1,6 +1,7 @@
 //! A value read as its parts: a title as its core and what decorates
 //! it, each decoration with what it is; a credit as its names and what
-//! joins them.
+//! joins them; an album as its name and the disc it says it is; a date
+//! as its year, month and day.
 //!
 //! Comparing, cleaning and writing a value each need to know which of
 //! its words name the song and which say something about it: `Lantern
@@ -25,6 +26,11 @@
 //! comma, `&`, `/`, `;`, `×` and their CJK forms, and `feat.`, `ft.`,
 //! `featuring`, `vs.`, `with`, `and`, `x` or a spaced `-` between words;
 //! the names after the first `feat.`, `ft.` or `featuring` are featured.
+//!
+//! An album's disc is one its name closes on, as `Live (CD2)`, `Live -
+//! Disc 2` or `Live CD 2` ([`crate::clean::disc_in`]); its name is what
+//! comes before it. A date is `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, as a
+//! tag holds one once read.
 //!
 //! Every part's text is found in the value as written, in order: nothing
 //! is added or respelled.
@@ -151,6 +157,74 @@ fn push<'a>(parts: &mut Credit<'a>, joined: &mut Option<&'a str>, name: &'a str)
 /// Whether `joiner` is the word `word`, case and a closing dot aside.
 fn starts_word(joiner: &str, word: &str) -> bool {
     joiner.trim_end_matches('.').eq_ignore_ascii_case(word)
+}
+
+/// An album as its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Album<'a> {
+    /// Its name, the disc it closes on left out, trimmed.
+    pub name: &'a str,
+    /// The disc its name says it is.
+    pub disc: Option<u32>,
+}
+
+/// `s` read as an album's parts, as the module says.
+#[must_use]
+pub fn album(s: &str) -> Album<'_> {
+    match crate::clean::disc_in(s) {
+        Some((at, disc)) => Album {
+            name: s[..at].trim(),
+            disc: Some(disc),
+        },
+        None => Album {
+            name: s.trim(),
+            disc: None,
+        },
+    }
+}
+
+/// A date as its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Date {
+    pub year: u16,
+    pub month: Option<u8>,
+    pub day: Option<u8>,
+}
+
+/// `text`, where it is `digits` digits.
+fn number(text: &str, digits: usize) -> Option<&str> {
+    (text.len() == digits && text.chars().all(|c| c.is_ascii_digit())).then_some(text)
+}
+
+/// `s` read as a date's parts; none where it is no `YYYY`, `YYYY-MM` or
+/// `YYYY-MM-DD`, or names no month or day there is.
+#[must_use]
+pub fn date(s: &str) -> Option<Date> {
+    let mut fields = s.trim().split('-');
+    let year = number(fields.next()?, 4)?.parse().ok()?;
+    let month = match fields.next() {
+        None => None,
+        Some(m) => Some(
+            number(m, 2)?
+                .parse::<u8>()
+                .ok()
+                .filter(|m| (1..=12).contains(m))?,
+        ),
+    };
+    let day = match fields.next() {
+        None => None,
+        Some(d) => Some(
+            number(d, 2)?
+                .parse::<u8>()
+                .ok()
+                .filter(|d| (1..=31).contains(d))?,
+        ),
+    };
+    (fields.next().is_none() && (day.is_none() || month.is_some())).then_some(Date {
+        year,
+        month,
+        day,
+    })
 }
 
 /// `s` read as a title's parts, as the module says.

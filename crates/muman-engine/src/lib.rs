@@ -19,7 +19,7 @@ use muman_core::{
 };
 use muman_media::{
     align, analysis, chapters, clean, codec, cues, detect, facts, ffmpeg, integrity, loudness,
-    lyrics, naming, ogg, picture, quality, record, similar, tags,
+    lyrics, naming, ogg, parts, picture, quality, record, similar, tags,
 };
 use muman_net::{acoustid, coverart, download, lrclib, music, musicbrainz, ytdlp_log};
 
