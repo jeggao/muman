@@ -308,6 +308,9 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                         Doubt::Length { key, why } => said.warning(format!(
                             "Plays another length than its record says: {song}: {key}: {why}"
                         ))?,
+                        Doubt::Reading { key, why } => said.warning(format!(
+                            "A title read more than one way: {song}: {key}: {why}"
+                        ))?,
                         Doubt::SetAside { .. } => {}
                     }
                 }

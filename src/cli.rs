@@ -538,7 +538,7 @@ pub enum Command {
     /// not muman's; sources missing, unreadable or damaged; and picks in
     /// doubt: a title won by the order of sources, a source set aside, a
     /// song holding two recordings or playing another length than its
-    /// record, a name spelled two ways.
+    /// record, a video's title read two ways, a name spelled two ways.
     Check {
         /// Decode every source in full again, to find audio cut off or
         /// missing in a file changed since it was measured.

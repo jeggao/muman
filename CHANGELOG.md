@@ -23,8 +23,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 - **`muman check` lists picks in doubt**: the songs holding a source set
   aside, each song holding two recordings or playing 30 s or more from
-  what a record it believes says, and each name spelled two ways that
-  no MusicBrainz artist ID tells apart.
+  what a record it believes says, each upload whose title reads as a
+  title and artist more than one way with nothing telling which, and
+  each name spelled two ways that no MusicBrainz artist ID tells apart.
 
 - **`[[tags.from]]` says what one torrent's or one channel's sources
   are not believed for**: fields to leave out, `credits = false` to

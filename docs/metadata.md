@@ -216,6 +216,18 @@ a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
 out.
 
+## Titles read off a video
+
+An upload names its song in one line, `Marlo Venn - Night Ferry`,
+`Night Ferry / Marlo Venn` or `「夜の船」Marlo Venn`. Cleaning splits it
+by convention; beside that, every reading its separators allow is
+weighed by what the song's other sources and the tags you set say: a
+side they credit, the channel's name, a quoted side, a side naming a
+version or a title they give. Where no reading leads the next clearly,
+`muman check` names the song, as `A title read more than one way`, and
+`muman review` walks it, for you to set the title or a `[[tags.from]]`
+pattern for the channel.
+
 ## House style
 
 Sources write a featured artist, a version and where a song is from

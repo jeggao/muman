@@ -4108,3 +4108,40 @@ fn a_record_moved_to_another_group_is_held_to_its_release_not_its_old_one() {
     assert_eq!(get(&r, "ALBUM").as_deref(), Some("Complete Harbor Works"));
     assert!(r.why.release.is_some());
 }
+
+#[test]
+fn an_upload_whose_title_reads_two_ways_is_in_doubt_until_a_source_settles_it() {
+    let upload = yt("vid00000001");
+    let mut u = audio("opus", 20.0);
+    tag(
+        &mut u,
+        Field::Title,
+        &["Paper Comets - Glass Orchard"],
+        false,
+    );
+    tag(&mut u, Field::Artist, &["Orchard Archive"], false);
+    let mut facts = BTreeMap::from([(upload.clone(), u)]);
+    let readings = |s: &Song, facts: &BTreeMap<SourceKey, Facts>| -> Vec<String> {
+        let r = resolve(&defaults(s, facts)).unwrap();
+        (r.why.doubts.iter())
+            .filter(|d| matches!(d, Doubt::Reading { .. }))
+            .map(Doubt::line)
+            .collect()
+    };
+    let s = song(std::slice::from_ref(&upload));
+    assert_eq!(
+        readings(&s, &facts),
+        [format!(
+            "read two ways: {upload}: its title reads as “Paper Comets - Glass Orchard” whole \
+             or as “Glass Orchard” by Paper Comets, nothing telling which"
+        )]
+    );
+    let file = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Artist, &["Paper Comets"], true);
+    facts.insert(file.clone(), f);
+    assert!(
+        readings(&song(&[upload, file]), &facts).is_empty(),
+        "its artist credited"
+    );
+}
