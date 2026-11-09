@@ -210,6 +210,26 @@ a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
 out.
 
+## House style
+
+Sources write a featured artist, a version and where a song is from
+each their own way: `Night Ferry (feat. Kiri Hoshino)` beside
+`Marlo Venn feat. Kiri Hoshino`, `[Live]` beside `(Live)`. Three
+`[tags]` keys write each one way once a song's values are chosen:
+
+- `featured`: `title` moves a featured artist the credit names into the
+  title, as `(feat. Kiri Hoshino)`; `artist` moves one the title names
+  into the credit, after `feat.`; a name already there is not written
+  twice.
+- `versions`: `parentheses` or `brackets` writes each version, as
+  `(Live)` or `(Radio Edit)`, in the one kind.
+- `context`: `drop` takes out a note on where the song is from, as
+  `(From "Harbor Lights")`.
+
+`keep` leaves values as their sources wrote them; a tag set by hand is
+never restyled, and `muman status` names `style` among what changed a
+value.
+
 ## Overrides by torrent or channel
 
 One rip tags every file the same wrong way, and one channel titles

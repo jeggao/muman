@@ -183,6 +183,7 @@ use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
 use crate::source::SourceKey;
 use crate::state::Aligned;
+use crate::style;
 use crate::tags::{self, Field, Offer, Scope};
 use crate::vet::recordings::{self, Recordings};
 use crate::vet::{self, Verdict, Vets};
@@ -1040,6 +1041,8 @@ pub struct Input<'a> {
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
     pub typography: clean::Typography,
+    /// The house style written values take ([`style`]).
+    pub style: style::Style,
     /// Which kind of source is believed first.
     pub believe: clean::Believe,
     /// The `[release]` table: which date a song on a release takes.
@@ -2904,6 +2907,7 @@ fn resolve_tags(
     }
     let mut artists = joined_artists(&mut fields);
     settle(input, &mut fields, &mut artists);
+    restyle(input.style, &mut fields, &mut artists);
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()
@@ -2931,6 +2935,40 @@ fn resolve_tags(
         why,
         artists,
     )
+}
+
+/// The title and artist in `style`, its artists one by one with them;
+/// a value restyled names `style` among the rules that changed it.
+fn restyle(style: style::Style, fields: &mut BTreeMap<Field, Slot>, artists: &mut Vec<String>) {
+    if style.keeps() {
+        return;
+    }
+    let first = |f: Field, fields: &BTreeMap<Field, Slot>| {
+        fields
+            .get(&f)
+            .and_then(|s| s.values.first().cloned())
+            .unwrap_or_default()
+    };
+    let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
+    let (styled_title, styled_artist) = style.apply(&title, &artist);
+    for (field, was, now) in [
+        (Field::Title, &title, styled_title),
+        (Field::Artist, &artist, styled_artist),
+    ] {
+        if now != *was
+            && let Some(slot) = fields.get_mut(&field)
+        {
+            if field == Field::Artist {
+                *artists = crate::parts::credit(&now)
+                    .names
+                    .iter()
+                    .map(|n| (*n).to_string())
+                    .collect();
+            }
+            slot.values = vec![now];
+            slot.cleaned.push("style");
+        }
+    }
 }
 
 /// What the album pass agreed on set over what the song's sources offer,

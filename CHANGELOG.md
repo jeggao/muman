@@ -9,6 +9,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`[tags] featured`, `versions` and `context` set a house style** for
+  titles and artists: a featured artist moved into the title or the
+  credit, versions written in one kind of bracket, and a note on where a
+  song is from dropped. Each keeps values as they are until set.
+
 - **`muman review` walks each song in doubt and settles it.** On a
   terminal, each song whose picks `muman check` finds in doubt is shown
   with why, and you change its tags and pins, pin it to one of the

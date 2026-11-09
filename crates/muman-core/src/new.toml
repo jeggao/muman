@@ -60,6 +60,14 @@ believe = "musicbrainz-first"
 # alone: "original", its own name, in its own script; "latin", a name of
 # theirs in Latin letters, where MusicBrainz knows one.
 script = "original"
+# The house style a song's title and artist are written in: `featured`,
+# where a featured artist goes, "keep", "title" as "(feat. …)", or
+# "artist" after "feat."; `versions`, how versions such as (Live) are
+# bracketed, "keep", "parentheses" or "brackets"; `context`, whether
+# where a song is from, as (From "…"), stays, "keep" or "drop".
+featured = "keep"
+versions = "keep"
+context = "keep"
 
 [release]
 # Which release a song is on, of those its recording is on: "album"

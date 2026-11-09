@@ -325,6 +325,7 @@ impl<'a> Resolver<'a> {
             lyrics: &settings.lyrics,
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             typography: settings.tags.typography,
+            style: settings.tags.style(),
             believe: settings.tags.believe,
             release: &settings.release,
             known: &self.known,

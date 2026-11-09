@@ -27,6 +27,7 @@ fn defaults<'a>(song: &'a Song, facts: &'a BTreeMap<SourceKey, Facts>) -> Input<
         lyrics: &ENGLISH,
         clean: &CLEAN,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::default(),
         release: &RELEASE,
         known: &KNOWN,
@@ -240,6 +241,7 @@ fn run_reading(
         lyrics,
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -342,6 +344,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         lyrics: &english(),
         clean: &off,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -800,6 +803,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         lyrics: &none_read(),
         clean: &clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -872,6 +876,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known {
@@ -983,6 +988,7 @@ fn hand_set_tags_and_the_album_win_last() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -1293,6 +1299,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         lyrics: &english(),
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -1438,6 +1445,7 @@ fn a_record_on_the_release_most_of_its_album_is_on_gives_its_release() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known {
@@ -1651,6 +1659,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -2290,6 +2299,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -2786,6 +2796,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -3048,6 +3059,7 @@ fn run_knowing(
         lyrics: &none_read(),
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known,
@@ -3205,6 +3217,7 @@ fn run_believing(
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe,
         release: &RELEASE,
         known: &Known::default(),
@@ -3415,6 +3428,7 @@ fn run_picked(
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -3562,6 +3576,7 @@ fn run_lyrics(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings)
         lyrics: &lyrics,
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -3937,5 +3952,47 @@ fn a_song_s_doubts_name_its_sources_set_aside_and_a_record_of_another_length() {
             "another length: {}: the audio plays 40 s longer than its record says",
             s.sources[1]
         )]
+    );
+}
+
+#[test]
+fn a_song_is_written_in_the_house_style_but_a_tag_set_by_hand() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(
+        &mut f,
+        Field::Title,
+        &["Night Ferry (feat. Kiri Hoshino) [Live]"],
+        true,
+    );
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let mut s = song(std::slice::from_ref(&key));
+    let styled = style::Style {
+        featured: style::Featured::Artist,
+        versions: style::Versions::Parentheses,
+        context: style::Context::Keep,
+    };
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "TITLE").as_deref(), Some("Night Ferry (Live)"));
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Marlo Venn feat. Kiri Hoshino")
+    );
+    assert!(why(&r, "TITLE").cleaned.contains(&"style"));
+    s.tags = vec![("title".into(), vec!["Night Ferry [Live]".into()])];
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry [Live]"),
+        "set by hand"
     );
 }

@@ -39,5 +39,6 @@ pub mod probe;
 pub mod quality;
 pub mod record;
 pub mod similar;
+pub mod style;
 pub mod tagfile;
 pub mod tags;
