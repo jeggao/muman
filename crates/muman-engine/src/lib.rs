@@ -43,3 +43,4 @@ pub mod render;
 pub mod resolve;
 pub mod rows;
 pub mod state;
+pub mod vet;

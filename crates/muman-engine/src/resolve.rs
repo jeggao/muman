@@ -21,13 +21,16 @@
 //!   off a title, plain over decorated, agreed on over alone; the
 //!   release fields come together from one source so a song's release
 //!   never mixes with another's. Each field's [`tags::Scope`] says which
-//!   it is. A recording's ISRC and MusicBrainz IDs come only from a source that
-//!   titles it as the song is titled, so a record of another recording,
-//!   its names outvoted, lends the song none; where the release's source
-//!   is one and names its recording, its recording IDs are the song's,
-//!   so a release's IDs and its recording's never contradict. A source's
-//!   comment is taken only with `[library] source_comments`: most are a
-//!   store's or an uploader's words, not the song's.
+//!   it is. A source [`crate::vet`] finds names another recording gives
+//!   nothing, no cover nor lyrics either, and one it is unsure of gives
+//!   no release fields and no recording IDs, so a record of another song
+//!   lends the song neither its album nor its IDs; where the release's
+//!   source names its recording, its recording IDs are the song's,
+//!   so a release's IDs and its recording's never contradict. With
+//!   vetting off, a recording's ISRC and MusicBrainz IDs come only from a
+//!   source that titles it as the song is titled, as before it. A
+//!   source's comment is taken only with `[library] source_comments`:
+//!   most are a store's or an uploader's words, not the song's.
 //!
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
@@ -149,6 +152,7 @@ use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
+use crate::vet::{self, Verdict, Vets};
 
 /// The renderer's version for plans in `codec`, raised whenever the bytes
 /// such a plan renders to change, so the songs in it are rendered again.
@@ -817,6 +821,8 @@ pub struct Why {
     pub tags: Vec<TagWhy>,
     /// Why the format is lower than the best, to fit `[library] max_size`.
     pub fit: Option<String>,
+    /// Each source set aside ([`crate::vet`]), as `<key>: <why>`.
+    pub set_aside: Vec<String>,
 }
 
 /// Where a written tag's value came from.
@@ -920,8 +926,14 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         Some(a) => Format::of(a, input.audio),
         None => bail!("no source of this song has audio"),
     };
-    let cover = pick_cover(input);
-    let (mut tags, mut tag_why, artists) = resolve_tags(input, &audio_key, format.mix().is_some());
+    let mut candidates = candidates(input);
+    let vets = vetted(input, &candidates, facts);
+    for (field, all) in &mut candidates {
+        all.retain(|c| vets.gives(c.key, *field));
+    }
+    let cover = pick_cover(input, &vets);
+    let (mut tags, mut tag_why, artists) =
+        resolve_tags(input, &candidates, &audio_key, format.mix().is_some());
     let mut sung: Vec<Lang> = tags
         .iter()
         .find(|(k, _)| k == Field::Language.vorbis())
@@ -941,7 +953,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         });
         sung.push(own);
     }
-    let lyrics = pick_lyrics(input, &audio_key, &sung);
+    let lyrics = pick_lyrics(input, &audio_key, &sung, &vets);
     let get = |field: Field| {
         tags.iter()
             .find(|(k, _)| k == field.vorbis())
@@ -993,8 +1005,51 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             lyrics: lyrics.map(|(_, w)| w),
             tags: tag_why,
             fit: None,
+            set_aside: vets.set_aside(),
         },
     })
+}
+
+/// The vetting of the song's sources ([`crate::vet`]) by their cleaned
+/// structured offers, the tags set by hand and the length of `audio`,
+/// the chosen audio's facts; none while `[tags.clean.structure] vetting`
+/// is off.
+fn vetted(
+    input: &Input<'_>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    audio: &Facts,
+) -> Vets {
+    if !input.clean.is_on(clean::VETTING) {
+        return Vets::default();
+    }
+    let pinned = |key: &SourceKey| {
+        input.song.cover.as_ref() == Some(key)
+            || matches!(&input.song.lyrics, Some(LyricsPin::From(k)) if k == key)
+    };
+    let claims: Vec<vet::Claims<'_>> = input
+        .present()
+        .map(|(_, key, facts)| vet::Claims {
+            key,
+            offers: candidates
+                .iter()
+                .filter_map(|(field, all)| {
+                    let c = all.iter().find(|c| c.key == key && c.offer.structured)?;
+                    Some((*field, c.offer.values.as_slice()))
+                })
+                .collect(),
+            vetted: facts.audio.is_none() && !pinned(key),
+            length_ms: facts.length_ms,
+        })
+        .collect();
+    let hand = input
+        .album
+        .iter()
+        .flat_map(|a| &a.tags)
+        .chain(&input.song.tags)
+        .filter_map(|(name, values)| Some((Field::named(name)?, values.clone())))
+        .collect();
+    let audio_ms = audio.length().map(|s| (s * 1000.0).round() as i64);
+    Vets::of(&claims, &hand, audio_ms)
 }
 
 /// A ranking: smaller is better, compared in order.
@@ -1262,11 +1317,13 @@ fn preferred(prefer: &[Prefer], fit: &Fitting, timed: bool) -> Vec<i64> {
         .collect()
 }
 
-fn pick_cover(input: &Input<'_>) -> Option<(CoverRef, String)> {
+fn pick_cover(input: &Input<'_>, vets: &Vets) -> Option<(CoverRef, String)> {
     let mut order = 0_i64;
     let mut best: Option<(Rank, CoverRef, String)> = None;
     for (_, key, facts) in input.present() {
-        if input.song.cover.as_ref().is_some_and(|pin| pin != key) {
+        if input.song.cover.as_ref().is_some_and(|pin| pin != key)
+            || vets.verdict(key) == Verdict::Other
+        {
             continue;
         }
         for cover in &facts.covers {
@@ -1435,7 +1492,12 @@ fn stated_confidence(stated_ms: i64, audio_ms: f64) -> f64 {
     STATED_MAX * (1.0 - gap / STATED_SPAN_MS).max(0.0)
 }
 
-fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(LyricsRef, String)> {
+fn pick_lyrics(
+    input: &Input<'_>,
+    audio: &SourceKey,
+    sung: &[Lang],
+    vets: &Vets,
+) -> Option<(LyricsRef, String)> {
     let pin = match &input.song.lyrics {
         Some(LyricsPin::None) => return None,
         Some(LyricsPin::From(k)) => Some(k),
@@ -1448,7 +1510,7 @@ fn pick_lyrics(input: &Input<'_>, audio: &SourceKey, sung: &[Lang]) -> Option<(L
         .map_or(0.0, units::ms_of_seconds);
     let mut best: Option<(Rank, LyricsRef, String)> = None;
     for (n, key, facts) in input.present() {
-        if pin.is_some_and(|p| p != key) {
+        if pin.is_some_and(|p| p != key) || vets.verdict(key) == Verdict::Other {
             continue;
         }
         // The audio's own lyrics, and a file of lyrics with no audio to
@@ -1938,37 +2000,39 @@ type Comments = Vec<(String, Vec<String>)>;
 /// A mix is as loud as no source measured, so `mixed` takes no loudness.
 fn resolve_tags(
     input: &Input<'_>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
     audio: &SourceKey,
     mixed: bool,
 ) -> (Comments, Vec<TagWhy>, Vec<String>) {
-    let candidates = candidates(input);
     let mut fields: BTreeMap<Field, Slot> = BTreeMap::new();
     let any = |_: &SourceKey| true;
     for field in Field::of(Scope::Recording).filter(|f| *f != Field::Language) {
-        if let Some(c) = best_offer(&candidates, field, &any) {
+        if let Some(c) = best_offer(candidates, field, &any) {
             fields.insert(field, Slot::of(c));
         }
     }
     let title = fields
         .get(&Field::Title)
         .map(|s| tags::normalized(&s.values));
+    let vetting = input.clean.is_on(clean::VETTING);
     let named_so = |key: &SourceKey| {
-        candidates
-            .get(&Field::Title)
-            .into_iter()
-            .flatten()
-            .filter(|c| c.key == key)
-            .all(|c| Some(tags::normalized(&c.offer.values)) == title)
+        vetting
+            || candidates
+                .get(&Field::Title)
+                .into_iter()
+                .flatten()
+                .filter(|c| c.key == key)
+                .all(|c| Some(tags::normalized(&c.offer.values)) == title)
     };
     for field in Field::of(Scope::RecordingId) {
-        if let Some(c) = best_offer(&candidates, field, &named_so) {
+        if let Some(c) = best_offer(candidates, field, &named_so) {
             fields.insert(field, Slot::of(c));
         }
     }
-    let release = release_of(input, &candidates);
+    let release = release_of(input, candidates);
     if let Some(album) = release {
         for field in Field::of(Scope::Release) {
-            if let Some(c) = best_offer(&candidates, field, &|k| k == album.key) {
+            if let Some(c) = best_offer(candidates, field, &|k| k == album.key) {
                 fields.insert(field, Slot::of(c));
             }
         }
@@ -1987,11 +2051,11 @@ fn resolve_tags(
         }
     }
     if let Some(album) = release.filter(|a| named_so(a.key)) {
-        recording_of_release(&mut fields, &candidates, album.key);
+        recording_of_release(&mut fields, candidates, album.key);
     }
     let writing = writing(&fields);
-    let sung_so = |key: &SourceKey| language_fits(&candidates, key, &writing);
-    if let Some(c) = best_offer(&candidates, Field::Language, &sung_so) {
+    let sung_so = |key: &SourceKey| language_fits(candidates, key, &writing);
+    if let Some(c) = best_offer(candidates, Field::Language, &sung_so) {
         fields.insert(Field::Language, Slot::of(c));
     }
     let heard = |k: &SourceKey| !mixed && k == audio;
@@ -2001,13 +2065,13 @@ fn resolve_tags(
         (Scope::AlbumLoudness, &album_heard),
     ] {
         for field in Field::of(scope) {
-            if let Some(c) = best_offer(&candidates, field, from) {
+            if let Some(c) = best_offer(candidates, field, from) {
                 fields.insert(field, Slot::of(c));
             }
         }
     }
     if !fields.contains_key(&Field::Date)
-        && let Some(c) = best_offer(&candidates, Field::Date, &any)
+        && let Some(c) = best_offer(candidates, Field::Date, &any)
     {
         fields.insert(Field::Date, Slot::of(c));
     }

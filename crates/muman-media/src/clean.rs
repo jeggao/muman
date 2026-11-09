@@ -11,6 +11,12 @@
 //! Lyrics have rules of their own, in [`lyrics`], switched under
 //! `[lyrics.clean.<tier>]` in the same tiers.
 //!
+//! One switch is no rule over a value: [`VETTING`], which lets the
+//! resolver set aside a source that names another recording than the
+//! song's other sources, so a MusicBrainz record of another song lends
+//! the song nothing. It is switched with the rules so the song list
+//! lists it beside them and `status` names it as it names them.
+//!
 //! Offers are cleaned at each resolve, never when read: the raw offers
 //! stay in the state, so changing a rule or a switch needs nothing read
 //! again, and a song whose tags it changes renders again. Tags set in
@@ -189,13 +195,25 @@ const fn rule(name: &'static str, fields: &'static [Field], scope: Scope, edit: 
 /// The rule whose disc number the album's name gave up.
 pub const DISC_IN_ALBUM: &str = "structure.disc_in_album";
 
+/// The switch of the vetting of a song's sources, which sets aside one
+/// that names another recording.
+pub const VETTING: &str = "structure.vetting";
+
+/// The switches that are no rule over a value, after the rules of their
+/// tier.
+const OTHERS: [&str; 1] = [VETTING];
+
+/// Every tag rule's name and every other switch's, `<tier>.<key>`.
+fn switch_names() -> impl Iterator<Item = &'static str> {
+    RULES.iter().map(|r| r.name).chain(OTHERS)
+}
+
 /// Every switch as `(tier, key)`, grouped by tier in the order of
 /// `TIERS`, and within one in the order run.
 pub fn switches() -> impl Iterator<Item = (&'static str, &'static str)> {
     TIERS.iter().flat_map(|(tier, _)| {
-        RULES
-            .iter()
-            .filter_map(|r| r.name.split_once('.'))
+        switch_names()
+            .filter_map(|n| n.split_once('.'))
             .filter(move |(t, _)| t == tier)
     })
 }
@@ -212,12 +230,7 @@ pub struct Settings {
 impl Settings {
     /// Turn the rule named `<tier>.<key>` on or off; whether there is one.
     pub fn set(&mut self, name: &str, on: bool) -> bool {
-        let Some(rule) = RULES
-            .iter()
-            .map(|r| r.name)
-            .chain(lyrics::names())
-            .find(|r| *r == name)
-        else {
+        let Some(rule) = switch_names().chain(lyrics::names()).find(|r| *r == name) else {
             return false;
         };
         if on {
@@ -237,11 +250,7 @@ impl Settings {
     #[must_use]
     pub fn none() -> Self {
         Self {
-            off: RULES
-                .iter()
-                .map(|r| r.name)
-                .chain(lyrics::names())
-                .collect(),
+            off: switch_names().chain(lyrics::names()).collect(),
             unknown: Vec::new(),
         }
     }

@@ -12,8 +12,8 @@ Each field describes either the recording or the release.
 
 - **The recording's fields**, the title, artist, genre, ISRC and the
   recording's and artists' MusicBrainz IDs, each come from whichever
-  source offers it best. The ISRC and the IDs come only from a source
-  that titles the recording as the song is titled.
+  source offers it best. A source [set aside](#sources-set-aside), even
+  in part, gives no ISRC or ID.
 - **The release's fields**, the album, album artist, track, disc, date,
   totals, country and release IDs, all come from the one source whose
   album ranks best. So one release's IDs never mix with another's. Of
@@ -43,6 +43,41 @@ muman and Picard agree on a library. A value its field cannot hold, as
 a date that is none, or a value over 4 KiB, counts as offered by no
 source. Control characters, and characters that reorder text, are
 dropped from every value.
+
+## Sources set aside
+
+A MusicBrainz record comes to a song by a lookup, and a fingerprint
+submitted with another song names that song. So a record's tags count
+only once it agrees with what the song's other sources say: their own
+tags, never a title read off a video, and the tags you set by hand,
+never what the record itself gave the song. muman compares:
+
+- its title, in any two scripts a rule bridges, so a title in kanji
+  against one in Latin letters says nothing either way, read as files
+  write theirs, as `Kiri Hoshino / Night Ferry`; a take or a date in
+  brackets tells nothing apart, and a recording the record calls live is
+  not the files' studio one;
+- its artists, by one whole name in common or a MusicBrainz artist ID:
+  `Marlo Venn Tribute Band` holds `Marlo Venn` but is not that artist;
+- an ISRC or MusicBrainz recording ID another source holds too, which
+  outweighs every name;
+- the length it states, against the audio's;
+- its album and album artist, against those the song's files name.
+
+A record whose title and artists both disagree names another song: it
+gives the song nothing, and neither does the Cover Art Archive's cover
+of its album. One that may name another, as a cover act's record whose
+title agrees but whose artist and album do not, gives no release field
+and no ID. One whose artists share no name with the song's gives no ID,
+though it may give its album, as a concert's record crediting each
+singer. A source with audio of its own, a pinned source and the tags
+you set by hand are never set aside. An AcoustID lookup refuses such a
+recording from the start: one whose title and first artist both
+disagree with the song's is no match.
+
+`muman status` names each source set aside and why, as `set aside
+musicbrainz:…: titled "Night Ferry" by Kiri Hoshino: no title or credit
+in common`. `[tags.clean.structure] vetting = false` turns this off.
 
 ## Cleaning
 
