@@ -290,6 +290,7 @@ mod tests {
         let channel = crate::tags::Offer {
             values: vec!["Orchard Archive".into()],
             structured: false,
+            also: Vec::new(),
         };
         facts.tags.insert(Field::Artist, channel);
         state.facts.insert(upload.clone(), facts);

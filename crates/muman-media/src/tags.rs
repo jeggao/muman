@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/12";
+pub const METHOD: &str = "tags/13";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1189,6 +1189,12 @@ pub struct Offer {
     /// From a field kept for it, rather than read off a title or a
     /// channel name.
     pub structured: bool,
+    /// What the source's other fields offer for it after these, best
+    /// first, as a video's title beside its track name, each holding none
+    /// of its own: kept for what reads a source's every claim, and
+    /// believed by no pick.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Offer>,
 }
 
 pub type Offers = BTreeMap<Field, Offer>;
@@ -1228,9 +1234,25 @@ fn offer(offers: &mut Offers, field: Field, values: Vec<String>, structured: boo
             }
             seen
         });
-    if !values.is_empty() && !offers.contains_key(&field) {
-        offers.insert(field, Offer { values, structured });
+    if values.is_empty() {
+        return;
     }
+    if let Some(first) = offers.get_mut(&field) {
+        if first.values != values && !first.also.iter().any(|o| o.values == values) {
+            first.also.push(Offer {
+                values,
+                structured,
+                also: Vec::new(),
+            });
+        }
+        return;
+    }
+    let offer = Offer {
+        values,
+        structured,
+        also: Vec::new(),
+    };
+    offers.insert(field, offer);
 }
 
 fn one(value: Option<&String>) -> Vec<String> {
@@ -2044,8 +2066,14 @@ mod tests {
             o[&Field::Title],
             Offer {
                 values: vec!["Song".into()],
-                structured: true
-            }
+                structured: true,
+                also: vec![Offer {
+                    values: vec!["Song (Official Video)".into()],
+                    structured: false,
+                    also: Vec::new(),
+                }],
+            },
+            "its video's title kept beside its track name"
         );
         assert_eq!(o[&Field::Artist].values, ["A", "B"]);
         assert_eq!(o[&Field::Album].values, ["Record"]);
@@ -2074,7 +2102,8 @@ mod tests {
             o[&Field::Artist],
             Offer {
                 values: vec!["Lu5ivo".into()],
-                structured: false
+                structured: false,
+                also: Vec::new(),
             }
         );
         assert!(!o.contains_key(&Field::Album));
@@ -2088,6 +2117,7 @@ mod tests {
             Some(Offer {
                 values: vec![code.into()],
                 structured: false,
+                also: Vec::new(),
             })
         };
         assert_eq!(
@@ -2706,8 +2736,8 @@ mod tests {
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/12",
-        "815aefc335b1e111fb94cdc278d512f9ed1488cd4d0c3227c80e2b876e8f3f5d",
+        "tags/13",
+        "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
     );
 
     #[test]

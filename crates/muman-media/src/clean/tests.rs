@@ -4,6 +4,7 @@ fn offer(values: &[&str], structured: bool) -> Offer {
     Offer {
         values: values.iter().map(|v| (*v).to_string()).collect(),
         structured,
+        also: Vec::new(),
     }
 }
 

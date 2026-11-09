@@ -195,6 +195,7 @@ mod tests {
         let channel = Offer {
             values: vec!["Orchard Archive".into()],
             structured: false,
+            also: Vec::new(),
         };
         offers.insert(Field::Artist, channel);
         assert!(o.names(&upload, &offers));
