@@ -29,6 +29,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   source of another and one playing more than 0.5% off the speed of the
   rest, and `[audio.pick.recording] enabled = false` turns it off. A
   song whose recordings are alike in sources keeps its audio.
+- **Lossless audio made from lossy audio no longer wins a tie as
+  lossless.** A lossless file at 48 kHz or lower whose sound stops under
+  19 kHz, as an MP3's does, ranks as lossy among sources scored alike.
+  `muman status` names lossless audio that holds less than it declares:
+  `lossless, cut off at 16.0 kHz as lossy audio is`, `96 kHz,
+  upsampled: nothing above 22.1 kHz`, `24-bit, 16 used`. Nothing is
+  measured again.
 - **A hook runs only once a command has changed the library, after it
   lets go of the home.** `on = "written"`, which ran on each song file
   as it was placed, is refused: it changed a file muman had written,

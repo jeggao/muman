@@ -28,6 +28,28 @@
 //!   them. Float lossless audio holds samples past full scale unclipped, so
 //!   in it only runs just under its own peak count.
 //!
+//! What lossless audio declares, its rate and bits, the measures can
+//! show it does not hold. These flags are read off stored measures, so
+//! none is measured again ([`AudioQuality::flags`]):
+//!
+//! - **Upsampled.** Above 48 kHz, its sound stops at [`UPSAMPLED_HZ`] or
+//!   lower: made from audio at 44.1 or 48 kHz, whose sound stops under
+//!   24 kHz, so its rate holds nothing more. Of one library's hi-res
+//!   files, 10 stopped at 24.5 kHz or lower, 7 of them at 20.5 kHz.
+//! - **Padded.** Its samples use fewer bits than it declares: 24 bits
+//!   holding a 16-bit recording, as 58 files of the same library did.
+//! - **Band-limited.** At 48 kHz or lower, its sound stops under
+//!   [`BAND_LIMITED_HZ`], as lossy audio's does: lossless audio made from
+//!   a lossy file, as 6 of that library's were. Not 20.5 kHz: the filters
+//!   of converters and resamplers stop genuine CDs at 20 to 21.4 kHz, and
+//!   of 170 lossless files that stopped between 19 and 20.5 kHz, most
+//!   were on albums whose other tracks reached their full band.
+//!
+//! A bandwidth is a whole number of bands, each a 256th of the sample
+//! rate, 172 Hz at 44.1 kHz, so it takes values such as 20,327 or
+//! 20,500 Hz alone, and each threshold falls between two of them at every
+//! common rate: a measure never crosses one by a rounding.
+//!
 //! A picture is measured in gray, laid over mid-gray where it is
 //! transparent, as [`flatten`] says, and only up to [`MOST_PIXELS`]: a
 //! larger one is no picture, as one that does not decode is. A picture
@@ -221,6 +243,43 @@ impl AudioQuality {
     pub fn clipping_bucket(&self, cutoffs: &[f64]) -> i64 {
         let reached = cutoffs.iter().filter(|c| self.clipping >= **c).count();
         i64::try_from(reached).unwrap_or(i64::MAX)
+    }
+}
+
+/// The rate above which lossless audio declares more than a CD or a
+/// video holds.
+pub const HI_RES_HZ: u32 = 48_000;
+/// The bandwidth at or under which lossless audio above [`HI_RES_HZ`] was
+/// upsampled: past the 24 kHz audio at 48 kHz holds, so a 48 kHz master
+/// made larger is caught as a CD is.
+pub const UPSAMPLED_HZ: f64 = 24_500.0;
+/// The bandwidth under which lossless audio at [`HI_RES_HZ`] or lower was
+/// made from lossy audio: past the 16 to 17.4 kHz MP3 and AAC at 128
+/// kbit/s reach, under the 20 kHz a converter's own filter stops at.
+pub const BAND_LIMITED_HZ: f64 = 19_000.0;
+
+/// What lossless audio's measures show it holds less of than it declares.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Flags {
+    /// Above [`HI_RES_HZ`], its sound stops at [`UPSAMPLED_HZ`] or lower.
+    pub upsampled: bool,
+    /// Its samples use fewer bits than it declares.
+    pub padded: bool,
+    /// At [`HI_RES_HZ`] or lower, its sound stops under
+    /// [`BAND_LIMITED_HZ`], as lossy audio's does.
+    pub band_limited: bool,
+}
+
+impl AudioQuality {
+    /// What these measures show of lossless audio declaring `rate` and
+    /// `bits` a sample, 0 when unknown.
+    #[must_use]
+    pub fn flags(&self, rate: u32, bits: u32) -> Flags {
+        Flags {
+            upsampled: rate > HI_RES_HZ && self.bandwidth_hz <= UPSAMPLED_HZ,
+            padded: self.bits > 0 && bits.min(MOST_BITS) > self.bits,
+            band_limited: rate <= HI_RES_HZ && self.bandwidth_hz < BAND_LIMITED_HZ,
+        }
     }
 }
 
@@ -1435,6 +1494,27 @@ mod tests {
     #[test]
     fn a_short_buffer_is_no_measure() {
         assert!(image(&[0; 10], 64, 64).is_none());
+    }
+
+    #[test]
+    fn lossless_audio_is_flagged_by_where_its_sound_stops_and_the_bits_it_uses() {
+        let q = |bandwidth_hz: f64, bits: u32| AudioQuality {
+            bandwidth_hz,
+            incoherence: 0.2,
+            clipping: 0.0,
+            bits,
+        };
+        let band = |rate: u32, bands: u32| f64::from(rate) * f64::from(bands) / 256.0;
+        assert_eq!(q(48_000.0, 24).flags(96_000, 24), Flags::default());
+        assert!(q(band(96_000, 65), 24).flags(96_000, 24).upsampled);
+        assert!(!q(band(96_000, 66), 24).flags(96_000, 24).upsampled);
+        assert!(!q(band(48_000, 65), 24).flags(48_000, 24).upsampled);
+        assert!(q(band(44_100, 110), 16).flags(44_100, 16).band_limited);
+        assert!(!q(band(44_100, 111), 16).flags(44_100, 16).band_limited);
+        assert!(!q(band(96_000, 50), 24).flags(96_000, 24).band_limited);
+        assert!(q(22_050.0, 16).flags(44_100, 24).padded);
+        assert!(!q(22_050.0, 24).flags(44_100, 32).padded, "24 at most");
+        assert!(!q(22_050.0, 0).flags(44_100, 24).padded, "unmeasured");
     }
 
     #[test]

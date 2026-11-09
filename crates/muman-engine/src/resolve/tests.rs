@@ -454,6 +454,74 @@ fn a_pin_overrides_the_measures() {
     assert!(r.plan.lyrics.is_none());
 }
 
+/// Facts of lossless audio cut at `khz`, `rate` Hz, declaring `bits` and
+/// using `used`, its revision `rev`.
+fn lossless(rev: &str, khz: f64, rate: u32, bits: u32, used: u32) -> Facts {
+    let mut f = audio("flac", khz);
+    f.rev = rev.into();
+    let a = f.audio.as_mut().unwrap();
+    (a.sample_rate, a.bits) = (rate, bits);
+    a.quality.as_mut().unwrap().bits = used;
+    f
+}
+
+#[test]
+fn lossless_audio_cut_off_as_lossy_audio_is_ranks_as_lossy_and_says_so() {
+    let (flac, mp3) = (manual("cut.flac"), yt("mmmmmmmmmmm"));
+    let mut m = audio("mp3", 16.0);
+    m.rev = "mp3".into();
+    m.audio.as_mut().unwrap().sample_rate = 44_100;
+    let facts = BTreeMap::from([
+        (flac.clone(), lossless("flac", 16.0, 44_100, 16, 16)),
+        (mp3.clone(), m),
+    ]);
+    let alignments = both(&facts, &flac, &mp3, 0, 0.99);
+    let r = run(&song(&[mp3.clone(), flac.clone()]), &facts, &alignments);
+    assert_eq!(
+        r.plan.audio.key, mp3,
+        "scored alike, by the order of sources"
+    );
+    let r = run(&song(&[flac.clone(), mp3]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, flac);
+    assert!(
+        r.why.audio.ends_with(
+            "16.0 kHz, stereo, 0.00% clipped, lossless, cut off at 16.0 kHz as lossy audio is"
+        ),
+        "{}",
+        r.why.audio
+    );
+}
+
+#[test]
+fn upsampled_and_padded_audio_ranks_by_what_it_holds_and_says_so() {
+    let (hires, cd, master) = (
+        manual("hires.flac"),
+        manual("cd.flac"),
+        manual("master.flac"),
+    );
+    let facts = BTreeMap::from([
+        (hires.clone(), lossless("hires", 22.0, 96_000, 24, 16)),
+        (cd.clone(), lossless("cd", 22.0, 44_100, 16, 16)),
+        (master.clone(), lossless("master", 22.0, 44_100, 24, 24)),
+    ]);
+    let alignments = both(&facts, &hires, &cd, 0, 0.99);
+    for sources in [[hires.clone(), cd.clone()], [cd.clone(), hires.clone()]] {
+        let r = run(&song(&sources), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, cd, "the lower rate, the bits alike");
+    }
+    let alignments = both(&facts, &cd, &master, 0, 0.99);
+    for sources in [[cd.clone(), master.clone()], [master.clone(), cd.clone()]] {
+        let r = run(&song(&sources), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, master, "the bits used");
+    }
+    let r = run(&song(&[hires]), &facts, &[]);
+    assert_eq!(
+        r.why.audio,
+        "the only audio, 22.0 kHz, stereo, 0.00% clipped, 96 kHz, upsampled: nothing above \
+         22.0 kHz, 24-bit, 16 used"
+    );
+}
+
 /// A song holding two recordings that align with neither: a live take,
 /// `live.flac`, wider and 231 s long, and the studio cut, an upload of
 /// 200 s, as the song's MusicBrainz record of 200.5 s is, which the

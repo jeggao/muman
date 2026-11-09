@@ -63,7 +63,11 @@ ranked](configuration.md#how-sources-are-ranked)).
 
 muman measures every channel as it is, never mixed into two. Of audio
 scored alike, lossless beats lossy, then the more bits its samples use,
-then the lower sample rate, which an upsample would only waste. A file
+then the lower sample rate, which an upsample would only waste. Lossless
+audio whose sound stops under 19 kHz, as lossy audio's does, was made
+from lossy audio and counts as lossy. `status` names it, a file above
+48 kHz whose sound stops at 24.5 kHz or lower, which was upsampled, and
+one whose samples use fewer bits than it declares. A file
 with several audio streams is made from its best: lossless before
 lossy, then the most channels, then the highest rate.
 
