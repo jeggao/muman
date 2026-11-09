@@ -326,6 +326,7 @@ impl<'a> Resolver<'a> {
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             typography: settings.tags.typography,
             believe: settings.tags.believe,
+            release: &settings.release,
             known: &self.known,
             naming: &self.naming,
             audio: &settings.audio,
