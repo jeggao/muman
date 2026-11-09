@@ -303,10 +303,13 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                              set the tag to settle it"
                         ))?,
                         Doubt::Recording { key, why } => said.warning(format!(
-                            "Holds more than one recording: {song}: {key}: {why}"
+                            "Holds another recording, or one at another speed: {song}: {key}: {why}"
                         ))?,
                         Doubt::Length { key, why } => said.warning(format!(
                             "Plays another length than its record says: {song}: {key}: {why}"
+                        ))?,
+                        Doubt::Reading { key, why } => said.warning(format!(
+                            "A title read more than one way: {song}: {key}: {why}"
                         ))?,
                         Doubt::SetAside { .. } => {}
                     }
@@ -317,7 +320,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             }
             if set_aside > 0 {
                 said.warning(format!(
-                    "A source set aside as another recording's: {set_aside} song(s); \
+                    "A source set aside, in whole or in part: {set_aside} song(s); \
                      `muman status` says why for each, and `muman review` walks them"
                 ))?;
             }
@@ -326,7 +329,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                     .map(|(name, n)| format!("“{name}” on {n}"))
                     .collect();
                 said.warning(format!(
-                    "One name spelled more than one way, no MusicBrainz artist to tell which: {}",
+                    "One name spelled more than one way, no one MusicBrainz artist to tell which: {}",
                     said_so.join(", ")
                 ))?;
             }

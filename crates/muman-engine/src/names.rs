@@ -17,7 +17,9 @@
 //!   joins nothing.
 //! - A group holding an ID is spelled as `[tags] script` says: the
 //!   artist's own name, in its own script; or a name of theirs in Latin
-//!   letters, its primary one first, then one for an English locale. With
+//!   letters, its primary one first, then one no legal name, then one for
+//!   an English locale. A search hint, a misspelling MusicBrainz keeps for
+//!   search alone, neither spells an artist nor joins a name to it. With
 //!   neither known, as most of the group's credits a record gave spell it
 //!   in the script `[tags] script` names, any other script only where none
 //!   spells it so; a credit spelled as another as common stays.
@@ -52,6 +54,9 @@ struct Credit<'a> {
     id: Option<&'a str>,
     /// Whether a MusicBrainz record gave it.
     by_record: bool,
+    /// Whether the song lists it alone as its artists too, as Picard
+    /// writes ARTISTS for one artist, which is spelled with it.
+    listed: bool,
 }
 
 /// The spellings each song of `planned` takes, by its place in the song
@@ -76,11 +81,14 @@ pub fn spell(
         };
         for c in members.iter().map(|&i| &credits[i]) {
             if c.name != name && !ties.contains(&c.name) {
-                out.entry(c.n).or_default().push(Agreed {
-                    field: c.field,
-                    values: vec![name.clone()],
-                    from: from.clone(),
-                });
+                let fields = std::iter::once(c.field).chain(c.listed.then_some(Field::Artists));
+                for field in fields {
+                    out.entry(c.n).or_default().push(Agreed {
+                        field,
+                        values: vec![name.clone()],
+                        from: from.clone(),
+                    });
+                }
             }
         }
     }
@@ -148,7 +156,9 @@ fn credits_of(n: usize, r: &Resolved) -> Vec<Credit<'_>> {
             let [name] = values else {
                 return None;
             };
-            if matches!(from, "song.tags" | "album.tags") || similar::names_in(name).len() != 1 {
+            // An album artist taken from an artist set by hand is too.
+            let by_hand = from.ends_with("song.tags") || from.ends_with("album.tags");
+            if by_hand || similar::names_in(name).len() != 1 {
                 return None;
             }
             let id = match tag(ids).map(|(v, _)| v) {
@@ -158,12 +168,15 @@ fn credits_of(n: usize, r: &Resolved) -> Vec<Credit<'_>> {
             let by_record = SourceKey::parse(from).is_ok_and(|k| {
                 matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ)
             });
+            let listed = field == Field::Artist
+                && tag(Field::Artists).is_some_and(|(v, _)| matches!(v, [one] if one == name));
             Some(Credit {
                 n,
                 field,
                 name,
                 id,
                 by_record,
+                listed,
             })
         })
         .collect()
@@ -183,7 +196,11 @@ fn groups<'c>(
         }
     }
     for (id, artist) in known {
-        let names = std::iter::once(&artist.name).chain(artist.aliases.iter().map(|a| &a.name));
+        let names = std::iter::once(&artist.name).chain(
+            (artist.aliases.iter())
+                .filter(|a| !is_hint(a))
+                .map(|a| &a.name),
+        );
         for name in names.filter(|n| !n.is_empty()) {
             ids_of.entry(similar::fold(name)).or_default().insert(*id);
         }
@@ -202,6 +219,12 @@ fn groups<'c>(
     (groups, left)
 }
 
+/// Whether `alias` is a search hint, a misspelling MusicBrainz keeps for
+/// search alone, which neither spells an artist nor joins a name to it.
+fn is_hint(alias: &crate::record::Alias) -> bool {
+    alias.kind.as_deref() == Some("Search hint")
+}
+
 /// How the group of artist `id` is spelled, why, and the spellings as
 /// common among its records, which a credit keeps; none where no
 /// spelling is known.
@@ -217,10 +240,11 @@ fn spelled<'a>(
             let latin = artist
                 .aliases
                 .iter()
-                .filter(|a| !a.ended && latin_only(&a.name))
+                .filter(|a| !a.ended && !is_hint(a) && latin_only(&a.name))
                 .min_by_key(|a| {
                     let english = a.locale.as_deref().is_some_and(|l| l.starts_with("en"));
-                    (!a.primary, !english, a.name.as_str())
+                    let legal = a.kind.as_deref() == Some("Legal name");
+                    (!a.primary, legal, !english, a.name.as_str())
                 });
             if let Some(alias) = latin {
                 let why = format!("musicbrainz artist {id}'s name in Latin letters");

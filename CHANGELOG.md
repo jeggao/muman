@@ -9,6 +9,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **`muman check --calibrate` counts how well vetting's evidence tells
+  records apart on your library**: for records of a song's recording, by
+  your files' IDs or the song's own AcoustID lookup, and records of
+  other songs sharing a title or a credit, how often a title, credits,
+  length, album and album unit agreed, each counted only where it did
+  not choose the record, with the points those counts suggest against
+  saying nothing, alone and fitted together, beside the ones vetting
+  gives. It changes nothing.
+
+- **`[tags] featured`, `versions` and `context` set a house style** for
+  titles and artists: a featured artist moved into the title or the
+  credit, versions written in one kind of bracket, and a note on where a
+  song is from dropped. Each keeps values as they are until set.
+
 - **`muman review` walks each song in doubt and settles it.** On a
   terminal, each song whose picks `muman check` finds in doubt is shown
   with why, and you change its tags and pins, pin it to one of the
@@ -18,8 +32,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 - **`muman check` lists picks in doubt**: the songs holding a source set
   aside, each song holding two recordings or playing 30 s or more from
-  what a record it believes says, and each name spelled two ways that
-  no MusicBrainz artist ID tells apart.
+  what a record it believes says, each upload whose title reads as a
+  title and artist more than one way with nothing telling which, and
+  each name spelled two ways that no MusicBrainz artist ID tells apart.
 
 - **`[[tags.from]]` says what one torrent's or one channel's sources
   are not believed for**: fields to leave out, `credits = false` to
@@ -60,7 +75,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track it is there, rather than one on the album and another on a
   compilation; `original` puts each song on the first album its
   recording came out on, and `avoid` names kinds of release, as
-  `compilation`, taken only where nothing else would be. `muman status`
+  `compilation`, taken only where nothing else would be. An album most
+  of whose songs are on one release already stays on it. `muman status`
   names the release a song was moved to. Songs looked up before keep
   their release until `muman sync --rematch`.
 
@@ -183,8 +199,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   album's release is believed though its title is spelled otherwise, and
   one on another release gives no album, track, date or ID unless its
   album is the files' own or the files name none, so a song a box set
-  or a compilation claimed stays on the album it came in. `muman status`
-  names the release among the reasons a record is set aside.
+  or a compilation claimed stays on the album it came in, and counts
+  against the record, by points `muman check --calibrate` fitted on one
+  library. `muman status` names the release among the reasons a record
+  is set aside.
 - **A title cut short agrees with the title it is the start of**, three
   words or more, so a file's title cut by a tag's length no longer sets
   the song's MusicBrainz record aside.

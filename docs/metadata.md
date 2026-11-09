@@ -87,7 +87,9 @@ name folded, as `The Marlo Venn` folds as `MARLO VENN` does, never by
 names merely alike; a name two artists share joins neither. Each group
 holding an ID is written one way, as `[tags] script` says: `original`,
 the artist's own name in its own script; `latin`, a name of theirs in
-Latin letters where MusicBrainz knows one. With neither known, the
+Latin letters where MusicBrainz knows one, an artist name before a
+legal name; a search hint, a misspelling MusicBrainz keeps for search,
+neither spells an artist nor joins a name to it. With neither known, the
 spelling most of the group's records credit in that script is written,
 one in another script only where none spells it so, and a song already
 spelled as another as common keeps it. A group with no
@@ -143,6 +145,28 @@ song whose audio plays 30 s or more from what a record it believes
 says, and each name spelled two ways that no artist ID tells apart.
 `[tags.clean.structure] vetting = false` turns this off.
 
+The points vetting gives each kind of evidence were set by hand, but an
+album's and its unit's, which `check --calibrate` fitted together on one
+library: a record on another release than its album's counts against
+it, as one in twenty of its songs' own records were and two in three of
+other songs'. `muman check --calibrate` counts, on your library, how
+often each agreed,
+disagreed or said nothing for records of a song's recording and for
+records of another, and prints the points those counts suggest beside
+the ones vetting gives; it changes nothing. A record is the song's where
+your files carry its recording ID, or its ISRC and no ID, or where an
+AcoustID lookup of the song's own audio found it; another where your
+files carry other IDs, or where another song lists it and shares a title
+or a credit with the song. Each counts only for what never chose it: the
+lookup ranks by title, credits and length, so its find counts for the
+album and album unit alone, or for all but length where it was the only
+candidate, which only lookups made since this version keep (`muman sync
+--rematch` asks again); a record chosen for its title never counts for
+titles. Points are counted against saying nothing, which vetting counts
+as nought, and the kinds every label counts are fitted together too,
+printed as `with`, so two that tend to agree at once, as an album and
+its unit, are not counted twice: those are the points to take.
+
 ## Which release
 
 A MusicBrainz record holds one release of its recording, the one
@@ -163,11 +187,16 @@ on, and `[release] prefer` chooses among them:
 
 A release of a kind `[release] avoid` names, as `"compilation"`, is
 chosen only where no other would be, and a song's `release` key pins
-it to one release of its recording, as `muman review` writes it. A song moved takes the album,
-date, country, types, track and disc numbers and IDs its place on the
-release has, and the label, catalog number and barcode the album's
-other songs on it have; its record's own release fields are left out.
-A song whose album you set is left where it is. Songs looked up before
+it to one release of its recording, as `muman review` writes it. An
+album three in five of whose songs are on one release already stays on
+it, a stray joining it where its recording is on it, unless another
+release holds more of its songs or `avoid` names the kind it is on. A song moved takes
+the album, date, country, types, track and disc numbers and IDs its
+place on the release has, and the label, catalog number and barcode the
+album's other songs on it have; its record's own release fields are
+left out, but for the album artist and the first release's date where
+the release is of the record's own group. A song whose album you set,
+or whose record vetting set aside, is left where it is. Songs looked up before
 this muman kept no such recordings until `muman sync --rematch` asks
 again. `muman status` names the release a song was moved to and why,
 as `release  musicbrainz:…: on "Rooms of Salt", the release 11 of its
@@ -210,6 +239,41 @@ a tag you set names it, one releasing its own music; a date from anyone
 else's upload, or from an upload only its own channel credits, is left
 out.
 
+## Titles read off a video
+
+An upload names its song in one line, `Marlo Venn - Night Ferry`,
+`Night Ferry / Marlo Venn` or `「夜の船」Marlo Venn`. Cleaning splits it
+by convention; beside that, every reading its separators allow is
+weighed by what the song's other sources and the tags you set say: a
+side they credit, the channel's name, a quoted side, a side naming a
+version or a title they give. Where no reading leads the next clearly,
+`muman check` names the song, as `A title read more than one way`, and
+`muman review` walks it; a title or artist you set, or a
+`[[tags.from]]` title pattern for the channel, settles it.
+
+## House style
+
+Sources write a featured artist, a version and where a song is from
+each their own way: `Night Ferry (feat. Kiri Hoshino)` beside
+`Marlo Venn feat. Kiri Hoshino`, `[Live]` beside `(Live)`. Three
+`[tags]` keys write each one way once a song's values are chosen:
+
+- `featured`: `title` moves a featured artist the credit names into the
+  title, as `(feat. Kiri Hoshino)`; `artist` moves one the title names
+  into the credit, after `feat.`. A name already there is not written
+  twice, one featured list takes them all, and `(With You)` is a
+  subtitle, featuring no one.
+- `versions`: `parentheses` or `brackets` writes each version, as
+  `(Live)` or `(Radio Edit)`, in the one kind.
+- `context`: `drop` takes out a note on where the song is from, as
+  `(From "Harbor Lights")` or `(from the film Harbor Lights)`, though
+  not a subtitle as `(From Me to You)`.
+
+`keep` leaves values as their sources wrote them, and a title nothing
+changes is left as written. A tag set by hand is never restyled, and no
+featured artist moves where you set the title or the artist; `muman
+status` names `style` among what changed a value.
+
 ## Overrides by torrent or channel
 
 One rip tags every file the same wrong way, and one channel titles
@@ -230,10 +294,12 @@ title = "%artist% - %title% (%dummy%)"
 ```
 
 `drop` leaves out the fields named; `credits = false` leaves out the
-artist, artists and album artist; `title` reads each title by a
-pattern of `%title%`, `%artist%`, `%album%`, `%track%` and `%dummy%`,
-a stretch read as nothing, each part taken as a field of the source's
-own. A title the pattern does not fit is left as it is.
+artist, artists and album artist; then `title` reads each title, as it
+came, by a pattern of `%title%`, `%artist%`, `%album%`, `%track%` and
+`%dummy%`, a stretch read as nothing, each part taken as a field of the
+source's own, so an artist it reads stands though `credits = false`
+left out the source's own. A title the pattern does not fit is left as
+it is.
 
 ## Cleaning
 

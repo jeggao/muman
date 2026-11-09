@@ -1,5 +1,7 @@
 //! A value read as its parts: a title as its core and what decorates
-//! it, each decoration with what it is.
+//! it, each decoration with what it is; a credit as its names and what
+//! joins them; an album as its name and the disc it says it is; a date
+//! as its year, month and day.
 //!
 //! Comparing, cleaning and writing a value each need to know which of
 //! its words name the song and which say something about it: `Lantern
@@ -18,8 +20,20 @@
 //! a soft version naming another master or cut, as `Remastered`
 //! ([`similar::SOFT_VERSIONS`]); or something else, as a subtitle. A
 //! title of decorations alone takes the first that is no packaging as
-//! its core. Every part's text is found in the title as written, in
-//! order: nothing is added or respelled.
+//! its core.
+//!
+//! A credit's names are what its joiners part ([`similar::JOINERS`]): a
+//! comma, `&`, `/`, `;`, `×` and their CJK forms, and `feat.`, `ft.`,
+//! `featuring`, `vs.`, `with`, `and`, `x` or a spaced `-` between words;
+//! the names after the first `feat.`, `ft.` or `featuring` are featured.
+//!
+//! An album's disc is one its name closes on, as `Live (CD2)`, `Live -
+//! Disc 2` or `Live CD 2` ([`crate::clean::disc_in`]); its name is what
+//! comes before it. A date is `YYYY`, `YYYY-MM` or `YYYY-MM-DD`, as a
+//! tag holds one once read.
+//!
+//! Every part's text is found in the value as written, in order: nothing
+//! is added or respelled.
 
 use crate::similar;
 
@@ -58,7 +72,9 @@ pub struct Title {
 }
 
 /// The words that open a featured artist's decoration.
-const FEATURING: [&str; 4] = ["feat", "ft", "featuring", "with"];
+/// A title's decoration opening with one of these features an artist;
+/// `(With You)` is a subtitle, so `with` is no such word here.
+const FEATURING: [&str; 3] = ["feat", "ft", "featuring"];
 
 impl Decoration {
     fn new(text: &str, brackets: Option<(char, char)>) -> Self {
@@ -89,6 +105,133 @@ impl Decoration {
             kind,
         }
     }
+}
+
+/// A credit as its parts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Credit<'a> {
+    /// Each name, trimmed, in the order written.
+    pub names: Vec<&'a str>,
+    /// What joins each name to the one before it, trimmed: one fewer than
+    /// the names.
+    pub joiners: Vec<&'a str>,
+    /// Where the featured names begin, after `feat.`; none where the
+    /// credit features no one.
+    pub featured: Option<usize>,
+    /// Where in the credit, in bytes, the joiner opening the featured
+    /// names begins, so the lead credit is what comes before it.
+    pub featured_at: Option<usize>,
+}
+
+/// `s` read as a credit's parts, as the module says.
+#[must_use]
+pub fn credit(s: &str) -> Credit<'_> {
+    let mut parts = Credit {
+        names: Vec::new(),
+        joiners: Vec::new(),
+        featured: None,
+        featured_at: None,
+    };
+    let mut joined = None;
+    let mut start = 0;
+    for m in similar::JOINERS.find_iter(s) {
+        push(&mut parts, &mut joined, s[start..m.start()].trim());
+        joined = Some((m.as_str().trim(), m.start()));
+        start = m.end();
+    }
+    push(&mut parts, &mut joined, s[start..].trim());
+    parts
+}
+
+/// `name` added to `parts`, the last joiner met, `joined`, joining it to
+/// the name before; an empty name, between two joiners, adds nothing.
+fn push<'a>(parts: &mut Credit<'a>, joined: &mut Option<(&'a str, usize)>, name: &'a str) {
+    if name.is_empty() {
+        return;
+    }
+    if !parts.names.is_empty() {
+        let (before, at) = joined.unwrap_or_default();
+        if parts.featured.is_none() && FEATURING.iter().any(|f| starts_word(before, f)) {
+            parts.featured = Some(parts.names.len());
+            parts.featured_at = Some(at);
+        }
+        parts.joiners.push(before);
+    }
+    *joined = None;
+    parts.names.push(name);
+}
+
+/// Whether `joiner` is the word `word`, case and a closing dot aside.
+fn starts_word(joiner: &str, word: &str) -> bool {
+    joiner.trim_end_matches('.').eq_ignore_ascii_case(word)
+}
+
+/// An album as its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Album<'a> {
+    /// Its name, the disc it closes on left out, trimmed.
+    pub name: &'a str,
+    /// The disc its name says it is.
+    pub disc: Option<u32>,
+}
+
+/// `s` read as an album's parts, as the module says.
+#[must_use]
+pub fn album(s: &str) -> Album<'_> {
+    match crate::clean::disc_in(s) {
+        Some((at, disc)) => Album {
+            name: s[..at].trim(),
+            disc: Some(disc),
+        },
+        None => Album {
+            name: s.trim(),
+            disc: None,
+        },
+    }
+}
+
+/// A date as its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Date {
+    pub year: u16,
+    pub month: Option<u8>,
+    pub day: Option<u8>,
+}
+
+/// `text`, where it is `digits` digits.
+fn number(text: &str, digits: usize) -> Option<&str> {
+    (text.len() == digits && text.chars().all(|c| c.is_ascii_digit())).then_some(text)
+}
+
+/// `s` read as a date's parts; none where it is no `YYYY`, `YYYY-MM` or
+/// `YYYY-MM-DD`, or names no month or day there is.
+#[must_use]
+pub fn date(s: &str) -> Option<Date> {
+    let mut fields = s.trim().split('-');
+    let year = number(fields.next()?, 4)?.parse().ok()?;
+    let month = match fields.next() {
+        None => None,
+        Some(m) => Some(
+            number(m, 2)?
+                .parse::<u8>()
+                .ok()
+                .filter(|m| (1..=12).contains(m))?,
+        ),
+    };
+    let day = match fields.next() {
+        None => None,
+        Some(d) => Some(
+            number(d, 2)?
+                .parse::<u8>()
+                .ok()
+                .filter(|d| (1..=31).contains(d))?,
+        ),
+    };
+    (fields.next().is_none() && (day.is_none() || month.is_some())).then_some(Date {
+        year,
+        month,
+        day,
+    })
 }
 
 /// `s` read as a title's parts, as the module says.

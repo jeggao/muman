@@ -281,18 +281,22 @@ pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Optio
     })
 }
 
-/// The first value of `f` a resolved song writes, unless a MusicBrainz
-/// record gave it, then the one its audio's source offers: a record
-/// found by the last lookup would hold the next to itself, so asking
-/// again could only ever refuse the right recording.
+/// The first value of `f` a resolved song writes, where it is its own
+/// sources' or set by hand; else, as a MusicBrainz record or the songs
+/// agreeing on a spelling gave it, the one its audio's source offers: a
+/// record found by the last lookup would hold the next to itself, so
+/// asking again could only ever refuse the right recording.
 fn own_tag(r: &Resolved, audio: &Facts, f: Field) -> Option<String> {
-    let from_record = r.why.tags.iter().any(|w| {
-        w.key == f.vorbis()
-            && SourceKey::parse(&w.from).is_ok_and(
-                |k| matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ),
-            )
+    let own = r.why.tags.iter().find(|w| w.key == f.vorbis()).is_none_or(|w| {
+        // A value written in the house style is the style's, not a source's.
+        let styled = w.cleaned.contains(&"style");
+        let sourced = matches!(w.from.as_str(), "song.tags" | "album.tags")
+            || SourceKey::parse(&w.from).is_ok_and(
+                |k| !matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ),
+            );
+        !styled && sourced
     });
-    if !from_record {
+    if own {
         return tag_of(r, f);
     }
     audio

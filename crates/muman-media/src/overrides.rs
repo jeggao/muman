@@ -7,13 +7,15 @@
 //!
 //! An override names a torrent by its info hash, or a channel by the
 //! name an upload credits it with where it names no artist of its own,
-//! case aside. It applies to each source it names before cleaning: its
-//! title is read by `title`, a pattern of `%title%`, `%artist%`,
-//! `%album%`, `%track%` and `%dummy%` for a stretch read as nothing, as
-//! `%artist% - %title%` or `%track%. %title% (%dummy%)`, each stretch
-//! taken as the source offering it in its own field; then `drop`'s
-//! fields go, and with `credits = false` its artist, artists and album
-//! artist. A title the pattern does not fit is left as it is.
+//! case aside. It applies to each source it names before cleaning:
+//! `drop`'s fields go, and with `credits = false` its artist, artists and
+//! album artist; then its title, as it came, is read by `title`, a
+//! pattern of `%title%`, `%artist%`, `%album%`, `%track%` and `%dummy%`
+//! for a stretch read as nothing, as `%artist% - %title%` or `%track%.
+//! %title% (%dummy%)`, each stretch taken as the source offering it in
+//! its own field, so an artist a pattern reads stands though the source's
+//! own credits were left out. A title the pattern does not fit is left as
+//! it is.
 
 use regex::Regex;
 

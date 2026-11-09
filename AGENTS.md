@@ -59,7 +59,7 @@ src/
   */tests.rs        a module's tests, when they outgrow it
 crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
   album.rs, release.rs   the songs of one album made to agree: one release, spelling, cover
-  names.rs          one spelling for each artist across the library
+  names.rs, calibrate.rs   one spelling per artist across the library; check --calibrate
   state.rs          the state: files written, measures, comparisons; state/db.rs, state.db, the
                     store it moves into: schema, transactions; state/json.rs, an old state.json, read once
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches
@@ -98,7 +98,8 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   detect.rs         values that say nothing of a song: placeholders and watermarks
   genres.rs         the genres a MusicBrainz record gives, spelled as genres/spelled.txt says
   overrides.rs      [[tags.from]]: what one torrent's or channel's sources are not believed for
-  parts.rs          a value read as its parts: a title's core and each decoration's kind
+  parts.rs, style.rs   values read as parts: titles, credits, albums, dates; the house style
+  readings.rs       the ways a video's title reads as a title and artist, and whether one is clear
   lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names, through the path template

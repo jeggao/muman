@@ -325,6 +325,7 @@ impl<'a> Resolver<'a> {
             lyrics: &settings.lyrics,
             clean: settings.clean.as_ref().unwrap_or(&self.manifest.clean),
             typography: settings.tags.typography,
+            style: settings.tags.style(),
             believe: settings.tags.believe,
             release: &settings.release,
             known: &self.known,
@@ -352,11 +353,12 @@ fn agree_on_albums(
     state: &State,
     on_disk: Option<&BTreeSet<SourceKey>>,
 ) {
+    let lookups = state.acoustid_lookups();
     let mut picks: BTreeMap<usize, crate::album::Pick> = crate::release::choose(
         planned,
         &manifest.songs,
         &state.facts,
-        &|song, record| state.candidates(&song.sources, record),
+        &|song, record| State::candidates_in(&lookups, &song.sources, record),
         &resolver.settings.release,
     )
     .into_iter()

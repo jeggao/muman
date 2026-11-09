@@ -19,13 +19,14 @@ use muman_core::{
 };
 use muman_media::{
     align, analysis, chapters, clean, codec, cues, detect, facts, ffmpeg, integrity, loudness,
-    lyrics, naming, ogg, picture, quality, record, similar, tags,
+    lyrics, naming, ogg, parts, picture, quality, readings, record, similar, style, tags,
 };
 use muman_net::{acoustid, coverart, download, lrclib, music, musicbrainz, ytdlp_log};
 
 pub mod acquire;
 pub mod album;
 pub mod artifact;
+pub mod calibrate;
 pub mod diagnose;
 pub mod due;
 pub mod fit;

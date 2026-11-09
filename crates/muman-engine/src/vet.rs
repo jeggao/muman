@@ -29,7 +29,7 @@
 //! | Its credits against the others', a name or an artist ID shared | [`CREDIT_SHARED`] | [`NO_CREDIT_SHARED`] |
 //! | The length it states against the chosen audio's | [`LENGTH_CLOSE`] | [`LENGTH_FAR`] |
 //! | Its album against the album the song's files name | [`RELEASE_ALIKE`] | [`RELEASE_APART`] |
-//! | Its release group against its album's ([`crate::album::unit_groups`]) | [`UNIT_ALIKE`] | nothing, but unsure |
+//! | Its release group against its album's ([`crate::album::unit_groups`]) | [`UNIT_ALIKE`] | [`UNIT_APART`], and unsure |
 //!
 //! Titles and albums are compared as [`similar::titles_agree`] reads
 //! them, as files write them, so one no rule compares, as kanji with
@@ -106,17 +106,25 @@ pub const LENGTH_FAR: i64 = -3;
 /// An album alike to one the song's files name: with a credit shared,
 /// enough to outweigh a title told apart only by a version or a number
 /// the files leave out, as a live album's track the files title plainly.
-pub const RELEASE_ALIKE: i64 = 3;
-/// An album, and an album artist, apart from those the song's files name.
-pub const RELEASE_APART: i64 = -2;
+/// This and the album unit's points are what `check --calibrate` fitted
+/// together on one library ([`crate::calibrate`]).
+pub const RELEASE_ALIKE: i64 = 5;
+/// An album, and an album artist, apart from those the song's files name:
+/// nothing once the album unit is weighed, which on one library told
+/// another recording as well alone; with credits that disagree too, the
+/// source is unsure.
+pub const RELEASE_APART: i64 = 0;
 /// The release group the song's album unit is on, the songs of one
 /// folder and album or of one `[[album]]` ([`crate::album::unit_groups`]):
-/// enough to outweigh a title that disagrees, as one a tag cut short or
-/// spelled a number in, but not a title and credits that both do. One on
-/// another release group gives no release field, unless its album is the
-/// files' own, as a concert's video beside its album; it costs nothing,
-/// since the recording may be on both.
-pub const UNIT_ALIKE: i64 = 6;
+/// with the files' album, enough to outweigh a title that disagrees, as
+/// one a tag cut short or spelled a number in, but not a title and
+/// credits that both do.
+pub const UNIT_ALIKE: i64 = 4;
+/// Another release group than the album unit's: on one library one in
+/// twenty of its songs' own records against two in three of other songs'.
+/// It also gives no release field, unless its album is the files' own,
+/// as a concert's video beside its album.
+pub const UNIT_APART: i64 = -7;
 /// The points at or under which a source may name another recording.
 pub const UNSURE_AT: i64 = -3;
 /// The points at or under which a source names another recording.
@@ -197,7 +205,7 @@ impl Evidence {
             + side(self.credits, CREDIT_SHARED, NO_CREDIT_SHARED)
             + side(self.length, LENGTH_CLOSE, LENGTH_FAR)
             + side(self.release, RELEASE_ALIKE, RELEASE_APART)
-            + side(self.unit, UNIT_ALIKE, 0)
+            + side(self.unit, UNIT_ALIKE, UNIT_APART)
     }
 
     fn verdict(self) -> Verdict {
@@ -270,9 +278,10 @@ impl Evidence {
     }
 }
 
-/// The vetting of each of a song's sources set aside, even in part.
+/// The vetting of each of a song's sources set aside, even in part, and
+/// the evidence each vetted source was weighed by.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Vets(BTreeMap<SourceKey, Vet>);
+pub struct Vets(BTreeMap<SourceKey, Vet>, BTreeMap<SourceKey, Evidence>);
 
 /// What vetting made of one source set aside.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,13 +310,14 @@ impl Vets {
         audio_ms: Option<i64>,
         units: &[Option<&str>],
     ) -> Self {
-        let mut vets = BTreeMap::new();
+        let (mut vets, mut weighed) = (BTreeMap::new(), BTreeMap::new());
         for s in sources
             .iter()
             .filter(|s| s.vetted && (!s.offers.is_empty() || s.length_ms.is_some()))
         {
             let others: Vec<&Claims<'_>> = sources.iter().filter(|o| o.key != s.key).collect();
             let e = evidence(s, &others, hand, audio_ms, units);
+            weighed.insert(s.key.clone(), e);
             let verdict = e.verdict();
             let ids = verdict == Verdict::Same && e.credits != Some(false);
             let credits = ids || (verdict == Verdict::Same && e.release == Some(true));
@@ -322,9 +332,25 @@ impl Vets {
                 vets.insert(s.key.clone(), vet);
             }
         }
-        let mut vets = Self(vets);
+        let mut vets = Self(vets, weighed);
         vets.covers(sources);
         vets
+    }
+
+    /// Each vetted source and how each kind of evidence compared for it,
+    /// by name, an identifier in common aside: `Some(true)` agreed,
+    /// `Some(false)` disagreed, `None` said nothing.
+    pub fn weighed(&self) -> impl Iterator<Item = (&SourceKey, [(&'static str, Option<bool>); 5])> {
+        self.1.iter().map(|(key, e)| {
+            let sides = [
+                ("title", e.title),
+                ("credits", e.credits),
+                ("length", e.length),
+                ("release", e.release),
+                ("unit", e.unit),
+            ];
+            (key, sides)
+        })
     }
 
     /// Set aside the vetted Cover Art Archive front of each release group
@@ -397,13 +423,14 @@ impl Vets {
     pub fn set_aside(&self) -> Vec<String> {
         self.aside()
             .into_iter()
-            .map(|(key, why)| format!("{key}: {why}"))
+            .map(|(key, why, _)| format!("{key}: {why}"))
             .collect()
     }
 
-    /// Each source set aside, and what of it and why.
+    /// Each source set aside, what of it and why, and whether it still
+    /// gives its release.
     #[must_use]
-    pub fn aside(&self) -> Vec<(&SourceKey, String)> {
+    pub fn aside(&self) -> Vec<(&SourceKey, String, bool)> {
         self.0
             .iter()
             .map(|(key, vet)| {
@@ -412,7 +439,7 @@ impl Vets {
                     Verdict::Unsure => format!("its release and IDs, {}", vet.why),
                     Verdict::Other => vet.why.clone(),
                 };
-                (key, why)
+                (key, why, vet.verdict == Verdict::Same)
             })
             .collect()
     }
@@ -723,9 +750,9 @@ mod tests {
             (Field::Album, "Rooms of Salt"),
             (Field::MusicBrainzReleaseGroupId, GROUP),
         ];
-        let alone = vet(&cut_short, Some(241_000), &FILE, &[]);
+        let alone = vet(&cut_short, None, &FILE, &[]);
         assert_eq!(alone.verdict(&record()), Verdict::Unsure);
-        let held = vet_in(&cut_short, Some(241_000), &FILE, &[], &[Some(GROUP)]);
+        let held = vet_in(&cut_short, None, &FILE, &[], &[Some(GROUP)]);
         assert_eq!(held.verdict(&record()), Verdict::Same, "its unit's release");
 
         let named = [

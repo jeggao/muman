@@ -27,6 +27,7 @@ fn defaults<'a>(song: &'a Song, facts: &'a BTreeMap<SourceKey, Facts>) -> Input<
         lyrics: &ENGLISH,
         clean: &CLEAN,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::default(),
         release: &RELEASE,
         known: &KNOWN,
@@ -240,6 +241,7 @@ fn run_reading(
         lyrics,
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -342,6 +344,7 @@ fn lyrics_name_the_cleaning_they_are_written_by() {
         lyrics: &english(),
         clean: &off,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -800,6 +803,7 @@ fn a_switched_off_rule_leaves_the_offer_as_it_came() {
         lyrics: &none_read(),
         clean: &clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -872,6 +876,7 @@ fn an_artist_named_for_another_album_of_its_owner_is_the_owner() {
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known {
@@ -983,6 +988,7 @@ fn hand_set_tags_and_the_album_win_last() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -1293,6 +1299,7 @@ fn run_clean(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings) 
         lyrics: &english(),
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -1438,6 +1445,7 @@ fn a_record_on_the_release_most_of_its_album_is_on_gives_its_release() {
         lyrics: &english(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known {
@@ -1651,6 +1659,7 @@ fn a_song_without_audio_on_disk_is_an_error() {
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -2290,6 +2299,7 @@ fn a_source_s_comment_is_written_only_when_asked_and_one_set_by_hand_always() {
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -2786,6 +2796,7 @@ fn an_album_s_edition_gives_the_song_its_release_whole_and_agreed_values_go_over
             lyrics: &english(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -3048,6 +3059,7 @@ fn run_knowing(
         lyrics: &none_read(),
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known,
@@ -3205,6 +3217,7 @@ fn run_believing(
         lyrics: &none_read(),
         clean: &Settings::default(),
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe,
         release: &RELEASE,
         known: &Known::default(),
@@ -3415,6 +3428,7 @@ fn run_picked(
             lyrics: &none_read(),
             clean: &Settings::default(),
             typography: clean::Typography::default(),
+            style: style::Style::default(),
             believe: clean::Believe::Sources,
             release: &RELEASE,
             known: &Known::default(),
@@ -3562,6 +3576,7 @@ fn run_lyrics(song: &Song, facts: &BTreeMap<SourceKey, Facts>, clean: &Settings)
         lyrics: &lyrics,
         clean,
         typography: clean::Typography::default(),
+        style: style::Style::default(),
         believe: clean::Believe::Sources,
         release: &RELEASE,
         known: &Known::default(),
@@ -3886,19 +3901,19 @@ fn a_torrent_s_override_drops_its_fields_and_reads_its_titles() {
     })
     .unwrap();
     assert_eq!(get(&r, "TITLE").as_deref(), Some("Night Ferry"));
-    assert_eq!(get(&r, "ARTIST"), None, "credits = false");
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Marlo Venn"),
+        "read off its title, its own credit left out"
+    );
     assert_eq!(get(&r, "WORK"), None);
-    clean.from[0].credits = true;
+    clean.from[0].title = None;
     let r = resolve(&Input {
         clean: &clean,
         ..defaults(&s, &facts)
     })
     .unwrap();
-    assert_eq!(
-        get(&r, "ARTIST").as_deref(),
-        Some("Marlo Venn"),
-        "read off its title"
-    );
+    assert_eq!(get(&r, "ARTIST"), None, "credits = false");
 }
 
 #[test]
@@ -3937,5 +3952,258 @@ fn a_song_s_doubts_name_its_sources_set_aside_and_a_record_of_another_length() {
             "another length: {}: the audio plays 40 s longer than its record says",
             s.sources[1]
         )]
+    );
+}
+
+#[test]
+fn a_song_is_written_in_the_house_style_but_a_tag_set_by_hand() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(
+        &mut f,
+        Field::Title,
+        &["Night Ferry (feat. Kiri Hoshino) [Live]"],
+        true,
+    );
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let mut s = song(std::slice::from_ref(&key));
+    let styled = style::Style {
+        featured: style::Featured::Artist,
+        versions: style::Versions::Parentheses,
+        context: style::Context::Keep,
+    };
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "TITLE").as_deref(), Some("Night Ferry (Live)"));
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Marlo Venn feat. Kiri Hoshino")
+    );
+    assert!(why(&r, "TITLE").cleaned.contains(&"style"));
+    s.tags = vec![("title".into(), vec!["Night Ferry [Live]".into()])];
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry [Live]"),
+        "set by hand"
+    );
+}
+
+/// A release pick moving the record `key` to release `id`, titled `album`,
+/// of release group `group`.
+fn moved_to(key: &SourceKey, album: &str, id: &str, group: &str) -> crate::album::Pick {
+    let offers: Offers = [
+        (Field::Album, album),
+        (Field::MusicBrainzAlbumId, id),
+        (Field::MusicBrainzReleaseGroupId, group),
+        (Field::Track, "4"),
+        (Field::Date, "2015"),
+    ]
+    .into_iter()
+    .map(|(f, v)| {
+        let offer = crate::tags::Offer {
+            values: vec![v.to_string()],
+            structured: true,
+            also: Vec::new(),
+        };
+        (f, offer)
+    })
+    .collect();
+    crate::album::Pick {
+        release: Some(crate::release::Pick {
+            key: key.clone(),
+            offers,
+            why: format!("on \"{album}\", the release 9 of its album's 10 songs are on"),
+        }),
+        ..crate::album::Pick::default()
+    }
+}
+
+#[test]
+fn a_record_set_aside_and_moved_leaves_the_song_its_files_album() {
+    let (s, facts) = file_record_and_cover("Night Ferry", "Kiri Hoshino", "Harbor Lights");
+    let other = "00000000-0000-0000-0000-0000000000c2";
+    let pick = moved_to(
+        &s.sources[1],
+        "Harbor Lights",
+        "00000000-0000-0000-0000-0000000000c1",
+        other,
+    );
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "ALBUM").as_deref(),
+        Some("Rooms of Salt"),
+        "no single"
+    );
+    assert_eq!(r.why.release, None, "no move to say");
+}
+
+#[test]
+fn a_record_moved_to_another_release_of_its_group_keeps_the_group_s_fields() {
+    let (s, mut facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    let record = facts.get_mut(&s.sources[1]).unwrap();
+    tag(record, Field::AlbumArtist, &["Various Artists"], true);
+    tag(record, Field::OriginalDate, &["1999"], true);
+    tag(record, Field::Label, &["Glass Orchard Records"], true);
+    let original = crate::settings::Release {
+        date: crate::settings::ReleaseDate::Original,
+        ..crate::settings::Release::default()
+    };
+    let pick = moved_to(
+        &s.sources[1],
+        "Rooms of Salt (Deluxe)",
+        "00000000-0000-0000-0000-0000000000c1",
+        GROUP,
+    );
+    let r = resolve(&Input {
+        pick: Some(&pick),
+        release: &original,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Rooms of Salt (Deluxe)"));
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Various Artists"));
+    assert_eq!(
+        get(&r, "DATE").as_deref(),
+        Some("1999"),
+        "its album's first"
+    );
+    assert_eq!(get(&r, "LABEL"), None, "the old release's own");
+}
+
+#[test]
+fn a_record_moved_to_another_group_is_held_to_its_release_not_its_old_one() {
+    let (s, facts) = file_record_and_cover("Lantern Weather", "Marlo Venn", "Rooms of Salt");
+    let known = Known {
+        units: (crate::album::units_of(&s, &facts).into_iter())
+            .map(|u| (u, GROUP.to_string()))
+            .collect(),
+        ..Known::default()
+    };
+    let other = "00000000-0000-0000-0000-0000000000c2";
+    let pick = moved_to(
+        &s.sources[1],
+        "Complete Harbor Works",
+        "00000000-0000-0000-0000-0000000000c1",
+        other,
+    );
+    let r = resolve(&Input {
+        known: &known,
+        pick: Some(&pick),
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(get(&r, "ALBUM").as_deref(), Some("Complete Harbor Works"));
+    assert!(r.why.release.is_some());
+}
+
+#[test]
+fn an_upload_whose_title_reads_two_ways_is_in_doubt_until_a_source_settles_it() {
+    let upload = yt("vid00000001");
+    let mut u = audio("opus", 20.0);
+    tag(
+        &mut u,
+        Field::Title,
+        &["Paper Comets - Glass Orchard"],
+        false,
+    );
+    tag(&mut u, Field::Artist, &["Orchard Archive"], false);
+    let mut facts = BTreeMap::from([(upload.clone(), u)]);
+    let readings = |s: &Song, facts: &BTreeMap<SourceKey, Facts>| -> Vec<String> {
+        let r = resolve(&defaults(s, facts)).unwrap();
+        (r.why.doubts.iter())
+            .filter(|d| matches!(d, Doubt::Reading { .. }))
+            .map(Doubt::line)
+            .collect()
+    };
+    let s = song(std::slice::from_ref(&upload));
+    assert_eq!(
+        readings(&s, &facts),
+        [format!(
+            "read two ways: {upload}: its title reads as “Paper Comets - Glass Orchard” whole \
+             or as “Glass Orchard” by Paper Comets, nothing telling which"
+        )]
+    );
+    let file = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Artist, &["Paper Comets"], true);
+    facts.insert(file.clone(), f);
+    assert!(
+        readings(&song(&[upload, file]), &facts).is_empty(),
+        "its artist credited"
+    );
+}
+
+#[test]
+fn a_featured_artist_moved_into_a_band_s_credit_leaves_the_band_whole() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(
+        &mut f,
+        Field::Title,
+        &["Night Ferry (feat. Ada Quill)"],
+        true,
+    );
+    tag(&mut f, Field::Artist, &["Salt & Pepper"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let mut s = song(std::slice::from_ref(&key));
+    let styled = style::Style {
+        featured: style::Featured::Artist,
+        ..style::Style::default()
+    };
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "ARTIST").as_deref(),
+        Some("Salt & Pepper feat. Ada Quill")
+    );
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Salt & Pepper"));
+    s.tags = vec![("artist".into(), vec!["Salt & Pepper".into()])];
+    let r = resolve(&Input {
+        style: styled,
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry (feat. Ada Quill)"),
+        "the artist set by hand, nothing moved"
+    );
+}
+
+#[test]
+fn a_title_set_by_hand_settles_how_an_upload_reads() {
+    let upload = yt("vid00000001");
+    let mut u = audio("opus", 20.0);
+    tag(
+        &mut u,
+        Field::Title,
+        &["Paper Comets - Glass Orchard"],
+        false,
+    );
+    let facts = BTreeMap::from([(upload.clone(), u)]);
+    let mut s = song(std::slice::from_ref(&upload));
+    s.tags = vec![("title".into(), vec!["Glass Orchard".into()])];
+    let r = resolve(&defaults(&s, &facts)).unwrap();
+    assert!(
+        !r.why
+            .doubts
+            .iter()
+            .any(|d| matches!(d, Doubt::Reading { .. }))
     );
 }

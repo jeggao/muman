@@ -183,6 +183,7 @@ use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
 use crate::source::SourceKey;
 use crate::state::Aligned;
+use crate::style;
 use crate::tags::{self, Field, Offer, Scope};
 use crate::vet::recordings::{self, Recordings};
 use crate::vet::{self, Verdict, Vets};
@@ -884,13 +885,21 @@ pub enum Doubt {
         key: SourceKey,
         why: String,
     },
-    /// A source vetting set aside, in part or whole ([`crate::vet`]).
-    SetAside { key: SourceKey, why: String },
+    /// A source vetting set aside, in part or whole ([`crate::vet`]):
+    /// `release`, whether it still gives its release.
+    SetAside {
+        key: SourceKey,
+        why: String,
+        release: bool,
+    },
     /// An audio source of another recording than the chosen audio's, or
     /// at another speed.
     Recording { key: SourceKey, why: String },
     /// A record it believes, stating a length far from its audio's.
     Length { key: SourceKey, why: String },
+    /// An upload whose title reads more than one way, none clear of the
+    /// rest ([`crate::readings`]).
+    Reading { key: SourceKey, why: String },
 }
 
 impl Doubt {
@@ -899,9 +908,10 @@ impl Doubt {
     pub fn line(&self) -> String {
         match self {
             Self::Contested { why, .. } => format!("contested: {why}"),
-            Self::SetAside { key, why } => format!("set aside: {key}: {why}"),
+            Self::SetAside { key, why, .. } => format!("set aside: {key}: {why}"),
             Self::Recording { key, why } => format!("another recording: {key}: {why}"),
             Self::Length { key, why } => format!("another length: {key}: {why}"),
+            Self::Reading { key, why } => format!("read two ways: {key}: {why}"),
         }
     }
 }
@@ -1040,6 +1050,8 @@ pub struct Input<'a> {
     pub lyrics: &'a crate::settings::Lyrics,
     pub clean: &'a Settings,
     pub typography: clean::Typography,
+    /// The house style written values take ([`style`]).
+    pub style: style::Style,
     /// Which kind of source is believed first.
     pub believe: clean::Believe,
     /// The `[release]` table: which date a song on a release takes.
@@ -1164,6 +1176,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     })?;
     let contested = contested_unset(&candidates, &tag_why);
     let doubts = doubts_of(input, &vets, &recordings, &contested, ms_of(facts));
+    let release = moved(input, &tag_why);
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1198,10 +1211,17 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             dropped: dropped(input),
             contested: contested.into_iter().map(|(_, _, why)| why).collect(),
             doubts,
-            release: (input.pick.and_then(|p| p.release.as_ref()))
-                .map(|r| format!("{}: {}", r.key, r.why)),
+            release,
         },
     })
+}
+
+/// The vetting `input`'s song is resolved with, its evidence for each
+/// source included, as calibration reads it ([`crate::calibrate`]).
+pub fn weigh(input: &Input<'_>) -> Result<Vets> {
+    let candidates = candidates(input);
+    let (audio, _, _) = pick_audio(input, &candidates)?;
+    Ok(vetted(input, &candidates, ms_of(&input.facts[&audio])))
 }
 
 /// `candidates` as `vets` leaves them: what each source gives, a source
@@ -1257,10 +1277,19 @@ fn vetted(
         .chain(&input.song.tags)
         .filter_map(|(name, values)| Some((Field::named(name)?, values.clone())))
         .collect();
-    let units: Vec<Option<&str>> = crate::album::units_of(input.song, input.facts)
-        .iter()
-        .map(|u| input.known.units.get(u).map(String::as_str))
-        .collect();
+    // A song moved to a release is held to that release, its album's by
+    // the release pass, rather than to the one its records were on.
+    let moved_to = (input.pick.and_then(|p| p.release.as_ref()))
+        .and_then(|r| r.offers.get(&Field::MusicBrainzReleaseGroupId))
+        .and_then(|o| o.values.first())
+        .map(String::as_str);
+    let units: Vec<Option<&str>> = match moved_to {
+        Some(group) => vec![Some(group)],
+        None => crate::album::units_of(input.song, input.facts)
+            .iter()
+            .map(|u| input.known.units.get(u).map(String::as_str))
+            .collect(),
+    };
     Vets::of(&claims, &hand, audio_ms, &units)
 }
 
@@ -2302,11 +2331,23 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             .filter(|(k, _)| k == key && moved.is_none())
             .and_then(|(_, at)| facts.editions.get(*at));
         let another = moved.is_some_and(|o| o.contains_key(&Field::MusicBrainzTrackId));
+        // A release of the record's own group shares its group's fields.
+        let same_group = moved.is_some_and(|o| {
+            let group = |offers: &crate::tags::Offers| {
+                (offers.get(&Field::MusicBrainzReleaseGroupId))
+                    .and_then(|o| o.values.first().cloned())
+            };
+            group(o).is_some() && group(o) == group(&facts.tags)
+        });
         let own = offers_of(input, key, facts)
             .into_iter()
             .filter(|(field, _)| {
-                let release =
-                    (edition.is_some() || moved.is_some()) && field.scope() == Scope::Release;
+                let kept = same_group
+                    && moved.is_some_and(|o| !o.contains_key(field))
+                    && GROUP_WIDE.contains(field);
+                let release = (edition.is_some() || moved.is_some())
+                    && field.scope() == Scope::Release
+                    && !kept;
                 let recording = another
                     && matches!(
                         field,
@@ -2347,8 +2388,8 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
 }
 
 /// What `key`, a source with `facts`, offers, as the `[[tags.from]]`
-/// naming it leave it ([`clean::Settings::from`]): its title read by a
-/// pattern, then fields dropped and credits left out.
+/// naming it leave it ([`clean::Settings::from`]): fields dropped and
+/// credits left out, then its title as it came read by a pattern.
 fn offers_of<'f>(
     input: &Input<'_>,
     key: &SourceKey,
@@ -2366,6 +2407,8 @@ fn offers_of<'f>(
         let title = offers
             .get(&Field::Title)
             .and_then(|t| t.values.first().cloned());
+        let credit = |f: Field| matches!(f, Field::Artist | Field::Artists | Field::AlbumArtist);
+        offers.retain(|f, _| !o.drop.contains(f) && (o.credits || !credit(*f)));
         let read = (o.title.as_ref()).and_then(|p| p.read(title.as_deref()?));
         for (field, value) in read.into_iter().flatten() {
             let offer = Offer {
@@ -2375,8 +2418,6 @@ fn offers_of<'f>(
             };
             offers.insert(field, Cow::Owned(offer));
         }
-        let credit = |f: Field| matches!(f, Field::Artist | Field::Artists | Field::AlbumArtist);
-        offers.retain(|f, _| !o.drop.contains(f) && (o.credits || !credit(*f)));
     }
     offers.into_iter().collect()
 }
@@ -2414,22 +2455,116 @@ fn best_album<'c, 'a>(
     .filter(|c| c.offer.structured)
 }
 
+/// Each upload of the song whose title, read off it as its channel
+/// wrote it, reads more than one way with none clear of the rest, held
+/// to the titles and credits its other sources give ([`crate::readings`]);
+/// none where the title or artist is set by hand, nor for an upload a
+/// `[[tags.from]]` title pattern reads.
+fn readings_of(input: &Input<'_>) -> Vec<Doubt> {
+    let present: Vec<(&SourceKey, &Facts)> = input.present().map(|(_, k, f)| (k, f)).collect();
+    let set = (input.song.tags.iter()).chain(input.album.iter().flat_map(|a| &a.tags));
+    let hand = |field: Field| {
+        set.clone()
+            .filter(move |(name, _)| Field::named(name) == Some(field))
+            .flat_map(|(_, values)| values.iter().map(String::as_str))
+    };
+    // A title or artist set by hand settles how the song is named.
+    if hand(Field::Title).next().is_some() || hand(Field::Artist).next().is_some() {
+        return Vec::new();
+    }
+    let mut doubts = Vec::new();
+    for (key, facts) in &present {
+        let Some(title) = facts.tags.get(&Field::Title).filter(|o| !o.structured) else {
+            continue;
+        };
+        // A `[[tags.from]]` pattern settles how its sources' titles read.
+        let read_by_pattern =
+            (input.clean.from.iter()).any(|o| o.title.is_some() && o.names(key, &facts.tags));
+        if read_by_pattern {
+            continue;
+        }
+        let others = present.iter().filter(|(k, _)| k != key).map(|(_, f)| f);
+        let structured = |field: Field| {
+            others
+                .clone()
+                .filter_map(move |f| f.tags.get(&field).filter(|o| o.structured))
+                .flat_map(|o| o.values.iter().map(String::as_str))
+                .chain(hand(field))
+                .collect::<Vec<_>>()
+        };
+        let (credited, titles) = (structured(Field::Artist), structured(Field::Title));
+        let channel = facts.tags.get(&Field::Artist).filter(|o| !o.structured);
+        let evidence = crate::readings::Evidence {
+            credited: &credited,
+            titles: &titles,
+            channel: channel.and_then(|o| o.values.first()).map(String::as_str),
+        };
+        let Some(raw) = title.values.first() else {
+            continue;
+        };
+        let read = crate::readings::read(raw, &evidence);
+        if read.clear {
+            continue;
+        }
+        let ways: Vec<String> = (read.readings.iter().take(2))
+            .map(|r| match &r.artist {
+                Some(artist) => format!("“{}” by {artist}", r.title),
+                None => format!("“{}” whole", r.title),
+            })
+            .collect();
+        doubts.push(Doubt::Reading {
+            key: (*key).clone(),
+            why: format!(
+                "its title reads as {}, nothing telling which",
+                ways.join(" or as ")
+            ),
+        });
+    }
+    doubts
+}
+
+/// The release the song was moved to and why ([`crate::release`]), as
+/// `<key>: <why>`, where its album came from the record moved, its
+/// spelling agreed by the album's songs or not (which appends how many).
+fn moved(input: &Input<'_>, tag_why: &[TagWhy]) -> Option<String> {
+    let r = input.pick.and_then(|p| p.release.as_ref())?;
+    let from = r.key.to_string();
+    (tag_why.iter())
+        .any(|w| w.key == Field::Album.vorbis() && w.from.starts_with(&from))
+        .then(|| format!("{from}: {}", r.why))
+}
+
+/// The fields a release shares with every release of its group, which a
+/// record moved to another release of its own group keeps.
+const GROUP_WIDE: [Field; 4] = [
+    Field::AlbumArtist,
+    Field::AlbumArtistSort,
+    Field::MusicBrainzAlbumArtistId,
+    Field::OriginalDate,
+];
+
 /// The album of the source the release fields come whole from: the one
 /// giving the release or the edition its album's songs share, else the
-/// best album.
+/// best album, as where vetting left the source picked no album.
 fn release_of<'c, 'a>(
     input: &Input<'_>,
     candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
 ) -> Option<&'c Candidate<'a>> {
-    let picked = input
-        .pick
-        .and_then(|p| (p.release.as_ref().map(|r| &r.key)).or(p.edition.as_ref().map(|(k, _)| k)));
-    match picked {
-        Some(key) => candidates
-            .get(&Field::Album)
-            .and_then(|all| all.iter().find(|c| c.key == key)),
-        None => best_album(candidates),
-    }
+    picked_album(input, candidates).or_else(|| best_album(candidates))
+}
+
+/// The album of the source a release or an edition pick names, where it
+/// still offers one.
+fn picked_album<'c, 'a>(
+    input: &Input<'_>,
+    candidates: &'c BTreeMap<Field, Vec<Candidate<'a>>>,
+) -> Option<&'c Candidate<'a>> {
+    let picked = input.pick.and_then(|p| {
+        (p.release.as_ref().map(|r| &r.key)).or(p.edition.as_ref().map(|(k, _)| k))
+    })?;
+    candidates
+        .get(&Field::Album)
+        .and_then(|all| all.iter().find(|c| c.key == picked))
 }
 
 /// [`best_offer`], with offers that rank alike ranked by `then`, least
@@ -2552,14 +2687,18 @@ fn doubts_of(
             why: why.clone(),
         })
         .collect();
-    doubts.extend(vets.aside().into_iter().map(|(key, why)| Doubt::SetAside {
-        key: key.clone(),
-        why,
-    }));
+    doubts.extend(
+        (vets.aside().into_iter()).map(|(key, why, release)| Doubt::SetAside {
+            key: key.clone(),
+            why,
+            release,
+        }),
+    );
     doubts.extend(recordings.iter().map(|(key, why)| Doubt::Recording {
         key: key.clone(),
         why: why.clone(),
     }));
+    doubts.extend(readings_of(input));
     for (_, key, facts) in input.present() {
         let (Some(stated), Some(heard)) = (facts.length_ms, audio_ms) else {
             continue;
@@ -2904,6 +3043,7 @@ fn resolve_tags(
     }
     let mut artists = joined_artists(&mut fields);
     settle(input, &mut fields, &mut artists);
+    restyle(input, &mut fields, &mut artists);
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()
@@ -2931,6 +3071,47 @@ fn resolve_tags(
         why,
         artists,
     )
+}
+
+/// The title and artist in `input`'s style, its artists one by one with
+/// them, a name moved out of the credit left out and one moved in added;
+/// a value restyled names `style` among the rules that changed it. No
+/// featured artist moves where the title or the artist is set by hand,
+/// so one is never written in both.
+fn restyle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut Vec<String>) {
+    let mut style = input.style;
+    let by_hand = (input.song.tags.iter())
+        .chain(input.album.iter().flat_map(|a| &a.tags))
+        .any(|(name, _)| matches!(Field::named(name), Some(Field::Title | Field::Artist)));
+    if by_hand {
+        style.featured = style::Featured::Keep;
+    }
+    if style.keeps() {
+        return;
+    }
+    let first = |f: Field, fields: &BTreeMap<Field, Slot>| {
+        fields
+            .get(&f)
+            .and_then(|s| s.values.first().cloned())
+            .unwrap_or_default()
+    };
+    let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
+    let styled = style.apply(&title, &artist);
+    if styled.artist != artist {
+        artists.retain(|a| !styled.removed.iter().any(|r| r.eq_ignore_ascii_case(a)));
+        artists.extend(styled.added.iter().cloned());
+    }
+    for (field, was, now) in [
+        (Field::Title, &title, styled.title),
+        (Field::Artist, &artist, styled.artist),
+    ] {
+        if now != *was
+            && let Some(slot) = fields.get_mut(&field)
+        {
+            slot.values = vec![now];
+            slot.cleaned.push("style");
+        }
+    }
 }
 
 /// What the album pass agreed on set over what the song's sources offer,
