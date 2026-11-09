@@ -50,3 +50,35 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn a_credit_s_names_are_parted_by_its_joiners_and_featured_after_feat() {
+    let c = credit("Marlo Venn & Kiri Hoshino feat. Ada Quill, Glass Orchard");
+    assert_eq!(
+        c.names,
+        ["Marlo Venn", "Kiri Hoshino", "Ada Quill", "Glass Orchard"]
+    );
+    assert_eq!(c.joiners, ["&", "feat.", ","]);
+    assert_eq!(c.featured, Some(2));
+    let one = credit("Marlo Venn");
+    assert_eq!(
+        (one.names, one.joiners, one.featured),
+        (vec!["Marlo Venn"], vec![], None)
+    );
+    assert_eq!(
+        credit(" & Marlo Venn & ").names,
+        ["Marlo Venn"],
+        "empty names add nothing"
+    );
+}
+
+proptest::proptest! {
+    #[test]
+    fn every_name_is_read_from_the_credit_as_written(raw in "[A-Za-z ]{0,6}((&|, | feat\\. | x )[A-Za-z ]{0,6}){0,3}") {
+        let c = credit(&raw);
+        proptest::prop_assert_eq!(c.joiners.len(), c.names.len().saturating_sub(1));
+        for name in &c.names {
+            proptest::prop_assert!(raw.contains(name), "{raw:?}: {c:?}");
+        }
+    }
+}

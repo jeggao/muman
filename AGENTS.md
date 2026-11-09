@@ -98,7 +98,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   detect.rs         values that say nothing of a song: placeholders and watermarks
   genres.rs         the genres a MusicBrainz record gives, spelled as genres/spelled.txt says
   overrides.rs      [[tags.from]]: what one torrent's or channel's sources are not believed for
-  parts.rs          a value read as its parts: a title's core and each decoration's kind
+  parts.rs          a value read as its parts: a title's decorations, a credit's names
   lyrics.rs, cues.rs   LRC cleaning and timing; lyrics written as LRC, WebVTT, SubRip, text
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names, through the path template
