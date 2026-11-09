@@ -117,6 +117,109 @@ fn the_library_s_records_and_look_alikes_are_weighed_as_vetting_weighs_them() {
     );
 }
 
+/// A calibration of records labelled by ID, each row a label, what the
+/// release and the unit said, and how many records said so.
+fn calibrated(rows: &[(bool, Option<bool>, Option<bool>, usize)]) -> Calibration {
+    let mut c = Calibration::default();
+    for &(same, release, unit, n) in rows {
+        let label = Label {
+            same,
+            how: BY_ID,
+            chosen_by: &[],
+        };
+        let sides = [
+            ("title", None),
+            ("credits", None),
+            ("length", None),
+            ("release", release),
+            ("unit", unit),
+        ];
+        for _ in 0..n {
+            c.count(label, sides);
+        }
+    }
+    c
+}
+
+#[test]
+fn two_kinds_that_say_the_same_are_not_counted_twice_together() {
+    let both = |same, side, n| (same, side, side, n);
+    let c = calibrated(&[
+        both(true, Some(true), 60),
+        both(true, Some(false), 10),
+        both(true, None, 30),
+        both(false, Some(true), 10),
+        both(false, Some(false), 50),
+        both(false, None, 40),
+    ]);
+    let (agrees, disagrees) = c.by["release"].suggested().unwrap();
+    let together = c.together();
+    assert_eq!(
+        together.keys().copied().collect::<Vec<_>>(),
+        ["release", "unit"]
+    );
+    let ((ra, rd), (ua, ud)) = (together["release"], together["unit"]);
+    assert!(
+        (ra + ua - agrees).abs() <= 1,
+        "{together:?} against {agrees}"
+    );
+    assert!(
+        (rd + ud - disagrees).abs() <= 1,
+        "{together:?} against {disagrees}"
+    );
+}
+
+#[test]
+fn kinds_that_say_their_own_are_weighed_together_as_alone() {
+    // Each label's release and unit drawn apart, 1,000 records each.
+    let (same_release, same_unit) = ([600, 100, 300], [500, 200, 300]);
+    let (other_release, other_unit) = ([100, 500, 400], [200, 500, 300]);
+    let sides = [Some(true), Some(false), None];
+    let mut rows = Vec::new();
+    for (same, release, unit) in [
+        (true, same_release, same_unit),
+        (false, other_release, other_unit),
+    ] {
+        for (r, rn) in sides.iter().zip(release) {
+            for (u, un) in sides.iter().zip(unit) {
+                rows.push((same, *r, *u, rn * un / 1000));
+            }
+        }
+    }
+    let c = calibrated(&rows);
+    let together = c.together();
+    for kind in ["release", "unit"] {
+        let (a, d) = c.by[kind].suggested().unwrap();
+        let (ta, td) = together[kind];
+        assert!(
+            (ta - a).abs() <= 1 && (td - d).abs() <= 1,
+            "{kind}: {together:?}"
+        );
+    }
+}
+
+#[test]
+fn a_kind_a_label_was_chosen_by_is_fitted_with_no_other() {
+    let mut c = calibrated(&[
+        (true, Some(true), Some(true), 30),
+        (false, Some(false), Some(false), 30),
+    ]);
+    let sides = [
+        ("title", None),
+        ("credits", None),
+        ("length", None),
+        ("release", Some(false)),
+        ("unit", Some(true)),
+    ];
+    let unit_chosen = Label {
+        same: false,
+        how: "test",
+        chosen_by: &["unit"],
+    };
+    c.count(unit_chosen, sides);
+    assert_eq!(c.together(), BTreeMap::new(), "release alone is left");
+}
+
 #[test]
 fn evidence_that_tells_the_labels_apart_is_weighed_by_its_log_odds() {
     let tally = Tally {

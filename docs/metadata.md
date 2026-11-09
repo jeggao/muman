@@ -158,7 +158,10 @@ lookup ranks by title, credits and length, so its find counts for the
 album and album unit alone, or for all but length where it was the only
 candidate, which only lookups made since this version keep (`muman sync
 --rematch` asks again); a record chosen for its title never counts for
-titles.
+titles. Points are counted against saying nothing, which vetting counts
+as nought, and the kinds every label counts are fitted together too,
+printed as `with`, so two that tend to agree at once, as an album and
+its unit, are not counted twice: those are the points to take.
 
 ## Which release
 
