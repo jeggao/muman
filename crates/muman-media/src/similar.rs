@@ -190,7 +190,7 @@ const OPENS: [(char, char); 10] = [
 ];
 
 /// What opens a name's suffix, as `Lantern Weather - Live at the Pier`.
-const SUFFIXES: [&str; 7] = [" - ", " – ", " — ", " ‐ ", " ‒ ", " ― ", " − "];
+pub(crate) const SUFFIXES: [&str; 7] = [" - ", " – ", " — ", " ‐ ", " ‒ ", " ― ", " − "];
 
 /// Wave dashes, which set off a subtitle in Japanese: `Title 〜Night〜`.
 const WAVES: [char; 2] = ['~', '〜'];
@@ -352,6 +352,17 @@ pub fn tokens(s: &str) -> Vec<String> {
 
 /// The words of `s`, folded but for kana, which tell a loanword in
 /// katakana from a word of the language in hiragana.
+/// The words of `s`, folded but for kana, as a version's entries are
+/// matched against.
+pub(crate) fn words(s: &str) -> Vec<String> {
+    words_of(s)
+}
+
+/// Whether `words` hold `entry`, a version's entry, as whole words.
+pub(crate) fn holds_words(words: &[String], entry: &str) -> bool {
+    holds(words, entry)
+}
+
 fn words_of(s: &str) -> Vec<String> {
     let prepared = prepare(s);
     let mut words = Vec::new();
@@ -601,47 +612,17 @@ fn holds(words: &[String], entry: &str) -> bool {
 
 /// `s` split into its core and its decorations.
 fn split(s: &str) -> (String, Vec<String>) {
-    let mut core = String::new();
-    let mut decorations = Vec::new();
-    let mut rest = s;
-    while let Some((at, open, close)) = rest
-        .char_indices()
-        .find_map(|(i, c)| opener(c).map(|close| (i, c, close)))
-    {
-        let inner_at = at + open.len_utf8();
-        let Some(len) = closing(&rest[inner_at..], open, close) else {
-            break;
-        };
-        core.push_str(&rest[..at]);
-        let inner = rest[inner_at..inner_at + len].trim();
-        if !inner.is_empty() && !clean::is_packaging(inner) {
-            decorations.push(inner.to_string());
-        }
-        rest = &rest[inner_at + len + close.len_utf8()..];
-    }
-    core.push_str(rest);
-    let mut core = core.trim().to_string();
-    if let Some((at, len)) = SUFFIXES
-        .iter()
-        .filter_map(|s| core.find(s).map(|at| (at, s.len())))
-        .min()
-        .filter(|&(at, _)| at > 0)
-    {
-        let suffix = core[at + len..].trim().to_string();
-        if !suffix.is_empty() && !clean::is_packaging(&suffix) {
-            decorations.push(suffix);
-        }
-        core.truncate(at);
-    }
-    if core.trim().is_empty() && !decorations.is_empty() {
-        core = decorations.remove(0);
-    }
-    (core.trim().to_string(), decorations)
+    let title = crate::parts::title(s);
+    let decorations = (title.decorations.into_iter())
+        .filter(|d| d.kind != crate::parts::Kind::Packaging)
+        .map(|d| d.text)
+        .collect();
+    (title.core, decorations)
 }
 
 /// Where the bracket `close` that matches an `open` before `inner`
 /// stands in it, past any pair nested inside.
-fn closing(inner: &str, open: char, close: char) -> Option<usize> {
+pub(crate) fn closing(inner: &str, open: char, close: char) -> Option<usize> {
     if open == close {
         return inner.find(close);
     }
@@ -659,7 +640,7 @@ fn closing(inner: &str, open: char, close: char) -> Option<usize> {
     None
 }
 
-fn opener(c: char) -> Option<char> {
+pub(crate) fn opener(c: char) -> Option<char> {
     OPENS
         .iter()
         .find(|(o, _)| *o == c)

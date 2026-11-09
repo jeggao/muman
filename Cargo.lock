@@ -1287,6 +1287,7 @@ dependencies = [
  "icu_segmenter",
  "lofty",
  "muman-core",
+ "proptest",
  "regex",
  "serde",
  "serde_json",

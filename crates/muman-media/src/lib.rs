@@ -33,6 +33,7 @@ pub mod lyrics;
 pub mod naming;
 pub mod ogg;
 pub mod overrides;
+pub mod parts;
 pub mod picture;
 pub mod probe;
 pub mod quality;
