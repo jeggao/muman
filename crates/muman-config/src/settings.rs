@@ -526,6 +526,7 @@ impl Audio {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioPick {
+    pub recording: Recording,
     pub purity: Purity,
     pub bandwidth: Bandwidth,
     pub stereo: Stereo,
@@ -798,6 +799,21 @@ fn check_measures<'a>(
         }
     }
     Ok(())
+}
+
+/// Sources of another recording than the song's, by how their audio
+/// aligns, ranked after every source of the song's, ahead of the measures
+/// rather than weighed with them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Recording {
+    pub enabled: bool,
+}
+
+impl Default for Recording {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Sound in a source beyond the song, a video's intro, outro or skit, and

@@ -66,7 +66,8 @@ crates/muman-engine/src/   the engine: the state, plans, the library written, ru
   lookup.rs         lookups due, each provider asked until a song has what it names
   reconcile.rs      the offline phase, a module a step, in order: measure.rs, keys.rs,
                     damage.rs, plan.rs, decide.rs, owned.rs, write.rs, prune.rs, report.rs
-  resolve.rs, vet.rs, levels.rs   one song's facts to its plan; its sources vetted; songs levelled
+  resolve.rs, vet.rs, levels.rs   one song's facts to its plan; its sources vetted, and its
+                    audio's recordings in vet/recordings.rs; songs levelled
   artifact.rs       the part of a plan each library file is made from, and its name
   render.rs         one plan to library files; render/lyrics.rs, render/cover.rs
   outputs.rs, folder.rs   the files beside a song, named and moved; the cover file a folder holds once

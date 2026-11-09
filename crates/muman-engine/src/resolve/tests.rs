@@ -454,6 +454,131 @@ fn a_pin_overrides_the_measures() {
     assert!(r.plan.lyrics.is_none());
 }
 
+/// A song holding two recordings that align with neither: a live take,
+/// `live.flac`, wider and 231 s long, and the studio cut, an upload of
+/// 200 s, as the song's MusicBrainz record of 200.5 s is, which the
+/// lookup asking with the live take found.
+fn live_and_studio() -> (Song, BTreeMap<SourceKey, Facts>) {
+    let (live, studio, mb) = (
+        manual("live.flac"),
+        yt("sssssssssss"),
+        SourceKey::parse("musicbrainz:00000000-0000-0000-0000-000000000001").unwrap(),
+    );
+    let mut fl = audio("flac", 22.0);
+    fl.duration = Some(231.0);
+    let mut fs = audio("opus", 20.0);
+    fs.rev = "studio".into();
+    let mut fmb = Facts::unreadable("mb".into());
+    fmb.length_ms = Some(200_500);
+    for f in [&mut fl, &mut fs, &mut fmb] {
+        tag(f, Field::Title, &["Lantern Weather"], true);
+        tag(f, Field::Artist, &["Marlo Venn"], true);
+    }
+    let facts = BTreeMap::from([(live.clone(), fl), (studio.clone(), fs), (mb.clone(), fmb)]);
+    (song(&[live, studio, mb]), facts)
+}
+
+/// Audio picked with `[audio.pick.recording]` on or off.
+fn recording(enabled: bool) -> Audio {
+    let mut audio = Audio::default();
+    audio.pick.recording.enabled = enabled;
+    audio
+}
+
+#[test]
+fn a_record_s_length_names_the_song_s_recording_in_any_order() {
+    let (mut s, facts) = live_and_studio();
+    let (live, studio) = (s.sources[0].clone(), s.sources[1].clone());
+    let r = run(&s, &facts, &[]);
+    assert_eq!(r.plan.audio.key, studio, "{:?}", r.why);
+    assert_eq!(
+        r.why.audio,
+        "the song's recording by its record: aligns with none, 20.0 kHz, stereo, 0.00% clipped"
+    );
+    assert_eq!(
+        r.why.recordings,
+        [format!(
+            "{live}: another recording than the song's 1 other: aligns with none, 31 s longer \
+             than its record"
+        )]
+    );
+    s.sources.reverse();
+    let again = run(&s, &facts, &[]);
+    assert_eq!(
+        (again.plan.audio, again.why.audio, again.why.recordings),
+        (r.plan.audio, r.why.audio, r.why.recordings),
+        "the order of sources"
+    );
+
+    let off = run_with(&s, &facts, &[], &recording(false), &COVER);
+    assert_eq!(off.plan.audio.key, live, "by its measures, as before");
+    assert!(
+        off.why.audio.starts_with("another recording"),
+        "{}",
+        off.why.audio
+    );
+}
+
+#[test]
+fn a_pin_takes_another_recording_and_says_which() {
+    let (mut s, facts) = live_and_studio();
+    s.audio = Some(s.sources[0].clone());
+    let r = run(&s, &facts, &[]);
+    assert_eq!(r.plan.audio.key, s.sources[0]);
+    assert_eq!(
+        r.why.audio,
+        "pinned, another recording than the song's 1 other: aligns with none, 31 s longer than \
+         its record"
+    );
+    assert_eq!(
+        r.why.recordings,
+        [format!(
+            "{}: the song's recording by its record: aligns with none",
+            s.sources[1]
+        )]
+    );
+}
+
+#[test]
+fn without_a_record_most_sources_name_the_song_s_recording_and_a_tie_nothing() {
+    let (mut s, mut facts) = live_and_studio();
+    let (live, studio, mb) = (
+        s.sources[0].clone(),
+        s.sources[1].clone(),
+        s.sources[2].clone(),
+    );
+    facts.remove(&mb);
+    s.sources.pop();
+    let r = run(&s, &facts, &[]);
+    assert_eq!(r.plan.audio.key, live, "alike in sources, as before");
+    assert!(
+        r.why.audio.starts_with(
+            "one of 2 recordings, none the song's by a record or by most sources: aligns with \
+             none, 22.0 kHz"
+        ),
+        "{}",
+        r.why.audio
+    );
+    assert_eq!(r.why.recordings.len(), 1, "{:?}", r.why.recordings);
+
+    let copy = yt("ccccccccccc");
+    let mut fc = audio("opus", 20.0);
+    fc.rev = "copy".into();
+    facts.insert(copy.clone(), fc);
+    s.sources.push(copy.clone());
+    let alignments = both(&facts, &studio, &copy, 0, 0.99);
+    let r = run(&s, &facts, &alignments);
+    assert_eq!(r.plan.audio.key, studio, "{:?}", r.why);
+    assert_eq!(
+        r.why.recordings,
+        [format!(
+            "{live}: another recording than the song's 2 others: aligns with none"
+        )]
+    );
+    let off = run_with(&s, &facts, &alignments, &recording(false), &COVER);
+    assert_eq!(off.plan.audio.key, studio, "its purity is known");
+}
+
 #[test]
 fn square_detail_beats_pixel_count_and_borders_are_cropped() {
     let (a, b, c) = (yt("aaaaaaaaaaa"), yt("bbbbbbbbbbb"), yt("ccccccccccc"));

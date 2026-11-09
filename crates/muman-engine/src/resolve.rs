@@ -7,7 +7,8 @@
 //! with a measure that could not be taken ranks after every source with
 //! fewer such.
 //!
-//! - Audio: least that is not the song (a video's intro or skit) or
+//! - Audio: the song's recording before another ([`vet::recordings`]),
+//!   then least that is not the song (a video's intro or skit) or
 //!   is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
 //!   lossless, then the most bits used, then the lowest rate.
@@ -152,6 +153,7 @@ use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::source::SourceKey;
 use crate::state::Aligned;
 use crate::tags::{self, Field, Offer, Scope};
+use crate::vet::recordings::{self, Recordings};
 use crate::vet::{self, Verdict, Vets};
 
 /// The renderer's version for plans in `codec`, raised whenever the bytes
@@ -823,6 +825,10 @@ pub struct Why {
     pub fit: Option<String>,
     /// Each source set aside ([`crate::vet`]), as `<key>: <why>`.
     pub set_aside: Vec<String>,
+    /// Each other audio source of another recording than the chosen
+    /// audio's, or at another speed than the rest of its own
+    /// ([`vet::recordings`]), as `<key>: <which>`.
+    pub recordings: Vec<String>,
 }
 
 /// Where a written tag's value came from.
@@ -915,7 +921,8 @@ pub fn wanted_alignments(
 }
 
 pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
-    let (audio_key, audio_why) = pick_audio(input)?;
+    let mut candidates = candidates(input);
+    let (audio_key, audio_why, recordings) = pick_audio(input, &candidates)?;
     let facts = &input.facts[&audio_key];
     let audio = facts.audio.as_ref().map_or(0, |a| a.index);
     let format = match facts.audio.as_ref() {
@@ -926,8 +933,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
         Some(a) => Format::of(a, input.audio),
         None => bail!("no source of this song has audio"),
     };
-    let mut candidates = candidates(input);
-    let vets = vetted(input, &candidates, facts);
+    let vets = vetted(input, &candidates, ms_of(facts));
     for (field, all) in &mut candidates {
         all.retain(|c| vets.gives(c.key, *field));
     }
@@ -1006,18 +1012,18 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             tags: tag_why,
             fit: None,
             set_aside: vets.set_aside(),
+            recordings,
         },
     })
 }
 
 /// The vetting of the song's sources ([`crate::vet`]) by their cleaned
-/// structured offers, the tags set by hand and the length of `audio`,
-/// the chosen audio's facts; none while `[tags.clean.structure] vetting`
-/// is off.
+/// structured offers, the tags set by hand and `audio_ms`, the chosen
+/// audio's length; none while `[tags.clean.structure] vetting` is off.
 fn vetted(
     input: &Input<'_>,
     candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
-    audio: &Facts,
+    audio_ms: Option<i64>,
 ) -> Vets {
     if !input.clean.is_on(clean::VETTING) {
         return Vets::default();
@@ -1048,8 +1054,12 @@ fn vetted(
         .chain(&input.song.tags)
         .filter_map(|(name, values)| Some((Field::named(name)?, values.clone())))
         .collect();
-    let audio_ms = audio.length().map(|s| (s * 1000.0).round() as i64);
     Vets::of(&claims, &hand, audio_ms)
+}
+
+/// How long a source's audio plays, in whole ms.
+fn ms_of(facts: &Facts) -> Option<i64> {
+    facts.length().map(|s| (s * 1000.0).round() as i64)
 }
 
 /// A ranking: smaller is better, compared in order.
@@ -1070,15 +1080,33 @@ fn score(measures: &[(i64, Option<i64>)]) -> [i64; 2] {
     [i64::try_from(unknown).unwrap_or(UNKNOWN), sum]
 }
 
-fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
+/// One of the song's audio sources as its measures rank it.
+struct Scored<'a> {
+    n: usize,
+    key: &'a SourceKey,
+    facts: &'a Facts,
+    /// Its rank by its measures, before the order of `sources`.
+    rank: Rank,
+    /// The least sound beyond the song it plays against another source of
+    /// its recording, where it aligns with one.
+    beyond: Option<i64>,
+    /// The most of the song another source plays on past its cut.
+    lacks: i64,
+}
+
+/// The audio the song takes, why, and each other source the recording it
+/// holds names ([`vet::recordings`]).
+fn pick_audio(
+    input: &Input<'_>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+) -> Result<(SourceKey, String, Vec<String>)> {
     let audible: Vec<(usize, &SourceKey, &Facts)> = input
         .present()
         .filter(|(_, _, f)| f.audio.is_some())
         .collect();
-    if let Some(pin) = &input.song.audio {
-        if audible.iter().any(|(_, k, _)| *k == pin) {
-            return Ok((pin.clone(), "pinned".to_string()));
-        }
+    if let Some(pin) = &input.song.audio
+        && !audible.iter().any(|(_, k, _)| *k == pin)
+    {
         bail!("the pinned audio, {pin}, has no audio on disk");
     }
     // Audio a source lacks counts against it as audio another source shows
@@ -1087,93 +1115,180 @@ fn pick_audio(input: &Input<'_>) -> Result<(SourceKey, String)> {
     let any_missing = audible
         .iter()
         .any(|(_, _, f)| matches!(f.damage(), Some(Damage::Missing { .. })));
-    let ranked = audible.iter().map(|(n, key, facts)| {
-        let compared: Vec<&Aligned> = audible
-            .iter()
-            .filter(|(_, other, _)| other != key)
-            .filter_map(|(_, other, _)| input.aligned(key, other).filter(|a| a.fits()))
-            .collect();
-        let beyond = compared
-            .iter()
-            .filter(|a| a.b_lacks_ms == 0)
-            .map(|a| a.unmatched_ms())
-            .min()
-            .or_else(|| compared.iter().map(|a| a.unmatched_ms()).min());
-        let lacks = compared.iter().map(|a| a.a_lacks_ms).max().unwrap_or(0);
-        let damage = facts.damage();
-        let missing = damage.map_or(0, |d| d.missing_ms());
-        let unmatched = beyond
-            .map(|ms| ms + lacks.max(missing))
-            .or_else(|| any_missing.then_some(missing));
-        let q = facts.audio.as_ref().and_then(|a| a.quality);
-        let w = &input.audio.pick;
-        let [unknown, sum] = score(&[
-            (
-                w.purity.weight(),
-                unmatched.map(|ms| ms / i64::from(w.purity.step_ms)),
-            ),
-            (
-                w.bandwidth.weight(),
-                q.map(|q| -q.bandwidth_bucket(f64::from(w.bandwidth.step_hz))),
-            ),
-            (
-                w.stereo.weight(),
-                q.map(|q| i64::from(!q.is_stereo(w.stereo.incoherence))),
-            ),
-            (
-                w.clipping.weight(),
-                q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
-            ),
-        ]);
-        let rank: Rank = vec![
-            unknown,
-            sum,
-            -tie_break(facts.audio.as_ref()),
-            facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
-            i64::try_from(*n).unwrap_or(UNKNOWN),
-        ];
-        // A song's milliseconds are far below 2^52, held exactly.
-        let tenths = |ms: i64| (units::seconds_of_ms(ms as f64) * 10.0).floor() / 10.0;
-        let why = match (beyond, q) {
-            (u, Some(q)) => format!(
-                "{}, {:.1} kHz, {}, {:.2}% clipped",
-                u.map_or_else(
-                    || "no other recording to compare".to_string(),
-                    |ms| match lacks {
-                        0 => format!("{:.1} s of sound beyond the song", tenths(ms)),
-                        _ => format!(
-                            "{:.1} s of sound beyond the song, {:.1} s of the song missing",
-                            tenths(ms),
-                            tenths(lacks)
-                        ),
-                    }
+    let scored: Vec<Scored<'_>> = audible
+        .iter()
+        .map(|&(n, key, facts)| {
+            let compared: Vec<&Aligned> = audible
+                .iter()
+                .filter(|(_, other, _)| *other != key)
+                .filter_map(|(_, other, _)| input.aligned(key, other).filter(|a| a.fits()))
+                .collect();
+            let beyond = compared
+                .iter()
+                .filter(|a| a.b_lacks_ms == 0)
+                .map(|a| a.unmatched_ms())
+                .min()
+                .or_else(|| compared.iter().map(|a| a.unmatched_ms()).min());
+            let lacks = compared.iter().map(|a| a.a_lacks_ms).max().unwrap_or(0);
+            let missing = facts.damage().map_or(0, |d| d.missing_ms());
+            let unmatched = beyond
+                .map(|ms| ms + lacks.max(missing))
+                .or_else(|| any_missing.then_some(missing));
+            let q = facts.audio.as_ref().and_then(|a| a.quality);
+            let w = &input.audio.pick;
+            let [unknown, sum] = score(&[
+                (
+                    w.purity.weight(),
+                    unmatched.map(|ms| ms / i64::from(w.purity.step_ms)),
                 ),
-                units::khz_of_hz(q.bandwidth_hz),
-                speakers(
-                    facts.audio.as_ref(),
-                    q.is_stereo(input.audio.pick.stereo.incoherence)
+                (
+                    w.bandwidth.weight(),
+                    q.map(|q| -q.bandwidth_bucket(f64::from(w.bandwidth.step_hz))),
                 ),
-                q.clipping * 100.0
-            ),
-            (_, None) => "not measured".to_string(),
-        };
-        let why = match damage {
-            Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
-            Some(Damage::Missing { seconds, .. }) => format!("{why}, {seconds:.1} s missing"),
-            Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
-            None => why,
-        };
-        (rank, (*key).clone(), why)
-    });
-    ranked
-        .min_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, key, why)| (key, why))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no source of this song has audio that reads: {}",
-                unheard(input).join("; ")
-            )
+                (
+                    w.stereo.weight(),
+                    q.map(|q| i64::from(!q.is_stereo(w.stereo.incoherence))),
+                ),
+                (
+                    w.clipping.weight(),
+                    q.map(|q| q.clipping_bucket(&w.clipping.cutoffs)),
+                ),
+            ]);
+            let rank: Rank = vec![
+                unknown,
+                sum,
+                -tie_break(facts.audio.as_ref()),
+                facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
+            ];
+            Scored {
+                n,
+                key,
+                facts,
+                rank,
+                beyond,
+                lacks,
+            }
         })
+        .collect();
+    let recordings = recordings_of(input, candidates, &scored);
+    if let Some(pin) = &input.song.audio {
+        let why = if recordings.several() {
+            format!("pinned, {}", recordings.describe(pin))
+        } else {
+            "pinned".to_string()
+        };
+        return Ok((pin.clone(), why, recordings.others(pin)));
+    }
+    let apart = |s: &Scored<'_>| {
+        if input.audio.pick.recording.enabled {
+            recordings.rank(s.key)
+        } else {
+            0
+        }
+    };
+    let Some(chosen) = scored
+        .iter()
+        .min_by(|a, b| (apart(a), &a.rank, a.n).cmp(&(apart(b), &b.rank, b.n)))
+    else {
+        bail!(
+            "no source of this song has audio that reads: {}",
+            unheard(input).join("; ")
+        );
+    };
+    let why = audio_why(input, chosen, &recordings);
+    Ok((chosen.key.clone(), why, recordings.others(chosen.key)))
+}
+
+/// The song's audio sources in recordings ([`vet::recordings`]), held to
+/// the records vetting believes on their names alone, a record's length
+/// being what the recordings are held to; none for a song with one.
+fn recordings_of(
+    input: &Input<'_>,
+    candidates: &BTreeMap<Field, Vec<Candidate<'_>>>,
+    scored: &[Scored<'_>],
+) -> Recordings {
+    let best = scored.iter().map(|s| &s.rank).min();
+    let audible: Vec<recordings::Audible<'_>> = scored
+        .iter()
+        .map(|s| recordings::Audible {
+            key: s.key,
+            ms: ms_of(s.facts),
+            digest: s.facts.audio.as_ref().and_then(|a| a.digest.as_deref()),
+            first: Some(&s.rank) == best,
+        })
+        .collect();
+    if audible.len() < 2 {
+        return Recordings::of(&audible, &[], |_, _| None);
+    }
+    let ids = |facts: &Facts| -> Vec<String> {
+        facts
+            .tags
+            .get(&Field::MusicBrainzTrackId)
+            .into_iter()
+            .flat_map(|o| o.values.iter().map(|id| id.trim().to_lowercase()))
+            .collect()
+    };
+    let named: BTreeSet<String> = input
+        .present()
+        .filter(|(_, key, facts)| key.file().is_some() && facts.audio.is_some())
+        .flat_map(|(_, _, facts)| ids(facts))
+        .collect();
+    let believed = vetted(input, candidates, None);
+    let records: Vec<recordings::Record<'_>> = input
+        .present()
+        .filter(|(_, key, facts)| facts.audio.is_none() && believed.verdict(key) == Verdict::Same)
+        .filter_map(|(_, key, facts)| {
+            Some(recordings::Record {
+                key,
+                ms: i64::try_from(facts.length_ms?).ok()?,
+                named: ids(facts).iter().any(|id| named.contains(id)),
+            })
+        })
+        .collect();
+    Recordings::of(&audible, &records, |a, b| input.aligned(a, b))
+}
+
+/// Why `chosen` is the song's audio: what it plays beyond the song or
+/// lacks of it, else which recording it holds, then how it measures.
+fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) -> String {
+    let (facts, lacks) = (chosen.facts, chosen.lacks);
+    // A song's milliseconds are far below 2^52, held exactly.
+    let tenths = |ms: i64| (units::seconds_of_ms(ms as f64) * 10.0).floor() / 10.0;
+    let heard = match chosen.beyond {
+        None => recordings.describe(chosen.key),
+        Some(ms) => {
+            let beyond = match lacks {
+                0 => format!("{:.1} s of sound beyond the song", tenths(ms)),
+                _ => format!(
+                    "{:.1} s of sound beyond the song, {:.1} s of the song missing",
+                    tenths(ms),
+                    tenths(lacks)
+                ),
+            };
+            match recordings.aside(chosen.key) {
+                Some(aside) => format!("{beyond}, {aside}"),
+                None => beyond,
+            }
+        }
+    };
+    let why = match facts.audio.as_ref().and_then(|a| a.quality) {
+        Some(q) => format!(
+            "{heard}, {:.1} kHz, {}, {:.2}% clipped",
+            units::khz_of_hz(q.bandwidth_hz),
+            speakers(
+                facts.audio.as_ref(),
+                q.is_stereo(input.audio.pick.stereo.incoherence)
+            ),
+            q.clipping * 100.0
+        ),
+        None => "not measured".to_string(),
+    };
+    match facts.damage() {
+        Some(Damage::Cut { ends, .. }) => format!("{why}, cut off at {ends:.0} s"),
+        Some(Damage::Missing { seconds, .. }) => format!("{why}, {seconds:.1} s missing"),
+        Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
+        None => why,
+    }
 }
 
 /// Why each of the song's sources gives it no audio: gone from the

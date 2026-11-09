@@ -66,6 +66,11 @@
 //! source set aside names, and no source still believed does, is set
 //! aside with it: it is that album's cover. `[tags.clean.structure]
 //! vetting` switches vetting off ([`crate::clean::VETTING`]).
+//!
+//! Sources with audio are told apart by the recording they hold, the
+//! song's or another, in [`recordings`].
+
+pub mod recordings;
 
 use std::collections::{BTreeMap, BTreeSet};
 

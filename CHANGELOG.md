@@ -20,6 +20,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Changed
 
+- **A song holding two recordings takes its audio from its own.**
+  Sources whose audio aligns are one recording; where a song holds
+  several, as a live take beside the studio cut, the one whose length
+  fits its MusicBrainz record, else the one most of its sources hold,
+  ranks ahead of every measure. `muman status` says which recording each
+  source holds in place of "no other recording to compare", names each
+  source of another and one playing more than 0.5% off the speed of the
+  rest, and `[audio.pick.recording] enabled = false` turns it off. A
+  song whose recordings are alike in sources keeps its audio.
 - **A hook runs only once a command has changed the library, after it
   lets go of the home.** `on = "written"`, which ran on each song file
   as it was placed, is refused: it changed a file muman had written,
