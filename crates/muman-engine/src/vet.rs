@@ -397,13 +397,14 @@ impl Vets {
     pub fn set_aside(&self) -> Vec<String> {
         self.aside()
             .into_iter()
-            .map(|(key, why)| format!("{key}: {why}"))
+            .map(|(key, why, _)| format!("{key}: {why}"))
             .collect()
     }
 
-    /// Each source set aside, and what of it and why.
+    /// Each source set aside, what of it and why, and whether it still
+    /// gives its release.
     #[must_use]
-    pub fn aside(&self) -> Vec<(&SourceKey, String)> {
+    pub fn aside(&self) -> Vec<(&SourceKey, String, bool)> {
         self.0
             .iter()
             .map(|(key, vet)| {
@@ -412,7 +413,7 @@ impl Vets {
                     Verdict::Unsure => format!("its release and IDs, {}", vet.why),
                     Verdict::Other => vet.why.clone(),
                 };
-                (key, why)
+                (key, why, vet.verdict == Verdict::Same)
             })
             .collect()
     }

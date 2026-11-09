@@ -237,3 +237,60 @@ fn names_spelled_more_than_one_way_with_no_id_are_suggested() {
         ]]
     );
 }
+
+#[test]
+fn a_search_hint_neither_spells_an_artist_nor_joins_a_name_to_it() {
+    let planned = vec![
+        song(
+            0,
+            &[
+                (Field::Artist, "マルロ・ヴェン", RECORD),
+                (Field::Artists, "マルロ・ヴェン", RECORD),
+                (Field::MusicBrainzArtistId, VENN, RECORD),
+            ],
+        ),
+        song(1, &[(Field::Artist, "Venn", "manual:a.flac")]),
+    ];
+    let mut facts = knowing(
+        VENN,
+        "マルロ・ヴェン",
+        &[("Marlo Venn", "ja", false), ("Aaron Legal", "en", false)],
+    );
+    let artist = &mut facts.values_mut().next().unwrap().artists[0];
+    artist.aliases[1].kind = Some("Legal name".into());
+    artist.aliases.push(Alias {
+        name: "Venn".into(),
+        sort_name: String::new(),
+        locale: None,
+        primary: false,
+        kind: Some("Search hint".into()),
+        ended: false,
+    });
+    let latin = spell(&planned, &facts, Spelling::Latin);
+    assert_eq!(
+        names(&latin),
+        [
+            (0, Field::Artist, "Marlo Venn"),
+            (0, Field::Artists, "Marlo Venn")
+        ],
+        "an artist name before a legal name, its ARTISTS with it, and no hint"
+    );
+}
+
+#[test]
+fn an_album_artist_taken_from_an_artist_set_by_hand_is_left_alone() {
+    let planned = vec![song(
+        0,
+        &[
+            (Field::Artist, "MARLO VENN", "song.tags"),
+            (
+                Field::AlbumArtist,
+                "MARLO VENN",
+                "the first artist of song.tags",
+            ),
+            (Field::MusicBrainzArtistId, VENN, RECORD),
+        ],
+    )];
+    let facts = knowing(VENN, "Marlo Venn", &[]);
+    assert!(spell(&planned, &facts, Spelling::Original).is_empty());
+}

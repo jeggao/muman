@@ -65,7 +65,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   track it is there, rather than one on the album and another on a
   compilation; `original` puts each song on the first album its
   recording came out on, and `avoid` names kinds of release, as
-  `compilation`, taken only where nothing else would be. `muman status`
+  `compilation`, taken only where nothing else would be. An album most
+  of whose songs are on one release already stays on it. `muman status`
   names the release a song was moved to. Songs looked up before keep
   their release until `muman sync --rematch`.
 

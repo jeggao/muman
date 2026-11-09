@@ -87,7 +87,9 @@ name folded, as `The Marlo Venn` folds as `MARLO VENN` does, never by
 names merely alike; a name two artists share joins neither. Each group
 holding an ID is written one way, as `[tags] script` says: `original`,
 the artist's own name in its own script; `latin`, a name of theirs in
-Latin letters where MusicBrainz knows one. With neither known, the
+Latin letters where MusicBrainz knows one, an artist name before a
+legal name; a search hint, a misspelling MusicBrainz keeps for search,
+neither spells an artist nor joins a name to it. With neither known, the
 spelling most of the group's records credit in that script is written,
 one in another script only where none spells it so, and a song already
 spelled as another as common keeps it. A group with no
@@ -163,11 +165,15 @@ on, and `[release] prefer` chooses among them:
 
 A release of a kind `[release] avoid` names, as `"compilation"`, is
 chosen only where no other would be, and a song's `release` key pins
-it to one release of its recording, as `muman review` writes it. A song moved takes the album,
-date, country, types, track and disc numbers and IDs its place on the
-release has, and the label, catalog number and barcode the album's
-other songs on it have; its record's own release fields are left out.
-A song whose album you set is left where it is. Songs looked up before
+it to one release of its recording, as `muman review` writes it. An
+album three in five of whose songs are on one release already stays on
+it, a stray joining it where its recording is on it. A song moved takes
+the album, date, country, types, track and disc numbers and IDs its
+place on the release has, and the label, catalog number and barcode the
+album's other songs on it have; its record's own release fields are
+left out, but for the album artist and the first release's date where
+the release is of the record's own group. A song whose album you set,
+or whose record vetting set aside, is left where it is. Songs looked up before
 this muman kept no such recordings until `muman sync --rematch` asks
 again. `muman status` names the release a song was moved to and why,
 as `release  musicbrainz:…: on "Rooms of Salt", the release 11 of its
@@ -250,10 +256,12 @@ title = "%artist% - %title% (%dummy%)"
 ```
 
 `drop` leaves out the fields named; `credits = false` leaves out the
-artist, artists and album artist; `title` reads each title by a
-pattern of `%title%`, `%artist%`, `%album%`, `%track%` and `%dummy%`,
-a stretch read as nothing, each part taken as a field of the source's
-own. A title the pattern does not fit is left as it is.
+artist, artists and album artist; then `title` reads each title, as it
+came, by a pattern of `%title%`, `%artist%`, `%album%`, `%track%` and
+`%dummy%`, a stretch read as nothing, each part taken as a field of the
+source's own, so an artist it reads stands though `credits = false`
+left out the source's own. A title the pattern does not fit is left as
+it is.
 
 ## Cleaning
 
