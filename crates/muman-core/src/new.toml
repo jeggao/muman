@@ -56,6 +56,10 @@ typography = "typographic"
 # "files-first" puts files before records; "sources" takes the order of
 # each song's `sources`.
 believe = "musicbrainz-first"
+# How an artist MusicBrainz knows is spelled on every song crediting it
+# alone: "original", its own name, in its own script; "latin", a name of
+# theirs in Latin letters, where MusicBrainz knows one.
+script = "original"
 
 [release]
 # Which release a song is on, of those its recording is on: "album"

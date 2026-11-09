@@ -9,6 +9,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Added
 
+- **An artist is spelled one way on every song crediting it alone.**
+  Names are grouped across the library by MusicBrainz's artist ID and
+  by the name folded, never by names merely alike, and each group with
+  an ID is written as `[tags] script` says: `original`, the artist's own
+  name in its own script, or `latin`, a name of theirs in Latin letters.
+  Records keep artists' own names and aliases, read again from the
+  records muman holds; `sync --rematch` fetches them for records kept
+  before.
+
 - **`[release] date = "original"` dates a song as its album first came
   out**, by MusicBrainz's `ORIGINALDATE`, rather than as the reissue it
   is on did, so a path's `year` is one for every edition of an album.

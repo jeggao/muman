@@ -36,6 +36,7 @@ pub mod levels;
 pub mod library;
 pub mod limit;
 pub mod lookup;
+pub mod names;
 pub mod outputs;
 pub mod query;
 pub mod reconcile;

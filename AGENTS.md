@@ -59,6 +59,7 @@ src/
   */tests.rs        a module's tests, when they outgrow it
 crates/muman-engine/src/   the engine: the state, plans, the library written, runs undone
   album.rs, release.rs   the songs of one album made to agree: one release, spelling, cover
+  names.rs          one spelling for each artist across the library
   state.rs          the state: files written, measures, comparisons; state/db.rs, state.db, the
                     store it moves into: schema, transactions; state/json.rs, an old state.json, read once
   acquire.rs        the network phase: yt-dlp listing, fetching, matching; due.rs, what a sync fetches

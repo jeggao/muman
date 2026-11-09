@@ -362,6 +362,18 @@ pub enum Believe {
     Sources,
 }
 
+/// Which script an artist known by names in several is written in, as
+/// `[tags] script` says.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Spelling {
+    /// The artist's own name, as MusicBrainz keeps it.
+    #[default]
+    Original,
+    /// A name of theirs in Latin letters, where MusicBrainz knows one.
+    Latin,
+}
+
 /// What a rule may look at besides the value: the song's names, the
 /// library's albums, the source's other offers, and how punctuation is
 /// written.
@@ -618,7 +630,8 @@ fn has_cjk(s: &str) -> bool {
 
 /// Letters only of the Latin script, and at least one: Vietnamese and
 /// full-width ones too.
-pub(crate) fn latin_only(s: &str) -> bool {
+#[must_use]
+pub fn latin_only(s: &str) -> bool {
     let script = CodePointMapData::<Script>::new();
     let mut letters = s.chars().filter(|c| c.is_alphabetic()).peekable();
     letters.peek().is_some() && letters.all(|c| script.get(c) == Script::Latin)

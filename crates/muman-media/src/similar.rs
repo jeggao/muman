@@ -834,6 +834,17 @@ static JOINERS: LazyLock<Regex> = LazyLock::new(|| {
         .expect("a valid pattern")
 });
 
+/// The names one credit holds as written, split where [`JOINERS`] join
+/// them: one for a credit naming one artist.
+#[must_use]
+pub fn names_in(credit: &str) -> Vec<&str> {
+    JOINERS
+        .split(credit)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
 /// The names one credit holds, folded: the whole, and each name what
 /// joins credits parts in it, each also without its apostrophes, as
 /// `Marlo's Lanterns` is written `Marlos Lanterns`, and without its

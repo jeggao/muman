@@ -2762,14 +2762,7 @@ fn resolve_tags(
         fields.insert(Field::Date, Slot::of(c));
     }
     let mut artists = joined_artists(&mut fields);
-    for agreed in input.pick.iter().flat_map(|p| &p.agreed) {
-        fields.insert(agreed.field, Slot::agreed(agreed));
-    }
-    if input.release.date == crate::settings::ReleaseDate::Original
-        && let Some(first) = fields.get(&Field::OriginalDate).cloned()
-    {
-        fields.insert(Field::Date, first);
-    }
+    settle(input, &mut fields, &mut artists);
 
     let mut written: Vec<(String, Slot)> = Field::ALL
         .iter()
@@ -2797,6 +2790,23 @@ fn resolve_tags(
         why,
         artists,
     )
+}
+
+/// What the album pass agreed on set over what the song's sources offer,
+/// its artists one by one with them, and the date `[release] date` asks
+/// for.
+fn settle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut Vec<String>) {
+    for agreed in input.pick.iter().flat_map(|p| &p.agreed) {
+        fields.insert(agreed.field, Slot::agreed(agreed));
+        if agreed.field == Field::Artist {
+            artists.clone_from(&agreed.values);
+        }
+    }
+    if input.release.date == crate::settings::ReleaseDate::Original
+        && let Some(first) = fields.get(&Field::OriginalDate).cloned()
+    {
+        fields.insert(Field::Date, first);
+    }
 }
 
 /// The loudness fields of `heard`, the source the song's audio is when

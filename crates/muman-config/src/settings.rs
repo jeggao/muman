@@ -1133,6 +1133,7 @@ impl From<WrittenTools> for Tools {
 pub struct Tags {
     pub typography: crate::clean::Typography,
     pub believe: crate::clean::Believe,
+    pub script: crate::clean::Spelling,
 }
 
 /// Which release a song is on, of those its recording is on.
