@@ -107,7 +107,8 @@ ID, though it may give its album, as a concert's record crediting each
 singer. A source with audio of its own, a pinned source and the tags
 you set by hand are never set aside. An AcoustID lookup refuses such a
 recording from the start: one whose title and first artist both
-disagree with the song's is no match.
+disagree with those the song's own sources give, never a record's, is
+no match.
 
 `muman status` names each source set aside and why, as `set aside
 musicbrainz:…: titled "Night Ferry" by Kiri Hoshino: no title or credit

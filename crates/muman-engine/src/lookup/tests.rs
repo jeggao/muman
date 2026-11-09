@@ -182,6 +182,33 @@ const NAMED: [(Field, &str); 2] = [
 ];
 
 #[test]
+fn a_print_is_asked_about_by_the_names_its_own_sources_give() {
+    let (_d, _m, mut s, mut p) = own(true, &NAMED);
+    let key = SourceKey::parse("manual:a.flac").unwrap();
+    let offer = crate::tags::Offer {
+        values: vec!["Lantern Weathr".into()],
+        structured: true,
+    };
+    s.facts
+        .get_mut(&key)
+        .unwrap()
+        .tags
+        .insert(Field::Title, offer);
+    p[0].1.why.tags = vec![crate::resolve::TagWhy {
+        key: Field::Title.vorbis().into(),
+        from: "musicbrainz:00000000-0000-0000-0000-000000000001".into(),
+        cleaned: Vec::new(),
+    }];
+    let query = print_query_of(&p[0].1, &s.facts).unwrap();
+    assert_eq!(
+        query.title.as_deref(),
+        Some("Lantern Weathr"),
+        "not the record's"
+    );
+    assert_eq!(query.artist.as_deref(), Some("Paper Comets"));
+}
+
+#[test]
 fn a_file_without_names_is_looked_up_by_its_print() {
     let (_d, m, s, p) = own(true, &[]);
     assert_eq!(found(&m, &s, &p), [Provider::AcoustId]);

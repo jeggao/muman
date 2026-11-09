@@ -137,8 +137,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   why, and `[tags.clean.structure] vetting = false` turns it off. The
   next sync moves such songs to their files' album.
 - **An AcoustID lookup no longer takes a recording of another song.** A
-  recording whose title and first artist both disagree with the song's,
-  as a print submitted with another song names, is no match whatever
+  recording whose title and first artist both disagree with those the
+  song's own sources give, never a record's, as a print submitted with
+  another song names, is no match whatever
   its score, and a cover act whose name holds the artist's is not the
   artist. This holds for new lookups, and for songs already looked up
   only once `sync --rematch` asks again.

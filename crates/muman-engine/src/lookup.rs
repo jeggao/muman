@@ -266,19 +266,40 @@ fn mono_of(facts: &Facts) -> Option<bool> {
 }
 
 /// What an AcoustID lookup asks for a resolved song: the print and length
-/// of its audio, with what names and album it has. A song whose audio
-/// lacks either is not asked.
+/// of its audio, with what names and album its own sources give it
+/// ([`own_tag`]). A song whose audio lacks either is not asked.
 #[must_use]
 pub fn print_query_of(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<acoustid::Query> {
     let audio = facts.get(&r.plan.audio.key)?;
     Some(acoustid::Query {
         print: audio.print.clone()?,
         seconds: audio.length()?,
-        title: tag_of(r, Field::Title),
-        artist: tag_of(r, Field::Artist),
-        album: tag_of(r, Field::Album).filter(|_| album_of(Some(r))),
+        title: own_tag(r, audio, Field::Title),
+        artist: own_tag(r, audio, Field::Artist),
+        album: own_tag(r, audio, Field::Album).filter(|_| album_of(Some(r))),
         mono: mono_of(audio),
     })
+}
+
+/// The first value of `f` a resolved song writes, unless a MusicBrainz
+/// record gave it, then the one its audio's source offers: a record
+/// found by the last lookup would hold the next to itself, so asking
+/// again could only ever refuse the right recording.
+fn own_tag(r: &Resolved, audio: &Facts, f: Field) -> Option<String> {
+    let from_record = r.why.tags.iter().any(|w| {
+        w.key == f.vorbis()
+            && SourceKey::parse(&w.from).is_ok_and(
+                |k| matches!(k, SourceKey::Remote { site, .. } if site == crate::provider::MUSICBRAINZ),
+            )
+    });
+    if !from_record {
+        return tag_of(r, f);
+    }
+    audio
+        .tags
+        .get(&f)
+        .filter(|o| o.structured)
+        .and_then(|o| o.values.first().cloned())
 }
 
 /// The first value a resolved song writes for `f`.
