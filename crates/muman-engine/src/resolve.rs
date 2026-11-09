@@ -897,6 +897,9 @@ pub enum Doubt {
     Recording { key: SourceKey, why: String },
     /// A record it believes, stating a length far from its audio's.
     Length { key: SourceKey, why: String },
+    /// An upload whose title reads more than one way, none clear of the
+    /// rest ([`crate::readings`]).
+    Reading { key: SourceKey, why: String },
 }
 
 impl Doubt {
@@ -908,6 +911,7 @@ impl Doubt {
             Self::SetAside { key, why, .. } => format!("set aside: {key}: {why}"),
             Self::Recording { key, why } => format!("another recording: {key}: {why}"),
             Self::Length { key, why } => format!("another length: {key}: {why}"),
+            Self::Reading { key, why } => format!("read two ways: {key}: {why}"),
         }
     }
 }
@@ -2443,6 +2447,62 @@ fn best_album<'c, 'a>(
     .filter(|c| c.offer.structured)
 }
 
+/// Each upload of the song whose title, read off it as its channel
+/// wrote it, reads more than one way with none clear of the rest, held
+/// to the titles and credits its other sources and the tags set by hand
+/// give ([`crate::readings`]).
+fn readings_of(input: &Input<'_>) -> Vec<Doubt> {
+    let present: Vec<(&SourceKey, &Facts)> = input.present().map(|(_, k, f)| (k, f)).collect();
+    let hand = |field: Field| {
+        (input.song.tags.iter())
+            .filter(move |(name, _)| Field::named(name) == Some(field))
+            .flat_map(|(_, values)| values.iter().map(String::as_str))
+    };
+    let mut doubts = Vec::new();
+    for (key, facts) in &present {
+        let Some(title) = facts.tags.get(&Field::Title).filter(|o| !o.structured) else {
+            continue;
+        };
+        let others = present.iter().filter(|(k, _)| k != key).map(|(_, f)| f);
+        let structured = |field: Field| {
+            others
+                .clone()
+                .filter_map(move |f| f.tags.get(&field).filter(|o| o.structured))
+                .flat_map(|o| o.values.iter().map(String::as_str))
+                .chain(hand(field))
+                .collect::<Vec<_>>()
+        };
+        let (credited, titles) = (structured(Field::Artist), structured(Field::Title));
+        let channel = facts.tags.get(&Field::Artist).filter(|o| !o.structured);
+        let evidence = crate::readings::Evidence {
+            credited: &credited,
+            titles: &titles,
+            channel: channel.and_then(|o| o.values.first()).map(String::as_str),
+        };
+        let Some(raw) = title.values.first() else {
+            continue;
+        };
+        let read = crate::readings::read(raw, &evidence);
+        if read.clear {
+            continue;
+        }
+        let ways: Vec<String> = (read.readings.iter().take(2))
+            .map(|r| match &r.artist {
+                Some(artist) => format!("“{}” by {artist}", r.title),
+                None => format!("“{}” whole", r.title),
+            })
+            .collect();
+        doubts.push(Doubt::Reading {
+            key: (*key).clone(),
+            why: format!(
+                "its title reads as {}, nothing telling which",
+                ways.join(" or as ")
+            ),
+        });
+    }
+    doubts
+}
+
 /// The release the song was moved to and why ([`crate::release`]), as
 /// `<key>: <why>`, where its album came from the record moved.
 fn moved(input: &Input<'_>, tag_why: &[TagWhy]) -> Option<String> {
@@ -2617,6 +2677,7 @@ fn doubts_of(
         key: key.clone(),
         why: why.clone(),
     }));
+    doubts.extend(readings_of(input));
     for (_, key, facts) in input.present() {
         let (Some(stated), Some(heard)) = (facts.length_ms, audio_ms) else {
             continue;

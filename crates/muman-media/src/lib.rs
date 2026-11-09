@@ -37,6 +37,7 @@ pub mod parts;
 pub mod picture;
 pub mod probe;
 pub mod quality;
+pub mod readings;
 pub mod record;
 pub mod similar;
 pub mod style;
