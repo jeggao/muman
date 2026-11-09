@@ -9,6 +9,19 @@
 //! that holds one is read as a lookup would read it
 //! (`parse_recording`). Which recording a search's answer fits is the
 //! provider's to say.
+//!
+//! A record keeps, for the names and genres a song is written with, each
+//! artist its recording and its release credit as MusicBrainz knows them
+//! ([`CreditedArtist`]): the artist's own name, which a credit may spell
+//! otherwise, its aliases, each with its locale and whether it is the
+//! primary name there, and its genres; and the genres of the recording,
+//! the release and the release group, most voted first. MusicBrainz
+//! lists aliases in no order, so they are kept primary first, then those
+//! of a locale, then any but a search hint, then by locale and name, at
+//! most [`MAX_ALIASES`] an artist: the various-artists entry has over two
+//! hundred, one per language, and every compilation credits it. A record
+//! kept before any of these were asked for reads with none, and gains
+//! them when it is next fetched.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +29,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::source::is_mbid;
+
+/// The aliases kept of one artist at most.
+pub const MAX_ALIASES: usize = 50;
 
 /// A MusicBrainz ID, 32 hex digits in groups of 8, 4, 4, 4 and 12. It
 /// names a file in the store, so it is checked where it comes in, from a
@@ -93,6 +109,77 @@ pub struct Record {
     /// work with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub languages: Vec<String>,
+    /// Each artist the recording credits that has an MBID, once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credited_artists: Vec<CreditedArtist>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<Genre>,
+}
+
+/// An artist a credit names, as MusicBrainz knows them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreditedArtist {
+    /// The artist's MBID.
+    pub id: String,
+    /// Its own name, which a credit may spell otherwise.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sort_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<Alias>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<Genre>,
+}
+
+/// Another name of an artist, as MusicBrainz answers and a record keeps
+/// it: a spelling, a legal name, or its name in a locale or a script.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Alias {
+    #[serde(default, deserialize_with = "or_default")]
+    pub name: String,
+    #[serde(
+        default,
+        alias = "sort-name",
+        deserialize_with = "or_default",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub sort_name: String,
+    /// The locale it names the artist in, as `ja` or `en_GB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Whether it is the artist's name in its locale.
+    #[serde(
+        default,
+        deserialize_with = "or_default",
+        skip_serializing_if = "is_false"
+    )]
+    pub primary: bool,
+    /// `Artist name`, `Legal name` or `Search hint`.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Whether the artist no longer goes by it.
+    #[serde(
+        default,
+        deserialize_with = "or_default",
+        skip_serializing_if = "is_false"
+    )]
+    pub ended: bool,
+}
+
+/// A genre MusicBrainz's users gave an entity, and by how many votes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Genre {
+    #[serde(default, deserialize_with = "or_default")]
+    pub name: String,
+    #[serde(default, deserialize_with = "or_default")]
+    pub count: i32,
+}
+
+// serde's `skip_serializing_if` passes the field by reference.
+#[expect(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +227,8 @@ pub struct Release {
 }
 
 /// What only a lookup of the release itself answers: its labels and
-/// catalogue numbers, barcode, ASIN and script.
+/// catalogue numbers, barcode, ASIN and script, its artists' aliases,
+/// and its genres and its release group's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Details {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -157,6 +245,13 @@ pub struct Details {
     /// The first release of its release group, as Picard's original date.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_date: Option<String>,
+    /// Each artist the release credits that has an MBID, once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credited_artists: Vec<CreditedArtist>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<Genre>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_genres: Vec<Genre>,
 }
 
 /// Where a record is kept in the store.
@@ -215,6 +310,9 @@ pub struct Recording {
     /// Its works, which a lookup asking for `work-rels` lists.
     #[serde(default, deserialize_with = "or_default")]
     pub relations: Vec<Relation>,
+    /// Its genres, which a lookup asking for `genres` lists.
+    #[serde(default, deserialize_with = "or_default")]
+    pub genres: Vec<Genre>,
 }
 
 /// A recording's relation, as a lookup lists it; only a work's are read.
@@ -277,6 +375,14 @@ pub struct Credit {
 #[derive(Debug, Deserialize)]
 pub struct Artist {
     pub id: String,
+    #[serde(default, deserialize_with = "or_default")]
+    pub name: String,
+    #[serde(default, rename = "sort-name", deserialize_with = "or_default")]
+    pub sort_name: String,
+    #[serde(default, deserialize_with = "or_default")]
+    pub aliases: Vec<Alias>,
+    #[serde(default, deserialize_with = "or_default")]
+    pub genres: Vec<Genre>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,6 +468,70 @@ pub fn artist_ids(credit: &[Credit]) -> Vec<String> {
         .iter()
         .filter_map(|c| Some(c.artist.as_ref()?.id.clone()))
         .collect()
+}
+
+/// Each artist of `credit` with an MBID, once, with its aliases in the
+/// order the module docs give.
+#[must_use]
+pub fn credited_artists(credit: &[Credit]) -> Vec<CreditedArtist> {
+    let mut all: Vec<CreditedArtist> = Vec::new();
+    for artist in credit.iter().filter_map(|c| c.artist.as_ref()) {
+        if !is_mbid(&artist.id) || all.iter().any(|a| a.id == artist.id) {
+            continue;
+        }
+        let mut aliases: Vec<Alias> = Vec::new();
+        for alias in &artist.aliases {
+            let alias = Alias {
+                name: alias.name.trim().to_string(),
+                sort_name: alias.sort_name.trim().to_string(),
+                locale: alias
+                    .locale
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string),
+                ..alias.clone()
+            };
+            if !alias.name.is_empty() && !aliases.contains(&alias) {
+                aliases.push(alias);
+            }
+        }
+        aliases.sort_by_cached_key(|a| {
+            (
+                !a.primary,
+                a.locale.is_none(),
+                a.kind.as_deref() == Some("Search hint"),
+                a.locale.clone(),
+                a.name.clone(),
+            )
+        });
+        aliases.truncate(MAX_ALIASES);
+        all.push(CreditedArtist {
+            id: artist.id.clone(),
+            name: artist.name.trim().to_string(),
+            sort_name: artist.sort_name.trim().to_string(),
+            aliases,
+            genres: genres(&artist.genres),
+        });
+    }
+    all
+}
+
+/// `answered`'s genres, each once, most voted first, then by name.
+#[must_use]
+pub fn genres(answered: &[Genre]) -> Vec<Genre> {
+    let mut all: Vec<Genre> = Vec::new();
+    for genre in answered {
+        let name = genre.name.trim();
+        if !name.is_empty() && !all.iter().any(|g| g.name == name) {
+            all.push(Genre {
+                name: name.to_string(),
+                count: genre.count,
+            });
+        }
+    }
+    all.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+    all
 }
 
 /// Whether two names hold one another, by [`crate::similar::names_match`].
@@ -491,6 +661,8 @@ impl Recording {
                 .map(|d| d.trim().to_string())
                 .filter(|d| !d.is_empty()),
             languages: languages(&self.relations),
+            credited_artists: credited_artists(&self.credit),
+            genres: genres(&self.genres),
         })
     }
 }

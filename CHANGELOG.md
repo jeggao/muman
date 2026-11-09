@@ -43,6 +43,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **MusicBrainz records keep the length of their recording.** The next
   sync reads each record kept again, from the store alone, opening no
   media file.
+- **Lookups ask for and keep more, for choosing releases, names and
+  genres.** An AcoustID lookup keeps every recording that fits the
+  print, with the releases and tracks each is on, not only the one
+  taken; a MusicBrainz record keeps its artists' aliases and the genres
+  of its recording, release and release group. No request is added and
+  no tag changes. A record gains them when it is fetched again, as a
+  record that falls short is; `sync --rematch` fetches them all at
+  once, one request a second.
 
 ### Fixed
 

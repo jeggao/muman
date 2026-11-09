@@ -382,6 +382,10 @@ pub struct Looked {
     /// falls short of what the song asks.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub unchanged: u32,
+    /// Every recording an AcoustID lookup that found a record by the
+    /// print named, best first, with the releases each is on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<crate::acoustid::Candidate>,
 }
 
 // serde's `skip_serializing_if` passes the field by reference.
@@ -415,6 +419,7 @@ impl Looked {
             at: now_secs(),
             outcome,
             unchanged: 0,
+            candidates: Vec::new(),
         }
     }
 
@@ -1034,6 +1039,24 @@ impl State {
             .find(|l| &l.from == from && l.find == find.name())
     }
 
+    /// The recordings AcoustID named for a song's print, best first, with
+    /// the releases each is on: those the newest AcoustID lookup made from
+    /// any of `sources` kept, when it found `record`. Empty when it found
+    /// another, or was made by a muman that kept none.
+    #[must_use]
+    pub fn candidates(
+        &self,
+        sources: &[SourceKey],
+        record: &SourceKey,
+    ) -> &[crate::acoustid::Candidate] {
+        self.lookups
+            .iter()
+            .filter(|l| l.find == Provider::AcoustId.name() && sources.contains(&l.from))
+            .max_by_key(|l| l.at)
+            .filter(|l| matches!(&l.outcome, Outcome::Found(k) if k == record))
+            .map_or(&[], |l| l.candidates.as_slice())
+    }
+
     /// Record lookups and the uploads releases replaced in the state file
     /// as it is now, under its lock: a failure counts on from the last.
     pub fn keep_lookups(
@@ -1194,6 +1217,7 @@ mod tests {
             at: 0,
             outcome,
             unchanged: 0,
+            candidates: Vec::new(),
         };
         let method = crate::lookup::method(Provider::Lrclib);
         let none = |_: &SourceKey| false;
@@ -1216,6 +1240,57 @@ mod tests {
             std::time::Duration::from_secs(7 * day),
             &none
         ));
+    }
+
+    #[test]
+    fn an_acoustid_lookup_keeps_its_candidates_and_an_older_row_reads_without_them() {
+        let dir = tempfile::tempdir().unwrap();
+        State::default().save(dir.path()).unwrap();
+        let audio = SourceKey::Manual("Lantern Weather.flac".into());
+        let id = |n: &str| format!("00000000-0000-0000-0000-00000000000{n}");
+        let record = SourceKey::parse(&format!("musicbrainz:{}", id("1"))).unwrap();
+        let mut looked = Looked::now(
+            audio.clone(),
+            Provider::AcoustId,
+            Outcome::Found(record.clone()),
+        );
+        looked.candidates = vec![crate::acoustid::Candidate {
+            id: crate::musicbrainz::Mbid::parse(&id("1")).unwrap(),
+            title: "Lantern Weather".into(),
+            artists: vec!["Paper Comets".into()],
+            length_ms: Some(241_000),
+            score: 970,
+            sources: 12,
+            releases: vec![crate::acoustid::CandidateRelease {
+                id: id("a"),
+                group_id: Some(id("b")),
+                title: "Rooms of Salt".into(),
+                date: Some("2003-05".into()),
+                country: Some("XW".into()),
+                types: vec!["Album".into()],
+                disc: Some(1),
+                discs: Some(1),
+                track: Some(4),
+                tracks: Some(11),
+            }],
+        }];
+        State::keep_lookups(dir.path(), std::slice::from_ref(&looked), &[]).unwrap();
+        let state = State::load(dir.path()).unwrap();
+        assert_eq!(state.lookups, [looked.clone()]);
+        let sources = [SourceKey::youtube("aaaaaaaaaaa"), audio];
+        assert_eq!(state.candidates(&sources, &record), looked.candidates);
+        let other = SourceKey::parse(&format!("musicbrainz:{}", id("2"))).unwrap();
+        assert_eq!(state.candidates(&sources, &other), []);
+
+        let mut row = serde_json::to_value(&looked).unwrap();
+        row.as_object_mut().unwrap().remove("candidates");
+        let older: Looked = serde_json::from_value(row).unwrap();
+        assert_eq!(older.candidates, []);
+        assert_eq!(
+            serde_json::to_value(&older).unwrap().get("candidates"),
+            None,
+            "a row without them writes none"
+        );
     }
 
     #[test]

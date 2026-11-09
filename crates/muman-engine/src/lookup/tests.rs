@@ -85,6 +85,7 @@ fn a_lookup_is_made_again_only_when_due() {
         at,
         outcome,
         unchanged: 0,
+        candidates: Vec::new(),
     };
     s.lookups = vec![looked(NOW - DAY, Outcome::Nothing)];
     assert!(finds(&m, &s, false).is_empty(), "found nothing a day ago");
@@ -199,6 +200,7 @@ fn musicbrainz_waits_for_acoustid() {
         at: NOW,
         outcome: Outcome::Nothing,
         unchanged: 0,
+        candidates: Vec::new(),
     }];
     assert_eq!(
         found(&m, &s, &p),
@@ -226,6 +228,7 @@ fn the_cover_waits_for_the_record_that_names_its_release() {
         at: NOW,
         outcome: Outcome::Nothing,
         unchanged: 0,
+        candidates: Vec::new(),
     };
     s.lookups = vec![nothing(Provider::AcoustId)];
     assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::MusicBrainz]);
@@ -253,6 +256,7 @@ fn what_no_output_writes_is_looked_up_for_no_song() {
         at: NOW,
         outcome: Outcome::Nothing,
         unchanged: 0,
+        candidates: Vec::new(),
     }];
     assert_eq!(found(&m, &s, &p), [Provider::Lrclib, Provider::CoverArt]);
     m.settings.lyrics.out.clear();
@@ -618,6 +622,8 @@ fn a_musicbrainz_record_that_falls_short_is_fetched_again_by_its_id() {
         editions: Vec::new(),
         original_date: None,
         languages: Vec::new(),
+        credited_artists: Vec::new(),
+        genres: Vec::new(),
     });
     s.facts.insert(record.clone(), facts);
     let mine: Vec<(Provider, Verdict)> = verdicts(&m, &s, &p, NOW, Ask::default())
@@ -740,6 +746,8 @@ fn a_rematch_fetches_a_full_record_again_and_asks_acoustid_again_for_its_own() {
         editions: Vec::new(),
         original_date: None,
         languages: vec!["eng".into()],
+        credited_artists: Vec::new(),
+        genres: Vec::new(),
     });
     s.facts.insert(record.clone(), facts);
     let rematch = Ask {
@@ -774,6 +782,7 @@ fn a_rematch_fetches_a_full_record_again_and_asks_acoustid_again_for_its_own() {
         at: NOW - DAY,
         outcome: Outcome::Found(record.clone()),
         unchanged: 0,
+        candidates: Vec::new(),
     }];
     let printed = mine(&s, rematch);
     assert_eq!(again(&printed[0].1), Some((record, 0)), "{printed:?}");

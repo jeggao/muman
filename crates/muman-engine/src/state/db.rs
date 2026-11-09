@@ -976,6 +976,7 @@ mod tests {
             at: 1_000,
             outcome: Outcome::Nothing,
             unchanged: 1,
+            candidates: Vec::new(),
         });
         state.sizes.insert(
             "0123456789abcdef".into(),

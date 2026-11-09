@@ -2297,6 +2297,8 @@ mod tests {
             editions: Vec::new(),
             original_date: None,
             languages: Vec::new(),
+            credited_artists: Vec::new(),
+            genres: Vec::new(),
         };
         let o = from_record(&record);
         assert_eq!(o[&Field::Title].values, ["Escape Title[2J"]);
@@ -2337,11 +2339,14 @@ mod tests {
                     asin: None,
                     script: Some("Latn".into()),
                     original_date: None,
+                    ..crate::record::Details::default()
                 },
             }),
             editions: Vec::new(),
             original_date: Some("1999-02-01".into()),
             languages: vec!["jpn".into(), "zxx".into()],
+            credited_artists: Vec::new(),
+            genres: Vec::new(),
         };
         let o = from_record(&record);
         let mut whole = record.clone();
@@ -2417,6 +2422,8 @@ mod tests {
             editions: Vec::new(),
             original_date: None,
             languages: Vec::new(),
+            credited_artists: Vec::new(),
+            genres: Vec::new(),
         });
         assert_eq!(
             o[&Field::Artist].values,

@@ -285,6 +285,12 @@ joins them, `Marlo Venn & The Glass Orchards`, and listed one by one in
 `sync --rematch` fetches every record again and asks AcoustID again for
 its own finds, replacing them: run it once after upgrading.
 
+An AcoustID lookup also keeps every recording that counts, with the
+releases, discs and tracks each is on, and a record keeps its artists'
+aliases, with their locales, and the genres of its recording, release,
+release group and artists, all asked in the requests above. No pick
+reads them; a record kept before has them once it is fetched again.
+
 ### Cover Art Archive
 
 A cover found joins every song of its album, which asks for it once
