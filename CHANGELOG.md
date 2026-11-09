@@ -113,7 +113,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   source holds in place of "no other recording to compare", names each
   source of another and one playing more than 0.5% off the speed of the
   rest, and `[audio.pick.recording] enabled = false` turns it off. A
-  song whose recordings are alike in sources keeps its audio.
+  song whose recordings are alike in sources keeps its audio, and a
+  record counts for no recording holding the source its lookup was made
+  from, so a music video's own lookup never trades a song's album cut
+  for the video's.
 - **Lossless audio made from lossy audio no longer wins a tie as
   lossless.** A lossless file at 48 kHz or lower whose sound stops under
   19 kHz, as an MP3's does, ranks as lossy among sources scored alike.
@@ -162,6 +165,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   of a cue is joined again. `[lyrics.clean.packaging] commentary` and
   `sound` and `[lyrics.clean.structure] wrapped` turn each off. Every
   song with lyrics is written again.
+- **A video's second subtitle track in a language counts.** YouTube
+  lists it under the language and the track's ID, as `en-Ab1-Cd2Ef3g`,
+  which read as no language, so the subtitles a person wrote for many
+  official videos were never taken. Such a code now reads as its
+  language, and those subtitles rank as any others do, ahead of lyrics
+  matched only by the length they state.
 - **An instrumental takes no lyrics, and lyrics of another cut no
   longer stick.** A song MusicBrainz marks as sung in no language, or
   titled as an instrumental or a karaoke take, takes none, and lyrics
@@ -209,11 +218,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A MusicBrainz record of another song no longer files a song under
   its album.** A record whose title and artists both disagree with the
   song's other sources and the tags set by hand gives the song nothing,
-  and neither does the Cover Art Archive's cover of its album; one
-  whose artist and album disagree, as a tribute act's, gives no album,
-  track, date or ID. `muman status` names each source set aside and
-  why, and `[tags.clean.structure] vetting = false` turns it off. The
-  next sync moves such songs to their files' album.
+  and neither does the Cover Art Archive's cover of its album, nor a
+  record titled as an instrumental or a karaoke take that no other
+  source's title names, as the instrumental a single holds beside its
+  song, whose album and length agree; one whose artist and album
+  disagree, as a tribute act's, gives no album, track, date or ID. A
+  title marked `(Instru)` now reads as an instrumental too. `muman
+  status` names each source set aside and why, and
+  `[tags.clean.structure] vetting = false` turns it off. The next sync
+  moves such songs to their files' album.
 - **An AcoustID lookup no longer takes a recording of another song.** A
   recording whose title and first artist both disagree with those the
   song's own sources give, never a record's, as a print submitted with

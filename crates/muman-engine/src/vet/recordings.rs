@@ -18,9 +18,12 @@
 //!    audio's recording by how it was found. Which audio it asked with is
 //!    not kept; it is taken to be the audio the measures alone rank
 //!    first, ties included, which every lookup made before recordings
-//!    were told apart asked with. A record counts only for a recording
-//!    holding none of it, or where a file names its recording ID, and
-//!    records that count for two recordings decide nothing.
+//!    were told apart asked with, and the source the lookup was made
+//!    from, as its row keeps it: the song's first source of its own, most
+//!    often the audio the song began with, and asked with while it was
+//!    the song's only audio. A record counts only for a recording holding
+//!    none of them, or where a file names its recording ID, and records
+//!    that count for two recordings decide nothing.
 //! 2. Else the one with the most sources, where one holds more than every
 //!    other.
 //! 3. Else none: every recording ranks alike, and the song is picked as
@@ -70,6 +73,8 @@ pub struct Record<'a> {
     pub ms: i64,
     /// Whether a file names its recording ID.
     pub named: bool,
+    /// The sources the lookups that found it were made from.
+    pub from: Vec<&'a SourceKey>,
 }
 
 /// What decided the song's recording.
@@ -329,7 +334,9 @@ fn song_of(
         let [group] = fitting.into_iter().collect::<Vec<_>>()[..] else {
             continue;
         };
-        let led_inside = groups[group].iter().any(|k| first.contains(k));
+        let led_inside = groups[group]
+            .iter()
+            .any(|k| first.contains(k) || r.from.contains(&k));
         if r.named || !led_inside {
             decided.entry(group).or_insert(r.ms);
         }
@@ -437,6 +444,7 @@ mod tests {
             key: &mb,
             ms: 200_500,
             named,
+            from: Vec::new(),
         };
         let r = recordings(&all, &[record(false)], &alignments);
         assert_eq!((r.rank(&a), r.rank(&c)), (1, 0), "the record over most");
@@ -448,6 +456,13 @@ mod tests {
             r.describe(&c),
             "the song's recording by its record: aligns with none"
         );
+
+        let found_from_c = Record {
+            from: vec![&c],
+            ..record(false)
+        };
+        let r = recordings(&all, &[found_from_c], &alignments);
+        assert_eq!((r.rank(&a), r.rank(&c)), (0, 1), "looked up from it");
 
         all[2].first = true;
         let r = recordings(&all, &[record(false)], &alignments);
