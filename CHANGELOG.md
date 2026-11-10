@@ -158,6 +158,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A torrent with a file named like a drive is added**: `a:b.flac` no
+  longer refuses the whole torrent; it is kept as `a：b.flac`.
+- **A file renamed in `sources/manual` is followed at once**, rather
+  than failing its song for 10 s; while a listed file is gone and
+  another is still being copied in, its song waits.
+- **A song is never built from audio damaged since it was built**, its
+  library file deleted or `max_size` leaving it out: it fails with exit
+  code 4 until the whole file is back or `sync --force`.
+- **Lyrics and pictures in a folder given to `add` reach their songs**
+  when no song file in the folder brings them, so a folder of lyrics
+  alone no longer fails.
 - **Placeholders are dropped whatever the typography**: MusicBrainz's
   `[non-album tracks]` is dropped, as `status` says, after typographic
   hyphens respell it, and the song is a single.
