@@ -91,9 +91,15 @@ fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
 }
 
+/// [`method`] before bandwidth was read at the lowest wall: facts it made
+/// hold, unless their audio is lossy.
+fn before_lowest() -> String {
+    measured_by(quality::BEFORE_LOWEST)
+}
+
 /// [`method`] before bars running into square art stopped at the frame's
 /// centred square: facts it made hold, unless a picture's content was
-/// trimmed to no square.
+/// trimmed to no square, or as [`before_lowest`]'s do not.
 fn before_square() -> String {
     measured_by(quality::BEFORE_SQUARE)
 }
@@ -243,17 +249,21 @@ impl Facts {
     /// Whether they were measured as muman measures now, or by an earlier
     /// method whose results stand for these.
     fn method_holds(&self) -> bool {
+        let lossy = self.audio.as_ref().is_some_and(|a| !a.is_lossless());
         self.method == method()
-            || self.method == before_square() && !self.unsquare()
+            || self.method == before_lowest() && !lossy
+            || self.method == before_square() && !self.unsquare() && !lossy
             || self.method == before_alpha()
                 && !self.detailless()
                 && !self.oversized()
                 && !self.unsquare()
+                && !lossy
             || self.method == before_sound()
                 && !self.soundless()
                 && !self.detailless()
                 && !self.oversized()
                 && !self.unsquare()
+                && !lossy
     }
 
     /// These facts at revision `rev`, for files whose revision changed

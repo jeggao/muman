@@ -12,13 +12,15 @@
 //! source with any sound is never judged to have none.
 //!
 //! - **Bandwidth.** Where a lowpass cuts the sound off: the top of the
-//!   highest band standing 20 dB above all bands past a short guard, the
-//!   band under it as high even at its quietest bin, in each excerpt's
-//!   mean spectrum, its channels' powers summed, taken low across the
-//!   excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz; a
-//!   recording whose treble fades into its noise floor shows no wall and
-//!   measures full, and so does one whose notes' partials end low over a
-//!   noise floor that runs on to the top.
+//!   lowest wall of bands standing 20 dB above all bands past a short
+//!   guard, the band under each as high even at its quietest bin, in each
+//!   excerpt's mean spectrum, its channels' powers summed, taken low across
+//!   the excerpts. A FLAC transcoded from a 16 kHz source measures 16 kHz,
+//!   and an Opus made from an MP3 its MP3's lowpass, under the noise Opus
+//!   fills past it, where that stands 20 dB down; a recording whose treble
+//!   fades into its noise floor shows no wall and measures full, and so
+//!   does one whose notes' partials end low over a noise floor that runs
+//!   on to the top.
 //! - **Real stereo.** One minus the first two channels' squared
 //!   correlation at the lag within 1 ms that best aligns them: mono copied
 //!   into two channels, at two levels or a few samples apart, has next to
@@ -102,10 +104,17 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/10";
+pub const METHOD: &str = "quality/11";
+/// The method before bandwidth was read at the lowest wall: what it
+/// measured holds for lossless audio, and lossy audio is measured again.
+/// A lossless encoder fills no band, so only a lossless file made from a
+/// lossy one that did stands two walls, and it keeps its higher until its
+/// source is measured again.
+pub const BEFORE_LOWEST: &str = "quality/10";
 /// The method before bars that run into square art were stopped at the
 /// frame's centred square: what it measured holds, unless a picture's
-/// content was trimmed to no square. A frame whose art's edge ran into
+/// content was trimmed to no square, or as [`BEFORE_LOWEST`]'s does not
+/// hold. A frame whose art's edge ran into
 /// bars of another width on each side was not trimmed at all, and keeps
 /// its whole frame until its source is measured again.
 pub const BEFORE_SQUARE: &str = "quality/9";
@@ -734,9 +743,27 @@ fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
     (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
 }
 
-/// The top of the highest band above [`WALL_MIN_HZ`] that stands
-/// [`WALL_DB`] above every band past [`WALL_GUARD`], the band under it
-/// standing as high at its floor; half the sample rate when none does.
+/// The top of the lowest wall above [`WALL_MIN_HZ`]: of a run of bands
+/// that each stand [`WALL_DB`] above every band past [`WALL_GUARD`], the
+/// band under each standing as high at its floor, the highest band; half
+/// the sample rate when none stands.
+///
+/// Bands stand in runs at each wall, and a second run stands only where
+/// what lies between the two walls is itself a plateau [`WALL_DB`] below
+/// the sound under the lower: what an encoder filled in above a lowpass
+/// it was given. Opus fills the bands past its source's lowpass up to its
+/// own, at 20 kHz, with folded noise, and the highest wall measured the
+/// fill. Of five 60 s pieces made 128 kbit/s MP3 and then 160 kbit/s Opus,
+/// the highest wall put each Opus 2.2 to 4.1 kHz above its MP3, which
+/// measured 9.82 and 16.19 to 16.88 kHz; the lowest put four at or under
+/// their MP3, at 9.75 and 16.13 to 16.5 kHz, and one, whose fill stood
+/// 19 dB under the sound below it, at 20.25 kHz as before. Opus
+/// from 128 kbit/s AAC fills within a few dB of the sound below, which no
+/// level tells apart from treble, and measures as before. An AAC copy of a
+/// piece whose own lowpass was at 16.7 kHz stood its walls at 17.2 and
+/// 16.7 kHz, and measures the source's. Opus copies of the full-band
+/// pieces, and the pieces themselves, stood one wall or none, and measure
+/// as before.
 ///
 /// A lowpass leaves next to nothing past it, while a tone's partial stands
 /// as high over a noise floor that runs on past it. A band's floor is its
@@ -768,14 +795,23 @@ fn wall(spectrum: &[f64], sample_rate: u32) -> f64 {
     for b in (0..levels.len()).rev() {
         above[b] = above[b + 1].max(levels[b]);
     }
-    (0..levels.len().saturating_sub(WALL_GUARD + 1))
+    let stands = |b: usize| {
+        let past = above[b + WALL_GUARD + 1];
+        levels[b] - past >= WALL_DB && floors[b.saturating_sub(1)] - past >= WALL_DB
+    };
+    let mut lowest = None;
+    let mut inside = false;
+    for b in (0..levels.len().saturating_sub(WALL_GUARD + 1))
         .rev()
         .take_while(|b| hz(b + 1) >= WALL_MIN_HZ)
-        .find(|b| {
-            let past = above[b + WALL_GUARD + 1];
-            levels[*b] - past >= WALL_DB && floors[b.saturating_sub(1)] - past >= WALL_DB
-        })
-        .map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
+    {
+        let standing = stands(b);
+        if standing && !inside {
+            lowest = Some(b);
+        }
+        inside = standing;
+    }
+    lowest.map_or(f64::from(sample_rate) / 2.0, |b| hz(b + 1))
 }
 
 /// The twiddle factors of each stage of [`fft`], as `(cos, sin)`, each
@@ -1236,6 +1272,32 @@ mod tests {
         let full = noise(FFT * 40, 9);
         let q = audio(&[stereo(&full, &noise(FFT * 40, 10))], 48_000, false).unwrap();
         assert!(q.bandwidth_hz > 23_000.0, "{q:?}");
+    }
+
+    #[test]
+    fn noise_an_encoder_filled_past_a_lowpass_is_no_bandwidth() {
+        let rate = 48_000.0;
+        // A lowpass at 16 kHz, then noise 25 dB down to the encoder's own
+        // lowpass at 20 kHz, as Opus fills past an MP3's.
+        let filled = |fill_db: f64| {
+            move |f: f64| match f {
+                _ if f <= 16_000.0 => 1.0,
+                _ if f <= 20_000.0 => 10_f64.powf(-fill_db / 20.0),
+                _ => 0.0,
+            }
+        };
+        let left = shaped(FFT * 40, rate, filled(25.0));
+        let q = audio(&[stereo(&left, &left)], 48_000, false).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+        let near = shaped(FFT * 40, rate, filled(10.0));
+        let q = audio(&[stereo(&near, &near)], 48_000, false).unwrap();
+        assert!(
+            (q.bandwidth_hz - 20_000.0).abs() <= 500.0,
+            "a step of 10 dB is the music's own: {q:?}"
+        );
+        let one = shaped(FFT * 40, rate, filled(200.0));
+        let q = audio(&[stereo(&one, &one)], 48_000, false).unwrap();
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
     }
 
     #[test]

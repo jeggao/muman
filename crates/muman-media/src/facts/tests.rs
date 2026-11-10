@@ -239,11 +239,40 @@ fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
             clipping: 0.0,
             bits: 16,
         }),
+        codec: "flac".into(),
         ..AudioFacts::default()
     });
     assert!(f.holds_for(&source.rev()));
     f.audio.as_mut().unwrap().quality = None;
     assert!(!f.holds_for(&source.rev()), "measured again");
+}
+
+#[test]
+fn facts_of_lossy_audio_before_the_lowest_wall_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    for method in [
+        before_lowest(),
+        before_square(),
+        before_alpha(),
+        before_sound(),
+    ] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.audio = Some(AudioFacts {
+            quality: Some(AudioQuality {
+                bandwidth_hz: 20_437.0,
+                incoherence: 0.5,
+                clipping: 0.0,
+                bits: 0,
+            }),
+            codec: "flac".into(),
+            ..AudioFacts::default()
+        });
+        assert!(f.holds_for(&source.rev()), "{method}: lossless");
+        f.audio.as_mut().unwrap().codec = "opus".into();
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
 }
 
 #[test]
@@ -310,6 +339,7 @@ fn facts_of_older_measures_of_a_picture_past_the_largest_measured_do_not_hold() 
                 clipping: 0.0,
                 bits: 16,
             }),
+            codec: "flac".into(),
             ..AudioFacts::default()
         });
         f.covers = vec![picture(4000)];
@@ -655,7 +685,27 @@ fn quality_audio() -> Vec<(Vec<quality::Segment>, bool)> {
         .iter()
         .map(|x| (x * 32_768.0).round() / 32_768.0)
         .collect();
+    // A tone at every FFT bin to 16 kHz, and 25 dB down from there to
+    // 20 kHz, as Opus fills past an MP3's lowpass.
+    let phases = crate::testing::words(1858, 7);
+    let filled: Vec<f32> = (0..16_384)
+        .map(|n| {
+            let t = f64::from(n) / 44_100.0;
+            let sum: f64 = phases
+                .iter()
+                .enumerate()
+                .map(|(k, phase)| {
+                    let hz = (k + 1) as f64 * 44_100.0 / 4096.0;
+                    let gain = if hz <= 16_000.0 { 1.0 } else { 0.056 };
+                    let phase = f64::from(*phase) / f64::from(u32::MAX);
+                    gain * (std::f64::consts::TAU * (hz * t + phase)).sin()
+                })
+                .sum();
+            (sum / 200.0) as f32
+        })
+        .collect();
     vec![
+        (thrice(stereo(&filled, &filled)), false),
         (thrice(stereo(&left, &right)), false),
         (thrice(stereo(&full, &half)), false),
         (thrice(Segment::new(2, clipped)), false),
@@ -722,8 +772,8 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/10",
-    "3e89fe1e34bbcfc280e4606f9a39ae1fff6257964f1f066c7104dfcba185286b",
+    "quality/11",
+    "87163984360d9ace671d595e98b066e89b1ca51642f5464b83f7530125bcb892",
 );
 
 #[test]
