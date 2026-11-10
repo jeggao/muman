@@ -1593,22 +1593,33 @@ fn decide<W: Write>(
                 ))?;
                 return Ok(Decision::Already);
             }
-            if !sure.is_empty() {
-                let album = &cands[sure[0]].album;
-                let whose = if sure.len() > 1
-                    && !album.is_empty()
-                    && sure.iter().all(|&n| cands[n].album == *album)
+            let whose = |of: &[usize]| {
+                let album = &cands[of[0]].album;
+                if of.len() > 1 && !album.is_empty() && of.iter().all(|&n| cands[n].album == *album)
                 {
-                    format!("{} songs of {album}", sure.len())
+                    format!("{} songs of {album}", of.len())
                 } else {
-                    sure.iter()
+                    of.iter()
                         .map(|&n| cands[n].label.clone())
                         .collect::<Vec<_>>()
                         .join(", ")
-                };
+                }
+            };
+            let (looked, matched): (Vec<usize>, Vec<usize>) = sure
+                .iter()
+                .partition(|&&n| alike.iter().any(|j| j.song == n));
+            if !looked.is_empty() {
                 ask.info(&format!(
-                    "{}: alike to the covers of {whose}; adding it to each",
-                    item.label
+                    "{}: alike to the covers of {}; adding it to each",
+                    item.label,
+                    whose(&looked)
+                ))?;
+            }
+            if !matched.is_empty() {
+                ask.info(&format!(
+                    "{}: matches {}; adding it to each",
+                    item.label,
+                    whose(&matched)
                 ))?;
             }
             if !asked.is_empty() {

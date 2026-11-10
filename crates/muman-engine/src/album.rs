@@ -496,7 +496,7 @@ pub fn origin_of(key: &SourceKey) -> Option<String> {
     let mut folder = path.parent()?;
     if folder
         .file_name()
-        .is_some_and(|n| is_disc_folder(&n.to_string_lossy()))
+        .is_some_and(|n| crate::store::is_disc_folder(&n.to_string_lossy()))
     {
         folder = folder.parent()?;
     }
@@ -570,18 +570,6 @@ pub fn unit_groups(songs: &[Song], facts: &BTreeMap<SourceKey, Facts>) -> BTreeM
             (unit.starts_with(LISTED) || on * 2 > songs).then_some((unit, group))
         })
         .collect()
-}
-
-/// Whether a folder's name names one disc of a set: `CD1`, `Disc 2`.
-fn is_disc_folder(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    let rest = ["cd", "disc", "disk"]
-        .iter()
-        .find_map(|p| lower.strip_prefix(p));
-    rest.is_some_and(|r| {
-        let digits = r.trim_start_matches([' ', '_', '-', '.']);
-        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
-    })
 }
 
 /// The songs on albums its sources name, album by album: a MusicBrainz
@@ -1059,7 +1047,7 @@ mod tests {
         assert_eq!(disc_1, origin_of(&key("Harbor Nights/03 Song.flac")));
         assert_ne!(disc_1, origin_of(&key("Glass Weather/01 Song.flac")));
         assert_eq!(origin_of(&SourceKey::youtube("vid00000001")), None);
-        assert!(!is_disc_folder("Discotheque"));
+        assert!(!crate::store::is_disc_folder("Discotheque"));
     }
 
     #[test]

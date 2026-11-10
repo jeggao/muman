@@ -424,10 +424,11 @@ fn import_all<R: Runner, W: Write>(
                 }
             }
             let songs = songs_among(files, &originals);
+            let beside = brought_with(files, &songs);
             let mut own = |file: &Path| {
                 store::kind_of(file).is_some()
                     && !originals.iter().any(|(o, _)| o == file)
-                    && kept_with_songs(file, &songs)
+                    && kept_with_songs(file, &beside)
                     && audio(file)
             };
             if originals.len() < files.len() {
@@ -645,26 +646,24 @@ fn songs_among<'a>(files: &'a [PathBuf], originals: &[(PathBuf, SourceKey)]) -> 
         .collect()
 }
 
+/// The lyrics and pictures of `files`, a folder's, that its song files
+/// `songs` bring from the manual folder ([`store::brought_by`]).
+fn brought_with(files: &[PathBuf], songs: &[&PathBuf]) -> BTreeSet<PathBuf> {
+    let files: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+    let songs: Vec<&Path> = songs.iter().map(|s| s.as_path()).collect();
+    store::brought_by(&files, &songs)
+}
+
 /// Whether `file` of a folder given to `add` is copied with the folder:
-/// anything but lyrics and pictures, and those a song file of `songs`
-/// brings from the manual folder, named as it is or its folder's cover.
-/// Lyrics or a picture no song file there brings would be no song's in
-/// the manual folder, so it is given to its songs as a named one is.
-fn kept_with_songs(file: &Path, songs: &[&PathBuf]) -> bool {
-    if !matches!(
+/// anything but lyrics and pictures, and those its song files bring,
+/// `brought` ([`brought_with`]). Lyrics or a picture no song file there
+/// brings would be no song's in the manual folder, so it is given to its
+/// songs as a named one is.
+fn kept_with_songs(file: &Path, brought: &BTreeSet<PathBuf>) -> bool {
+    !matches!(
         store::kind_of(file),
         Some(store::Kind::Lyrics | store::Kind::Image)
-    ) {
-        return true;
-    }
-    let cover = store::kind_of(file) == Some(store::Kind::Image)
-        && file
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| store::FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()));
-    songs
-        .iter()
-        .any(|s| store::named_as(file, s) || (cover && s.parent() == file.parent()))
+    ) || brought.contains(file)
 }
 
 /// The files of a folder given to `add`, `files`, that it gives to songs
@@ -681,10 +680,11 @@ fn found_loose(files: &[PathBuf], songs: &[&PathBuf], loose: &mut attach::Loose)
         file.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case(ext))
     };
+    let brought = brought_with(files, songs);
     let mut left = Vec::new();
     for file in files
         .iter()
-        .filter(|f| store::kind_of(f).is_none() || !kept_with_songs(f, songs))
+        .filter(|f| store::kind_of(f).is_none() || !kept_with_songs(f, &brought))
     {
         let info_json = file
             .file_name()

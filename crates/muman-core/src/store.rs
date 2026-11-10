@@ -29,7 +29,10 @@
 //! A manual song file brings the `.lrc` and pictures named as it is in
 //! any case, as a folder's `COVER.JPG` covers it and as a filesystem
 //! blind to case holds them: one in its own case first, and none named
-//! exactly as another song file, which is that file's.
+//! exactly as another song file, which is that file's. A song file in a
+//! disc's folder, as `Album/CD1/`, with no picture of its own, brings
+//! the album folder's cover: a rip of several discs keeps one cover
+//! above them, for all of them.
 //!
 //! A listed manual file gone from its path is followed to the file no
 //! song lists that is it, moved ([`moved_manual`]): one of the same size
@@ -340,6 +343,19 @@ pub enum Kind {
     Image,
     /// A MusicBrainz record, which offers tags alone.
     Tags,
+}
+
+/// Whether a folder's name names one disc of a set: `CD1`, `Disc 2`.
+#[must_use]
+pub fn is_disc_folder(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let rest = ["cd", "disc", "disk"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p));
+    rest.is_some_and(|r| {
+        let digits = r.trim_start_matches([' ', '_', '-', '.']);
+        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+    })
 }
 
 /// Whether two files are in one folder and named alike but for their
@@ -1078,7 +1094,8 @@ impl Store {
 /// The `.lrc` and pictures that come with the song file `rel` among
 /// `files`, a folder's or a torrent's: named as it is in any case, those
 /// in its own case first, and none named in its case as another song
-/// file is; then its folder's cover.
+/// file is; then its folder's cover, or, with none of its own, the cover
+/// of the album folder its disc's folder is in.
 fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
     let stem = rel.with_extension("");
     let another_s = |p: &Path| {
@@ -1098,8 +1115,7 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
     };
     let lyrics = named(Kind::Lyrics).into_iter().next();
     let mut covers = named(Kind::Image);
-    let folder = rel.parent().unwrap_or(Path::new(""));
-    covers.extend(
+    let of_folder = |folder: &Path| -> Vec<PathBuf> {
         files
             .iter()
             .filter(|(p, k)| {
@@ -1109,9 +1125,37 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
                         .and_then(|s| s.to_str())
                         .is_some_and(|s| FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()))
             })
-            .map(|(p, _)| p.clone()),
-    );
+            .map(|(p, _)| p.clone())
+            .collect()
+    };
+    let folder = rel.parent().unwrap_or(Path::new(""));
+    let mut own = of_folder(folder);
+    let disc = folder
+        .file_name()
+        .is_some_and(|n| is_disc_folder(&n.to_string_lossy()));
+    if covers.is_empty() && own.is_empty() && disc {
+        own = of_folder(folder.parent().unwrap_or(Path::new("")));
+    }
+    covers.extend(own);
     (lyrics, covers)
+}
+
+/// The `.lrc` and pictures among `files` that the song files `songs` of
+/// them bring, as a manual or torrent song file brings them.
+#[must_use]
+pub fn brought_by(files: &[&Path], songs: &[&Path]) -> BTreeSet<PathBuf> {
+    let kinds: BTreeMap<PathBuf, Kind> = files
+        .iter()
+        .filter_map(|f| Some((f.to_path_buf(), kind_of(f)?)))
+        .filter(|(f, k)| *k != Kind::Media || songs.contains(&f.as_path()))
+        .collect();
+    songs
+        .iter()
+        .flat_map(|s| {
+            let (lyrics, covers) = sidecars(&kinds, s);
+            lyrics.into_iter().chain(covers)
+        })
+        .collect()
 }
 
 /// What measuring last recorded of a listed source's files.
@@ -1607,6 +1651,22 @@ mod tests {
         let other = store.locate(&manual("Album/02 Other.flac")).unwrap();
         assert_eq!(other.lyrics, None);
         assert_eq!(other.covers, vec![folder]);
+    }
+
+    #[test]
+    fn a_disc_s_song_with_no_cover_of_its_own_brings_its_album_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        touch(dir.path(), "sources/manual/Album/CD1/01 Song.flac");
+        touch(dir.path(), "sources/manual/Album/Disc 2/01 Other.flac");
+        let own = touch(dir.path(), "sources/manual/Album/Disc 2/front.jpg");
+        touch(dir.path(), "sources/manual/Album/Extras/01 Demo.flac");
+        let album = touch(dir.path(), "sources/manual/Album/folder.png");
+        let store = Store::scan(&d).unwrap();
+        let covers = |rel: &str| store.locate(&manual(rel)).unwrap().covers;
+        assert_eq!(covers("Album/CD1/01 Song.flac"), vec![album]);
+        assert_eq!(covers("Album/Disc 2/01 Other.flac"), vec![own]);
+        assert_eq!(covers("Album/Extras/01 Demo.flac"), Vec::<PathBuf>::new());
     }
 
     #[test]

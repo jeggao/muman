@@ -358,18 +358,18 @@ song files are read without the lyrics and pictures they bring.
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`. You can
 also drop files there yourself; the next `sync` lists them. muman reads
 a dropped file only 10 s after it arrived, whatever modification time
-the copy kept, so it never reads a file still being copied. A listed
-file you move within the folder is followed by any command that syncs,
-not listed again: at once when it holds every byte it held, else once
-settled, by its audio, as when a tagger renames it as it retags it.
-While it is gone and another file is copied in, its song waits.
+the copy kept, so it never reads a file still being copied. Any command
+that syncs follows a listed file you move within the folder: at once
+when it holds every byte it held, else once settled, by its audio,
+retagged too. While it is gone and another is copied in, its song waits.
 
 A song file brings what sits beside it:
 
 - the `.lrc` named as it is, in any case: `Paper Comets.flac` brings
   `Paper Comets.lrc`;
 - the JPEG, PNG or WebP pictures named as it is, as `paper comets.jpg`;
-- its folder's `cover`, `folder`, `front` or `album` picture.
+- its folder's `cover`, `folder`, `front` or `album` picture, else, in a
+  disc's folder as `CD1`, that of the album folder above it.
 
 A `.lrc` may be in UTF-8 or UTF-16, or in an older encoding such as
 GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.

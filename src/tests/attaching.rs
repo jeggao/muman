@@ -341,6 +341,46 @@ fn yes_takes_a_song_that_leads_and_to_names_one() {
 }
 
 #[test]
+fn an_album_folder_s_cover_goes_with_the_songs_of_its_discs() {
+    let s = Setup::new();
+    s.file("rip/Album/CD1/Lantern Weather.flac");
+    s.file("rip/Album/CD2/Copper Moth.flac");
+    s.file("rip/Album/folder.png");
+    let album = s.dir.path().join("rip").join("Album");
+    let (ok, text) = s.run(&library(), &["add", album.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("matches no song"), "{text}");
+    let store = crate::store::Store::scan(&s.job(&["sync"]).dirs).unwrap();
+    let cover = Path::new("Album").join("folder.png");
+    for song in [
+        "Album/CD1/Lantern Weather.flac",
+        "Album/CD2/Copper Moth.flac",
+    ] {
+        let at = store.locate(&manual(song)).unwrap();
+        assert!(
+            at.covers.iter().any(|c| c.ends_with(&cover)),
+            "{song}: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_picture_that_came_with_songs_of_no_cover_is_not_called_alike() {
+    let s = Setup::new();
+    s.file("rip/Album/Lantern Weather.flac");
+    s.file("rip/Album/Copper Moth.flac");
+    s.file("rip/Album/art.png");
+    let album = s.dir.path().join("rip").join("Album");
+    let (ok, text) = s.run(&library(), &["add", album.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("art.png: matches 2 songs of The Glass Orchards"),
+        "{text}"
+    );
+    assert!(!text.contains("alike to the covers"), "{text}");
+}
+
+#[test]
 fn a_picture_goes_to_every_song_whose_cover_it_looks_like() {
     let s = Setup::new();
     let mut fake = library();

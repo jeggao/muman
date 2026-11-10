@@ -330,30 +330,17 @@ fn place_of(path: &Path) -> String {
 }
 
 fn wanted(meta: &Metainfo) -> Vec<&File> {
-    use crate::store::{FOLDER_COVERS, Kind, kind_of, named_as};
-    let songs: Vec<&Path> = meta
-        .files
+    use crate::store::{Kind, brought_by, kind_of};
+    let files: Vec<&Path> = meta.files.iter().map(|f| f.path.as_path()).collect();
+    let songs: Vec<&Path> = files
         .iter()
-        .filter(|f| kind_of(&f.path) == Some(Kind::Media))
-        .map(|f| f.path.as_path())
+        .copied()
+        .filter(|f| kind_of(f) == Some(Kind::Media))
         .collect();
+    let brought = brought_by(&files, &songs);
     meta.files
         .iter()
-        .filter(|f| match kind_of(&f.path) {
-            Some(Kind::Media) => true,
-            Some(Kind::Lyrics) => songs.iter().any(|s| named_as(&f.path, s)),
-            Some(Kind::Image) => songs.iter().any(|s| {
-                named_as(&f.path, s)
-                    || (f.path.parent() == s.parent()
-                        && f.path
-                            .file_stem()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| {
-                                FOLDER_COVERS.contains(&n.to_ascii_lowercase().as_str())
-                            }))
-            }),
-            _ => false,
-        })
+        .filter(|f| kind_of(&f.path) == Some(Kind::Media) || brought.contains(&f.path))
         .collect()
 }
 

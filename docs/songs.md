@@ -224,12 +224,12 @@ muman add album.cue rips/*.flac --new
 
 A picture that looks like the covers of more than three songs on more
 than one album is asked about rather than given to all. A cover given
-with songs from its folder goes to those songs. Several songs may list
-one picture of yours, but each song must still list a file of its own:
-a song whose every source another song lists too is refused. Lyrics
-belong to one song, so the same lyrics given to a second song are
-copied for it. A picture or `.lrc` moved within `sources/manual` is
-followed, as a song file is.
+with songs from its folder, or from the disc folders in it, goes to
+those songs. Several songs may list one picture of yours, but each song
+must still list a file of its own: a song whose every source another
+song lists too is refused. Lyrics belong to one song, so the same lyrics
+given to a second song are copied for it. A picture or `.lrc` moved
+within `sources/manual` is followed, as a song file is.
 
 ## Duplicates
 
