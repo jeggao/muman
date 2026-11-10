@@ -16,8 +16,9 @@
 //!
 //! An album is a MusicBrainz release group, the album whichever its
 //! edition, else an album artist and album as [`similar::fold`] compares
-//! them, in one year. A song on no release group joins the one release
-//! group of its folded name, so an upload naming the album alone joins
+//! them, the album's article kept ([`similar::fold_title`]), in one
+//! year. A song on no release group joins the one release group of its
+//! folded name, so an upload naming the album alone joins
 //! the album's songs whatever date it gives; two release groups of one
 //! name, as two albums named for their artist, stay apart.
 //!
@@ -154,7 +155,7 @@ impl<'a> Member<'a> {
     fn name(&self) -> (String, String) {
         let fold = |f: Field| {
             self.tag(f)
-                .map(|(v, _)| similar::fold(&v.join(" ")))
+                .map(|(v, _)| folded(f, &v.join(" ")))
                 .unwrap_or_default()
         };
         (fold(Field::AlbumArtist), fold(Field::Album))
@@ -502,7 +503,9 @@ pub fn units_of(song: &Song, facts: &BTreeMap<SourceKey, Facts>) -> BTreeSet<Str
             .get(key)
             .and_then(|f| f.tags.get(&Field::Album))
             .and_then(|o| o.values.first());
-        let album = named.map_or_else(String::new, |a| similar::fold(crate::parts::album(a).name));
+        let album = named.map_or_else(String::new, |a| {
+            similar::fold_title(crate::parts::album(a).name)
+        });
         units.insert(format!("{origin}\u{1f}{album}"));
     }
     units
@@ -594,6 +597,17 @@ fn albums<'m>(all: &'m [Member<'m>]) -> Vec<Vec<&'m Member<'m>>> {
     albums.into_values().collect()
 }
 
+/// `value` of `field` as an album's songs are told alike by: an artist's
+/// name as [`similar::fold`] compares it, and an album's keeping its
+/// article, so `The Orchards` is another album than `Orchards`.
+fn folded(field: Field, value: &str) -> String {
+    if field == Field::Album {
+        similar::fold_title(value)
+    } else {
+        similar::fold(value)
+    }
+}
+
 /// The values the songs of `album` agree on, each song's into `agreed`.
 fn agree_on(album: &[&Member<'_>], agreed: &mut BTreeMap<usize, Vec<Agreed>>) {
     for field in [Field::Album, Field::AlbumArtist] {
@@ -601,7 +615,7 @@ fn agree_on(album: &[&Member<'_>], agreed: &mut BTreeMap<usize, Vec<Agreed>>) {
         for m in album.iter().filter(|m| !m.by_hand(field)) {
             if let Some((v, _)) = m.tag(field) {
                 spellings
-                    .entry(similar::fold(&v.join(" ")))
+                    .entry(folded(field, &v.join(" ")))
                     .or_default()
                     .push(m);
             }
@@ -827,6 +841,40 @@ mod tests {
         );
         assert_eq!(agreed(&planned, 1, Field::Album), None);
         assert_eq!(agreed(&planned, 3, Field::Album), None);
+    }
+
+    #[test]
+    fn an_album_s_article_is_part_of_its_name_and_its_artist_s_is_not() {
+        let named = |n, artist, album| {
+            song(
+                n,
+                &[
+                    (Field::Album, album, "torrent:t"),
+                    (Field::AlbumArtist, artist, "torrent:t"),
+                    (Field::Date, "1974", "torrent:t"),
+                ],
+            )
+        };
+        let planned = vec![
+            named(0, "Marlo Venn", "Orchards"),
+            named(1, "Marlo Venn", "Orchards"),
+            named(2, "Marlo Venn", "The Orchards"),
+            named(3, "Marlo Venn", "Orchards, The"),
+        ];
+        assert_eq!(albums(&members(&planned)).len(), 3);
+        for n in 0..4 {
+            assert_eq!(agreed(&planned, n, Field::Album), None, "song {n}");
+        }
+        let planned = vec![
+            named(0, "The Marlo Venn", "Orchards"),
+            named(1, "Marlo Venn", "Orchards"),
+            named(2, "Marlo Venn", "Orchards"),
+        ];
+        assert_eq!(albums(&members(&planned)).len(), 1);
+        assert_eq!(
+            agreed(&planned, 0, Field::AlbumArtist),
+            Some(vec!["Marlo Venn".to_string()])
+        );
     }
 
     #[test]

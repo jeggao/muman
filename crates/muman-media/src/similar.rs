@@ -40,6 +40,11 @@
 //! of decimal digits, modulo 10: Unicode keeps every such run in blocks
 //! of ten, from 0 to 9.
 //!
+//! Last, a leading `the`, or a trailing one as in `Marlo Venn, The`, is
+//! dropped, since a credit names an artist with it or without. An
+//! album's name keeps it ([`fold_title`]): `The Orchards` is another
+//! work than its artist's `Orchards`.
+//!
 //! [`tokens`] are the words ICU4X's dictionary word breaker finds: UAX
 //! #29 words where a script writes spaces, and dictionary words for
 //! Chinese, Japanese, Thai, Lao, Khmer and Burmese, which write none. The
@@ -331,8 +336,7 @@ fn prepare(s: &str) -> String {
 /// `s` as it is compared: see the module's documentation.
 #[must_use]
 pub fn fold(s: &str) -> String {
-    let folded: String = prepare(s).chars().map(kana).collect();
-    without_article(&folded).to_string()
+    without_article(&fold_title(s)).to_string()
 }
 
 /// Whether `a` and `b` are one name written alike but for case, in any
@@ -347,6 +351,13 @@ pub fn caseless(a: &str, b: &str) -> bool {
             .into_owned()
     };
     fold(a) == fold(b)
+}
+
+/// `s` as it is compared, a leading or trailing `the` kept as the word of
+/// a work's name it is: see the module's documentation.
+#[must_use]
+pub fn fold_title(s: &str) -> String {
+    prepare(s).chars().map(kana).collect()
 }
 
 fn without_article(mut s: &str) -> &str {

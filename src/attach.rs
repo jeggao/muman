@@ -434,10 +434,14 @@ fn candidates(
         }
         stems.remove("");
         let album = view.first("album");
-        let album_key = format!("{}\u{1f}{album}", view.first("albumartist"));
+        let album_key = format!(
+            "{}\u{1f}{}",
+            similar::fold(&view.first("albumartist")),
+            similar::fold_title(&album)
+        );
         out.push(Candidate {
             label: view.name(),
-            album_key: similar::fold(&album_key),
+            album_key,
             album,
             titles,
             artists,

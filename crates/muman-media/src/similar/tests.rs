@@ -40,6 +40,14 @@ fn caseless_names_ignore_case_in_any_script_and_nothing_else() {
 }
 
 #[test]
+fn a_title_keeps_its_article() {
+    assert_eq!(fold_title("The Orchards"), "the orchards");
+    assert_ne!(fold_title("Orchards, The"), fold_title("Orchards"));
+    assert_eq!(fold_title("ORCHARDS!"), fold_title("orchards"));
+    assert_eq!(fold("The Orchards"), fold_title("Orchards"));
+}
+
+#[test]
 fn cyrillic_and_greek_keep_their_letters_apart() {
     assert!(same("Ёлка", "елка"));
     assert!(!same("Мой", "Мои"));
