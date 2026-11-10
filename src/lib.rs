@@ -831,14 +831,9 @@ pub(crate) fn traits(command: &Command) -> Traits {
         | Command::Set { .. }
         | Command::Edit { .. }
         | Command::Review { .. } => edits(CHANGE),
-        // The song list as it stands names the programs undo's sync runs,
-        // so it is trusted first, and the list put back after.
         Command::Undo { .. } => Traits {
-            apart: true,
-            gated: true,
-            ffmpeg: true,
-            steps: CHANGE,
-            ..reads
+            edits_list: false,
+            ..edits(CHANGE)
         },
         Command::Purge { .. } => Traits {
             apart: true,

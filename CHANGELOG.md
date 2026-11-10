@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`purge` never deletes a source in use**: a stray file beside a listed
+  fetched source goes alone; a kept record in any case of extension, and
+  a record's `.json` left without its `.lrc`, are purged; the folders
+  purge empties go too.
+- **`add --from` finds a torrent's decomposed names**, as another client
+  left them on Linux.
+- **A multi-disc torrent's top folder covers its discs**, as such a folder
+  of your own does.
 - **`undo` runs nothing a song list names until it is trusted**: it read
   the programs of an untrusted list's `[tools]` before asking, as no
   other command does.
