@@ -6,11 +6,20 @@
 //! | macOS | `~/Library/Application Support/muman` | `~/Music/muman` |
 //! | Windows | `%LOCALAPPDATA%\muman\data` | `%USERPROFILE%\Music\muman` |
 //!
+//! On Linux and the other systems that follow XDG, the music folder is
+//! `XDG_MUSIC_DIR` from the environment when it is set to an absolute
+//! path, as the XDG user-dirs convention lets a session override the
+//! file; else the one `user-dirs.dirs` names; else `~/Music`, as on a
+//! server without that file. A relative or empty value is ignored, as the
+//! XDG base-directory specification asks of its own variables. macOS and
+//! Windows have no such variable, and their music folder is the system's.
+//!
 //! The home is in the local, not the roaming, application data on
 //! Windows: its sources run to gigabytes, which a roaming profile would
 //! copy at every sign-in. The library's lock is kept under the cache
 //! folder, in its `locks` folder, as [`crate::atomic`] says why.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use unicode_normalization::UnicodeNormalization;
@@ -31,15 +40,27 @@ pub struct Defaults {
 pub fn defaults() -> Option<Defaults> {
     let project = directories::ProjectDirs::from("", "", NAME)?;
     let user = directories::UserDirs::new()?;
-    // Linux without `user-dirs.dirs`, as on a server, names no music folder.
-    let music = user
-        .audio_dir()
-        .map_or_else(|| user.home_dir().join("Music"), PathBuf::from);
+    let from_env = if cfg!(any(target_os = "macos", windows)) {
+        None
+    } else {
+        std::env::var_os("XDG_MUSIC_DIR")
+    };
+    let music = music_folder(from_env, user.audio_dir(), user.home_dir());
     Some(Defaults {
         home: project.data_local_dir().to_path_buf(),
         library: music.join(NAME),
         cache: Some(project.cache_dir().to_path_buf()),
     })
+}
+
+/// The music folder: `from_env`, the XDG variable, when it is absolute;
+/// else the one the system names; else `Music` in the home.
+fn music_folder(from_env: Option<OsString>, named: Option<&Path>, home: &Path) -> PathBuf {
+    from_env
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| named.map(Path::to_path_buf))
+        .unwrap_or_else(|| home.join("Music"))
 }
 
 /// When a file arrived where it is: the later of its modification time
@@ -122,6 +143,22 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_music_folder_in_the_environment_comes_before_the_named_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let named = home.join("Tunes");
+        let set = dir.path().join("elsewhere");
+        let pick = |from_env: Option<&Path>, named: Option<&Path>| {
+            music_folder(from_env.map(OsString::from), named, &home)
+        };
+        assert_eq!(pick(Some(&set), Some(&named)), set);
+        assert_eq!(pick(None, Some(&named)), named);
+        assert_eq!(pick(Some(Path::new("Tunes")), Some(&named)), named);
+        assert_eq!(pick(Some(Path::new("")), None), home.join("Music"));
+        assert_eq!(pick(None, None), home.join("Music"));
+    }
 
     #[test]
     fn a_folder_is_within_itself_and_its_parents_only() {

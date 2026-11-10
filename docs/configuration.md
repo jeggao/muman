@@ -28,7 +28,7 @@ Without them, each folder is the platform's own:
 
 | Platform | Home | Library |
 |---|---|---|
-| Linux | `$XDG_DATA_HOME/muman`, usually `~/.local/share/muman` | `$XDG_MUSIC_DIR/muman`, usually `~/Music/muman` |
+| Linux | `$XDG_DATA_HOME/muman`, usually `~/.local/share/muman` | `$XDG_MUSIC_DIR/muman`, from the environment or else `user-dirs.dirs`, usually `~/Music/muman` |
 | macOS | `~/Library/Application Support/muman` | `~/Music/muman` |
 | Windows | `%LOCALAPPDATA%\muman\data` | `%USERPROFILE%\Music\muman` |
 
