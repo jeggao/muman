@@ -687,6 +687,11 @@ fn vouch<R: Runner, W: Write>(
         out,
         &format!("{verb}: {}", crate::relpath::show(&done.audio)),
     )?;
+    // A file beside the song it had none of before, as lyrics found since.
+    let had = |path: &Path| before.is_some_and(|w| w.sidecars.iter().any(|s| s.path == path));
+    for (path, _) in done.beside.iter().filter(|(path, _)| !had(path)) {
+        crate::ui::success(out, &format!("Added: {}", crate::relpath::show(path)))?;
+    }
     for problem in done.problems.iter().chain(&r.why.chapters) {
         crate::ui::warning(out, &format!("  {problem}"))?;
     }

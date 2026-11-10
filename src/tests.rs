@@ -5637,6 +5637,29 @@ fn undo_puts_a_removed_song_back() {
     );
 }
 
+#[test]
+fn the_lyrics_beside_a_song_are_said_added_and_counted_by_undo() {
+    let s = Setup::new();
+    let song = s.file("rips/Song.flac");
+    s.file("rips/Song.lrc");
+    let (ok, text) = s.run(&flacs(), &["add", &song]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.lrc"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:Song.flac"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:Song.flac"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.flac"), "{text}");
+    assert!(text.contains("Added: Artist/Record/02 Song.lrc"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-n"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Remove 2 files the run added:"), "{text}");
+    assert!(text.contains("    Artist/Record/02 Song.lrc\n"), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("Removed: ").count(), 2, "{text}");
+}
+
 /// The record of the latest run, as `run.json` holds it, and its path.
 fn latest_record(s: &Setup) -> (PathBuf, serde_json::Value) {
     let history = s.dir.path().join("home/history");

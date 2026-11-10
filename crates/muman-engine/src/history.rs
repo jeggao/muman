@@ -1296,14 +1296,14 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         ));
     }
     lines.extend(copies_said(dirs, &record));
-    let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
-    let added = state
-        .outputs
-        .into_keys()
-        .filter(|p| !record.was.contains_key(p) && !moved.contains(p))
-        .count();
-    if added > 0 {
-        lines.push(format!("Remove {added} file(s) the run added"));
+    // What `undo` removes, the files beside a song, as its lyrics, too.
+    let added = made_by_run(&record, &state.outputs, &dirs.library);
+    if !added.is_empty() {
+        let files = if added.len() == 1 { "file" } else { "files" };
+        lines.push(format!("Remove {} {files} the run added:", added.len()));
+        for rel in &added {
+            lines.push(format!("  {}", crate::relpath::show(rel)));
+        }
     }
     Ok(UndoPlan { dir, record, lines })
 }
