@@ -946,6 +946,41 @@ fn a_move_lands_where_another_song_leaves_and_never_on_its_file() {
 }
 
 #[test]
+fn a_file_and_a_folder_of_one_name_trade_places_by_moves_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let with = |other: &str| {
+        format!(
+            "[library]\ntemplate = \"{{% if id == 'aaaaaaaaaaa' %}}Y{{% else %}}{other}t{{% \
+             endif %}}\"\n{TWO}"
+        )
+    };
+    h.songs(&with(""));
+    assert!(h.run(&fake, Options::default()).0);
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    for (other, a, b) in [
+        ("Y.opus/", "Y [aaaaaaaaaaa].opus", "Y.opus/t.opus"),
+        ("", "Y.opus", "t.opus"),
+    ] {
+        h.songs(&with(other));
+        let (_, said) = h.run(&fake, dry);
+        let (ok, text) = h.run(&fake, Options::default());
+        assert!(ok, "{text}");
+        assert!(crate::ui::plain(&said).contains("2 moved"), "{said}");
+        assert!(
+            !text.contains("Wrote") && !text.contains("Could not"),
+            "{text}"
+        );
+        assert!(h.lib(a).is_file() && h.lib(b).is_file(), "{text}");
+    }
+}
+
+#[test]
 fn a_dry_run_names_every_move_and_removal_its_sync_makes() {
     let h = home();
     let ids = ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"];
@@ -2839,6 +2874,63 @@ fn songs_whose_files_beside_them_share_a_name_are_kept_apart() {
     ];
     plan::separate(&mut apart, &[], &naming, &beside);
     assert_eq!(apart[1].1.stem, PathBuf::from("Outro.en"));
+}
+
+#[test]
+fn a_file_named_as_another_song_s_folder_is_told_apart_in_either_order() {
+    use crate::codec::Codec;
+    use crate::resolve::{AudioRef, Format, Plan, Resolved, TAGGING, Why, render_version};
+    let song = |stem: PathBuf, id: &str| {
+        (
+            0,
+            Resolved {
+                plan: Plan {
+                    folder: None,
+                    version: render_version(Codec::Flac),
+                    format: Format::Copy { codec: Codec::Flac },
+                    audio: AudioRef {
+                        key: SourceKey::youtube(id),
+                        rev: "r".into(),
+                        index: 0,
+                    },
+                    cover: None,
+                    lyrics: None,
+                    tags: Vec::new(),
+                    loudness: None,
+                    tagging: TAGGING,
+                    chapters: Vec::new(),
+                },
+                stem,
+                why: Why::default(),
+            },
+        )
+    };
+    let library = crate::settings::Library::default();
+    let naming = library.naming(Path::new("lib")).unwrap();
+    let beside = |_: &Path, _: &Plan| Vec::new();
+    let inside = Path::new("Y.flac").join("t1");
+    for first in [true, false] {
+        let mut planned = vec![
+            song(inside.clone(), "aaaaaaaaaaa"),
+            song(PathBuf::from("y"), "bbbbbbbbbbb"),
+        ];
+        if !first {
+            planned.reverse();
+        }
+        plan::separate(&mut planned, &[], &naming, &beside);
+        let stem = |id: &str| {
+            (planned.iter())
+                .find(|(_, r)| r.plan.audio.key == SourceKey::youtube(id))
+                .map(|(_, r)| r.stem.clone())
+                .unwrap()
+        };
+        assert_eq!(stem("aaaaaaaaaaa"), inside);
+        assert_eq!(
+            stem("bbbbbbbbbbb"),
+            PathBuf::from("y [bbbbbbbbbbb]"),
+            "`y.flac` is the folder `Y.flac` on a filesystem blind to case"
+        );
+    }
 }
 
 #[test]

@@ -269,7 +269,10 @@ pub(super) type Holding<'a> = (&'a BTreeSet<usize>, &'a BTreeSet<usize>);
 /// | Otherwise, or `force` | Written |
 ///
 /// A path is free when no file of anyone's is there, folded as NTFS and
-/// APFS fold names, or only a song's file that moves away first, as when
+/// APFS fold names, nor a song's file where one of its folders goes, as
+/// `Y.flac` is the folder of `Y.flac/Song.flac`, or only a song's file
+/// that moves away first, or a folder all of whose songs' files do, as
+/// when
 /// two songs of one name become two of two names and the one told apart
 /// takes the plain name; a name changing only its case is free to its
 /// own file. Moves are listed in the order they can be made;
@@ -334,8 +337,12 @@ fn decide_in(
     // already chosen leaves, so the order chosen is an order they can run.
     let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
     let mut held: BTreeSet<String> = recorded.iter().map(|p| folded(p)).collect();
+    let ours: BTreeSet<String> = held.clone();
     let free = |held: &BTreeSet<String>, p: &Path| {
-        !held.contains(&folded(p)) && (recorded.contains(p) || !library.join(p).exists())
+        p.ancestors().all(|a| !held.contains(&folded(a)))
+            && (recorded.contains(p)
+                || !library.join(p).exists()
+                || emptied(library, p, (&ours, held)))
     };
     let mut order = 0;
     loop {
@@ -480,6 +487,35 @@ pub(super) fn own_place(library: &Path, from: &Path, to: &Path) -> bool {
     folded(from) == folded(to)
         && (!library.join(to).exists()
             || same_file::is_same_file(library.join(from), library.join(to)).unwrap_or(false))
+}
+
+/// Whether the library's folder `dir` held files of `ours` and holds
+/// nothing else but what a file manager leaves, each of them moved away,
+/// `held` no longer: a song's file may move to where it is once they have,
+/// as the folder is removed once empty, but never to a folder of the user's.
+fn emptied(
+    library: &Path,
+    dir: &Path,
+    (ours, held): (&BTreeSet<String>, &BTreeSet<String>),
+) -> bool {
+    let Ok(entries) = std::fs::read_dir(library.join(dir)) else {
+        return false;
+    };
+    let mut any = false;
+    let all = entries.flatten().all(|e| {
+        let path = dir.join(e.file_name());
+        let folded = crate::relpath::folded(&path);
+        if e.file_type().is_ok_and(|t| t.is_dir()) {
+            any = true;
+            emptied(library, &path, (ours, held))
+        } else if ours.contains(&folded) {
+            any = true;
+            !held.contains(&folded)
+        } else {
+            crate::library::is_desktop_clutter(&e.file_name().to_string_lossy())
+        }
+    });
+    any && all
 }
 
 /// Everything a sync does to the library, decided before it does any:

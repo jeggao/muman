@@ -72,8 +72,13 @@ pub fn path_of(r: &Resolved) -> PathBuf {
 /// blind to case folds it, by the song's stem, so a FLAC song and an Opus
 /// song of one name are told apart before either writes a `.lrc`, and by
 /// each file a song may write, so `Intro` and its `.en.lrc` never meet
-/// `Intro.en` and its `.lrc`. `beside` names the files a song at a path
-/// writes beside it by its plan.
+/// `Intro.en` and its `.lrc`. A file is never named as a folder another
+/// song's files are in, as a template that puts some songs in a folder of
+/// their album's name and others not can ask: `Y.flac` the file of one
+/// and the folder of another. The folders are known before any name is
+/// held, as telling a name apart changes no folder, so the song whose
+/// file it is is told apart, whichever is listed first. `beside` names
+/// the files a song at a path writes beside it by its plan.
 pub(super) fn separate(
     planned: &mut [(usize, Resolved)],
     failed: &[(usize, Resolved)],
@@ -89,11 +94,20 @@ pub(super) fn separate(
             .map(|p| folded(&p))
             .collect()
     };
+    let folders: BTreeSet<String> = (failed.iter().chain(planned.iter()))
+        .flat_map(|(_, r)| files(r))
+        .flat_map(|f| {
+            (f.match_indices('/'))
+                .map(|(at, _)| f[..at].to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let mut stems: BTreeSet<String> = BTreeSet::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
-    let mut hold = |r: &Resolved, stems: &mut BTreeSet<String>| {
+    let mut hold = |r: &Resolved, stems: &mut BTreeSet<String>, failed: bool| {
         let files = files(r);
-        let free = !stems.contains(&folded(&r.stem)) && files.iter().all(|f| !taken.contains(f));
+        let free = !stems.contains(&folded(&r.stem))
+            && (files.iter()).all(|f| !taken.contains(f) && (failed || !folders.contains(f)));
         if free {
             stems.insert(folded(&r.stem));
             taken.extend(files);
@@ -103,10 +117,10 @@ pub(super) fn separate(
     // A song that failed keeps the name its file has, so no song takes
     // its path, and its file, while it is held.
     for (_, r) in failed {
-        hold(r, &mut stems);
+        hold(r, &mut stems, true);
     }
     for (_, r) in planned.iter_mut() {
-        if hold(r, &mut stems) {
+        if hold(r, &mut stems, false) {
             continue;
         }
         let base = r.stem.clone();
@@ -114,7 +128,7 @@ pub(super) fn separate(
         let id = naming.value(&r.plan.audio.key.short());
         for n in 1.. {
             r.stem = naming.suffixed(&base, &id, n);
-            if hold(r, &mut stems) {
+            if hold(r, &mut stems, false) {
                 break;
             }
         }

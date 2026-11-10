@@ -460,15 +460,14 @@ replaces what `windows` does, since Windows can hold no such name.
 `[library] replace` maps characters or strings to replacements of your
 own, applied first: `{ ":" = " -" }` turns `A: B` into `A - B`.
 
-File and folder names are cut to `max_name_bytes` and
-`max_folder_bytes` bytes of UTF-8, once in Unicode NFC, which no
-filesystem counts more strictly. A cut never splits a character as a
-reader sees one, such as a flag or a letter with its accent, unless
-that character alone is too long, and never ends on a joiner. A name
-keeps room for what tells it apart, so `max_name_bytes` takes at least
-40, more when a file beside a song has a longer tail than `.flac`, and
-`max_folder_bytes` at least 16. Neither takes more than 255, as much as
-any filesystem holds.
+File and folder names are cut to `max_name_bytes` and `max_folder_bytes`
+bytes of UTF-8, once in Unicode NFC, which no filesystem counts more
+strictly. A cut never splits a character as a reader sees one, such as a
+flag or a letter with its accent, unless that character alone is too
+long, and never ends on a joiner. A name keeps room for what tells it
+apart, so `max_name_bytes` takes at least 40, more when a file beside a
+song has a longer tail than `.flac`, and `max_folder_bytes` at least 16.
+Neither takes more than 255, as much as any filesystem holds.
 
 Windows programs and some players stop at 260 characters for a whole
 path. `max_path` cuts each title so the full path, library folder
@@ -479,4 +478,5 @@ Windows does, in UTF-16 units, so an emoji counts two.
 
 Two names a case-insensitive filesystem holds as one, as `Song` and
 `SONG`, or `ΟΔΟΣ` and `οδοσ`, are told apart by a suffix naming the
-song's source, so a library copied to Windows or macOS loses neither.
+song's source, so a library copied to Windows or macOS loses neither; so
+is a file named as another song's folder.
