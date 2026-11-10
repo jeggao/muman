@@ -15,8 +15,9 @@
 //!   then decides; then least that is not the song (a video's intro or
 //!   skit) or is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
-//!   from the folder most of its album's audio comes from, then
-//!   lossless, then the most bits used, then the lowest rate.
+//!   lossless, then the most bits used, then the lowest rate, then
+//!   from the folder most of its album's audio comes from, which never
+//!   puts an album's lossy rip ahead of a lossless copy of it.
 //!   Lossless audio cut off as lossy audio is counts as lossy, padded
 //!   audio by the bits it uses, and upsampled audio by the rate it
 //!   declares, which its bytes take: ranked by the rate its sound needs,
@@ -1332,7 +1333,7 @@ type Rank = Vec<i64>;
 /// Where a [`Rank`] holds whether a source came from its album's folder,
 /// which sways the audio a song plays but not the audio a lookup was
 /// asked with.
-const FROM_ALBUM: usize = 3;
+const FROM_ALBUM: usize = 5;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
@@ -1443,9 +1444,9 @@ fn pick_audio(
                 i64::from(facts.damage().is_some()),
                 unknown,
                 sum,
-                i64::from(!from_album(input, key)),
                 -tie_break(facts.audio.as_ref()),
                 facts.audio.as_ref().map_or(0, |a| i64::from(a.sample_rate)),
+                i64::from(!from_album(input, key)),
             ];
             Scored {
                 n,

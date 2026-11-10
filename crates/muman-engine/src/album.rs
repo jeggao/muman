@@ -50,10 +50,12 @@
 //!   and the folder most of their
 //!   audio comes from ([`origin_of`]), a
 //!   disc's folder counting as its album's, which wins a song's audio
-//!   between sources its measures rank alike, so an album plays from one
-//!   rip, gapless and levelled alike. A song takes nothing from another
-//!   song's sources: what each source held when its song was built stays
-//!   that song's own record.
+//!   between sources its measures, then lossless before lossy, the bits
+//!   used and the rate, rank alike, so an album plays from one rip,
+//!   gapless and levelled alike, and never from its lossy rip where a
+//!   lossless copy of the same audio is at hand. A song takes nothing
+//!   from another song's sources: what each source held when its song
+//!   was built stays that song's own record.
 //!
 //! A tag set by hand is never changed and never counts, and a song whose
 //! album is set by hand is left out. A song resolved alone, as songs
@@ -84,7 +86,8 @@ pub struct Pick {
     /// shows too from a source of its own that holds it.
     pub cover: Option<Look>,
     /// The folder most of its album's audio comes from ([`origin_of`]),
-    /// which wins between its sources its measures rank alike.
+    /// which wins between its sources ranked alike by all else
+    /// ([`crate::resolve`]).
     pub audio_from: Option<String>,
 }
 

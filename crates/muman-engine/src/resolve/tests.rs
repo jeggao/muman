@@ -3599,6 +3599,25 @@ fn audio_its_measures_rank_alike_comes_from_its_album_s_folder() {
     );
 }
 
+#[test]
+fn a_lossless_copy_beats_its_album_s_lossy_rip_of_the_same_audio() {
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{}/{p}", "a".repeat(40))).unwrap();
+    let (rip, copy) = (
+        key("Glass Weather/01 Song.mp3"),
+        key("Harbor Nights/01 Song.flac"),
+    );
+    let (mut f1, mut f2) = (audio("mp3", 22.0), audio("flac", 22.0));
+    f1.rev = "1".into();
+    f2.rev = "2".into();
+    let facts = BTreeMap::from([(rip.clone(), f1), (copy.clone(), f2)]);
+    let pick = crate::album::Pick {
+        audio_from: crate::album::origin_of(&rip),
+        ..crate::album::Pick::default()
+    };
+    let r = run_picked(&song(&[rip, copy.clone()]), &facts, &pick);
+    assert_eq!(r.plan.audio.key, copy, "{}", r.why.audio);
+}
+
 /// A song's file, sung in `language`, titled `title`, and a lyrics file
 /// with no audio whose lines, Latin or not, run to `last_ms`.
 fn sung_with_lyrics_file(

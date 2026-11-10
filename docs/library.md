@@ -16,7 +16,7 @@ is the only override, and the order of `sources` breaks the last tie.
 
 | Part | Ranked by, in order |
 |---|---|
-| Audio | The song's recording; whole over damaged; least sound beyond the song or missing from it; real stereo; widest real bandwidth; least clipping; peaks highest over its loudness, where that counts |
+| Audio | The song's recording; whole over damaged; fewest measures not taken; least sound beyond the song or missing from it; real stereo; peaks highest over its loudness, where that counts; widest real bandwidth; least clipping; lossless over lossy; most bits used; lowest sample rate; from its album's folder |
 | Cover | Square content; effective resolution; fewest block artifacts |
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
@@ -74,8 +74,8 @@ then the lower sample rate, which an upsample would only waste. Lossless
 audio whose sound stops under 19 kHz, as lossy audio's does, was made
 from lossy audio and counts as lossy. `status` names it, a file above
 48 kHz whose sound stops at 24.5 kHz or lower, which was upsampled, and
-one whose samples use fewer bits than it declares. Of sources ranked
-alike, a song on an album takes the one from the folder most of its
+one whose samples use fewer bits than it declares. Of sources alike in
+all that, a song on an album takes the one from the folder most of its
 album's audio comes from, a disc's folder counting as its album's, so
 the album plays from one rip. A file
 with several audio streams is made from its best: lossless before
