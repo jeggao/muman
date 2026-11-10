@@ -256,7 +256,7 @@ impl std::str::FromStr for Level {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, String> {
-        hundredths(text, &["db", "dbfs", "dbtp"])
+        hundredths(text, &["db", "dbfs", "dbtp", "decibel", "decibels"])
             .map(Self)
             .ok_or_else(|| format!("`{text}` is not a level, such as \"-1 dB\""))
     }
@@ -676,6 +676,8 @@ mod tests {
         assert_eq!("-1 dBTP".parse(), Ok(Level(-100)));
         assert_eq!("-0.25dBFS".parse(), Ok(Level(-25)));
         assert_eq!("+2 dB".parse(), Ok(Level(200)));
+        assert_eq!("-1 decibel".parse(), Ok(Level(-100)));
+        assert_eq!("-1.5 Decibels".parse(), Ok(Level(-150)));
         assert!("-18 dB".parse::<Loudness>().is_err());
         assert!("-1 LUFS".parse::<Level>().is_err());
         assert!(

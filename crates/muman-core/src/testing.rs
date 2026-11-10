@@ -132,6 +132,8 @@ pub struct Fake {
     pub failing: Vec<String>,
     /// Lines a streamed run writes, and what it does to the disk.
     pub lines: Vec<String>,
+    /// Lines a streamed run writes to its errors, after those.
+    pub err_lines: Vec<String>,
     // A hook one test installs; a named type would be used once.
     #[expect(clippy::type_complexity)]
     pub on_stream: Option<Box<dyn Fn(&[String]) -> bool + Sync>>,
@@ -631,6 +633,9 @@ impl Runner for Fake {
         let args = self.record(cmd);
         for line in &self.lines {
             on_line(Line::Out(line));
+        }
+        for line in &self.err_lines {
+            on_line(Line::Err(line));
         }
         Ok(self.on_stream.as_ref().is_none_or(|f| f(&args)))
     }

@@ -115,7 +115,8 @@ pub struct Cli {
     pub library: Option<PathBuf>,
 
     /// Reach no network: make no lookup, fetch nothing missing, and
-    /// refuse URLs; what is on disk is written as ever.
+    /// refuse URLs and torrents, which aria2c checks and finishes even
+    /// with `--from`; what is on disk is written as ever.
     #[arg(
         long,
         global = true,

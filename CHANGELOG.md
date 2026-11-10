@@ -158,6 +158,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`purge` never deletes what a run under way is about to use.** It
+  waits for an `add` or `sync` fetching what no song lists yet, and
+  keeps each file a song lists by then.
+- **A command begins its run only once it has saved**, so `review`
+  asking about the next song and `edit` opened again after a change
+  meanwhile hold no other run back either.
+- **`check --upstream` with no network says so once**, after asking one
+  site, rather than naming every source as no longer served.
+- **`status`, `info` and `purge` agree on what is unused**: a removed
+  song's sources are kept for `restore` in all three, and a copy `add`
+  made of lyrics or a picture no song lists is named in all three.
+- **A level may be spelled out**, as `"-1 decibel"`.
+- **`check --calibrate` with no MusicBrainz record kept says so**,
+  rather than ask whether vetting is off.
 - **An Opus made from an MP3 no longer replaces it.** Bandwidth is read
   at the MP3's lowpass, under the noise Opus fills in above it, so a
   transcode cannot win on bandwidth and cost a generation. Lossy sources

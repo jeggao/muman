@@ -453,13 +453,10 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    // A manual file not listed is added by the next sync; only fetched
-    // and kept files can lie unused.
-    for path in store
-        .unused(listed)
-        .iter()
-        .filter(|p| !p.starts_with(dirs.manual()))
-    {
+    // As `purge` deletes them: a removed song's sources stay for `restore`.
+    let mut known = listed.clone();
+    known.extend(manifest.removed_keys());
+    for path in store.purgeable(dirs, &known) {
         crate::ui::info(out, &format!("Unused: {}", path.display()))?;
     }
     Ok(())

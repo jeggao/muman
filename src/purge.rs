@@ -22,7 +22,7 @@ use crate::atomic::Lock;
 use crate::cli::Confirm;
 use crate::dirs::Dirs;
 use crate::manifest::Manifest;
-use crate::store::{self, Store};
+use crate::store::Store;
 use crate::ui::Prompter;
 
 /// Delete every fetched file and kept record no listed or removed song
@@ -35,12 +35,7 @@ pub fn purge<W: Write>(
     prompter: Option<&mut dyn Prompter>,
     out: &mut W,
 ) -> Result<bool> {
-    let _lock = Lock::folder(&dirs.home)?;
-    let manifest = Manifest::load(&dirs.home)?;
-    let store = Store::scan(dirs)?;
-    let mut known = manifest.keys();
-    known.extend(manifest.removed_keys());
-    let doomed = unused_files(dirs, &store, &known);
+    let doomed = unused_now(dirs)?;
     if doomed.is_empty() {
         crate::ui::success(out, "Nothing unused to delete")?;
         return Ok(false);
@@ -59,6 +54,17 @@ pub fn purge<W: Write>(
     if !crate::change::confirmed(confirm, &ask, prompter, out)? {
         return Ok(false);
     }
+    // Taken only once answered, as a run takes it: a run under way, as an
+    // add fetching what no song lists yet, is waited for, and what it made
+    // used since the question is kept.
+    let _runs = Lock::runs(&dirs.home)?;
+    let still = unused_now(dirs)?;
+    let (doomed, kept): (Vec<PathBuf>, Vec<PathBuf>) =
+        doomed.into_iter().partition(|f| still.contains(f));
+    for file in &kept {
+        crate::ui::info(out, &format!("Kept, used since: {}", file.display()))?;
+    }
+    let total: u64 = doomed.iter().map(size).sum();
     for file in &doomed {
         match crate::atomic::remove(file) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
@@ -71,6 +77,18 @@ pub fn purge<W: Write>(
     Ok(true)
 }
 
+/// What no listed or removed song uses now, by the song list read whole.
+fn unused_now(dirs: &Dirs) -> Result<BTreeSet<PathBuf>> {
+    let manifest = {
+        let _lock = Lock::folder(&dirs.home)?;
+        Manifest::load(&dirs.home)?
+    };
+    let store = Store::scan(dirs)?;
+    let mut known = manifest.keys();
+    known.extend(manifest.removed_keys());
+    Ok(unused_files(dirs, &store, &known).into_iter().collect())
+}
+
 /// Every file of a fetched source, a kept record or a copy `add` made in
 /// `added/` no key of `known` names, with the files that come with it.
 fn unused_files(
@@ -78,38 +96,83 @@ fn unused_files(
     store: &Store,
     known: &BTreeSet<crate::source::SourceKey>,
 ) -> Vec<PathBuf> {
-    let mut doomed = BTreeSet::new();
-    for path in store.unused(known) {
-        if path.starts_with(dirs.ytdlp()) {
-            doomed.extend(store.fetched_files_at(&path));
-            continue;
-        }
-        // What `add` copied of lyrics and pictures is muman's copy of a
-        // file the user keeps elsewhere, as fetched sources are.
-        if path.starts_with(dirs.torrent())
-            || path.starts_with(dirs.manual().join(crate::attach::ADDED))
-        {
-            doomed.insert(path);
-            continue;
-        }
-        let kind = store::KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
-        let id = path.file_stem().and_then(|s| s.to_str());
-        if let (Some(kind), Some(id)) = (kind, id) {
-            doomed.extend(kind.files(dirs, id));
-        }
-    }
-    doomed.into_iter().collect()
+    store.with_their_files(dirs, &store.purgeable(dirs, known))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store;
 
     fn touch(dirs: &Dirs, rel: &str) -> PathBuf {
         let path = dirs.home.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, rel).unwrap();
         path
+    }
+
+    /// Answers yes, having listed what `lists` names meanwhile, as a run
+    /// under way would.
+    struct ListsMeanwhile {
+        manifest: PathBuf,
+        lists: &'static str,
+    }
+
+    impl Prompter for ListsMeanwhile {
+        fn ask(&mut self, _: &str) -> std::io::Result<bool> {
+            std::fs::write(&self.manifest, self.lists)?;
+            Ok(true)
+        }
+
+        fn choose(&mut self, _: &str, _: &[String], p: &[usize]) -> std::io::Result<Vec<usize>> {
+            Ok(p.to_vec())
+        }
+
+        fn select(&mut self, _: &str, _: &[String]) -> std::io::Result<Option<usize>> {
+            Ok(None)
+        }
+
+        fn text(&mut self, _: &str, _: &str) -> std::io::Result<Option<String>> {
+            Ok(None)
+        }
+
+        fn text_with(
+            &mut self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: crate::ui::Check,
+        ) -> std::io::Result<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn what_a_song_lists_while_purge_asks_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
+        };
+        let used = touch(&dirs, "sources/lrclib/7.lrc");
+        let gone = touch(&dirs, "sources/lrclib/8.lrc");
+        std::fs::write(dirs.manifest(), "version = 4\n").unwrap();
+        let mut asked = ListsMeanwhile {
+            manifest: dirs.manifest(),
+            lists: "version = 4\n[[song]]\nsources = [\"lrclib:7\"]\n",
+        };
+        let confirm = Confirm {
+            yes: false,
+            all: false,
+            dry_run: false,
+        };
+        let mut out = Vec::new();
+        assert!(purge(&dirs, &confirm, Some(&mut asked), &mut out).unwrap());
+        let text = String::from_utf8(out).unwrap();
+        assert!(used.exists(), "{text}");
+        assert!(!gone.exists(), "{text}");
+        assert!(text.contains("Kept, used since"), "{text}");
     }
 
     #[test]

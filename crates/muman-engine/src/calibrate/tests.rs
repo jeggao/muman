@@ -381,3 +381,15 @@ fn another_song_s_record_sharing_a_title_or_a_credit_is_another_unless_it_names_
         "the same recording listed again is no look-alike"
     );
 }
+
+#[test]
+fn nothing_weighed_says_whether_records_were_kept() {
+    let none = lines(&Calibration::default()).join("\n");
+    assert!(none.contains("no MusicBrainz record kept"), "{none}");
+    let some = Calibration {
+        same: 3,
+        ..Calibration::default()
+    };
+    let some = lines(&some).join("\n");
+    assert!(some.contains("vetting` off"), "{some}");
+}

@@ -37,6 +37,29 @@ const STALE: [&str; 6] = [
     "HTTP Error 403",
 ];
 
+/// Texts of an error that reached no server: a name that does not
+/// resolve, a connection refused or timed out, a proxy failing to connect,
+/// as Python's socket and urllib3 word them on every platform.
+const UNREACHABLE: [&str; 9] = [
+    "Unable to connect to proxy",
+    "Failed to establish a new connection",
+    "Temporary failure in name resolution",
+    "Name or service not known",
+    "nodename nor servname",
+    "getaddrinfo failed",
+    "Connection refused",
+    "Network is unreachable",
+    "No route to host",
+];
+
+/// Whether a yt-dlp error says it reached no server, as when the network
+/// or a proxy is down: every other request would fail alike, as an
+/// unreachable lookup does ([`crate::http::TransportError::Unreachable`]).
+#[must_use]
+pub fn unreachable(line: &str) -> bool {
+    UNREACHABLE.iter().any(|t| line.contains(t))
+}
+
 /// What a fetch learns from yt-dlp's lines beyond the files it finished.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Flags {

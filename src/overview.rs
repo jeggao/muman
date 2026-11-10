@@ -631,12 +631,9 @@ fn status<W: Write>(c: &Context<'_>, out: &mut W) -> Result<()> {
     }
     group(out, c.verbose, "Dropped in, not listed", &new)?;
     let (mut unused, mut strays) = (Group::default(), Group::default());
-    for path in c
-        .store
-        .unused(&listed)
-        .iter()
-        .filter(|p| !p.starts_with(c.dirs.manual()))
-    {
+    let mut known = listed.clone();
+    known.extend(c.manifest.removed_keys());
+    for path in &c.store.purgeable(c.dirs, &known) {
         if c.store.leftovers().contains(path) {
             strays.add(&path.display().to_string());
         } else {

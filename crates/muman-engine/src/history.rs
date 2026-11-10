@@ -226,10 +226,11 @@ pub struct Run {
     _runs: atomic::Lock,
 }
 
-/// A run begun only once a command is about to change the home, as it
-/// saves the song list: a command that asks first holds no lock while
-/// its question waits, so no other run waits on an answer, and one
-/// declined begins none. What it read before is checked again as it
+/// A run begun only once a command has saved the song list, its
+/// questions answered: no other run waits on an answer, and a change
+/// declined begins none. The run takes up the change as it takes up a
+/// hand edit, its song list before being the one the last run left, so
+/// one `undo` takes it back. What the command read is checked again as it
 /// saves, a song changed meanwhile refusing the save.
 #[derive(Debug)]
 pub struct Later {

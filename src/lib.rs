@@ -665,8 +665,8 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             })
         }
         Command::Edit { query, all } => {
-            // Begun once the editor is closed, so an open editor holds no
-            // other run back.
+            // Begun once the edit is saved, so an open editor holds no other
+            // run back.
             let mut later = Later::new(&dirs.home);
             let edited = editor::edit(
                 dirs,

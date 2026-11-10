@@ -55,7 +55,7 @@ pub fn edit<W: Write>(
     terms: &[String],
     confirm: &Confirm,
     p: &mut dyn Prompter,
-    later: &mut crate::history::Later,
+    mut later: Option<&mut crate::history::Later>,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -133,12 +133,14 @@ pub fn edit<W: Write>(
             read.manifest.edit(edit);
         }
         let albums: Vec<_> = held.into_iter().collect();
-        later.begin()?;
         if read
             .manifest
             .save_if_unchanged_with(&expected, &albums)?
             .is_empty()
         {
+            if let Some(later) = later.as_deref_mut() {
+                later.begin()?;
+            }
             return Ok(true);
         }
         read.manifest.discard();

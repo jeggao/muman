@@ -1033,6 +1033,42 @@ impl Store {
     }
 }
 
+impl Store {
+    /// The sources no key of `known`, every listed and removed song's,
+    /// names, as `status` and `info` name them and `purge` deletes them: a
+    /// fetched file, a torrent's, a kept record, or a copy `add` made in
+    /// the manual folder's `added/`, never another file of the user's.
+    #[must_use]
+    pub fn purgeable(&self, dirs: &Dirs, known: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
+        let added = dirs.manual().join(crate::dirs::ADDED);
+        (self.unused(known).into_iter())
+            .filter(|p| !p.starts_with(dirs.manual()) || p.starts_with(&added))
+            .collect()
+    }
+
+    /// `paths`, as [`Self::purgeable`] names them, each with the files
+    /// that come with it: a fetch's thumbnail and metadata, a record's.
+    #[must_use]
+    pub fn with_their_files(&self, dirs: &Dirs, paths: &[PathBuf]) -> Vec<PathBuf> {
+        let mut all = BTreeSet::new();
+        for path in paths {
+            if path.starts_with(dirs.ytdlp()) {
+                all.extend(self.fetched_files_at(path));
+                continue;
+            }
+            let kind = KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
+            let id = path.file_stem().and_then(|s| s.to_str());
+            match (kind, id) {
+                (Some(kind), Some(id)) => all.extend(kind.files(dirs, id)),
+                _ => {
+                    all.insert(path.clone());
+                }
+            }
+        }
+        all.into_iter().collect()
+    }
+}
+
 /// The `.lrc` and pictures that come with the song file `rel` among
 /// `files`, a folder's or a torrent's: named as it is in any case, those
 /// in its own case first, and none named in its case as another song

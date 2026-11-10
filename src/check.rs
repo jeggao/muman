@@ -130,6 +130,29 @@ pub fn check<R: Runner, W: Write, D: Write>(
     Ok(problems == 0)
 }
 
+/// What the sites listed, each with a digest of its tags.
+type Listed = Vec<(crate::info::VideoInfo, Option<String>)>;
+
+/// Ask the sites of `urls` what they serve, by one yt-dlp run that
+/// downloads nothing, adding to `listed` and `errors`.
+fn ask_sites<R: Runner>(
+    runner: &R,
+    passed: &crate::download::Passed,
+    urls: &[String],
+    listed: &mut Listed,
+    errors: &mut Vec<String>,
+) -> Result<bool> {
+    let cmd = crate::download::upstream_command(passed, urls);
+    runner.stream(&cmd, &mut |line| match line {
+        Line::Out(l) => listed.extend(
+            crate::info::parse(l.as_bytes())
+                .ok()
+                .map(|i| (i, crate::info::tags_digest(l.as_bytes()))),
+        ),
+        Line::Err(l) => errors.push(l.trim().to_string()),
+    })
+}
+
 /// What each site serves now of each fetched source its song records a
 /// format for, by one yt-dlp run that downloads nothing: a line for each
 /// served otherwise, with whether it is a problem, then how many are
@@ -179,16 +202,30 @@ fn served<R: Runner, W: Write>(
     let urls: Vec<String> = asked.iter().map(|(_, _, u)| u.clone()).collect();
     let scratch = crate::atomic::Scratch::new()?;
     let passed = crate::download::Passed::write(&manifest.settings.ytdlp, scratch.path())?;
-    let cmd = crate::download::upstream_command(&passed, &urls);
-    let (mut listed, mut errors) = (Vec::new(), Vec::new());
-    runner.stream(&cmd, &mut |line| match line {
-        Line::Out(l) => listed.extend(
-            crate::info::parse(l.as_bytes())
-                .ok()
-                .map(|i| (i, crate::info::tags_digest(l.as_bytes()))),
-        ),
-        Line::Err(l) => errors.push(l.trim().to_string()),
-    })?;
+    let ask = |urls: &[String], listed: &mut Listed, errors: &mut Vec<String>| {
+        ask_sites(runner, &passed, urls, listed, errors)
+    };
+    let (mut listed, mut errors): (Listed, Vec<String>) = (Vec::new(), Vec::new());
+    // One site asked first: one that reaches no server says the network
+    // is down, and the rest would each wait out yt-dlp's retries to fail
+    // alike, as though each site had taken its source down.
+    ask(&urls[..1], &mut listed, &mut errors)?;
+    if let Some(why) = errors
+        .iter()
+        .find(|e| crate::ytdlp_log::unreachable(e))
+        .filter(|_| listed.is_empty())
+    {
+        return Ok(vec![(
+            true,
+            format!(
+                "No site can be reached, so none was asked what it serves: {}",
+                why.trim_start_matches("ERROR: ")
+            ),
+        )]);
+    }
+    if urls.len() > 1 {
+        ask(&urls[1..], &mut listed, &mut errors)?;
+    }
     let mut lines = Vec::new();
     let mut same = 0;
     for (key, held, _) in &asked {
@@ -349,6 +386,45 @@ mod tests {
             .find(|c| c.iter().any(|a| a == "--skip-download"))
             .unwrap();
         assert!(!asked.iter().any(|a| a == "--format"), "nothing fetched");
+    }
+
+    #[test]
+    fn upstream_with_no_site_reachable_asks_one_and_says_so_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
+        };
+        std::fs::create_dir_all(&dirs.home).unwrap();
+        let song = |id: &str| {
+            format!(
+                "[[song]]\nsources = [\"youtube.com:{id}\"]\nheld.\"youtube.com:{id}\" = \
+                 {{ audio = \"0123456789abcdef\", format = \"251\", size = 1 }}\n"
+            )
+        };
+        let list = format!(
+            "version = 1\n{}{}",
+            song("aaaaaaaaaaa"),
+            song("bbbbbbbbbbb")
+        );
+        std::fs::write(dirs.manifest(), list).unwrap();
+        let fake = Fake {
+            err_lines: vec![
+                "ERROR: [youtube] aaaaaaaaaaa: Unable to download API page: \
+                 Unable to connect to proxy"
+                    .into(),
+            ],
+            ..Fake::default()
+        };
+        let (mut out, mut report) = (Vec::new(), Vec::new());
+        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let text = crate::ui::plain(&String::from_utf8(report).unwrap());
+        assert!(!ok);
+        assert!(text.contains("No site can be reached"), "{text}");
+        assert!(!text.contains("Not served now"), "{text}");
+        let asked = fake.calls();
+        assert_eq!(asked.len(), 1, "{asked:?}");
     }
 
     #[test]

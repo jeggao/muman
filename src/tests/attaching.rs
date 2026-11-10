@@ -191,6 +191,11 @@ fn purge_deletes_the_lyrics_add_copied_once_no_song_lists_them() {
     assert!(listed.contains(key), "{listed}");
     std::fs::write(&songs, listed.replace(key, "")).unwrap();
     s.run(&fake, &["sync"]);
+    let (_, said) = s.report(&fake, &["status"]);
+    assert!(
+        said.contains("Unused:") && said.contains("Lantern Weather.lrc"),
+        "{said}"
+    );
     let (ok, text) = s.run(&fake, &["purge", "-y"]);
     assert!(ok, "{text}");
     assert!(s.added().is_empty(), "{:?}: {text}", s.added());

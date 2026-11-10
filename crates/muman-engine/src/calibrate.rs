@@ -533,7 +533,9 @@ pub fn lines(c: &Calibration) -> Vec<String> {
             .collect();
         out.push(format!("  by {}", how.join(", ")));
     }
-    if c.by.is_empty() {
+    if c.same + c.other == 0 {
+        out.push("  no MusicBrainz record kept to weigh: a sync with lookups keeps them".into());
+    } else if c.by.is_empty() {
         out.push("  no evidence weighed: is `[tags.clean.structure] vetting` off?".into());
     }
     let together = c.together();

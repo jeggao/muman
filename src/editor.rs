@@ -409,8 +409,8 @@ fn summarize<W: Write>(
 }
 
 /// Open the songs the query picks in an editor, run by `editor` on the
-/// file's path, and apply what changed, calling `before_save` first each
-/// time it saves. Returns whether anything did.
+/// file's path, and apply what changed, calling `on_saved` once it is saved.
+/// Returns whether anything did.
 // Writes the file the editor is opened on, in scratch.
 #[expect(clippy::disallowed_methods)]
 pub fn edit<W: Write>(
@@ -419,7 +419,7 @@ pub fn edit<W: Write>(
     all: bool,
     mut prompter: Option<&mut dyn Prompter>,
     editor: &mut dyn FnMut(&Path) -> Result<()>,
-    before_save: &mut dyn FnMut() -> Result<()>,
+    on_saved: &mut dyn FnMut() -> Result<()>,
     out: &mut W,
 ) -> Result<bool> {
     if prompter.is_none() {
@@ -469,10 +469,10 @@ pub fn edit<W: Write>(
                 continue;
             }
         };
-        before_save()?;
         read.manifest.edit(edit.clone());
         let changed = read.manifest.save_if_unchanged(&expected)?;
         if changed.is_empty() {
+            on_saved()?;
             summarize(&edit, &opened, &gone, out)?;
             return Ok(true);
         }

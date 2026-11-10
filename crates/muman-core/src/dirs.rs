@@ -13,6 +13,9 @@ pub const HISTORY: &str = "history";
 /// The folder of unfinished downloads.
 pub const PARTIAL: &str = "partial";
 const SOURCES: &str = "sources";
+/// The folder of the manual sources `add` copies lyrics and pictures
+/// into: muman's copies of files the user keeps where they were.
+pub const ADDED: &str = "added";
 /// The folders muman keeps in the home, which no library may lie in.
 pub const KEPT: [&str; 3] = [SOURCES, HISTORY, PARTIAL];
 

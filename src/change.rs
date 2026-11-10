@@ -370,6 +370,7 @@ pub fn remove<W: Write>(
             note: view.name(),
         });
     }
+    read.save(&picked)?;
     let run = later.begin()?;
     for (file, _) in doomed.iter().filter(|(_, own)| *own) {
         run.trashed(&dirs.home, file);
@@ -377,7 +378,6 @@ pub fn remove<W: Write>(
     if doomed.iter().any(|(_, own)| *own) {
         run.checkpoint(&dirs.home)?;
     }
-    read.save(&picked)?;
     purge_all(doomed)?;
     Ok(true)
 }
@@ -544,8 +544,8 @@ pub fn restore<W: Write>(
     for id in picked.iter().filter_map(|n| views[*n].id()) {
         manifest.edit(Edit::Restore(id.clone()));
     }
-    later.begin()?;
     manifest.save()?;
+    later.begin()?;
     Ok(true)
 }
 
@@ -785,7 +785,7 @@ pub fn set<W: Write>(
         if let Some(p) = prompter
             && !query_terms.is_empty()
         {
-            return crate::guided::edit(dirs, &query_terms, confirm, p, later, out);
+            return crate::guided::edit(dirs, &query_terms, confirm, p, Some(later), out);
         }
         return refuse(
             "Nothing to set: give NAME=VALUE or NAME!, or a query alone on a terminal to set \
@@ -822,8 +822,8 @@ pub fn set<W: Write>(
         songs,
         new: Vec::new(),
     });
-    later.begin()?;
     read.save(&picked)?;
+    later.begin()?;
     Ok(true)
 }
 

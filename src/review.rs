@@ -17,7 +17,9 @@
 //! - leave it as it is, or stop.
 //!
 //! Each change is saved as it is made, so stopping keeps what was
-//! decided, and the run that saves them is one `undo` reverses.
+//! decided, and the run begun once the last question is answered takes
+//! them up, as a run takes up a hand edit: one `undo` reverses them all,
+//! and no other run waits on a question meanwhile.
 
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -136,17 +138,16 @@ pub fn review<W: Write>(
                     all: true,
                     dry_run: false,
                 };
-                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, later, out)?;
+                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, None, out)?;
             }
             Answer::Release => {
-                changed |= pin_release(dirs, song, id, &read.state, p, later, out)?;
+                changed |= pin_release(dirs, song, id, &read.state, p, out)?;
             }
             Answer::Never {
                 field,
                 torrent,
                 channel,
             } => {
-                later.begin()?;
                 let mut m = Manifest::load(&dirs.home)?;
                 m.edit(Edit::TagsFrom {
                     torrent: torrent.clone(),
@@ -163,6 +164,9 @@ pub fn review<W: Write>(
             Answer::Skip => {}
             Answer::Stop => break,
         }
+    }
+    if changed {
+        later.begin()?;
     }
     Ok(changed)
 }
@@ -239,7 +243,6 @@ fn pin_release<W: Write>(
     id: &SourceKey,
     state: &State,
     p: &mut dyn Prompter,
-    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let releases = releases(song, state);
@@ -254,7 +257,6 @@ fn pin_release<W: Write>(
     if release == song.release {
         return Ok(false);
     }
-    later.begin()?;
     let mut m = Manifest::load(&dirs.home)?;
     m.edit(Edit::Release {
         key: id.clone(),

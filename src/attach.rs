@@ -120,7 +120,7 @@ const PER_TRACK: usize = 8;
 const UNMATCHED: i64 = 500;
 const NO_MATCH: i64 = 10_000;
 /// Where accepted files are copied, inside the manual folder.
-pub const ADDED: &str = "added";
+pub use crate::dirs::ADDED;
 
 /// Files given to songs, each with what it holds.
 pub type Loose = Vec<(PathBuf, What)>;
