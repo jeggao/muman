@@ -158,6 +158,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A damaged copy no longer replaces the whole one.** A source cut
+  off, missing audio or cut short ranks below every whole copy of its
+  recording, however little it lacks. A copy with holes is compared
+  with its whole copy allowing for the audio it lost, so it stays the
+  same recording, and copies of one damaged file no longer outvote a
+  whole copy. Every stored comparison is made again once.
 - **A library in the home's `history/` or `partial/` is refused**, as
   one in `sources/` is: muman deletes what it keeps there as runs fall
   out of the history, and the user's files with it.
