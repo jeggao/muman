@@ -348,10 +348,10 @@ piece reaching into a file muman does not keep is checked by one fetch.
 
 Each file is kept in the torrent's folder at its path in the torrent,
 with what Windows refuses in a name replaced by a lookalike. Where two
-files land at one place that way, or differ only by case, the first
-the torrent lists is kept and the other is left with a warning. While a
-listed torrent's metainfo is gone, its folder is kept and its song
-files are read without the lyrics and pictures they bring.
+files land at one place or one name that way, or differ only by case,
+the first the torrent lists is kept and the other left with a warning.
+While a listed torrent's metainfo is gone, its folder is kept and its
+song files are read without the lyrics and pictures they bring.
 
 ### Files of your own
 

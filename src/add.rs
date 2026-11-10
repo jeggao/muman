@@ -962,13 +962,18 @@ fn propose_torrents<W: Write>(
             .map(|f| (meta.key(f), f.path.display().to_string()))
             .collect();
         for (lost, kept) in crate::torrent::shadowed(meta) {
+            let why = if lost.path == kept.path {
+                "its key is spelled as that of"
+            } else {
+                "some systems keep it at the place of"
+            };
             ui::warning(
                 out,
                 &format!(
-                    "{}: {} is not fetched: some systems keep it at the place of {}",
+                    "{}: {} is not fetched: {why} {}",
                     meta.name,
-                    lost.display(),
-                    kept.display()
+                    lost.named_path().display(),
+                    kept.named_path().display()
                 ),
             )?;
         }

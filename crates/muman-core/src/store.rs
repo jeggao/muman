@@ -686,15 +686,11 @@ impl Store {
             };
             sources.insert(file);
             let mut found = BTreeMap::new();
-            let shadowed: BTreeSet<&Path> = crate::torrent::shadowed(&meta)
+            let shadowed: BTreeSet<usize> = crate::torrent::shadowed(&meta)
                 .into_iter()
-                .map(|(lost, _)| lost)
+                .map(|(lost, _)| lost.index)
                 .collect();
-            for f in meta
-                .files
-                .iter()
-                .filter(|f| !shadowed.contains(f.path.as_path()))
-            {
+            for f in meta.files.iter().filter(|f| !shadowed.contains(&f.index)) {
                 let key = TorrentKey::new(&hash, &f.path);
                 let at = torrent_path(&root, &key);
                 if let Some(kind) = kind_of(&f.path).filter(|_| at.is_file()) {

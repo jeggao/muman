@@ -384,13 +384,33 @@ fn of_two_files_kept_at_one_place_the_first_is_taken() {
         taken,
         ["01 Lantern?.mp3", "02 Wren.flac", "03 Ash.mp3"].map(Path::new)
     );
+    let lost: Vec<(&Path, &Path)> = shadowed(&meta)
+        .iter()
+        .map(|(lost, kept)| (lost.path.as_path(), kept.path.as_path()))
+        .collect();
     assert_eq!(
-        shadowed(&meta),
+        lost,
         [
             (Path::new("01 Lantern？.mp3"), Path::new("01 Lantern?.mp3")),
             (Path::new("02 WREN.flac"), Path::new("02 Wren.flac")),
         ]
     );
+}
+
+#[test]
+fn of_two_files_keyed_alike_the_first_is_taken() {
+    let meta = Metainfo::read(&crate::testing::metainfo(
+        "Marlo Venn - Paper Comets",
+        &["a:b.flac", "a：b.flac"],
+    ))
+    .unwrap();
+    let taken: Vec<usize> = selected(&meta).iter().map(|f| f.index).collect();
+    assert_eq!(taken, [1]);
+    let lost: Vec<(usize, PathBuf)> = shadowed(&meta)
+        .iter()
+        .map(|(lost, kept)| (lost.index, kept.named_path()))
+        .collect();
+    assert_eq!(lost, [(2, PathBuf::from("a:b.flac"))]);
 }
 
 #[test]

@@ -54,7 +54,9 @@
 //! torrent can then be kept at one place, as `song?.mp3` beside
 //! `song？.mp3`, or `Song.mp3` beside `song.mp3` on a system blind to
 //! case; the first the torrent lists is taken and the other left on its
-//! peers ([`shadowed`]), as one would be written over the other.
+//! peers ([`shadowed`]), as one would be written over the other. So is
+//! one whose key is spelled as another's, as `a:b.flac` keyed beside
+//! `a：b.flac`: a key names one file, and one of two would be neither's.
 
 use std::path::{Path, PathBuf};
 
@@ -275,6 +277,12 @@ impl File {
                 .fold(root.to_path_buf(), |at, p| at.join(p))
         })
     }
+
+    /// Its path inside the torrent as the torrent names it, to show.
+    #[must_use]
+    pub fn named_path(&self) -> PathBuf {
+        self.named.iter().collect()
+    }
 }
 
 /// Whether `part` is one plain name on this system.
@@ -296,19 +304,19 @@ pub fn selected(meta: &Metainfo) -> Vec<&File> {
 }
 
 /// Each file of `meta` muman would fetch but keeps no place for, as
-/// another listed before it is kept at its path on some system, with
-/// that other file's path.
+/// another listed before it is kept at its path on some system, or has
+/// its key, with that other file.
 #[must_use]
-pub fn shadowed(meta: &Metainfo) -> Vec<(&Path, &Path)> {
+pub fn shadowed(meta: &Metainfo) -> Vec<(&File, &File)> {
     let mut places = std::collections::HashMap::new();
     let mut lost = Vec::new();
     for f in wanted(meta) {
         match places.entry(place_of(&f.path)) {
             std::collections::hash_map::Entry::Occupied(first) => {
-                lost.push((f.path.as_path(), *first.get()));
+                lost.push((f, *first.get()));
             }
             std::collections::hash_map::Entry::Vacant(v) => {
-                v.insert(f.path.as_path());
+                v.insert(f);
             }
         }
     }

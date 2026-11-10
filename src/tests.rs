@@ -1895,6 +1895,30 @@ fn a_torrents_file_kept_at_another_files_place_is_left_and_said() {
 }
 
 #[test]
+fn a_torrents_file_keyed_as_another_is_left_and_the_other_written() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("Lantern Weather", &["a:b.flac", "a：b.flac"]);
+    let meta = crate::torrent::Metainfo::read(&bytes).unwrap();
+    let hash = meta.hash().to_string();
+    let file = s.dir.path().join("Lantern Weather.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let fake = aria2c(bytes, hash.clone(), runs.clone());
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("a：b.flac is not fetched: its key is spelled as that of a:b.flac"),
+        "{text}"
+    );
+    let key = SourceKey::parse(&format!("torrent:{hash}/a：b.flac")).unwrap();
+    assert_eq!(s.songs(), [vec![key]]);
+    let built = crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+    let (ok, text) = s.run(&fake, &["sync", "--offline"]);
+    assert!(ok, "{text}");
+}
+
+#[test]
 fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["01 Paper Comets.flac", "cover.jpg"]);
