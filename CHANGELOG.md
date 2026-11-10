@@ -7,157 +7,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-10
-
-### Added
-
-- **`muman check --calibrate` counts how well vetting's evidence tells
-  records apart on your library**: for records of a song's recording, by
-  your files' IDs or the song's own AcoustID lookup, and records of
-  other songs sharing a title or a credit, how often a title, credits,
-  length, album and album unit agreed, each counted only where it did
-  not choose the record, with the points those counts suggest against
-  saying nothing, alone and fitted together, beside the ones vetting
-  gives. It changes nothing.
-
-- **`[tags] featured`, `versions` and `context` set a house style** for
-  titles and artists: a featured artist moved into the title or the
-  credit, versions written in one kind of bracket, and a note on where a
-  song is from dropped. Each keeps values as they are until set.
-
-- **`muman review` walks each song in doubt and settles it.** On a
-  terminal, each song whose picks `muman check` finds in doubt is shown
-  with why, and you change its tags and pins, pin it to one of the
-  releases its recording is on with a new `release` key, or leave a
-  contested field out of everything its torrent or channel offers, each
-  change saved as you make it and taken back by `undo`.
-
-- **`muman check` lists picks in doubt**: the songs holding a source set
-  aside, each song holding two recordings or playing 30 s or more from
-  what a record it believes says, each upload whose title reads as a
-  title and artist more than one way with nothing telling which, and
-  each name spelled two ways that no MusicBrainz artist ID tells apart.
-
-- **`[[tags.from]]` says what one torrent's or one channel's sources
-  are not believed for**: fields to leave out, `credits = false` to
-  leave out their artists, and a `title` pattern, as `%artist% -
-  %title%`, to read their titles by, before any cleaning rule.
-
-- **A song takes the genres MusicBrainz's users voted for**: its
-  recording's, else its release group's, its release's or its artists',
-  the most voted, three at most, written as `Alternative Rock` or `R&B`.
-  A file's own genre is taken where no record gives one, or first under
-  `[tags] believe = "files-first"`. Records are read again, quickly,
-  for them; a record kept before muman asked for genres gains them with
-  `sync --rematch`.
-
-- **An artist is spelled one way on every song crediting it alone.**
-  Names are grouped across the library by MusicBrainz's artist ID and
-  by the name folded, never by names merely alike, and each group with
-  an ID is written as `[tags] script` says: `original`, the artist's own
-  name in its own script, or `latin`, a name of theirs in Latin letters.
-  Records keep artists' own names and aliases, read again from the
-  records muman holds; `sync --rematch` fetches them for records kept
-  before.
-
-- **`[release] date = "original"` dates a song as its album first came
-  out**, by MusicBrainz's `ORIGINALDATE`, rather than as the reissue it
-  is on did, so a path's `year` is one for every edition of an album.
-
-- **`[audio.pick.dynamics]` prefers the master whose peaks stand
-  highest over its loudness**, from the loudness muman already
-  measures, so a master squeezed louder ranks after an older one of the
-  same recording. It is off until turned on, and `muman status` gives
-  the chosen audio's figure when it is.
-
-- **`[release] prefer` puts the songs of one album on one release.**
-  Songs that came in one folder under one album name, or in one
-  `[[album]]`, are put on the release three in five of them or more are
-  on, of every release AcoustID found their recordings on, each on the
-  track it is there, rather than one on the album and another on a
-  compilation; `original` puts each song on the first album its
-  recording came out on, and `avoid` names kinds of release, as
-  `compilation`, taken only where nothing else would be. An album most
-  of whose songs are on one release already stays on it. `muman status`
-  names the release a song was moved to. Songs looked up before keep
-  their release until `muman sync --rematch`.
-
-- **`[tags] believe` says which kind of source a song believes first.**
-  `musicbrainz-first`, the default, spells a value its sources agree on
-  as a MusicBrainz record does, so a file's typo gives way, and credits
-  the artists a record vetting believes; `files-first` puts files first;
-  `sources` keeps the order of each song's `sources`. Offers alike but
-  for a spelling or a decoration now agree, a title naming a version, as
-  `(Live)`, keeps it against one that does not whatever their order, and
-  a title or artist still won by the order of `sources` alone is named
-  by `muman status` and `muman check` until it is set by hand.
-
-- **`muman info --changes` lists what a sync would change in each
-  song, value by value.** Each tag, the path, audio, format, cover and
-  lyrics a sync would write otherwise is shown as the file holds it and
-  as it would be, with the reason `status` gives, then how many songs
-  each field changes in. Naming fields, as `--changes album title`,
-  shows those alone. It reads only what earlier runs recorded and
-  changes nothing, so a new setting or a new muman can be checked on a
-  whole library before a sync writes it.
-
-### Changed
-
-- **Every source's tags are read again once**, as each value a source
-  offers for a field is now kept, a video's title beside its track name,
-  for later readings to weigh. No pick changes.
-
-- **A song holding two recordings takes its audio from its own.**
-  Sources whose audio aligns are one recording; where a song holds
-  several, as a live take beside the studio cut, the one whose length
-  fits its MusicBrainz record, else the one most of its sources hold,
-  ranks ahead of every measure. `muman status` says which recording each
-  source holds in place of "no other recording to compare", names each
-  source of another and one playing more than 0.5% off the speed of the
-  rest, and `[audio.pick.recording] enabled = false` turns it off. A
-  song whose recordings are alike in sources keeps its audio, and a
-  record counts for no recording holding the source its lookup was made
-  from, so a music video's own lookup never trades a song's album cut
-  for the video's.
-- **Lossless audio made from lossy audio no longer wins a tie as
-  lossless.** A lossless file at 48 kHz or lower whose sound stops under
-  19 kHz, as an MP3's does, ranks as lossy among sources scored alike.
-  `muman status` names lossless audio that holds less than it declares:
-  `lossless, cut off at 16.0 kHz as lossy audio is`, `96 kHz,
-  upsampled: nothing above 22.1 kHz`, `24-bit, 16 used`. Nothing is
-  measured again.
-- **A hook runs only once a command has changed the library, after it
-  lets go of the home.** `on = "written"`, which ran on each song file
-  as it was placed, is refused: it changed a file muman had written,
-  outside the song's plan, and an export left it out. A tag a program
-  should add is given with `muman add` as a tag file. A hook's words
-  take `{library}`, `{written}`, `{moved}` and `{removed}` alone, so no
-  title reaches a command line, and a hook may run muman on its own
-  home; a muman a hook starts runs no hook.
-- **An emoji is told as Unicode tells it.** The emoji trimmed from a
-  title's ends and those that mark a source as decorated are one set: a
-  symbol shown as an emoji, by default or asked by U+FE0F, as `⚡` or
-  `♥️`, a dingbat, as `❆`, and a pictograph past U+1F000. A symbol shown
-  as text, as `☆`, `♪` or `♥`, is part of the name. The two had
-  disagreed, and `⚡` stayed on a title.
-
-- **A MusicBrainz record's ISRC and IDs no longer need its title
-  spelled as the song's.** A record that names the song's recording,
-  its title alike but for a take, a date or a script no rule compares,
-  gives them; one whose artists share no name with the song's gives
-  none. The next sync writes them into such songs, or takes them out.
-- **MusicBrainz records keep the length of their recording.** The next
-  sync reads each record kept again, from the store alone, opening no
-  media file.
-- **Lookups ask for and keep more, for choosing releases, names and
-  genres.** An AcoustID lookup keeps every recording that fits the
-  print, with the releases and tracks each is on, not only the one
-  taken; a MusicBrainz record keeps its artists' aliases and the genres
-  of its recording, release and release group. No request is added and
-  no tag changes. A record gains them when it is fetched again, as a
-  record that falls short is; `sync --rematch` fetches them all at
-  once, one request a second.
-
 ### Fixed
 
 - **`purge` never deletes a source in use**: a stray file beside a listed
@@ -423,6 +272,226 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   `remove`, `restore`, `edit`, `review`, `undo`, `purge` and merging
   duplicates on a mistyped `--home` refuse, exit 5, instead of creating
   the folder and its lock files, a dry run included.
+- **A regex query term ignores accents** as every other term does, and
+  bare text passed as one argument matches each of its words apart.
+- **`set track=0` says tracks and discs count from 1**, instead of
+  calling 0 no number.
+- **A line break set by hand in a name becomes a space**, so a title,
+  artist or other named field is stored as `list` shows it. A comment
+  or unknown tag keeps its lines, is listed with each break as `\n`,
+  and is matched as if the break were a space.
+- **`set` refuses the query fields `from=` and `has=`**, as it refused
+  `key=` and `path=`, and `release=<ID>` pins the song's release
+  instead of writing a tag.
+- **Interactive `set` counts only choices that change a song**, and a
+  field set on the album counts once.
+- **`undo -n` names every file a run added**, the lyrics beside a song
+  too, and a sync says the lyrics it wrote were added.
+- **A song removed with `--purge` keeps its title and artist**, so
+  `list --removed` names it and a query by those fields finds it.
+- **`edit` reopens a file on the song list as it is now**, with the
+  user's edits merged in, so saving again no longer takes back a change
+  made meanwhile.
+- **songs.toml keeps its CRLF line endings and byte-order mark**
+  through every write, instead of being rewritten with LF endings.
+- **`XDG_MUSIC_DIR` set in the environment** places the default library
+  on Linux, before the folder `user-dirs.dirs` names.
+- **The album artist muman fills in leaves out a featured artist** in
+  every `[tags] featured` style, so a guest credited in one song's
+  artist no longer splits its album into two folders.
+- **A file named as another song's folder** is told apart by a suffix,
+  so a template that puts some songs in an album folder and others not
+  no longer makes sync fail a song that status said would move.
+- **A path template is checked whole before anything is written**: a
+  syntax error, an unknown filter or test, or a `pad` or `truncate`
+  width that is no whole number up to 255 is refused (exit 5) while
+  `list` keeps working, and `pad` above 65535 no longer crashes.
+- **A provider's `skip` refuses a field no song has**, as a query in
+  `list` does, instead of matching nothing.
+- **A setting that does not read exits 2**, as the exit-code table
+  says, instead of 4.
+- **A song's `album` must name a listed `[[album]]`** and its `track`
+  must be a whole number from 1; the `[[album]]` keys are documented.
+- **A lyrics or cover suffix may be a dot and 24 bytes**, as documented,
+  instead of 23.
+- **A negative `recheck`, an `incoherence` over 100 %, and clipping
+  cutoffs that are empty, unsorted or over 100 % are refused**, and a
+  value too large to keep says it is out of range.
+- **An `[library] untitled` that shows nothing is refused**, so no song
+  is named `.flac`; refusals of a file named twice and of a song list
+  that is not valid TOML are worded alike everywhere.
+- **Stopping muman stops what its programs started**: on Linux and
+  macOS, Ctrl-C or a stop signal also ends a hook's background jobs and
+  whatever yt-dlp or a wrapper script started; on Windows only the
+  program muman started is ended.
+- **A hook's background job no longer holds muman**: muman waits for
+  the hook itself and lets go of its output a second after it exits.
+- **A hook's output shows as it comes**, stdout and stderr in the order
+  written, instead of all at once after the hook ends.
+- **A hook whose `run` holds a number or a boolean is refused**, and
+  `check` reports it, instead of running with those words dropped.
+- **Ctrl-C at a question exits 130**, as Ctrl-C does elsewhere, instead
+  of failing with exit 4.
+- **A read-only home can be read**: `list`, `status`, `check`, `info`
+  and `duplicates` work on a home muman may not write, such as a
+  read-only mount or a backup snapshot, and make no file there.
+- **`MUMAN_LIBRARY` works inside a hook**: a hook is also given
+  `MUMAN_HOOK_LIBRARY`, so a muman it runs on another library is no
+  longer refused as running on its own.
+
+## [0.11.0] - 2026-11-10
+
+### Added
+
+- **`muman check --calibrate` counts how well vetting's evidence tells
+  records apart on your library**: for records of a song's recording, by
+  your files' IDs or the song's own AcoustID lookup, and records of
+  other songs sharing a title or a credit, how often a title, credits,
+  length, album and album unit agreed, each counted only where it did
+  not choose the record, with the points those counts suggest against
+  saying nothing, alone and fitted together, beside the ones vetting
+  gives. It changes nothing.
+
+- **`[tags] featured`, `versions` and `context` set a house style** for
+  titles and artists: a featured artist moved into the title or the
+  credit, versions written in one kind of bracket, and a note on where a
+  song is from dropped. Each keeps values as they are until set.
+
+- **`muman review` walks each song in doubt and settles it.** On a
+  terminal, each song whose picks `muman check` finds in doubt is shown
+  with why, and you change its tags and pins, pin it to one of the
+  releases its recording is on with a new `release` key, or leave a
+  contested field out of everything its torrent or channel offers, each
+  change saved as you make it and taken back by `undo`.
+
+- **`muman check` lists picks in doubt**: the songs holding a source set
+  aside, each song holding two recordings or playing 30 s or more from
+  what a record it believes says, each upload whose title reads as a
+  title and artist more than one way with nothing telling which, and
+  each name spelled two ways that no MusicBrainz artist ID tells apart.
+
+- **`[[tags.from]]` says what one torrent's or one channel's sources
+  are not believed for**: fields to leave out, `credits = false` to
+  leave out their artists, and a `title` pattern, as `%artist% -
+  %title%`, to read their titles by, before any cleaning rule.
+
+- **A song takes the genres MusicBrainz's users voted for**: its
+  recording's, else its release group's, its release's or its artists',
+  the most voted, three at most, written as `Alternative Rock` or `R&B`.
+  A file's own genre is taken where no record gives one, or first under
+  `[tags] believe = "files-first"`. Records are read again, quickly,
+  for them; a record kept before muman asked for genres gains them with
+  `sync --rematch`.
+
+- **An artist is spelled one way on every song crediting it alone.**
+  Names are grouped across the library by MusicBrainz's artist ID and
+  by the name folded, never by names merely alike, and each group with
+  an ID is written as `[tags] script` says: `original`, the artist's own
+  name in its own script, or `latin`, a name of theirs in Latin letters.
+  Records keep artists' own names and aliases, read again from the
+  records muman holds; `sync --rematch` fetches them for records kept
+  before.
+
+- **`[release] date = "original"` dates a song as its album first came
+  out**, by MusicBrainz's `ORIGINALDATE`, rather than as the reissue it
+  is on did, so a path's `year` is one for every edition of an album.
+
+- **`[audio.pick.dynamics]` prefers the master whose peaks stand
+  highest over its loudness**, from the loudness muman already
+  measures, so a master squeezed louder ranks after an older one of the
+  same recording. It is off until turned on, and `muman status` gives
+  the chosen audio's figure when it is.
+
+- **`[release] prefer` puts the songs of one album on one release.**
+  Songs that came in one folder under one album name, or in one
+  `[[album]]`, are put on the release three in five of them or more are
+  on, of every release AcoustID found their recordings on, each on the
+  track it is there, rather than one on the album and another on a
+  compilation; `original` puts each song on the first album its
+  recording came out on, and `avoid` names kinds of release, as
+  `compilation`, taken only where nothing else would be. An album most
+  of whose songs are on one release already stays on it. `muman status`
+  names the release a song was moved to. Songs looked up before keep
+  their release until `muman sync --rematch`.
+
+- **`[tags] believe` says which kind of source a song believes first.**
+  `musicbrainz-first`, the default, spells a value its sources agree on
+  as a MusicBrainz record does, so a file's typo gives way, and credits
+  the artists a record vetting believes; `files-first` puts files first;
+  `sources` keeps the order of each song's `sources`. Offers alike but
+  for a spelling or a decoration now agree, a title naming a version, as
+  `(Live)`, keeps it against one that does not whatever their order, and
+  a title or artist still won by the order of `sources` alone is named
+  by `muman status` and `muman check` until it is set by hand.
+
+- **`muman info --changes` lists what a sync would change in each
+  song, value by value.** Each tag, the path, audio, format, cover and
+  lyrics a sync would write otherwise is shown as the file holds it and
+  as it would be, with the reason `status` gives, then how many songs
+  each field changes in. Naming fields, as `--changes album title`,
+  shows those alone. It reads only what earlier runs recorded and
+  changes nothing, so a new setting or a new muman can be checked on a
+  whole library before a sync writes it.
+
+### Changed
+
+- **Every source's tags are read again once**, as each value a source
+  offers for a field is now kept, a video's title beside its track name,
+  for later readings to weigh. No pick changes.
+
+- **A song holding two recordings takes its audio from its own.**
+  Sources whose audio aligns are one recording; where a song holds
+  several, as a live take beside the studio cut, the one whose length
+  fits its MusicBrainz record, else the one most of its sources hold,
+  ranks ahead of every measure. `muman status` says which recording each
+  source holds in place of "no other recording to compare", names each
+  source of another and one playing more than 0.5% off the speed of the
+  rest, and `[audio.pick.recording] enabled = false` turns it off. A
+  song whose recordings are alike in sources keeps its audio, and a
+  record counts for no recording holding the source its lookup was made
+  from, so a music video's own lookup never trades a song's album cut
+  for the video's.
+- **Lossless audio made from lossy audio no longer wins a tie as
+  lossless.** A lossless file at 48 kHz or lower whose sound stops under
+  19 kHz, as an MP3's does, ranks as lossy among sources scored alike.
+  `muman status` names lossless audio that holds less than it declares:
+  `lossless, cut off at 16.0 kHz as lossy audio is`, `96 kHz,
+  upsampled: nothing above 22.1 kHz`, `24-bit, 16 used`. Nothing is
+  measured again.
+- **A hook runs only once a command has changed the library, after it
+  lets go of the home.** `on = "written"`, which ran on each song file
+  as it was placed, is refused: it changed a file muman had written,
+  outside the song's plan, and an export left it out. A tag a program
+  should add is given with `muman add` as a tag file. A hook's words
+  take `{library}`, `{written}`, `{moved}` and `{removed}` alone, so no
+  title reaches a command line, and a hook may run muman on its own
+  home; a muman a hook starts runs no hook.
+- **An emoji is told as Unicode tells it.** The emoji trimmed from a
+  title's ends and those that mark a source as decorated are one set: a
+  symbol shown as an emoji, by default or asked by U+FE0F, as `⚡` or
+  `♥️`, a dingbat, as `❆`, and a pictograph past U+1F000. A symbol shown
+  as text, as `☆`, `♪` or `♥`, is part of the name. The two had
+  disagreed, and `⚡` stayed on a title.
+
+- **A MusicBrainz record's ISRC and IDs no longer need its title
+  spelled as the song's.** A record that names the song's recording,
+  its title alike but for a take, a date or a script no rule compares,
+  gives them; one whose artists share no name with the song's gives
+  none. The next sync writes them into such songs, or takes them out.
+- **MusicBrainz records keep the length of their recording.** The next
+  sync reads each record kept again, from the store alone, opening no
+  media file.
+- **Lookups ask for and keep more, for choosing releases, names and
+  genres.** An AcoustID lookup keeps every recording that fits the
+  print, with the releases and tracks each is on, not only the one
+  taken; a MusicBrainz record keeps its artists' aliases and the genres
+  of its recording, release and release group. No request is added and
+  no tag changes. A record gains them when it is fetched again, as a
+  record that falls short is; `sync --rematch` fetches them all at
+  once, one request a second.
+
+### Fixed
+
 - **Lyrics from subtitles lose the uploader's notes and the sounds.**
   Notes around the lyrics, as `These captions are designed for desktop`
   or `English Subtitles`, and descriptions of sounds in square brackets,
@@ -687,75 +756,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   A fetched or torrent file whose place already held it was refused as
   differing from its own name only in case, since HFS+ lists names
   decomposed.
-
-- **A regex query term ignores accents** as every other term does, and
-  bare text passed as one argument matches each of its words apart.
-- **`set track=0` says tracks and discs count from 1**, instead of
-  calling 0 no number.
-- **A line break set by hand in a name becomes a space**, so a title,
-  artist or other named field is stored as `list` shows it. A comment
-  or unknown tag keeps its lines, is listed with each break as `\n`,
-  and is matched as if the break were a space.
-- **`set` refuses the query fields `from=` and `has=`**, as it refused
-  `key=` and `path=`, and `release=<ID>` pins the song's release
-  instead of writing a tag.
-- **Interactive `set` counts only choices that change a song**, and a
-  field set on the album counts once.
-- **`undo -n` names every file a run added**, the lyrics beside a song
-  too, and a sync says the lyrics it wrote were added.
-- **A song removed with `--purge` keeps its title and artist**, so
-  `list --removed` names it and a query by those fields finds it.
-- **`edit` reopens a file on the song list as it is now**, with the
-  user's edits merged in, so saving again no longer takes back a change
-  made meanwhile.
-- **songs.toml keeps its CRLF line endings and byte-order mark**
-  through every write, instead of being rewritten with LF endings.
-- **`XDG_MUSIC_DIR` set in the environment** places the default library
-  on Linux, before the folder `user-dirs.dirs` names.
-- **The album artist muman fills in leaves out a featured artist** in
-  every `[tags] featured` style, so a guest credited in one song's
-  artist no longer splits its album into two folders.
-- **A file named as another song's folder** is told apart by a suffix,
-  so a template that puts some songs in an album folder and others not
-  no longer makes sync fail a song that status said would move.
-
-- **A path template is checked whole before anything is written**: a
-  syntax error, an unknown filter or test, or a `pad` or `truncate`
-  width that is no whole number up to 255 is refused (exit 5) while
-  `list` keeps working, and `pad` above 65535 no longer crashes.
-- **A provider's `skip` refuses a field no song has**, as a query in
-  `list` does, instead of matching nothing.
-- **A setting that does not read exits 2**, as the exit-code table
-  says, instead of 4.
-- **A song's `album` must name a listed `[[album]]`** and its `track`
-  must be a whole number from 1; the `[[album]]` keys are documented.
-- **A lyrics or cover suffix may be a dot and 24 bytes**, as documented,
-  instead of 23.
-- **A negative `recheck`, an `incoherence` over 100 %, and clipping
-  cutoffs that are empty, unsorted or over 100 % are refused**, and a
-  value too large to keep says it is out of range.
-- **An `[library] untitled` that shows nothing is refused**, so no song
-  is named `.flac`; refusals of a file named twice and of a song list
-  that is not valid TOML are worded alike everywhere.
-
-- **Stopping muman stops what its programs started**: on Linux and
-  macOS, Ctrl-C or a stop signal also ends a hook's background jobs and
-  whatever yt-dlp or a wrapper script started; on Windows only the
-  program muman started is ended.
-- **A hook's background job no longer holds muman**: muman waits for
-  the hook itself and lets go of its output a second after it exits.
-- **A hook's output shows as it comes**, stdout and stderr in the order
-  written, instead of all at once after the hook ends.
-- **A hook whose `run` holds a number or a boolean is refused**, and
-  `check` reports it, instead of running with those words dropped.
-- **Ctrl-C at a question exits 130**, as Ctrl-C does elsewhere, instead
-  of failing with exit 4.
-- **A read-only home can be read**: `list`, `status`, `check`, `info`
-  and `duplicates` work on a home muman may not write, such as a
-  read-only mount or a backup snapshot, and make no file there.
-- **`MUMAN_LIBRARY` works inside a hook**: a hook is also given
-  `MUMAN_HOOK_LIBRARY`, so a muman it runs on another library is no
-  longer refused as running on its own.
 
 ## [0.10.1] - 2026-11-04
 
