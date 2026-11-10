@@ -3824,6 +3824,72 @@ fn an_add_stopped_at_any_step_is_undone_at_once() {
 }
 
 #[test]
+fn a_set_stopped_at_any_step_is_undone_at_once() {
+    let prepare = |s: &Setup| {
+        s.file("home/sources/manual/a.flac");
+        let (ok, text) = s.run(&flacs(), &["sync"]);
+        assert!(ok, "{text}");
+    };
+    let args = ["set", "-y", "manual:a.flac", "title=Rooms of Salt"];
+    let whole = Setup::new();
+    prepare(&whole);
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &args);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let s = Setup::new();
+        prepare(&s);
+        let songs = s.dir.path().join("home/songs.toml");
+        let (listed, library) = (std::fs::read_to_string(&songs).unwrap(), library_of(&s));
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&args),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        // Stopped before it changed anything, the run before is the last.
+        if std::fs::read_to_string(&songs).unwrap() == listed && library_of(&s) == library {
+            continue;
+        }
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "step {at}: {text}");
+        assert_eq!(
+            std::fs::read_to_string(&songs).unwrap(),
+            listed,
+            "step {at}"
+        );
+        assert_eq!(library_of(&s), library, "step {at}: {text}");
+    }
+}
+
+#[test]
+fn undo_is_refused_where_a_file_of_your_own_holds_where_a_song_moves_back() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    edit_list(&s, &default, "template = \"{{ title }}\"");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Moved"), "{text}");
+    let old = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "a file of my own").unwrap();
+    let library = library_of(&s);
+    let e = s.refused(&["undo", "-y"]);
+    assert!(e.contains("is taken"), "{e}");
+    assert_eq!(library_of(&s), library);
+}
+
+#[test]
 fn a_change_with_no_run_kept_before_it_is_undone() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

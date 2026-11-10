@@ -112,7 +112,9 @@ goes no further back, and `check` names it. An undo stopped before it
 put the song list back is finished by `undo` alone: until then a command
 that changes the library or the song list refuses, and says so.
 
-`undo` refuses when the song list changed since the run. After `remove
+`undo` refuses when the song list changed since a run that ended. One
+stopped partway may have saved it after its last record, so `undo` takes
+the song list back as it stands, and says so first. After `remove
 --purge`, it refuses until you take back from the trash the files it
 names. `[history]` sets how many runs are kept and how much space their
 files may take together. When space runs short the oldest runs' files

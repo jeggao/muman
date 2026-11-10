@@ -158,6 +158,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A run stopped at any point is undone**: every run records itself
+  before it changes anything, so one stopped right after saving the song
+  list no longer leaves a change `undo` refuses as made by hand.
+- **`undo` of a run stopped partway checks your edits too**: a library
+  file you changed since is refused as for a run that ended, and one
+  written as the run stopped, which cannot be told from an edit, is
+  named before it is put back.
+- **`undo` never moves a song back onto a file of yours**: a file in the
+  way of a song moving back is refused, rather than the song's file
+  taken for one the run made and deleted.
 - **A WAVE file of MP3 or other compressed audio is not called cut
   off** when its header gives a false byte rate: with no `fact` chunk
   counting its samples, its length is taken for a guess, as a headerless

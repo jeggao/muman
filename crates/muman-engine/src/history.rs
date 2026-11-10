@@ -202,6 +202,9 @@ struct Record {
 
 /// One run, recording as it goes; written ahead by [`Run::checkpoint`]
 /// and at the end by [`Run::finish`] only when the run changed anything.
+// Each flag is one fact of the run's own: what it knows, wrote, reached
+// and began.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct Run {
     dir: PathBuf,
@@ -231,6 +234,9 @@ pub struct Run {
     found: Option<String>,
     /// The library the run kept files of, once it kept one.
     library: Option<PathBuf>,
+    /// Whether the run began its own record, not going on in a stopped
+    /// run's.
+    fresh: bool,
     /// Held while the run lasts, so no other begins meanwhile.
     _runs: atomic::Lock,
 }
@@ -286,7 +292,9 @@ impl Later {
     /// Let go of a run begun for a save refused, as before asking again:
     /// it changed nothing, and holds no other run back while it asks.
     pub fn abandon(&mut self) {
-        self.run = None;
+        if let Some(run) = self.run.take() {
+            run.discard();
+        }
     }
 
     /// The run, if one began.
@@ -380,6 +388,18 @@ impl Head {
             None
         }
     }
+}
+
+/// The runs kept in `home` but `mine`, oldest first, with the bytes each
+/// keeps.
+fn others(home: &Path, mine: Option<&PathBuf>) -> Vec<(PathBuf, u64)> {
+    (runs(home).unwrap_or_default().into_iter())
+        .filter(|dir| Some(dir) != mine)
+        .map(|dir| {
+            let bytes = held(&dir);
+            (dir, bytes)
+        })
+        .collect()
 }
 
 fn head(dir: &Path) -> Option<Head> {
@@ -508,15 +528,7 @@ impl Run {
             .history;
         let found = now.clone();
         let mine = resumed.as_ref().map(|(dir, _)| dir.clone());
-        let others = runs(home)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|dir| Some(dir) != mine.as_ref())
-            .map(|dir| {
-                let bytes = held(&dir);
-                (dir, bytes)
-            })
-            .collect();
+        let others = others(home, mine.as_ref());
         let (dir, record, outputs_known) = match resumed {
             Some((dir, mut record)) => {
                 record.version = VERSION;
@@ -537,7 +549,7 @@ impl Run {
         };
         let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
         let made_before = made_by(&record, home);
-        Ok(Self {
+        let mut run = Self {
             dir,
             record,
             outputs_known,
@@ -551,8 +563,22 @@ impl Run {
             made_before,
             found,
             library: None,
+            fresh: mine.is_none(),
             _runs: runs_lock,
-        })
+        };
+        // Ahead of all it changes, so stopped anywhere it is undone.
+        run.checkpoint(home)?;
+        Ok(run)
+    }
+
+    /// Let go of the run, having changed nothing: the record it wrote
+    /// ahead goes, unless it went on in a stopped run's.
+    // Removes the run's own folder, written ahead and never used.
+    #[expect(clippy::disallowed_methods)]
+    fn discard(self) {
+        if self.fresh {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     /// Note the song list as the run read or wrote it: the list the run
@@ -1132,6 +1158,67 @@ fn refuse_another_library(record: &Record, state: &State, dirs: &Dirs) -> Result
     Ok(())
 }
 
+/// Refuse to undo `record`'s run where it would write over a file not
+/// as the run left it, or move a song back onto a file in its way.
+fn refuse_writing_over(record: &Record, state: &State, dirs: &Dirs) -> Result<()> {
+    // What undoing would write over must be muman's as the run left it,
+    // as the state stamps it: a file a stopped run was writing it stamps
+    // not, and an undo resumed put some files back already.
+    if !record.undoing {
+        let mut state = state.clone();
+        crate::reconcile::vouch_for_copies(&dirs.library, &mut state);
+        let beside: BTreeMap<&PathBuf, &crate::state::Sidecar> = state
+            .outputs
+            .values()
+            .flat_map(|w| &w.sidecars)
+            .map(|s| (&s.path, s))
+            .collect();
+        for rel in &record.touched {
+            if !dirs.library.join(rel).exists() {
+                continue;
+            }
+            let changed = "changed since muman wrote it";
+            let why = if state.outputs.contains_key(rel) {
+                crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel)
+                    .then_some(changed)
+            } else if !record.complete {
+                None
+            } else if let Some(s) = beside.get(rel) {
+                (!crate::reconcile::sidecar_as_written(&dirs.library, s)).then_some(changed)
+            } else {
+                Some("is not muman's")
+            };
+            let Some(why) = why else {
+                continue;
+            };
+            return Err(crate::errors::Refused(format!(
+                "{} {why}; undoing would write over it. Move it aside first",
+                crate::relpath::show(rel)
+            ))
+            .into());
+        }
+        // Each move goes back, last first, to where it came from, which a
+        // move after it freed, or a file the run kept puts back; any other
+        // file there would be moved over.
+        for (n, m) in record.moves.iter().enumerate() {
+            let freed = record.moves[n + 1..].iter().any(|later| later.to == m.from);
+            if dirs.library.join(&m.from).exists()
+                && dirs.library.join(&m.to).exists()
+                && !freed
+                && !record.kept.contains(&m.from)
+            {
+                return Err(crate::errors::Refused(format!(
+                    "{} is taken; undoing would move {} back onto it. Move it aside first",
+                    crate::relpath::show(&m.from),
+                    crate::relpath::show(&m.to)
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     let home = &dirs.home;
     let state = State::load(home)?;
@@ -1154,41 +1241,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         .into());
     }
     refuse_another_library(&record, &state, dirs)?;
-    // What undoing would write over must be muman's as the run left it.
-    // An undo resumed has put some files back already, and a run stopped
-    // partway may have written files it never recorded: both know theirs.
-    if record.complete && !record.undoing {
-        let mut state = state.clone();
-        crate::reconcile::vouch_for_copies(&dirs.library, &mut state);
-        let beside: BTreeMap<&PathBuf, &crate::state::Sidecar> = state
-            .outputs
-            .values()
-            .flat_map(|w| &w.sidecars)
-            .map(|s| (&s.path, s))
-            .collect();
-        for rel in &record.touched {
-            if !dirs.library.join(rel).exists() {
-                continue;
-            }
-            let changed = "changed since muman wrote it";
-            let why = if state.outputs.contains_key(rel) {
-                crate::reconcile::edited_since_written(&dirs.library, &state.outputs, rel)
-                    .then_some(changed)
-            } else if let Some(s) = beside.get(rel) {
-                (!crate::reconcile::sidecar_as_written(&dirs.library, s)).then_some(changed)
-            } else {
-                Some("is not muman's")
-            };
-            let Some(why) = why else {
-                continue;
-            };
-            return Err(crate::errors::Refused(format!(
-                "{} {why}; undoing would write over it. Move it aside first",
-                crate::relpath::show(rel)
-            ))
-            .into());
-        }
-    }
+    refuse_writing_over(&record, &state, dirs)?;
     all_trashed_back(home, &record)?;
     let mut lines = Vec::new();
     if record.undoing {
@@ -1196,6 +1249,20 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     if !record.complete {
         lines.push("The run was stopped before it ended".to_string());
+    }
+    if stopped {
+        // Written as the run stopped, before the state could stamp it: what
+        // it holds cannot be told from an edit of yours made since.
+        for rel in record.touched.iter().filter(|rel| {
+            dirs.library.join(rel).exists()
+                && state.outputs.get(*rel).is_some_and(|w| w.stamp.is_none())
+        }) {
+            lines.push(format!(
+                "{}: written as the run stopped, so not told from an edit since; \
+                 put back as it was before the run",
+                crate::relpath::show(rel)
+            ));
+        }
     }
     if stopped && songs != record.songs_after {
         lines.push(
@@ -1598,10 +1665,14 @@ fn made_by_run(record: &Record, now: &BTreeMap<PathBuf, Written>, library: &Path
     let then: BTreeSet<&Path> = (record.was.iter())
         .flat_map(|(rel, w)| w.files(rel))
         .collect();
-    let moved_back: BTreeSet<&Path> = record.moves.iter().map(|m| m.from.as_path()).collect();
+    // A file a move left where it went, not moved back, is no file the
+    // run made: it holds what was there before the run.
+    let moved: BTreeSet<&Path> = (record.moves.iter())
+        .flat_map(|m| [m.from.as_path(), m.to.as_path()])
+        .collect();
     let mine = |rel: &Path| {
         !then.contains(rel)
-            && !moved_back.contains(rel)
+            && !moved.contains(rel)
             && !record.kept.contains(rel)
             && library.join(rel).is_file()
     };
@@ -2208,11 +2279,15 @@ mod tests {
         )
         .unwrap();
         earlier.finish(&d.home).unwrap();
-        assert_eq!(runs(&d.home).unwrap().len(), 1);
+        let kept = runs(&d.home).unwrap();
+        assert_eq!(kept.len(), 1);
         let mut run = Run::begin(&d.home).unwrap();
         run.outputs_before(&state.outputs);
         run.keep(&d.library, Path::new("A/x.opus")).unwrap();
-        assert_eq!(runs(&d.home).unwrap().len(), 1, "the earlier run is kept");
+        assert!(
+            runs(&d.home).unwrap().contains(&kept[0]),
+            "the earlier run is kept"
+        );
     }
 
     #[test]
