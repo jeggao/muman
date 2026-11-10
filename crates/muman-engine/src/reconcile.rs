@@ -47,15 +47,17 @@ use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
 pub use self::decide::{Doing, Foreseen, files_of, foresee};
 use self::keys::{foresee_moves, sites_found};
-pub use self::measure::compare;
 pub use self::measure::{Measuring, look, measure};
-use self::measure::{analyze, analyze_mixes, hash, sizes};
+use self::measure::{analyze, hash, sizes};
+pub use self::measure::{analyze_mixes, compare};
 pub use self::owned::{
     adopt, changed_since_written, edited_since_written, rehome, sidecar_as_written,
     vouch_for_copies,
 };
 use self::plan::plan_awaiting;
-pub use self::plan::{Planned, Resolver, name_of, path_of, plan, plan_with, resolve_songs};
+pub use self::plan::{
+    Planned, Resolver, name_of, path_of, plan, plan_with, resolve_as_fitted, resolve_songs,
+};
 pub use self::report::{Fate, verdict};
 use self::report::{Showing, Shown, fit_summary, left_out, status};
 use self::write::{Writing, apply, touch};
@@ -242,7 +244,15 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &analyses,
         out,
     )?;
-    let mixed = analyze_mixes(runner, &store, &listed, &mut state, &manifest.settings, out)?;
+    let fitted = manifest.settings.library.max_size.is_some();
+    let mixed = analyze_mixes(
+        runner,
+        &store,
+        &listed,
+        &mut state,
+        (&manifest.settings, fitted),
+        out,
+    )?;
     if analyzed || mixed {
         persist(home, &state, opts.dry_run, &lock)?;
     }

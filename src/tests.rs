@@ -6485,6 +6485,137 @@ fn export_fits_songs_made_anew_into_its_size() {
     assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.opus"));
 }
 
+/// A home holding one 5.1 FLAC song, `seconds` long, synced once each
+/// `(line, replacement)` of `settings` is made in its song list, and a
+/// fake whose stereo mix of it is far quieter than its six channels.
+fn surround_home(seconds: &str, settings: &[(&str, &str)]) -> (Setup, Fake) {
+    let s = Setup::new();
+    let tone = |amplitude| {
+        crate::testing::wav(
+            8000,
+            2,
+            Some(0x3),
+            &crate::testing::sine(8000, 2, 1000.0, amplitude, 2.0),
+        )
+    };
+    let surround = FLAC.replace("200.0", seconds).replace(
+        r#""channels": 2, "sample_rate": "44100""#,
+        r#""channels": 6, "channel_layout": "5.1", "sample_rate": "48000""#,
+    );
+    let fake = Fake {
+        wavs: vec![("Song.flac".into(), tone(0.4))],
+        mixed: vec![("Song.flac".into(), tone(0.05))],
+        ..Fake::default()
+    }
+    .probe(".flac", &surround);
+    let song = s.file("rips/Song.flac");
+    let (ok, text) = s.run(&fake, &["add", &song]);
+    assert!(ok, "{text}");
+    if !settings.is_empty() {
+        let list = s.dir.path().join("home/songs.toml");
+        let mut text = std::fs::read_to_string(&list).unwrap();
+        for (line, replacement) in settings {
+            assert!(text.contains(line), "{line}");
+            text = text.replacen(line, replacement, 1);
+        }
+        s.written("home/songs.toml", &text);
+        let (ok, text) = s.run(&fake, &["sync"]);
+        assert!(ok, "{text}");
+    }
+    (s, fake)
+}
+
+/// The gain the last MP3 `fake` encoded was given in its samples.
+fn mp3_volume(fake: &Fake) -> Option<String> {
+    let calls = fake.calls();
+    let encode = calls
+        .iter()
+        .rfind(|c| c.iter().any(|a| a == "libmp3lame"))?;
+    encode.iter().find_map(|a| {
+        let at = a.find("volume=")?;
+        a[at..].split([',', ' ', ';']).next().map(str::to_owned)
+    })
+}
+
+/// The mixes into stereo `fake` was asked to measure.
+fn stereo_mixes(fake: &Fake) -> usize {
+    (fake.calls().iter())
+        .filter(|c| {
+            c.iter().any(|a| a == crate::ffmpeg::PIPE)
+                && c.iter().any(|a| a.starts_with("aresample=ochl=stereo"))
+        })
+        .count()
+}
+
+/// The settings a sync writes the song of [`surround_home`] in MP3 under,
+/// levelled in its samples.
+const IN_MP3: [(&str, &str); 4] = [
+    (
+        r#"codecs = ["opus", "vorbis", "aac", "mp3", "flac"]"#,
+        r#"codecs = ["mp3"]"#,
+    ),
+    (r#"lossy = "opus""#, r#"lossy = "mp3""#),
+    (r#"lossless = "flac""#, r#"lossless = "mp3""#),
+    (r#"mode = "tags""#, r#"mode = "audio""#),
+];
+
+#[test]
+fn an_export_mixing_a_song_levels_it_by_its_mix_as_a_sync_would() {
+    let (_synced, by_sync) = surround_home("200.0", &IN_MP3);
+    let written = mp3_volume(&by_sync);
+    assert!(written.is_some(), "{:?}", by_sync.calls());
+
+    let (s, fake) = surround_home("200.0", &[]);
+    let before = stereo_mixes(&fake);
+    let zip = s.dir.path().join("out.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &zip.to_string_lossy(),
+            "--codec",
+            "mp3",
+            "--set",
+            "loudness.mode=audio",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(stereo_mixes(&fake) > before, "the mix is measured: {text}");
+    assert_eq!(mp3_volume(&fake), written, "{text}");
+}
+
+#[test]
+fn an_export_mixing_a_song_to_fit_levels_it_by_its_mix_as_a_sync_would() {
+    let (_synced, by_sync) = surround_home("0.05", &IN_MP3);
+    let written = mp3_volume(&by_sync);
+    assert!(written.is_some(), "{:?}", by_sync.calls());
+
+    let (s, fake) = surround_home("0.05", &[]);
+    let whole = s.dir.path().join("whole.zip");
+    let (ok, text) = s.run(&fake, &["export", "-o", &whole.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let max = std::fs::metadata(&whole).unwrap().len() - 2000;
+    let fitted = s.dir.path().join("fitted.zip");
+    let (ok, text) = s.run(
+        &fake,
+        &[
+            "export",
+            "-o",
+            &fitted.to_string_lossy(),
+            "--max-size",
+            &max.to_string(),
+            "--set",
+            "audio.lossy=\"mp3\"",
+            "--set",
+            "loudness.mode=audio",
+        ],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("at a lower bitrate to fit"), "{text}");
+    assert_eq!(mp3_volume(&fake), written, "{text}");
+}
+
 /// Every file under `dir`, by its path there with `/`, with its bytes.
 fn files_under(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();

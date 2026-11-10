@@ -521,17 +521,18 @@ pub(super) fn analyze<R: Runner, W: Write>(
     Ok(true)
 }
 
-/// Analyze the audio of every source in `keys` that `audio` mixes into
+/// Analyze the audio of every source in `keys` that `settings` mix into
 /// another layout, as mixed, where it is not already: into the layout of
-/// its best format, and under `[library] max_size` into the one it is
-/// lowered into, whether or not fitting lowers it, so what is measured
-/// never hangs on the fit. Returns whether any was.
-pub(super) fn analyze_mixes<R: Runner, W: Write>(
+/// its best format, and when songs are `fitted` into a size, as under
+/// `[library] max_size`, into the one it is lowered into, whether or not
+/// fitting lowers it, so what is measured never hangs on the fit. Returns
+/// whether any was.
+pub fn analyze_mixes<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
     keys: &BTreeSet<SourceKey>,
     state: &mut State,
-    settings: &crate::settings::Settings,
+    (settings, fitted): (&crate::settings::Settings, bool),
     out: &mut W,
 ) -> Result<bool> {
     let mut wanted = crate::analysis::wanted(&settings.loudness);
@@ -553,7 +554,7 @@ pub(super) fn analyze_mixes<R: Runner, W: Write>(
         })
         .flat_map(|(l, audio, rev)| {
             let best = crate::resolve::Format::encoded(audio, &settings.audio).mix();
-            let lowered = (settings.library.max_size.is_some())
+            let lowered = fitted
                 .then(|| crate::fit::lowered_mix(&audio.shape(), &settings.audio))
                 .flatten();
             let layouts: BTreeSet<crate::codec::Layout> = best.into_iter().chain(lowered).collect();

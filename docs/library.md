@@ -417,8 +417,9 @@ An export may change, for itself alone, any setting of `[library]`,
 cleaning rule, as `tags.clean.tidy.spacing=false`. `--set
 table.key=value` sets any of them, and `--codec`, `--template` and
 `--lyrics` the commonest. The export then holds the library a sync
-would write under those settings. Each song the change leaves alone is
-copied, and every other is made again from its sources.
+would write under those settings, a song mixed into another layout
+levelled on its mix, which the export measures where no sync has. Each
+song the change leaves alone is copied, and every other is made again.
 
 A song you changed since muman wrote it, or whose sources are gone, goes
 in as the library holds it; the export says so and exits with code 4.

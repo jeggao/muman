@@ -466,6 +466,20 @@ pub(super) fn level_as_fitted(
     Ok(())
 }
 
+/// Every song resolved under `settings`, saying nothing, each of `fitted`
+/// levelled at the format given there, as `level_as_fitted` levels a
+/// sync's: what an export fitted into a size writes.
+pub fn resolve_as_fitted(
+    manifest: &Manifest,
+    settings: &crate::settings::Settings,
+    state: &State,
+    library: &Path,
+    fitted: &BTreeMap<usize, Format>,
+) -> Result<Planned> {
+    let found = (None, &BTreeSet::new());
+    Ok(resolve_fitted(manifest, settings, state, library, found, fitted)?.planned)
+}
+
 /// [`resolve_songs`], each song of `fitted` levelled at the format given
 /// there rather than at its best.
 fn resolve_fitted(

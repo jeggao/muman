@@ -6,7 +6,9 @@
 //! records, so a song not written yet is not in it; `sync` first brings it
 //! in step. Entries are stored, not compressed: audio does not compress.
 //! The library, the song list and the state are only read, under the
-//! home's lock.
+//! home's lock: a mix the export's settings level a song by, which no
+//! sync measured, as 5.1 written in MP3's stereo, is measured for the
+//! export alone and not kept.
 //!
 //! **Settings.** An export may change any setting of `[library]`,
 //! `[audio]` and `[loudness]` for itself alone, and its library is then the
@@ -48,6 +50,15 @@
 //! settles on sizes encoded alone. A song that can only be copied stays
 //! its library file. Every entry is counted with what the zip spends on
 //! it, `ENTRY` bytes and its name twice.
+//!
+//! Fitting encodes each rung at the gains of the song's first. A rung that
+//! mixes it into another layout measures otherwise, and so does the pool
+//! of its album, so once fitting has chosen, every song is levelled again
+//! at the format chosen, by the resolving a sync's fitted songs are
+//! levelled by (`reconcile::resolve_as_fitted`), and one whose gains that
+//! changes is encoded again, as a sync renders it again. Under a size,
+//! the layout each song would be lowered into is measured whether or not
+//! fitting lowers it, as `[library] max_size` has it measured.
 //!
 //! Each file encoded for the zip is deleted from the scratch folder once it
 //! is in, so an export made anew needs about its own size free beside it,
@@ -313,6 +324,8 @@ struct Song {
     anew: bool,
     /// What it may be encoded from; none when it can only be copied.
     sources: Option<BTreeMap<SourceKey, Located>>,
+    /// Its place in the song list, when a song lists it.
+    n: Option<usize>,
 }
 
 /// The songs encoded for the zip, by their place and rung, with their
@@ -441,16 +454,24 @@ pub fn export<R: Runner, W: Write>(
     } else {
         Some(settings_of(&manifest, options.settings)?)
     };
-    let state = State::load(&dirs.home)?;
+    let mut state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let (output, target) = target_of(options, settings.as_ref().unwrap_or(&manifest.settings))?;
+    let writes_under = settings.as_ref().unwrap_or(&manifest.settings);
+    let (output, target) = target_of(options, writes_under)?;
     guard(&output, dirs, options.force)?;
     let (beside, _made) = scratch_beside(target, &output)?;
 
-    let (songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
-    let audio = settings
-        .as_ref()
-        .map_or(&manifest.settings.audio, |s| &s.audio);
+    let (keys, fitted) = (manifest.keys(), options.max_size.is_some());
+    reconcile::analyze_mixes(
+        runner,
+        &store,
+        &keys,
+        &mut state,
+        (writes_under, fitted),
+        out,
+    )?;
+    let (mut songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
+    let audio = &writes_under.audio;
     let held: Vec<Vec<Entry>> = songs
         .iter()
         .map(|s| held_entries(&dirs.library, s))
@@ -465,8 +486,8 @@ pub fn export<R: Runner, W: Write>(
         let fitted = fit_into(
             runner,
             (audio, target),
-            &state,
-            (&songs, &held),
+            (&manifest, writes_under, &state, dirs.library.as_path()),
+            (&mut songs, &held),
             (max, budget),
             scratch.path(),
             out,
@@ -779,8 +800,9 @@ fn songs<W: Write>(
             plan: plan.clone(),
             anew: false,
             sources: located(store, plan).filter(|_| !changed),
+            n: owners.get(path).copied(),
         };
-        if let (Some((library, export)), Some(n)) = (&planned, owners.get(path)) {
+        if let (Some((library, export)), Some(n)) = (&planned, song.n.as_ref()) {
             match (library.get(n), export.get(n)) {
                 (Some(was), Some(now)) => {
                     song.stem.clone_from(&now.stem);
@@ -986,12 +1008,14 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
 
 /// Fit the songs into `budget` bytes by [`fit::settle`], encoding those
 /// chosen into `scratch`; each encoding's real size replaces its
-/// estimate, and corrects the estimates not measured yet.
+/// estimate, and corrects the estimates not measured yet. The songs are
+/// then levelled at the formats chosen, as `resolving` them under the
+/// export's settings levels them, and made again where that changes them.
 fn fit_into<R: Runner, W: Write>(
     runner: &R,
     (audio, target): (&Audio, Target),
-    state: &State,
-    (songs, held): (&[Song], &[Vec<Entry>]),
+    resolving: (&Manifest, &Settings, &State, &Path),
+    (songs, held): (&mut [Song], &[Vec<Entry>]),
     (max, budget): (u64, u64),
     scratch: &Path,
     out: &mut W,
@@ -999,7 +1023,7 @@ fn fit_into<R: Runner, W: Write>(
     let mut items: Vec<Item> = songs
         .iter()
         .zip(held)
-        .map(|(song, entries)| item((audio, target), state, song, entries))
+        .map(|(song, entries)| item((audio, target), resolving.2, song, entries))
         .collect();
     let estimates: Vec<Vec<u64>> = items
         .iter()
@@ -1010,10 +1034,10 @@ fn fit_into<R: Runner, W: Write>(
     let mut ok = true;
     let mut again = false;
     let mut measure = |items: &mut [Item], wanted: &fit::Wanted| -> Result<()> {
-        let due: Vec<(usize, usize, Format)> = wanted
+        let due: Vec<(usize, usize, Plan)> = wanted
             .iter()
             .filter(|(n, c)| !items[*n].rungs[*c].known)
-            .map(|&(n, c)| (n, c, items[n].rungs[c].format))
+            .map(|&(n, c)| (n, c, songs[n].plan.with_format(items[n].rungs[c].format)))
             .collect();
         let results = make(runner, songs, &due, again, scratch, out)?;
         again |= due.iter().any(|(_, c, _)| *c > 0);
@@ -1054,11 +1078,96 @@ fn fit_into<R: Runner, W: Write>(
             crate::ui::bytes(floor + (max - budget))
         ),
     };
+    let formats: Vec<Format> = (items.iter().zip(&fit.choice))
+        .map(|(item, &c)| item.rungs[c].format)
+        .collect();
+    let again = level_as_fitted(resolving, songs, (&fit.choice, &formats))?;
+    ok &= make_again(runner, songs, &again, &mut made, scratch, out)?;
     Ok(Fitted {
         choice: fit.choice,
         made,
         ok,
     })
+}
+
+/// Level every song again at the rung fitting chose for it, by its place
+/// in `choice`, and that rung's format, as a sync levels its songs once
+/// fitted ([`reconcile::resolve_as_fitted`]): a song lowered into another
+/// layout by its mix, and its album's songs by their pool with it.
+/// Returns, by place, the songs whose gains that changes, each with its
+/// rung and the plan it is made from; a song at its first rung is made
+/// anew.
+fn level_as_fitted(
+    (manifest, settings, state, library): (&Manifest, &Settings, &State, &Path),
+    songs: &mut [Song],
+    (choice, formats): (&[usize], &[Format]),
+) -> Result<Vec<(usize, usize, Plan)>> {
+    let lowered: BTreeMap<usize, Format> = (songs.iter().zip(formats).zip(choice))
+        .filter(|(_, c)| **c > 0)
+        .filter_map(|((song, format), _)| Some((song.n?, *format)))
+        .collect();
+    if lowered.is_empty() {
+        return Ok(Vec::new());
+    }
+    let resolved = |fitted: &BTreeMap<usize, Format>| -> Result<BTreeMap<usize, Resolved>> {
+        Ok(
+            reconcile::resolve_as_fitted(manifest, settings, state, library, fitted)?
+                .into_iter()
+                .collect(),
+        )
+    };
+    let best = resolved(&BTreeMap::new())?;
+    let fitted = resolved(&lowered)?;
+    let mut again = Vec::new();
+    for (i, song) in songs.iter_mut().enumerate() {
+        let Some(n) = song.n.filter(|_| song.sources.is_some()) else {
+            continue;
+        };
+        let (Some(best), Some(fitted)) = (best.get(&n), fitted.get(&n)) else {
+            continue;
+        };
+        let c = choice[i];
+        let format = formats[i];
+        let (Some(gains), true) = (fitted.plan.loudness, fitted.plan.format == format) else {
+            continue;
+        };
+        if best.plan.loudness == Some(gains) {
+            continue;
+        }
+        let plan = song.plan.with_format(format).with_loudness(gains);
+        if c == 0 {
+            song.plan = plan.clone();
+            song.anew = true;
+        }
+        again.push((i, c, plan));
+    }
+    Ok(again)
+}
+
+/// Make again each song of `again` at its rung, from the plan given
+/// there, in place of what fitting made of it; whether every one was
+/// made. One that could not be is exported as when fitting could not
+/// make it: not lowered, or as the library holds it.
+fn make_again<R: Runner, W: Write>(
+    runner: &R,
+    songs: &[Song],
+    again: &[(usize, usize, Plan)],
+    made: &mut Made,
+    scratch: &Path,
+    out: &mut W,
+) -> Result<bool> {
+    // A folder of its own, so no file made at the earlier gains stands in its way.
+    let results = make(runner, songs, again, true, &scratch.join("levelled"), out)?;
+    let mut all = true;
+    for ((i, c, _), result) in again.iter().zip(results) {
+        if let Some(entries) = result {
+            made.insert((*i, *c), entries);
+        } else {
+            made.remove(&(*i, *c));
+            all = false;
+        }
+    }
+    Ok(all)
 }
 
 /// Make each song the export's settings ask for anew into `scratch`, by
@@ -1069,11 +1178,11 @@ fn anew<R: Runner, W: Write>(
     scratch: &Path,
     out: &mut W,
 ) -> Result<(Made, bool)> {
-    let due: Vec<(usize, usize, Format)> = songs
+    let due: Vec<(usize, usize, Plan)> = songs
         .iter()
         .enumerate()
         .filter(|(_, s)| s.anew)
-        .map(|(n, s)| (n, 0, s.plan.format))
+        .map(|(n, s)| (n, 0, s.plan.clone()))
         .collect();
     let results = make(runner, songs, &due, false, scratch, out)?;
     let all = results.iter().all(Option::is_some);
@@ -1085,12 +1194,12 @@ fn anew<R: Runner, W: Write>(
     Ok((made, all))
 }
 
-/// Encode each song of `due` at its rung's format into `scratch`: what
-/// each made, none where it could not be, which is said.
+/// Encode each song of `due` at its rung, from the plan given there, into
+/// `scratch`: what each made, none where it could not be, which is said.
 fn make<R: Runner, W: Write>(
     runner: &R,
     songs: &[Song],
-    due: &[(usize, usize, Format)],
+    due: &[(usize, usize, Plan)],
     again: bool,
     scratch: &Path,
     out: &mut W,
@@ -1116,14 +1225,9 @@ fn make<R: Runner, W: Write>(
         )?;
     }
     let step = crate::progress::step("Encoding", Some(due.len() as u64));
-    let rendered = parallel::map(due, parallel::builds(), |(n, c, format)| {
+    let rendered = parallel::map(due, parallel::builds(), |(n, c, plan)| {
         let _working = step.working(&crate::progress::label(&songs[*n].path));
-        encode(
-            runner,
-            &songs[*n],
-            *format,
-            &scratch.join(format!("{n}-{c}")),
-        )
+        encode(runner, &songs[*n], plan, &scratch.join(format!("{n}-{c}")))
     });
     let mut made = Vec::with_capacity(due.len());
     for ((n, c, _), result) in due.iter().zip(rendered) {
@@ -1244,25 +1348,20 @@ fn item((audio, target): (&Audio, Target), state: &State, song: &Song, held: &[E
     item
 }
 
-/// Encode one song as `format` into `scratch`, returning its entries and
+/// Encode one song from `plan` into `scratch`, returning its entries and
 /// what could not be added to it.
 fn encode<R: Runner>(
     runner: &R,
     song: &Song,
-    format: Format,
+    plan: &Plan,
     scratch: &Path,
 ) -> Result<(Vec<Entry>, Vec<String>)> {
     let sources = song
         .sources
         .as_ref()
         .ok_or_else(|| anyhow!("its sources are gone"))?;
-    let plan = if format == song.plan.format {
-        song.plan.clone()
-    } else {
-        song.plan.with_format(format)
-    };
     let library = scratch.join("library");
-    let parts = crate::artifact::parts(&plan);
+    let parts = crate::artifact::parts(plan);
     let rendered = render::render(
         runner,
         &render::Job {
@@ -1432,6 +1531,7 @@ mod tests {
                     plan,
                     anew: false,
                     sources: None,
+                    n: None,
                 },
                 vec![entry],
             )
