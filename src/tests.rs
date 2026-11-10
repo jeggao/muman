@@ -5763,6 +5763,9 @@ fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
     for (term, said) in [
         ("track=abc", "no number"),
         ("disc=2/x", "no number"),
+        ("track=0", "tracks and discs count from 1"),
+        ("track=-1", "tracks and discs count from 1"),
+        ("disc=2/0", "tracks and discs count from 1"),
         ("date=yesterday", "no date"),
         ("replaygain_track_gain=loud", "[loudness]"),
     ] {

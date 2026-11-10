@@ -64,8 +64,8 @@ song when negated.
   `audio!` unpins it; `lyrics=false` takes no lyrics. A `cover` or
   `lyrics` pinned to a source that holds none leaves the song without
   it, which `sync`, `status` and `check` say. `set` refuses a
-  track or disc that is no number, a date that is none, and a ReplayGain
-  gain or peak.
+  track or disc that is no number or below 1, as they count from 1, a
+  date that is none, and a ReplayGain gain or peak.
 - **`set` with a query alone**, on a terminal, steps through the songs
   field by field. Each field shows its value and where it came from;
   opened, it shows what each source offers, for you to keep, take, type

@@ -289,12 +289,17 @@ impl Kind {
                     Ok(v.to_string())
                 }
             }
+            Self::Count if below_one(v) => Err("below 1: a count starts at 1, as 12"),
             Self::Count => count(v)
                 .map(|n| n.to_string())
                 .ok_or("no count: give one as 12"),
             Self::Place => {
-                let read = match v.split_once('/') {
-                    Some((n, of)) => count(n).zip(count(of)).map(|(n, of)| format!("{n}/{of}")),
+                let (n, of) = v.split_once('/').map_or((v, None), |(n, of)| (n, Some(of)));
+                if below_one(n) || of.is_some_and(below_one) {
+                    return Err("below 1: tracks and discs count from 1, as 3 or 3/12");
+                }
+                let read = match of {
+                    Some(of) => count(n).zip(count(of)).map(|(n, of)| format!("{n}/{of}")),
                     None => count(v).map(|n| n.to_string()),
                 };
                 read.ok_or("no number: give one as 3, or 3/12")
@@ -315,6 +320,11 @@ impl Kind {
             Self::Language => language(v).ok_or("no language: give its code, as jpn or ja"),
         }
     }
+}
+
+/// Whether `text` is a whole number below 1, as `0` or `-2`.
+fn below_one(text: &str) -> bool {
+    text.trim().parse::<i64>().is_ok_and(|n| n < 1)
 }
 
 /// A count from 1, from digits alone.
@@ -2753,6 +2763,19 @@ mod tests {
         );
         assert_eq!(by_hand("album", "\u{202E}\u{202C}").unwrap(), "");
         assert!(by_hand("date", "2019-07-04 extra").is_err());
+        for (name, value) in [("track", "0"), ("track", "-1"), ("disc", "1/0")] {
+            let why = by_hand(name, value).unwrap_err();
+            assert!(
+                why.contains("is below 1: tracks and discs count from 1"),
+                "{why}"
+            );
+        }
+        assert!(
+            by_hand("tracktotal", "0")
+                .unwrap_err()
+                .contains("a count starts at 1")
+        );
+        assert!(by_hand("track", "x").unwrap_err().contains("no number"));
         assert!(by_hand("date", "2019-07-04Tea").is_err());
         assert_eq!(
             by_hand("date", "2019-07-04T10:00:00Z").unwrap(),
