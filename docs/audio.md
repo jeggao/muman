@@ -54,7 +54,7 @@ remix the speakers to make audio fit:
 | Codec | Holds |
 |---|---|
 | `flac` | Up to 8 channels, in any layout; integer samples of up to 24 bits |
-| `alac` | As FLAC, but only in mono, stereo, 3.0, 4.0, 5.0, 5.1, 6.1 and 7.1 (wide) |
+| `alac` | As FLAC, but only in the layouts ffmpeg names `mono`, `stereo`, `3.0`, `4.0`, `5.0`, `5.1`, `6.1(back)` and `7.1(wide)`; any other, as `5.1(side)` or `6.1`, is FLAC |
 | `wavpack` | Any number of channels; integer samples of up to 32 bits, or 32-bit float |
 | `opus` | Any number of channels: Vorbis layouts as they are, side speakers named as back ones, any other layout with no speakers named |
 | `vorbis` | Any number of channels, its speakers named by their count; resampled to 44.1 or 48 kHz from a rate it cannot encode |
