@@ -48,9 +48,9 @@ A field is any tag, or one of these:
 `lyrics`, `cover`, `from` and `has` compare their value whole, so
 `lyrics:timed` never matches "untimed". An album artist muman takes
 from the artist, or an album named after a single's title, is no tag
-for `has`. muman refuses a field that is no tag it knows and that no
-song has, so a misspelled field never quietly matches nothing, or every
-song when negated.
+for `has`. muman refuses a field, here or in a provider's `skip`, that
+is no tag it knows and that no song has, so a misspelled field never
+quietly matches nothing, or every song when negated.
 
 ## Changing songs
 

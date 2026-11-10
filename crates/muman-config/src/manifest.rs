@@ -1171,13 +1171,21 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
     }
     let removed = removed_of(doc)?;
     let settings = crate::settings::read(doc)?;
+    let providers = providers::read(doc)?;
+    // A song's tags are those muman knows and those the song list gives
+    // it or its album, as a query reads them.
+    providers.check_fields(|name| {
+        (songs.iter().map(|s| &s.tags))
+            .chain(albums.iter().map(|a| &a.tags))
+            .any(|t| t.iter().any(|(k, _)| tags::vorbis_key(k) == name))
+    })?;
     refuse_unsited(&settings.sites, &songs, &albums, &removed)?;
     Ok(Parsed {
         songs,
         albums,
         torrents: torrents_of(doc)?,
         removed,
-        providers: providers::read(doc)?,
+        providers,
         hooks: hooks::read(doc),
         clean: clean_of(doc)?,
         settings,

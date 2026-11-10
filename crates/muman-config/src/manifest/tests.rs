@@ -254,6 +254,44 @@ fn a_pin_outside_the_sources_is_refused() {
 }
 
 #[test]
+fn a_skip_naming_a_field_no_song_has_is_refused_as_list_refuses_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let song = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\ntags.mood = \"calm\"\n";
+    for (skip, refused) in [
+        (
+            "[providers]\nskip = [\"artst:Marlo\"]\n",
+            Some("[providers] skip"),
+        ),
+        (
+            "[providers.acoustid]\nskip = [\"^artst:=Marlo\"]\n",
+            Some("[providers.acoustid] skip"),
+        ),
+        (
+            "[providers.lrclib]\nskip = [\"albm:Harbor\"]\n",
+            Some("`albm`"),
+        ),
+        (
+            "[providers]\nskip = [\"artist:Marlo\", \"mood:calm\"]\n",
+            None,
+        ),
+        (
+            "[providers]\nskip = [\"path:Harbor\", \"vid00000001\"]\n",
+            None,
+        ),
+    ] {
+        write(dir.path(), &format!("{song}{skip}"));
+        match (Manifest::load(dir.path()), refused) {
+            (Ok(_), None) => {}
+            (Err(e), Some(says)) => {
+                assert!(format!("{e:#}").contains(says), "{skip}: {e:#}");
+                assert!(format!("{e:#}").contains("No song has a field"), "{e:#}");
+            }
+            (got, _) => panic!("{skip}: {:?}", got.map(drop)),
+        }
+    }
+}
+
+#[test]
 fn a_source_listed_twice_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write(

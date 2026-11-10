@@ -396,7 +396,7 @@ fn judge(
     let mut skips: BTreeMap<Provider, Vec<(&str, songs::Query)>> = BTreeMap::new();
     for p in ORDER {
         for text in config.skips(p) {
-            // A field no song has yet, as a tag of your own, matches none;
+            // The song list refused a field no song has as it was read;
             // `status` names the query whatever it skips.
             let q = songs::parse_text(text, &extractors)
                 .with_context(|| format!("[providers] skip: `{text}`"))?;

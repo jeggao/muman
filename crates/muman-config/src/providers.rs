@@ -213,6 +213,28 @@ impl Config {
         self.settings(p).enabled && self.settings(p.yields()).enabled
     }
 
+    /// Refuse a `skip` query naming a field that is no tag muman knows and
+    /// that `had`, given its Vorbis name, says no song has, as `list`
+    /// refuses a query's.
+    pub fn check_fields(&self, had: impl Fn(&str) -> bool) -> Result<()> {
+        let schemes = schemes();
+        let own = self.providers.iter().flat_map(|(p, s)| {
+            s.skip
+                .iter()
+                .map(move |text| (format!("[providers.{p}] skip"), text))
+        });
+        let all = (self.skip.iter())
+            .map(|text| ("[providers] skip".to_string(), text))
+            .chain(own);
+        for (what, text) in all {
+            let query = crate::terms::parse_text(text, &schemes)?;
+            if let Some(field) = query.unknown_field(&had) {
+                bail!("{what}: `{text}`: {}", crate::terms::no_field(field));
+            }
+        }
+        Ok(())
+    }
+
     /// The queries naming songs that ask `p` nothing: `[providers] skip`
     /// and the provider's own.
     pub fn skips(&self, p: Provider) -> impl Iterator<Item = &str> {
@@ -268,15 +290,20 @@ fn read_until(p: Provider, item: &Item, what: &str) -> Result<Vec<Closed>> {
     Ok(until)
 }
 
+/// The key schemes a `skip` query may name a song by.
+fn schemes() -> std::collections::BTreeSet<String> {
+    crate::source::schemes()
+        .chain(crate::sites::built_in().schemes())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The queries a `skip` lists, each checked to read as one.
 fn read_skip(item: &Item, what: &str) -> Result<Vec<String>> {
     let list = item
         .as_array()
         .with_context(|| format!("{what} must be a list of queries"))?;
-    let schemes: std::collections::BTreeSet<String> = crate::source::schemes()
-        .chain(crate::sites::built_in().schemes())
-        .map(str::to_string)
-        .collect();
+    let schemes = schemes();
     list.iter()
         .map(|v| {
             let text = v.as_str().with_context(|| {

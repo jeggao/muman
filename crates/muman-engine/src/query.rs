@@ -372,24 +372,11 @@ impl QueryMatch for Query {
     }
 
     fn check_fields(&self, views: &[View]) -> Result<()> {
-        for term in &self.0 {
-            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
-                &term.test
-            else {
-                continue;
-            };
-            let name = tags::vorbis_key(field);
-            let had = views.iter().any(|v| v.tags.iter().any(|(k, _)| *k == name));
-            if !is_field(field) && !had {
-                return Err(crate::errors::Refused(format!(
-                    "No song has a field `{field}`: a tag such as title, artist, album, \
-                     album_artist, genre or date, or one of {}",
-                    DERIVED.join(", ")
-                ))
-                .into());
-            }
+        let had = |name: &str| views.iter().any(|v| v.tags.iter().any(|(k, _)| k == name));
+        match self.unknown_field(had) {
+            Some(field) => Err(crate::errors::Refused(crate::terms::no_field(field)).into()),
+            None => Ok(()),
         }
-        Ok(())
     }
 }
 

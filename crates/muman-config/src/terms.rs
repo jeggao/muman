@@ -76,6 +76,20 @@ impl Query {
             .map_err(|e| crate::errors::Refused(format!("{e:#}")).into())
     }
 
+    /// The first field a term names that is no tag muman knows and that
+    /// `had`, given its Vorbis name, says no song has: a misspelling, which
+    /// would match nothing, or negated, every song.
+    pub fn unknown_field(&self, had: impl Fn(&str) -> bool) -> Option<&str> {
+        self.0.iter().find_map(|term| {
+            let (Test::Contains(field, _) | Test::Equals(field, _) | Test::Matches(field, _)) =
+                &term.test
+            else {
+                return None;
+            };
+            (!is_field(field) && !had(&tags::vorbis_key(field))).then_some(field.as_str())
+        })
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -189,6 +203,17 @@ fn fold_pattern(pattern: &str) -> String {
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .nfc()
         .collect()
+}
+
+/// Why a query naming `field`, as [`Query::unknown_field`] finds one, is
+/// refused.
+#[must_use]
+pub fn no_field(field: &str) -> String {
+    format!(
+        "No song has a field `{field}`: a tag such as title, artist, album, album_artist, \
+         genre or date, or one of {}",
+        DERIVED.join(", ")
+    )
 }
 
 #[must_use]
