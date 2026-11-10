@@ -717,6 +717,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   so a template that puts some songs in an album folder and others not
   no longer makes sync fail a song that status said would move.
 
+- **A path template is checked whole before anything is written**: a
+  syntax error, an unknown filter or test, or a `pad` or `truncate`
+  width that is no whole number up to 255 is refused (exit 5) while
+  `list` keeps working, and `pad` above 65535 no longer crashes.
+- **A provider's `skip` refuses a field no song has**, as a query in
+  `list` does, instead of matching nothing.
+- **A setting that does not read exits 2**, as the exit-code table
+  says, instead of 4.
+- **A song's `album` must name a listed `[[album]]`** and its `track`
+  must be a whole number from 1; the `[[album]]` keys are documented.
+- **A lyrics or cover suffix may be a dot and 24 bytes**, as documented,
+  instead of 23.
+- **A negative `recheck`, an `incoherence` over 100 %, and clipping
+  cutoffs that are empty, unsorted or over 100 % are refused**, and a
+  value too large to keep says it is out of range.
+- **An `[library] untitled` that shows nothing is refused**, so no song
+  is named `.flac`; refusals of a file named twice and of a song list
+  that is not valid TOML are worded alike everywhere.
+
 ## [0.10.1] - 2026-11-04
 
 ### Changed
