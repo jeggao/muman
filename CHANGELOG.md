@@ -158,6 +158,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An export makes no song from a source cut off since it was built**:
+  such a song goes in as the library holds it, the export saying so and
+  exiting 4, rather than a stub of a fraction of a second.
+- **`export --max-size` lowers what `[library] max_size` does**: the same
+  songs to the same formats, the song list and a zip's own bytes still
+  counted against the export's cap.
 - **`export --folder` onto a file or a link to nothing exits 5** with
   a refusal, as onto a folder holding anything, not with an error of
   the system's.
