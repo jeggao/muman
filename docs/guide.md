@@ -179,7 +179,9 @@ by its page's domain, without `www.`.
 A torrent's file is named by the torrent's v1 hash, or its v2 hash if
 it has no v1, then its path inside the torrent without the torrent's
 own folder: `torrent:<hash>/CD1/01 Paper Comets.flac`. A torrent of one
-file names it by its name. The hash covers every byte, so a torrent's
+file names it by its name. A part starting with a letter and a colon,
+which Windows reads as a drive, is named with the colon's lookalike:
+`a:b.flac` is `a：b.flac`. The hash covers every byte, so a torrent's
 files never change.
 
 An earlier muman named sources by yt-dlp's extractor, as

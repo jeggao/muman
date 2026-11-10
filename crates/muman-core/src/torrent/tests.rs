@@ -228,8 +228,6 @@ fn a_path_leaving_the_torrent_refuses_it() {
         &["."],
         &[".. ", "x.flac"],
         &["..."],
-        &["C:", "x.flac"],
-        &["c:x.flac"],
         &["Album\u{1b}]0;Lantern\u{7}", "x.flac"],
         &["x\u{9b}2J.flac"],
         &["x\0.flac"],
@@ -246,6 +244,50 @@ fn a_path_leaving_the_torrent_refuses_it() {
         let (bytes, _) = torrent(info, &[]);
         assert!(Metainfo::read(&bytes).is_err(), "{parts:?}");
     }
+}
+
+#[test]
+fn a_part_starting_as_a_drive_is_keyed_by_the_colon_s_lookalike() {
+    let info = B::D(vec![
+        ("name", s("C: The Remixes")),
+        ("piece length", B::I(16384)),
+        ("pieces", B::S(vec![0; 20])),
+        (
+            "files",
+            B::L(vec![
+                B::D(vec![("length", B::I(1)), ("path", path(&["a:b.flac"]))]),
+                B::D(vec![
+                    ("length", B::I(1)),
+                    ("path", path(&["D:", "Act 1: Intro.flac"])),
+                ]),
+            ]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    assert_eq!(meta.name, "C: The Remixes");
+    let keyed: Vec<&Path> = meta.files.iter().map(|f| f.path.as_path()).collect();
+    assert_eq!(
+        keyed,
+        [
+            PathBuf::from("a：b.flac"),
+            ["D：", "Act 1: Intro.flac"].iter().collect()
+        ]
+    );
+    assert_eq!(meta.files[0].named, ["a:b.flac"]);
+    assert_eq!(
+        meta.key(&meta.files[1]).to_string(),
+        format!("torrent:{}/D：/Act 1: Intro.flac", meta.hash())
+    );
+    assert_eq!(
+        stored(&meta.files[1].path),
+        Path::new("D：").join("Act 1： Intro.flac")
+    );
+    let root = Path::new("from");
+    assert_eq!(
+        meta.files[0].named_in(root),
+        cfg!(not(windows)).then(|| root.join("a:b.flac")),
+        "a folder another client left is read by the torrent's names, but on Windows"
+    );
 }
 
 #[test]

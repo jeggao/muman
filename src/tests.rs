@@ -1738,6 +1738,27 @@ fn a_torrents_files_stay_sources_when_its_metainfo_is_gone() {
 }
 
 #[test]
+fn a_torrents_file_named_as_a_drive_is_kept_by_a_lookalike_not_refused() {
+    let s = Setup::new();
+    let bytes = crate::testing::metainfo("X: The Remixes", &["a:b.flac", "Plain.flac"]);
+    let hash = crate::torrent::Metainfo::read(&bytes)
+        .unwrap()
+        .hash()
+        .to_string();
+    let file = s.dir.path().join("a.torrent");
+    std::fs::write(&file, &bytes).unwrap();
+    let fake = aria2c(bytes, hash.clone(), Arc::new(Mutex::new(Vec::new())));
+    let (ok, text) = s.run(&fake, &["add", "--no-match", file.to_str().unwrap()]);
+    assert!(ok, "{text}");
+    let key = |p: &str| SourceKey::parse(&format!("torrent:{hash}/{p}")).unwrap();
+    let mut songs = s.songs();
+    songs.sort();
+    assert_eq!(songs, [vec![key("Plain.flac")], vec![key("a：b.flac")]]);
+    let torrents = s.dir.path().join("home/sources/torrent");
+    assert!(torrents.join(&hash).join("a：b.flac").is_file());
+}
+
+#[test]
 fn a_torrent_downloaded_already_is_taken_up_from_its_folder() {
     let s = Setup::new();
     let bytes = crate::testing::metainfo("Lantern Weather", &["Paper Comets.flac", "scan.png"]);
