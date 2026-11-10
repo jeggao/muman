@@ -51,6 +51,15 @@
 //! against the audio; records read before muman kept it are read again
 //! by [`retag`], as [`tags_method`] names, which opens no media file.
 //!
+//! A picture of a file's own tags is known by its bytes: ffmpeg takes its
+//! codec from the media type it is labelled with, so it shows a JPEG
+//! labelled `image/png` as a PNG it cannot decode, and none labelled
+//! `image/x-png` or `application/octet-stream`. Where ffprobe's pictures
+//! are not the tags' one for one, each in the format its bytes are, they
+//! are read as `lofty` reads them ([`picture::tag_pictures`]) and decoded
+//! as their bytes say. A picture that does not decode is no cover, and
+//! said when its source is measured ([`Unkept::Picture`]).
+//!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the gray pixels its quality is measured from, so a picture
 //! given to `add` finds the songs whose covers it is. Facts taken before,
@@ -536,6 +545,8 @@ pub enum Unkept {
     /// A cue sheet of its name beside it, which splits an album image
     /// into its tracks; the image is one song.
     CueSheet,
+    /// A picture in it that does not decode, which is no cover.
+    Picture,
 }
 
 /// Where a picture sits.
@@ -549,8 +560,10 @@ pub enum CoverAt {
     Sidecar(usize),
     /// The source is the picture.
     File,
-    /// The `index`th picture of an MP4's `covr` atom, which ffprobe does
-    /// not show ([`picture::mp4_covers`]).
+    /// The `index`th picture of the file's own tags, as `lofty` reads
+    /// them by their bytes ([`picture::tag_pictures`]), where ffprobe
+    /// shows them otherwise: an MP4's of implicit type, or one labelled
+    /// with another media type than its bytes are.
     Atom { index: usize },
 }
 
@@ -965,8 +978,9 @@ fn image_file<R: Runner>(
 
 /// The outputs writing each picture `probed` holds, and those dumped
 /// from its attachments into `scratch`, in gray, each input it
-/// needs added to `inputs`; where ffprobe found no picture in `path`,
-/// those of its MP4 `covr` atom.
+/// needs added to `inputs`; where ffprobe shows the pictures of `path`'s
+/// own tags otherwise than their bytes are ([`streams_agree`]), those
+/// pictures as `lofty` reads them, each decoded as its bytes say.
 fn cover_outputs(
     probed: &Probed,
     path: &Path,
@@ -974,7 +988,11 @@ fn cover_outputs(
     inputs: &mut Vec<Input>,
 ) -> Vec<(Output, CoverAt, String, bool)> {
     let mut outputs = Vec::new();
-    for p in &probed.pictures {
+    let tagged = picture::tag_pictures(path);
+    let streams = tagged
+        .as_deref()
+        .is_none_or(|t| streams_agree(&probed.pictures, t));
+    for p in probed.pictures.iter().filter(|_| streams) {
         outputs.push((
             Output::new(
                 quality::gray_output(0, &p.index.to_string()),
@@ -1007,12 +1025,12 @@ fn cover_outputs(
             ),
         ));
     }
-    let atoms = if probed.pictures.is_empty() {
-        picture::mp4_covers(path)
-    } else {
+    let atoms = if streams {
         Vec::new()
+    } else {
+        tagged.unwrap_or_default()
     };
-    for (index, bytes) in atoms.into_iter().enumerate() {
+    for (index, (bytes, other)) in atoms.into_iter().enumerate() {
         let Ok(name) = crate::atomic::Name::new(format!("atom{index}")) else {
             continue;
         };
@@ -1027,11 +1045,23 @@ fn cover_outputs(
                 &scratch.join(format!("atom{index}.pam")),
             ),
             CoverAt::Atom { index },
-            picture::sniff(&bytes).unwrap_or("image/jpeg").to_string(),
-            false,
+            picture::sniff(&bytes)
+                .unwrap_or("image/unknown")
+                .to_string(),
+            other,
         ));
     }
     outputs
+}
+
+/// Whether ffprobe's picture `streams` are the pictures a file's tags
+/// hold, `tagged`, one for one, each of the format its bytes are.
+fn streams_agree(streams: &[probe::Picture], tagged: &[(Vec<u8>, bool)]) -> bool {
+    let format = picture::ImageFormat::of_mimetype;
+    streams.len() == tagged.len()
+        && streams.iter().zip(tagged).all(|(stream, (bytes, _))| {
+            picture::sniff(bytes).is_none_or(|is| format(is) == format(&stream.mimetype))
+        })
 }
 
 /// The run writing the `n`th picture beside a manual file in gray;
@@ -1349,8 +1379,10 @@ fn media<R: Runner>(
     let mut timeline = None;
     let mut digests = Digests::default();
     let mut opus_gain = 0;
+    let mut undecoded = false;
     for ((output, measured), result) in outputs.into_iter().zip(results) {
         if result.is_err() {
+            undecoded |= matches!(measured, Measured::Cover(..));
             continue;
         }
         match measured {
@@ -1435,6 +1467,9 @@ fn media<R: Runner>(
         segments = measure_segments(runner, located, a, &starts, scratch);
     }
     facts.unkept = unkept(&located.path);
+    if undecoded {
+        facts.unkept.push(Unkept::Picture);
+    }
     facts.audio = probed.audio.map(|a| AudioFacts {
         quality: quality::audio(&segments, a.sample_rate, headroom),
         index: a.index,

@@ -254,6 +254,10 @@ pub(super) fn unkept_warning(key: &SourceKey, unkept: crate::facts::Unkept) -> S
             "{key}: a cue sheet beside it splits it into tracks, which muman does not; \
              it is one song"
         ),
+        crate::facts::Unkept::Picture => format!(
+            "{key}: a picture in it does not decode whole; \
+             it is no cover of its song"
+        ),
     }
 }
 

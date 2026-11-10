@@ -390,6 +390,48 @@ pub fn sniff_file(path: &std::path::Path) -> Option<&'static str> {
     sniff(&head)
 }
 
+/// The pictures a file's own tags hold, each with whether its picture
+/// type says it shows no front cover, as [`typed_other`] reads one, as
+/// `lofty` reads them: by their bytes, whatever media type they are
+/// labelled with. ffmpeg takes a picture's codec from its label, so it
+/// shows a JPEG labelled `image/png` as a PNG it cannot decode, and none
+/// at all labelled `image/x-png`, `application/octet-stream`, or WebP in
+/// a FLAC; `lofty` keeps each as it is. They are a FLAC's picture blocks,
+/// an Ogg stream's `METADATA_BLOCK_PICTURE`s, an MP3's `APIC` frames and
+/// an MP4's `covr` atom ([`mp4_covers`]); `None` for a file of another
+/// format, as WavPack, whose APEv2 cover `lofty`'s tag does not read.
+#[must_use]
+pub fn tag_pictures(path: &std::path::Path) -> Option<Vec<(Vec<u8>, bool)>> {
+    use lofty::file::{FileType, TaggedFileExt};
+    use lofty::picture::PictureType;
+
+    let file = crate::tags::read_tagged(path).ok()?;
+    match file.file_type() {
+        FileType::Mp4 => return Some(mp4_covers(path).into_iter().map(|b| (b, false)).collect()),
+        FileType::Flac | FileType::Vorbis | FileType::Opus | FileType::Speex | FileType::Mpeg => {}
+        _ => return None,
+    }
+    let pictures = file
+        .primary_tag()
+        .map_or(&[][..], lofty::tag::Tag::pictures);
+    let front = pictures
+        .iter()
+        .any(|p| p.pic_type() == PictureType::CoverFront);
+    Some(
+        pictures
+            .iter()
+            .map(|p| {
+                let other = match p.pic_type() {
+                    PictureType::CoverFront => false,
+                    PictureType::Other => front,
+                    _ => true,
+                };
+                (p.data().to_vec(), other)
+            })
+            .collect(),
+    )
+}
+
 /// The pictures of an MP4's `covr` atom, as `lofty` reads them: ffprobe
 /// shows none whose data type is implicit, 0, as some audiobook tools
 /// write it. None for a file that is no MP4.
@@ -454,6 +496,64 @@ mod tests {
         }
         assert_eq!(ImageFormat::of_extension("JPEG"), Some(ImageFormat::Jpeg));
         assert_eq!(ImageFormat::of_mimetype("image/gif"), None);
+    }
+
+    #[test]
+    fn a_tag_s_pictures_are_read_whatever_they_are_labelled() {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::tag::{Tag, TagExt, TagType};
+
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes, kind) in [
+            (
+                "a.flac",
+                crate::testing::SILENCE_FLAC,
+                TagType::VorbisComments,
+            ),
+            (
+                "a.ogg",
+                crate::testing::SILENCE_VORBIS,
+                TagType::VorbisComments,
+            ),
+            ("a.mp3", crate::testing::SILENCE_MP3, TagType::Id3v2),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            let mut tag = Tag::new(kind);
+            for (data, label, side) in [
+                (
+                    crate::testing::PIXEL_WEBP,
+                    MimeType::Png,
+                    PictureType::Other,
+                ),
+                (
+                    crate::testing::PIXEL_JPEG,
+                    MimeType::Unknown("application/octet-stream".into()),
+                    PictureType::CoverFront,
+                ),
+            ] {
+                tag.push_picture(
+                    Picture::unchecked(data.to_vec())
+                        .pic_type(side)
+                        .mime_type(label)
+                        .build(),
+                );
+            }
+            tag.save_to_path(&path, WriteOptions::default()).unwrap();
+            let read = tag_pictures(&path).unwrap();
+            let sniffed: Vec<(Option<&str>, bool)> =
+                read.iter().map(|(b, other)| (sniff(b), *other)).collect();
+            assert_eq!(
+                sniffed,
+                [(Some("image/webp"), true), (Some("image/jpeg"), false)],
+                "{name}: an Other beside a front cover is no cover"
+            );
+        }
+        let wv = dir.path().join("a.wv");
+        std::fs::write(&wv, crate::testing::SILENCE_WV).unwrap();
+        assert_eq!(tag_pictures(&wv), None, "lofty's tag reads no APEv2 cover");
+        assert_eq!(tag_pictures(dir.path()), None);
     }
 
     #[test]

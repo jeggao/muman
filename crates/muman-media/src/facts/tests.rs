@@ -136,6 +136,75 @@ fn a_manual_file_brings_its_tags_cover_and_lrc() {
     assert!(facts.audio.unwrap().is_lossless());
 }
 
+/// A FLAC at `path` holding `picture`'s bytes as its front cover,
+/// labelled `label`.
+fn with_cover(path: &Path, picture: &[u8], label: lofty::picture::MimeType) {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{Picture, PictureType};
+    use lofty::tag::{Tag, TagExt, TagType};
+
+    std::fs::write(path, crate::testing::SILENCE_FLAC).unwrap();
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.push_picture(
+        Picture::unchecked(picture.to_vec())
+            .pic_type(PictureType::CoverFront)
+            .mime_type(label)
+            .build(),
+    );
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+#[test]
+fn a_picture_labelled_otherwise_than_its_bytes_is_read_by_them() {
+    use lofty::picture::MimeType;
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let scratch = dir.path().join("scratch");
+    let covers = |json: &str| {
+        let fake = Fake::default().probe("Song.flac", json);
+        let facts = gather(&fake, &source, &scratch, &[]).unwrap();
+        let at: Vec<(CoverAt, String)> = (facts.covers.into_iter())
+            .map(|c| (c.at, c.mimetype))
+            .collect();
+        at
+    };
+    let as_png = FLAC.replace(r#""mjpeg""#, r#""png""#);
+    let unshown = FLAC.replace(r#""codec_type": "video""#, r#""codec_type": "data""#);
+
+    with_cover(&source.path, crate::testing::PIXEL_JPEG, MimeType::Png);
+    let atom = vec![(CoverAt::Atom { index: 0 }, "image/jpeg".to_string())];
+    assert_eq!(
+        covers(&as_png),
+        atom,
+        "ffprobe shows a PNG it cannot decode"
+    );
+    with_cover(
+        &source.path,
+        crate::testing::PIXEL,
+        MimeType::Unknown("image/x-png".into()),
+    );
+    let atom = vec![(CoverAt::Atom { index: 0 }, "image/png".to_string())];
+    assert_eq!(covers(&unshown), atom, "ffprobe shows none");
+    with_cover(&source.path, crate::testing::PIXEL_JPEG, MimeType::Jpeg);
+    assert_eq!(
+        covers(FLAC),
+        [(CoverAt::Picture { index: 1 }, "image/jpeg".to_string())],
+        "labelled as it is, read as ffprobe shows it"
+    );
+}
+
+#[test]
+fn a_picture_that_does_not_decode_is_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.flac");
+    let mut fake = Fake::default().probe("Song.flac", FLAC);
+    fake.failing = vec!["image2".into()];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
+    assert!(facts.covers.is_empty());
+    assert_eq!(facts.unkept, [Unkept::Picture]);
+}
+
 #[test]
 fn a_file_s_own_lyrics_tag_is_lyrics_of_it_measured_hashed_and_read_again() {
     use lofty::config::WriteOptions;

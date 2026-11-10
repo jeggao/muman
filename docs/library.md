@@ -102,10 +102,10 @@ it is tall, or as tall as wide, is a banner and never a cover, unless
 pinned. The songs of one album show one design, a pinned cover's, else
 the one most of their covers show: a song showing another takes that
 design from a source of its own where one holds it, before any picture
-that measures better. A picture is known by its bytes, never its name,
-so a PNG named `.jpg` is written as PNG.
-[`[[cover.out]]`](configuration.md#where-the-cover-goes) says where
-the cover goes.
+that measures better. A picture is known by its bytes, never its name
+or the media type a file labels it with, so a PNG named `.jpg` is
+written as PNG; one that does not decode is said, and is no cover.
+[`[[cover.out]]`](configuration.md#where-the-cover-goes) says where the cover goes.
 
 ### Lyrics
 
