@@ -3,6 +3,13 @@
 //! same recording as, the lyrics, pictures and tag files given to their
 //! songs, then a sync.
 //!
+//! A file in a folder given is sorted as a file named is: a song, or the
+//! lyrics or a picture beside one, is copied with the folder, and a tag
+//! file, cue sheet or subtitles go to their songs through
+//! [`crate::attach`], as they would named. A rip's cue sheet is in its
+//! folder more often than named, and dropped there it left the songs
+//! untitled.
+//!
 //! A magnet link or a `.torrent` file names a torrent, whose song files
 //! and what they bring are fetched by aria2c ([`crate::aria2`]) and each
 //! song file listed as a song is. Its metainfo is kept in the store, and
@@ -75,7 +82,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             files,
             urls,
         } = sort_inputs(request.inputs)?;
-        let (loose, files) = split_loose(&files, &mut unread);
+        let (mut loose, files) = split_loose(&files, &mut unread);
         let mut ok = true;
         refuse_offline(job, urls.first().or(torrents.first()))?;
         let sites = Manifest::load(&dirs.home)?.settings.sites;
@@ -87,7 +94,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             &sites,
             &files,
             (&mut beside, &mut copied),
-            &mut unread,
+            (&mut unread, &mut loose),
             out,
         );
         copied.finish()?;
@@ -317,12 +324,14 @@ pub(crate) fn split_loose<'a>(
 /// Copy files and folders the user named into the sources: an original
 /// yt-dlp fetched into the store under its key, anything else into the
 /// manual folder with the lyrics and pictures named as it is; a folder's
-/// files that are no song, lyrics or picture are left out and named,
-/// since nothing would read them there. Never moves or overwrites: a
-/// name already taken, once composed, is refused, and an add that fails
-/// partway removes the copies it made. Each song file copied is noted in
-/// `beside` with where it came from, for the loose files given with it,
-/// and every file copied in `copied`, for `undo`.
+/// files `add` gives to songs go into `loose`, as named ones do
+/// ([`found_loose`]), and the rest that are no song, lyrics, picture
+/// or tags are left out and named, since nothing would read them there. Never
+/// moves or overwrites: a name already taken, once composed, is refused,
+/// and an add that fails partway removes the copies it made. Each song
+/// file copied is noted in `beside` with where it came from, for the
+/// loose files given with it, and every file copied in `copied`, for
+/// `undo`.
 // Removes again the copies an add refused partway made.
 #[expect(clippy::disallowed_methods)]
 pub(crate) fn import<R: Runner, W: Write>(
@@ -331,11 +340,11 @@ pub(crate) fn import<R: Runner, W: Write>(
     sites: &crate::sites::Sites,
     paths: &[&String],
     (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Copies<'_>),
-    unread: &mut Vec<String>,
+    given: (&mut Vec<String>, &mut attach::Loose),
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let start = copied.made.len();
-    let imported = import_all(runner, dirs, sites, paths, (beside, copied), unread, out);
+    let imported = import_all(runner, dirs, sites, paths, (beside, copied), given, out);
     if imported.is_err() {
         // An add refused partway, as by two names one once composed,
         // leaves none of its copies for the next sync to list.
@@ -354,7 +363,7 @@ fn import_all<R: Runner, W: Write>(
     sites: &crate::sites::Sites,
     paths: &[&String],
     (beside, copied): (&mut Vec<(PathBuf, SourceKey)>, &mut Copies<'_>),
-    unread: &mut Vec<String>,
+    (unread, loose): (&mut Vec<String>, &mut attach::Loose),
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let names = paths
@@ -401,6 +410,7 @@ fn import_all<R: Runner, W: Write>(
             continue;
         }
         let mut originals = Vec::new();
+        let mut others = false;
         if path.is_dir() {
             let folder = Folder::new(path);
             let walked = match walked.remove(path) {
@@ -421,7 +431,10 @@ fn import_all<R: Runner, W: Write>(
             if originals.len() < files.len() {
                 copy_tree(&folder, files, &to, &mut own, copied)?;
             }
-            say_left_out(path, files, out)?;
+            let given = loose.len();
+            let left = found_loose(files, loose);
+            others |= loose.len() > given;
+            say_left_out(path, &left, out)?;
             crate::given::say_outside(path, &walked.outside, out)?;
             for (file, key) in &originals {
                 let given = (&folder, file.as_path());
@@ -435,7 +448,7 @@ fn import_all<R: Runner, W: Write>(
         brought.push(Brought::Manual(Manual {
             path: path.to_path_buf(),
             to,
-            originals: !originals.is_empty(),
+            others: others || !originals.is_empty(),
         }));
     }
     // The store is read once for every path, after all are copied: read
@@ -547,18 +560,19 @@ struct Probed {
 }
 
 /// A file or folder copied into the manual folder, at `to`, to be found
-/// there once the store is read; `originals` when the folder held
-/// originals, which are proposed on their own.
+/// there once the store is read; `others` when the folder held files
+/// added on their own: originals, proposed apart, or files given to
+/// songs.
 struct Manual {
     path: PathBuf,
     to: PathBuf,
-    originals: bool,
+    others: bool,
 }
 
 impl Manual {
     /// The song files found at `to`, each a proposal and noted in
     /// `beside` with where it came from; a folder holding none is noted
-    /// in `not_read`, unless its originals were all it held.
+    /// in `not_read`, unless what it held was added on its own.
     fn propose<W: Write>(
         self,
         dirs: &Dirs,
@@ -568,7 +582,7 @@ impl Manual {
     ) -> Result<Vec<Proposal>> {
         let found = media_at(store, dirs, &self.to)?;
         if found.is_empty() && self.path.is_dir() {
-            if !self.originals {
+            if !self.others {
                 not_read.push(format!(
                     "{}, which holds no song muman reads",
                     self.path.display()
@@ -619,19 +633,53 @@ fn propose(
         .collect()
 }
 
+/// The files of a folder given to `add`, `files`, that it gives to songs
+/// as it gives one named ([`attach::sort`]), each with what it holds,
+/// into `loose`; returned are those neither copied with the folder nor
+/// given to songs, which are left out. Two kinds a named file may be are
+/// not read from a folder, which holds them for another purpose: a `.txt`
+/// of plain text not named as a song file beside it, as a rip's notes,
+/// and yt-dlp's `.info.json`, which describes a video, not a song.
+fn found_loose(files: &[PathBuf], loose: &mut attach::Loose) -> Vec<PathBuf> {
+    let songs: Vec<&PathBuf> = files
+        .iter()
+        .filter(|f| store::kind_of(f) == Some(store::Kind::Media))
+        .collect();
+    let named = |file: &Path, ext: &str| {
+        file.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+    };
+    let mut left = Vec::new();
+    for file in files.iter().filter(|f| store::kind_of(f).is_none()) {
+        let info_json = file
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(".info.json"));
+        match attach::sort(file) {
+            Ok(Some(attach::What::Lyrics))
+                if named(file, "txt") && !songs.iter().any(|s| store::named_as(file, s)) =>
+            {
+                left.push(file.clone());
+            }
+            Ok(Some(what)) if !info_json => loose.push((file.clone(), what)),
+            _ => left.push(file.clone()),
+        }
+    }
+    left
+}
+
 /// Warn of the files of the folder `dir` given to `add` that are left
-/// out, as no song, lyrics or picture, each named below `dir`.
-pub(crate) fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<()> {
+/// out, `files`, as no song, lyrics, picture or tags, each named below
+/// `dir`.
+fn say_left_out<W: Write>(dir: &Path, files: &[PathBuf], out: &mut W) -> Result<()> {
     let other: Vec<String> = files
         .iter()
-        .filter(|f| store::kind_of(f).is_none())
         .map(|f| f.strip_prefix(dir).unwrap_or(f).display().to_string())
         .collect();
     if !other.is_empty() {
         ui::warning(
             out,
             &format!(
-                "Left out of {}, as no song, lyrics or picture: {}",
+                "Left out of {}, as no song, lyrics, picture or tags: {}",
                 dir.display(),
                 other.join(", ")
             ),

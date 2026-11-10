@@ -369,8 +369,12 @@ A song file brings what sits beside it:
 A `.lrc` may be in UTF-8 or UTF-16, or in an older encoding such as
 GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.
 
-A folder given to `add` is copied except for what is no song, lyrics or
-picture, as a booklet `.pdf`, which is left out and named. A file
+A folder given to `add` is copied but for what is no song, lyrics or
+picture. A tag file, cue sheet or subtitles in it go to their songs as
+they would given alone; a `.txt` of plain lyrics does only when named
+as a song file beside it, since a rip's notes are plain text too, and
+yt-dlp's `.info.json` never. The rest, as a booklet `.pdf`, is left out
+and named. A file
 yt-dlp fetched elsewhere, named `<title> [<id>]` with yt-dlp's metadata
 inside, goes into `sources/yt-dlp` under its key instead. If the store
 holds that key already, the file joins its song and is not copied

@@ -688,6 +688,87 @@ fn a_cue_of_one_file_holding_a_whole_album_sets_nothing() {
 }
 
 #[test]
+fn a_cue_sheet_and_a_tag_file_in_a_folder_given_go_to_its_songs() {
+    let s = Setup::new();
+    let fake = library();
+    s.file("rips/Album/Lantern Weather.flac");
+    s.file("rips/Album/Copper Moth.flac");
+    s.written(
+        "rips/Album/album.cue",
+        "REM GENRE \"Chamber Pop\"\nPERFORMER \"Marlo Venn\"\nTITLE \"The Glass Orchards\"\n\
+         FILE \"Lantern Weather.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         FILE \"Copper Moth.flac\" WAVE\n  TRACK 02 AUDIO\n    TITLE \"Copper Moth\"\n    INDEX 01 00:00:00\n",
+    );
+    s.written(
+        "rips/Album/tags.txt",
+        "TITLE=Copper Moth\nARTIST=Marlo Venn\nTRACKNUMBER=2\nDATE=2011\n",
+    );
+    s.written("rips/Album/notes.txt", "Ripped on a quiet evening.\n");
+    let album = s.dir.path().join("rips").join("Album");
+    let (ok, text) = s.run(&fake, &["add", "--new", &album.to_string_lossy()]);
+    assert!(ok, "{text}");
+    let plain = crate::ui::plain(&text);
+    let left_out = plain.lines().find(|l| l.contains("Left out of")).unwrap();
+    assert!(left_out.ends_with(": notes.txt"), "{text}");
+    let tags_of = |file: &str| {
+        Manifest::load(&s.dir.path().join("home"))
+            .unwrap()
+            .songs
+            .into_iter()
+            .find(|song| song.has(&manual(&format!("Album/{file}.flac"))))
+            .unwrap()
+            .tags
+    };
+    for song in ["Lantern Weather", "Copper Moth"] {
+        let tags = tags_of(song);
+        assert!(
+            tags.iter()
+                .any(|(k, v)| k == "genre" && v == &["Chamber Pop"]),
+            "{song}: {tags:?}: {text}"
+        );
+    }
+    let tags = tags_of("Copper Moth");
+    assert!(
+        tags.iter().any(|(k, v)| k == "date" && v == &["2011"]),
+        "{tags:?}: {text}"
+    );
+}
+
+#[test]
+fn a_folder_holding_a_cue_of_one_file_is_added_as_that_cue_named_is() {
+    let s = Setup::new();
+    let fake = library().probe(
+        "The Glass Orchards.flac",
+        &flac(
+            "The Glass Orchards",
+            "Marlo Venn",
+            "The Glass Orchards",
+            1,
+            600,
+            "",
+        ),
+    );
+    s.file("rips/Image/The Glass Orchards.flac");
+    s.written(
+        "rips/Image/image.cue",
+        "FILE \"The Glass Orchards.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Lantern Weather\"\n    INDEX 01 00:00:00\n\
+         \x20 TRACK 02 AUDIO\n    TITLE \"Salt Road\"\n    INDEX 01 03:00:00\n",
+    );
+    let folder = s.dir.path().join("rips").join("Image");
+    let e = run_with(
+        &s.job(&["add", "--new", &folder.to_string_lossy()]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
+    assert_eq!(s.songs(), [vec![manual("Image/The Glass Orchards.flac")]]);
+}
+
+#[test]
 fn choosing_song_by_song_never_gives_one_song_two_tracks() {
     let s = Setup::new();
     let fake = library();

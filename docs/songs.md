@@ -146,8 +146,8 @@ choices to the song as it is now.
 
 ## Giving songs lyrics, pictures and tags
 
-`muman add` also takes files that are no song, and gives each to the
-songs it belongs to:
+`muman add` also takes files that are no song, named or in a folder
+given, and gives each to the songs it belongs to:
 
 | File | Is |
 |---|---|
