@@ -71,7 +71,8 @@ its own. Anything else in the library folder stays as it is:
 - A file muman wrote that you changed since, as a tagger changes a
   song or an editor its `.lrc`, stays with a warning. A new path
   template still moves it, your change with it, but a change to the
-  song leaves it alone. `sync --force` writes the song again over your
+  song leaves it alone: a song whose `.lrc` you changed keeps its old
+  name when retitled. `sync --force` writes the song again over your
   change, and `undo` brings your change back.
 - muman knows its files by their size and modification time, else by
   their bytes, so a restored backup or a copy without its times is

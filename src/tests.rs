@@ -3666,6 +3666,55 @@ fn lyrics_muman_wrote_and_the_user_changed_are_said_to_be_so() {
 }
 
 #[test]
+fn a_song_renamed_beside_lyrics_the_user_changed_stays_where_it_is_and_undoes() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let song = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let lrc = song.with_extension("lrc");
+    std::fs::write(&lrc, "[00:01.00]Paper comets, by hand\n").unwrap();
+    let built = std::fs::read(&song).unwrap();
+
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "title=Lantern"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains(
+            "Left at Artist/Record/02 Song.flac: Artist/Record/02 Song.lrc changed since muman \
+             wrote it"
+        ),
+        "{text}"
+    );
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets, by hand\n"
+    );
+    assert!(
+        !s.dir
+            .path()
+            .join("lib/Artist/Record/02 Lantern.flac")
+            .exists()
+    );
+    let (_, report) = s.report(&flacs(), &["check"]);
+    assert!(!report.contains(".flac (`sync --force"), "{report}");
+
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    let renamed = s.dir.path().join("lib/Artist/Record/02 Lantern.flac");
+    assert!(renamed.exists(), "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read(&song).unwrap(), built, "{text}");
+    assert_eq!(
+        std::fs::read_to_string(&lrc).unwrap(),
+        "[00:01.00]Paper comets, by hand\n",
+        "{text}"
+    );
+}
+
+#[test]
 fn a_song_whose_source_is_gone_says_which() {
     let s = Setup::new();
     let a = s.file("home/sources/manual/a.flac");

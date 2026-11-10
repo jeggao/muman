@@ -17,7 +17,7 @@ use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
 
 use super::damage::{damaged_since_built, split_drifts};
-use super::owned::{blocking, edited_since_written};
+use super::owned::{blocking, carried_edit, edited_since_written};
 use super::plan::{PlannedSong, path_of};
 use super::prune::{Pruned, prune_plan};
 
@@ -196,6 +196,7 @@ pub(super) fn settled(
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
+/// | Elsewhere, beside a changed file a move would write again | Left where it is until `--force` |
 /// | At its path, of the same media | Its tags written, and each file beside it that differs |
 /// | Any, and a file not muman's at its path or its lyrics' | Left where it is until `--force` |
 /// | None, and a file not muman's at its path or its lyrics' | Left alone until `--force` |
@@ -208,7 +209,9 @@ pub(super) fn settled(
 /// own file. Moves are listed in the order they can be made;
 /// two songs swapping paths are written instead. A changed file moves
 /// only when its tags need no writing, so nothing a tagger wrote is
-/// written over.
+/// written over, nor a file beside it the user changed that its new plan
+/// would write again: the move would carry that file to where the song
+/// cannot write it ([`carried_edit`]).
 pub(super) fn decide(
     planned: &[PlannedSong],
     files: &BTreeMap<usize, PathBuf>,
@@ -285,6 +288,18 @@ pub(super) fn decide(
             if file != Some(&path) && edited_since_written(library, old, &path) {
                 return Doing::Guard { file: path };
             }
+            // A change to the song leaves a file beside it the user changed as it is,
+            // and the song with it.
+            let carried = file
+                .filter(|f| **f != path && same_media)
+                .and_then(|f| Some((f, carried_edit(library, old, (f, &path), &r.plan)?)));
+            if let Some((file, by)) = carried {
+                return Doing::Blocked {
+                    file: file.clone(),
+                    by,
+                    edited: true,
+                };
+            }
             // Its tags are written into its own file alone, and the files
             // beside it that differ where no file of the user's is in their way.
             let beside = redo.is_some_and(|d| !d.beside);
@@ -314,7 +329,8 @@ pub(super) fn decide(
 /// Each of `planned` not `decided` that could move to its path, by what
 /// it would take and leave and whether its tags change: its file of the
 /// same media, there, not changed since written where its tags change,
-/// and no file of the user's at a name it gains beside it.
+/// no file of the user's at a name it gains beside it, and none it
+/// carries there that its plan writes again.
 fn movable(
     planned: &[PlannedSong],
     decided: &[Option<Doing>],
@@ -339,7 +355,11 @@ fn movable(
         let retag = was.plan.as_ref() != Some(&r.plan);
         let gains =
             redo.is_none_or(|d| d.beside) && !blocking(library, old, &path, &r.plan).is_empty();
-        if same_media && !gains && !(retag && edited_since_written(library, old, from)) {
+        if same_media
+            && !gains
+            && !(retag && edited_since_written(library, old, from))
+            && carried_edit(library, old, (from, &path), &r.plan).is_none()
+        {
             moving.push((i, from.clone(), path, retag));
         }
     }

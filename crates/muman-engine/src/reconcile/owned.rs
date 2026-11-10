@@ -71,6 +71,40 @@ pub(super) fn blocking(
         .collect()
 }
 
+/// A file beside the song's file at `from`, written by muman and changed
+/// by the user since, that moving the song to `to` as `plan` makes it
+/// would write over or remove: one whose part `plan` changes or drops. A
+/// move carries it with the song, so it is in the song's way at `to` as
+/// a changed file already there would be; one a move leaves as it is, as
+/// a new path template moves it, is not, nor a folder's file.
+pub(super) fn carried_edit(
+    library: &Path,
+    old: &BTreeMap<PathBuf, Written>,
+    (from, to): (&Path, &Path),
+    plan: &Plan,
+) -> Option<PathBuf> {
+    let written = old.get(from)?;
+    let now = crate::artifact::parts(plan);
+    let was = written.plan.as_ref().map(crate::artifact::parts);
+    let kept: Vec<PathBuf> = now
+        .beside
+        .iter()
+        .filter(|b| was.as_ref().is_some_and(|p| p.beside.contains(b)))
+        .filter_map(|b| b.path(to))
+        .collect();
+    let folder = now.folder_files(to);
+    written
+        .sidecars
+        .iter()
+        .filter(|s| std::fs::symlink_metadata(library.join(&s.path)).is_ok())
+        .filter(|s| !sidecar_as_written(library, s))
+        .find(|s| {
+            let at = crate::outputs::moved(from, to, &s.path);
+            !kept.contains(&at) && !folder.contains(&at)
+        })
+        .map(|s| s.path.clone())
+}
+
 /// The files at a song's paths, its audio and those beside it, that
 /// writing it may write over or remove, each to be kept for `undo` first:
 /// muman's, under its name or one a filesystem blind to case takes for it,

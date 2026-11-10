@@ -411,19 +411,27 @@ fn retag_one<R: Runner>(
     let anew = was.as_ref().is_none_or(|p| p.lyrics != parts.lyrics);
     let tags = was.as_ref().is_none_or(|p| parts.redo_from(p).retag);
     let bytes = |p: &Path| std::fs::metadata(library.join(p)).map_or(0, |m| m.len());
-    let mut done = if tags {
-        render::retag(runner, job, (&path, recorded), anew)?
-    } else {
-        render::Rendered {
+    // Staged first and put last, so the song's file is as its record says
+    // until every file beside it is written.
+    let staged = tags
+        .then(|| render::retag(runner, job, (&path, recorded), anew))
+        .transpose()?;
+    let beside = beside_changes(library, old, r)
+        .then(|| {
+            let kept = kept_beside(library, old, r);
+            render::beside(runner, job, &kept).map(|b| (kept, b))
+        })
+        .transpose()?;
+    let mut done = match staged {
+        Some(staged) => staged.put(library, job.claim)?,
+        None => render::Rendered {
             audio_bytes: bytes(&path),
             audio: path.clone(),
             beside: recorded.iter().map(|b| (b.clone(), bytes(b))).collect(),
             problems: Vec::new(),
-        }
+        },
     };
-    if beside_changes(library, old, r) {
-        let kept = kept_beside(library, old, r);
-        let beside = render::beside(runner, job, &kept)?;
+    if let Some((kept, beside)) = beside {
         done.beside = parts
             .files(&path)
             .into_iter()

@@ -110,20 +110,23 @@ fn go(fake: &Fake, f: &Fixture, plan: &Plan) -> Result<Rendered> {
 fn retag_over(fake: &Fake, f: &Fixture, plan: &Plan, r: &Rendered, anew: bool) -> Result<Rendered> {
     let made = crate::artifact::parts(plan);
     let beside = names(r);
+    let library = f.dir.path().join("lib");
+    let claim = [Ledger::taken(&r.audio)];
     retag(
         fake,
         &Job {
             parts: &made,
             stem: Path::new("A/Record/Song"),
-            library: &f.dir.path().join("lib"),
+            library: &library,
             sources: &f.sources,
             scratch: &f.dir.path().join("scratch-retag"),
-            claim: &[Ledger::taken(&r.audio)],
+            claim: &claim,
             stale: &[],
         },
         (&r.audio, &beside),
         anew,
-    )
+    )?
+    .put(&library, &claim)
 }
 
 fn go_claiming(fake: &Fake, f: &Fixture, plan: &Plan, claim: &[Owned]) -> Result<Rendered> {
@@ -224,7 +227,11 @@ fn lyrics_written_alone_are_those_a_build_writes_and_go_when_the_plan_has_none()
     let lib = f.dir.path().join("lib");
     let lrc = lib.join("A/Record/Song.lrc");
     let whole = fs::read(&lrc).unwrap();
-    let claim = [Ledger::taken(Path::new("A/Record/Song.lrc"))];
+    // As a retag claims the song's file it puts once these are written.
+    let claim = [
+        Ledger::taken(&built.audio),
+        Ledger::taken(Path::new("A/Record/Song.lrc")),
+    ];
     let scratch = f.dir.path().join("scratch-beside");
     let job = |parts| Job {
         parts,
@@ -415,6 +422,7 @@ fn a_cover_file_written_alone_is_the_one_a_build_writes() {
     let built = go(&Fake::default(), &f, &p).unwrap();
     let lib = f.dir.path().join("lib");
     let claim = [
+        Ledger::taken(&built.audio),
         Ledger::taken(Path::new("A/Record/Song.png")),
         Ledger::taken(Path::new("A/Record/Song.j.jpg")),
     ];
@@ -770,6 +778,32 @@ fn lyrics_not_claimed_are_neither_written_over_nor_removed() {
         "mine",
         "the song writes none and its last build left none there"
     );
+}
+
+#[test]
+fn a_song_one_file_of_the_user_s_refuses_changes_none_of_its_files() {
+    let f = fixture();
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.cover.as_mut().unwrap().out = Some(vec![place(Some(""), ImageFormat::Png, true, None, None)]);
+    let built = go(&Fake::default(), &f, &p).unwrap();
+    let lib = f.dir.path().join("lib");
+    let audio = fs::read(lib.join(&built.audio)).unwrap();
+    let lrc = lib.join("A/Record/Song.lrc");
+    fs::write(&lrc, "as recorded").unwrap();
+    fs::write(lib.join("A/Record/Song.png"), "mine").unwrap();
+    let claim = [
+        Ledger::taken(&built.audio),
+        Ledger::taken(Path::new("A/Record/Song.lrc")),
+    ];
+    let e = go_claiming(&Fake::default(), &f, &p, &claim).unwrap_err();
+    assert!(
+        format!("{e:#}").contains("Song.png is not muman's"),
+        "{e:#}"
+    );
+    assert_eq!(fs::read_to_string(&lrc).unwrap(), "as recorded");
+    assert_eq!(fs::read(lib.join("A/Record/Song.png")).unwrap(), b"mine");
+    assert_eq!(fs::read(lib.join(&built.audio)).unwrap(), audio);
+    assert_eq!(leftover_parts(&lib.join("A/Record")), Vec::<PathBuf>::new());
 }
 
 #[cfg(unix)]

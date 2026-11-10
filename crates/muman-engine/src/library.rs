@@ -242,6 +242,18 @@ pub fn may_change(root: &Path, rel: &Path, claim: &[Owned]) -> bool {
     held(root, rel, claim).is_ok()
 }
 
+/// Refuse, before any is changed, a song's files at `rels` that are not
+/// all for [`put`] or [`clear`] to change as `claim` holds them, so a song
+/// one of them refuses is left as it was, whole, and as the state records
+/// it.
+pub fn claimed<'p>(
+    root: &Path,
+    rels: impl IntoIterator<Item = &'p PathBuf>,
+    claim: &[Owned],
+) -> Result<()> {
+    rels.into_iter().try_for_each(|rel| held(root, rel, claim))
+}
+
 /// Refuse a file at `rel` that no file of `claim` is, under its name or
 /// one a filesystem blind to case takes for it.
 fn held(root: &Path, rel: &Path, claim: &[Owned]) -> Result<()> {
