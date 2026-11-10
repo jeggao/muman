@@ -598,6 +598,61 @@ fn lyrics_beside_a_song_that_read_as_no_text_are_said() {
 }
 
 #[test]
+fn lyrics_of_a_song_s_own_words_find_it_by_its_lyrics_tag() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+
+    let s = Setup::new();
+    let fake = library();
+    let words = [
+        (
+            "Lantern Weather",
+            "[00:05.00]the lanterns hang along the quay\n\
+             [00:10.00]and every ferry waits for me\n\
+             [00:15.00]a paper light on harbour stone\n\
+             [00:20.00]we walk the long way home alone\n",
+        ),
+        (
+            "Copper Moth",
+            "[00:05.00]a copper moth against the glass\n\
+             [00:10.00]counts the hours as they pass\n\
+             [00:15.00]its wings are dust its wings are flame\n\
+             [00:20.00]it never learned the window's name\n",
+        ),
+    ];
+    let mut songs = Vec::new();
+    for (title, lrc) in words {
+        let song = s.file(&format!("rips/{title}.flac"));
+        std::fs::write(&song, crate::testing::SILENCE_FLAC).unwrap();
+        let mut tag = Tag::new(TagType::VorbisComments);
+        tag.push(TagItem::new(ItemKey::Lyrics, ItemValue::Text(lrc.into())));
+        tag.save_to_path(Path::new(&song), WriteOptions::default())
+            .unwrap();
+        songs.push(song);
+    }
+    let (ok, text) = s.run(&fake, &["add", "--new", &songs[0], &songs[1]]);
+    assert!(ok, "{text}");
+    let same = s.written("dl/same.lrc", words[0].1);
+    let (ok, text) = s.run(&fake, &["add", &same]);
+    assert!(
+        ok && text.contains("Lantern Weather.flac already holds it"),
+        "{text}"
+    );
+    let lrc = s.written(
+        "dl/anyname.lrc",
+        &words[0].1.replace("[00:05.00]", "[00:06.00]"),
+    );
+    let (ok, text) = s.run(&fake, &["add", &lrc]);
+    assert!(ok, "{text}");
+    assert!(text.contains("its words are the song's"), "{text}");
+    assert!(
+        s.song_with("Lantern Weather")
+            .has(&manual("added/anyname.lrc")),
+        "{text}"
+    );
+}
+
+#[test]
 fn a_mistyped_loose_file_is_no_file() {
     let s = Setup::new();
     let e = run_with(

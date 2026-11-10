@@ -126,7 +126,7 @@ fn words_sung_alike_decide_and_words_unlike_hold_a_name_back() {
                  every window holds a flame\nevery flame forgets its name\n";
     std::fs::write(&theirs, verse).unwrap();
     let mut cands = [cand("Copper Moth", "Marlo Venn", "The Glass Orchards", 200)];
-    cands[0].lyrics = vec![theirs];
+    cands[0].lyrics = vec![Held::File(theirs)];
     let mut clues = Clues {
         grace: (GRACE_MS, SPAN_MS),
         ..Clues::default()
@@ -147,6 +147,29 @@ fn words_sung_alike_decide_and_words_unlike_hold_a_name_back() {
     let (_, verdict, reasons) = top(&cands, &named, What::Lyrics);
     assert_eq!(verdict, Verdict::Unsure, "{reasons:?}");
     assert!(reasons.contains(&"its words are not the song's".to_string()));
+}
+
+#[test]
+fn a_number_or_version_word_holds_back_no_words_sung_alike() {
+    let dir = tempfile::tempdir().unwrap();
+    let theirs = dir.path().join("theirs.lrc");
+    let verse = "copper moth upon the glass\nwings of rust and amber light\n\
+                 circle round the lantern twice\nfold your shadow into night\n";
+    std::fs::write(&theirs, verse).unwrap();
+    let mut cands = [cand(
+        "Copper Moth 2",
+        "Marlo Venn",
+        "The Glass Orchards",
+        200,
+    )];
+    cands[0].lyrics = vec![Held::File(theirs)];
+    let mut clues = said("anyname", None);
+    clues.words = Some((
+        similar::shingles(&similar::tokens(&lyrics::sung(verse)), 3),
+        similar::script_of(verse),
+    ));
+    let (_, verdict, reasons) = top(&cands, &clues, What::Lyrics);
+    assert_eq!(verdict, Verdict::Same, "{reasons:?}");
 }
 
 fn asking(cands: &[Candidate]) -> (Vec<u8>, BTreeSet<String>) {

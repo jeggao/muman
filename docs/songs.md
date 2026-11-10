@@ -179,8 +179,8 @@ muman matches each file by the strongest evidence it shows:
 1. Its fields: an `.lrc`'s `[ti:]`, `[ar:]`, `[al:]` and `[length:]`,
    a tag file's, or its own name read as `03 - Artist - Title`,
    `Artist - Title` or `Title`.
-1. What it holds: lyrics against the words the song's lyrics sing, and
-   a picture against the song's covers by how they look, whatever its
+1. What it holds: lyrics against the words the song's lyrics sing,
+   from any source, a song file's own lyrics tag too, and a picture against the song's covers by how they look, whatever its
    size, compression or bars.
 
 Names are compared within their own script. Accents, case, width and

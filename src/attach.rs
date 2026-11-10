@@ -15,7 +15,9 @@
 //!    `fromfilename` reads one; compared by [`crate::similar`] against
 //!    every name each song is known by, its tags and every source's.
 //! 1. **Its content**: lyrics against the words the song's own lyrics
-//!    sing; a picture against the song's covers, by [`crate::picture`].
+//!    sing, from every source that holds them, a song file's lyrics tag
+//!    as a file of lyrics; a picture against the song's covers, by
+//!    [`crate::picture`].
 //!
 //! Fields are weighed as beets weighs them, title and artist 3, album 2,
 //! length 2, track 1, and their distance is `Σ weight × distance / Σ
@@ -30,7 +32,8 @@
 //!
 //! A title alone weighs 3, so it never decides: a hundred songs are
 //! called `Intro`. A version word on one side only (live, instrumental,
-//! remix…) or another number keeps a match at maybe.
+//! remix…) or another number keeps a match at maybe, between names at
+//! least maybe alike; between names unlike, it says nothing.
 //!
 //! Lyrics are refused by a song they cannot be the words of: one whose
 //! last line comes more than 2 s after the song ends, or whose `[length:]`
@@ -248,11 +251,38 @@ struct Candidate {
     ids: BTreeSet<String>,
     looks: Vec<Look>,
     digests: BTreeSet<String>,
-    lyrics: Vec<PathBuf>,
+    lyrics: Vec<Held>,
     /// The subtitle streams its sources hold, read only when it is among
     /// the likeliest songs for lyrics.
     streams: Vec<(PathBuf, u32)>,
     view: View,
+}
+
+/// Lyrics a song holds, whose words a file of lyrics is compared with.
+#[derive(Debug)]
+enum Held {
+    /// A file of them: a lyrics file, one beside a song file, or a
+    /// subtitle stream converted.
+    File(PathBuf),
+    /// The lyrics tag of the song file at the path.
+    Tag(PathBuf),
+}
+
+impl Held {
+    /// The lyrics at `at` of `source`, but a stream's.
+    fn of(at: &LyricsAt, source: &store::Located) -> Option<Self> {
+        match at {
+            LyricsAt::Tag => Some(Self::Tag(source.path.clone())),
+            at => crate::render::lyrics_file(at, source).map(Self::File),
+        }
+    }
+
+    fn text(&self) -> Option<String> {
+        match self {
+            Self::File(path) => read_text(path).ok(),
+            Self::Tag(path) => crate::tags::lyrics_in(path).map(|(text, _)| text),
+        }
+    }
 }
 
 /// What a file or a track says of its song.
@@ -421,7 +451,7 @@ fn candidates(
                 digests.extend(l.digest.clone());
                 match (&l.at, &located) {
                     (LyricsAt::Stream { index }, Some(s)) => streams.push((s.path.clone(), *index)),
-                    (at, Some(s)) => lyrics.extend(crate::render::lyrics_file(at, s)),
+                    (at, Some(s)) => lyrics.extend(Held::of(at, s)),
                     (_, None) => {}
                 }
             }
@@ -594,7 +624,9 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
         let d = thousandths(d);
         if d < distance {
             distance = d;
-            conflicts = found;
+            // A version word or a number tells apart names that are alike;
+            // between names that are not, it says nothing.
+            conflicts = if d <= ASK { found } else { Vec::new() };
             let fields = if d <= STRONG && weight >= MIN_WEIGHT {
                 Verdict::Same
             } else if d <= ASK {
@@ -685,8 +717,8 @@ fn judge_one(n: usize, c: &Candidate, clues: &Clues, what: What) -> Judged {
     if let (Some((ours, script)), false) = (&clues.words, c.lyrics.is_empty()) {
         let mut best: Option<f64> = None;
         let mut contradicted = false;
-        for path in &c.lyrics {
-            let Ok(text) = read_text(path) else { continue };
+        for held in &c.lyrics {
+            let Some(text) = held.text() else { continue };
             let sung = lyrics::sung(&text);
             let theirs = similar::shingles(&similar::tokens(&sung), 3);
             let share = similar::containment(ours, &theirs);
@@ -952,7 +984,7 @@ fn read_streams<R: Runner>(runner: &R, cands: &mut [Candidate], items: &[Item], 
                     std::slice::from_ref(&output),
                 );
                 if ran.into_iter().all(|r| r.is_ok()) {
-                    c.lyrics.push(lrc);
+                    c.lyrics.push(Held::File(lrc));
                 }
             }
         }
