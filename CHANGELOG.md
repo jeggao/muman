@@ -158,6 +158,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Copies of one song moved together stay its own**, and are followed
+  again after `undo`; a move that cannot be told apart keeps the song's
+  library file, held as built, rather than delete it.
+- **A file of yours deleted by hand leaves its song** when another file
+  of yours still makes it, as after a re-encode: `sync` says so, `undo`
+  puts it back, and `check` no longer fails on it for good.
+- **A removed song keeps out its recording, not its name**: other audio
+  dropped at a removed song's file name is listed as a new file.
+- **`undo` follows swapped files again**: undoing the sync that followed
+  files trading names keeps each song's tags on its own recording.
 - **A run stopped at any point is undone**: every run records itself
   before it changes anything, so one stopped right after saving the song
   list no longer leaves a change `undo` refuses as made by hand.
