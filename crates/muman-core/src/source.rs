@@ -43,14 +43,17 @@ const PLAYLIST: &str = "playlist/";
 /// The scheme of a torrent's files.
 pub const TORRENT: &str = "torrent";
 
-/// The schemes that are no site: a manual file, and the records lookups
-/// keep.
-const NOT_SITES: [&str; 4] = [
-    "manual",
-    crate::provider::LRCLIB,
-    crate::provider::MUSICBRAINZ,
-    crate::provider::COVERART,
-];
+/// The scheme of a manual folder's files.
+const MANUAL: &str = "manual";
+
+/// The schemes of keys that name no site: a manual file, a torrent's
+/// file, and each record a lookup keeps ([`crate::store::KEPT`]). With
+/// the sites' own, they are every scheme a key can have.
+pub fn schemes() -> impl Iterator<Item = &'static str> {
+    [MANUAL, TORRENT]
+        .into_iter()
+        .chain(crate::store::KEPT.iter().map(|k| k.extractor))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
@@ -156,7 +159,7 @@ impl SourceKey {
         let Some((scheme, rest)) = text.split_once(':') else {
             bail!("`{text}` names no source: expected `youtube.com:<id>` or `manual:<path>`");
         };
-        if scheme == "manual" {
+        if scheme == MANUAL {
             if !is_plain_relative(Path::new(rest)) {
                 bail!("`{text}`: a manual source is a path inside the manual folder");
             }
@@ -181,7 +184,7 @@ impl SourceKey {
             }
             _ => (scheme, rest.to_string()),
         };
-        let valid = if NOT_SITES.contains(&site.as_str()) {
+        let valid = if schemes().any(|s| s == site) {
             is_token(&id)
         } else {
             is_site(&site) && is_remote_id(&id)
@@ -216,7 +219,7 @@ impl SourceKey {
     #[must_use]
     pub fn site(&self) -> Option<&str> {
         match self {
-            Self::Remote { site, .. } if !NOT_SITES.contains(&site.as_str()) => Some(site),
+            Self::Remote { site, .. } if !schemes().any(|s| s == site) => Some(site),
             _ => None,
         }
     }

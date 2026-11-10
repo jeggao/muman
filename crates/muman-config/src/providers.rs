@@ -273,9 +273,9 @@ fn read_skip(item: &Item, what: &str) -> Result<Vec<String>> {
     let list = item
         .as_array()
         .with_context(|| format!("{what} must be a list of queries"))?;
-    let schemes: std::collections::BTreeSet<String> = ["manual".to_string()]
-        .into_iter()
-        .chain(crate::sites::built_in().schemes().map(str::to_string))
+    let schemes: std::collections::BTreeSet<String> = crate::source::schemes()
+        .chain(crate::sites::built_in().schemes())
+        .map(str::to_string)
         .collect();
     list.iter()
         .map(|v| {

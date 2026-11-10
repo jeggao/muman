@@ -456,12 +456,13 @@ impl Holds for Closed {
     }
 }
 
-/// The key schemes a query treats as keys: `manual`, every site, alias
-/// and extractor `[sites]` names, built in or the song list's, as keys
-/// were once named, and every site the song list names.
+/// The key schemes a query treats as keys: every scheme that names no
+/// site ([`crate::source::schemes`]), every site, alias and extractor
+/// `[sites]` names, built in or the song list's, as keys were once
+/// named, and every site the song list names.
 #[must_use]
 pub fn extractors(manifest: &Manifest) -> BTreeSet<String> {
-    let mut found: BTreeSet<String> = ["manual".to_string()].into();
+    let mut found: BTreeSet<String> = crate::source::schemes().map(str::to_string).collect();
     found.extend(crate::sites::built_in().schemes().map(str::to_string));
     found.extend(manifest.settings.sites.schemes().map(str::to_string));
     let keys = manifest
@@ -622,6 +623,25 @@ mod tests {
             "from::you",
         ] {
             assert!(Query::parse(&[bad.to_string()], &none).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn every_key_a_song_can_list_names_it_in_a_query() {
+        let home = tempfile::tempdir().unwrap();
+        let schemes = extractors(&Manifest::load(home.path()).unwrap());
+        for key in [
+            "manual:Tide/a.flac",
+            "torrent:0123456789abcdef0123456789abcdef01234567/Glass Hours/01.flac",
+            "lrclib:123",
+            "musicbrainz:00000000-0000-0000-0000-000000000001",
+            "coverart:00000000-0000-0000-0000-000000000002",
+            "youtube.com:vid00000001",
+        ] {
+            let q = Query::parse(&[key.to_string()], &schemes).unwrap_or_else(|e| panic!("{e:#}"));
+            assert!(q.names_keys(), "{key}");
+            let v = view("Tide", "Ada Quill", key);
+            assert!(q.matches(&v), "{key}");
         }
     }
 

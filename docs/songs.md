@@ -22,7 +22,7 @@ matches "Café":
 | `artist:="Marlo Venn"` | A field equal to the text |
 | `title::^paper` | A field matching a regular expression |
 | `^lyrics:yes` | Songs the term does not match |
-| `youtube.com:vid00000001` | The song listing that key |
+| `youtube.com:vid00000001` | The song listing that key; any key `list --keys` writes, a torrent's or a record's too |
 
 A field is any tag, or one of these:
 
