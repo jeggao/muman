@@ -39,7 +39,7 @@ Exit codes:
 * `remove` — Remove the songs a query matches: their library files go, and they are kept under `[[removed]]` so no playlist or dropped file lists them again
 * `restore` — List again the removed songs a query matches, fetching any source purged
 * `review` — Walk each song a query matches whose picks are in doubt, as `check` lists them, and settle it: change its tags and pins, pin its release, or leave a field out of what one torrent or channel offers. Needs a terminal
-* `set` — Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
+* `set` — Set tags, pins, the release or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 * `edit` — Edit the songs a query matches in $VISUAL or $EDITOR, as their song-list entries, then apply what changed. Needs a terminal
 * `undo` — Put the song list and the library back as they were before the last run that changed them; how many runs are kept is the song list's `[history] runs`
 * `purge` — Delete fetched sources, lookup records and copies `add` made in `sources/manual/added` no song uses: an upload a release took the place of, a source taken out of its song. A removed song's sources stay for `restore`, and a file of your own is never touched. A source listed again is fetched again
@@ -243,7 +243,7 @@ flac, mp3, m4a), cover and lyrics (yes, none). Case is ignored.
 
 ### `muman set`
 
-Set tags, pins or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
+Set tags, pins, the release or the lyrics offset on the songs a query matches: each `NAME=VALUE` sets, `NAME!` clears, the other words query
 
 **Usage:** `muman set [OPTIONS] <QUERY|NAME=VALUE|NAME!>...`
 
@@ -255,6 +255,7 @@ Assignments:
   lyrics=false       Take no lyrics
   audio!             Unpin
   lyrics_offset=80ms Move the lyrics later; a negative time, earlier
+  release=<ID>       Pin it to that MusicBrainz release; release! unpins
 Every other word is a query, as `muman list` reads it. A query alone, on
 a terminal, sets them step by step: each field with where its value comes
 from and what the sources offer.

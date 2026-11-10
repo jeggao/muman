@@ -5768,10 +5768,27 @@ fn set_refuses_a_number_or_date_that_is_none_and_a_measured_gain() {
         ("disc=2/0", "tracks and discs count from 1"),
         ("date=yesterday", "no date"),
         ("replaygain_track_gain=loud", "[loudness]"),
+        ("from=x", "from is no tag"),
+        ("has=x", "has is no tag"),
+        ("format=opus", "format is no tag"),
+        ("release=abc", "no MusicBrainz release ID"),
     ] {
         let e = s.refused(&["set", "-y", "manual:a.flac", term]);
         assert!(e.contains(said), "{term}: {e}");
     }
+    let id = "00000000-0000-4000-8000-00000000000b";
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", &format!("release={id}")],
+    );
+    assert!(ok, "{text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(m.songs[0].release.as_deref(), Some(id), "the pin, no tag");
+    assert!(m.songs[0].tags.is_empty(), "{:?}", m.songs[0].tags);
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "release!"]);
+    assert!(ok, "{text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(m.songs[0].release, None);
     let (ok, text) = s.run(
         &flacs(),
         &["set", "-y", "manual:a.flac", "track=3/12", "date=2024-05"],

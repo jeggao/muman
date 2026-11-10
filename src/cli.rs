@@ -322,6 +322,7 @@ Assignments:
   lyrics=false       Take no lyrics
   audio!             Unpin
   lyrics_offset=80ms Move the lyrics later; a negative time, earlier
+  release=<ID>       Pin it to that MusicBrainz release; release! unpins
 Every other word is a query, as `muman list` reads it. A query alone, on
 a terminal, sets them step by step: each field with where its value comes
 from and what the sources offer.";
@@ -486,7 +487,7 @@ pub enum Command {
         #[arg(value_name = "QUERY")]
         query: Vec<String>,
     },
-    /// Set tags, pins or the lyrics offset on the songs a query matches:
+    /// Set tags, pins, the release or the lyrics offset on the songs a query matches:
     /// each `NAME=VALUE` sets, `NAME!` clears, the other words query.
     #[command(after_help = SET_HELP)]
     Set {

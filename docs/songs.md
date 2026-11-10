@@ -63,7 +63,11 @@ song when negated.
   sources' value shows. `audio=<key>` pins the audio to a source and
   `audio!` unpins it; `lyrics=false` takes no lyrics. A `cover` or
   `lyrics` pinned to a source that holds none leaves the song without
-  it, which `sync`, `status` and `check` say. `set` refuses a
+  it, which `sync`, `status` and `check` say. `release=<ID>` puts the
+  song on that MusicBrainz release of its recording, out of its
+  album's choice, and `release!` lets the album choose again. A field
+  a query reads that is no tag, as `from`, `has`, `key` or `path`, is
+  refused, as is a release ID that is none. `set` refuses a
   track or disc that is no number or below 1, as they count from 1, a
   date that is none, and a ReplayGain gain or peak. A value is one
   line: a line break or tab in it reads as a space, set by `set`,

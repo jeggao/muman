@@ -618,6 +618,9 @@ fn another(p: &mut dyn Prompter) -> Result<Option<String>> {
                 "{name} is measured by muman and written over on every sync"
             ));
         }
+        if let Some(why) = change::no_tag(name) {
+            return Some(why);
+        }
         tags::bad_value(name, "")
     });
     let help = "one of muman's tags, as composer or isrc, or a name of your own";

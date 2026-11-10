@@ -562,6 +562,20 @@ pub(crate) enum Assign {
     Tag(String, Vec<String>),
     Pin(&'static str, Option<String>),
     Offset(Option<i64>),
+    /// The MusicBrainz release the song is pinned to, or none.
+    Release(Option<String>),
+}
+
+/// Why `name` is no tag `set` sets, if it is none: a field a query reads
+/// of a song ([`crate::terms::DERIVED`]) that is no pin, or how the song
+/// list names a song's parts.
+pub(crate) fn no_tag(name: &str) -> Option<String> {
+    let lower = name.trim().to_ascii_lowercase();
+    let pin = ["audio", "cover", "lyrics"].contains(&lower.as_str());
+    let derived = crate::terms::DERIVED.contains(&lower.as_str()) && !pin;
+    (derived || ["sources", "id", "held"].contains(&lower.as_str())).then(|| {
+        format!("{lower} is no tag; set a tag, audio, cover, lyrics, lyrics_offset or release")
+    })
 }
 
 /// Refuse `term`, setting a lyrics offset of `ms`, when it is no song's.
@@ -591,6 +605,9 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
             continue;
         };
         let lower = name.to_ascii_lowercase();
+        if let Some(why) = no_tag(&lower) {
+            return refuse(format!("`{term}`: {why}"));
+        }
         match lower.as_str() {
             "audio" | "cover" | "lyrics" => {
                 let pin = match lower.as_str() {
@@ -630,12 +647,17 @@ fn split_terms(terms: &[String]) -> Result<(Vec<String>, Vec<Assign>)> {
                 refuse_offset(term, ms)?;
                 other.push(Assign::Offset(ms));
             }
-            // What a query reads of a song, or how the song list names its
-            // parts, but no tag a file carries.
-            "key" | "path" | "format" | "sources" | "id" | "held" => {
-                return refuse(format!(
-                    "`{term}`: {lower} is no tag; set a tag, audio, cover, lyrics or lyrics_offset"
-                ));
+            "release" => {
+                let id = match v.map(str::trim).filter(|v| !v.is_empty()) {
+                    None => None,
+                    Some(v) => match crate::tags::Kind::Mbid.read(v) {
+                        Ok(id) => Some(id),
+                        Err(_) => {
+                            return refuse(format!("`{term}` is no MusicBrainz release ID"));
+                        }
+                    },
+                };
+                other.push(Assign::Release(id));
             }
             _ => {
                 // Shown and stored as it takes effect; one that reads as
@@ -671,6 +693,7 @@ impl Assign {
             Self::Tag(name, _) => name,
             Self::Pin(pin, _) => pin,
             Self::Offset(_) => "lyrics_offset",
+            Self::Release(_) => "release",
         }
     }
 
@@ -696,6 +719,8 @@ impl Assign {
             Self::Offset(Some(ms)) if *ms < 0 => format!("lyrics earlier by {} ms", -ms),
             Self::Offset(Some(ms)) => format!("lyrics later by {ms} ms"),
             Self::Offset(None) => "lyrics offset: none".to_string(),
+            Self::Release(Some(id)) => format!("release: pinned to {id}"),
+            Self::Release(None) => "release: chosen with its album".to_string(),
         }
     }
 
@@ -726,6 +751,12 @@ impl Assign {
             Self::Offset(None) => {
                 table.remove("lyrics_offset_ms");
                 table.remove("lyrics_offset");
+            }
+            Self::Release(Some(id)) => {
+                table.insert("release", value(id.as_str()));
+            }
+            Self::Release(None) => {
+                table.remove("release");
             }
         }
         Ok(())
@@ -868,6 +899,28 @@ mod tests {
             ]
         );
         assert!(split_terms(&strings(&["cover=false"])).is_err());
+        for term in [
+            "from=manual",
+            "HAS=title",
+            "key=x",
+            "path=x",
+            "format=opus",
+            "id!",
+        ] {
+            let e = split_terms(&strings(&[term])).unwrap_err();
+            assert!(e.downcast_ref::<Refused>().is_some(), "{term}: {e:#}");
+            assert!(format!("{e:#}").contains("is no tag"), "{term}: {e:#}");
+        }
+        let id = "00000000-0000-4000-8000-00000000000A";
+        let (_, assigns) = split_terms(&strings(&[&format!("release={id}")])).unwrap();
+        assert_eq!(assigns, [Assign::Release(Some(id.to_ascii_lowercase()))]);
+        let (_, assigns) = split_terms(&strings(&["release!"])).unwrap();
+        assert_eq!(assigns, [Assign::Release(None)]);
+        let e = split_terms(&strings(&["release=abc"])).unwrap_err();
+        assert!(
+            format!("{e:#}").contains("no MusicBrainz release ID"),
+            "{e:#}"
+        );
         assert!(split_terms(&strings(&["lyrics_offset_ms=soon"])).is_err());
         assert!(split_terms(&strings(&["genre=a", "genre!"])).is_err());
         let e = split_terms(&strings(&["format=mp3"])).unwrap_err();
