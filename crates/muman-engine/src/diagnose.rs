@@ -225,6 +225,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         said.problem(line)?;
     }
     let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
+    let unsure: BTreeSet<&SourceKey> = moves.unsure.iter().flat_map(|(gone, _)| gone).collect();
     for key in &listed {
         if let Some(line) = moves.line(key, true) {
             said.info(line)?;
@@ -233,7 +234,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                 "Missing from sources while a file is still being copied in, its song \
                  waiting for it: {key}"
             ))?;
-        } else if !store.has(key) {
+        } else if !store.has(key) && !unsure.contains(key) {
             let page = manifest
                 .song_with(key)
                 .and_then(|s| s.held.get(key))

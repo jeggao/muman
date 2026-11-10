@@ -360,8 +360,9 @@ also drop files there yourself; the next `sync` lists them. muman reads
 a dropped file only 10 s after it arrived, whatever modification time
 the copy kept. Any command that syncs follows a file you move within
 the folder, a removed song's too, by its bytes, else once settled by its
-audio: files that trade names keep their songs; one two files could be
-is named, not guessed. While gone as a file copies in, its song waits.
+audio: files that trade names keep their songs, as do copies of one song
+moved together. One two files could be is named, not guessed, and its
+song kept as built. While gone as a file copies in, its song waits.
 
 A song file brings what sits beside it:
 
@@ -376,16 +377,15 @@ GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.
 
 A folder given to `add` is copied but for what is no song, lyrics or
 picture, and for lyrics and pictures no song file in it brings, as
-above. Those, a tag file, cue sheet or subtitles in it go to their
-songs as they would given alone; a `.txt` of plain lyrics does only
-when named as a song file beside it, since a rip's notes are plain text
-too, and yt-dlp's `.info.json` never. The rest, as a booklet `.pdf`,
-is left out and named. A file
-yt-dlp fetched elsewhere, named `<title> [<id>]` with yt-dlp's metadata
-inside, goes into `sources/yt-dlp` under its key instead. If the store
-holds that key already, the file joins its song and is not copied
-again. A lyrics file, picture or tag file given alone goes to the songs
-it belongs to: see [giving songs lyrics, pictures and
+above. Those, a tag file, cue sheet or subtitles in it go to their songs
+as they would given alone; a `.txt` of plain lyrics does only when named
+as a song file beside it, since a rip's notes are plain text too, and
+yt-dlp's `.info.json` never. The rest, as a booklet `.pdf`, is left out
+and named. A file yt-dlp fetched elsewhere, named `<title> [<id>]` with
+yt-dlp's metadata inside, goes into `sources/yt-dlp` under its key
+instead. If the store holds that key already, the file joins its song
+and is not copied again. A lyrics file, picture or tag file given alone
+goes to the songs it belongs to: see [giving songs lyrics, pictures and
 tags](songs.md#giving-songs-lyrics-pictures-and-tags).
 
 Links in `sources/manual` are read as what they lead to, except a link

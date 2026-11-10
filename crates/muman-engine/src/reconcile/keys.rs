@@ -39,12 +39,24 @@
 //! too lately to be read yet ([`Unlisted`]) only those holding every
 //! byte of a gone one are taken: a rename places a file anew, so it
 //! looks as freshly arrived as a copy under way, but a copy under way
-//! does not yet hold every byte. A file gone that more than one file
-//! could be, or a file more than one gone file could be, is not guessed
-//! at: it is named, its song fails as for a file gone, and those files
-//! are not listed as new songs either. The digests need nothing beyond
-//! what measuring keeps, on every system, where a file's ID would have
-//! to be recorded before it went.
+//! does not yet hold every byte. The digests need nothing beyond what
+//! measuring keeps, on every system, where a file's ID would have to be
+//! recorded before it went.
+//!
+//! A file gone that more than one file could be, or a file more than one
+//! gone file could be, is not guessed at where the guess decides what a
+//! song is made from: it is named, and those files are not listed as new
+//! songs either. Its song is held as built, as one waiting for a file
+//! copied in, its library file kept, though the state, which an undo
+//! leaves as it is, names that file's sources by the files it cannot
+//! tell; the run fails until one such file is left. Where the guess
+//! decides nothing it is made: keys gone that one song, or one removed
+//! song, alone names among its sources, pinned nowhere and recorded as
+//! holding the same, each of which as many files could be, as two
+//! copies of one file moved together, are matched to those files in the
+//! order of their names, since any order makes one song of one set of
+//! files and records. An undo, which puts back the keys but not the
+//! state's stamps that told them apart, finds such copies so.
 //!
 //! A named file whose own content moved elsewhere is gone too, but only
 //! once another named file is matched to its path: one that holds other
@@ -304,11 +316,38 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// A named file gone, or changed, looking for the file that is it.
-struct Seeker {
+struct Seeker<'m> {
     key: SourceKey,
     was: Was,
     /// The file at its own path, for one changed.
     own: Option<usize>,
+    role: Option<Role<'m>>,
+}
+
+/// What a gone key is to the song list but its name, for a key that one
+/// song or one removed song names among its sources and nowhere else:
+/// two keys of one role, given each other's files, make what they made.
+#[derive(Debug, PartialEq, Eq)]
+struct Role<'m> {
+    /// The song's place, or the removed song's after every song.
+    owner: usize,
+    held: Option<&'m Held>,
+}
+
+impl<'m> Role<'m> {
+    fn of(manifest: &'m Manifest, key: &SourceKey) -> Option<Self> {
+        let pinned = |s: &crate::manifest::Song| {
+            [&s.album, &s.audio, &s.cover].contains(&&Some(key.clone()))
+                || matches!(&s.lyrics, Some(crate::manifest::LyricsPin::From(k)) if k == key)
+        };
+        let songs = (manifest.songs.iter().enumerate()).filter(|(_, s)| s.has(key) || pinned(s));
+        let removed =
+            (manifest.removed.iter().enumerate()).filter(|(_, r)| r.sources.contains(key));
+        let mut roles = (songs.map(|(n, s)| (!pinned(s)).then(|| (n, s.held.get(key)))))
+            .chain(removed.map(|(n, r)| Some((manifest.songs.len() + n, r.held.get(key)))));
+        let (owner, held) = roles.next()??;
+        roles.next().is_none().then_some(Self { owner, held })
+    }
 }
 
 /// Each manual file a song or a removed song names that is gone, or that
@@ -366,6 +405,7 @@ pub fn moved(
             key: k.clone(),
             was: Was::of(manifest, state, k, *kind),
             own: None,
+            role: Role::of(manifest, k),
         })
         .collect();
     for (k, kind) in changed {
@@ -374,6 +414,7 @@ pub fn moved(
             key: k.clone(),
             was: Was::of(manifest, state, k, *kind),
             own: Some(files.len() - 1),
+            role: None,
         });
     }
     let (pairs, unsure) = pair(&seekers, &files, state, &mut hear);
@@ -469,7 +510,7 @@ fn pair(
             *claims.entry(*f).or_default() += 1;
         }
         let mut groups: Vec<(BTreeSet<usize>, BTreeSet<usize>)> = Vec::new();
-        for (s, matches) in found {
+        for (&s, matches) in &found {
             open_seekers.remove(&s);
             if let [f] = matches[..]
                 && claims[&f] == 1
@@ -478,7 +519,7 @@ fn pair(
                 pairs.insert(s, f);
                 continue;
             }
-            let mut group = (BTreeSet::from([s]), BTreeSet::from_iter(matches));
+            let mut group = (BTreeSet::from([s]), BTreeSet::from_iter(matches.clone()));
             groups.retain(|(their_seekers, their_files)| {
                 let shared = their_files.intersection(&group.1).next().is_some();
                 if shared {
@@ -493,7 +534,10 @@ fn pair(
             for f in &group.1 {
                 open_files.remove(f);
             }
-            unsure.push(group);
+            match interchangeable(&group, &found, seekers, files) {
+                Some(matched) => pairs.extend(matched),
+                None => unsure.push(group),
+            }
         }
     }
     loop {
@@ -509,6 +553,33 @@ fn pair(
         }
     }
     (pairs, unsure)
+}
+
+/// The seekers of `group` each matched to one of its files, in the order
+/// of their keys, where which is which changes nothing: as many files as
+/// seekers, each seeker gone, of one [`Role`], and `found` to be any of
+/// the files.
+fn interchangeable(
+    (group_seekers, group_files): &(BTreeSet<usize>, BTreeSet<usize>),
+    found: &BTreeMap<usize, Vec<usize>>,
+    seekers: &[Seeker],
+    files: &[File],
+) -> Option<Vec<(usize, usize)>> {
+    let role = seekers[*group_seekers.first()?].role.as_ref()?;
+    let alike = group_seekers.len() == group_files.len()
+        && group_seekers.iter().all(|s| {
+            seekers[*s].own.is_none()
+                && seekers[*s].role.as_ref() == Some(role)
+                && found.get(s).is_some_and(|m| m.len() == group_files.len())
+        });
+    if !alike {
+        return None;
+    }
+    let mut by_seeker: Vec<usize> = group_seekers.iter().copied().collect();
+    by_seeker.sort_by(|a, b| seekers[*a].key.cmp(&seekers[*b].key));
+    let mut by_file: Vec<usize> = group_files.iter().copied().collect();
+    by_file.sort_by(|a, b| files[*a].key.cmp(&files[*b].key));
+    Some(by_seeker.into_iter().zip(by_file).collect())
 }
 
 /// [`moved`]'s `hear`: the audio a song file holds, read by `runner`,
@@ -536,7 +607,8 @@ impl Following<'_> {
     /// Follow each named manual file to where it moved ([`moved`]), in
     /// the song list and the state, saved, the list noted in `run`; a dry
     /// run follows them in memory alone, so it reports on the songs as
-    /// the next sync will find them.
+    /// the next sync will find them. What it cannot tell is returned, as
+    /// [`Moves::unsure`].
     pub(super) fn follow<W: Write>(
         self,
         manifest: &mut Manifest,
@@ -544,14 +616,14 @@ impl Following<'_> {
         store: &Store,
         hear: impl FnMut(&Located) -> Option<String>,
         out: &mut W,
-    ) -> Result<()> {
+    ) -> Result<Vec<(BTreeSet<SourceKey>, BTreeSet<SourceKey>)>> {
         let mut unlisted = Unlisted::of(manifest, state, store, self.settling);
         let moves = moved(manifest, state, store, &mut unlisted, hear);
         for line in moves.unsure_lines() {
             crate::ui::warning(out, &line)?;
         }
         if moves.moved.is_empty() {
-            return Ok(());
+            return Ok(moves.unsure);
         }
         for line in moves
             .moved
@@ -576,7 +648,7 @@ impl Following<'_> {
         if !self.dry_run {
             state.save(self.home)?;
         }
-        Ok(())
+        Ok(moves.unsure)
     }
 }
 

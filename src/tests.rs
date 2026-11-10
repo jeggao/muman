@@ -1490,6 +1490,80 @@ fn undoing_the_sync_that_followed_a_move_follows_it_again() {
     assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
 }
 
+/// A song of `in/a.flac` and a copy of it, `in/copy.flac`, synced, by
+/// `fake`; the library file built.
+fn copies_listed(s: &Setup, fake: &Fake) -> PathBuf {
+    s.written("home/sources/manual/in/a.flac", "one recording");
+    assert!(s.run(fake, &["sync"]).0);
+    s.written("home/sources/manual/in/copy.flac", "one recording");
+    let (ok, text) = s.run(fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![
+            SourceKey::Manual("in/a.flac".into()),
+            SourceKey::Manual("in/copy.flac".into())
+        ]],
+        "{text}"
+    );
+    let built = crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+    built[0].clone()
+}
+
+fn copies() -> Fake {
+    flacs()
+        .print("a.flac", words(1600, 1))
+        .print("copy.flac", words(1600, 1))
+}
+
+#[test]
+fn two_copies_of_one_song_moved_together_are_followed_and_undone() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    let moved = [vec![
+        SourceKey::Manual("x/p.flac".into()),
+        SourceKey::Manual("x/q.flac".into()),
+    ]];
+    let (ok, text) = s.run(&copies(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), moved, "{text}");
+
+    let (ok, text) = s.run(&copies(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Not followed"), "{text}");
+    assert!(!text.contains("Removed"), "{text}");
+    assert!(built.exists(), "{text}");
+    assert_eq!(s.songs(), moved, "{text}");
+    let (ok, report) = s.report(&copies(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+#[test]
+fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    let (ok, text) = s.run(
+        &copies(),
+        &["set", "-y", "manual:in/a.flac", "audio=manual:in/copy.flac"],
+    );
+    assert!(ok, "{text}");
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    assert!(s.run(&copies(), &["sync"]).0, "told apart by their stamps");
+    for args in [&["undo", "-y"][..], &["sync"]] {
+        let (ok, text) = s.run(&copies(), args);
+        assert!(!ok, "which is pinned cannot be told: {text}");
+        assert!(text.contains("Not followed"), "{text}");
+        assert!(!text.contains("Removed"), "{text}");
+        assert!(built.exists(), "held as built: {text}");
+    }
+    let (_, report) = s.report(&copies(), &["check"]);
+    assert!(!report.contains("cannot be written"), "{report}");
+}
+
 #[test]
 fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
     let s = Setup::new();

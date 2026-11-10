@@ -220,7 +220,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         settling: opts.settling,
     };
     let hear = hearing(runner, temp.path());
-    following.follow(&mut manifest, &mut state, &store, hear, out)?;
+    let unsure = following.follow(&mut manifest, &mut state, &store, hear, out)?;
     let listed = manifest.keys();
     let mut how = Measuring {
         retry: opts.retry,
@@ -340,6 +340,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let waiting: BTreeSet<SourceKey> = arriving(&manifest, &state, &store, opts.settling)
         .into_iter()
         .chain(to_fetch.iter().cloned())
+        .chain(unsure.iter().flat_map(|(gone, _)| gone).cloned())
         .collect();
     let on_disk: BTreeSet<SourceKey> = listed
         .iter()
@@ -354,8 +355,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &waiting,
         out,
     )?;
-    let mut ok = failed.is_empty();
+    let mut ok = failed.is_empty() && unsure.is_empty();
     failed.extend(waiting.iter().cloned());
+    // A file of a song not followed is held as built: the state, which an
+    // undo leaves, may name it by a file it cannot tell.
+    failed.extend(unsure.iter().flat_map(|(_, files)| files).cloned());
     // Every song this sync fails, by its place in the list, with why, so
     // `check` names each until a sync writes it.
     let mut song_errors: Vec<(usize, String)> = Vec::new();
@@ -589,9 +593,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
     }
     // A removed song's measures stay while its sources do, so restoring
-    // it measures nothing again.
+    // it measures nothing again, and so do those of files not followed,
+    // which tell them for the next run.
     let mut kept = listed.clone();
     kept.extend(manifest.removed_keys().into_iter().filter(|k| store.has(k)));
+    kept.extend(unsure.iter().flat_map(|(_, files)| files).cloned());
     state.facts.retain(|k, _| kept.contains(k));
     match &fitted {
         Some(f) => state.sizes.retain(|key, _| f.keys.contains(key)),
