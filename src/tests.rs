@@ -1746,6 +1746,41 @@ fn two_files_that_trade_names_are_each_followed_to_the_other_s() {
 }
 
 #[test]
+fn undoing_the_sync_that_followed_a_round_of_names_follows_it_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/c.flac");
+    two_listed(&s);
+
+    move_manual(&s, "c.flac", "x.flac");
+    move_manual(&s, "b.flac", "c.flac");
+    move_manual(&s, "a.flac", "b.flac");
+    move_manual(&s, "x.flac", "a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let followed = genres(&s);
+    assert_eq!(
+        followed[0],
+        (
+            vec![SourceKey::Manual("b.flac".into())],
+            Some("Folk".to_string())
+        ),
+        "{text}"
+    );
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:b.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("has changed since"), "{text}");
+    assert!(!text.contains("Updated"), "{text}");
+    assert_eq!(genres(&s), followed, "each song keeps its own tags");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+#[test]
 fn a_file_moved_over_another_listed_one_takes_its_song_there() {
     let s = Setup::new();
     two_listed(&s);

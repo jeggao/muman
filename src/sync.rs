@@ -559,7 +559,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
     if !moves.moved.is_empty() {
         let _lock = atomic::Lock::folder(&dirs.home)?;
         let mut state = State::load(&dirs.home)?;
-        state.rekey(&moves.moved)?;
+        state.rekey(&moves.of_state())?;
         state.save(&dirs.home)?;
     }
     Ok(ready

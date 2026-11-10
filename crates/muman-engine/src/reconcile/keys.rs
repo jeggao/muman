@@ -71,6 +71,15 @@
 //! are written at once, so a key one move frees and another takes is
 //! never named twice.
 //!
+//! A named file is changed, too, when what measuring read at its name,
+//! as it is now, is other than what its record names it held: an undo
+//! puts back the song list's keys and records, but the state keeps each
+//! file's record under the name it moved to, so after a swap was
+//! followed each name holds what the other's record names, though no
+//! stamp changed. Such files are matched as any changed one, and the
+//! state, which names each where it is already, is not moved again
+//! ([`Moves::drifted`]).
+//!
 //! A removed song keeps out what it held, by the same rule, not a name:
 //! a song file only a removed song names, settled and not as measuring
 //! last read it, whose audio is other than the song recorded, is a new
@@ -167,9 +176,21 @@ pub struct Moves {
     /// Keys only a removed song names whose file holds other audio than
     /// the song held: new files, listed as any dropped in.
     pub anew: Vec<SourceKey>,
+    /// Keys moved whose record the state already keeps where the file
+    /// is, as after an undo: the state follows none of them.
+    pub drifted: BTreeSet<SourceKey>,
 }
 
 impl Moves {
+    /// The moves the state follows: those not [`Moves::drifted`].
+    #[must_use]
+    pub fn of_state(&self) -> BTreeMap<SourceKey, SourceKey> {
+        (self.moved.iter())
+            .filter(|(from, _)| !self.drifted.contains(*from))
+            .map(|(from, to)| (from.clone(), to.clone()))
+            .collect()
+    }
+
     /// What is said of each file of [`Moves::anew`]; `ahead` of the sync
     /// that lists it.
     pub fn anew_lines(&self, ahead: bool) -> impl Iterator<Item = String> + '_ {
@@ -242,15 +263,14 @@ struct Was {
 }
 
 impl Was {
-    fn of(manifest: &Manifest, state: &State, key: &SourceKey, kind: Kind) -> Self {
+    /// What `key` held; what measuring read at its name is left out when
+    /// that is `drifted` from what its record names.
+    fn of(manifest: &Manifest, state: &State, key: &SourceKey, kind: Kind, drifted: bool) -> Self {
         let facts = state.facts.get(key);
-        let aspect = aspect(kind);
-        let held = (manifest.song_with(key).and_then(|s| s.held.get(key)))
-            .or_else(|| manifest.removed.iter().find_map(|r| r.held.get(key)));
-        let part = (held.and_then(|h| h.digest(aspect)).map(str::to_string)).or_else(|| {
-            let now = Held::now(key, facts?, &manifest.settings.sites)?;
-            now.digest(aspect).map(str::to_string)
-        });
+        let part = (recorded(manifest, key).and_then(|h| h.digest(aspect(kind))))
+            .map(str::to_string)
+            .or_else(|| now_held(manifest, key, facts?, kind));
+        let facts = facts.filter(|_| !drifted);
         Self {
             kind,
             stamp: facts.and_then(|f| store::stamp_of_rev(&f.rev)),
@@ -258,6 +278,38 @@ impl Was {
             part,
         }
     }
+}
+
+/// What the song, or removed song, naming `key` records it held.
+fn recorded<'m>(manifest: &'m Manifest, key: &SourceKey) -> Option<&'m Held> {
+    (manifest.song_with(key).and_then(|s| s.held.get(key)))
+        .or_else(|| manifest.removed.iter().find_map(|r| r.held.get(key)))
+}
+
+/// The digest of the part of a file of `kind` that `facts` read.
+fn now_held(
+    manifest: &Manifest,
+    key: &SourceKey,
+    facts: &crate::facts::Facts,
+    kind: Kind,
+) -> Option<String> {
+    let now = Held::now(key, facts, &manifest.settings.sites)?;
+    now.digest(aspect(kind)).map(str::to_string)
+}
+
+/// Whether what measuring read at `key`'s name, as it is now, is other
+/// than what its record names it held: another named file's, as an undo,
+/// which puts back the records but not the state's keys, leaves it.
+fn drifted(manifest: &Manifest, state: &State, store: &Store, key: &SourceKey, kind: Kind) -> bool {
+    let Some(at) = store.locate(key) else {
+        return false;
+    };
+    let Some(facts) = state.facts.get(key).filter(|f| f.holds_for(&at.rev())) else {
+        return false;
+    };
+    let was = recorded(manifest, key).and_then(|h| h.digest(aspect(kind)));
+    was.zip(now_held(manifest, key, facts, kind))
+        .is_some_and(|(was, now)| !same(was, &now))
 }
 
 /// The part a record holds of a file of `kind`.
@@ -438,14 +490,22 @@ pub fn moved(
             Some((k, kind))
         })
         .collect();
-    let changed = |k: &SourceKey| {
+    let restamped = |k: &SourceKey| {
         let was = state.facts.get(k).and_then(|f| store::stamp_of_rev(&f.rev));
         let now = store.locate(k).and_then(|l| store::stamp(&l.path));
         was.is_some() && was != now
     };
     let gone: Vec<&(SourceKey, Kind)> = named.iter().filter(|(k, _)| !store.has(k)).collect();
-    let changed: Vec<&(SourceKey, Kind)> = (named.iter())
-        .filter(|(k, _)| store.has(k) && changed(k))
+    // Each named file there, changed since measured or drifted from its
+    // record, and whether drifted.
+    let changed: Vec<(&SourceKey, Kind, bool)> = (named.iter())
+        .filter(|(k, _)| store.has(k))
+        .map(|(k, kind)| (k, *kind, drifted(manifest, state, store, k, *kind)))
+        .filter(|(k, _, drifted)| *drifted || restamped(k))
+        .collect();
+    let drifted: BTreeSet<SourceKey> = (changed.iter())
+        .filter(|(_, _, drifted)| *drifted)
+        .map(|(k, _, _)| (*k).clone())
         .collect();
     // With none gone, a file changed alone was changed in place: no other
     // named file can be the one moved over it.
@@ -468,16 +528,16 @@ pub fn moved(
     let mut seekers: Vec<Seeker> = (gone.iter())
         .map(|(k, kind)| Seeker {
             key: k.clone(),
-            was: Was::of(manifest, state, k, *kind),
+            was: Was::of(manifest, state, k, *kind, false),
             own: None,
             role: Role::of(manifest, k),
         })
         .collect();
-    for (k, kind) in changed {
-        files.push(File::new(store, k.clone(), *kind, false));
+    for (k, kind, drifted) in changed {
+        files.push(File::new(store, k.clone(), kind, false));
         seekers.push(Seeker {
             key: k.clone(),
-            was: Was::of(manifest, state, k, *kind),
+            was: Was::of(manifest, state, k, kind, drifted),
             own: Some(files.len() - 1),
             role: None,
         });
@@ -491,6 +551,9 @@ pub fn moved(
             .insert(seekers[*s].key.clone(), files[*f].key.clone());
     }
     moved_over(&seekers, &pairs, &taken, &mut moves);
+    moves.drifted = (drifted.into_iter())
+        .filter(|k| moves.moved.contains_key(k))
+        .collect();
     let mut out: BTreeSet<&SourceKey> = pairs.values().map(|f| &files[*f].key).collect();
     for (gone, these) in &unsure {
         out.extend(these.iter().map(|f| &files[*f].key));
@@ -733,7 +796,7 @@ impl Following<'_> {
                 run.saw(manifest);
             }
         }
-        state.rekey(&moves.moved)?;
+        state.rekey(&moves.of_state())?;
         if !self.dry_run {
             state.save(self.home)?;
         }
