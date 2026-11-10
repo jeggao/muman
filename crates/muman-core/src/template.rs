@@ -18,12 +18,16 @@
 //! variable outside this table, apply no filter or test there is not,
 //! give `pad` and `truncate` a whole number written in it, at most
 //! [`MOST_WIDTH`], include no other template, and render for a song
-//! with every field set and for one with none. Each refusal is
+//! with every field set. A template that fails only on a song missing a
+//! field, as `{{ track + 1 }}` without a track, still names every song
+//! that has it, so that song alone fails as it is named. Each refusal is
 //! [`Refused`](crate::errors::Refused), which a query reading the songs
 //! unnamed passes over. The filters and tests a template applies are
 //! found in its compiled instructions, which MiniJinja shows only through
-//! its `unstable_machinery`, so a MiniJinja that changes them fails to
-//! build here rather than letting a mistake through. A value missing as
+//! its `unstable_machinery`. That API may change in any release, so
+//! `Cargo.toml` pins MiniJinja to one: a bump comes as a pull request of
+//! its own, and one that changes the API fails to build there rather
+//! than letting a mistake through. A value missing as
 //! a song is named, as `title[100]` of a short title, writes nothing, as
 //! a missing track does.
 //!
@@ -157,14 +161,14 @@ impl Template {
             )));
         }
         check(&env).map_err(|why| refused(format!("the library template {why}")))?;
-        for fields in [Fields::default(), Fields::probe()] {
-            env.get_template(NAME)?.render(Serde(fields)).map_err(|e| {
+        env.get_template(NAME)?
+            .render(Serde(Fields::probe()))
+            .map_err(|e| {
                 refused(format!(
                     "the library template does not render: {}",
                     said(&e)
                 ))
             })?;
-        }
         Ok(Self { env })
     }
 
@@ -286,6 +290,19 @@ fn asciify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_template_failing_only_without_a_field_still_names_songs_with_it() {
+        let t = Template::new("{{ title }}/{{ track + 1 }}").unwrap();
+        let none = Fields {
+            title: "Tide".into(),
+            ..Fields::default()
+        };
+        assert!(t.render(&none).is_err());
+        let mut one = none.clone();
+        one.track = Some(4);
+        assert_eq!(t.render(&one).unwrap(), "Tide/5");
+    }
 
     #[test]
     fn a_missing_number_writes_nothing() {

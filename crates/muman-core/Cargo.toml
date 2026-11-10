@@ -27,7 +27,7 @@ icu_properties = "2.3"
 isolang = { version = "2.4", default-features = false }
 indicatif = "0.18"
 inquire = { version = "0.9", default-features = false, features = ["crossterm"] }
-minijinja = { version = "3", features = ["serde", "unstable_machinery"] }
+minijinja = { version = "=3.0.5", features = ["serde", "unstable_machinery"] }
 percent-encoding = "2"
 regex = "1"
 rusty-chromaprint = "0.3"
