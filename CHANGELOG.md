@@ -686,6 +686,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   differing from its own name only in case, since HFS+ lists names
   decomposed.
 
+- **A regex query term ignores accents** as every other term does, and
+  bare text passed as one argument matches each of its words apart.
+- **`set track=0` says tracks and discs count from 1**, instead of
+  calling 0 no number.
+- **A line break set by hand in a name becomes a space**, so the value
+  is stored as `list` shows it and one-line reports stay one line.
+- **`set` refuses the query fields `from=` and `has=`**, as it refused
+  `key=` and `path=`, and `release=<ID>` pins the song's release
+  instead of writing a tag.
+- **Interactive `set` counts only choices that change a song**, and a
+  field set on the album counts once.
+- **`undo -n` names every file a run added**, the lyrics beside a song
+  too, and a sync says the lyrics it wrote were added.
+- **A song removed with `--purge` keeps its title and artist**, so
+  `list --removed` names it and a query by those fields finds it.
+- **`edit` reopens a file on the song list as it is now**, with the
+  user's edits merged in, so saving again no longer takes back a change
+  made meanwhile.
+- **songs.toml keeps its CRLF line endings and byte-order mark**
+  through every write, instead of being rewritten with LF endings.
+- **`XDG_MUSIC_DIR` set in the environment** places the default library
+  on Linux, before the folder `user-dirs.dirs` names.
+- **The album artist muman fills in leaves out a featured artist** in
+  every `[tags] featured` style, so a guest credited in one song's
+  artist no longer splits its album into two folders.
+- **A file named as another song's folder** is told apart by a suffix,
+  so a template that puts some songs in an album folder and others not
+  no longer makes sync fail a song that status said would move.
+
 ## [0.10.1] - 2026-11-04
 
 ### Changed
