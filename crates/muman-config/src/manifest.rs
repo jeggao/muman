@@ -1098,7 +1098,8 @@ const MAX_OFFSET_MS: u64 = 3_600_000;
 /// What `doc` holds, read as the current edition writes it.
 fn parse(doc: &DocumentMut) -> Result<Parsed> {
     let mut current = doc.clone();
-    let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)?;
+    let renamed = crate::migrate::rename_all(&mut current, &crate::migrate::EDITIONS)
+        .map_err(crate::errors::invalid)?;
     let respelled = respell(&mut current, &spelled_now);
     let doc = no_misspelled_list(&current)?;
     let mut songs = Vec::new();
@@ -1179,6 +1180,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
             .chain(albums.iter().map(|a| &a.tags))
             .any(|t| t.iter().any(|(k, _)| tags::vorbis_key(k) == name))
     })?;
+    let clean = clean_of(doc).map_err(crate::errors::invalid)?;
     refuse_unsited(&settings.sites, &songs, &albums, &removed)?;
     Ok(Parsed {
         songs,
@@ -1187,7 +1189,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         removed,
         providers,
         hooks: hooks::read(doc),
-        clean: clean_of(doc)?,
+        clean,
         settings,
         stale_defaults: crate::settings::stale(doc, &crate::settings::EDITIONS),
         renamed,

@@ -1493,7 +1493,12 @@ pub struct Override {
 /// The settings `doc` sets with `overrides` set over them, checked as
 /// the song list's own are. They are set by today's names, after the
 /// file's older names are renamed, so one never collides with another.
+/// One that does not read is [`Invalid`](crate::errors::Invalid).
 pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
+    checked(doc, overrides).map_err(crate::errors::invalid)
+}
+
+fn checked(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     let mut only = DocumentMut::new();
     for table in TABLES.into_iter().chain(crate::migrate::moved_from()) {
         if let Some(item) = doc.get(table) {

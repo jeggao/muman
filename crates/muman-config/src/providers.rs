@@ -215,7 +215,7 @@ impl Config {
 
     /// Refuse a `skip` query naming a field that is no tag muman knows and
     /// that `had`, given its Vorbis name, says no song has, as `list`
-    /// refuses a query's.
+    /// refuses a query's; the setting is [`Invalid`](crate::errors::Invalid).
     pub fn check_fields(&self, had: impl Fn(&str) -> bool) -> Result<()> {
         let schemes = schemes();
         let own = self.providers.iter().flat_map(|(p, s)| {
@@ -229,7 +229,8 @@ impl Config {
         for (what, text) in all {
             let query = crate::terms::parse_text(text, &schemes)?;
             if let Some(field) = query.unknown_field(&had) {
-                bail!("{what}: `{text}`: {}", crate::terms::no_field(field));
+                let why = format!("{what}: `{text}`: {}", crate::terms::no_field(field));
+                return Err(crate::errors::Invalid(why).into());
             }
         }
         Ok(())
@@ -378,8 +379,13 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
     Ok(s)
 }
 
-/// The providers a song list sets; the defaults where it sets none.
+/// The providers a song list sets; the defaults where it sets none. A
+/// setting that does not read is [`Invalid`](crate::errors::Invalid).
 pub fn read(doc: &DocumentMut) -> Result<Config> {
+    tables(doc).map_err(crate::errors::invalid)
+}
+
+fn tables(doc: &DocumentMut) -> Result<Config> {
     let mut config = Config::default();
     if let Some(item) = doc.get("providers") {
         let table = item

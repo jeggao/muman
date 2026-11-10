@@ -156,9 +156,9 @@ muman undo
 | Exit code | Means |
 |---|---|
 | 0 | Done, nothing to do, or a change you declined |
-| 2 | A program missing, too old or not running; no home folder; a command line or setting that does not read |
-| 4 | A failure: a download, a song, the song list or state, a song an export left out, or a problem `check` found |
-| 5 | A refusal: a query that matches nothing, a change with no terminal and no `-y`, a file `add` cannot place, an export's output that is taken or not there, an untrusted song list, a hook running muman on its run's library under another home |
+| 2 | A program missing, too old or not running; no home folder; a command line, or a setting it or the song list gives, that does not read |
+| 4 | A failure: a download, a song, the state, the song list or a song, album or removed song in it, a song an export left out, or a problem `check` found |
+| 5 | A refusal: a query that matches nothing, a change with no terminal and no `-y`, a file `add` cannot place, an export's output that is taken or not there, a library template that cannot name every song, an untrusted song list, a hook running muman on its run's library under another home |
 | 130 | Stopped by Ctrl-C or a signal, with every program muman started; the next run resumes the downloads |
 
 The [command reference](docs/cli.md) lists every flag and exit case.

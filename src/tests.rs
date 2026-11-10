@@ -5136,6 +5136,44 @@ fn a_template_that_cannot_name_every_song_is_refused_before_anything_is_written(
 }
 
 #[test]
+fn a_setting_that_does_not_read_is_invalid_and_a_song_that_does_not_is_a_failure() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let error = |text: &str| {
+        std::fs::write(&songs, text).unwrap();
+        run_with(
+            &s.job(&["status"]),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+    };
+    for setting in [
+        listed.replace("restrict = \"windows\"", "restrict = \"bogus\""),
+        listed.replacen("skip = []", "skip = [\"artst:Marlo\"]", 1),
+        listed.replace("recheck = \"7 days\"", "recheck = \"a while\""),
+        listed.replace("max_name_bytes = 200", "max_name_bytes = 3"),
+    ] {
+        let e = error(&setting);
+        assert!(e.downcast_ref::<crate::cli::Invalid>().is_some(), "{e:#}");
+    }
+    for list in [
+        format!("{listed}\n[[song]\n"),
+        format!("{listed}\n[[song]]\nsources = [\"manual:b.flac\"]\nlyrics_offset = \"soon\"\n"),
+    ] {
+        let e = error(&list);
+        assert!(e.downcast_ref::<crate::cli::Invalid>().is_none(), "{e:#}");
+        assert!(e.downcast_ref::<change::Refused>().is_none(), "{e:#}");
+    }
+}
+
+#[test]
 fn undo_waits_for_a_run_under_way_before_it_plans() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
