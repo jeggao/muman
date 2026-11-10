@@ -1691,6 +1691,32 @@ fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
     );
 }
 
+#[test]
+fn a_source_that_failed_to_read_is_read_again_once_muman_reads_it_otherwise() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let home = s.dir.path().join("home");
+    let key = SourceKey::Manual("a.flac".into());
+    let rev = State::load(&home).unwrap().facts[&key].rev.clone();
+    let fail = |reader: String| {
+        let mut state = State::load(&home).unwrap();
+        state.facts.remove(&key);
+        state.record_unread(&key, rev.clone(), reader, "unreadable".into());
+        state.save(&home).unwrap();
+    };
+    fail(crate::facts::reading(crate::store::Kind::Media));
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(
+        text.contains("Not reading 1 source(s)"),
+        "read as before: {text}"
+    );
+    fail("an older reading".into());
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Measuring 1 source(s)"), "{text}");
+    assert!(State::load(&home).unwrap().failures.is_empty());
+}
+
 /// The two manual files `s` lists, `a.flac` and `b.flac`, synced; the
 /// first song given a genre by hand.
 fn two_listed(s: &Setup) {

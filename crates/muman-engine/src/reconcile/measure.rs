@@ -82,7 +82,8 @@ fn clear_read(store: &Store, keys: &BTreeSet<SourceKey>, state: &mut State) {
 /// Measure every source in `keys` the store holds whose facts are not
 /// current, into `state`, kept by the checkpoint as it goes and at the
 /// end. A file that cannot be read is said so, and is not read again
-/// until it changes.
+/// until it changes or muman reads its kind otherwise
+/// ([`facts::reading`]): a reading mended reads what it failed on.
 pub fn measure<R: Runner, W: Write>(
     runner: &R,
     store: &Store,
@@ -111,10 +112,9 @@ pub fn measure<R: Runner, W: Write>(
     let now = state::now_secs();
     let (due, failed): (Vec<Located>, Vec<Located>) = outdated.into_iter().partition(|l| {
         how.retry
-            || state
-                .failures
-                .get(&l.key)
-                .is_none_or(|f| f.step != Step::Measure || f.due(Some(&l.rev()), now))
+            || state.failures.get(&l.key).is_none_or(|f| {
+                f.step != Step::Measure || f.due_to_read(&l.rev(), &facts::reading(l.kind), now)
+            })
     });
     if how.say_unread && !failed.is_empty() {
         crate::ui::warning(
@@ -209,10 +209,10 @@ fn unread<W: Write>(
         .map_err(Into::into);
     }
     crate::ui::warning(out, &format!("Could not read {}: {e:#}", located.key))?;
-    state.record_failure(
+    state.record_unread(
         &located.key,
-        Step::Measure,
-        Some(located.rev()),
+        located.rev(),
+        facts::reading(located.kind),
         format!("{e:#}"),
     );
     Ok(())

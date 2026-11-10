@@ -208,8 +208,9 @@ pub const HASH_METHOD: &str = "hash/2";
 pub const RECORD_METHOD: &str = "record/3";
 
 /// What a lyrics file's facts keep beside its lines: whether the letters
-/// it sings are Latin alone.
-pub const LYRICS_METHOD: &str = "lyrics/1";
+/// it sings are Latin alone; since lyrics/2, its lines as
+/// [`crate::lyrics::read`] reads them, a control character dropped.
+pub const LYRICS_METHOD: &str = "lyrics/2";
 
 /// How the tags of a source of `kind` are read: `tags::METHOD`, and for
 /// a record [`RECORD_METHOD`] too, or for a lyrics file [`LYRICS_METHOD`],
@@ -222,6 +223,14 @@ pub fn tags_method(kind: Kind) -> String {
         Kind::Lyrics => format!("{}+{LYRICS_METHOD}", tags::METHOD),
         Kind::Media | Kind::Image => tags::METHOD.to_string(),
     }
+}
+
+/// How a source of `kind` is read and measured: [`method`] and
+/// [`tags_method`]. A measure that failed is recorded with it, and tried
+/// again once muman reads that kind of source otherwise.
+#[must_use]
+pub fn reading(kind: Kind) -> String {
+    format!("{}+{}", method(), tags_method(kind))
 }
 
 /// The format a site served a source in, by yt-dlp's info.

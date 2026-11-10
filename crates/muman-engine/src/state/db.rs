@@ -967,6 +967,7 @@ mod tests {
                 error: "unreadable".into(),
                 count: 2,
                 last: 1_000,
+                reader: "m".into(),
             },
         );
         state.lookups.push(Looked {

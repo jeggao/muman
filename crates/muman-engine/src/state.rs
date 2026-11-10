@@ -609,6 +609,11 @@ pub struct Failure {
     pub count: u32,
     /// Seconds since the Unix epoch.
     pub last: u64,
+    /// How the source was read when a measure failed
+    /// ([`crate::facts::reading`]); empty for any other step, and for a
+    /// measure that failed before muman kept it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reader: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -680,6 +685,16 @@ impl Failure {
             }
             Step::Mend => false,
         }
+    }
+
+    /// Whether a source at revision `rev`, which muman reads as `reader`
+    /// says ([`crate::facts::reading`]), is due to be read again: as
+    /// [`Self::due`] says, or, for a measure that failed, once muman reads
+    /// it otherwise than the way that failed, so a reading mended reads
+    /// what it failed on.
+    #[must_use]
+    pub fn due_to_read(&self, rev: &str, reader: &str, now: u64) -> bool {
+        self.due(Some(rev), now) || self.step == Step::Measure && self.reader != reader
     }
 }
 
@@ -960,8 +975,18 @@ impl State {
                 error,
                 count: count + 1,
                 last: now_secs(),
+                reader: String::new(),
             },
         );
+    }
+
+    /// Record that measuring `key` at revision `rev`, read as `reader`
+    /// says ([`crate::facts::reading`]), failed as `error` says.
+    pub fn record_unread(&mut self, key: &SourceKey, rev: String, reader: String, error: String) {
+        self.record_failure(key, Step::Measure, Some(rev), error);
+        if let Some(f) = self.failures.get_mut(key) {
+            f.reader = reader;
+        }
     }
 
     /// The songs this sync could not write, each by its id with why: the
@@ -1260,6 +1285,7 @@ mod tests {
             error: String::new(),
             count,
             last: 1_000_000,
+            reader: String::new(),
         };
         let hour = 3600;
         assert!(failure(1).due(None, 1_000_000), "the first at once");
@@ -1271,6 +1297,28 @@ mod tests {
         assert!(
             !failure(REFETCH_TRIES + 1).due(None, 1_000_000 + 30 * 24 * hour),
             "given up on until `--retry`"
+        );
+    }
+
+    #[test]
+    fn a_measure_that_failed_is_due_once_the_file_or_its_reading_changes() {
+        let mut state = State::default();
+        let key = SourceKey::Manual("a.lrc".into());
+        state.record_unread(&key, "1".into(), "read/1".into(), "no text".into());
+        let failed = &state.failures[&key];
+        assert!(!failed.due_to_read("1", "read/1", 0), "not again as it was");
+        assert!(failed.due_to_read("2", "read/1", 0), "the file changed");
+        assert!(
+            failed.due_to_read("1", "read/2", 0),
+            "muman reads it otherwise"
+        );
+        let before = Failure {
+            reader: String::new(),
+            ..failed.clone()
+        };
+        assert!(
+            before.due_to_read("1", "read/1", 0),
+            "kept before readers were"
         );
     }
 
