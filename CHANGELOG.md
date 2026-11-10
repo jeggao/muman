@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A file moved in `sources/manual` stays followed by every command**:
+  `set`, `remove`, `add` and `undo` follow it as `sync` does, a file a
+  tagger renamed and retagged at once matched by its audio. Undoing the
+  sync that followed a move no longer deletes the song's file.
+- **A torrent holding `a:b.flac` and `a：b.flac`** keeps the first and
+  names the second as left out, rather than list a song never written.
+- **An album folder's cover covers its discs**: a cover picture in
+  `Album/` goes to the songs in `Album/CD1/` with none of their own.
 - **Retagging an `.m4a` never crashes the run**: tags that came out
   exactly 8 bytes shorter made the tag library panic, exit 101; a tag
   writer that fails in any way now fails only that song.
