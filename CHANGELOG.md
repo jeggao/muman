@@ -158,6 +158,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A file beside a song that you changed is left when a build no
+  longer writes it**, as a folder cover a new template drops: it stays
+  yours rather than fail the song.
+- **A disc folder takes its album folder's cover only from a folder of
+  its own**, never from the manual folder or a folder of loose songs.
 - **Undoing a run stopped partway says what it takes back**: the song
   list as it stands, with a line when it differs from what the run last
   recorded, whether the run saved it or a hand did, rather than refuse

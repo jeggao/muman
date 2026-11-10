@@ -1052,6 +1052,39 @@ fn songs_of_two_folders_moved_into_the_library_folder_move_and_take_no_cover() {
 }
 
 #[test]
+fn a_folder_cover_the_user_changed_is_left_by_a_template_that_drops_its_folder() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "a cover of my own").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    std::fs::write(
+        &list,
+        listed.replace(&default, "template = \"{{ artist }} - {{ title }}\""),
+    )
+    .unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read(&cover).unwrap(),
+        b"a cover of my own",
+        "{text}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
 fn a_song_that_fails_still_counts_toward_its_folder_s_majority() {
     let s = Setup::new();
     for name in ["a.flac", "b.flac", "other.flac"] {

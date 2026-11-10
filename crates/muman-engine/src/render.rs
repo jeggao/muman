@@ -521,8 +521,13 @@ fn put_beside(
     written: &[PathBuf],
 ) -> Result<Vec<(PathBuf, u64)>> {
     let audio = with_extension(job.stem, job.parts.audio.format.extension());
+    // A file the last build left that is not written again, changed by
+    // the user since, is theirs now: left where it is, not cleared.
     let cleared: Vec<&PathBuf> = (job.stale.iter().chain(rels))
         .filter(|gone| !written.contains(gone) && !left_alone(job, gone))
+        .filter(|gone| {
+            !job.stale.contains(gone) || crate::library::may_change(job.library, gone, job.claim)
+        })
         .collect();
     crate::library::claimed(
         job.library,
@@ -849,6 +854,7 @@ pub fn place(
     let cleared: Vec<&PathBuf> = stale
         .iter()
         .filter(|gone| !left_alone(gone) && !beside.iter().any(|(b, _)| b == *gone))
+        .filter(|gone| crate::library::may_change(library, gone, claim))
         .collect();
     crate::library::claimed(
         library,

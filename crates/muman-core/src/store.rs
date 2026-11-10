@@ -1133,8 +1133,17 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
     let disc = folder
         .file_name()
         .is_some_and(|n| is_disc_folder(&n.to_string_lossy()));
-    if covers.is_empty() && own.is_empty() && disc {
-        own = of_folder(folder.parent().unwrap_or(Path::new("")));
+    // The folder above a disc's is its album's only where it is a folder
+    // of its own, holding discs and no song file: not the manual folder
+    // or a torrent's root, nor a folder of loose songs.
+    let album = folder.parent().filter(|p| {
+        !p.as_os_str().is_empty()
+            && !files
+                .iter()
+                .any(|(f, k)| *k == Kind::Media && f.parent() == Some(*p))
+    });
+    if let Some(album) = album.filter(|_| covers.is_empty() && own.is_empty() && disc) {
+        own = of_folder(album);
     }
     covers.extend(own);
     (lyrics, covers)
@@ -1667,6 +1676,17 @@ mod tests {
         assert_eq!(covers("Album/CD1/01 Song.flac"), vec![album]);
         assert_eq!(covers("Album/Disc 2/01 Other.flac"), vec![own]);
         assert_eq!(covers("Album/Extras/01 Demo.flac"), Vec::<PathBuf>::new());
+
+        touch(dir.path(), "sources/manual/Loose.flac");
+        touch(dir.path(), "sources/manual/cover.jpg");
+        touch(dir.path(), "sources/manual/CD1/01 Root Disc.flac");
+        touch(dir.path(), "sources/manual/Singles/Single.flac");
+        touch(dir.path(), "sources/manual/Singles/cover.jpg");
+        touch(dir.path(), "sources/manual/Singles/CD2/01 Beside.flac");
+        let store = Store::scan(&d).unwrap();
+        let covers = |rel: &str| store.locate(&manual(rel)).unwrap().covers;
+        assert_eq!(covers("CD1/01 Root Disc.flac"), Vec::<PathBuf>::new());
+        assert_eq!(covers("Singles/CD2/01 Beside.flac"), Vec::<PathBuf>::new());
     }
 
     #[test]
