@@ -158,6 +158,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`max_size` counts a song left as built as its file**, so another
+  song gives up the room, and the song is not reported lowered.
 - **An export makes no song from a source cut off since it was built**:
   such a song goes in as the library holds it, the export saying so and
   exiting 4, rather than a stub of a fraction of a second.
