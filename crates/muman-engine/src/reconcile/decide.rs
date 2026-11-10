@@ -11,13 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::held::Drift;
+use crate::library::Relocation;
 use crate::manifest::{Edit, Manifest};
 use crate::resolve::{Plan, Resolved};
 use crate::source::SourceKey;
 use crate::state::{Sidecar, State, Written};
 
 use super::damage::{damaged_since_built, split_drifts};
-use super::owned::{blocking, carried_edit, edited_since_written};
+use super::owned::{blocking, carried, carried_edit, edited_since_written};
 use super::plan::{PlannedSong, path_of};
 use super::prune::{Pruned, prune_plan};
 
@@ -92,11 +93,13 @@ pub fn files_of(
 pub enum Doing {
     /// Its file is as it would be written.
     Keep,
-    /// Its file moves to the song's path, its tags written again when
-    /// they changed; moves are made by `order`, as a move into a path
-    /// another move leaves runs after it.
+    /// Its file moves to the song's path with the files `beside` it it
+    /// carries, from and to, its tags written again when they changed or
+    /// a file it leaves is written anew; moves are made by `order`, as a
+    /// move into a path another move leaves runs after it.
     Move {
         from: PathBuf,
+        beside: Vec<(PathBuf, PathBuf)>,
         retag: bool,
         order: usize,
     },
@@ -211,7 +214,11 @@ pub(super) fn settled(
 /// only when its tags need no writing, so nothing a tagger wrote is
 /// written over, nor a file beside it the user changed that its new plan
 /// would write again: the move would carry that file to where the song
-/// cannot write it ([`carried_edit`]).
+/// cannot write it ([`carried_edit`]). A folder's file the user changed
+/// is not carried, and keeps no song where it is
+/// ([`stays`](super::owned::stays)) while a song is left in its folder:
+/// decided again, with each folder a song is left in, until every folder
+/// the songs end in was counted.
 pub(super) fn decide(
     planned: &[PlannedSong],
     files: &BTreeMap<usize, PathBuf>,
@@ -220,12 +227,46 @@ pub(super) fn decide(
     force: bool,
     holding: &BTreeSet<usize>,
 ) -> Vec<Doing> {
-    use crate::relpath::folded;
     if force {
         return vec![Doing::Write; planned.len()];
     }
+    let fold = |p: &Path| crate::relpath::folded(p.parent().unwrap_or(Path::new("")));
+    let mut filled: BTreeSet<String> = planned.iter().map(|(_, r)| fold(&path_of(r))).collect();
+    // Files no planned song has, as a failed song's, stay where they are.
+    let theirs: BTreeSet<&PathBuf> = files.values().collect();
+    filled.extend(old.keys().filter(|p| !theirs.contains(p)).map(|p| fold(p)));
+    loop {
+        let decided = decide_in(planned, files, (old, &filled), library, holding);
+        let ended: BTreeSet<String> = planned
+            .iter()
+            .zip(&decided)
+            .filter_map(|((_, r), d)| match d {
+                Doing::Guard { file } | Doing::Blocked { file, .. } | Doing::Held { file } => {
+                    Some(fold(file))
+                }
+                Doing::Unowned { .. } => None,
+                _ => Some(fold(&path_of(r))),
+            })
+            .collect();
+        if ended.is_subset(&filled) {
+            return decided;
+        }
+        filled.extend(ended);
+    }
+}
+
+/// [`decide`] once, a folder's file the user changed staying in each
+/// folder of `filled`, folded, that a song is in once the sync is done.
+fn decide_in(
+    planned: &[PlannedSong],
+    files: &BTreeMap<usize, PathBuf>,
+    (old, filled): (&BTreeMap<PathBuf, Written>, &BTreeSet<String>),
+    library: &Path,
+    holding: &BTreeSet<usize>,
+) -> Vec<Doing> {
+    use crate::relpath::folded;
     let mut decided = settled(planned, files, old, library, holding);
-    let mut moving = movable(planned, &decided, files, old, library);
+    let mut moving = movable(planned, &decided, files, (old, filled), library);
     // Made in rounds: a move lands only where nothing is, or where a move
     // already chosen leaves, so the order chosen is an order they can run.
     let recorded: BTreeSet<&Path> = old.iter().flat_map(|(p, w)| w.files(p)).collect();
@@ -237,10 +278,7 @@ pub(super) fn decide(
     loop {
         let before = moving.len();
         moving.retain(|(i, from, to, retag)| {
-            let beside: Vec<(&Path, PathBuf)> = old[from]
-                .sidecar_paths()
-                .map(|s| (s.as_path(), crate::outputs::moved(from, to, s)))
-                .collect();
+            let beside = carried(library, filled, &old[from], (from, to));
             let fits = |from: &Path, to: &Path| own_place(library, from, to) || free(&held, to);
             if !fits(from, to) || beside.iter().any(|(a, b)| !fits(a, b)) {
                 return true;
@@ -251,9 +289,12 @@ pub(super) fn decide(
                 held.remove(&folded(a));
                 held.insert(folded(b));
             }
+            // A folder's file left behind is written anew where the song goes.
+            let left = beside.len() < old[from].sidecars.len();
             decided[*i] = Some(Doing::Move {
                 from: from.clone(),
-                retag: *retag,
+                beside,
+                retag: *retag || left,
                 order,
             });
             order += 1;
@@ -290,9 +331,10 @@ pub(super) fn decide(
             }
             // A change to the song leaves a file beside it the user changed as it is,
             // and the song with it.
-            let carried = file
-                .filter(|f| **f != path && same_media)
-                .and_then(|f| Some((f, carried_edit(library, old, (f, &path), &r.plan)?)));
+            let carried = file.filter(|f| **f != path && same_media).and_then(|f| {
+                let by = carried_edit(library, (old, filled), (f, &path), &r.plan)?;
+                Some((f, by))
+            });
             if let Some((file, by)) = carried {
                 return Doing::Blocked {
                     file: file.clone(),
@@ -330,12 +372,13 @@ pub(super) fn decide(
 /// it would take and leave and whether its tags change: its file of the
 /// same media, there, not changed since written where its tags change,
 /// no file of the user's at a name it gains beside it, and none it
-/// carries there that its plan writes again.
+/// carries there that its plan writes again, songs in the folders
+/// `filled` once they are done.
 fn movable(
     planned: &[PlannedSong],
     decided: &[Option<Doing>],
     files: &BTreeMap<usize, PathBuf>,
-    old: &BTreeMap<PathBuf, Written>,
+    (old, filled): (&BTreeMap<PathBuf, Written>, &BTreeSet<String>),
     library: &Path,
 ) -> Vec<(usize, PathBuf, PathBuf, bool)> {
     let mut moving = Vec::new();
@@ -358,7 +401,7 @@ fn movable(
         if same_media
             && !gains
             && !(retag && edited_since_written(library, old, from))
-            && carried_edit(library, old, (from, &path), &r.plan).is_none()
+            && carried_edit(library, (old, filled), (from, &path), &r.plan).is_none()
         {
             moving.push((i, from.clone(), path, retag));
         }
@@ -381,9 +424,9 @@ pub(super) fn own_place(library: &Path, from: &Path, to: &Path) -> bool {
 pub(super) struct Intent {
     /// What is done with each planned song, in the order of `planned`.
     pub decided: Vec<Doing>,
-    /// Each song's file moved to its song's path, in an order the moves
-    /// can be made.
-    pub moves: Vec<(PathBuf, PathBuf)>,
+    /// Each song's file moved to its song's path, with the files beside it
+    /// it carries, in an order the moves can be made.
+    pub moves: Vec<Relocation>,
     /// The outputs as the moves leave them, which pruning is judged by.
     pub moved: BTreeMap<PathBuf, Written>,
     /// What becomes of each file of `moved` no song makes once the sync
@@ -406,20 +449,32 @@ pub(super) fn intend(
     (failed, forced): (&BTreeSet<SourceKey>, bool),
     edits: Vec<Edit>,
 ) -> Intent {
-    let mut moves: Vec<(usize, PathBuf, PathBuf)> = planned
+    let mut moves: Vec<(usize, Relocation)> = planned
         .iter()
         .zip(&decided)
         .filter_map(|((_, r), d)| match d {
-            Doing::Move { from, order, .. } => Some((*order, from.clone(), path_of(r))),
+            Doing::Move {
+                from,
+                beside,
+                order,
+                ..
+            } => Some((
+                *order,
+                Relocation {
+                    from: from.clone(),
+                    to: path_of(r),
+                    beside: beside.clone(),
+                },
+            )),
             _ => None,
         })
         .collect();
-    moves.sort_by_key(|(order, ..)| *order);
-    let moves: Vec<(PathBuf, PathBuf)> = moves.into_iter().map(|(_, f, t)| (f, t)).collect();
+    moves.sort_by_key(|(order, _)| *order);
+    let moves: Vec<Relocation> = moves.into_iter().map(|(_, m)| m).collect();
     let mut relocated = old.clone();
-    for (from, to) in &moves {
-        if let Some(written) = relocated.remove(from) {
-            relocated.insert(to.clone(), moved_to(written, from, to));
+    for m in &moves {
+        if let Some(written) = relocated.remove(&m.from) {
+            relocated.insert(m.to.clone(), moved_to(written, &m.beside));
         }
     }
     let arrived: Vec<Doing> = decided
@@ -458,11 +513,14 @@ pub(super) fn intend(
     }
 }
 
-/// What `written` records once its file has moved from `from` to `to`,
-/// each file beside it with it.
-pub(super) fn moved_to(mut written: Written, from: &Path, to: &Path) -> Written {
+/// What `written` records once its file has moved, each file beside it
+/// that went with it as `beside` says, from and to, where it went; one
+/// that [`stays`](super::owned::stays) is recorded where it is.
+pub(super) fn moved_to(mut written: Written, beside: &[(PathBuf, PathBuf)]) -> Written {
     for sidecar in &mut written.sidecars {
-        sidecar.path = crate::outputs::moved(from, to, &sidecar.path);
+        if let Some((_, to)) = beside.iter().find(|(from, _)| *from == sidecar.path) {
+            sidecar.path.clone_from(to);
+        }
     }
     written
 }

@@ -7,8 +7,9 @@
 //! Each is named by the song's audio path without its extension and a
 //! suffix of its own, so the song's files read as one in a folder, and a
 //! song moved takes each to the same suffix at its new path; a folder's
-//! file is named in the folder, and keeps its name in the folder the song
-//! moves to. Every name a
+//! file is named in the folder ([`of_folder`]), and keeps its name in the
+//! folder the song moves to, unless the user changed it, when it stays
+//! ([`crate::folder`]). Every name a
 //! file beside a song is given, and every one a move gives it, comes from
 //! here: `tests/architecture.rs` holds every other module to deriving
 //! none. A suffix the song list gives is checked by its name
@@ -65,7 +66,6 @@ pub fn folder_file(stem: &Path, place: &CoverPlace) -> Option<PathBuf> {
 /// its name in the song's new folder.
 #[must_use]
 pub fn moved(from: &Path, to: &Path, sidecar: &Path) -> PathBuf {
-    use crate::relpath::folded;
     let stem = from.with_extension("");
     let (Some(name), Some(stem)) = (sidecar.file_name(), stem.file_name()) else {
         return beside(&to.with_extension(""), "");
@@ -79,9 +79,7 @@ pub fn moved(from: &Path, to: &Path, sidecar: &Path) -> PathBuf {
     if let Some(suffix) = suffix {
         return beside(&to.with_extension(""), &suffix);
     }
-    let mut dotted = stem.to_os_string();
-    dotted.push(".");
-    if !folded(Path::new(name)).starts_with(&folded(Path::new(&dotted))) {
+    if of_folder(from, sidecar) {
         return to.parent().unwrap_or(Path::new("")).join(name);
     }
     let extension = sidecar
@@ -89,6 +87,23 @@ pub fn moved(from: &Path, to: &Path, sidecar: &Path) -> PathBuf {
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
     beside(&to.with_extension(""), &extension)
+}
+
+/// Whether `sidecar`, beside the song at `from`, is a folder's file: one
+/// whose name does not begin with the song's, as a filesystem blind to
+/// case reports it.
+#[must_use]
+pub fn of_folder(from: &Path, sidecar: &Path) -> bool {
+    use crate::relpath::folded;
+    let (Some(name), Some(stem)) = (
+        sidecar.file_name(),
+        from.with_extension("").file_name().map(ToOwned::to_owned),
+    ) else {
+        return false;
+    };
+    let mut dotted = stem;
+    dotted.push(".");
+    !folded(Path::new(name)).starts_with(&folded(Path::new(&dotted)))
 }
 
 /// `stem` with `suffix` after it.

@@ -907,7 +907,9 @@ pub enum Moves {
 /// they left that no move went into are still listed.
 ///
 /// A file beside a song that stayed where it was moves after the song
-/// under [`Moves::Follow`]; under [`Moves::Foresee`], as a dry run
+/// under [`Moves::Follow`], but a folder's file the record lists no move
+/// of, which the run left in its folder ([`crate::folder`]); under
+/// [`Moves::Foresee`], as a dry run
 /// reads, it stays and is recorded where it is, so nothing in the
 /// library changes.
 // Moves the files beside a song a stopped run left behind it.
@@ -947,6 +949,7 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
         return 0;
     }
     let went: BTreeMap<&PathBuf, &PathBuf> = made.iter().map(|m| (&m.from, &m.to)).collect();
+    let listed = |rel: &Path| record.moves.iter().any(|m| m.from == rel);
     let before = state.outputs.clone();
     let mut followed = BTreeMap::new();
     for m in &songs {
@@ -956,7 +959,10 @@ pub fn follow_moves(home: &Path, library: &Path, state: &mut State, moves: Moves
         for sidecar in &mut written.sidecars {
             if let Some(to) = went.get(&sidecar.path) {
                 sidecar.path = (*to).clone();
-            } else if moves == Moves::Follow && library.join(&sidecar.path).exists() {
+            } else if moves == Moves::Follow
+                && library.join(&sidecar.path).exists()
+                && (!crate::outputs::of_folder(&m.from, &sidecar.path) || listed(&sidecar.path))
+            {
                 // Stopped between the audio and the files beside it: they follow now.
                 let to = crate::outputs::moved(&m.from, &m.to, &sidecar.path);
                 if !library.join(&to).exists()

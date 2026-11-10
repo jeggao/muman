@@ -841,6 +841,114 @@ fn a_folder_s_own_cover_is_left_alone_and_blocks_no_song() {
 }
 
 #[test]
+fn a_folder_s_cover_the_user_changed_stays_in_its_folder_when_its_song_moves() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "mine").unwrap();
+    let before = library_of(&s);
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", &holder.to_string(), "album=Copper Moth"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved:"), "{text}");
+    assert_eq!(std::fs::read_to_string(&cover).unwrap(), "mine", "{text}");
+    let moved = s.dir.path().join("lib/Artist/Copper Moth/cover.jpg");
+    assert_eq!(
+        std::fs::read(&moved).unwrap(),
+        crate::testing::PIXEL_JPEG,
+        "the song's new folder has muman's: {text}"
+    );
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+    let (_, report) = s.report(&flacs(), &["check"]);
+    assert!(report.contains("cover.jpg"), "{report}");
+}
+
+#[test]
+fn a_folder_s_cover_the_user_changed_stays_with_a_song_held_back_from_its_move() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let cover = s.dir.path().join("lib/Artist/Record/cover.jpg");
+    std::fs::write(&cover, "mine").unwrap();
+    let holder = holder_of(&s, "cover.jpg").expect("a song holds it");
+    assert_eq!(holder.to_string(), "manual:b.flac");
+    let lib = s.dir.path().join("lib");
+    let mine = lib.join("Record/Song.flac");
+    std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
+    std::fs::write(&mine, "my own rip").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("Moved:"), "{text}");
+    assert!(
+        text.contains("Left at Artist/Record/02 Song.flac"),
+        "{text}"
+    );
+    assert_eq!(std::fs::read_to_string(&cover).unwrap(), "mine", "{text}");
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "my own rip");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
+fn a_folder_s_cover_the_user_changed_moves_with_its_whole_album() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::write(s.dir.path().join("lib/Artist/Record/cover.jpg"), "mine").unwrap();
+    let before = library_of(&s);
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    assert_eq!(
+        std::fs::read_to_string(lib.join("Record/cover.jpg")).unwrap(),
+        "mine",
+        "{text}"
+    );
+    assert!(!lib.join("Artist").exists(), "{text}");
+
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), before, "{text}");
+}
+
+#[test]
 fn undo_takes_a_folder_s_cover_back_out() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

@@ -22,6 +22,19 @@
 //! stale to the song it leaves ([`crate::reconcile`]). A name one of the
 //! songs' own files takes is left to the song, said.
 //!
+//! A song that moves carries the folder's file with it, as it carries
+//! its own, so a folder a path template renames keeps its cover, the
+//! user's change to it with it, as their change to a song's `.lrc`. But
+//! one the user changed stays where it is while songs are left in its
+//! folder, as when the song that holds it moves to another album: it is
+//! that folder's cover, not the song's. Carried off, it would sit in
+//! another album's folder at a name the song there may not write, its
+//! own folder given a new cover in its place, and `undo`, which takes
+//! out what the run wrote but leaves a file of the user's, could not put
+//! the two back. Left, it is a file of the user's own to its folder's
+//! next holder, which writes beside it, and the song's new folder gets
+//! a cover of its own.
+//!
 //! A song held at its last plan while it fails ([`crate::reconcile`]) is
 //! one of its folder's songs still: it counts toward the albums, the
 //! majority and the cover, and one that holds the folder's file keeps
