@@ -264,9 +264,9 @@ that package manager is skipped.
 - **Pull requests:** the title is the subject and the description the
   body; a squash merge writes them to `main` as they are, so both follow
   the rules above. Open them ready for review, not as drafts. One pull
-  request is one change, the one a changelog bullet or a few describe.
-  Past about a thousand changed lines, split it where it splits
-  cleanly; one that does not says why in its description.
+  request is one change, the one a changelog bullet or a few describe;
+  one over about a thousand changed lines is split before review, a
+  release pull request apart.
 - **Merging:** squash and merge, every time. A rebase merge puts a
   branch's authors and half-made commits on `main`.
 - `cargo xtask commits` checks these rules on a pull request's commits,
