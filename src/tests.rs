@@ -3940,6 +3940,49 @@ fn set_step_by_step_tags_an_album_types_an_offset_and_names_another_tag() {
     let after = std::fs::read_to_string(&list).unwrap();
     let album_table = &after[after.find("[[album]]").unwrap()..];
     assert!(album_table.contains("genre = \"Folk\""), "{after}\n{text}");
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Save 1 change to 2 songs?"),
+        "one field, on the album: {text}"
+    );
+}
+
+#[test]
+fn set_step_by_step_counts_and_marks_only_what_differs() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (title, audio, offset, review) = (0, 7, 10, 12);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    p.push_select(Some(offset)).push_text(Some(""));
+    p.push_select(Some(audio)).push_select(Some(0));
+    p.push_select(Some(title)).push_select(Some(1));
+    p.push_text(Some("Tide"));
+    p.push_select(Some(review));
+    let text = s
+        .trusting(&flacs(), &["set", "manual:a.flac"], Some(&mut p))
+        .unwrap();
+    let menus: Vec<&String> = (p.asked.iter())
+        .filter(|a| a.starts_with("What to change?"))
+        .collect();
+    assert_eq!(menus.len(), 4, "{:?}", p.asked);
+    for menu in &menus[..3] {
+        assert!(menu.starts_with("What to change?\n"), "{menu}");
+        assert!(!menu.contains('✎'), "nothing to be: {menu}");
+    }
+    assert!(
+        menus[3].starts_with("What to change? (1 change chosen)"),
+        "{}",
+        menus[3]
+    );
+    assert_eq!(
+        p.asked.last().map(String::as_str),
+        Some("Save 1 change to Song — Artist?"),
+        "{text}"
+    );
+    assert!(!text.contains("lyrics offset"), "{text}");
+    assert!(!text.contains("audio: picked by measure"), "{text}");
 }
 
 #[test]

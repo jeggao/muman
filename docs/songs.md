@@ -81,7 +81,9 @@ song when negated.
   on one album, you can set an album field, such as the genre or date,
   on the album itself, for its songs and any added later, which clears
   each song's own. Nothing is saved until "Review and save", which says
-  each change and asks.
+  each change and asks. A choice that leaves the songs as they are, as
+  an empty offset left empty, is no change: it is neither marked nor
+  counted, and a field set on the album counts once.
 - **`review`**, on a terminal, steps through each song whose picks
   `muman check` finds in doubt, a query limiting it, and shows why:
   a title won by the order of `sources`, a source set aside, two

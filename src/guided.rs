@@ -15,7 +15,11 @@
 //!
 //! What is chosen is kept as the assignments `set` makes, one a field,
 //! and nothing is written until it is reviewed: said song by song, then
-//! asked about by name, then saved as one change `undo` reverses. A song
+//! asked about by name, then saved as one change `undo` reverses. A
+//! choice that leaves every song as it is, as Enter on an empty offset
+//! or a pin taken off a song pinned to nothing, is no change: it is
+//! neither marked to be made nor counted. A field set on the album, and
+//! cleared on its songs so the album's value shows, is one change. A song
 //! changed meanwhile, by hand or by another run, has the choices applied
 //! again to it as it is now, rather than the work lost.
 
@@ -91,15 +95,19 @@ pub fn edit<W: Write>(
             .collect();
         let songs = change::rewrite(&read, &picked, &chosen, out)?;
         let held = album.as_ref().and_then(|a| read.manifest.album(a)).cloned();
-        let album_edit = match (&held, on_album.is_empty()) {
+        let new_on_album: Vec<_> = (on_album.iter())
+            .filter(|(name, values)| held.as_ref().is_some_and(|a| !holds(a, name, values)))
+            .cloned()
+            .collect();
+        let album_edit = match (&held, new_on_album.is_empty()) {
             (Some(a), false) => {
                 crate::ui::line(out, &format!("  ~ the album {}", album_name(a)))?;
-                for (tag, values) in &on_album {
+                for (tag, values) in &new_on_album {
                     crate::ui::line(out, &format!("    {tag}: {}", show(values)))?;
                 }
                 Some(Edit::AlbumTags {
                     source: a.source.clone(),
-                    tags: on_album.clone(),
+                    tags: new_on_album.clone(),
                 })
             }
             _ => None,
@@ -117,7 +125,7 @@ pub fn edit<W: Write>(
         };
         let ask = Ask::YesNo(format!(
             "Save {} to {whose}?",
-            change::counted(chosen.len() + on_album.len(), "change")
+            change::counted(changing(&read, &picked, &chosen, &new_on_album)?, "change")
         ));
         if !change::confirmed(confirm, &ask, Some(&mut *p), out)? {
             return Ok(false);
@@ -199,7 +207,7 @@ impl Session<'_> {
         crate::ui::info(out, &head)?;
         loop {
             let (items, labels) = self.menu();
-            let count = self.pending.len() + self.on_album.len();
+            let count = fields(&self.pending, &self.on_album);
             let question = match count {
                 0 => "What to change?".to_string(),
                 n => format!("What to change? ({} chosen)", change::counted(n, "change")),
@@ -235,10 +243,14 @@ impl Session<'_> {
         }
     }
 
-    /// Keep `a` in place of anything chosen for its field before.
-    fn choose(&mut self, a: Assign) {
+    /// Keep `a` in place of anything chosen for its field before; one
+    /// that changes no song is kept as nothing chosen.
+    fn choose(&mut self, a: Assign) -> Result<()> {
         self.pending.retain(|x| x.name() != a.name());
-        self.pending.push(a);
+        if change::changes(self.read, self.picked, &a)? {
+            self.pending.push(a);
+        }
+        Ok(())
     }
 
     /// What was chosen for `name`, if anything.
@@ -484,16 +496,16 @@ impl Session<'_> {
                 None => return Ok(()),
                 Some(1) => {
                     self.on_album.retain(|(n, _)| tags::vorbis_key(n) != key);
-                    self.on_album.push((name.to_string(), values));
-                    self.choose(Assign::Tag(name.to_string(), Vec::new()));
-                    return Ok(());
+                    if !holds(album, name, &values) {
+                        self.on_album.push((name.to_string(), values));
+                    }
+                    return self.choose(Assign::Tag(name.to_string(), Vec::new()));
                 }
                 Some(_) => {}
             }
         }
         self.on_album.retain(|(n, _)| tags::vorbis_key(n) != key);
-        self.choose(Assign::Tag(name.to_string(), values));
-        Ok(())
+        self.choose(Assign::Tag(name.to_string(), values))
     }
 
     /// Ask for the lyrics offset of the songs picked, as a time.
@@ -519,7 +531,7 @@ impl Session<'_> {
                 .then(|| typed.trim().parse::<crate::units::Time>().map(|t| t.0))
                 .transpose()
                 .map_err(|e| anyhow::anyhow!(e))?;
-            self.choose(Assign::Offset(ms));
+            self.choose(Assign::Offset(ms))?;
         }
         Ok(())
     }
@@ -599,7 +611,7 @@ impl Session<'_> {
             .select(&format!("Which source gives the {pin}?"), &labels)?
             .and_then(|i| picks.get(i).cloned())
         {
-            self.choose(a);
+            self.choose(a)?;
         }
         Ok(())
     }
@@ -628,6 +640,47 @@ fn another(p: &mut dyn Prompter) -> Result<Option<String>> {
     Ok(typed
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty()))
+}
+
+/// How many fields `chosen` and `on_album` change, a field set on the
+/// album and cleared on its songs counted once.
+fn fields(chosen: &[Assign], on_album: &[(String, Vec<String>)]) -> usize {
+    let mut names: Vec<String> = (chosen.iter())
+        .map(|a| match a {
+            Assign::Tag(name, _) => tags::vorbis_key(name),
+            other => other.name().to_string(),
+        })
+        .chain(on_album.iter().map(|(name, _)| tags::vorbis_key(name)))
+        .collect();
+    names.sort();
+    names.dedup();
+    names.len()
+}
+
+/// How many fields `chosen` and `on_album` change on the songs at
+/// `picked` as `read` holds them, as [`fields`] counts them.
+fn changing(
+    read: &Read,
+    picked: &[usize],
+    chosen: &[Assign],
+    on_album: &[(String, Vec<String>)],
+) -> Result<usize> {
+    let mut differ = Vec::new();
+    for a in chosen {
+        if change::changes(read, picked, a)? {
+            differ.push(a.clone());
+        }
+    }
+    Ok(fields(&differ, on_album))
+}
+
+/// Whether `album` sets `name` to `values` already.
+fn holds(album: &crate::manifest::Album, name: &str, values: &[String]) -> bool {
+    let key = tags::vorbis_key(name);
+    let now = (album.tags.iter())
+        .find(|(k, _)| tags::vorbis_key(k) == key)
+        .map_or(&[][..], |(_, v)| v.as_slice());
+    now == values
 }
 
 /// The album every song at `picked` is on, if they share one.

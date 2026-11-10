@@ -763,8 +763,32 @@ impl Assign {
     }
 }
 
+/// Whether `a` changes any song at `picked` as the song list holds it:
+/// one already so, as a pin taken off a song pinned to nothing, is no
+/// change.
+pub(crate) fn changes(read: &Read, picked: &[usize], a: &Assign) -> Result<bool> {
+    let ids: Vec<SourceKey> = picked
+        .iter()
+        .filter_map(|n| read.manifest.songs[*n].id().cloned())
+        .collect();
+    let mut tables = read.manifest.tables_by_id(&ids)?;
+    for n in picked {
+        let song = &read.manifest.songs[*n];
+        let Some(table) = song.id().and_then(|id| tables.get_mut(id)) else {
+            continue;
+        };
+        let before = table.to_string();
+        a.apply(table, song)?;
+        if table.to_string() != before {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The songs at `picked` with `assigns` applied, each said to `out` as
-/// it changes; a song already so is left out.
+/// it changes, by the assignments that change it; a song already so is
+/// left out.
 pub(crate) fn rewrite<W: Write>(
     read: &Read,
     picked: &[usize],
@@ -784,16 +808,20 @@ pub(crate) fn rewrite<W: Write>(
         let Some(mut table) = tables.remove(&id) else {
             bail!("{id} is no longer listed");
         };
-        let before = table.to_string();
+        let mut said = Vec::new();
         for a in assigns {
+            let before = table.to_string();
             a.apply(&mut table, song)?;
+            if table.to_string() != before {
+                said.push(a.describe(view));
+            }
         }
-        if table.to_string() == before {
+        if said.is_empty() {
             continue;
         }
         crate::ui::line(out, &format!("  ~ {}", named(view)))?;
-        for a in assigns {
-            crate::ui::line(out, &format!("    {}", a.describe(view)))?;
+        for line in said {
+            crate::ui::line(out, &format!("    {line}"))?;
         }
         songs.push((id, Rewritten::Table(SongTable(table))));
     }
