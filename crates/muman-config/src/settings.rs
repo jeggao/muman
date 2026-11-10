@@ -1559,13 +1559,6 @@ pub fn read_with(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> 
     if library.block_size.0 == 0 {
         bail!("[library] block_size must be above 0");
     }
-    if library
-        .template
-        .split('/')
-        .all(|part| part.trim().is_empty())
-    {
-        bail!("[library] template names no path for a song");
-    }
     let least = [
         (
             "max_name_bytes",
@@ -1951,7 +1944,8 @@ mod tests {
         );
         assert!(settings("[library]\nmax_folder_bytes = 3\n").is_err());
         assert!(settings("[library]\nmax_name_bytes = 40\nmax_folder_bytes = 16\n").is_ok());
-        assert!(settings("[library]\ntemplate = \" / / \"\n").is_err());
+        let empty = settings("[library]\ntemplate = \" / / \"\n").unwrap();
+        assert!(empty.library.naming(Path::new("lib")).is_err());
         let e = settings("[library]\nmax_folder_bytes = 1000\n").unwrap_err();
         assert!(format!("{e:#}").contains("at most 255"), "{e:#}");
         assert!(settings("[library]\nmax_name_bytes = 255\n").is_ok());

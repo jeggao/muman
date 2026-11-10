@@ -99,11 +99,10 @@ A quantity takes its unit after the number; the space is optional:
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 
-Every unit but `LUFS` and `LKFS` may also be spelled out, singular or
-plural, as `"2 gibibytes"`, `"3 hours"` or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary
-sizes, as `KiB`; `KB`, `MB` and `GB` are decimal. A bare number is
-bytes for a size, hertz for a frequency and a fraction for a share. A
-bitrate, a time, a loudness or a level needs its unit.
+Every unit but `LUFS` and `LKFS` may be spelled out, as `"2 gibibytes"`
+or `"-1 decibel"`. `K`, `M`, `G` and `T` alone are binary sizes; `KB`,
+`MB` and `GB` decimal. A bare number is bytes, hertz or a fraction; a
+bitrate, time, loudness or level needs its unit.
 
 | Table | Sets |
 |---|---|
@@ -410,8 +409,10 @@ without the extension. `/` in the template separates folders.
 | `bpm`, `key` | The tempo and the musical key, or empty |
 | `id` | The ID or file name of the song's audio source |
 
-A template naming any other variable is refused before a sync fetches
-or writes anything (exit 5); `list` and `edit` still work.
+A template that does not parse, names another variable or a filter or
+test there is not, or gives `pad` or `truncate` other than a whole
+number up to 255 is refused before a sync fetches or writes anything
+(exit 5); `list` and `edit` still work.
 
 Beside MiniJinja's own filters (`default`, `lower`, `upper`, `replace`,
 `first`, `join` and more), muman adds:
@@ -435,11 +436,10 @@ template = "{{ album_artist }}/{% if year %}{{ year }} - {% endif %}{{ album }}/
 template = "{{ genre | default('Unsorted', true) }}/{{ artist }} - {{ title }}"
 ```
 
-muman makes every tag value safe before the template sees it, so a `/`
-in a title never makes a folder; only the template's own `/` does. When two
-songs resolve to one path, the second song's source ID tells them
-apart: `Title [vid00000001]`. `muman status` shows each song's path
-before anything is written.
+Every tag value is made safe before the template sees it, so only the
+template's own `/` makes a folder. Two songs of one path are told apart
+by the second's source ID: `Title [vid00000001]`. `muman status` shows
+each song's path before anything is written.
 
 ## Safe names on every system
 

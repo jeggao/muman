@@ -5059,7 +5059,10 @@ fn check_reports_a_song_no_sync_can_build() {
     let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
     std::fs::write(
         &songs,
-        listed.replace(&default, "template = \"{{ title | truncate('x') }}\""),
+        listed.replace(
+            &default,
+            "template = \"{% if title not in ['', 'Title'] %}{{ 1 + title }}{% endif %}x\"",
+        ),
     )
     .unwrap();
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -5101,6 +5104,35 @@ fn a_template_naming_no_field_is_refused_before_the_sync_while_songs_still_list(
     assert!(s.listed(&["list"]).contains("manual:a.flac"));
     let (ok, report) = s.report(&flacs(), &["check"]);
     assert!(!ok && report.contains("names albm"), "{report}");
+}
+
+#[test]
+fn a_template_that_cannot_name_every_song_is_refused_before_anything_is_written() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let before = library_of(&s);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    for template in [
+        "{{ title",
+        "{{ title | nofilter }}",
+        "{{ track | pad(65536) }}/{{ title }}",
+        "{{ title | truncate(-1) }}",
+    ] {
+        std::fs::write(
+            &songs,
+            listed.replace(&default, &format!("template = \"{template}\"")),
+        )
+        .unwrap();
+        for args in [&["sync"][..], &["status"]] {
+            let e = s.refused(args);
+            assert!(e.contains("the library template"), "{template}: {e}");
+        }
+        assert_eq!(library_of(&s), before, "{template}");
+        assert!(s.listed(&["list"]).contains("manual:a.flac"), "{template}");
+    }
 }
 
 #[test]
