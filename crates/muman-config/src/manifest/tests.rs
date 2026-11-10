@@ -749,6 +749,31 @@ fn an_override_of_a_torrent_s_or_channel_s_sources_is_read_and_kept() {
         write(dir.path(), bad);
         assert!(Manifest::load(dir.path()).is_err(), "{bad}");
     }
+    let hash = "0123456789abcdef".repeat(4);
+    for (bad, said) in [
+        ("torrent = \"xyz\"".to_string(), "no info hash"),
+        (format!("torrent = \"{}\"", &hash[..39]), "no info hash"),
+        (format!("torrent = \"{}g\"", &hash[..39]), "no info hash"),
+        (
+            format!("torrent = \"{}\"\nchannel = \"x\"", &hash[..40]),
+            "both",
+        ),
+        ("channel = \" \"".to_string(), "names no channel"),
+    ] {
+        write(
+            dir.path(),
+            &format!("[[tags.from]]\n{bad}\ncredits = false\n"),
+        );
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains(said), "{bad}: {e:#}");
+    }
+    for good in [hash[..40].to_uppercase(), hash.clone()] {
+        write(
+            dir.path(),
+            &format!("[[tags.from]]\ntorrent = \"{good}\"\ncredits = false\n"),
+        );
+        assert!(Manifest::load(dir.path()).is_ok(), "{good}");
+    }
 }
 
 #[test]

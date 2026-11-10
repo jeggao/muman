@@ -2084,8 +2084,24 @@ fn override_of(table: &Table) -> Result<crate::overrides::Override> {
         })
         .transpose()?;
     let (torrent, channel) = (text("torrent")?, text("channel")?);
-    if torrent.is_none() && channel.is_none() {
-        bail!("a `[[tags.from]]` names no `torrent` or `channel`");
+    match (&torrent, &channel) {
+        (None, None) => bail!("a `[[tags.from]]` names no `torrent` or `channel`"),
+        (Some(_), Some(_)) => bail!(
+            "a `[[tags.from]]` names both a `torrent` and a `channel`; give each a table of its own"
+        ),
+        _ => {}
+    }
+    if let Some(hash) = &torrent
+        && !crate::torrent::is_hash(&hash.trim().to_ascii_lowercase())
+    {
+        bail!(
+            "`[[tags.from]] torrent`: `{hash}` is no info hash, {} or {} hex digits",
+            crate::torrent::V1_HEX,
+            crate::torrent::V2_HEX
+        );
+    }
+    if channel.as_deref().is_some_and(|c| c.trim().is_empty()) {
+        bail!("`[[tags.from]] channel` names no channel");
     }
     Ok(crate::overrides::Override {
         torrent,

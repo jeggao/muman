@@ -3146,7 +3146,7 @@ fn restyle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut 
     let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
     let styled = style.apply(&title, &artist);
     if styled.artist != artist {
-        artists.retain(|a| !styled.removed.iter().any(|r| r.eq_ignore_ascii_case(a)));
+        artists.retain(|a| !styled.removed.iter().any(|r| similar::caseless(r, a)));
         artists.extend(styled.added.iter().cloned());
     }
     for (field, was, now) in [

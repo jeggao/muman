@@ -335,6 +335,20 @@ pub fn fold(s: &str) -> String {
     without_article(&folded).to_string()
 }
 
+/// Whether `a` and `b` are one name written alike but for case, in any
+/// script: NFC, then full Unicode case folding, so `ÖLUND` is `ölund` and
+/// `STRASSE` is `straße`. Marks, punctuation and articles still count,
+/// as a name given in the song list is matched as written.
+#[must_use]
+pub fn caseless(a: &str, b: &str) -> bool {
+    let fold = |s: &str| {
+        CaseMapper::new()
+            .fold_string(&s.trim().nfc().collect::<String>())
+            .into_owned()
+    };
+    fold(a) == fold(b)
+}
+
 fn without_article(mut s: &str) -> &str {
     while let Some(rest) = s.strip_prefix("the ").or_else(|| s.strip_suffix(" the")) {
         s = rest;

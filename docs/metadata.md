@@ -283,9 +283,11 @@ status` names `style` among what changed a value.
 
 One rip tags every file the same wrong way, and one channel titles
 every upload one way. A `[[tags.from]]` in the song list says what the
-sources of one torrent, by its info hash, or of one channel, by the
-name its uploads credit where they name no artist of their own, are
-not believed for, before any rule cleans them:
+sources of one torrent, by its info hash of 40 or 64 hex digits, or of
+one channel, by the name its uploads credit where they name no artist
+of their own, case aside in any script, are not believed for, before any rule cleans them. Each
+table names one torrent or one channel, and muman refuses one naming
+both or a hash that is none:
 
 ```toml
 [[tags.from]]

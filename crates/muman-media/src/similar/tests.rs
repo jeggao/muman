@@ -28,6 +28,18 @@ fn latin_folds_case_width_marks_and_letters_without_a_base() {
 }
 
 #[test]
+fn caseless_names_ignore_case_in_any_script_and_nothing_else() {
+    assert!(caseless("ÖLUND ÄRCHIVE", "ölund ärchive"));
+    assert!(caseless("ΚΑΛΗ", "καλη"));
+    assert!(caseless("ЛЕС", "лес"));
+    assert!(caseless("STRASSE", "straße"));
+    assert!(caseless("Lo\u{308}wen", "LÖWEN"), "composed or not");
+    assert!(caseless(" Orchard Archive ", "orchard archive"));
+    assert!(!caseless("Olund", "Ölund"));
+    assert!(!caseless("The Orchard", "Orchard"));
+}
+
+#[test]
 fn cyrillic_and_greek_keep_their_letters_apart() {
     assert!(same("Ёлка", "елка"));
     assert!(!same("Мой", "Мои"));

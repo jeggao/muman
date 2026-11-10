@@ -495,7 +495,7 @@ fn evidence(
         let mine: Vec<&str> = s.values(field).collect();
         theirs(field)
             .iter()
-            .any(|t| mine.iter().any(|m| m.trim().eq_ignore_ascii_case(t.trim())))
+            .any(|t| mine.iter().any(|m| similar::caseless(m, t)))
     };
     let titles = theirs(Field::Title);
     let their_credits: Vec<&str> = theirs(Field::Artist)
