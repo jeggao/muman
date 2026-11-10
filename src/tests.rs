@@ -3114,7 +3114,7 @@ fn edit_shows_where_each_tag_comes_from_and_hides_what_was_held() {
         false,
         Some(&mut p),
         &mut editor,
-        &mut || Ok(()),
+        &mut crate::history::Later::new(&dirs.home).unwrap(),
         &mut Vec::new(),
     )
     .unwrap();
@@ -3373,6 +3373,65 @@ fn an_add_stopped_at_any_step_leaves_no_copy_undo_cannot_take_out() {
         );
         let m = Manifest::load(&s.dir.path().join("home")).unwrap();
         assert!(m.songs.is_empty(), "step {at}: {undone:?}");
+    }
+}
+
+#[test]
+fn an_add_stopped_at_any_step_is_undone_at_once() {
+    let whole = Setup::new();
+    let given = whole.file("rips/a.flac");
+    let counted = crate::kill::kill_at(whole.dir.path(), usize::MAX);
+    whole.run(&flacs(), &["add", &given]);
+    let steps = counted.seen();
+    drop(counted);
+    for at in 1..=steps {
+        let s = Setup::new();
+        let given = s.file("rips/a.flac");
+        let kill = crate::kill::kill_at(s.dir.path(), at);
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_with(
+                &s.job(&["add", &given]),
+                &flacs(),
+                &Server::default(),
+                None,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }));
+        drop(kill);
+        assert!(stopped.is_err(), "not stopped at step {at} of {steps}");
+        let undone = s.trusting(&flacs(), &["undo", "-y"], None);
+        if let Err(e) = &undone {
+            assert!(
+                format!("{e:#}").contains("no run to undo"),
+                "step {at}: {e:#}"
+            );
+        }
+        let m = Manifest::load(&s.dir.path().join("home")).map(|m| m.songs.len());
+        assert!(m.is_err() || m.unwrap() == 0, "step {at}: {undone:?}");
+        assert!(library_of(&s).is_empty(), "step {at}: {undone:?}");
+    }
+}
+
+#[test]
+fn a_change_with_no_run_kept_before_it_is_undone() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    std::fs::remove_dir_all(s.dir.path().join("home/history")).unwrap();
+    let songs = s.dir.path().join("home/songs.toml");
+    let (listed, library) = (std::fs::read_to_string(&songs).unwrap(), library_of(&s));
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+    ] {
+        let (ok, text) = s.run(&flacs(), args);
+        assert!(ok, "{args:?}: {text}");
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "{args:?}: {text}");
+        assert_eq!(std::fs::read_to_string(&songs).unwrap(), listed, "{args:?}");
+        assert_eq!(library_of(&s), library, "{args:?}: {text}");
     }
 }
 

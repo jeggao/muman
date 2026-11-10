@@ -409,8 +409,8 @@ fn summarize<W: Write>(
 }
 
 /// Open the songs the query picks in an editor, run by `editor` on the
-/// file's path, and apply what changed, calling `on_saved` once it is saved.
-/// Returns whether anything did.
+/// file's path, and apply what changed, under the run `later` begins as
+/// it saves. Returns whether anything did.
 // Writes the file the editor is opened on, in scratch.
 #[expect(clippy::disallowed_methods)]
 pub fn edit<W: Write>(
@@ -419,7 +419,7 @@ pub fn edit<W: Write>(
     all: bool,
     mut prompter: Option<&mut dyn Prompter>,
     editor: &mut dyn FnMut(&Path) -> Result<()>,
-    on_saved: &mut dyn FnMut() -> Result<()>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     if prompter.is_none() {
@@ -469,13 +469,15 @@ pub fn edit<W: Write>(
                 continue;
             }
         };
+        later.begin()?;
         read.manifest.edit(edit.clone());
         let changed = read.manifest.save_if_unchanged(&expected)?;
         if changed.is_empty() {
-            on_saved()?;
+            later.saved()?;
             summarize(&edit, &opened, &gone, out)?;
             return Ok(true);
         }
+        later.abandon();
         read.manifest = crate::manifest::Manifest::load(&dirs.home)?;
         gone = opened
             .iter()

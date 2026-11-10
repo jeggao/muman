@@ -158,6 +158,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`undo` takes back a change with no earlier run kept**, as after the
+  history was let go of: `set`, `remove` and `restore` record the song
+  list as they found it.
+- **Ctrl-C while a change waits for another run cancels it**: `set`,
+  `remove` and `restore` wait before they save, not after.
+- **A run stopped as it saves the song list is undone**: an `add`
+  stopped in its lookups, after listing its songs, no longer leaves a
+  run `undo` refuses as changed by hand.
+- **`check --upstream` asks every site it can reach**, naming the
+  sources of a site that cannot be reached, rather than stopping at the
+  first.
 - **A torrent with a file named like a drive is added**: `a:b.flac` no
   longer refuses the whole torrent; it is kept as `a：b.flac`.
 - **A file renamed in `sources/manual` is followed at once**, rather

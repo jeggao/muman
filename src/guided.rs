@@ -133,13 +133,16 @@ pub fn edit<W: Write>(
             read.manifest.edit(edit);
         }
         let albums: Vec<_> = held.into_iter().collect();
+        if let Some(later) = later.as_deref_mut() {
+            later.begin()?;
+        }
         if read
             .manifest
             .save_if_unchanged_with(&expected, &albums)?
             .is_empty()
         {
             if let Some(later) = later.as_deref_mut() {
-                later.begin()?;
+                later.saved()?;
             }
             return Ok(true);
         }

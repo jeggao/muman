@@ -295,9 +295,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 to: to.clone(),
             });
         }
+        if let Some(run) = run.as_deref_mut() {
+            run.saving(home)?;
+        }
         manifest.save_locked(&lock)?;
         if let Some(run) = run.as_deref_mut() {
             run.saw(&manifest);
+            run.saved(home)?;
         }
         for at in linked {
             crate::store::unplace(&ytdlp, &at)?;
@@ -614,9 +618,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
     for edit in edits {
         manifest.edit(edit);
     }
+    if let Some(run) = run.as_deref_mut() {
+        run.saving(home)?;
+    }
     manifest.save_locked(&lock)?;
     if let Some(run) = run {
         run.saw(&manifest);
+        run.saved(home)?;
         run.synced();
     }
     let counts = (

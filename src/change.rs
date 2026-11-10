@@ -370,14 +370,13 @@ pub fn remove<W: Write>(
             note: view.name(),
         });
     }
+    later.begin()?;
     read.save(&picked)?;
     let run = later.begin()?;
     for (file, _) in doomed.iter().filter(|(_, own)| *own) {
         run.trashed(&dirs.home, file);
     }
-    if doomed.iter().any(|(_, own)| *own) {
-        run.checkpoint(&dirs.home)?;
-    }
+    later.saved()?;
     purge_all(doomed)?;
     Ok(true)
 }
@@ -544,8 +543,9 @@ pub fn restore<W: Write>(
     for id in picked.iter().filter_map(|n| views[*n].id()) {
         manifest.edit(Edit::Restore(id.clone()));
     }
-    manifest.save()?;
     later.begin()?;
+    manifest.save()?;
+    later.saved()?;
     Ok(true)
 }
 
@@ -822,8 +822,9 @@ pub fn set<W: Write>(
         songs,
         new: Vec::new(),
     });
-    read.save(&picked)?;
     later.begin()?;
+    read.save(&picked)?;
+    later.saved()?;
     Ok(true)
 }
 

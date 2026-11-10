@@ -64,7 +64,7 @@ fn edit_with(h: &Home, steps: &[Step]) -> (bool, String, Vec<String>) {
         false,
         Some(&mut prompter),
         &mut editor,
-        &mut || Ok(()),
+        &mut crate::history::Later::new(&h.dirs.home).unwrap(),
         &mut out,
     )
     .unwrap();
@@ -155,7 +155,7 @@ fn a_source_listed_twice_is_said_by_the_file_s_own_numbers() {
         false,
         Some(&mut prompter),
         &mut editor,
-        &mut || Ok(()),
+        &mut crate::history::Later::new(&h.dirs.home).unwrap(),
         &mut Vec::new(),
     )
     .unwrap();

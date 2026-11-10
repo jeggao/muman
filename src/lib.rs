@@ -462,7 +462,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             yes,
             dry_run,
         } if *resolve || merge.is_some() => {
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let confirm = cli::Confirm {
                 yes: *yes,
                 all: false,
@@ -634,14 +634,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             purge,
             confirm,
         } => {
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(job, runner, Options::default(), Some(run), due, out)
             })
         }
         Command::Restore { query, confirm } => {
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let changed = change::restore(dirs, query, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
@@ -651,30 +651,30 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             })
         }
         Command::Review { query } => {
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let changed = review::review(dirs, query, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(job, runner, Options::default(), Some(run), due, out)
             })
         }
         Command::Set { terms, confirm } => {
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let changed = change::set(dirs, terms, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 reconcile_now(job, runner, Options::default(), Some(run), due, out)
             })
         }
         Command::Edit { query, all } => {
-            // Begun once the edit is saved, so an open editor holds no other
+            // Begun as the edit is saved, so an open editor holds no other
             // run back.
-            let mut later = Later::new(&dirs.home);
+            let mut later = Later::new(&dirs.home)?;
             let edited = editor::edit(
                 dirs,
                 query,
                 *all,
                 change::reborrow(&mut prompter),
                 &mut editor::launch,
-                &mut || later.begin().map(drop),
+                &mut later,
                 out,
             );
             synced_after(job, runner, later, edited, out, |run, due, out| {

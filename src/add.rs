@@ -123,6 +123,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             loose: !loose.is_empty(),
         };
         let mut prompter = prompter;
+        run.saving(&dirs.home)?;
         let listed = list(
             runner,
             dirs,
@@ -144,10 +145,9 @@ pub(crate) fn run<R: Runner, W: Write>(
             .copied
             .iter()
             .for_each(|f| run.copied(&dirs.home, f));
-        if !attached.copied.is_empty() {
-            run.checkpoint(&dirs.home)?;
-        }
         give_tags(dirs, &attached.songs, &how, listed, out)?;
+        // Listing, attaching and tagging each save the song list.
+        run.saved(&dirs.home)?;
         ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
         ok &= crate::reconcile_now(
             job,

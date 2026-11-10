@@ -22,7 +22,9 @@
 //!
 //! The record is written ahead of what it records: before the run moves,
 //! writes over or removes a library file, which a sync does only through
-//! [`crate::library::Ledger`], or writes a new one, and again as it goes,
+//! [`crate::library::Ledger`], or writes a new one, before and after it
+//! saves the song list ([`Run::saving`]), so `undo` takes the song list
+//! of a run stopped between the two as the run's own, and again as it goes,
 //! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
 //! interrupted, and can be undone. The next run that changes the home,
 //! holding the runs lock that proves the stopped one gone, goes on in
@@ -129,6 +131,9 @@ struct Moved {
 }
 
 /// What one run changed, as `undo` reads it.
+// Each flag is a key of `run.json` of its own, which records of every
+// version read alike.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Record {
     #[serde(default = "version_one")]
@@ -139,6 +144,11 @@ struct Record {
     /// Set by an `undo` under way, so a second one finishes it.
     #[serde(default)]
     undoing: bool,
+    /// Set, recorded ahead, as the run saves the song list, and cleared
+    /// once it has: a run stopped between the two may have left the song
+    /// list as it saved it, which its last record does not say.
+    #[serde(default)]
+    saving: bool,
     /// Set once that undo put the song list and the state back, leaving
     /// only its sync to do.
     #[serde(default)]
@@ -226,33 +236,60 @@ pub struct Run {
     _runs: atomic::Lock,
 }
 
-/// A run begun only once a command has saved the song list, its
-/// questions answered: no other run waits on an answer, and a change
-/// declined begins none. The run takes up the change as it takes up a
-/// hand edit, its song list before being the one the last run left, so
-/// one `undo` takes it back. What the command read is checked again as it
-/// saves, a song changed meanwhile refusing the save.
+/// The run of a command that asks before it changes the song list,
+/// begun only once its questions are answered, as it saves: no other run
+/// waits on an answer, and a change declined begins none. The song list
+/// as the command found it is kept from the start, so a run begun after
+/// a save, as `review` begins its run once its last question is
+/// answered, still knows what it was before where no earlier run says.
+/// What the command read is checked again as it saves, a song changed
+/// meanwhile refusing the save.
 #[derive(Debug)]
 pub struct Later {
     home: PathBuf,
+    found: Option<String>,
     run: Option<Run>,
 }
 
 impl Later {
-    #[must_use]
-    pub fn new(home: &Path) -> Self {
-        Self {
+    /// A run to begin later, the song list read whole now.
+    pub fn new(home: &Path) -> Result<Self> {
+        let found = {
+            let _lock = atomic::Lock::folder(home)?;
+            songs_text(home)?
+        };
+        Ok(Self {
             home: home.to_path_buf(),
+            found,
             run: None,
+        })
+    }
+
+    /// The run, begun now if it was not, and recorded ahead as about to
+    /// save the song list ([`Run::saving`]): called just before the
+    /// command saves, so a run under way is waited for while nothing is
+    /// changed yet.
+    pub fn begin(&mut self) -> Result<&mut Run> {
+        let run = match &mut self.run {
+            Some(run) => run,
+            none => none.insert(Run::begin_from(&self.home, self.found.as_deref())?),
+        };
+        run.saving(&self.home)?;
+        Ok(run)
+    }
+
+    /// Note that the command saved the song list ([`Run::saved`]).
+    pub fn saved(&mut self) -> Result<()> {
+        match &mut self.run {
+            Some(run) => run.saved(&self.home),
+            None => Ok(()),
         }
     }
 
-    /// The run, begun now if it was not.
-    pub fn begin(&mut self) -> Result<&mut Run> {
-        match &mut self.run {
-            Some(run) => Ok(run),
-            none => Ok(none.insert(Run::begin(&self.home)?)),
-        }
+    /// Let go of a run begun for a save refused, as before asking again:
+    /// it changed nothing, and holds no other run back while it asks.
+    pub fn abandon(&mut self) {
+        self.run = None;
     }
 
     /// The run, if one began.
@@ -400,6 +437,12 @@ fn made_by(record: &Record, home: &Path) -> BTreeSet<PathBuf> {
 impl Run {
     /// Begin recording, with the song list as it is before anything.
     pub fn begin(home: &Path) -> Result<Self> {
+        Self::begin_from(home, None)
+    }
+
+    /// [`Self::begin`] for a command that read the song list as `found`
+    /// before it changed it: its song list before, where no run kept says.
+    pub fn begin_from(home: &Path, found: Option<&str>) -> Result<Self> {
         // A clock coarser than a nanosecond can repeat a reading; the
         // count keeps two runs of one process apart regardless.
         static STARTED: AtomicU32 = AtomicU32::new(0);
@@ -419,7 +462,7 @@ impl Run {
         // As the last run left it, when one is kept: a hand edit since is
         // part of what this run applies, and undone with it.
         let kept = runs(home).unwrap_or_default();
-        for dir in &kept {
+        for dir in kept.iter().chain(&strays(home)) {
             atomic::clear_parts(dir);
         }
         let last = Some(kept)
@@ -455,7 +498,7 @@ impl Run {
             (Some(left), now) => (left, now.ok().flatten()),
             (None, now) => {
                 let now = now?;
-                (now.clone(), now)
+                (found.map(str::to_string).or_else(|| now.clone()), now)
             }
         };
         // A song list that does not read keeps the default history; the
@@ -481,6 +524,9 @@ impl Run {
             Some((dir, mut record)) => {
                 record.version = VERSION;
                 record.songs_before = songs_before;
+                // The song list the stopped run may have saved is this run's
+                // to go on from, as it stands.
+                record.saving = false;
                 (dir, record, true)
             }
             None => (
@@ -676,6 +722,18 @@ impl Run {
                 self.record.changed.remove(&rel);
             }
         }
+    }
+
+    /// Record ahead that the run is about to save the song list.
+    pub fn saving(&mut self, home: &Path) -> Result<()> {
+        self.record.saving = true;
+        self.checkpoint(home)
+    }
+
+    /// Record that the run saved the song list, as it now stands.
+    pub fn saved(&mut self, home: &Path) -> Result<()> {
+        self.record.saving = false;
+        self.checkpoint(home)
     }
 
     /// Record that the run is moving a library file, before it does.
@@ -1078,12 +1136,13 @@ fn all_trashed_back(home: &Path, record: &Record) -> Result<()> {
 fn refuse_another_library(record: &Record, state: &State, dirs: &Dirs) -> Result<()> {
     let wrote_library =
         !(record.touched.is_empty() && record.moves.is_empty() && record.before.is_empty());
-    if wrote_library
-        && !state
-            .library
-            .as_deref()
-            .is_some_and(|l| crate::platform::same_path(l, &dirs.library))
-    {
+    // A home's first run stopped before the state named its library wrote
+    // none other than the one the state has yet to name.
+    let named = match state.library.as_deref() {
+        Some(l) => crate::platform::same_path(l, &dirs.library),
+        None => !record.complete,
+    };
+    if wrote_library && !named {
         return Err(
             crate::errors::Refused("The last run wrote another library folder".into()).into(),
         );
@@ -1101,7 +1160,9 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         .songs_before
         .clone()
         .or_else(|| Some(crate::manifest::NEW.to_string()));
-    if songs != record.songs_after && !(record.undoing && songs == before) {
+    // A run stopped as it saved the song list may have left it so.
+    let saving = !record.complete && record.saving;
+    if songs != record.songs_after && !(record.undoing && songs == before) && !saving {
         return Err(crate::errors::Refused(format!(
             "The song list changed after the last run; undoing it would lose those changes. \
              Edit {} by hand instead",
@@ -1152,6 +1213,9 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     }
     if !record.complete {
         lines.push("The run was stopped before it ended".to_string());
+    }
+    if saving {
+        lines.push("It was stopped as it saved the song list".to_string());
     }
     if record.songs_before != record.songs_after && !record.undone {
         lines.push("Put the song list back as it was".to_string());

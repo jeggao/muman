@@ -10,6 +10,7 @@
 //! What it reports without running a tool is [`crate::diagnose`]'s,
 //! which `status` counts too.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::Result;
@@ -153,6 +154,84 @@ fn ask_sites<R: Runner>(
     })
 }
 
+/// What the sites served, with yt-dlp's errors, and each site that
+/// reached no server, with why.
+struct Asked {
+    listed: Listed,
+    errors: Vec<String>,
+    unreachable: BTreeMap<String, String>,
+}
+
+/// The site each of `keys` is of, and the first of its keys.
+fn sites<'a>(keys: &[&'a SourceKey]) -> BTreeMap<&'a str, usize> {
+    let mut first = BTreeMap::new();
+    for (n, key) in keys.iter().enumerate() {
+        if let SourceKey::Remote { site, .. } = key {
+            first.entry(site.as_str()).or_insert(n);
+        }
+    }
+    first
+}
+
+/// Ask the sites what each of `keys`, at `urls`, serves now: one source of
+/// each site first, as a site that reaches no server is down, or the
+/// network is, and its other sources would each wait out yt-dlp's retries
+/// to fail alike, as though taken down; then the rest of the sites it
+/// reached.
+fn ask_by_site<R: Runner>(
+    runner: &R,
+    ytdlp: &crate::settings::Ytdlp,
+    keys: &[&SourceKey],
+    urls: &[String],
+) -> Result<Asked> {
+    let scratch = crate::atomic::Scratch::new()?;
+    let passed = crate::download::Passed::write(ytdlp, scratch.path())?;
+    let (mut listed, mut errors): (Listed, Vec<String>) = (Vec::new(), Vec::new());
+    let first = sites(keys);
+    let probes: Vec<String> = first.values().map(|&n| urls[n].clone()).collect();
+    ask_sites(runner, &passed, &probes, &mut listed, &mut errors)?;
+    let unreachable: BTreeMap<String, String> = first
+        .iter()
+        .filter_map(|(&site, &n)| {
+            let SourceKey::Remote { id, .. } = keys[n] else {
+                return None;
+            };
+            if listed
+                .iter()
+                .any(|(i, _)| i.id.as_deref() == Some(id.as_str()))
+            {
+                return None;
+            }
+            let named = errors.iter().find(|e| e.contains(&format!("] {id}:")));
+            named
+                .or_else(|| errors.iter().find(|e| crate::ytdlp_log::unreachable(e)))
+                .filter(|e| crate::ytdlp_log::unreachable(e))
+                .map(|e| {
+                    (
+                        site.to_string(),
+                        e.trim_start_matches("ERROR: ").to_string(),
+                    )
+                })
+        })
+        .collect();
+    let site_of = |n: usize| match keys[n] {
+        SourceKey::Remote { site, .. } => site.as_str(),
+        _ => "",
+    };
+    let rest: Vec<String> = (0..keys.len())
+        .filter(|n| !first.values().any(|f| f == n) && !unreachable.contains_key(site_of(*n)))
+        .map(|n| urls[n].clone())
+        .collect();
+    if !rest.is_empty() && unreachable.len() < first.len() {
+        ask_sites(runner, &passed, &rest, &mut listed, &mut errors)?;
+    }
+    Ok(Asked {
+        listed,
+        errors,
+        unreachable,
+    })
+}
+
 /// What each site serves now of each fetched source its song records a
 /// format for, by one yt-dlp run that downloads nothing: a line for each
 /// served otherwise, with whether it is a problem, then how many are
@@ -200,31 +279,18 @@ fn served<R: Runner, W: Write>(
     )?;
     out.flush()?;
     let urls: Vec<String> = asked.iter().map(|(_, _, u)| u.clone()).collect();
-    let scratch = crate::atomic::Scratch::new()?;
-    let passed = crate::download::Passed::write(&manifest.settings.ytdlp, scratch.path())?;
-    let ask = |urls: &[String], listed: &mut Listed, errors: &mut Vec<String>| {
-        ask_sites(runner, &passed, urls, listed, errors)
-    };
-    let (mut listed, mut errors): (Listed, Vec<String>) = (Vec::new(), Vec::new());
-    // One site asked first: one that reaches no server says the network
-    // is down, and the rest would each wait out yt-dlp's retries to fail
-    // alike, as though each site had taken its source down.
-    ask(&urls[..1], &mut listed, &mut errors)?;
-    if let Some(why) = errors
-        .iter()
-        .find(|e| crate::ytdlp_log::unreachable(e))
-        .filter(|_| listed.is_empty())
-    {
+    let keys: Vec<&SourceKey> = asked.iter().map(|(k, _, _)| *k).collect();
+    let Asked {
+        listed,
+        errors,
+        unreachable,
+    } = ask_by_site(runner, &manifest.settings.ytdlp, &keys, &urls)?;
+    if unreachable.len() == sites(&keys).len() {
+        let why = unreachable.values().next().cloned().unwrap_or_default();
         return Ok(vec![(
             true,
-            format!(
-                "No site can be reached, so none was asked what it serves: {}",
-                why.trim_start_matches("ERROR: ")
-            ),
+            format!("No site can be reached, so none was asked what it serves: {why}"),
         )]);
-    }
-    if urls.len() > 1 {
-        ask(&urls[1..], &mut listed, &mut errors)?;
     }
     let mut lines = Vec::new();
     let mut same = 0;
@@ -232,6 +298,13 @@ fn served<R: Runner, W: Write>(
         let SourceKey::Remote { site, id } = key else {
             continue;
         };
+        if let Some(why) = unreachable.get(site.as_str()) {
+            lines.push((
+                true,
+                format!("Not asked: {key}: its site cannot be reached: {why}"),
+            ));
+            continue;
+        }
         let info = listed.iter().find(|(i, _)| {
             i.id.as_deref() == Some(id.as_str())
                 && (i.key(&manifest.settings.sites).as_ref() == Some(key)
@@ -425,6 +498,51 @@ mod tests {
         assert!(!text.contains("Not served now"), "{text}");
         let asked = fake.calls();
         assert_eq!(asked.len(), 1, "{asked:?}");
+    }
+
+    #[test]
+    fn upstream_asks_the_sites_it_reaches_and_names_the_one_it_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
+        };
+        std::fs::create_dir_all(&dirs.home).unwrap();
+        let song = |key: &str| {
+            format!(
+                "[[song]]\nsources = [\"{key}\"]\nheld.\"{key}\" = \
+                 {{ audio = \"0123456789abcdef\", format = \"251\", size = 100 }}\n"
+            )
+        };
+        let list = format!(
+            "version = 1\n{}{}",
+            song("youtube.com:aaaaaaaaaaa"),
+            song("archive.org:item00000001")
+        );
+        std::fs::write(dirs.manifest(), list).unwrap();
+        let fake = Fake {
+            lines: vec![
+                r#"{"id": "aaaaaaaaaaa", "extractor_key": "Youtube", "formats": [{"format_id": "251", "filesize": 100, "acodec": "opus", "vcodec": "none"}]}"#
+                    .into(),
+            ],
+            err_lines: vec![
+                "ERROR: [archive.org] item00000001: Unable to download JSON metadata: \
+                 Temporary failure in name resolution"
+                    .into(),
+            ],
+            ..Fake::default()
+        };
+        let (mut out, mut report) = (Vec::new(), Vec::new());
+        let ok = check(&fake, &dirs, (false, true), &mut out, &mut report).unwrap();
+        let text = crate::ui::plain(&String::from_utf8(report).unwrap());
+        assert!(!ok);
+        assert!(!text.contains("No site can be reached"), "{text}");
+        assert!(
+            text.contains("Not asked: archive.org:item00000001: its site cannot be reached"),
+            "{text}"
+        );
+        assert!(!text.contains("youtube.com:aaaaaaaaaaa:"), "{text}");
     }
 
     #[test]

@@ -167,6 +167,7 @@ pub fn review<W: Write>(
     }
     if changed {
         later.begin()?;
+        later.saved()?;
     }
     Ok(changed)
 }
@@ -340,7 +341,7 @@ mod tests {
             &dirs,
             &[],
             None,
-            &mut crate::history::Later::new(&dirs.home),
+            &mut crate::history::Later::new(&dirs.home).unwrap(),
             &mut Vec::new(),
         )
         .unwrap_err();
