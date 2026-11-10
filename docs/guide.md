@@ -313,11 +313,10 @@ waits the same way when that fails. Only runs that fetch need yt-dlp.
 
 `muman add <magnet link|FILE.torrent>` fetches a torrent's song files
 with aria2c, each with the `.lrc` and pictures named as it is and its
-folder's cover, by the rules for [files of your
-own](#files-of-your-own). Scans, logs and the rest stay with the
-torrent's peers. Each song file is listed as a song, or joins the song
-it is the same recording as, and is tagged and looked up as a file of
-your own is.
+folder's cover, by the rules for [files of your own](#files-of-your-own).
+Scans, logs and the rest stay with the torrent's peers. Each song file
+is listed as a song, or joins the song it is the same recording as, and
+is tagged and looked up as a file of your own is.
 
 The metainfo is kept in the store, and the torrent's name, trackers and
 v2 hash in the song list's `[torrents."<hash>"]`. A private torrent's
@@ -370,7 +369,8 @@ A song file brings what sits beside it:
   `Paper Comets.lrc`;
 - the JPEG, PNG or WebP pictures named as it is, as `paper comets.jpg`;
 - its folder's `cover`, `folder`, `front` or `album` picture, else, in a
-  disc's folder as `CD1`, that of the album folder above it.
+  disc's folder as `CD1`, that of the folder above it, a torrent's own
+  too, where that holds no song file and is not `sources/manual` itself.
 
 A `.lrc` may be in UTF-8 or UTF-16, or in an older encoding such as
 GBK, Shift-JIS or Windows-1252, which muman tells by its bytes.

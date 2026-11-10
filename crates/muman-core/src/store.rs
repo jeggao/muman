@@ -36,7 +36,10 @@
 //! exactly as another song file, which is that file's. A song file in a
 //! disc's folder, as `Album/CD1/`, with no picture of its own, brings
 //! the album folder's cover: a rip of several discs keeps one cover
-//! above them, for all of them.
+//! above them, for all of them. The folder above a disc's is its album's
+//! where it holds no song file of its own, a torrent's own folder too,
+//! which a rip of several discs is shared as; never the manual folder
+//! itself, which holds what the user drops in, not one album.
 //!
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
@@ -834,7 +837,7 @@ impl Store {
                 let files = self.torrents.get(t.hash())?;
                 let kind = *files.get(t.path())?;
                 let (lyrics, covers) = if kind == Kind::Media {
-                    sidecars(files, t.path())
+                    sidecars(files, t.path(), true)
                 } else {
                     (None, Vec::new())
                 };
@@ -851,7 +854,7 @@ impl Store {
                 let rel = manual.path();
                 let kind = *self.manual.get(rel)?;
                 let (lyrics, covers) = if kind == Kind::Media {
-                    sidecars(&self.manual, rel)
+                    sidecars(&self.manual, rel, false)
                 } else {
                     (None, Vec::new())
                 };
@@ -1133,8 +1136,14 @@ impl Store {
 /// `files`, a folder's or a torrent's: named as it is in any case, those
 /// in its own case first, and none named in its case as another song
 /// file is; then its folder's cover, or, with none of its own, the cover
-/// of the album folder its disc's folder is in.
-fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Vec<PathBuf>) {
+/// of the album folder its disc's folder is in. `top_is_album` where the
+/// folder `files` are in, the empty path, may be that album folder, as a
+/// torrent's is and the manual folder is not.
+fn sidecars(
+    files: &BTreeMap<PathBuf, Kind>,
+    rel: &Path,
+    top_is_album: bool,
+) -> (Option<PathBuf>, Vec<PathBuf>) {
     let stem = rel.with_extension("");
     let another_s = |p: &Path| {
         files.iter().any(|(m, k)| {
@@ -1171,11 +1180,10 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
     let disc = folder
         .file_name()
         .is_some_and(|n| is_disc_folder(&n.to_string_lossy()));
-    // The folder above a disc's is its album's only where it is a folder
-    // of its own, holding discs and no song file: not the manual folder
-    // or a torrent's root, nor a folder of loose songs.
+    // The folder above a disc's is its album's only where it holds discs
+    // and no song file, not a folder of loose songs.
     let album = folder.parent().filter(|p| {
-        !p.as_os_str().is_empty()
+        (top_is_album || !p.as_os_str().is_empty())
             && !files
                 .iter()
                 .any(|(f, k)| *k == Kind::Media && f.parent() == Some(*p))
@@ -1188,7 +1196,8 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
 }
 
 /// The `.lrc` and pictures among `files` that the song files `songs` of
-/// them bring, as a manual or torrent song file brings them.
+/// them bring, as a manual or torrent song file brings them: `files`
+/// are a torrent's, by their paths in it, or a folder's, by whole paths.
 #[must_use]
 pub fn brought_by(files: &[&Path], songs: &[&Path]) -> BTreeSet<PathBuf> {
     let kinds: BTreeMap<PathBuf, Kind> = files
@@ -1199,7 +1208,7 @@ pub fn brought_by(files: &[&Path], songs: &[&Path]) -> BTreeSet<PathBuf> {
     songs
         .iter()
         .flat_map(|s| {
-            let (lyrics, covers) = sidecars(&kinds, s);
+            let (lyrics, covers) = sidecars(&kinds, s, true);
             lyrics.into_iter().chain(covers)
         })
         .collect()
@@ -1686,6 +1695,50 @@ mod tests {
         let covers = |rel: &str| store.locate(&manual(rel)).unwrap().covers;
         assert_eq!(covers("CD1/01 Root Disc.flac"), Vec::<PathBuf>::new());
         assert_eq!(covers("Singles/CD2/01 Beside.flac"), Vec::<PathBuf>::new());
+        std::fs::remove_file(d.manual().join("Loose.flac")).unwrap();
+        let store = Store::scan(&d).unwrap();
+        assert_eq!(
+            store
+                .locate(&manual("CD1/01 Root Disc.flac"))
+                .unwrap()
+                .covers,
+            Vec::<PathBuf>::new(),
+            "the manual folder is no album's"
+        );
+    }
+
+    #[test]
+    fn a_torrent_s_own_folder_above_its_discs_is_their_album_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let files = [
+            "cover.jpg",
+            "CD1/01 Paper Comets.flac",
+            "CD2/01 Night Ferry.flac",
+        ];
+        let bytes = crate::testing::metainfo("Lantern Weather", &files);
+        let meta = Metainfo::read(&bytes).unwrap();
+        let selected: Vec<&Path> = (crate::torrent::selected(&meta).iter())
+            .map(|f| f.path.as_path())
+            .collect();
+        assert!(selected.contains(&Path::new("cover.jpg")), "{selected:?}");
+        let hash = meta.hash().to_string();
+        let root = d.torrent();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(metainfo_path(&root, &hash), &bytes).unwrap();
+        let cover = touch(&root, &format!("{hash}/cover.jpg"));
+        for song in &files[1..] {
+            touch(&root, &format!("{hash}/{song}"));
+        }
+        let store = Store::scan(&d).unwrap();
+        for song in &files[1..] {
+            let key =
+                SourceKey::Torrent(TorrentKey::new(&hash, &crate::relpath::from_portable(song)));
+            assert_eq!(
+                store.locate(&key).unwrap().covers,
+                std::slice::from_ref(&cover)
+            );
+        }
     }
 
     #[test]
