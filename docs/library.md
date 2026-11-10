@@ -21,12 +21,11 @@ is the only override, and the order of `sources` breaks the last tie.
 | Lyrics | Role and timing, as `[lyrics] prefer` ranks them; in a language you read; surest to be the chosen audio's recording; spanning most of the song |
 | Tags | A field kept for the tag over one read off a video title; fewest decorations; most sources agreeing |
 
-Audio and covers are scored. muman counts each measure in whole steps,
-so noise never decides between near-equals, and multiplies each step
-by its measure's weight. The lowest sum wins. A source missing a
-measure ranks after those missing fewer. The weights a song list starts
-with rank by each measure in turn, each outweighing all after it, but
-dynamics, off until set, which weighs against bandwidth step by step.
+Audio and covers are scored: each measure in whole steps, so noise
+never decides between near-equals, times its weight; the lowest sum
+wins. A source missing a measure ranks after those missing fewer. The
+weights a song list starts with rank by each measure in turn, each
+outweighing all after it, but dynamics, off until set.
 `[audio.pick]` and `[cover.pick]` change a measure's weight and steps
 or switch it off ([how sources are
 ranked](configuration.md#how-sources-are-ranked)).
