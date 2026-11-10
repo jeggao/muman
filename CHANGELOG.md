@@ -158,6 +158,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A control character no longer costs a lyrics file its lyrics**: a
+  DOS end-of-file mark, a terminal colour code or a NUL is dropped, as in
+  a lyrics tag; a file that reads as other data is said. Every song's
+  lyrics are written again once.
+- **Lyrics given to `add` find a song by its embedded lyrics.**
+- **WebVTT with a style or region block reads.**
+- **A lyrics line timed past the song's end is left out**, and said.
+- **A cover or lyrics pinned to a source that holds none is said** by
+  `sync`, `status` and `check`.
+- **Section headings and credits are cleaned alike**, in any bracket or
+  none; docs/metadata.md says what each lyrics rule drops.
 - **An album's lossy rip no longer wins over a lossless copy of the same
   audio**: of audio scored alike, lossless, more bits and the lower rate
   come before the folder most of the album comes from.
