@@ -20,6 +20,11 @@
 //! the program muman started is ended alone: a job object would hold
 //! what it starts, and no safe interface offers one, so what it started
 //! runs on, though a Ctrl-C at the console reaches every program there.
+//!
+//! A program streamed is waited for, not what it leaves running: a
+//! background job it started, as a hook's `mpc update &` or a daemon,
+//! holds its pipes open, so once it exits they are read for
+//! [`AFTER_EXIT`] more at most, for what it wrote last, and let go.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -27,6 +32,7 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use shared_child::SharedChild;
 
@@ -400,20 +406,18 @@ impl Runner for System {
             .stderr(Stdio::piped());
         let child = Spawned::new(&mut command, cmd)?;
         let (tx, rx) = mpsc::channel();
-        let readers = [
-            child.0.take_stdout().map(|r| reader(r, true, tx.clone())),
-            child.0.take_stderr().map(|r| reader(r, false, tx)),
-        ];
-        for (out, line) in rx {
-            on_line(if out {
-                Line::Out(&line)
-            } else {
-                Line::Err(&line)
-            });
+        if let Some(r) = child.0.take_stdout() {
+            reader(r, true, tx.clone());
         }
-        for r in readers.into_iter().flatten() {
-            let _ = r.join();
+        if let Some(r) = child.0.take_stderr() {
+            reader(r, false, tx.clone());
         }
+        let waited = Arc::clone(&child.0);
+        std::thread::spawn(move || {
+            let _ = waited.wait();
+            let _ = tx.send(Said::Exited);
+        });
+        relay(&rx, on_line);
         Ok(child.0.wait()?.success())
     }
 
@@ -754,13 +758,21 @@ fn quoted(arg: &str) -> String {
     }
 }
 
+/// What a streamed program said: a line, on stdout or not, or that it
+/// exited.
+enum Said {
+    Line(bool, String),
+    Exited,
+}
+
+/// How long a streamed program's pipes are read after it exits, for
+/// what a program it left running holds open.
+const AFTER_EXIT: Duration = Duration::from_secs(1);
+
 /// Send each line of `pipe` until it closes; a carriage return ends a
-/// line too, as progress written in place does.
-fn reader<R: Read + Send + 'static>(
-    pipe: R,
-    out: bool,
-    tx: mpsc::Sender<(bool, String)>,
-) -> std::thread::JoinHandle<()> {
+/// line too, as progress written in place does. Not joined: a program
+/// left running by the one streamed may hold the pipe for ever.
+fn reader<R: Read + Send + 'static>(pipe: R, out: bool, tx: mpsc::Sender<Said>) {
     std::thread::spawn(move || {
         let mut pipe = BufReader::new(pipe);
         let mut buf = Vec::new();
@@ -769,16 +781,35 @@ fn reader<R: Read + Send + 'static>(
                 .split(|b| *b == b'\r' || *b == b'\n')
                 .filter(|p| !p.is_empty())
             {
-                if tx
-                    .send((out, String::from_utf8_lossy(part).into_owned()))
-                    .is_err()
-                {
+                let line = String::from_utf8_lossy(part).into_owned();
+                if tx.send(Said::Line(out, line)).is_err() {
                     return;
                 }
             }
             buf.clear();
         }
-    })
+    });
+}
+
+/// Hand each line `rx` brings to `on_line` until every pipe closes, or
+/// [`AFTER_EXIT`] once the program has exited.
+fn relay(rx: &mpsc::Receiver<Said>, on_line: &mut dyn FnMut(Line<'_>)) {
+    let mut exited: Option<Instant> = None;
+    loop {
+        let said = match exited {
+            None => rx.recv().ok(),
+            Some(at) => match AFTER_EXIT.checked_sub(at.elapsed()) {
+                Some(left) => rx.recv_timeout(left).ok(),
+                None => None,
+            },
+        };
+        match said {
+            None => return,
+            Some(Said::Exited) => exited = Some(Instant::now()),
+            Some(Said::Line(true, line)) => on_line(Line::Out(&line)),
+            Some(Said::Line(false, line)) => on_line(Line::Err(&line)),
+        }
+    }
 }
 
 fn name(cmd: &[OsString]) -> String {
@@ -923,6 +954,25 @@ mod tests {
         assert!(!started.0.wait().unwrap().success());
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert!(!late.exists(), "the background job outlived its program");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_streamed_is_not_held_by_the_job_it_left_running() {
+        let cmd = ["sh", "-c", "sleep 30 & echo done"].map(OsString::from);
+        let start = Instant::now();
+        let mut said = Vec::new();
+        let ran = System::default().stream(&cmd, &mut |line| {
+            let (Line::Out(l) | Line::Err(l)) = line;
+            said.push(l.to_string());
+        });
+        assert!(ran.unwrap());
+        assert_eq!(said, ["done"]);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

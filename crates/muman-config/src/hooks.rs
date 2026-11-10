@@ -3,7 +3,9 @@
 //! any file, an undo's files put back counting as written, and after
 //! the run has let go of the home and the library, so a hook may run
 //! muman there. Each is an argument list, run without a shell; its
-//! output is relayed and a failure is warned of, never fatal.
+//! output is relayed and a failure is warned of, never fatal. muman
+//! waits for the hook, not for a job it leaves running, as `mpc update &`
+//! does: once the hook exits, its pipes are let go (`runner`).
 //!
 //! A hook is given the library folder and how many files the run wrote,
 //! moved and removed, as `{library}`, `{written}`, `{moved}` and

@@ -455,16 +455,16 @@ It runs once, after a run that wrote, moved or removed any file (an
 undo's files put back count as written), and after that run lets go of
 the home and the library, so it may run muman there; a muman a hook
 starts runs no hook. It is given `library` and how many files were
-`written`, `moved` and `removed`, each as a `{name}` placeholder in its
-words and as a `MUMAN_<NAME>` variable, such as `MUMAN_LIBRARY`; none
-holds a title or a file's name. `run` is an argument list, run without a
-shell; a batch file (`.bat`, `.cmd`) gets the variables only. Its output
-shows as `hook:`, and a hook that fails is warned of but fails nothing.
+`written`, `moved` and `removed`, as `{name}` placeholders in its words
+and `MUMAN_<NAME>` variables, such as `MUMAN_LIBRARY`; none holds a
+title or a file's name. `run` is a list of words, run without a shell;
+a batch file (`.bat`, `.cmd`) gets the variables only. Its output shows
+as `hook:`, a failure is warned of but fails nothing, and muman waits
+for the hook alone: a job it leaves running is let go once it exits.
 
 A hook muman cannot run, as one `on = "written"`, is refused alone:
 commands that would run it say so, `check` reports it, and the rest
-still work. A tag a program should add goes in through `muman add` as a
-[tag file](songs.md#giving-songs-lyrics-pictures-and-tags); ReplayGain
-is [`[loudness]`](audio.md#loudness)'s. A muman a hook runs under
-another home, on the library the hook's run wrote, stops with exit code
-5: pass `--library` to name another.
+still work. A tag a program should add is a [tag file](songs.md#giving-songs-lyrics-pictures-and-tags)
+given to `muman add`; ReplayGain is [`[loudness]`](audio.md#loudness)'s.
+A muman a hook runs under another home, on the library the hook's run
+wrote, stops with exit code 5: pass `--library` to name another.
