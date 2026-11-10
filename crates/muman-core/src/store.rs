@@ -440,10 +440,15 @@ impl Kept {
     /// those beside it.
     #[must_use]
     pub fn files(&self, dirs: &Dirs, id: &str) -> Vec<PathBuf> {
+        self.files_in(&self.dir(dirs), id)
+    }
+
+    /// [`Self::files`], in `dir`, this kind's folder.
+    fn files_in(&self, dir: &Path, id: &str) -> Vec<PathBuf> {
         self.main
             .iter()
             .chain(self.beside)
-            .map(|ext| self.dir(dirs).join(format!("{id}.{ext}")))
+            .map(|ext| dir.join(format!("{id}.{ext}")))
             .filter(|p| p.exists())
             .collect()
     }
@@ -542,6 +547,8 @@ pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
 #[derive(Debug, Default)]
 pub struct Store {
     manual_root: PathBuf,
+    /// Each kind of kept record's folder, by scheme.
+    kept_dirs: HashMap<&'static str, PathBuf>,
     fetched_root: PathBuf,
     /// What yt-dlp fetched, each at its key's place.
     fetched: BTreeMap<SourceKey, PathBuf>,
@@ -573,6 +580,7 @@ impl Store {
     pub fn scan(dirs: &Dirs) -> Result<Self> {
         let mut store = Self {
             manual_root: dirs.manual(),
+            kept_dirs: KEPT.iter().map(|k| (k.extractor, k.dir(dirs))).collect(),
             fetched_root: dirs.ytdlp(),
             torrent_root: dirs.torrent(),
             ..Self::default()
@@ -1002,21 +1010,7 @@ impl Store {
     /// song lists or brings cannot be told.
     #[must_use]
     pub fn unused(&self, listed: &BTreeSet<SourceKey>) -> Vec<PathBuf> {
-        let mut used: BTreeSet<PathBuf> = BTreeSet::new();
-        let mut unread: BTreeSet<PathBuf> = BTreeSet::new();
-        for key in listed {
-            if let SourceKey::Torrent(t) = key {
-                used.insert(metainfo_path(&self.torrent_root, t.hash()));
-                if !self.torrents.contains_key(t.hash()) {
-                    unread.insert(self.torrent_root.join(t.hash()));
-                }
-            }
-            if let Some(l) = self.locate(key) {
-                used.insert(l.path);
-                used.extend(l.lyrics);
-                used.extend(l.covers);
-            }
-        }
+        let in_use = self.in_use(listed);
         let torrents: Vec<PathBuf> = self
             .torrents
             .iter()
@@ -1042,11 +1036,39 @@ impl Store {
                     .collect::<Vec<_>>()
                     .iter(),
             )
-            .filter(|p| !used.contains(*p) && !unread.iter().any(|d| p.starts_with(d)))
+            .filter(|p| !in_use(p))
             .cloned()
             .collect();
         unused.sort();
         unused
+    }
+
+    /// Whether a file is one a key of `listed` uses: its file, what it
+    /// brings, its torrent's metainfo or a part of its record; or a file
+    /// in the folder of a listed torrent whose metainfo is gone.
+    fn in_use(&self, listed: &BTreeSet<SourceKey>) -> impl Fn(&Path) -> bool + use<> {
+        let mut used: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut unread: BTreeSet<PathBuf> = BTreeSet::new();
+        for key in listed {
+            if let SourceKey::Torrent(t) = key {
+                used.insert(metainfo_path(&self.torrent_root, t.hash()));
+                if !self.torrents.contains_key(t.hash()) {
+                    unread.insert(self.torrent_root.join(t.hash()));
+                }
+            }
+            if let SourceKey::Remote { site, id } = key
+                && let Some(kind) = kept(site)
+                && let Some(dir) = self.kept_dirs.get(kind.extractor)
+            {
+                used.extend(kind.files_in(dir, id));
+            }
+            if let Some(l) = self.locate(key) {
+                used.insert(l.path);
+                used.extend(l.lyrics);
+                used.extend(l.covers);
+            }
+        }
+        move |p| used.contains(p) || unread.iter().any(|d| p.starts_with(d))
     }
 }
 
@@ -1063,10 +1085,19 @@ impl Store {
             .collect()
     }
 
-    /// `paths`, as [`Self::purgeable`] names them, each with the files
-    /// that come with it: a fetch's thumbnail and metadata, a record's.
+    /// `paths`, as [`Self::purgeable`] names them for `known`, each with
+    /// the files that come with it: a fetch's thumbnail and metadata, a
+    /// record's. Never a file a key of `known` uses, as the file at a
+    /// key's place is when a stray of another extension lies beside it:
+    /// `purge` deletes what `status` names and what comes with it alone.
     #[must_use]
-    pub fn with_their_files(&self, dirs: &Dirs, paths: &[PathBuf]) -> Vec<PathBuf> {
+    pub fn with_their_files(
+        &self,
+        dirs: &Dirs,
+        known: &BTreeSet<SourceKey>,
+        paths: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        let in_use = self.in_use(known);
         let mut all = BTreeSet::new();
         for path in paths {
             if path.starts_with(dirs.ytdlp()) {
@@ -1082,7 +1113,7 @@ impl Store {
                 }
             }
         }
-        all.into_iter().collect()
+        all.into_iter().filter(|p| !in_use(p)).collect()
     }
 }
 
@@ -1697,6 +1728,51 @@ mod tests {
         assert_eq!(gone.len(), 2);
         assert!(upload.iter().all(|p| !p.exists()));
         assert!(listed.exists());
+    }
+
+    #[test]
+    fn what_comes_with_an_unused_file_is_never_a_file_a_known_key_uses() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let fetched = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.mkv");
+        let thumbnail = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.jpg");
+        let second = touch(dir.path(), "sources/yt-dlp/youtube.com/vid00000001.mka");
+        let legacy = touch(dir.path(), "sources/yt-dlp/c/Paper Comet [vid00000002].mkv");
+        let subtitle = touch(
+            dir.path(),
+            "sources/yt-dlp/c/Paper Comet [vid00000002].en.vtt",
+        );
+        let lyrics = touch(dir.path(), "sources/lrclib/7.lrc");
+        let record = touch(dir.path(), "sources/lrclib/7.json");
+        let bytes = crate::testing::metainfo("Lantern Weather", &["a.flac", "b.flac"]);
+        let hash = Metainfo::read(&bytes).unwrap().hash().to_string();
+        let root = d.torrent();
+        let song = touch(&root, &format!("{hash}/a.flac"));
+        let other = touch(&root, &format!("{hash}/b.flac"));
+        std::fs::write(metainfo_path(&root, &hash), &bytes).unwrap();
+        let known = BTreeSet::from([
+            SourceKey::youtube("vid00000001"),
+            SourceKey::youtube("vid00000002"),
+            SourceKey::parse("lrclib:7").unwrap(),
+            SourceKey::Torrent(TorrentKey::new(&hash, Path::new("a.flac"))),
+        ]);
+        let store = Store::scan(&d).unwrap();
+        let named = store.purgeable(&d, &known);
+        assert_eq!(named, [other, subtitle, thumbnail, second]);
+        assert_eq!(store.with_their_files(&d, &known, &named), named);
+        let used = [
+            fetched,
+            legacy,
+            lyrics,
+            record,
+            song,
+            metainfo_path(&root, &hash),
+        ];
+        assert_eq!(
+            store.with_their_files(&d, &known, &used),
+            named[1..],
+            "a file in use is never purged, whichever file it comes with"
+        );
     }
 
     #[test]

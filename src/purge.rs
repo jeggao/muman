@@ -96,7 +96,7 @@ fn unused_files(
     store: &Store,
     known: &BTreeSet<crate::source::SourceKey>,
 ) -> Vec<PathBuf> {
-    store.with_their_files(dirs, &store.purgeable(dirs, known))
+    store.with_their_files(dirs, known, &store.purgeable(dirs, known))
 }
 
 #[cfg(test)]
@@ -241,6 +241,37 @@ mod tests {
         assert!(purge(&dirs, &confirm, None, &mut Vec::new()).unwrap());
         assert!(gone.iter().all(|p| !p.exists()));
         assert!(kept.iter().all(|p| p.exists()));
+    }
+
+    #[test]
+    fn a_stray_at_a_listed_key_s_place_goes_and_the_key_s_file_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = Dirs {
+            home: dir.path().join("home"),
+            library: dir.path().join("lib"),
+            locks: Some(dir.path().to_path_buf()),
+        };
+        let listed = touch(&dirs, "sources/yt-dlp/youtube.com/vid00000001.mkv");
+        let strays = [
+            touch(&dirs, "sources/yt-dlp/youtube.com/vid00000001.jpg"),
+            touch(&dirs, "sources/yt-dlp/youtube.com/vid00000001.mka"),
+        ];
+        std::fs::write(
+            dirs.manifest(),
+            "version = 4\n[[song]]\nsources = [\"youtube.com:vid00000001\"]\n",
+        )
+        .unwrap();
+        let confirm = Confirm {
+            yes: true,
+            all: false,
+            dry_run: false,
+        };
+        let mut out = Vec::new();
+        assert!(purge(&dirs, &confirm, None, &mut out).unwrap());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("Deleting 2 unused files"), "{text}");
+        assert!(listed.exists(), "{text}");
+        assert!(strays.iter().all(|p| !p.exists()), "{text}");
     }
 
     #[test]
