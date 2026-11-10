@@ -96,6 +96,15 @@ pub(super) fn prune<W: Write>(
     out: &mut W,
 ) -> Result<Vec<PathBuf>> {
     let plan = prune_plan(ledger.root(), old, outputs, failed, forced);
+    let there = |file: &PathBuf| std::fs::symlink_metadata(ledger.root().join(file)).is_ok();
+    let gone_before: BTreeSet<PathBuf> = plan
+        .iter()
+        .filter_map(|(_, fate)| match fate {
+            Pruned::Removed(files) => Some(files.iter().filter(|f| !there(f)).cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     let doomed: Vec<Owned> = plan
         .iter()
         .filter_map(|(_, fate)| match fate {
@@ -130,7 +139,10 @@ pub(super) fn prune<W: Write>(
             .filter(|(f, _)| files.contains(f))
             .collect();
         if stuck.is_empty() {
-            crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
+            // A file deleted by hand is only let go of, not said removed.
+            if !files.iter().all(|f| gone_before.contains(f)) {
+                crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(&path)))?;
+            }
             continue;
         }
         // One file held open must not stop the run before the state is

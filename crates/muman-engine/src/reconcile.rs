@@ -450,13 +450,18 @@ pub fn reconcile_into<R: Runner, W: Write>(
         else {
             continue;
         };
-        if let (Doing::Held { .. }, Some(damage)) = (d, f.damage()) {
+        if let (Doing::Held { file }, Some(damage)) = (d, f.damage()) {
             ok = false;
             song_errors.push((*n, damage.describe(&r.plan.audio.key)));
+            let left = if file.is_some() {
+                "its file is left as built"
+            } else {
+                "no file built before is left, and it is not written from it"
+            };
             crate::ui::error(
                 out,
                 &format!(
-                    "Failed: {}: {}, since its song was built; its file is left as built \
+                    "Failed: {}: {}, since its song was built; {left} \
                      (`sync --force` writes it from what the source holds now)",
                     name_of(&manifest.songs[*n], Some(r), &state.facts),
                     damage.describe(&r.plan.audio.key)

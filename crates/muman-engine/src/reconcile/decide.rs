@@ -121,8 +121,10 @@ pub enum Doing {
         edited: bool,
     },
     /// Left as built: a source it was built from was fetched again and
-    /// holds otherwise, not yet accepted.
-    Held { file: PathBuf },
+    /// holds otherwise, not yet accepted, or holds damaged audio since.
+    /// With no file built before left, a song of damaged audio is not
+    /// written, and one of a source fetched again is.
+    Held { file: Option<PathBuf> },
 }
 
 /// What a sync decides for every song, before it does any: each song's
@@ -154,9 +156,15 @@ pub fn foresee(
         damaged_since_built(planned, &drifts, &state.facts)
     };
     let (_, kept) = split_drifts(&drifts, &damaged, accept, state);
-    let mut holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
-    holding.extend(&damaged);
-    let decided = decide(planned, &files, &state.outputs, library, force, &holding);
+    let holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    let decided = decide(
+        planned,
+        &files,
+        &state.outputs,
+        library,
+        force,
+        (&holding, &damaged),
+    );
     Foreseen {
         files,
         drifts,
@@ -166,14 +174,16 @@ pub fn foresee(
 }
 
 /// Each of `planned` kept as it is, decided before any moves: its file
-/// as it would be written, or one built before from what a source in
-/// `holding` no longer holds.
+/// as it would be written, or one built before from what a source no
+/// longer holds, of the songs `holding` or `damaged` since built. A song
+/// `damaged` is held with no file left too: what its record names is
+/// not what its source holds, and only `--force` builds it from that.
 pub(super) fn settled(
     planned: &[PlannedSong],
     files: &BTreeMap<usize, PathBuf>,
     old: &BTreeMap<PathBuf, Written>,
     library: &Path,
-    holding: &BTreeSet<usize>,
+    (holding, damaged): Holding<'_>,
 ) -> Vec<Option<Doing>> {
     planned
         .iter()
@@ -181,13 +191,22 @@ pub(super) fn settled(
             if current(library, old, r).is_some() {
                 return Some(Doing::Keep);
             }
-            files
-                .get(n)
-                .filter(|f| holding.contains(n) && library.join(f).exists())
-                .map(|f| Doing::Held { file: f.clone() })
+            let file = files.get(n).filter(|f| library.join(f).exists());
+            if damaged.contains(n) {
+                return Some(Doing::Held {
+                    file: file.cloned(),
+                });
+            }
+            file.filter(|_| holding.contains(n)).map(|f| Doing::Held {
+                file: Some(f.clone()),
+            })
         })
         .collect()
 }
+
+/// The songs held as built: those a source fetched again holds otherwise
+/// for, not yet accepted, and those of audio damaged since.
+pub(super) type Holding<'a> = (&'a BTreeSet<usize>, &'a BTreeSet<usize>);
 
 /// What a sync does with each of `planned`, by its file in `files`, as
 /// [`settled`] first keeps or holds it:
@@ -196,6 +215,7 @@ pub(super) fn settled(
 /// |---|---|
 /// | At its path, as it would be written | Kept |
 /// | Built from what a source in `holding` no longer holds | Left as built until `--accept` |
+/// | Any or none, its audio's source `damaged` since it was built | Left as built, or unwritten |
 /// | Elsewhere, of the same media, its path free | Moved, then tags written if they changed |
 /// | Changed since written, and not merely moving | Left alone until `--force` |
 /// | Any, where a changed file is at its path | Left alone until `--force` |
@@ -225,7 +245,7 @@ pub(super) fn decide(
     old: &BTreeMap<PathBuf, Written>,
     library: &Path,
     force: bool,
-    holding: &BTreeSet<usize>,
+    holding: Holding<'_>,
 ) -> Vec<Doing> {
     if force {
         return vec![Doing::Write; planned.len()];
@@ -241,10 +261,10 @@ pub(super) fn decide(
             .iter()
             .zip(&decided)
             .filter_map(|((_, r), d)| match d {
-                Doing::Guard { file } | Doing::Blocked { file, .. } | Doing::Held { file } => {
-                    Some(fold(file))
-                }
-                Doing::Unowned { .. } => None,
+                Doing::Guard { file }
+                | Doing::Blocked { file, .. }
+                | Doing::Held { file: Some(file) } => Some(fold(file)),
+                Doing::Unowned { .. } | Doing::Held { file: None } => None,
                 _ => Some(fold(&path_of(r))),
             })
             .collect();
@@ -262,7 +282,7 @@ fn decide_in(
     files: &BTreeMap<usize, PathBuf>,
     (old, filled): (&BTreeMap<PathBuf, Written>, &BTreeSet<String>),
     library: &Path,
-    holding: &BTreeSet<usize>,
+    holding: Holding<'_>,
 ) -> Vec<Doing> {
     use crate::relpath::folded;
     let mut decided = settled(planned, files, old, library, holding);
@@ -540,9 +560,9 @@ pub(super) fn kept(
     for ((n, r), d) in planned.iter().zip(doing) {
         let path = match d {
             Doing::Keep => path_of(r),
-            Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } => {
-                file.clone()
-            }
+            Doing::Guard { file }
+            | Doing::Held { file: Some(file) }
+            | Doing::Blocked { file, .. } => file.clone(),
             _ => continue,
         };
         let Some(mut written) = outputs.get(&path).cloned() else {

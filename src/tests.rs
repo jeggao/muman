@@ -4496,6 +4496,44 @@ fn a_source_cut_off_since_its_song_was_built_leaves_its_file_as_built() {
 }
 
 #[test]
+fn a_source_cut_off_since_its_song_was_built_is_not_followed_though_its_file_is_gone() {
+    let s = Setup::new();
+    let source = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let held = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    std::fs::write(&source, "a copy stopped short").unwrap();
+    let mut cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..flacs()
+    };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
+    for run in ["the sync that finds it", "the sync after"] {
+        let (ok, text) = s.run(&cut, &["sync"]);
+        assert!(!ok, "{run} fails: {text}");
+        assert!(
+            text.contains("no file built before is left"),
+            "{run}: {text}"
+        );
+        assert!(!text.contains("Removed"), "{run}: {text}");
+        assert!(!file.exists(), "{run} writes nothing: {text}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap(),
+        held,
+        "the record keeps naming the audio the song was built from"
+    );
+    let (_, text) = s.run(&cut, &["sync", "--force"]);
+    assert!(file.exists(), "{text}");
+}
+
+#[test]
 fn check_decode_measures_each_source_afresh_and_names_its_damage() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

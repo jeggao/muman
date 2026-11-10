@@ -32,9 +32,12 @@
 //! song keeps the file built from what was recorded until `sync
 //! --accept` takes what the source holds now, and is built
 //! from what is there when no file of it is left, its record kept for
-//! the next sync to say so again. The format lets a fetch again ask a
-//! site for the same stream, and the page, kept for a site whose keys
-//! name none, lets a home made from the song list alone fetch it.
+//! the next sync to say so again. Audio damaged since, of any source, is
+//! never followed nor built from, file or not, but by `sync --force`:
+//! the record, not the library, says what the song was built from.
+//! The format lets a fetch again ask a site for the same stream, and the
+//! page, kept for a site whose keys name none, lets a home made from the
+//! song list alone fetch it.
 //!
 //! The size lets `check --upstream` ask a site whether it still serves
 //! a source as fetched, before anything is lost: YouTube gives each

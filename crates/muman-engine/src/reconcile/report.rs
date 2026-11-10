@@ -260,9 +260,13 @@ pub fn verdict(d: &Doing, before: Option<&Plan>, plan: &Plan) -> (Fate, String) 
                 whose(*edited)
             ),
         ),
-        Doing::Held { .. } => (
+        Doing::Held { file: Some(_) } => (
             Fate::Alone,
             "left as built, a source holding otherwise".to_string(),
+        ),
+        Doing::Held { file: None } => (
+            Fate::Alone,
+            "not written, its source damaged since it was built".to_string(),
         ),
         Doing::Retag | Doing::Write => match before {
             Some(p) if p == plan => (Fate::Again, "written again".to_string()),
@@ -361,7 +365,10 @@ pub(super) fn status<W: Write>(
             .get(&path)
             .or_else(|| files.get(n).and_then(|f| old.get(f)))
             .and_then(|w| w.plan.as_ref());
-        if let Doing::Guard { file } | Doing::Held { file } | Doing::Blocked { file, .. } = d {
+        if let Doing::Guard { file }
+        | Doing::Held { file: Some(file) }
+        | Doing::Blocked { file, .. } = d
+        {
             path.clone_from(file);
         }
         let (fate, verdict) = verdict(d, before, &r.plan);

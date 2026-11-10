@@ -186,7 +186,7 @@ pub(super) fn say_drifts<W: Write>(
             .find(|((n, _), _)| *n == d.song)
             .map(|(_, doing)| doing);
         let what = match doing {
-            Some(Doing::Held { .. } | Doing::Keep) => {
+            Some(Doing::Held { file: Some(_) } | Doing::Keep) => {
                 "its song is left as built; `sync --accept` takes what it holds now"
             }
             Some(_) if force => {
@@ -203,26 +203,30 @@ pub(super) fn say_drifts<W: Write>(
     Ok(())
 }
 
-/// The songs of `planned` whose audio would come from a source whose
-/// audio changed since the song was built and is damaged now, as a copy
-/// stopped short or a download that lost pieces leaves a file: written
-/// from it, the song would lose what its file holds, so the file is held
-/// as built.
+/// The songs whose audio would come from a source whose audio changed
+/// since the song was built, by its record, and is damaged now, as a
+/// copy stopped short or a download that lost pieces leaves a file: of
+/// `planned`, those whose plan takes that source's audio, and every song
+/// not planned, as one `max_size` leaves out. Written from it, the song
+/// would lose what its record names, so it is held as built, its file or
+/// none; and its drift is neither followed nor taken, so its record
+/// keeps naming the whole audio, whether its file is there or not.
 pub(super) fn damaged_since_built(
     planned: &[PlannedSong],
     drifts: &[Drift],
     facts: &BTreeMap<SourceKey, Facts>,
 ) -> BTreeSet<usize> {
-    planned
+    drifts
         .iter()
-        .filter(|(n, r)| {
-            let key = &r.plan.audio.key;
-            facts.get(key).is_some_and(|f| f.damage().is_some())
-                && drifts.iter().any(|d| {
-                    d.song == *n && d.key == *key && d.changed.contains(&crate::held::Aspect::Audio)
-                })
+        .filter(|d| {
+            d.changed.contains(&crate::held::Aspect::Audio)
+                && facts.get(&d.key).is_some_and(|f| f.damage().is_some())
         })
-        .map(|(n, _)| *n)
+        .filter(|d| match planned.iter().find(|(n, _)| *n == d.song) {
+            Some((_, r)) => r.plan.audio.key == d.key,
+            None => true,
+        })
+        .map(|d| d.song)
         .collect()
 }
 

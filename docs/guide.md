@@ -456,9 +456,10 @@ nobody chose the damage. A damaged file of your own is named and left
 for you to replace.
 
 When a source's audio changed and the new audio is damaged, muman does
-not follow it. The song keeps its file and fails, with exit code 4,
-until you put the whole file back or `sync --force` writes the song
-from what the source holds.
+not follow it. The song keeps its file, or stays unwritten where none
+is left, as one you deleted or `max_size` left out, and fails, with
+exit code 4, until you put the whole file back or `sync --force` writes
+the song from what the source holds.
 
 ### New sources
 
