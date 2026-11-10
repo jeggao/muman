@@ -15,7 +15,10 @@
 //!   last ends ([`Timeline`]), as the packets list them without decoding.
 //!   Not the sum of the packets' durations: Matroska leaves some packets'
 //!   durations out, so healthy files sum about 2 s short, and corrupt
-//!   packets can sum to more than the file runs.
+//!   packets can sum to more than the file runs. A duration no packet can
+//!   last, wrapped around from a negative one ([`WRAP`]) or past
+//!   [`LONGEST_PACKET_S`], ends nothing: one such packet at the end of a
+//!   whole Ogg file spanned 27 hours.
 //! - **Decoded:** the frames the decoder produced, counted as the
 //!   analysis pass reads them.
 //! - **Stated:** the length the site gave, for what yt-dlp fetched, kept
@@ -46,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/2";
+pub const METHOD: &str = "integrity/3";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -59,6 +62,19 @@ const STATED_SLACK: (f64, f64) = (2.0, 0.01);
 
 /// A gap between packets longer than this is a hole: five Opus packets.
 const HOLE_S: f64 = 0.1;
+
+/// Ticks past which a packet's listed duration wrapped around 32 bits: a
+/// negative one, as an Ogg page whose granule ends inside its last packet
+/// trims that packet, listed unsigned. A Vorbis file remuxed with
+/// `-c copy` listed its last packet as 4,294,966,620 ticks, 2^32 less 676,
+/// and read as lacking 97,392 s of its 207 s.
+const WRAP: i64 = 1 << 32;
+
+/// Seconds no audio packet lasts: the longest frames of any codec are a
+/// FLAC block of 65,535 samples, 1.5 s at 44.1 kHz. A packet listed as
+/// longer says nothing of where it ends, and counts as one listing no
+/// duration.
+const LONGEST_PACKET_S: f64 = 10.0;
 
 /// What a source's audio was found to hold, in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -202,16 +218,28 @@ impl Timeline {
         if den <= 0.0 {
             return None;
         }
+        let seconds = |ticks: i64| ticks as f64 * num / den;
+        let length = |ticks: i64| {
+            let ticks = if (WRAP / 2..WRAP).contains(&ticks) {
+                ticks - WRAP
+            } else {
+                ticks
+            };
+            if seconds(ticks) > LONGEST_PACKET_S {
+                0
+            } else {
+                ticks.max(0)
+            }
+        };
         let mut packets: Vec<(i64, i64)> = framecrc
             .lines()
             .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
             .filter_map(|l| {
                 let mut fields = l.split(',').skip(2).map(|f| f.trim().parse::<i64>().ok());
-                Some((fields.next()??, fields.next()??.max(0)))
+                Some((fields.next()??, length(fields.next()??)))
             })
             .collect();
         packets.sort_unstable();
-        let seconds = |ticks: i64| ticks as f64 * num / den;
         let start = packets.first()?.0;
         let mut end = start;
         let mut holes = 0.0;
@@ -334,6 +362,25 @@ mod tests {
         assert_eq!(Timeline::parse("#tb 0: 1/1000\n"), None, "no packet");
     }
 
+    #[test]
+    fn a_duration_no_packet_lasts_ends_nothing() {
+        // The last packet of a remuxed Ogg file, trimmed by its page's
+        // granule, listed 7 ms short of 2^32 ticks.
+        let mut trimmed = whole(10);
+        trimmed.push((9993, WRAP - 7));
+        let t = Timeline::parse(&list(&trimmed)).unwrap();
+        assert!((t.end - 9.993).abs() < 1e-9, "{t:?}");
+        assert_eq!(measured(Some(10.0), &trimmed, 10.0).damage(), None);
+        let mut long = whole(10);
+        long.push((9993, 86_400_000));
+        assert!((Timeline::parse(&list(&long)).unwrap().end - 9.993).abs() < 1e-9);
+        let blocks: Vec<(i64, i64)> = (0..10).map(|n| (n * 1486, 1486)).collect();
+        assert!(
+            (Timeline::parse(&list(&blocks)).unwrap().end - 14.86).abs() < 1e-9,
+            "FLAC's longest blocks"
+        );
+    }
+
     fn measured(said: Option<f64>, packets: &[(i64, i64)], decoded: f64) -> Measure {
         let found = Found {
             said,
@@ -411,11 +458,12 @@ mod tests {
     }
 
     /// What the pass measures of audio holding samples that are no number,
-    /// beside packets whole, gapped, out of order or none, and a length
-    /// stated or guessed, with [`METHOD`].
+    /// beside packets whole, gapped, out of order, listed with durations
+    /// no packet lasts, or none, and a length stated or guessed, with
+    /// [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "integrity/2",
-        "bf1275ebfa8dc5a6395ce0dea1119fa7bf5f4874679692c15cd912ee8762e22c",
+        "integrity/3",
+        "d0259807b05e7a7aae0d2eac016784282e4f2a5ab217283013f2ccc18429789d",
     );
 
     #[test]
@@ -430,14 +478,18 @@ mod tests {
             .into_iter()
             .filter(|(pts, _)| !(1000..1150).contains(pts) && !(2000..2080).contains(pts))
             .collect();
+        let mut trimmed = whole(3);
+        trimmed.push((2993, WRAP - 7));
+        trimmed.push((3013, 86_400_000));
         let packets = [
             Some(whole(3)),
             Some(gapped),
             Some(vec![(60, 0), (0, 20), (20, 20), (500, 20)]),
             None,
+            Some(trimmed),
         ];
         let mut digest = crate::testing::Digest::default();
-        for (said, packets) in [Some(3.5), None, Some(2.0), Some(3.0)]
+        for (said, packets) in [Some(3.5), None, Some(2.0), Some(3.0), Some(3.0)]
             .into_iter()
             .zip(packets)
         {

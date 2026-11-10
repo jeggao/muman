@@ -29,6 +29,7 @@
 #![expect(clippy::disallowed_methods)]
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -356,9 +357,9 @@ impl Fake {
                 flac[STREAMINFO_MD5].copy_from_slice(&stamp[..16]);
                 flac
             }
-            // A stream's packets, as many bytes as 200 s at 128 kbit/s,
-            // running as long as the audio its analysis decodes, unless the
-            // tables say otherwise.
+            // A stream's packets, a second each, as many bytes as 200 s at
+            // 128 kbit/s, running as long as the audio its analysis decodes,
+            // unless the tables say otherwise.
             "framecrc" => {
                 if let Some(list) = find(&self.timelines, &input) {
                     list.clone().into_bytes()
@@ -371,7 +372,14 @@ impl Fake {
                         },
                         |s| i64::from(*s) * 48_000,
                     );
-                    format!("#tb 0: 1/48000\n0, 0, 0, {ticks}, {bytes}, 0x00000000\n").into_bytes()
+                    let mut list = "#tb 0: 1/48000\n".to_string();
+                    let mut size = bytes;
+                    for pts in (0..ticks.max(1)).step_by(48_000) {
+                        let duration = (ticks - pts).min(48_000);
+                        let _ = writeln!(list, "0, {pts}, {pts}, {duration}, {size}, 0x00000000");
+                        size = 0;
+                    }
+                    list.into_bytes()
                 }
             }
             // A stream hashes as its file's bytes and the stream mapped.
