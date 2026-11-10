@@ -3179,6 +3179,31 @@ fn a_watermark_and_a_placeholder_say_nothing_and_status_names_them() {
 }
 
 #[test]
+fn a_placeholder_typography_would_respell_is_dropped_as_status_says() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Real Title"], true);
+    tag(&mut f, Field::Artist, &["Marlo Venn"], true);
+    tag(&mut f, Field::Album, &["[non-album tracks]"], true);
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let r = run_knowing(
+        &song(std::slice::from_ref(&key)),
+        &facts,
+        &Known::default(),
+        &Settings::default(),
+    );
+    assert_eq!(
+        r.why.dropped,
+        ["ALBUM “[non-album tracks]” from manual:a.flac: a placeholder"]
+    );
+    assert_eq!(
+        written(&r, Field::Album),
+        Some(&["Real Title".to_string()][..]),
+        "a single, named for its title"
+    );
+}
+
+#[test]
 fn an_upload_date_stands_only_for_an_upload_by_the_song_s_artist() {
     let (file, upload) = (manual("a.flac"), yt("vid00000001"));
     let mut f = audio("flac", 22.0);

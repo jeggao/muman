@@ -60,7 +60,9 @@
 //!   most are a store's or an uploader's words, not the song's. A value
 //!   that says nothing of the song, a placeholder or a watermark, is
 //!   dropped before any offer is ranked ([`crate::detect`]), watermarks
-//!   found across the sources the song list names ([`Known`]). An
+//!   found across the sources the song list names ([`Known`]): as the
+//!   source wrote it, before cleaning, so `status` drops what it names,
+//!   and again as cleaned, where splitting a value made one. An
 //!   upload's date, the day it went up, dates the song only where the
 //!   upload's channel is the song's artist, set by hand or offered.
 //!
@@ -2392,7 +2394,7 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
             if field == Field::Comment && !input.source_comments {
                 continue;
             }
-            let c = clean::clean(field, &raw, &ctx, input.clean);
+            let c = clean::clean(field, &heard(input, key, field, &raw), &ctx, input.clean);
             let values: Vec<String> = (c.values.into_iter())
                 .filter(|v| says_nothing(input, key, field, v).is_none())
                 .collect();
@@ -2415,6 +2417,18 @@ fn candidates<'a>(input: &'a Input<'_>) -> BTreeMap<Field, Vec<Candidate<'a>>> {
         }
     }
     all
+}
+
+/// `offer`, of `field` from `key`, without the values that say nothing of
+/// the song as the source wrote them, as `status` names them.
+fn heard<'o>(input: &Input<'_>, key: &SourceKey, field: Field, offer: &'o Offer) -> Cow<'o, Offer> {
+    let said = |v: &String| says_nothing(input, key, field, v).is_some();
+    if !offer.values.iter().any(said) {
+        return Cow::Borrowed(offer);
+    }
+    let mut kept = offer.clone();
+    kept.values.retain(|v| !said(v));
+    Cow::Owned(kept)
 }
 
 /// What `key`, a source with `facts`, offers, as the `[[tags.from]]`

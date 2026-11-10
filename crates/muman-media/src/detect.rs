@@ -12,7 +12,7 @@
 //! as `Show OST 2`, on 38 as their artist.
 //!
 //! - A **placeholder** is a value `placeholders.txt` lists for its field,
-//!   compared whole, case aside, or a credit that names a soundtrack
+//!   compared whole, case, spacing and typography aside, or a credit that names a soundtrack
 //!   rather than anyone, ending in `OST` and perhaps its volume: files
 //!   tagged by album, their artist filled with the album's short name.
 //!   A release country that is no two-letter code, as a group's name
@@ -37,6 +37,12 @@
 //! A source group is the torrent a file came from, else the folder or the
 //! site, as the caller says. Values are compared folded to their letters
 //! and digits, case aside.
+//!
+//! Each test holds a value alike whether cleaning has run on it or not:
+//! `tidy.typography` writes `[non-album tracks]` with the hyphen U+2010,
+//! and the spacing rule makes a no-break space a space, so a placeholder
+//! is compared with its spaces, quotes and hyphens as ASCII writes them,
+//! and a watermark by its letters and digits alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -81,21 +87,30 @@ static PLACEHOLDERS: LazyLock<BTreeMap<Option<Field>, BTreeSet<String>>> = LazyL
                 None => continue,
             }
         };
-        table
-            .entry(field)
-            .or_default()
-            .insert(value.trim().to_lowercase());
+        table.entry(field).or_default().insert(plain(value));
     }
     table
 });
 
+/// `value` as a placeholder is compared: its spaces one space each, its
+/// quotes and hyphens as ASCII writes them, lower-cased.
+fn plain(value: &str) -> String {
+    let words: Vec<&str> = value.split_whitespace().collect();
+    words
+        .join(" ")
+        .chars()
+        .map(crate::clean::plain_punctuation)
+        .collect::<String>()
+        .to_lowercase()
+}
+
 /// Whether `value` stands for no value in `field`.
 #[must_use]
 pub fn placeholder(field: Field, value: &str) -> bool {
-    let lower = value.trim().to_lowercase();
+    let plain = plain(value);
     let listed = [None, Some(field)]
         .iter()
-        .any(|f| PLACEHOLDERS.get(f).is_some_and(|set| set.contains(&lower)));
+        .any(|f| PLACEHOLDERS.get(f).is_some_and(|set| set.contains(&plain)));
     listed
         || (CREDITS.contains(&field) && names_a_soundtrack(value))
         || (field == Field::ReleaseCountry && !is_country(value.trim()))
@@ -295,6 +310,20 @@ mod tests {
         assert!(!placeholder(Field::Label, "Glass Orchard Records"));
         assert!(placeholder(Field::ReleaseCountry, "GRP"), "no country");
         assert!(!placeholder(Field::ReleaseCountry, "XW"));
+    }
+
+    #[test]
+    fn a_placeholder_is_one_however_cleaning_spelled_it() {
+        for value in [
+            "[non-album tracks]",
+            "[non\u{2010}album tracks]",
+            "[Non\u{2011}Album  Tracks]",
+            "[non-album\u{a0}tracks]",
+        ] {
+            assert!(placeholder(Field::Album, value), "{value}");
+        }
+        assert!(placeholder(Field::Artist, "Unknown\u{a0}Artist"));
+        assert!(!placeholder(Field::Album, "[non album tracks]"));
     }
 
     #[test]
