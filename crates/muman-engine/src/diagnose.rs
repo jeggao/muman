@@ -219,17 +219,8 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                  or a magnet link of it is given to `add` again"
         ))?;
     }
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
-    let (mut ready, mut settling) =
-        store.unlisted(&known, std::time::SystemTime::now(), store::SETTLING);
-    let moved = store::moved_manual(
-        &listed,
-        |k| state.recorded(k),
-        &store,
-        &mut ready,
-        &mut settling,
-    );
+    let mut unlisted = crate::reconcile::Unlisted::of(&manifest, &state, &store, store::SETTLING);
+    let moved = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, |_| None);
     let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
     for key in &listed {
         if let Some(to) = moved.get(key) {

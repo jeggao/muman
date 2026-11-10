@@ -101,7 +101,8 @@ muman set artist:="Marlo Venn" album="Lantern Weather"
 back the files it moved. A file you had changed comes back still yours.
 A file `add` copied into the sources goes: deleted while it holds what
 was copied, moved to the trash once changed. A hand edit to the song
-list is undone with the run that applied it.
+list is undone with the run that applied it. A file of yours in
+`sources/manual` stays where you moved it, and its song follows it again.
 
 A run stopped partway, by a crash or Ctrl-C, can be undone, and so can
 an undo stopped partway. An undo ends with a sync, and until that sync

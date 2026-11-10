@@ -1402,6 +1402,89 @@ fn a_listed_file_gone_while_another_is_copied_in_waits_rather_than_fails() {
     assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
 }
 
+/// Move the manual file `from` of `s` to `to`.
+fn move_manual(s: &Setup, from: &str, to: &str) {
+    let manual = s.dir.path().join("home/sources/manual");
+    let to = manual.join(to);
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::rename(manual.join(from), to).unwrap();
+}
+
+#[test]
+fn a_moved_file_is_followed_by_every_command_that_syncs() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    move_manual(&s, "a.flac", "Artist/a.flac");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/a.flac"),
+        "{text}"
+    );
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+}
+
+#[test]
+fn undoing_the_sync_that_followed_a_move_follows_it_again() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built: Vec<PathBuf> =
+        crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+
+    move_manual(&s, "a.flac", "Artist/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/a.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("Removed"), "{text}");
+    assert!(built[0].exists(), "its file is kept: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "listed once: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("Artist/a.flac".into())]]);
+}
+
+#[test]
+fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
+    let s = Setup::new();
+    let fake = Fake {
+        hashes: vec![("a.flac".into(), 7), ("drop.flac".into(), 7)],
+        ..flacs()
+    };
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.flac")).unwrap();
+    s.written(
+        "home/sources/manual/Artist/drop.flac",
+        "a.flac, tagged anew",
+    );
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/drop.flac"),
+        "{text}"
+    );
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("Artist/drop.flac".into())]]
+    );
+}
+
 #[test]
 fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
     let s = Setup::new();

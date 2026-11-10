@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -28,13 +28,13 @@ use crate::history::Run;
 use crate::http::HttpTransport;
 use crate::identify::Mode;
 use crate::manifest::{Edit, Manifest, Tags};
-use crate::reconcile::Options;
+use crate::reconcile::{Options, Unlisted};
 use crate::runner::Runner;
 use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::Store;
 use crate::ui::Prompter;
-use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, store, ui};
+use crate::{atomic, identify, lookup, manifest, plugins, relpath, state, ui};
 
 /// What `sync` was given: its flags, each on its own.
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +73,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         if request.update_defaults {
             update_settings(&dirs.home, out)?;
         }
-        let proposals = dropped_in(dirs, job.settling, out)?;
+        let proposals = dropped_in(runner, dirs, job.settling, out)?;
         if !job.offline {
             crate::reconcile::note_damaged(runner, dirs, request.retry, out)?;
         }
@@ -477,7 +477,8 @@ pub(crate) fn list<R: Runner, W: Write>(
 
 /// Song files dropped into the manual folder that no song lists, each a
 /// proposal; a listed file moved within the folder is followed instead.
-pub(crate) fn dropped_in<W: Write>(
+pub(crate) fn dropped_in<R: Runner, W: Write>(
+    runner: &R,
     dirs: &Dirs,
     wait: Duration,
     out: &mut W,
@@ -485,9 +486,6 @@ pub(crate) fn dropped_in<W: Write>(
     let mut manifest = Manifest::load(&dirs.home)?;
     let state = State::load(&dirs.home)?;
     let store = Store::scan(dirs)?;
-    let listed = manifest.keys();
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
     for twin in store.twins() {
         ui::warning(
             out,
@@ -498,17 +496,14 @@ pub(crate) fn dropped_in<W: Write>(
             ),
         )?;
     }
-    let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), wait);
-    // A file listed before is no new one still copying in, however
-    // recently it was touched.
-    settling.retain(|path| {
-        let key = SourceKey::Manual(path.into());
-        let was_listed = state.listed.contains(&key);
-        if was_listed {
-            ready.push(key);
-        }
-        !was_listed
-    });
+    let mut unlisted = Unlisted::of(&manifest, &state, &store, wait);
+    let scratch = atomic::Scratch::new()?;
+    let hear = crate::reconcile::hearing(runner, scratch.path());
+    let renames = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
+    let Unlisted {
+        mut ready,
+        settling,
+    } = unlisted;
     let unlisted: Vec<SourceKey> = ready
         .iter()
         .filter(|k| state.listed.contains(k))
@@ -528,13 +523,6 @@ pub(crate) fn dropped_in<W: Write>(
             key,
         });
     }
-    let renames = store::moved_manual(
-        &listed,
-        |k| state.recorded(k),
-        &store,
-        &mut ready,
-        &mut settling,
-    );
     for path in settling {
         ui::info(
             out,

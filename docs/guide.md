@@ -359,9 +359,10 @@ files are read without the lyrics and pictures they bring.
 also drop files there yourself; the next `sync` lists them. muman reads
 a dropped file only 10 s after it arrived, whatever modification time
 the copy kept, so it never reads a file still being copied. A listed
-file you move within the folder is followed, not listed again, at once
-when it holds every byte it held. While a listed file is gone and
-another is still being copied in, its song waits rather than fails.
+file you move within the folder is followed by any command that syncs,
+not listed again: at once when it holds every byte it held, else once
+settled, by its audio, as when a tagger renames it as it retags it.
+While it is gone and another file is copied in, its song waits.
 
 A song file brings what sits beside it:
 
