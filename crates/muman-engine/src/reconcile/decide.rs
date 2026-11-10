@@ -128,12 +128,17 @@ pub enum Doing {
 }
 
 /// What a sync decides for every song, before it does any: each song's
-/// file, the sources holding otherwise than it was built from, those
-/// damaged since, and what it does with each.
+/// file, the sources holding otherwise than it was built from, the songs
+/// held as built for them and those of them damaged since, and what it
+/// does with each.
 #[derive(Debug)]
 pub struct Foreseen {
     pub files: BTreeMap<usize, PathBuf>,
     pub drifts: Vec<Drift>,
+    /// The songs held as built, never built from what a source holds
+    /// now: those a source fetched again holds otherwise for, not yet
+    /// accepted, and those of audio damaged since.
+    pub held: BTreeSet<usize>,
     pub damaged: BTreeSet<usize>,
     pub decided: Vec<Doing>,
 }
@@ -168,6 +173,7 @@ pub fn foresee(
     Foreseen {
         files,
         drifts,
+        held: holding.union(&damaged).copied().collect(),
         damaged,
         decided,
     }

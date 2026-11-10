@@ -28,7 +28,12 @@
 //! A song changed since muman wrote it is copied as the library holds it:
 //! the file is the user's. So is one whose sources are gone, or that the
 //! export's settings resolve to no plan, as its file is the only one there
-//! is; each is said, and the export fails. The settings that place or
+//! is, and one a sync leaves as built ([`reconcile::Foreseen::held`]): a
+//! source fetched again holding otherwise, not yet accepted, or one whose
+//! audio was damaged since, as a copy cut off leaves it. The export makes
+//! a song from the sources a sync would make it from, or not at all. Each
+//! that the export's settings or size would have made anew is said, and
+//! the export fails. The settings that place or
 //! cap the library folder, `path`, `touch_root` and `max_size`, are no
 //! export's, and `block_size` is a folder's alone. Nor is `[audio.pick]`: the measures a sync takes
 //! follow its weights, so an export could rank by measures never taken. Loudness
@@ -461,16 +466,16 @@ pub fn export<R: Runner, W: Write>(
     guard(&output, dirs, options.force)?;
     let (beside, _made) = scratch_beside(target, &output)?;
 
-    let (keys, fitted) = (manifest.keys(), options.max_size.is_some());
+    let asked = (settings.as_ref(), options.max_size.is_some());
     reconcile::analyze_mixes(
         runner,
         &store,
-        &keys,
+        &manifest.keys(),
         &mut state,
-        (writes_under, fitted),
+        (writes_under, asked.1),
         out,
     )?;
-    let (mut songs, mut ok) = songs(dirs, &manifest, settings.as_ref(), &state, &store, out)?;
+    let (mut songs, mut ok) = songs(dirs, &manifest, asked, &state, &store, out)?;
     let audio = &writes_under.audio;
     let held: Vec<Vec<Entry>> = songs
         .iter()
@@ -742,18 +747,20 @@ fn located(store: &Store, plan: &Plan) -> Option<BTreeMap<SourceKey, Located>> {
 #[derive(Debug, Default)]
 struct Kept {
     changed: usize,
+    held: usize,
     gone: usize,
     unresolved: usize,
 }
 
 /// The songs the library holds as the state records them, in its path
 /// order, each as the export writes it: under `settings`, when given,
-/// and else as the library holds it. Returns them with whether every song
-/// the library should hold is there, as asked.
+/// and else as the library holds it, `fitted` to a size or not. Returns
+/// them with whether every song the library should hold is there, as
+/// asked.
 fn songs<W: Write>(
     dirs: &Dirs,
     manifest: &Manifest,
-    settings: Option<&Settings>,
+    (settings, fitted): (Option<&Settings>, bool),
     state: &State,
     store: &Store,
     out: &mut W,
@@ -763,20 +770,24 @@ fn songs<W: Write>(
             .into_iter()
             .map(|(n, path)| (path, n))
             .collect();
-    let mut planned: Option<(BTreeMap<usize, Resolved>, BTreeMap<usize, Resolved>)> = None;
-    if let Some(settings) = settings {
-        let (library, _) = reconcile::plan_with(
-            manifest,
-            &manifest.settings,
-            state,
-            &dirs.library,
-            None,
-            &mut io::sink(),
-        )?;
-        let (export, _) =
-            reconcile::plan_with(manifest, settings, state, &dirs.library, None, out)?;
-        planned = Some((library.into_iter().collect(), export.into_iter().collect()));
-    }
+    let (library, _) = reconcile::plan_with(
+        manifest,
+        &manifest.settings,
+        state,
+        &dirs.library,
+        None,
+        &mut io::sink(),
+    )?;
+    let held = reconcile::foresee(manifest, state, &library, &dirs.library, (false, false)).held;
+    let library: BTreeMap<usize, Resolved> = library.into_iter().collect();
+    let export: Option<BTreeMap<usize, Resolved>> = match settings {
+        Some(settings) => {
+            let (export, _) =
+                reconcile::plan_with(manifest, settings, state, &dirs.library, None, out)?;
+            Some(export.into_iter().collect())
+        }
+        None => None,
+    };
     let mut songs = Vec::new();
     let mut missing = 0_usize;
     let mut kept = Kept::default();
@@ -789,6 +800,8 @@ fn songs<W: Write>(
             continue;
         }
         let changed = reconcile::changed_since_written(&dirs.library, &state.outputs, path);
+        let n = owners.get(path).copied();
+        let as_built = n.is_some_and(|n| held.contains(&n));
         let mut song = Song {
             stem: path.with_extension(""),
             path: path.clone(),
@@ -799,16 +812,19 @@ fn songs<W: Write>(
                 .collect(),
             plan: plan.clone(),
             anew: false,
-            sources: located(store, plan).filter(|_| !changed),
-            n: owners.get(path).copied(),
+            sources: located(store, plan).filter(|_| !changed && !as_built),
+            n,
         };
-        if let (Some((library, export)), Some(n)) = (&planned, song.n.as_ref()) {
-            match (library.get(n), export.get(n)) {
+        let mut asked = fitted;
+        if let (Some(export), Some(n)) = (&export, n) {
+            match (library.get(&n), export.get(&n)) {
                 (Some(was), Some(now)) => {
                     song.stem.clone_from(&now.stem);
                     if now.plan != was.plan {
+                        asked = true;
                         match located(store, &now.plan) {
                             _ if changed => kept.changed += 1,
+                            _ if as_built => {}
                             None => kept.gone += 1,
                             Some(sources) => {
                                 song.plan = now.plan.clone();
@@ -822,8 +838,18 @@ fn songs<W: Write>(
                 (_, None) => kept.unresolved += 1,
             }
         }
+        if as_built && !changed && asked {
+            kept.held += 1;
+        }
         songs.push(song);
     }
+    let all = say_kept(missing, &kept, out)?;
+    Ok((songs, all))
+}
+
+/// Say which songs the library should hold are `missing` from it, and
+/// which it gives only as it holds them, by why; whether there were none.
+fn say_kept<W: Write>(missing: usize, kept: &Kept, out: &mut W) -> Result<bool> {
     if missing > 0 {
         crate::ui::warning(
             out,
@@ -849,10 +875,17 @@ fn songs<W: Write>(
             ),
         )?;
     }
-    Ok((
-        songs,
-        missing == 0 && reasons.iter().all(|(count, _)| *count == 0),
-    ))
+    if kept.held > 0 {
+        crate::ui::warning(
+            out,
+            &format!(
+                "{} song(s) a sync leaves as built, a source holding otherwise than they were \
+                 built from, are exported as the library holds them; `muman sync` says why",
+                kept.held
+            ),
+        )?;
+    }
+    Ok(missing == 0 && kept.held == 0 && reasons.iter().all(|(count, _)| *count == 0))
 }
 
 /// A song's library file and those beside it, named in the zip by its

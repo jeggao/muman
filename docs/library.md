@@ -421,11 +421,11 @@ would write under those settings, a song mixed into another layout
 levelled on its mix, which the export measures where no sync has. Each
 song the change leaves alone is copied, and every other is made again.
 
-A song you changed since muman wrote it, or whose sources are gone, goes
-in as the library holds it; the export says so and exits with code 4.
-An export cannot change where the library lives, its `max_size`, how
-sources are ranked or which lyrics a song takes, nor loudness when the
-song list's `[loudness] mode` measures none.
+A song you changed since muman wrote it, whose sources are gone, or that a sync
+leaves as built, as one cut off since, goes in as the library holds it; the
+export says so and exits with code 4. An export cannot change where the library
+lives, its `max_size`, how sources are ranked or which lyrics a song takes, nor
+loudness when the song list's `[loudness] mode` measures none.
 
 ### A size limit
 

@@ -437,6 +437,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         drifts,
         damaged,
         decided,
+        ..
     } = foresee(
         &manifest,
         &state,

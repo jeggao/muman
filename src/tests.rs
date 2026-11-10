@@ -7346,6 +7346,52 @@ fn export_keeps_a_song_whose_sources_are_gone_as_the_library_holds_it() {
 }
 
 #[test]
+fn an_export_makes_no_song_from_a_source_cut_off_since_it_was_built() {
+    let s = Setup::new();
+    let source = s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built = std::fs::read(s.dir.path().join("lib/Artist/Record/02 Song.flac")).unwrap();
+    std::fs::write(&source, "a copy stopped short").unwrap();
+    let mut cut = Fake {
+        held: vec![("a.flac".into(), 3)],
+        ..flacs()
+    };
+    let said = crate::testing::FLAC.replace(
+        r#""sample_rate": "44100"}"#,
+        r#""sample_rate": "44100", "duration": "200.0"}"#,
+    );
+    cut.probes.insert(0, ("a.flac".into(), said));
+    let (ok, text) = s.run(&cut, &["sync"]);
+    assert!(!ok && text.contains("cut off"), "{text}");
+    let whole = s.dir.path().join("whole.zip");
+    let (ok, text) = s.run(&cut, &["export", "-o", &whole.to_string_lossy()]);
+    assert!(
+        ok,
+        "a copy of the library asks nothing of the source: {text}"
+    );
+    for (n, ask) in [["--codec", "opus"], ["--max-size", "1GiB"]]
+        .iter()
+        .enumerate()
+    {
+        let zip = s.dir.path().join(format!("out{n}.zip"));
+        let named = zip.to_string_lossy();
+        let args = [&["export", "-o", &*named][..], ask].concat();
+        let (ok, text) = s.run(&cut, &args);
+        assert!(
+            !ok && text.contains("a sync leaves as built"),
+            "{ask:?}: {text}"
+        );
+        assert!(!cut.ran("libopus"), "{ask:?}: {text}");
+        assert_eq!(
+            unzip(&zip).get("library/Artist/Record/02 Song.flac"),
+            Some(&built),
+            "{ask:?}: {text}"
+        );
+    }
+}
+
+#[test]
 fn export_fits_songs_made_anew_into_its_size() {
     let (s, fake) = exported_home("0.05");
     let zip = s.dir.path().join("out.zip");
