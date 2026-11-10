@@ -70,9 +70,12 @@ song when negated.
   a query reads that is no tag, as `from`, `has`, `key` or `path`, is
   refused, as is a release ID that is none. `set` refuses a
   track or disc that is no number or below 1, as they count from 1, a
-  date that is none, and a ReplayGain gain or peak. A value is one
+  date that is none, and a ReplayGain gain or peak. A field muman
+  knows, which names the song or holds a number, date or ID, is one
   line: a line break or tab in it reads as a space, set by `set`,
-  `edit` or a tag file, as `list` shows it and a query matches it.
+  `edit` or a tag file. A `comment`, or a tag muman does not know,
+  keeps its lines; `list`, `status` and `remove -n` show each break as
+  `\n`, and a query matches it as a space.
 - **`set` with a query alone**, on a terminal, steps through the songs
   field by field. Each field shows its value and where it came from;
   opened, it shows what each source offers, for you to keep, take, type

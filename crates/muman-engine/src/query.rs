@@ -522,10 +522,7 @@ pub fn format(template: &str, view: &View) -> String {
             view.values(field)
         };
         // One song a line, whatever its values hold, a file's name too.
-        let flat: Vec<String> = values
-            .iter()
-            .map(|v| v.replace(['\t', '\n', '\r'], " "))
-            .collect();
+        let flat: Vec<String> = values.iter().map(|v| tags::escaped(v)).collect();
         out.push_str(&flat.join("; "));
         rest = &after[close + 1..];
     }
@@ -823,7 +820,7 @@ mod tests {
         let odd = view("Tide", "Ada Quill", "manual:Ada\nQuill/02 Tide.flac");
         assert_eq!(
             format("{key}\t{title}", &odd),
-            "manual:Ada Quill/02 Tide.flac\tTide"
+            "manual:Ada\\nQuill/02 Tide.flac\tTide"
         );
     }
 }

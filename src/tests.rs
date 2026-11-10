@@ -5920,6 +5920,21 @@ fn a_line_break_set_by_hand_reads_as_a_space_stored_shown_and_matched() {
         listed.contains("Paper Comets"),
         "a hand edit reads alike: {listed}"
     );
+
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "comment=one\ntwo"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ one\\ntwo\n"), "shown escaped: {text}");
+    let m = Manifest::load(&s.dir.path().join("home")).unwrap();
+    let kept: BTreeMap<String, Vec<String>> = m.songs[0].tags.iter().cloned().collect();
+    assert_eq!(kept["comment"], ["one\ntwo"], "kept over lines");
+    assert_eq!(
+        s.listed(&["list", "-f", "{comment}", "comment:=one two"]),
+        "one\\ntwo\n",
+        "matched with the break as a space, listed escaped"
+    );
 }
 
 #[test]

@@ -123,7 +123,7 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
             out,
             format!(
                 "  {key:<width$} {} ({}{cleaned})",
-                values.join("; "),
+                crate::tags::escaped(&values.join("; ")),
                 why.from
             ),
         )?;

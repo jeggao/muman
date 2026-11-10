@@ -701,7 +701,7 @@ impl Assign {
     pub(crate) fn describe(&self, view: &View) -> String {
         match self {
             Self::Tag(name, values) => {
-                let now = view.values(name).join("; ");
+                let now = crate::tags::escaped(&view.values(name).join("; "));
                 let now = if now.is_empty() {
                     "nothing".to_string()
                 } else {
@@ -710,7 +710,10 @@ impl Assign {
                 if values.is_empty() {
                     format!("{name}: {now} → what the sources offer")
                 } else {
-                    format!("{name}: {now} → {}", values.join("; "))
+                    format!(
+                        "{name}: {now} → {}",
+                        crate::tags::escaped(&values.join("; "))
+                    )
                 }
             }
             Self::Pin(pin, Some(v)) if v == "false" => format!("{pin}: none taken"),

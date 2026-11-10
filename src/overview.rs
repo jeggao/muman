@@ -298,9 +298,10 @@ fn differences(file: &Path, was: &Plan, r: &Resolved) -> Vec<(String, String)> {
         add("lyrics", &before, "written again", "");
     }
     let values = |tags: &[(String, Vec<String>)], k: &str| {
-        tags.iter()
-            .find(|(t, _)| t == k)
-            .map_or_else(|| "none".to_string(), |(_, v)| v.join("; "))
+        tags.iter().find(|(t, _)| t == k).map_or_else(
+            || "none".to_string(),
+            |(_, v)| crate::tags::escaped(&v.join("; ")),
+        )
     };
     for ((k, _), why) in now.tags.iter().zip(&r.why.tags) {
         let (before, after) = (values(&was.tags, k), values(&now.tags, k));
@@ -315,7 +316,7 @@ fn differences(file: &Path, was: &Plan, r: &Resolved) -> Vec<(String, String)> {
     }
     for (k, v) in &was.tags {
         if !now.tags.iter().any(|(t, _)| t == k) {
-            add(k, &v.join("; "), "none", "");
+            add(k, &crate::tags::escaped(&v.join("; ")), "none", "");
         }
     }
     differ

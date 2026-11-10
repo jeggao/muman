@@ -157,11 +157,15 @@ impl Query {
 }
 
 /// `text` as a query compares it: lower case, in one Unicode form, its
-/// accents taken off, and the punctuation typography respells written
-/// plain, so `twenty-five` finds `Twenty‐Five`.
+/// accents taken off, the punctuation typography respells written
+/// plain, so `twenty-five` finds `Twenty‐Five`, and on one line, so
+/// `comment:"one two"` finds a comment of two lines.
 #[must_use]
 pub fn fold(text: &str) -> String {
-    let plain: String = text.chars().map(crate::clean::plain_punctuation).collect();
+    let plain: String = tags::joined(text)
+        .chars()
+        .map(crate::clean::plain_punctuation)
+        .collect();
     plain
         .nfd()
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))

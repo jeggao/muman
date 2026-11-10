@@ -1134,9 +1134,9 @@ pub fn song_list_name(name: &str) -> String {
 /// Vorbis comment cannot carry (printable ASCII but `=`, as APEv2 keys
 /// are ASCII too), a number that is none, a date that is none, or a gain
 /// muman measures and writes over. An empty value sets nothing, so it is
-/// never wrong. A line break or tab, with the spaces around it, reads as
-/// one space: a value set by hand is one line, as `list` and every
-/// message show it and as a query matches it, wherever it was set.
+/// never wrong. A field [`single_line`] names reads each line break or
+/// tab, with the spaces around it, as one space, wherever it was set;
+/// any other keeps its lines.
 pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     if name.is_empty()
         || !name
@@ -1152,12 +1152,11 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
         .chars()
         .filter(|c| !crate::portable::reorders(*c))
         .collect();
-    let value = value
-        .split(['\n', '\r', '\t'])
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let value = if single_line(name) {
+        joined(&value)
+    } else {
+        value
+    };
     if value.trim().is_empty() {
         return Ok(String::new());
     }
@@ -1182,6 +1181,37 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     }
     kind.read(&value)
         .map_err(|why| format!("{name} = {value:?} is {why}"))
+}
+
+/// Whether the tag `name` holds one line: every field muman knows, which
+/// names a song, a person, a release or a path part, or holds a number,
+/// a date or an ID, but the comment, free text as a tag muman does not
+/// know may be too. One holds a line break as it was given, stored so,
+/// shown [`escaped`] and matched as a space.
+#[must_use]
+pub fn single_line(name: &str) -> bool {
+    Field::named(name).is_some_and(|f| f != Field::Comment)
+}
+
+/// `text` on one line: each line break or tab, with the spaces around
+/// it, one space.
+#[must_use]
+pub fn joined(text: &str) -> String {
+    text.split(['\n', '\r', '\t'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `text` as a listing shows a value, one line a song: each line break
+/// written `\n` and each tab `\t`, so text kept over lines is seen whole.
+#[must_use]
+pub fn escaped(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t")
 }
 
 /// Whether `t` is a time of day, as a date's tail: `HH:MM`, seconds and
@@ -2789,6 +2819,10 @@ mod tests {
             "line1 line2 end"
         );
         assert_eq!(by_hand("title", "\n\t").unwrap(), "");
+        assert_eq!(by_hand("comment", "one\ntwo").unwrap(), "one\ntwo");
+        assert_eq!(by_hand("liner_notes", "one\ntwo").unwrap(), "one\ntwo");
+        assert!(single_line("album_artist") && single_line("DATE") && !single_line("comment"));
+        assert_eq!(escaped("one\r\ntwo\tthree"), "one\\ntwo\\tthree");
         assert!(by_hand("date", "2019-07-04Tea").is_err());
         assert_eq!(
             by_hand("date", "2019-07-04T10:00:00Z").unwrap(),
