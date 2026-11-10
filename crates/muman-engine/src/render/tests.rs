@@ -1199,6 +1199,35 @@ fn an_mp3_holds_each_field_in_the_frame_picard_writes() {
 }
 
 #[test]
+fn an_m4a_s_tags_shrinking_by_any_length_are_written() {
+    let codec = Format::Copy { codec: Codec::Aac };
+    let album = |name: &str| vec![("ALBUM".to_string(), vec![name.to_string()])];
+    let long = "Lantern Weather Sampler";
+    for shrink in 1..=12 {
+        let (_dir, path) = written(crate::testing::SILENCE_M4A, "song.m4a");
+        write_tags(&path, codec, &album(long), None, None, &[]).unwrap();
+        let short = album(&long[..long.len() - shrink]);
+        write_tags(&path, codec, &short, None, None, &[])
+            .unwrap_or_else(|e| panic!("{shrink} bytes shorter: {e:#}"));
+        assert_eq!(verify(&path, &short, false), [] as [String; 0], "{shrink}");
+    }
+}
+
+#[test]
+fn a_tag_writer_that_panics_fails_the_write_alone() {
+    let codec = Format::Copy { codec: Codec::Aac };
+    let album = |name: &str| vec![("ALBUM".to_string(), vec![name.to_string()])];
+    // An atom after `moov` keeps its `ilst` in place, where `lofty` cannot
+    // write one exactly 8 bytes shorter.
+    let mut bytes = crate::testing::SILENCE_M4A.to_vec();
+    bytes.extend_from_slice(&[0, 0, 0, 8, b'f', b'r', b'e', b'e']);
+    let (_dir, path) = written(&bytes, "song.m4a");
+    write_tags(&path, codec, &album("Paper Comet Sampler"), None, None, &[]).unwrap();
+    let e = write_tags(&path, codec, &album("Paper Comet"), None, None, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("the tag writer stopped"), "{e:#}");
+}
+
+#[test]
 fn an_m4a_holds_each_field_in_the_atom_picard_writes() {
     use lofty::mp4::{AtomData, AtomIdent};
 
