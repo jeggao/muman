@@ -64,10 +64,10 @@ fn one(t: &toml_edit::Table) -> Hook {
     let run: Vec<String> = t
         .get("run")
         .and_then(Item::as_array)
-        .map(|a| {
+        .and_then(|a| {
             a.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
+                .map(|v| v.as_str().map(str::to_string))
+                .collect::<Option<_>>()
         })
         .unwrap_or_default();
     let refused = match t.get("on").and_then(Item::as_str) {
@@ -366,6 +366,7 @@ mod tests {
             "[[hook]]\non = \"sometimes\"\nrun = [\"x\"]\n",
             "[[hook]]\non = \"changed\"\nrun = []\n",
             "[[hook]]\non = \"changed\"\nrun = \"x y\"\n",
+            "[[hook]]\non = \"changed\"\nrun = [\"prog\", \"-n\", 5, true, \"x\"]\n",
             "[[hook]]\non = \"changed\"\nrun = [\"x\"]\nshell = true\n",
         ] {
             assert!(refused(bad).is_some(), "{bad}");
