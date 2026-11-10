@@ -20,7 +20,15 @@
 //!   fills past it, where that stands 20 dB down; a recording whose treble
 //!   fades into its noise floor shows no wall and measures full, and so
 //!   does one whose notes' partials end low over a noise floor that runs
-//!   on to the top.
+//!   on to the top. Where the audio clips, only frames holding no sample
+//!   at its clip level count, while any excerpt holds one: clipping
+//!   splatters harmonics past the lowpass the audio was made with. Of 10
+//!   pieces cut 40 s long as FLAC, copies raised by 3 to 20 dB into
+//!   clipping measured a 500 Hz step or more wider than their source in
+//!   39 of 50 copies counting every frame, and in 20 counting those, the
+//!   loudest frames left out; a copy that clips in nearly every frame
+//!   still measures its splatter, which ranking sources does not count
+//!   against a lossless copy of its recording that clips less.
 //! - **Real stereo.** One minus the first two channels' squared
 //!   correlation at the lag within 1 ms that best aligns them: mono copied
 //!   into two channels, at two levels or a few samples apart, has next to
@@ -104,7 +112,11 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/11";
+pub const METHOD: &str = "quality/12";
+/// The method before bandwidth was read where the audio does not clip:
+/// what it measured holds for audio that does not clip, or as
+/// [`BEFORE_LOWEST`]'s does not hold.
+pub const BEFORE_UNCLIPPED: &str = "quality/11";
 /// The method before bandwidth was read at the lowest wall: what it
 /// measured holds for lossless audio, and lossy audio is measured again.
 /// A lossless encoder fills no band, so only a lossless file made from a
@@ -540,19 +552,27 @@ pub fn audio(segments: &[Segment], sample_rate: u32, headroom: bool) -> Option<A
     } else {
         CLIP_LEVEL.min(peak * CLIP_OF_PEAK)
     };
-    let mut bandwidth: Option<f64> = None;
+    let lowest = |bandwidth: Option<f64>, spectrum: Option<Vec<f64>>| {
+        let Some(hz) = spectrum.map(|s| wall(&s, sample_rate)) else {
+            return bandwidth;
+        };
+        Some(bandwidth.map_or(hz, |b: f64| b.min(hz)))
+    };
     let (mut clipped, mut total) = (0_usize, 0_usize);
     for segment in segments {
         for channel in 0..segment.channels {
             clipped += clipped_samples(segment.channel(channel), level);
         }
         total += segment.samples.len();
-        if let Some(spectrum) = mean_spectrum(segment, &window) {
-            let hz = wall(&spectrum, sample_rate);
-            bandwidth = Some(bandwidth.map_or(hz, |b| b.min(hz)));
-        }
     }
-    let bandwidth_hz = bandwidth?;
+    let clips = (clipped > 0).then_some(level);
+    let (mut unclipped, mut any) = (None, None);
+    for segment in segments {
+        let spectra = mean_spectra(segment, &window, clips);
+        unclipped = lowest(unclipped, spectra.unclipped);
+        any = lowest(any, spectra.all);
+    }
+    let bandwidth_hz = unclipped.or(any)?;
     if peak == 0.0 {
         return None;
     }
@@ -708,20 +728,34 @@ fn clipped_samples(channel: impl Iterator<Item = f32>, level: f32) -> usize {
     }
 }
 
-/// The mean power spectrum of a segment's sounding frames, by FFT bin,
-/// each channel's power summed: channels in opposite phase cancel in a
-/// mix, and measured as silence.
-fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
+/// A segment's mean power spectra, by FFT bin: of its sounding frames
+/// that hold no clipped sample, and of all its sounding frames; `None`
+/// where there are none.
+#[derive(Debug, Default)]
+struct Spectra {
+    unclipped: Option<Vec<f64>>,
+    all: Option<Vec<f64>>,
+}
+
+/// The mean power spectra of a segment's sounding frames, each channel's
+/// power summed: channels in opposite phase cancel in a mix, and measured
+/// as silence. Where the audio clips at `clips`, a frame holding a sample
+/// at that level is told apart.
+fn mean_spectra(segment: &Segment, window: &[f64], clips: Option<f32>) -> Spectra {
     let mut sum = vec![0.0; FFT / 2];
-    let mut frames = 0_usize;
+    let mut clean_sum = vec![0.0; FFT / 2];
+    let (mut frames, mut clean_frames) = (0_usize, 0_usize);
     let width = FFT * segment.channels;
     let twiddles = Twiddles::new(FFT);
     let (mut re, mut im) = (Vec::with_capacity(FFT), vec![0.0; FFT]);
+    let mut power = vec![0.0; FFT / 2];
     for frame in segment.samples.chunks_exact(width) {
         let energy: f64 = frame.iter().map(|x| f64::from(*x).powi(2)).sum();
         if (energy / real(width)).sqrt() < SILENT_RMS {
             continue;
         }
+        let clipping = clips.is_some_and(|level| frame.iter().any(|x| x.abs() >= level));
+        power.fill(0.0);
         for channel in 0..segment.channels {
             re.clear();
             re.extend(
@@ -734,13 +768,28 @@ fn mean_spectrum(segment: &Segment, window: &[f64]) -> Option<Vec<f64>> {
             );
             im.fill(0.0);
             fft(&mut re, &mut im, &twiddles);
-            for (k, power) in sum.iter_mut().enumerate() {
-                *power += re[k] * re[k] + im[k] * im[k];
+            for (k, p) in power.iter_mut().enumerate() {
+                *p += re[k] * re[k] + im[k] * im[k];
             }
         }
+        for (total, p) in sum.iter_mut().zip(&power) {
+            *total += p;
+        }
         frames += 1;
+        if !clipping {
+            for (total, p) in clean_sum.iter_mut().zip(&power) {
+                *total += p;
+            }
+            clean_frames += 1;
+        }
     }
-    (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
+    let mean = |sum: Vec<f64>, frames: usize| {
+        (frames > 0).then(|| sum.into_iter().map(|p| p / real(frames)).collect())
+    };
+    Spectra {
+        unclipped: mean(clean_sum, clean_frames),
+        all: mean(sum, frames),
+    }
 }
 
 /// The top of the lowest wall above [`WALL_MIN_HZ`]: of a run of bands
@@ -1376,6 +1425,29 @@ mod tests {
             audio(&[stereo(&n, &noise(FFT * 4, 2))], 48_000, false)
                 .unwrap()
                 .is_stereo(STEREO_INCOHERENCE)
+        );
+    }
+
+    #[test]
+    fn bandwidth_is_read_where_the_audio_does_not_clip() {
+        let rate = 48_000.0;
+        let mut low = lowpassed(FFT * 40, 16_000.0, rate);
+        for frame in low.chunks_mut(FFT).step_by(4) {
+            for v in frame {
+                *v = (*v * 8.0).clamp(-1.0, 1.0);
+            }
+        }
+        let segment = stereo(&low, &low);
+        let q = audio(std::slice::from_ref(&segment), 48_000, false).unwrap();
+        assert!(q.clipping > 1e-3, "{q:?}");
+        assert!((q.bandwidth_hz - 16_000.0).abs() <= 500.0, "{q:?}");
+        let window: Vec<f64> = (0..FFT)
+            .map(|i| 0.5 - 0.5 * (std::f64::consts::TAU * real(i) / real(FFT)).cos())
+            .collect();
+        let every = mean_spectra(&segment, &window, None).all.unwrap();
+        assert!(
+            wall(&every, 48_000) > 17_000.0,
+            "clipping splatters past it"
         );
     }
 

@@ -317,6 +317,35 @@ fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
 }
 
 #[test]
+fn facts_of_older_measures_of_audio_that_clips_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    for method in [
+        before_unclipped(),
+        before_lowest(),
+        before_square(),
+        before_alpha(),
+        before_sound(),
+    ] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.audio = Some(AudioFacts {
+            quality: Some(AudioQuality {
+                bandwidth_hz: 20_437.0,
+                incoherence: 0.5,
+                clipping: 0.0,
+                bits: 16,
+            }),
+            codec: "flac".into(),
+            ..AudioFacts::default()
+        });
+        assert!(f.holds_for(&source.rev()), "{method}: no clipping");
+        f.audio.as_mut().unwrap().quality.as_mut().unwrap().clipping = 1e-3;
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
+}
+
+#[test]
 fn facts_of_lossy_audio_before_the_lowest_wall_are_measured_again() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
@@ -773,8 +802,21 @@ fn quality_audio() -> Vec<(Vec<quality::Segment>, bool)> {
             (sum / 200.0) as f32
         })
         .collect();
+    // The same, a frame of it raised into clipping.
+    let burst: Vec<f32> = filled
+        .iter()
+        .enumerate()
+        .map(|(n, x)| {
+            if n / 4096 == 1 {
+                (x * 12.0).clamp(-1.0, 1.0)
+            } else {
+                *x
+            }
+        })
+        .collect();
     vec![
         (thrice(stereo(&filled, &filled)), false),
+        (thrice(stereo(&burst, &burst)), false),
         (thrice(stereo(&left, &right)), false),
         (thrice(stereo(&full, &half)), false),
         (thrice(Segment::new(2, clipped)), false),
@@ -841,8 +883,8 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/11",
-    "87163984360d9ace671d595e98b066e89b1ca51642f5464b83f7530125bcb892",
+    "quality/12",
+    "70e878c3c7d12fa9b6edb5efb0ea5d8db180c00f7bc4331e9c73fe1531405c9d",
 );
 
 #[test]

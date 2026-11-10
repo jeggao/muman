@@ -26,9 +26,8 @@ never decides between near-equals, times its weight; the lowest sum
 wins. A source missing a measure ranks after those missing fewer. The
 weights a song list starts with rank by each measure in turn, each
 outweighing all after it, but dynamics, off until set.
-`[audio.pick]` and `[cover.pick]` change a measure's weight and steps
-or switch it off ([how sources are
-ranked](configuration.md#how-sources-are-ranked)).
+`[audio.pick]` and `[cover.pick]` change a measure's weight and steps or
+switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)).
 
 ### Audio
 
@@ -60,6 +59,8 @@ ranked](configuration.md#how-sources-are-ranked)).
 - **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
   made from an MP3 measures as narrow as the MP3, under any fill 20 dB
   down, while a recording whose treble fades on its own measures full.
+  What clipping splatters past a lowpass is not counted: a copy that
+  clips more than a lossless copy of its recording counts no wider.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
@@ -78,9 +79,9 @@ from lossy audio and counts as lossy. `status` names it, a file above
 one whose samples use fewer bits than it declares. Of sources alike in
 all that, a song on an album takes the one from the folder most of its
 album's audio comes from, a disc's folder counting as its album's, so
-the album plays from one rip. A file
-with several audio streams is made from its best: lossless before
-lossy, then the most channels, then the highest rate.
+the album plays from one rip. A file with several audio streams is made
+from its best: lossless before lossy, then the most channels, then the
+highest rate.
 
 muman copies the audio chosen when `[audio] codecs` lists its codec.
 Otherwise it encodes lossless audio to `[audio] lossless` and lossy
@@ -110,9 +111,8 @@ written as PNG; one that does not decode is said, and is no cover.
 
 ### Lyrics
 
-Lyrics rank first by [role, timing and
-language](configuration.md#which-lyrics-a-song-takes). Only subtitles a
-person wrote count; generated captions never do. Lyrics from a source
+Lyrics rank first by [role, timing and language](configuration.md#which-lyrics-a-song-takes).
+Only subtitles a person wrote count; generated captions never do. Lyrics from a source
 other than the chosen audio must be of the same recording. muman shifts
 them by the offset it measured between the two, and stretches them when
 one plays a little faster. A word's time moves with its line's, and an

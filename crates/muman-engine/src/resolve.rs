@@ -75,7 +75,11 @@
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
 //! purity outweighs mono and any bandwidth up to 240 kHz together, mono
-//! any such bandwidth, and a step of bandwidth all of clipping. Mono
+//! any such bandwidth, and a step of bandwidth all of clipping. A copy
+//! clipping more than a lossless copy of its recording counts its
+//! bandwidth no wider than that copy's ([`unclipped`]): what clipping
+//! splatters past a lowpass is no sound of the recording, so a copy
+//! raised into clipping never beats the copy it was made from. Mono
 //! comes before bandwidth because it is the larger loss to a listener:
 //! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
 //! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
@@ -190,7 +194,7 @@ use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
 use crate::picture::{self, Alike};
-use crate::quality::{ImageQuality, Rect};
+use crate::quality::{AudioQuality, ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
 use crate::similar;
 use crate::source::SourceKey;
@@ -1438,7 +1442,7 @@ fn pick_audio(
             let unmatched = beyond
                 .map(|ms| ms + lacks.max(missing))
                 .or_else(|| any_missing.then_some(missing));
-            let q = facts.audio.as_ref().and_then(|a| a.quality);
+            let q = unclipped(facts, &compared, &audible);
             let w = &input.audio.pick;
             let [unknown, sum] = score(&[
                 (
@@ -1648,6 +1652,31 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
         Some(Damage::Short { ends, .. }) => format!("{why}, cut short at {ends:.0} s"),
         None => why,
     }
+}
+
+/// The quality `facts` measured, its bandwidth no wider than that of any
+/// lossless copy of its recording, among `compared`, that clips less than
+/// it does: what clipping adds above a lowpass is no sound of the
+/// recording, and a step of bandwidth outweighs all of clipping.
+fn unclipped(
+    facts: &Facts,
+    compared: &[&Aligned],
+    audible: &[(usize, &SourceKey, &Facts)],
+) -> Option<AudioQuality> {
+    let q = facts.audio.as_ref()?.quality?;
+    let cleaner = compared
+        .iter()
+        .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
+        .filter_map(|(_, _, facts)| facts.audio.as_ref())
+        .filter(|audio| audio.is_lossless() && !audio.flags().band_limited)
+        .filter_map(|audio| audio.quality)
+        .filter(|other| other.clipping < q.clipping)
+        .map(|other| other.bandwidth_hz)
+        .reduce(f64::max);
+    Some(AudioQuality {
+        bandwidth_hz: cleaner.map_or(q.bandwidth_hz, |hz| q.bandwidth_hz.min(hz)),
+        ..q
+    })
 }
 
 /// How far `facts`' true peak stands above its integrated loudness, in

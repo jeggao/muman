@@ -100,8 +100,14 @@ fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
 }
 
+/// [`method`] before bandwidth was read where the audio does not clip:
+/// facts it made hold, unless their audio clips.
+fn before_unclipped() -> String {
+    measured_by(quality::BEFORE_UNCLIPPED)
+}
+
 /// [`method`] before bandwidth was read at the lowest wall: facts it made
-/// hold, unless their audio is lossy.
+/// hold, unless their audio is lossy, or as [`before_unclipped`]'s do not.
 fn before_lowest() -> String {
     measured_by(quality::BEFORE_LOWEST)
 }
@@ -259,20 +265,24 @@ impl Facts {
     /// method whose results stand for these.
     fn method_holds(&self) -> bool {
         let lossy = self.audio.as_ref().is_some_and(|a| !a.is_lossless());
+        let clips = self.clips();
         self.method == method()
-            || self.method == before_lowest() && !lossy
-            || self.method == before_square() && !self.unsquare() && !lossy
+            || self.method == before_unclipped() && !clips
+            || self.method == before_lowest() && !lossy && !clips
+            || self.method == before_square() && !self.unsquare() && !lossy && !clips
             || self.method == before_alpha()
                 && !self.detailless()
                 && !self.oversized()
                 && !self.unsquare()
                 && !lossy
+                && !clips
             || self.method == before_sound()
                 && !self.soundless()
                 && !self.detailless()
                 && !self.oversized()
                 && !self.unsquare()
                 && !lossy
+                && !clips
     }
 
     /// These facts at revision `rev`, for files whose revision changed
@@ -325,6 +335,14 @@ impl Facts {
             c.quality
                 .is_some_and(|q| q.is_cropped() && !q.is_square(quality::SQUARE_TOLERANCE))
         })
+    }
+
+    /// Whether its audio measured any clipping.
+    fn clips(&self) -> bool {
+        self.audio
+            .as_ref()
+            .and_then(|a| a.quality)
+            .is_some_and(|q| q.clipping > 0.0)
     }
 
     /// Whether its audio measured no sound to judge.

@@ -394,6 +394,35 @@ fn wider_bandwidth_wins_between_clean_recordings_and_a_transcode_cannot_fake_it(
     assert_eq!(r.plan.audio.key, opus, "a 16 kHz FLAC is a lossy transcode");
 }
 
+#[test]
+fn a_copy_clipped_louder_never_beats_the_clean_lossless_copy_by_its_splatter() {
+    let (clean, clipped, mp3) = (
+        manual("clean.flac"),
+        manual("loud.flac"),
+        manual("loud.mp3"),
+    );
+    let clips = |mut f: Facts, share: f64| {
+        let q = f.audio.as_mut().unwrap().quality.as_mut().unwrap();
+        q.clipping = share;
+        f
+    };
+    let facts = BTreeMap::from([
+        (clean.clone(), audio("flac", 20.3)),
+        (clipped.clone(), clips(audio("flac", 21.2), 1.2e-3)),
+        (mp3.clone(), audio("mp3", 20.3)),
+    ]);
+    let alignments = both(&facts, &clean, &clipped, 0, 0.99).to_vec();
+    for order in [[&clipped, &clean], [&clean, &clipped]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, clean, "{}", r.why.audio);
+    }
+    let r = run(&song(&[clipped.clone(), clean.clone()]), &facts, &[]);
+    assert_eq!(r.plan.audio.key, clipped, "not known to be one recording");
+    let alignments = both(&facts, &mp3, &clipped, 0, 0.99).to_vec();
+    let r = run(&song(&[mp3, clipped.clone()]), &facts, &alignments);
+    assert_eq!(r.plan.audio.key, clipped, "a lossy copy caps no bandwidth");
+}
+
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
 /// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
 fn cut(
