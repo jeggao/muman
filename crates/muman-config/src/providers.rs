@@ -343,7 +343,9 @@ fn read_settings(p: Provider, t: &Table) -> Result<Settings> {
                     })?
                     .parse()
                     .map_err(|e| anyhow::anyhow!("{what}: `recheck`: {e}"))?;
-                s.recheck = t.duration();
+                s.recheck = t
+                    .wait()
+                    .map_err(|e| anyhow::anyhow!("{what}: `recheck`: {e}"))?;
             }
             "recheck_days" => {
                 let days = i64::try_from(number()?).unwrap_or(i64::MAX);

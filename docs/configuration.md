@@ -93,9 +93,9 @@ A quantity takes its unit after the number; the space is optional:
 |---|---|---|
 | Size | `"32 GiB"`, `"700 MB"`, `"4K"` | `[library] max_size`, `block_size`, `[history] max_size` |
 | Bitrate | `"160 kb/s"`, `"160 kbps"`, `"160k"` | `[audio] *_bitrate` |
-| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[audio.pick.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, a song's `lyrics_offset` |
+| Time | `"14 days"`, `"2 s"`, `"500 ms"`, `"2 weeks"` | `[audio.pick.purity] step`, `[ytdlp] keep_partial`, `[torrent] stall`, `[providers.*] recheck`, never negative; a song's `lyrics_offset`, either way |
 | Frequency | `"500 Hz"`, `"1.5 kHz"` | `[audio.pick.bandwidth] step` |
-| Share | `"1 %"`, or `0.01` | `[audio.pick.stereo] incoherence`, `[audio.pick.clipping] cutoffs`, `[cover.pick.resolution] step` |
+| Share | `"1 %"`, or `0.01` | `[audio.pick.stereo] incoherence` and `[audio.pick.clipping] cutoffs`, at most 100 %, the cutoffs rising; `[cover.pick.resolution] step` |
 | Loudness | `"-18 LUFS"`, `"-23 LKFS"` | `[loudness] target` |
 | Level | `"-1 dB"`, `"-1 dBTP"`, `"-0.5 dBFS"` | `[loudness] ceiling` |
 

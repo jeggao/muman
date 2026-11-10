@@ -549,7 +549,19 @@ impl AudioPick {
             .iter()
             .map(|c| ("clipping.cutoffs", *c));
         let bounds = std::iter::once(("stereo.incoherence", self.stereo.incoherence));
-        check_measures("audio.pick", &steps, bounds.chain(cutoffs))
+        let shares = bounds.chain(cutoffs);
+        check_measures("audio.pick", &steps, shares.clone())?;
+        if let Some((key, _)) = shares.into_iter().find(|(_, share)| *share > 1.0) {
+            bail!("[audio.pick.{key}] must be 100 % or less, a share of the audio");
+        }
+        let cutoffs = &self.clipping.cutoffs;
+        if cutoffs.is_empty() {
+            bail!("[audio.pick.clipping.cutoffs] lists none; `enabled = false` judges no clipping");
+        }
+        if !cutoffs.is_sorted_by(|a, b| a < b) {
+            bail!("[audio.pick.clipping.cutoffs] must rise, each above the one before");
+        }
+        Ok(())
     }
 }
 
@@ -1634,10 +1646,16 @@ fn plainly(message: &str) -> String {
     let message = message.replace("unknown variant", "unknown value");
     let message = message.replace("invalid type: ", "");
     RUST.replace_all(&message, |c: &regex::Captures| {
-        if c[0].starts_with('f') {
-            "a number"
-        } else {
-            "a whole number"
+        let range = |low: i128, high: i128| format!("a whole number from {low} to {high}");
+        match &c[0] {
+            "u8" => range(0, u8::MAX.into()),
+            "u16" => range(0, u16::MAX.into()),
+            "u32" => range(0, u32::MAX.into()),
+            "i8" => range(i8::MIN.into(), i8::MAX.into()),
+            "i16" => range(i16::MIN.into(), i16::MAX.into()),
+            "i32" => range(i32::MIN.into(), i32::MAX.into()),
+            "f32" | "f64" => "a number".into(),
+            _ => "a whole number".into(),
         }
     })
     .into_owned()
@@ -2023,6 +2041,37 @@ mod tests {
             "{e:#}"
         );
         assert!(settings("[audio.pick.clipping]\ncutoffs = [-1.0]\n").is_err());
+        for (bad, says) in [
+            (
+                "[audio.pick.stereo]\nincoherence = \"150 %\"\n",
+                "100 % or less",
+            ),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"200 %\"]\n",
+                "100 % or less",
+            ),
+            ("[audio.pick.clipping]\ncutoffs = []\n", "lists none"),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"0.1 %\"]\n",
+                "must rise",
+            ),
+            (
+                "[audio.pick.clipping]\ncutoffs = [\"1 %\", \"1 %\"]\n",
+                "must rise",
+            ),
+            (
+                "[audio.pick.purity]\nweight = 10000000000\n",
+                "from 0 to 4294967295",
+            ),
+            (
+                "[ytdlp]\nkeep_partial = \"9999999999999 days\"\n",
+                "out of range",
+            ),
+        ] {
+            let e = settings(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(says), "{bad}: {e:#}");
+        }
+        assert!(settings("[audio.pick.clipping]\ncutoffs = [\"0.1 %\", \"100 %\"]\n").is_ok());
         assert!(settings("[audio.pick.loudness]\nweight = 1\n").is_err());
         assert!(settings("[cover.pick.stereo]\nweight = 1\n").is_err());
     }

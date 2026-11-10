@@ -30,6 +30,11 @@
 //! counted in their own units, days for one and milliseconds for another,
 //! so `recheck = 30` or `opus_bitrate = 160` would be read wrongly.
 //!
+//! One rule holds each kind wherever a setting takes it: a time a setting
+//! waits is 0 or more ([`Time::wait`]), as only a song's lyrics offset
+//! may be negative; a quantity too large to keep is refused as out of
+//! range, not as unreadable.
+//!
 //! A value muman writes, as when it renames an old setting, is in the
 //! largest unit that holds it whole: `"2 GiB"`, `"14 days"`, `"2 s"`.
 
@@ -170,11 +175,27 @@ fn whole<T: TryFrom<i128>>(value: f64) -> Option<T> {
         .flatten()
 }
 
+/// `text` read by `read`, then kept whole by `keep`: an error naming
+/// `what` when it does not read, and saying it is out of range when it
+/// does not keep.
+fn kept<Q, T>(
+    text: &str,
+    read: impl FnOnce(&str) -> Option<Q>,
+    keep: impl FnOnce(Q) -> Option<T>,
+    what: &str,
+) -> Result<T, String> {
+    let q = read(text).ok_or_else(|| format!("`{text}` is not {what}"))?;
+    keep(q).ok_or_else(|| format!("`{text}` is out of range for {what}"))
+}
+
 /// A size as `songs.toml` and `--max-size` take it, in bytes.
 pub fn parse_size(text: &str) -> Result<u64, String> {
-    quantity::<Information>(text, SIZES)
-        .and_then(|q| whole(q.get::<information::byte>()))
-        .ok_or_else(|| format!("`{text}` is not a size, such as \"4 GiB\" or \"700 MB\""))
+    kept(
+        text,
+        |t| quantity::<Information>(t, SIZES),
+        |q| whole(q.get::<information::byte>()),
+        "a size, such as \"4 GiB\" or \"700 MB\"",
+    )
 }
 
 impl std::str::FromStr for Size {
@@ -189,10 +210,13 @@ impl std::str::FromStr for Bitrate {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, String> {
-        quantity::<InformationRate>(text, BITRATES)
-            .and_then(|q| whole(q.get::<information_rate::kilobit_per_second>()))
-            .map(Self)
-            .ok_or_else(|| format!("`{text}` is not a bitrate, such as \"160 kb/s\""))
+        kept(
+            text,
+            |t| quantity::<InformationRate>(t, BITRATES),
+            |q| whole(q.get::<information_rate::kilobit_per_second>()),
+            "a bitrate, such as \"160 kb/s\"",
+        )
+        .map(Self)
     }
 }
 
@@ -200,12 +224,13 @@ impl std::str::FromStr for Time {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, String> {
-        quantity::<Seconds>(text, TIMES)
-            .and_then(|q| whole(q.get::<time::millisecond>()))
-            .map(Self)
-            .ok_or_else(|| {
-                format!("`{text}` is not a length of time, such as \"14 days\" or \"2 s\"")
-            })
+        kept(
+            text,
+            |t| quantity::<Seconds>(t, TIMES),
+            |q| whole(q.get::<time::millisecond>()),
+            "a length of time, such as \"14 days\" or \"2 s\"",
+        )
+        .map(Self)
     }
 }
 
@@ -213,10 +238,13 @@ impl std::str::FromStr for Frequency {
     type Err = String;
 
     fn from_str(text: &str) -> Result<Self, String> {
-        quantity::<Hertz>(text, FREQUENCIES)
-            .and_then(|q| whole(q.get::<frequency::hertz>()))
-            .map(Self)
-            .ok_or_else(|| format!("`{text}` is not a frequency, such as \"500 Hz\""))
+        kept(
+            text,
+            |t| quantity::<Hertz>(t, FREQUENCIES),
+            |q| whole(q.get::<frequency::hertz>()),
+            "a frequency, such as \"500 Hz\"",
+        )
+        .map(Self)
     }
 }
 
@@ -298,8 +326,8 @@ impl TryFrom<Written> for Time {
 
     fn try_from(w: Written) -> Result<Self, String> {
         match w {
-            Written::Whole(n) => Err(needs_unit(n, "days")),
-            Written::Real(n) => Err(needs_unit(n, "s")),
+            Written::Whole(n) => Err(needs_unit(n, &format!("days\" or \"{n} s"))),
+            Written::Real(n) => Err(needs_unit(n, &format!("s\" or \"{n} min"))),
             Written::Text(t) => t.parse(),
         }
     }
@@ -427,14 +455,9 @@ pub mod serde_as {
 
     /// A length of time that cannot be negative.
     pub fn duration<'de, D: Deserializer<'de>>(d: D) -> Result<std::time::Duration, D::Error> {
-        let t = Time::deserialize(d)?;
-        if t.0 < 0 {
-            return Err(serde::de::Error::custom(format!(
-                "`{}` must be 0 or more",
-                t.exact()
-            )));
-        }
-        Ok(t.duration())
+        Time::deserialize(d)?
+            .wait()
+            .map_err(serde::de::Error::custom)
     }
 
     pub fn hz<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
@@ -521,6 +544,14 @@ impl Time {
     #[must_use]
     pub fn duration(self) -> Duration {
         Duration::from_millis(u64::try_from(self.0).unwrap_or(0))
+    }
+
+    /// The time as a setting's wait, which is never negative.
+    pub fn wait(self) -> Result<Duration, String> {
+        if self.0 < 0 {
+            return Err(format!("`{}` must be 0 or more", self.exact()));
+        }
+        Ok(self.duration())
     }
 
     /// As a setting is written: `14 days`, `2 s`, `-120 ms`.
@@ -642,6 +673,25 @@ mod tests {
         assert_eq!(Time(2000).exact(), "2 s");
         assert_eq!(Time(-120).exact(), "-120 ms");
         assert_eq!(Time(-5).duration(), Duration::ZERO);
+        assert_eq!(Time(5).wait(), Ok(Duration::from_millis(5)));
+        assert!(Time(-5).wait().unwrap_err().contains("must be 0 or more"));
+    }
+
+    #[test]
+    fn a_quantity_too_large_to_keep_is_said_to_be() {
+        for e in [
+            "9999999999999 days".parse::<Time>().unwrap_err(),
+            parse_size("99999999999 TiB").unwrap_err(),
+            "9999999999999 kHz".parse::<Frequency>().unwrap_err(),
+        ] {
+            assert!(e.contains("out of range"), "{e}");
+        }
+        assert!(
+            "soon"
+                .parse::<Time>()
+                .unwrap_err()
+                .contains("is not a length")
+        );
     }
 
     #[test]
