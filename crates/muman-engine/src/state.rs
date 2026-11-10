@@ -835,6 +835,17 @@ impl Caches {
     }
 }
 
+/// The store in `home`, opened for reading: read only when it will not
+/// open for writing, as on a read-only home (`db.rs`); `None` when one
+/// opened so holds no state yet.
+fn opened(home: &Path) -> Result<Option<db::Db>> {
+    match db::Db::open(home, BUSY_WAIT) {
+        Ok(db) => Ok(Some(db)),
+        Err(e) if db::unwritable(&e) => db::Db::open_read_only(&home.join(db::FILE)).map_err(|_| e),
+        Err(e) => Err(e),
+    }
+}
+
 impl State {
     /// The state in `home`; an empty one when there is none yet. A
     /// `state.json` an earlier muman left is brought into `state.db`
@@ -858,7 +869,13 @@ impl State {
                 file.display()
             );
         }
-        let (mut state, loaded) = db::Db::open(home, BUSY_WAIT)?.snapshot()?;
+        let Some(mut db) = opened(home)? else {
+            return Ok(Self {
+                version: VERSION,
+                ..Self::default()
+            });
+        };
+        let (mut state, loaded) = db.snapshot()?;
         state.held = Held::new(loaded);
         Ok(state)
     }
@@ -889,7 +906,13 @@ impl State {
         let file = home.join(crate::dirs::STATE);
         let state = match std::fs::read(&file) {
             Ok(text) if !exists(home) && !is_stub(&text) => json::read(&file, &text)?,
-            _ if exists(home) => db::Db::open(home, BUSY_WAIT)?.snapshot()?.0,
+            _ if exists(home) => match opened(home)? {
+                Some(mut db) => db.snapshot()?.0,
+                None => Self {
+                    version: VERSION,
+                    ..Self::default()
+                },
+            },
             _ => Self {
                 version: VERSION,
                 ..Self::default()
@@ -1266,11 +1289,16 @@ impl State {
     /// caller already holding its lock, by `merge_measured`, in
     /// one transaction that writes the caches alone: what the library
     /// holds is left to the run that holds its lock, which writes the
-    /// names a fact gives its source's parts anew into the plans.
+    /// names a fact gives its source's parts anew into the plans. On a
+    /// home muman may not write, nothing is kept: a cache only saves
+    /// measuring again, and `status` there still reports.
     pub fn keep_caches(home: &Path, measured: &Caches, _lock: &atomic::Lock) -> Result<()> {
         bring_over(home)?;
         std::fs::create_dir_all(home).with_context(|| format!("creating {}", home.display()))?;
-        db::Db::open(home, BUSY_WAIT)?.keep(measured)?;
+        match db::Db::open(home, BUSY_WAIT) {
+            Err(e) if db::unwritable(&e) => return Ok(()),
+            db => db?.keep(measured)?,
+        }
         stub(home)
     }
 

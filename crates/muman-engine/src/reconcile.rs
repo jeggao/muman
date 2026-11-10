@@ -392,8 +392,12 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .filter_map(|k| Some((k.clone(), store.locate(k)?)))
         .collect();
     // Beside the home rather than in the system's temporary folder, which
-    // may be memory: fitting may render much of the library into it.
-    let workshop = crate::atomic::Scratch::within(home)?;
+    // may be memory: fitting may render much of the library into it. A
+    // dry run on a home it may not write, as a read-only mount, uses that.
+    let workshop = match crate::atomic::Scratch::within(home) {
+        Err(_) if opts.dry_run => crate::atomic::Scratch::new()?,
+        workshop => workshop?,
+    };
     let (fitted, placed) = if manifest.settings.library.max_size.is_some() {
         if sizes(runner, &store, &planned, &mut state, temp.path(), out)? {
             persist(home, &state, opts.dry_run, &lock)?;

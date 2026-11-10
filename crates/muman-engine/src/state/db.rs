@@ -33,6 +33,16 @@
 //! `kill::kill_at` can stop a test at, just before it lands:
 //! a write stopped there is rolled back whole, as a write killed before
 //! its rename leaves the file as it was.
+//!
+//! A home muman may not write, as a read-only mount or a backup's
+//! snapshot, cannot hold the WAL's index beside the store, and SQLite
+//! opens no WAL store without it; a command that only reads would fail.
+//! So when the store will not open for writing, it is opened read only
+//! ([`Db::open_read_only`]), which makes no file: as it is when no
+//! `-wal` file stands beside it, every commit then in the store itself,
+//! and through the `-wal` and `-shm` files a run left when they do. A
+//! table a store made before it lacks is made in memory alone, empty.
+//! A command that writes then fails at its first write, naming the store.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -171,6 +181,43 @@ impl Db {
         Ok(db)
     }
 
+    /// The store at `file` opened read only, making no file; `None` for
+    /// one with no tables yet.
+    pub(crate) fn open_read_only(file: &Path) -> Result<Option<Self>> {
+        use rusqlite::OpenFlags;
+        let file = file.to_path_buf();
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let mut wal = file.clone().into_os_string();
+        wal.push("-wal");
+        let conn = if Path::new(&wal).is_file() {
+            Connection::open_with_flags(&file, flags)
+        } else {
+            Connection::open_with_flags(immutable(&file), flags | OpenFlags::SQLITE_OPEN_URI)
+        };
+        let mut conn = conn.with_context(|| format!("opening {}", file.display()))?;
+        let version = (|| {
+            conn.pragma_update(None, "temp_store", "MEMORY")?;
+            let version = schema(&conn.transaction()?, &file)?;
+            for (name, made) in [
+                ("song_failures", SONG_FAILURES),
+                ("built", BUILT_TABLE),
+                ("renamings", RENAMINGS),
+            ] {
+                let held: i64 = conn.query_row(
+                    "SELECT count(*) FROM main.sqlite_schema WHERE type = 'table' AND name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )?;
+                if held == 0 {
+                    conn.execute_batch(&made.replace("CREATE TABLE", "CREATE TEMP TABLE"))?;
+                }
+            }
+            Ok(version)
+        })()
+        .map_err(|e| named(e, &file))?;
+        Ok((version > 0).then_some(Self { conn, file }))
+    }
+
     /// Run `f` in one transaction, which commits only when it returns
     /// `Ok`, a writer at a time.
     pub(crate) fn write<T>(&mut self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
@@ -195,6 +242,48 @@ impl Db {
             .with_context(|| format!("reading {}", self.file.display()))?;
         f(&tx).map_err(|e| named(e, &self.file))
     }
+}
+
+/// The URI SQLite opens `file` by as immutable: read with no lock and no
+/// WAL index, as no process changes it. Its path written with `/`, and
+/// `%`, `?` and `#`, which a URI reads otherwise, escaped.
+fn immutable(file: &Path) -> String {
+    let path = file.to_string_lossy().replace('\\', "/");
+    let mut escaped = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            '%' => escaped.push_str("%25"),
+            '?' => escaped.push_str("%3f"),
+            '#' => escaped.push_str("%23"),
+            c => escaped.push(c),
+        }
+    }
+    // A Windows path, as `C:/x`, follows an empty authority as `/C:/x`.
+    let lead = if escaped.starts_with('/') {
+        "file://"
+    } else if file.is_absolute() {
+        "file:///"
+    } else {
+        "file:"
+    };
+    format!("{lead}{escaped}?immutable=1")
+}
+
+/// Whether `e` says the store could not be opened for writing, as on a
+/// read-only home, where it may still be read ([`Db::open_read_only`]).
+pub(crate) fn unwritable(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<rusqlite::Error>().is_some_and(|e| {
+            matches!(
+                e.sqlite_error_code(),
+                Some(
+                    rusqlite::ErrorCode::CannotOpen
+                        | rusqlite::ErrorCode::ReadOnly
+                        | rusqlite::ErrorCode::PermissionDenied
+                )
+            )
+        })
+    })
 }
 
 /// `e` with the store `file` named, and for a file SQLite cannot read as
@@ -1042,6 +1131,49 @@ mod tests {
             "nothing differs"
         );
         assert_eq!(db.conn.total_changes(), before);
+    }
+
+    fn files_in(dir: &Path) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_store_that_will_not_open_for_writing_is_read_whole_making_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        let state = every_row();
+        db.save_diff(&state, &mut Loaded::default()).unwrap();
+        db.write(|tx| Ok(tx.execute_batch("DROP TABLE renamings")?))
+            .unwrap();
+        drop(db);
+        // What SQLite cannot make, as on a read-only home: the WAL's index.
+        std::fs::create_dir(dir.path().join(format!("{FILE}-shm"))).unwrap();
+        let e = Db::open(dir.path(), WAIT).err().unwrap();
+        assert!(unwritable(&e), "{e:#}");
+        let before = files_in(dir.path());
+        let mut db = Db::open_read_only(&dir.path().join(FILE)).unwrap().unwrap();
+        assert_eq!(db.snapshot().unwrap().0, state);
+        assert!(
+            db.write(|tx| Ok(tx.execute("DELETE FROM listed", [])?))
+                .is_err()
+        );
+        drop(db);
+        assert_eq!(files_in(dir.path()), before);
+    }
+
+    #[test]
+    fn a_store_s_uri_reads_its_path_as_it_is() {
+        let uri = immutable(Path::new("dir/a%b?c#d.db"));
+        assert_eq!(uri, "file:dir/a%25b%3fc%23d.db?immutable=1");
+        let absolute = std::env::temp_dir().join("muman").join("state.db");
+        let uri = immutable(&absolute);
+        assert!(uri.starts_with("file:///"), "{uri}");
+        assert!(!uri.starts_with("file:////"), "{uri}");
     }
 
     #[test]
