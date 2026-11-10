@@ -68,6 +68,15 @@ pub fn stop() -> bool {
     true
 }
 
+/// [`stop`], then exit with [`STOPPED_EXIT`]: what Ctrl-C or a signal to
+/// stop does, at a prompt too. Returns while a program of the user's own
+/// runs in the terminal.
+pub fn stop_and_exit() {
+    if stop() {
+        std::process::exit(i32::from(STOPPED_EXIT));
+    }
+}
+
 /// Kill `child` and, on Unix, every program in its process group.
 fn end(child: &SharedChild) {
     #[cfg(unix)]

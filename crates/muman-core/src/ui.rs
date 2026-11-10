@@ -217,7 +217,7 @@ impl Prompter for InquirePrompter {
                 .with_default(false)
                 .prompt_skippable()
         })
-        .map_err(io::Error::other)?;
+        .map_err(unanswered)?;
         Ok(answer == Some(true))
     }
 
@@ -234,7 +234,7 @@ impl Prompter for InquirePrompter {
                 .with_help_message("space toggles, → all, ← none, type to filter, enter accepts")
                 .raw_prompt_skippable()
         })
-        .map_err(io::Error::other)?;
+        .map_err(unanswered)?;
         Ok(picked
             .unwrap_or_default()
             .into_iter()
@@ -249,7 +249,7 @@ impl Prompter for InquirePrompter {
                 .with_help_message("↑↓ moves, type to filter, enter picks, esc for none")
                 .raw_prompt_skippable()
         })
-        .map_err(io::Error::other)?;
+        .map_err(unanswered)?;
         Ok(picked.map(|o| o.index))
     }
 
@@ -260,7 +260,7 @@ impl Prompter for InquirePrompter {
                 .with_help_message(&help)
                 .prompt_skippable()
         })
-        .map_err(io::Error::other)?;
+        .map_err(unanswered)?;
         Ok(typed.filter(|t| !t.trim().is_empty()))
     }
 
@@ -287,7 +287,7 @@ impl Prompter for InquirePrompter {
                 .with_validator(validator)
                 .prompt_skippable()
         })
-        .map_err(io::Error::other)
+        .map_err(unanswered)
     }
 
     fn width(&self) -> usize {
@@ -299,6 +299,21 @@ impl Prompter for InquirePrompter {
 /// the item's.
 fn printable_all(items: &[String]) -> Vec<String> {
     items.iter().map(|i| printable(i).into_owned()).collect()
+}
+
+/// The error of a prompt left unanswered. Ctrl-C at a prompt comes as a
+/// key, the terminal being in raw mode, not as a signal; it stops muman
+/// as the signal would ([`crate::runner::stop_and_exit`]), exit 130.
+fn unanswered(e: inquire::InquireError) -> io::Error {
+    if interrupted(&e) {
+        crate::runner::stop_and_exit();
+    }
+    io::Error::other(e)
+}
+
+/// Whether `e` is Ctrl-C at a prompt, rather than Esc or a failure.
+fn interrupted(e: &inquire::InquireError) -> bool {
+    matches!(e, inquire::InquireError::OperationInterrupted)
 }
 
 /// Answers from queues, in order; running out panics, surfacing the
@@ -512,6 +527,15 @@ mod tests {
         assert_eq!(typed.as_deref(), Some("2019"));
         assert_eq!(p.asked, ["Date: [2018]", "refused: spring is no year"]);
         assert_eq!(p.text_with("Date:", "", "", check).unwrap(), None);
+    }
+
+    #[test]
+    fn ctrl_c_at_a_prompt_stops_and_esc_or_a_failure_does_not() {
+        assert!(interrupted(&inquire::InquireError::OperationInterrupted));
+        assert!(!interrupted(&inquire::InquireError::OperationCanceled));
+        assert!(!interrupted(&inquire::InquireError::NotTTY));
+        let failed = unanswered(inquire::InquireError::NotTTY);
+        assert_eq!(failed.kind(), io::ErrorKind::Other);
     }
 
     #[test]

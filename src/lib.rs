@@ -202,11 +202,7 @@ impl Job {
 /// On Ctrl-C or a signal to stop, stop every program muman started, then
 /// exit; one a program of the user's own in the terminal gets is its own.
 fn stop_on_signals() {
-    let _ = ctrlc::set_handler(|| {
-        if runner::stop() {
-            std::process::exit(i32::from(runner::STOPPED_EXIT));
-        }
-    });
+    let _ = ctrlc::set_handler(runner::stop_and_exit);
 }
 
 #[must_use]
