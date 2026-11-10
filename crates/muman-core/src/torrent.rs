@@ -23,12 +23,17 @@
 //! ([`keyed`]), a plain name on every system, as the file is kept by
 //! anyway. Only a folder another client left is read by the name the
 //! torrent gives ([`File::named_in`]), and never on Windows, where no
-//! client keeps a file so. A part holding a control character refuses
-//! the torrent, rather than have the character replaced: the key would
-//! no longer name the file a client wrote, and printed as it is, an
-//! escape would drive the terminal. No client writes one, and Windows
-//! keeps no file named with one. Padding files (BEP 47) hold nothing and
-//! are no file of it.
+//! client keeps a file so. It is read by the torrent's own spelling, not
+//! its NFC: a client on Linux keeps a decomposed name as the torrent
+//! spells it, and a client elsewhere may have written it composed or
+//! decomposed, so each part is looked for as the torrent spells it, then
+//! in NFC, then in NFD, the first the folder holds taken, as a
+//! filesystem that keeps names as given holds both apart. A part
+//! holding a control character refuses the torrent, rather than have
+//! the character replaced: the key would no longer name the file a
+//! client wrote, and printed as it is, an escape would drive the
+//! terminal. No client writes one, and Windows keeps no file named with
+//! one. Padding files (BEP 47) hold nothing and are no file of it.
 //!
 //! A torrent's numbers are read as a hostile file may write them. Its
 //! piece length is at least a byte and at most libtorrent's largest,
@@ -107,8 +112,11 @@ pub struct Metainfo {
     pub v1: Option<String>,
     /// The SHA-256 of its `info`, where it is a v2 or hybrid torrent.
     pub v2: Option<String>,
-    /// Its own name: the folder its files are in, or its one file.
+    /// Its own name in NFC: the folder its files are in, or its one file.
     pub name: String,
+    /// Its own name as the torrent spells it, where another client keeps
+    /// its files.
+    pub named: String,
     /// Its files in the torrent's order, which a fetch selects them by.
     pub files: Vec<File>,
     /// Whether it is private (BEP 27): reached by its trackers alone, whose
@@ -129,8 +137,8 @@ pub struct File {
     /// Its path inside the torrent, part by part in NFC, as its key holds
     /// it ([`keyed`]).
     pub path: PathBuf,
-    /// Its path's parts in NFC as the torrent names them, where another
-    /// client keeps it.
+    /// Its path's parts as the torrent spells them, where another client
+    /// keeps it.
     pub named: Vec<String>,
     pub length: u64,
     /// The hash of its content alone, a v2 `pieces root` in hex.
@@ -169,8 +177,8 @@ impl Metainfo {
             v1.is_some() || v2.is_some(),
             "not a torrent: its `info` has neither v1 pieces nor a v2 file tree"
         );
-        let name = text(info, "name").context("a torrent with no `name`")?;
-        let name = part(&name).with_context(|| format!("the torrent's name, {name:?}"))?;
+        let named = text(info, "name").context("a torrent with no `name`")?;
+        part(&named).with_context(|| format!("the torrent's name, {named:?}"))?;
         let roots = match get(info, "file tree") {
             Some(Value::Dict(tree, _)) if version == 2 => {
                 let mut roots = Vec::new();
@@ -191,7 +199,7 @@ impl Metainfo {
             "not a torrent: a v2 piece length of {piece_length}, no power of two from 16 KiB"
         );
         let (files, total) = if v1.is_some() {
-            v1_list(info, &name, &roots)?
+            v1_list(info, &named, &roots)?
         } else {
             v2_list(roots, piece_length)?
         };
@@ -225,7 +233,8 @@ impl Metainfo {
         Ok(Self {
             v1,
             v2,
-            name,
+            name: named.nfc().collect(),
+            named,
             files,
             private,
             trackers,
@@ -257,10 +266,11 @@ impl Metainfo {
     }
 
     /// The folder another client keeps its files in below `from`, named
-    /// as the torrent names it; None where that is no plain name here.
+    /// as the torrent names it, in the spelling `from` holds; None where
+    /// that is no plain name here.
     #[must_use]
     pub fn folder_in(&self, from: &Path) -> Option<PathBuf> {
-        plain_here(&self.name).then(|| from.join(&self.name))
+        plain_here(&self.named).then(|| spelled_in(from, std::slice::from_ref(&self.named)))
     }
 }
 
@@ -271,11 +281,7 @@ impl File {
     /// where no client keeps a file so.
     #[must_use]
     pub fn named_in(&self, root: &Path) -> Option<PathBuf> {
-        self.named.iter().all(|p| plain_here(p)).then(|| {
-            self.named
-                .iter()
-                .fold(root.to_path_buf(), |at, p| at.join(p))
-        })
+        (self.named.iter().all(|p| plain_here(p))).then(|| spelled_in(root, &self.named))
     }
 
     /// Its path inside the torrent as the torrent names it, to show.
@@ -283,6 +289,19 @@ impl File {
     pub fn named_path(&self) -> PathBuf {
         self.named.iter().collect()
     }
+}
+
+/// `root` joined with `parts`, each in the first of its spellings the
+/// folder above it holds: as the torrent spells it, in NFC, in NFD; as
+/// the torrent spells it where the folder holds none.
+fn spelled_in(root: &Path, parts: &[String]) -> PathBuf {
+    parts.iter().fold(root.to_path_buf(), |at, part| {
+        let mut spellings = vec![part.clone(), part.nfc().collect(), part.nfd().collect()];
+        dedup(&mut spellings);
+        (spellings.iter().map(|s| at.join(s)))
+            .find(|p| std::fs::symlink_metadata(p).is_ok())
+            .unwrap_or_else(|| at.join(part))
+    })
 }
 
 /// Whether `part` is one plain name on this system.
@@ -477,7 +496,7 @@ fn v1_list(info: &[(&[u8], Value<'_>)], name: &str, roots: &[Rooted]) -> Result<
         let named = vec![name.to_string()];
         let file = File {
             root: root_of(&named),
-            path: PathBuf::from(keyed(name)),
+            path: PathBuf::from(keyed(&nfc(name))),
             named,
             length,
             index: 1,
@@ -511,8 +530,8 @@ fn v1_list(info: &[(&[u8], Value<'_>)], name: &str, roots: &[Rooted]) -> Result<
             let p = p
                 .text()
                 .context("not a torrent: a path part is no string")?;
-            let p = part(&p).with_context(|| format!("a file's path in the torrent, {p:?}"))?;
-            path.push(keyed(&p));
+            part(&p).with_context(|| format!("a file's path in the torrent, {p:?}"))?;
+            path.push(keyed(&nfc(&p)));
             named.push(p);
         }
         ensure!(
@@ -540,7 +559,7 @@ fn v2_list(roots: Vec<Rooted>, piece: u64) -> Result<(Vec<File>, u64)> {
     for (i, (named, length, root)) in roots.into_iter().enumerate() {
         total = end_of(offset, length)?;
         files.push(File {
-            path: named.iter().map(|p| keyed(p)).collect(),
+            path: named.iter().map(|p| keyed(&nfc(p))).collect(),
             named,
             length,
             root,
@@ -593,8 +612,8 @@ fn tree_files(
             out.push((at.clone(), u64::try_from(*length)?, root));
             continue;
         }
-        let name = String::from_utf8_lossy(name);
-        let name = part(&name).with_context(|| format!("a path in the torrent, {name:?}"))?;
+        let name = String::from_utf8_lossy(name).into_owned();
+        part(&name).with_context(|| format!("a path in the torrent, {name:?}"))?;
         at.push(name);
         tree_files(inner, at, out, depth + 1)?;
         at.pop();
@@ -602,10 +621,10 @@ fn tree_files(
     Ok(())
 }
 
-/// One part of a path a torrent names, in NFC, refused where it is no
-/// name of a file or folder on every system, as the module says.
-fn part(text: &str) -> Result<String> {
-    let nfc: String = text.nfc().collect();
+/// Refuse one part of a path a torrent names where it is no name of a
+/// file or folder on every system, in NFC, as the module says.
+fn part(text: &str) -> Result<()> {
+    let nfc = nfc(text);
     ensure!(
         !nfc.trim_end_matches(['.', ' ']).is_empty() && !nfc.contains(['/', '\\']),
         "is no plain name of a file"
@@ -614,7 +633,11 @@ fn part(text: &str) -> Result<String> {
         !nfc.chars().any(char::is_control),
         "holds a control character"
     );
-    Ok(nfc)
+    Ok(())
+}
+
+fn nfc(text: &str) -> String {
+    text.nfc().collect()
 }
 
 /// A torrent's `part` as its key holds it: a plain name on every system,

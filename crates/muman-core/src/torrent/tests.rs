@@ -616,3 +616,44 @@ fn a_piece_longer_than_a_read_is_checked_a_chunk_at_a_time() {
     std::fs::write(dir.path().join("1"), &damaged).unwrap();
     assert!(!checks(&meta, &meta.files[0], at));
 }
+
+#[test]
+fn a_folder_another_client_left_is_read_in_the_spelling_it_holds() {
+    let decomposed = "Lante\u{301}rn Weather";
+    let composed = "Lant\u{e9}rn Weather";
+    let info = B::D(vec![
+        ("name", s(decomposed)),
+        ("piece length", B::I(16384)),
+        ("pieces", B::S(vec![0; 20])),
+        (
+            "files",
+            B::L(vec![B::D(vec![
+                ("length", B::I(1)),
+                ("path", path(&["Pape\u{301}r Comets.flac"])),
+            ])]),
+        ),
+    ]);
+    let meta = Metainfo::read(&torrent(info, &[]).0).unwrap();
+    assert_eq!(meta.name, composed, "a name shown and keyed is in NFC");
+    assert_eq!(meta.files[0].path, Path::new("Pap\u{e9}r Comets.flac"));
+    assert_eq!(meta.files[0].named, ["Pape\u{301}r Comets.flac"]);
+    if cfg!(windows) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join(decomposed);
+    let file = folder.join("Pape\u{301}r Comets.flac");
+    std::fs::create_dir_all(&file).unwrap();
+    assert_eq!(meta.folder_in(dir.path()), Some(folder.clone()));
+    assert_eq!(meta.files[0].named_in(&folder), Some(file.clone()));
+    // Where a filesystem keeps names as given, the composed one is apart.
+    std::fs::create_dir_all(folder.join("Pap\u{e9}r Comets.flac")).unwrap();
+    assert_eq!(meta.files[0].named_in(&folder), Some(file));
+
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(other.path().join(composed).join("Pap\u{e9}r Comets.flac")).unwrap();
+    let found = meta.folder_in(other.path()).unwrap();
+    assert!(found.is_dir(), "{}", found.display());
+    let at = meta.files[0].named_in(&found).unwrap();
+    assert!(at.exists(), "a client that composed the names is read too");
+}
