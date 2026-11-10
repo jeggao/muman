@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -432,17 +432,21 @@ pub(super) fn status<W: Write>(
             ),
         )?;
     }
-    let mut known = listed.clone();
-    known.extend(manifest.removed_keys());
-    let (mut unlisted, mut settling) = store.unlisted(&known, SystemTime::now(), settling);
-    settling.retain(|path| {
-        let key = SourceKey::Manual(path.into());
-        let was_listed = state.listed.contains(&key);
-        if was_listed {
-            unlisted.push(key);
-        }
-        !was_listed
-    });
+    let mut found = super::Unlisted::of(manifest, state, store, settling);
+    let followed = super::moved(manifest, state, store, &mut found, |_| None);
+    for key in super::deleted(manifest, store, &followed, &found) {
+        crate::ui::info(
+            out,
+            &format!(
+                "Deleted from sources/manual by hand, taken out of its song by the next \
+                 sync: {key}"
+            ),
+        )?;
+    }
+    let super::Unlisted {
+        ready: unlisted,
+        settling,
+    } = found;
     for key in unlisted {
         let line = if state.listed.contains(&key) {
             format!("Taken out of the song list by hand, kept out by the next sync: {key}")

@@ -226,6 +226,7 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
     }
     let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
     let unsure: BTreeSet<&SourceKey> = moves.unsure.iter().flat_map(|(gone, _)| gone).collect();
+    let deleted = crate::reconcile::deleted(&manifest, &store, &moves, &unlisted);
     for key in &listed {
         if let Some(line) = moves.line(key, true) {
             said.info(line)?;
@@ -233,6 +234,11 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             said.info(format!(
                 "Missing from sources while a file is still being copied in, its song \
                  waiting for it: {key}"
+            ))?;
+        } else if deleted.contains(key) {
+            said.info(format!(
+                "Deleted from sources/manual by hand, taken out of its song by the next \
+                 sync: {key}"
             ))?;
         } else if !store.has(key) && !unsure.contains(key) {
             let page = manifest
@@ -249,7 +255,8 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
             let how = if fetchable {
                 "`sync` fetches it again"
             } else if others {
-                "its song is made from its other sources"
+                "its song is made from its other sources until `muman edit` takes it out \
+                 of the song's `sources`"
             } else {
                 "its song cannot be written"
             };

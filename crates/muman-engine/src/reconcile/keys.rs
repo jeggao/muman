@@ -70,6 +70,18 @@
 //! file, and the file put back is followed as any other. All the moves
 //! are written at once, so a key one move frees and another takes is
 //! never named twice.
+//!
+//! A song file of the user's that is followed nowhere, while another
+//! song file of the user's its song lists is still there and nothing is
+//! arriving, was deleted by hand ([`deleted`]), as encoding a file anew
+//! and deleting the old one leaves it: `sync` takes it out of its song,
+//! as it keeps out a song taken out of the list by hand, saying so, and
+//! `undo` puts it back. Its song would otherwise be made from the rest
+//! with `check` naming the file gone for good. A file gone with no other
+//! of the user's left beside it is not taken out: its folder may be
+//! moved away for a while, and its song waits for it, failing, its file
+//! kept; one beside a fetched source only is named by `check` with how
+//! to take it out by hand.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -650,6 +662,41 @@ impl Following<'_> {
         }
         Ok(moves.unsure)
     }
+}
+
+/// Each song file of the user's a song lists that is gone from
+/// `sources/manual`, followed nowhere by `moves`, while another song file
+/// of the user's the song lists is there and no file is arriving
+/// ([`Unlisted::settling`]): deleted by hand, as a file encoded anew
+/// leaves the old one, as the module says.
+#[must_use]
+pub fn deleted(
+    manifest: &Manifest,
+    store: &Store,
+    moves: &Moves,
+    unlisted: &Unlisted,
+) -> Vec<SourceKey> {
+    if !unlisted.settling.is_empty() {
+        return Vec::new();
+    }
+    let unsure: BTreeSet<&SourceKey> = moves.unsure.iter().flat_map(|(gone, _)| gone).collect();
+    let song_file = |k: &SourceKey| match k {
+        SourceKey::Manual(m) => store::kind_of(m.path()) == Some(Kind::Media),
+        _ => false,
+    };
+    let mut deleted = Vec::new();
+    for song in &manifest.songs {
+        if !(song.sources.iter()).any(|k| song_file(k) && store.has(k)) {
+            continue;
+        }
+        deleted.extend(
+            (song.sources.iter())
+                .filter(|k| song_file(k) && !store.has(k))
+                .filter(|k| !moves.moved.contains_key(*k) && !unsure.contains(k))
+                .cloned(),
+        );
+    }
+    deleted
 }
 
 /// Each listed manual file gone while a file no song lists is still

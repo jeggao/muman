@@ -1542,6 +1542,49 @@ fn two_copies_of_one_song_moved_together_are_followed_and_undone() {
 }
 
 #[test]
+fn a_file_of_yours_deleted_beside_another_of_its_song_is_taken_out_of_it() {
+    let s = Setup::new();
+    let fake = || {
+        flacs()
+            .print("old.flac", words(1600, 1))
+            .print("new.flac", words(1600, 1))
+    };
+    let (old, new) = (
+        SourceKey::Manual("in/old.flac".into()),
+        SourceKey::Manual("in/new.flac".into()),
+    );
+    let gone = s.file("home/sources/manual/in/old.flac");
+    assert!(s.run(&fake(), &["sync"]).0);
+    s.file("home/sources/manual/in/new.flac");
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), [vec![old.clone(), new.clone()]], "{text}");
+
+    std::fs::remove_file(gone).unwrap();
+    let (_, report) = s.report(&fake(), &["status"]);
+    assert!(
+        report.contains(
+            "Deleted from sources/manual by hand, taken out of its song by the next sync: \
+             manual:in/old.flac"
+        ),
+        "{report}"
+    );
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Deleted from sources/manual by hand, so taken out of its song"),
+        "{text}"
+    );
+    assert_eq!(s.songs(), [vec![new.clone()]]);
+    let (ok, report) = s.report(&fake(), &["check"]);
+    assert!(ok, "{report}");
+
+    let (ok, text) = s.run(&fake(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(s.songs(), [vec![old, new]]);
+}
+
+#[test]
 fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
     let s = Setup::new();
     let built = copies_listed(&s, &copies());

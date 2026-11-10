@@ -500,6 +500,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
     let scratch = atomic::Scratch::new()?;
     let hear = crate::reconcile::hearing(runner, scratch.path());
     let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
+    let deleted = crate::reconcile::deleted(&manifest, &store, &moves, &unlisted);
     let Unlisted {
         mut ready,
         settling,
@@ -537,6 +538,16 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
     }
     if !moves.moved.is_empty() {
         manifest.edit(Edit::Moved(moves.moved.clone()));
+    }
+    for key in deleted {
+        ui::info(
+            out,
+            &format!(
+                "Deleted from sources/manual by hand, so taken out of its song: {key}; \
+                 `muman undo` puts it back"
+            ),
+        )?;
+        manifest.edit(Edit::Drop(key));
     }
     manifest.save()?;
     // So the song's plan names its file anew and the song is not written

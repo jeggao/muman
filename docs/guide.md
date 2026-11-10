@@ -262,10 +262,10 @@ adding its video alone by URL, or deleting the table by hand lets it
 back in; `restore` puts it back where it stood, so two songs at one
 path keep the paths they had.
 
-A song you delete from the list by hand is kept out the same way. The
-next `sync` puts its files in `sources/manual` under `[[removed]]`
-rather than listing them again as files dropped in, and `status` says
-so first.
+A song you delete from the list by hand is kept out the same way: the
+next `sync` puts its files in `sources/manual` under `[[removed]]`, and
+`status` says so first. A file of yours deleted beside another of its
+song's, as one encoded anew, it takes out of the song, for `undo`.
 
 ## Sources
 
