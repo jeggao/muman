@@ -1584,6 +1584,62 @@ fn a_file_of_yours_deleted_beside_another_of_its_song_is_taken_out_of_it() {
     assert_eq!(s.songs(), [vec![old, new]]);
 }
 
+/// `a.flac` and `b.flac` synced by `fake`, the song of `b.flac` removed,
+/// and `b.flac` written anew with other bytes.
+fn removed_and_written_over(s: &Setup, fake: &Fake) {
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(fake, &["sync"]).0);
+    let (ok, text) = s.run(fake, &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    s.written(
+        "home/sources/manual/b.flac",
+        "another recording at its name",
+    );
+}
+
+#[test]
+fn other_audio_at_a_removed_song_s_name_is_listed_as_a_new_file() {
+    let s = Setup::new();
+    removed_and_written_over(&s, &flacs());
+    let (_, report) = s.run(&flacs(), &["status"]);
+    assert!(
+        report.contains(
+            "Other audio than its removed song held, listed by the next sync as a new file: \
+             manual:b.flac"
+        ),
+        "{report}"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Other audio than its removed song held, so listed as a new file"),
+        "{text}"
+    );
+    assert!(!text.contains("kept out"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn a_removed_song_s_file_retagged_in_place_stays_out() {
+    let s = Setup::new();
+    let fake = Fake {
+        hashes: vec![("b.flac".into(), 7)],
+        ..flacs()
+    };
+    removed_and_written_over(&s, &fake);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Other audio"), "{text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
 #[test]
 fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
     let s = Setup::new();

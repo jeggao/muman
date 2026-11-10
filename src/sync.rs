@@ -504,10 +504,14 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
     let Unlisted {
         mut ready,
         settling,
+        ..
     } = unlisted;
+    for line in moves.anew_lines(false) {
+        ui::info(out, &line)?;
+    }
     let unlisted: Vec<SourceKey> = ready
         .iter()
-        .filter(|k| state.listed.contains(k))
+        .filter(|k| state.listed.contains(k) && !moves.anew.contains(k))
         .cloned()
         .collect();
     ready.retain(|k| !unlisted.contains(k));

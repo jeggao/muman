@@ -446,6 +446,7 @@ pub(super) fn status<W: Write>(
     let super::Unlisted {
         ready: unlisted,
         settling,
+        ..
     } = found;
     for key in unlisted {
         let line = if state.listed.contains(&key) {

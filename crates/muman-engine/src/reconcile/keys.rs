@@ -71,6 +71,14 @@
 //! are written at once, so a key one move frees and another takes is
 //! never named twice.
 //!
+//! A removed song keeps out what it held, by the same rule, not a name:
+//! a song file only a removed song names, settled and not as measuring
+//! last read it, whose audio is other than the song recorded, is a new
+//! file the user put at that name, listed as any dropped in
+//! ([`Moves::anew`]); one retagged in place holds the same audio and
+//! stays out. Its audio unknown, as to `check`, which hears nothing, it
+//! stays out too.
+//!
 //! A song file of the user's that is followed nowhere, while another
 //! song file of the user's its song lists is still there and nothing is
 //! arriving, was deleted by hand ([`deleted`]), as encoding a file anew
@@ -107,14 +115,27 @@ pub struct Unlisted {
     pub ready: Vec<SourceKey>,
     /// Those arrived too lately to be read yet.
     pub settling: Vec<PathBuf>,
+    /// The song files only a removed song names, settled, that are not as
+    /// measuring last read them: each may hold other audio than the song
+    /// held, a new file at its name, which [`moved`] tells.
+    pub tombed: Vec<SourceKey>,
 }
 
 impl Unlisted {
     #[must_use]
     pub fn of(manifest: &Manifest, state: &State, store: &Store, wait: Duration) -> Self {
-        let mut known = manifest.keys();
-        known.extend(manifest.removed_keys());
-        let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), wait);
+        let removed = manifest.removed_keys();
+        let (ready, mut settling) = store.unlisted(&manifest.keys(), SystemTime::now(), wait);
+        let (tombed, mut ready): (Vec<SourceKey>, Vec<SourceKey>) =
+            ready.into_iter().partition(|k| removed.contains(k));
+        let tombed = (tombed.into_iter())
+            .filter(|k| {
+                let was = state.facts.get(k).and_then(|f| store::stamp_of_rev(&f.rev));
+                let now = store.locate(k).and_then(|l| store::stamp(&l.path));
+                was.is_some() && was != now
+            })
+            .collect();
+        settling.retain(|path| !removed.contains(&SourceKey::Manual(path.into())));
         settling.retain(|path| {
             let key = SourceKey::Manual(path.into());
             let was_listed = state.listed.contains(&key);
@@ -123,7 +144,11 @@ impl Unlisted {
             }
             !was_listed
         });
-        Self { ready, settling }
+        Self {
+            ready,
+            settling,
+            tombed,
+        }
     }
 }
 
@@ -139,9 +164,25 @@ pub struct Moves {
     /// Keys gone, each set beside the files that may be them, of which
     /// none can be told to be one; no file of these is followed or listed.
     pub unsure: Vec<(BTreeSet<SourceKey>, BTreeSet<SourceKey>)>,
+    /// Keys only a removed song names whose file holds other audio than
+    /// the song held: new files, listed as any dropped in.
+    pub anew: Vec<SourceKey>,
 }
 
 impl Moves {
+    /// What is said of each file of [`Moves::anew`]; `ahead` of the sync
+    /// that lists it.
+    pub fn anew_lines(&self, ahead: bool) -> impl Iterator<Item = String> + '_ {
+        let what = if ahead {
+            "listed by the next sync"
+        } else {
+            "so listed"
+        };
+        (self.anew.iter()).map(move |key| {
+            format!("Other audio than its removed song held, {what} as a new file: {key}")
+        })
+    }
+
     /// What following `from` says; `ahead` of the sync that follows it.
     #[must_use]
     pub fn line(&self, from: &SourceKey, ahead: bool) -> Option<String> {
@@ -285,6 +326,18 @@ impl File {
             .as_deref()
     }
 
+    /// Whether its audio is known to be other than `was` records.
+    fn holds_other(
+        &self,
+        was: &Was,
+        state: &State,
+        hear: &mut impl FnMut(&Located) -> Option<String>,
+    ) -> bool {
+        (was.part.as_deref())
+            .zip(self.audio(state, hear))
+            .is_some_and(|(was, now)| !same(now, was))
+    }
+
     /// Whether it is the file `was` names, by `by`.
     fn is(
         &self,
@@ -396,7 +449,7 @@ pub fn moved(
         .collect();
     // With none gone, a file changed alone was changed in place: no other
     // named file can be the one moved over it.
-    if gone.is_empty() && changed.len() < 2 {
+    if gone.is_empty() && changed.len() < 2 && unlisted.tombed.is_empty() {
         return Moves::default();
     }
     let named: BTreeSet<&SourceKey> = named.iter().map(|(k, _)| k).collect();
@@ -437,6 +490,40 @@ pub fn moved(
             .moved
             .insert(seekers[*s].key.clone(), files[*f].key.clone());
     }
+    moved_over(&seekers, &pairs, &taken, &mut moves);
+    let mut out: BTreeSet<&SourceKey> = pairs.values().map(|f| &files[*f].key).collect();
+    for (gone, these) in &unsure {
+        out.extend(these.iter().map(|f| &files[*f].key));
+        moves.unsure.push((
+            gone.iter().map(|s| seekers[*s].key.clone()).collect(),
+            these.iter().map(|f| files[*f].key.clone()).collect(),
+        ));
+    }
+    moves.anew = (seekers.iter())
+        .filter(|s| unlisted.tombed.contains(&s.key) && !out.contains(&s.key))
+        .filter(|s| s.own.is_some_and(|f| !taken.contains_key(&f)))
+        .filter(|s| {
+            s.own
+                .is_some_and(|f| files[f].holds_other(&s.was, state, &mut hear))
+        })
+        .map(|s| s.key.clone())
+        .collect();
+    unlisted.ready.extend(moves.anew.iter().cloned());
+    unlisted.ready.retain(|k| !out.contains(k));
+    unlisted
+        .settling
+        .retain(|rel| !out.contains(&SourceKey::Manual(rel.into())));
+    moves
+}
+
+/// Each changed seeker whose file another took, not matched itself, put
+/// in `moves` as moved over, by `pairs` and the files `taken` by seeker.
+fn moved_over(
+    seekers: &[Seeker],
+    pairs: &BTreeMap<usize, usize>,
+    taken: &BTreeMap<usize, usize>,
+    moves: &mut Moves,
+) {
     for (s, seeker) in seekers.iter().enumerate() {
         let Some(&by) = seeker.own.and_then(|f| taken.get(&f)) else {
             continue;
@@ -460,19 +547,6 @@ pub fn moved(
             .over
             .insert(seeker.key.clone(), seekers[by].key.clone());
     }
-    let mut out: BTreeSet<&SourceKey> = pairs.values().map(|f| &files[*f].key).collect();
-    for (gone, these) in &unsure {
-        out.extend(these.iter().map(|f| &files[*f].key));
-        moves.unsure.push((
-            gone.iter().map(|s| seekers[*s].key.clone()).collect(),
-            these.iter().map(|f| files[*f].key.clone()).collect(),
-        ));
-    }
-    unlisted.ready.retain(|k| !out.contains(k));
-    unlisted
-        .settling
-        .retain(|rel| !out.contains(&SourceKey::Manual(rel.into())));
-    moves
 }
 
 /// Seekers by the file each is matched to, and sets of seekers beside
@@ -633,6 +707,9 @@ impl Following<'_> {
         let moves = moved(manifest, state, store, &mut unlisted, hear);
         for line in moves.unsure_lines() {
             crate::ui::warning(out, &line)?;
+        }
+        for line in moves.anew_lines(true) {
+            crate::ui::info(out, &line)?;
         }
         if moves.moved.is_empty() {
             return Ok(moves.unsure);
