@@ -17,7 +17,7 @@ use crate::info::VideoInfo;
 /// Tags read by another are read again, without measuring the source
 /// again, so changing what a file or an info JSON offers means changing
 /// this.
-pub const METHOD: &str = "tags/13";
+pub const METHOD: &str = "tags/14";
 
 /// What a field describes, which decides where a song's value comes
 /// from.
@@ -1890,12 +1890,31 @@ fn ape_fields(ape: &lofty::ape::ApeTag) -> Read {
 /// Opus stream of mapping family 255, and a file's tags never need them.
 /// Its format is told by its bytes, as ffprobe tells it, its name only
 /// where they say nothing: a FLAC named `.mp3` holds Vorbis comments,
-/// and `song.opus.part` is a file being written.
+/// and `song.opus.part` is a file being written. An Ogg stream of a codec
+/// `lofty` does not read, as Ogg FLAC, it takes for MPEG by a frame sync
+/// inside its audio, and finds no tags in: such a file is refused as of
+/// no format `lofty` knows, so its tags are read as ffprobe reads them.
 pub fn read_tagged(
     path: &std::path::Path,
 ) -> Result<lofty::file::TaggedFile, lofty::error::FileParseError> {
-    lofty::probe::Probe::open(path)?
-        .guess_file_type()?
+    use lofty::file::FileType;
+    use std::io::Read;
+
+    let probe = lofty::probe::Probe::open(path)?.guess_file_type()?;
+    let ogg = matches!(
+        probe.file_type(),
+        Some(FileType::Vorbis | FileType::Opus | FileType::Speex)
+    );
+    let mut magic = [0; 4];
+    if !ogg
+        && std::fs::File::open(path)
+            .and_then(|mut f| f.read_exact(&mut magic))
+            .is_ok()
+        && magic == *b"OggS"
+    {
+        return Err(lofty::error::UnknownFormatError.into());
+    }
+    probe
         .options(lofty::config::ParseOptions::new().read_properties(false))
         .read()
 }
@@ -2517,6 +2536,21 @@ mod tests {
     }
 
     #[test]
+    fn an_ogg_flac_is_no_file_lofty_reads_tags_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let oga = dir.path().join("a.oga");
+        std::fs::write(&oga, include_bytes!("../../../testdata/silence.oga")).unwrap();
+        assert!(
+            read_tagged(&oga).is_err_and(|e| e.is_unknown_format()),
+            "lofty takes it for MPEG and finds no tags"
+        );
+        assert_eq!(read_file(&oga), None);
+        let ogg = dir.path().join("a.ogg");
+        std::fs::write(&ogg, crate::testing::SILENCE_VORBIS).unwrap();
+        assert!(read_file(&ogg).is_some());
+    }
+
+    #[test]
     fn a_files_tags_read_alike_whatever_its_format_and_repeated_ones_apart() {
         use lofty::config::WriteOptions;
         use lofty::file::TaggedFileExt;
@@ -2754,7 +2788,7 @@ mod tests {
     /// an MP3's `ID3v1` beside its `ID3v2` too, and what an upload's and a
     /// release's info offer, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "tags/13",
+        "tags/14",
         "4baae954c7432f93886ec73e31356bf33b534a2a20d242816b32a5c9fd1785f8",
     );
 

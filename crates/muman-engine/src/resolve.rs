@@ -202,8 +202,9 @@ use crate::vet::{self, Verdict, Vets};
 pub fn render_version(codec: Codec) -> u32 {
     match codec {
         // Opus ended 312 samples late, its timestamps shifted by its delay;
-        // MP4 wrote a tag of several values as an atom each.
-        Codec::Opus | Codec::Aac | Codec::Alac => 4,
+        // MP4 wrote a tag of several values as an atom each; a FLAC copied
+        // from one stating no length stated none.
+        Codec::Opus | Codec::Aac | Codec::Alac | Codec::Flac => 4,
         _ => 3,
     }
 }

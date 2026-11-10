@@ -2615,7 +2615,7 @@ fn a_plan_s_loudness_tags_follow_its_format() {
     use crate::loudness::{Apply, Gains, Level};
     let plan = Plan {
         folder: None,
-        version: 3,
+        version: render_version(Codec::Flac),
         format: Format::Copy { codec: Codec::Flac },
         audio: AudioRef {
             key: SourceKey::youtube("vid00000001"),
@@ -3024,8 +3024,8 @@ fn every_format() -> Vec<Format> {
 /// Digests of the stored form and the plan key of a plan with every part
 /// in [`every_format`], as the last release kept them.
 const KEPT: (&str, &str) = (
-    "dda4384a5663bc870df337ef76afdaac12029381f3157e9d0ee42c89385bd1b5",
-    "a48d1582c48ae597bfdf336f9ecbe9105b31b7b99e0e6a234139fd592acf3ea9",
+    "5f03099a30084619432e22331e6def9376d8041f801b951ab16a930d596bd945",
+    "d51001353701d828419ff2990c66455d89abd65290de23a8a1b45144a49b1173",
 );
 
 #[test]

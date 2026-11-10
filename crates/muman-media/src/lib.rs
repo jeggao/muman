@@ -25,6 +25,7 @@ pub mod cues;
 pub mod detect;
 pub mod facts;
 pub mod ffmpeg;
+pub mod flac;
 pub mod genres;
 pub mod info;
 pub mod integrity;

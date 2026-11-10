@@ -104,7 +104,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   chapters.rs       a source's chapters, in each container's own form
   naming.rs         safe names, through the path template
   quality.rs, align.rs   audio and picture measures; audio compared by loudness envelopes
-  codec.rs, ogg.rs  output codecs: names, containers, ffmpeg arguments; an Opus header's gain
+  codec.rs, ogg.rs, flac.rs   output codecs, their arguments; an Opus header's gain; a FLAC's length
   record.rs         the MusicBrainz record kept, and the answer it is read from
 crates/muman-core/src/   the lowest layer, which every other module builds on
   units.rs          sizes, bitrates, times, frequencies, shares (uom)

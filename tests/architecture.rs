@@ -830,6 +830,7 @@ const WRITES: &[(&str, usize, &str)] = &[
     ),
     ("atomic.rs", 2, "a whole file's bytes, and a private file's"),
     ("ogg.rs", 1, "an Opus header's page, in its file"),
+    ("flac.rs", 1, "a STREAMINFO's sample count, in its file"),
     (
         "render.rs",
         3,

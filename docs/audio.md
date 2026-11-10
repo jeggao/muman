@@ -46,6 +46,10 @@ title, the track or the lyrics, goes there. Any other keeps its name in
 a `TXXX` frame or an iTunes freeform atom. A tag of several values, as
 two artists, is one MP4 atom holding each, as Picard writes it.
 
+A FLAC copied from one that states no length, as a FLAC encoded into a
+pipe or an Ogg FLAC (`.oga`) holds, is given the length its audio
+plays, so a player shows it and seeks in it.
+
 ### What each codec holds
 
 No codec holds every kind of audio, and muman never lets an encoder

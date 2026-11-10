@@ -1730,7 +1730,7 @@ const RENDERED: [(Codec, &str, &str); 7] = [
     ),
     (
         Codec::Flac,
-        "3",
+        "4",
         "952b8c6d0e58c6a7397fb90c88876b2aa818f72ee456b59bed8cfaa0577a6b66",
     ),
     (

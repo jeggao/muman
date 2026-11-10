@@ -18,8 +18,8 @@ use muman_core::{
     relpath, runner, sites, source, store, tools, ui, units,
 };
 use muman_media::{
-    align, analysis, chapters, clean, codec, cues, detect, facts, ffmpeg, integrity, loudness,
-    lyrics, naming, ogg, parts, picture, quality, readings, record, similar, style, tags,
+    align, analysis, chapters, clean, codec, cues, detect, facts, ffmpeg, flac, integrity,
+    loudness, lyrics, naming, ogg, parts, picture, quality, readings, record, similar, style, tags,
 };
 use muman_net::{acoustid, coverart, download, lrclib, music, musicbrainz, ytdlp_log};
 

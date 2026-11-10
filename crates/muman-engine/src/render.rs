@@ -22,6 +22,9 @@
 //! another song rendered at the same time may be writing into one; the
 //! sync clears the folders failures leave once every song is written.
 //!
+//! A FLAC copied from a stream whose STREAMINFO states no length, as a
+//! FLAC encoded into a pipe or an Ogg FLAC holds, is given the count of
+//! its samples ([`crate::flac`]): ffmpeg copies the 0 as it is.
 //! A FLAC's tags and cover are written into padding ffmpeg reserves for
 //! them (`write_flac_blocks`), so the file is written once: `lofty`
 //! writes a tag of another length by moving every byte of audio after it,
@@ -378,6 +381,9 @@ pub fn render<R: Runner>(runner: &R, job: &Job<'_>) -> Result<Rendered> {
     let staged = (|| -> Result<Vec<PathBuf>> {
         if let Some(e) = failed(&audio_part) {
             return Err(anyhow!("{e}"));
+        }
+        if made.audio.format.codec().container() == Container::Flac {
+            state_samples(&audio_part, &mut problems)?;
         }
         let text = match (made.lyric_text(), lyrics_text) {
             (Some(_), Some(Some(text))) => Some(text),
@@ -805,6 +811,23 @@ fn set_opus_header(path: &Path, gain: Option<i16>) -> Result<()> {
         .with_context(|| format!("opening {}", path.display()))?;
     crate::ogg::set_output_gain(&mut file, gain)
         .with_context(|| format!("setting the gain of {}", path.display()))
+}
+
+/// The sample count of the FLAC at `path` stated where its STREAMINFO
+/// states none, as a stream copied from a pipe's FLAC or an Ogg FLAC
+/// does ([`crate::flac`]); one that cannot be counted is said.
+// Sets the count in a staged file's STREAMINFO in place.
+#[expect(clippy::disallowed_methods)]
+fn state_samples(path: &Path, problems: &mut Vec<String>) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    if let Err(e) = crate::flac::state_samples(&mut file) {
+        problems.push(format!("no length stated in the file: {e:#}"));
+    }
+    Ok(())
 }
 
 fn size_of(path: &Path) -> u64 {
