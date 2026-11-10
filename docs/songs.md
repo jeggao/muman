@@ -137,7 +137,8 @@ can put back, and asks by name, as "Remove 2 songs?":
 
 `-n` says what would change and stops. A query of keys alone takes
 every song it names. `edit` needs a terminal for its editor and takes
-no `-y`. A song changed meanwhile, by hand or by another run, refuses
+no `-y`. A question waiting for your answer holds no other run back,
+and a song changed meanwhile, by hand or by another run, refuses
 the save of `remove`, `restore` or `set NAME=VALUE`. `edit` opens again
 and says so: save again to apply your edit over the change, or quit
 without saving to keep it. `set` stepping through fields applies your

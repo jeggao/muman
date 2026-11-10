@@ -158,6 +158,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A question waiting for an answer holds no other run back.** `set`,
+  `remove`, `restore`, `review` and merging duplicates take the home
+  only once you answer, so a scheduled `sync` no longer waits on a
+  question left open; a song changed meanwhile still refuses the save.
+- **`add` says `-y` only where `-y` would add the file.** A picture
+  like covers on several albums, or lyrics whose length is far off,
+  name `--to` alone; an excerpt kept as its own song says to undo the
+  add first; and a file added again says it is a source already.
+- **`has:` holds for a ReplayGain tag a source gives**, as muman writes
+  its own measured gain in its place.
+- **`check` counts songs, not credits, for a name spelled more than one
+  way**, so a song's album artist filled from its artist counts once.
+- **A whole MP3 without a VBR header is copied, not judged cut off.** A
+  VBR MP3 with no Xing or VBRI header, and a raw AAC, AC-3 or DTS file,
+  states no length, and the length ffmpeg guesses is no longer taken as
+  one. A truncated file whose header counts its frames is still found.
+- **A dark cover framed in black bars stays square**, rather than losing
+  its sides to the bars. Sources whose cover was cropped to a shape not
+  square are measured again once.
+- **A folder cover you changed stays in its folder** when the song that
+  holds it moves to another album while other songs stay, those held
+  back from their own move included. A new path template that moves the
+  whole album still takes it along.
 - **`check` names every song the last sync failed**: one `max_size`
   left out, and one whose source was damaged since it was built, as
   well as one that could not be written.

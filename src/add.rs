@@ -66,7 +66,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     crate::atomic::private_dir(&dirs.home)?;
     let mut run = Run::begin(&dirs.home)?;
     let mut due = crate::hooks::Due::default();
-    let mut left_out = 0;
+    let mut left_out = (0, 0);
     let mut unread = Vec::new();
     let mut refused = None;
     let done = (|| {
@@ -131,7 +131,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         };
         let attached = attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out);
         let attached = held_back(attached, &mut refused)?;
-        left_out = attached.left_out;
+        left_out = (attached.left_out, attached.by_yes);
         unread.extend(attached.unread);
         attached
             .copied
@@ -156,7 +156,7 @@ pub(crate) fn run<R: Runner, W: Write>(
     if let Some(e) = refused {
         return Err(e);
     }
-    not_added(&unread, left_out, request.matching.yes)?;
+    not_added(&unread, left_out)?;
     Ok(ok)
 }
 
@@ -233,7 +233,7 @@ fn sort_inputs(inputs: &[String]) -> Result<Inputs<'_>> {
 
 /// The error of files `add` could not read, or left out as matched to no
 /// song for sure, once the songs added with them are written.
-fn not_added(unread: &[String], left_out: usize, yes: bool) -> Result<()> {
+fn not_added(unread: &[String], (left_out, by_yes): (usize, usize)) -> Result<()> {
     if !unread.is_empty() {
         bail!(
             "{} file(s) could not be added: {}",
@@ -242,10 +242,10 @@ fn not_added(unread: &[String], left_out: usize, yes: bool) -> Result<()> {
         );
     }
     if left_out > 0 {
-        let how = if yes {
-            "name their songs with --to, or run on a terminal to pick them"
-        } else {
+        let how = if by_yes > 0 {
             "name their songs with --to, give -y, or run on a terminal to pick them"
+        } else {
+            "name their songs with --to, or run on a terminal to pick them"
         };
         return Err(change::Refused(format!("{left_out} file(s) were not added: {how}")).into());
     }
@@ -1185,12 +1185,26 @@ pub(crate) fn copy_new(
         .into());
     }
     if to.exists() {
-        return Err(change::Refused(format!(
-            "{} exists already, the name {} takes once composed; rename one of them first",
-            to.display(),
-            from.display()
-        ))
-        .into());
+        let why = if from.file_name() != to.file_name() {
+            format!(
+                "{} exists already, the name {} takes once composed; rename one of them first",
+                to.display(),
+                from.display()
+            )
+        } else if crate::hash::digest_file(from) == crate::hash::digest_file(to) {
+            format!(
+                "{} is a source already, as {}; `muman edit` moves it to another song",
+                from.display(),
+                to.display()
+            )
+        } else {
+            format!(
+                "{} exists already; rename {} first",
+                to.display(),
+                from.display()
+            )
+        };
+        return Err(change::Refused(why).into());
     }
     if let Some(dir) = to.parent() {
         crate::create(dir)?;

@@ -226,6 +226,41 @@ pub struct Run {
     _runs: atomic::Lock,
 }
 
+/// A run begun only once a command is about to change the home, as it
+/// saves the song list: a command that asks first holds no lock while
+/// its question waits, so no other run waits on an answer, and one
+/// declined begins none. What it read before is checked again as it
+/// saves, a song changed meanwhile refusing the save.
+#[derive(Debug)]
+pub struct Later {
+    home: PathBuf,
+    run: Option<Run>,
+}
+
+impl Later {
+    #[must_use]
+    pub fn new(home: &Path) -> Self {
+        Self {
+            home: home.to_path_buf(),
+            run: None,
+        }
+    }
+
+    /// The run, begun now if it was not.
+    pub fn begin(&mut self) -> Result<&mut Run> {
+        match &mut self.run {
+            Some(run) => Ok(run),
+            none => Ok(none.insert(Run::begin(&self.home)?)),
+        }
+    }
+
+    /// The run, if one began.
+    #[must_use]
+    pub fn begun(self) -> Option<Run> {
+        self.run
+    }
+}
+
 /// The song list as a run last read or wrote it, `None` for a home
 /// without one, once it has.
 #[derive(Debug, Clone, Default)]

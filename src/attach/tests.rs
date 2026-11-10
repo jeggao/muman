@@ -202,7 +202,7 @@ fn a_picture_alike_to_many_songs_of_many_albums_is_asked_about() {
         out: &mut out,
     };
     let decided = decide(&mut ask, &picture_item(look), None).unwrap();
-    assert!(matches!(decided, Decision::LeftOut));
+    assert!(matches!(decided, Decision::LeftOut { by_yes: false }));
     for c in &mut cands {
         c.album = "One Album".into();
         c.album_key = similar::fold("One Album");

@@ -234,6 +234,7 @@ pub fn resolve<R: Runner, W: Write>(
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     if prompter.is_none() {
@@ -281,7 +282,7 @@ pub fn resolve<R: Runner, W: Write>(
             Step::Stop => break,
         }
     }
-    apply(&mut found, &chosen, *confirm, prompter, out)
+    apply(&mut found, &chosen, *confirm, prompter, later, out)
 }
 
 /// Merge each group an album holds twice, the copies on that album, into
@@ -293,6 +294,7 @@ pub fn merge<R: Runner, W: Write>(
     terms: &[String],
     confirm: &Confirm,
     prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut found = find(dirs, terms, out)?;
@@ -333,7 +335,7 @@ pub fn merge<R: Runner, W: Write>(
             });
         }
     }
-    apply(&mut found, &chosen, *confirm, prompter, out)
+    apply(&mut found, &chosen, *confirm, prompter, later, out)
 }
 
 /// Compare the sources of each of `groups` as one song, as the sync
@@ -565,6 +567,7 @@ fn apply<W: Write>(
     chosen: &[Choice],
     confirm: Confirm,
     prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     if chosen.is_empty() {
@@ -657,6 +660,7 @@ fn apply<W: Write>(
     for edit in edits {
         found.manifest.edit(edit);
     }
+    later.begin()?;
     let changed = found.manifest.save_if_unchanged(&expected)?;
     if !changed.is_empty() {
         found.manifest.discard();

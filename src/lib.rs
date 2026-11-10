@@ -120,7 +120,7 @@ use clap::FromArgMatches;
 use crate::atomic::Lock;
 use crate::cli::{Cli, Command, Matching};
 use crate::dirs::Dirs;
-use crate::history::Run;
+use crate::history::{Later, Run};
 use crate::identify::Mode;
 use crate::manifest::Manifest;
 use crate::platform::Defaults;
@@ -462,32 +462,20 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             yes,
             dry_run,
         } if *resolve || merge.is_some() => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
+            let mut later = Later::new(&dirs.home);
             let confirm = cli::Confirm {
                 yes: *yes,
                 all: false,
                 dry_run: *dry_run,
             };
-            let done = (|| {
-                let changed = if *resolve {
-                    duplicates::resolve(runner, dirs, query, &confirm, prompter, out)?
-                } else {
-                    duplicates::merge(runner, dirs, query, &confirm, prompter, out)?
-                };
-                if !changed {
-                    return Ok(true);
-                }
-                reconcile_now(
-                    job,
-                    runner,
-                    Options::default(),
-                    Some(&mut run),
-                    &mut due,
-                    out,
-                )
-            })();
-            finished(job, runner, run, done, &due, out)
+            let changed = if *resolve {
+                duplicates::resolve(runner, dirs, query, &confirm, prompter, &mut later, out)
+            } else {
+                duplicates::merge(runner, dirs, query, &confirm, prompter, &mut later, out)
+            };
+            synced_after(job, runner, later, changed, out, |run, due, out| {
+                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+            })
         }
         Command::Duplicates { query, .. } => {
             duplicates::report(dirs, query, out, data)?;
@@ -646,119 +634,79 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             purge,
             confirm,
         } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::remove(dirs, query, *purge, confirm, prompter, &mut run, out)? {
-                    return Ok(true);
-                }
-                reconcile_now(
-                    job,
-                    runner,
-                    Options::default(),
-                    Some(&mut run),
-                    &mut due,
-                    out,
-                )
-            })();
-            finished(job, runner, run, done, &due, out)
+            let mut later = Later::new(&dirs.home);
+            let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
+                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+            })
         }
         Command::Restore { query, confirm } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::restore(dirs, query, confirm, prompter, out)? {
-                    return Ok(true);
-                }
+            let mut later = Later::new(&dirs.home);
+            let changed = change::restore(dirs, query, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
-                ok &= reconcile_now(
-                    job,
-                    runner,
-                    Options::default(),
-                    Some(&mut run),
-                    &mut due,
-                    out,
-                )?;
+                ok &= reconcile_now(job, runner, Options::default(), Some(run), due, out)?;
                 Ok(ok)
-            })();
-            finished(job, runner, run, done, &due, out)
+            })
         }
         Command::Review { query } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !review::review(dirs, query, prompter, out)? {
-                    return Ok(true);
-                }
-                reconcile_now(
-                    job,
-                    runner,
-                    Options::default(),
-                    Some(&mut run),
-                    &mut due,
-                    out,
-                )
-            })();
-            finished(job, runner, run, done, &due, out)
+            let mut later = Later::new(&dirs.home);
+            let changed = review::review(dirs, query, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
+                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+            })
         }
         Command::Set { terms, confirm } => {
-            let mut run = Run::begin(&dirs.home)?;
-            let mut due = hooks::Due::default();
-            let done = (|| {
-                if !change::set(dirs, terms, confirm, prompter, out)? {
-                    return Ok(true);
-                }
-                reconcile_now(
-                    job,
-                    runner,
-                    Options::default(),
-                    Some(&mut run),
-                    &mut due,
-                    out,
-                )
-            })();
-            finished(job, runner, run, done, &due, out)
+            let mut later = Later::new(&dirs.home);
+            let changed = change::set(dirs, terms, confirm, prompter, &mut later, out);
+            synced_after(job, runner, later, changed, out, |run, due, out| {
+                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+            })
         }
         Command::Edit { query, all } => {
             // Begun once the editor is closed, so an open editor holds no
             // other run back.
-            let mut run: Option<Run> = None;
-            let mut due = hooks::Due::default();
+            let mut later = Later::new(&dirs.home);
             let edited = editor::edit(
                 dirs,
                 query,
                 *all,
                 change::reborrow(&mut prompter),
                 &mut editor::launch,
-                &mut || {
-                    if run.is_none() {
-                        run = Some(Run::begin(&dirs.home)?);
-                    }
-                    Ok(())
-                },
+                &mut || later.begin().map(drop),
                 out,
             );
-            let Some(mut run) = run else {
-                return edited.map(|_| true);
-            };
-            let done = edited.and_then(|edited| {
-                if edited {
-                    reconcile_now(
-                        job,
-                        runner,
-                        Options::default(),
-                        Some(&mut run),
-                        &mut due,
-                        out,
-                    )
-                } else {
-                    Ok(true)
-                }
-            });
-            finished(job, runner, run, done, &due, out)
+            synced_after(job, runner, later, edited, out, |run, due, out| {
+                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+            })
         }
     }
+}
+
+/// Finish a command that changed the home, or did not: `changed` says
+/// whether it did, and `after` brings the library in line under the run
+/// it began. A command that began no run changed nothing.
+fn synced_after<R: Runner, W: Write>(
+    job: &Job,
+    runner: &R,
+    later: Later,
+    changed: Result<bool>,
+    out: &mut W,
+    after: impl FnOnce(&mut Run, &mut hooks::Due, &mut W) -> Result<bool>,
+) -> Result<bool> {
+    let Some(mut run) = later.begun() else {
+        return changed.map(|_| true);
+    };
+    let mut due = hooks::Due::default();
+    let done = changed.and_then(|changed| {
+        if changed {
+            after(&mut run, &mut due, out)
+        } else {
+            Ok(true)
+        }
+    });
+    finished(job, runner, run, done, &due, out)
 }
 
 /// The offline phase with the run's settling time, as every command

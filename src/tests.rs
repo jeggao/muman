@@ -174,7 +174,18 @@ fn an_added_file_is_copied_with_its_lyrics_listed_and_written() {
         &mut Vec::new(),
     )
     .unwrap_err();
-    assert!(format!("{e:#}").contains("exists already"), "{e:#}");
+    assert!(format!("{e:#}").contains("is a source already"), "{e:#}");
+    std::fs::write(&song, "other bytes").unwrap();
+    let e = run_with(
+        &s.job(&["add", &song]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("exists already; rename"), "{e:#}");
 }
 
 #[test]
@@ -6955,6 +6966,30 @@ fn has_holds_for_tags_a_source_gives_and_not_for_loudness_muman_measured() {
 }
 
 #[test]
+fn has_holds_for_a_gain_a_source_gives_though_muman_writes_its_own() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let gained = crate::testing::FLAC.replace(
+        r#""track": "2"}"#,
+        r#""track": "2", "REPLAYGAIN_TRACK_GAIN": "-3.21 dB"}"#,
+    );
+    let fake = Fake::default().probe(".flac", &gained);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let mut data = Vec::new();
+    run_with(
+        &s.job(&["list", "has:replaygain_track_gain"]),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut data,
+    )
+    .unwrap();
+    assert!(!data.is_empty());
+}
+
+#[test]
 fn a_command_stopped_on_a_song_list_that_does_not_read_keeps_no_run() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
@@ -6998,6 +7033,72 @@ fn a_sync_whose_library_cannot_be_locked_writes_nothing() {
     );
     assert!(e.is_err());
     assert!(library_of(&s).is_empty());
+}
+
+/// Answers yes, noting whether a run held the home as it was asked.
+struct Asked {
+    home: PathBuf,
+    held: bool,
+}
+
+impl crate::ui::Prompter for Asked {
+    fn ask(&mut self, _: &str) -> std::io::Result<bool> {
+        self.held |= Lock::busy(&self.home);
+        Ok(true)
+    }
+
+    fn choose(&mut self, _: &str, _: &[String], picked: &[usize]) -> std::io::Result<Vec<usize>> {
+        Ok(picked.to_vec())
+    }
+
+    fn select(&mut self, _: &str, _: &[String]) -> std::io::Result<Option<usize>> {
+        Ok(None)
+    }
+
+    fn text(&mut self, _: &str, _: &str) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn text_with(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: crate::ui::Check,
+    ) -> std::io::Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+#[test]
+fn a_change_asking_its_question_holds_no_other_run_back() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    for args in [
+        &["set", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "manual:a.flac"],
+        &["restore", "manual:a.flac"],
+    ] {
+        let mut asked = Asked {
+            home: s.dir.path().join("home"),
+            held: false,
+        };
+        let mut out = Vec::new();
+        let ok = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            Some(&mut asked),
+            &mut out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(ok, "{args:?}: {}", String::from_utf8_lossy(&out));
+        assert!(!asked.held, "{args:?} held the home as it asked");
+    }
+    assert!(s.listed(&["list"]).contains("manual:a.flac"));
 }
 
 #[test]

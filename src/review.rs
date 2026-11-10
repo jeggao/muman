@@ -81,6 +81,7 @@ pub fn review<W: Write>(
     dirs: &Dirs,
     terms: &[String],
     prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let Some(p) = prompter else {
@@ -135,14 +136,17 @@ pub fn review<W: Write>(
                     all: true,
                     dry_run: false,
                 };
-                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, out)?;
+                changed |= crate::guided::edit(dirs, &[id.to_string()], &confirm, p, later, out)?;
             }
-            Answer::Release => changed |= pin_release(dirs, song, id, &read.state, p, out)?,
+            Answer::Release => {
+                changed |= pin_release(dirs, song, id, &read.state, p, later, out)?;
+            }
             Answer::Never {
                 field,
                 torrent,
                 channel,
             } => {
+                later.begin()?;
                 let mut m = Manifest::load(&dirs.home)?;
                 m.edit(Edit::TagsFrom {
                     torrent: torrent.clone(),
@@ -235,6 +239,7 @@ fn pin_release<W: Write>(
     id: &SourceKey,
     state: &State,
     p: &mut dyn Prompter,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let releases = releases(song, state);
@@ -249,6 +254,7 @@ fn pin_release<W: Write>(
     if release == song.release {
         return Ok(false);
     }
+    later.begin()?;
     let mut m = Manifest::load(&dirs.home)?;
     m.edit(Edit::Release {
         key: id.clone(),
@@ -328,7 +334,14 @@ mod tests {
             library: dir.path().join("library"),
             locks: None,
         };
-        let e = review(&dirs, &[], None, &mut Vec::new()).unwrap_err();
+        let e = review(
+            &dirs,
+            &[],
+            None,
+            &mut crate::history::Later::new(&dirs.home),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("needs a terminal"), "{e}");
     }
 }

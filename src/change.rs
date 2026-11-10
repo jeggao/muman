@@ -283,7 +283,7 @@ pub fn remove<W: Write>(
     purge: bool,
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
-    run: &mut crate::history::Run,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -370,6 +370,7 @@ pub fn remove<W: Write>(
             note: view.name(),
         });
     }
+    let run = later.begin()?;
     for (file, _) in doomed.iter().filter(|(_, own)| *own) {
         run.trashed(&dirs.home, file);
     }
@@ -467,6 +468,7 @@ pub fn restore<W: Write>(
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut manifest = Manifest::load(&dirs.home)?;
@@ -542,6 +544,7 @@ pub fn restore<W: Write>(
     for id in picked.iter().filter_map(|n| views[*n].id()) {
         manifest.edit(Edit::Restore(id.clone()));
     }
+    later.begin()?;
     manifest.save()?;
     Ok(true)
 }
@@ -774,6 +777,7 @@ pub fn set<W: Write>(
     terms: &[String],
     confirm: &Confirm,
     mut prompter: Option<&mut dyn Prompter>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let (query_terms, assigns) = split_terms(terms).map_err(|e| Refused(format!("{e:#}")))?;
@@ -781,7 +785,7 @@ pub fn set<W: Write>(
         if let Some(p) = prompter
             && !query_terms.is_empty()
         {
-            return crate::guided::edit(dirs, &query_terms, confirm, p, out);
+            return crate::guided::edit(dirs, &query_terms, confirm, p, later, out);
         }
         return refuse(
             "Nothing to set: give NAME=VALUE or NAME!, or a query alone on a terminal to set \
@@ -818,6 +822,7 @@ pub fn set<W: Write>(
         songs,
         new: Vec::new(),
     });
+    later.begin()?;
     read.save(&picked)?;
     Ok(true)
 }

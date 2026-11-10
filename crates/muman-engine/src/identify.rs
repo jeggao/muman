@@ -226,7 +226,7 @@ pub fn identify<R: Runner, W: Write>(
                                     out,
                                     &format!(
                                         "{} may be {song} ({}); kept as a song of its own. \
-                                     To merge them, move its sources into that song's, or add it again with -y",
+                                     To merge them, move its sources into that song's, or undo this add and add it again with -y",
                                         p.label,
                                         m.describe()
                                     ),

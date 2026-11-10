@@ -216,16 +216,26 @@ pub fn view_of(
             .and_then(|x| x.quality.as_ref())
             .is_some_and(|q| q.effective < crate::quality::SOFT_COVER)
     });
+    // A tag one of the song's sources offers is given, whatever muman
+    // writes for it: a measured gain stands in for the one a file holds.
+    let offered = |k: &str| {
+        song.sources.iter().filter_map(|s| facts.get(s)).any(|f| {
+            Field::ALL
+                .iter()
+                .any(|field| field.vorbis() == k && f.tags.contains_key(field))
+        })
+    };
     let given = r
         .plan
         .tags
         .iter()
         .map(|(k, _)| k)
         .filter(|k| {
-            r.why
-                .tags
-                .iter()
-                .any(|t| &t.key == *k && !crate::resolve::derived(&t.from))
+            offered(k)
+                || r.why
+                    .tags
+                    .iter()
+                    .any(|t| &t.key == *k && !crate::resolve::derived(&t.from))
         })
         .cloned()
         .collect();

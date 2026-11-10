@@ -224,6 +224,8 @@ pub struct How {
 pub struct Attached {
     pub songs: Vec<SourceKey>,
     pub left_out: usize,
+    /// Those of them `-y` would have placed.
+    pub by_yes: usize,
     /// The files that could not be read or used, each with why.
     pub unread: Vec<String>,
     /// The copies made in the manual folder's `added/`, for `undo`.
@@ -972,10 +974,14 @@ enum Decision {
     Tagged {
         songs: Vec<(usize, Tags)>,
         left_out: bool,
+        by_yes: bool,
     },
     Already,
     Declined,
-    LeftOut,
+    /// Left out; `by_yes` when `-y` would have placed it.
+    LeftOut {
+        by_yes: bool,
+    },
 }
 
 /// The asking side: the songs, how they are named, and the prompter.
@@ -1072,6 +1078,7 @@ impl<W: Write> Asking<'_, '_, W> {
                     next.verdict == Verdict::Different || next.distance - j.distance >= LEAD
                 })
         };
+        let by_yes = !self.yes && top.as_ref().is_some_and(leads);
         if self.yes
             && let Some(j) = top.filter(leads)
         {
@@ -1113,15 +1120,15 @@ impl<W: Write> Asking<'_, '_, W> {
                     "{item_label} may be {} {}; not added. Name its song with --to{}",
                     what.of(),
                     maybe.join(" or "),
-                    if self.yes {
-                        ", or run on a terminal"
-                    } else {
+                    if by_yes {
                         ", add it again with -y, or run on a terminal"
+                    } else {
+                        ", or run on a terminal"
                     }
                 )
             };
             self.warn(&said)?;
-            return Err(LeftOut.into());
+            return Err(LeftOut { by_yes }.into());
         }
         let lines: Vec<String> = offered.iter().map(|j| self.line(j)).collect();
         let songs: Vec<usize> = offered.iter().map(|j| j.song).collect();
@@ -1226,9 +1233,12 @@ enum Searched {
     Back,
 }
 
-/// A file left out for want of a terminal to ask on.
+/// A file left out for want of a terminal to ask on; `by_yes` when `-y`
+/// would have placed it.
 #[derive(Debug)]
-struct LeftOut;
+struct LeftOut {
+    by_yes: bool,
+}
 
 impl std::fmt::Display for LeftOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1345,12 +1355,16 @@ pub fn attach<R: Runner, W: Write>(
         }
         let decision = match decide(&mut ask, item, pool.as_deref()) {
             Ok(d) => d,
-            Err(e) if e.is::<LeftOut>() => Decision::LeftOut,
-            Err(e) => {
-                ui::warning(ask.out, &format!("{e:#}"))?;
-                attached.unread.push(item.path.display().to_string());
-                Decision::Declined
-            }
+            Err(e) => match e.downcast::<LeftOut>() {
+                Ok(left) => Decision::LeftOut {
+                    by_yes: left.by_yes,
+                },
+                Err(e) => {
+                    ui::warning(ask.out, &format!("{e:#}"))?;
+                    attached.unread.push(item.path.display().to_string());
+                    Decision::Declined
+                }
+            },
         };
         decisions.push(decision);
     }
@@ -1377,8 +1391,13 @@ pub fn attach<R: Runner, W: Write>(
                     attached.songs.push(id);
                 }
             }
-            Decision::Tagged { songs, left_out } => {
+            Decision::Tagged {
+                songs,
+                left_out,
+                by_yes,
+            } => {
                 attached.left_out += usize::from(left_out);
+                attached.by_yes += usize::from(by_yes);
                 for (n, tags) in songs {
                     let id = cands[n].id.clone();
                     let named: Vec<String> = tags
@@ -1432,7 +1451,10 @@ pub fn attach<R: Runner, W: Write>(
             Decision::Already => {}
             Decision::Declined if attached.unread.contains(&item.path.display().to_string()) => {}
             Decision::Declined => ui::info(ask.out, &format!("{}: not added", item.label))?,
-            Decision::LeftOut => attached.left_out += 1,
+            Decision::LeftOut { by_yes } => {
+                attached.left_out += 1;
+                attached.by_yes += usize::from(by_yes);
+            }
         }
     }
     manifest.save()?;
@@ -1498,6 +1520,7 @@ fn decide<W: Write>(
         Decision::Tagged {
             songs: vec![(n, tags)],
             left_out: false,
+            by_yes: false,
         }
     };
     if let Some(pool) = pool {
@@ -1521,7 +1544,7 @@ fn decide<W: Write>(
                         item.label,
                         lines.join("\n  ")
                     ))?;
-                    return Ok(Decision::LeftOut);
+                    return Ok(Decision::LeftOut { by_yes: false });
                 }
                 ask.pick(
                     &format!("{}: {}", item.label, item.what.whose()),
@@ -1624,7 +1647,7 @@ fn decide<W: Write>(
                             item.label,
                             asked.len()
                         ))?;
-                        return Ok(Decision::LeftOut);
+                        return Ok(Decision::LeftOut { by_yes: false });
                     }
                     None => ask.warn(&format!(
                         "{}: {} more song(s) have a cover somewhat like it; not added to those",
@@ -1759,13 +1782,14 @@ fn decide_sheet<W: Write>(
     let all_sure = fits
         .iter()
         .all(|(_, j)| j.as_ref().is_some_and(|j| j.verdict == Verdict::Same));
-    let tagged = |chosen: &[(usize, usize)], left_out: bool| {
+    let tagged = |chosen: &[(usize, usize)], left_out: bool, by_yes: bool| {
         if chosen.is_empty() && left_out {
-            return Decision::LeftOut;
+            return Decision::LeftOut { by_yes };
         }
         Decision::Tagged {
             songs: chosen.iter().map(|&(r, n)| (n, sheet.tags_of(r))).collect(),
             left_out,
+            by_yes,
         }
     };
     let sure: Vec<(usize, usize)> = fits
@@ -1777,7 +1801,7 @@ fn decide_sheet<W: Write>(
         })
         .collect();
     if all_sure {
-        return Ok(tagged(&sure, false));
+        return Ok(tagged(&sure, false, false));
     }
     for (r, j) in &fits {
         let to = j.as_ref().map_or_else(
@@ -1811,18 +1835,18 @@ fn decide_sheet<W: Write>(
             "{}: no track fits a song; not added. Name the songs it is of with --to",
             item.label
         ))?;
-        return Ok(Decision::LeftOut);
+        return Ok(Decision::LeftOut { by_yes: false });
     }
+    let led: Vec<(usize, usize)> = fits
+        .iter()
+        .filter_map(|(r, j)| {
+            let j = j.as_ref()?;
+            let next = per_track[*r].iter().find(|o| o.song != j.song);
+            let leads = next.is_none_or(|o| o.distance - j.distance >= LEAD);
+            (j.verdict == Verdict::Same || leads).then_some((*r, j.song))
+        })
+        .collect();
     if ask.yes {
-        let led: Vec<(usize, usize)> = fits
-            .iter()
-            .filter_map(|(r, j)| {
-                let j = j.as_ref()?;
-                let next = per_track[*r].iter().find(|o| o.song != j.song);
-                let leads = next.is_none_or(|o| o.distance - j.distance >= LEAD);
-                (j.verdict == Verdict::Same || leads).then_some((*r, j.song))
-            })
-            .collect();
         let unsure = fitting.len() - led.len();
         if unsure > 0 {
             ask.warn(&format!(
@@ -1831,18 +1855,20 @@ fn decide_sheet<W: Write>(
                 item.label
             ))?;
         }
-        return Ok(tagged(&led, unsure > 0));
+        return Ok(tagged(&led, unsure > 0, false));
     }
     let Some(p) = ask.prompter.as_deref_mut() else {
         let unsure = fitting.len() - sure.len();
+        let by_yes = led.len() > sure.len();
         if unsure > 0 {
             ask.warn(&format!(
                 "{}: {unsure} track(s) are not surely a song's; their tags are not set. \
-                 Run on a terminal, or give -y",
-                item.label
+                 Run on a terminal{}",
+                item.label,
+                if by_yes { ", or give -y" } else { "" }
             ))?;
         }
-        return Ok(tagged(&sure, unsure > 0));
+        return Ok(tagged(&sure, unsure > 0, by_yes));
     };
     let album = values(&sheet.album, "ALBUM")
         .next()
@@ -1870,7 +1896,7 @@ fn decide_sheet<W: Write>(
         )?
     };
     match picked {
-        Some(0) => Ok(tagged(&fitting, false)),
+        Some(0) => Ok(tagged(&fitting, false, false)),
         Some(1) => {
             let mut chosen: Vec<(usize, usize)> = Vec::new();
             for (r, judged) in per_track.iter().enumerate() {
@@ -1894,7 +1920,7 @@ fn decide_sheet<W: Write>(
                     chosen.push((r, n));
                 }
             }
-            Ok(tagged(&chosen, false))
+            Ok(tagged(&chosen, false, false))
         }
         _ => Ok(Decision::Declined),
     }

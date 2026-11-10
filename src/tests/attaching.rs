@@ -217,6 +217,7 @@ fn lyrics_tags_name_their_song_and_a_length_far_off_keeps_them_out() {
     );
     let said = s.not_added(&fake, &["add", &far]);
     assert!(said.contains("1 file(s) were not added"), "{said}");
+    assert!(!said.contains("-y"), "-y would not add it: {said}");
     assert!(said.contains("far.lrc matches no song"), "{said}");
     assert_eq!(s.added(), ["words.lrc"]);
 }
