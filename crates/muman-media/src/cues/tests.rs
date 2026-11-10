@@ -91,11 +91,12 @@ fn untimed_lyrics_make_no_cues_and_plain_text_drops_id_tags() {
     );
 }
 
-/// What reading, moving and writing make of lyrics in four encodings,
+/// What reading, moving and writing make of lyrics in four encodings and
+/// with control characters,
 /// with [`crate::lyrics::WRITING`].
 const WRITTEN: (&str, &str) = (
-    "3",
-    "d1f08047587406e0d03d18dd9618c62ddc69cf050f64fba500dde398610ad913",
+    "4",
+    "87a7d7bbfe6ede3fca499806e0e8d2f671e51dc767a5410b3f033f91b6fb2bdd",
 );
 
 #[test]
@@ -119,6 +120,7 @@ fn writing_rises_with_what_it_makes() {
             .into_owned(),
         b"[00:03,50]Comma lights\n[00:99.99]Past the minute\n".to_vec(),
         b"[offset:+500]\n[offset:-900]\n[00:04.00]Two offsets\n".to_vec(),
+        b"[00:05.00]Bell\x07 and \x1b[1mbold\x1b[0m\r\n[00:06.00]End\r\n\x1a".to_vec(),
     ];
     let mut digest = crate::testing::Digest::default();
     digest.debug(&crate::facts::LRC_ARGS);

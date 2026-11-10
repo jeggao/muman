@@ -1591,8 +1591,9 @@ pub fn read_file(path: &std::path::Path) -> Option<BTreeMap<String, Vec<String>>
 
 /// The lyrics a file's own tags hold, as `lofty` reads them: `USLT` in
 /// `ID3v2`, `LYRICS` or else `UNSYNCEDLYRICS` in a Vorbis comment, `©lyr`
-/// in MP4 and `Lyrics` in APEv2; with the ISO 639-2 language a `USLT`
-/// frame names, unless it names none, as `XXX` or `und`.
+/// in MP4 and `Lyrics` in APEv2, read as [`crate::lyrics::as_read`] reads
+/// a file's; with the ISO 639-2 language a `USLT` frame names, unless it
+/// names none, as `XXX` or `und`.
 #[must_use]
 pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
     use lofty::file::TaggedFileExt;
@@ -1610,7 +1611,9 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
                 .flat_map(|t| t.items())
                 .filter(|i| i.key() == *key)
                 .find_map(|i| match i.value() {
-                    ItemValue::Text(text) if !text.trim().is_empty() => Some((text, i.lang())),
+                    ItemValue::Text(text) => Some(crate::lyrics::as_read(text))
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| (text, i.lang())),
                     _ => None,
                 })
         })
@@ -1619,7 +1622,7 @@ pub fn lyrics_in(path: &std::path::Path) -> Option<(String, Option<String>)> {
             let named = lang.len() == 3
                 && lang.bytes().all(|b| b.is_ascii_lowercase())
                 && !matches!(lang.as_str(), "xxx" | "und" | "zxx" | "mis" | "mul");
-            (text.clone(), named.then_some(lang))
+            (text, named.then_some(lang))
         })
 }
 

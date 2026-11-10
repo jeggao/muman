@@ -99,7 +99,7 @@ pub fn measure<R: Runner, W: Write>(
             !state
                 .facts
                 .get(&l.key)
-                .is_some_and(|f| f.holds_for(&l.rev()))
+                .is_some_and(|f| f.holds_for(&l.rev()) && !f.missed_sidecar(l))
         })
         .collect();
     let moved = moved(&outdated, state);
@@ -258,6 +258,9 @@ pub(super) fn unkept_warning(key: &SourceKey, unkept: crate::facts::Unkept) -> S
             "{key}: a picture in it does not decode whole; \
              it is no cover of its song"
         ),
+        crate::facts::Unkept::Lyrics => {
+            format!("{key}: the lyrics beside it read as no text; its song has none from them")
+        }
     }
 }
 

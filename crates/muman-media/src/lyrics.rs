@@ -26,6 +26,12 @@
 //! the line, and a closing `>` or `}` found missing once is not looked
 //! for again from each later `<` or `{`.
 //!
+//! Lyrics read from a file and from a tag are read alike ([`as_read`]):
+//! a control character, as a DOS end-of-file mark or a terminal's colour
+//! code pasted in, is dropped rather than costing the whole text, and a
+//! file is refused as no lyrics only when it reads as other data
+//! ([`is_text`]).
+//!
 //! [`WRITING`] names how a song's lyrics are read from their source,
 //! moved and written: [`decode`], [`shift_lrc`], ffmpeg's
 //! [`LRC_ARGS`](crate::facts::LRC_ARGS) for a stream, and
@@ -44,7 +50,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 3;
+pub const WRITING: u32 = 4;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -703,10 +709,22 @@ pub fn sung(text: &str) -> String {
 /// The text of a lyrics file, whatever wrote it: UTF-8 or UTF-16 by its
 /// byte-order mark, else UTF-8 when it reads as UTF-8, else the legacy
 /// encoding its bytes look most like, as GBK, Shift-JIS or Windows-1252,
-/// guessed as a browser guesses a page that names none. CRLF and CR
-/// line endings become LF.
+/// guessed as a browser guesses a page that names none; then read as
+/// [`as_read`] reads any lyrics.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> String {
+    as_read(&decoded(bytes))
+}
+
+/// The lyrics of a file that reads as text ([`is_text`]), as [`decode`]
+/// reads them; none for a file of other data.
+#[must_use]
+pub fn read(bytes: &[u8]) -> Option<String> {
+    let text = decoded(bytes);
+    is_text(&text).then(|| as_read(&text))
+}
+
+fn decoded(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     let encoding = if let Some(utf16) = utf16_unmarked(bytes) {
         utf16
     } else if is_utf8(bytes) {
@@ -716,8 +734,30 @@ pub fn decode(bytes: &[u8]) -> String {
         detector.feed(bytes, true);
         detector.guess(None, chardetng::Utf8Detection::Deny)
     };
-    let (text, _, _) = encoding.decode(bytes);
-    text.replace("\r\n", "\n").replace('\r', "\n")
+    encoding.decode(bytes).0
+}
+
+/// Lyrics as muman reads them, from a file or a tag alike: CRLF and CR
+/// line endings LF, and no control character but a tab, so a DOS
+/// end-of-file mark, a bell or a stray NUL costs only itself; a
+/// terminal's colour code, as `ESC[31m`, goes whole.
+#[must_use]
+pub fn as_read(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1B}' && chars.next_if_eq(&'[').is_some() {
+            while chars
+                .next_if(|c| ('\u{20}'..='\u{3F}').contains(c))
+                .is_some()
+            {}
+            chars.next_if(|c| ('\u{40}'..='\u{7E}').contains(c));
+        } else if !c.is_control() || matches!(c, '\n' | '\t') {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// UTF-16 with no byte-order mark, told by its zero bytes: an ASCII
@@ -743,15 +783,22 @@ fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     }
 }
 
-/// Whether `text` reads as text: almost none of it control characters or
-/// bytes that would not decode, as a file of other data holds.
+/// Whether `text` reads as text: almost none of it bytes that would not
+/// decode or control characters text never holds, as a file of other
+/// data holds them throughout. The controls an editor, a terminal or DOS
+/// leaves in text, as ESC, a bell or the end-of-file mark, are no sign,
+/// and any file may hold one stray byte.
 #[must_use]
 pub fn is_text(text: &str) -> bool {
+    const LEFT_IN_TEXT: [char; 11] = [
+        '\t', '\n', '\r', '\u{7}', '\u{8}', '\u{B}', '\u{C}', '\u{1A}', '\u{1B}', '\u{7F}',
+        '\u{85}',
+    ];
     let odd = text
         .chars()
-        .filter(|c| *c == '\u{FFFD}' || c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        .filter(|c| *c == '\u{FFFD}' || c.is_control() && !LEFT_IN_TEXT.contains(c))
         .count();
-    odd * 50 <= text.chars().count()
+    odd * 50 <= text.chars().count().max(50)
 }
 
 /// Whether `bytes` are UTF-8, perhaps damaged: fewer bytes in error
@@ -1195,7 +1242,28 @@ mod tests {
         let noise: Vec<u8> = (0..4000_u32)
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
-        assert!(!is_text(&decode(&noise)));
+        assert!(read(&noise).is_none());
+    }
+
+    #[test]
+    fn a_control_character_costs_lyrics_only_itself() {
+        let sung = "[00:01.00]one\n[00:02.00]two\n";
+        for stray in [
+            "\u{1A}",
+            "\u{1B}[31m",
+            "\u{7}",
+            "\u{B}",
+            "\u{C}",
+            "\u{7F}",
+            "\0",
+            "\u{85}",
+        ] {
+            let lrc = format!("[00:01.00]one\r\n[00:02.00]two\r\n{stray}");
+            assert_eq!(read(lrc.as_bytes()).as_deref(), Some(sung), "{stray:?}");
+            let twice = format!("[00:01.00]one{stray}\r\n[00:02.00]two\r\n{stray}");
+            assert_eq!(as_read(&twice), sung, "{stray:?}");
+        }
+        assert_eq!(as_read("a\u{1B}[0;1;31mb\u{1B}c\td\n"), "abc\td\n");
     }
 
     #[test]

@@ -437,6 +437,19 @@ impl Facts {
         self.picture_method = picture::METHOD.to_string();
     }
 
+    /// Whether these hold no word of the lyrics beside `located`, read or
+    /// not: a media file measured while lyrics with a control character
+    /// in them read as no text ([`crate::lyrics::is_text`]), which is
+    /// measured again.
+    #[must_use]
+    pub fn missed_sidecar(&self, located: &Located) -> bool {
+        located.kind == Kind::Media
+            && located.lyrics.is_some()
+            && self.audio.is_some()
+            && !self.lyrics.iter().any(|l| l.at == LyricsAt::Sidecar)
+            && !self.unkept.contains(&Unkept::Lyrics)
+    }
+
     /// Whether the tags of a source of `kind` were read the way they are
     /// now.
     #[must_use]
@@ -547,6 +560,8 @@ pub enum Unkept {
     CueSheet,
     /// A picture in it that does not decode, which is no cover.
     Picture,
+    /// Lyrics beside it that read as no text, which give it none.
+    Lyrics,
 }
 
 /// Where a picture sits.
@@ -885,11 +900,7 @@ fn tags_of(info: Option<&VideoInfo>, probed: &Probed, path: &Path) -> Offers {
 
 fn read_text(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let text = crate::lyrics::decode(&bytes);
-    if !crate::lyrics::is_text(&text) {
-        anyhow::bail!("{} holds no text", path.display());
-    }
-    Ok(text)
+    crate::lyrics::read(&bytes).with_context(|| format!("{} holds no text", path.display()))
 }
 
 /// The lyrics a media file's own tags hold, measured as any lyrics are,
@@ -1433,8 +1444,9 @@ fn media<R: Runner>(
     file_digests(located, &probed, scratch, &mut digests);
     digests.tags = tags;
     // Lyrics beside a song that do not read cost the song only them.
-    if let Some(text) = located.lyrics.as_deref().and_then(|l| read_text(l).ok()) {
-        facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, &text));
+    let sidecar = located.lyrics.as_deref().map(read_text);
+    if let Some(Ok(text)) = &sidecar {
+        facts.lyrics.push(lyrics_of(LyricsAt::Sidecar, text));
     }
     if let Some(l) = tag_lyrics(located) {
         digests
@@ -1469,6 +1481,9 @@ fn media<R: Runner>(
     facts.unkept = unkept(&located.path);
     if undecoded {
         facts.unkept.push(Unkept::Picture);
+    }
+    if sidecar.is_some_and(|r| r.is_err()) {
+        facts.unkept.push(Unkept::Lyrics);
     }
     facts.audio = probed.audio.map(|a| AudioFacts {
         quality: quality::audio(&segments, a.sample_rate, headroom),

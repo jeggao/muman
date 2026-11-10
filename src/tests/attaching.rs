@@ -551,6 +551,52 @@ fn a_song_file_and_its_lyrics_given_together_are_copied_once() {
     );
 }
 
+/// Whether the library holds a file of lyrics.
+fn library_has_lyrics(s: &Setup) -> bool {
+    crate::store::files_below(&s.dir.path().join("lib"), usize::MAX, |_| true)
+        .unwrap()
+        .iter()
+        .any(|f| f.extension().is_some_and(|e| e == "lrc"))
+}
+
+#[test]
+fn a_control_character_costs_lyrics_only_itself() {
+    let s = Setup::new();
+    let fake = library();
+    let song = s.file("rips/Lantern Weather.flac");
+    let lrc = s.written(
+        "rips/Lantern Weather.lrc",
+        "[00:01.00]first \u{1b}[31mlight\r\n[01:00.00]second\r\n\u{1a}",
+    );
+    let (ok, text) = s.run(&fake, &["add", &song, &lrc]);
+    assert!(ok, "{text}");
+    assert!(library_has_lyrics(&s), "{text}");
+    s.songs_named(&fake, &["Copper Moth"]);
+    let alone = s.written("dl/Copper Moth.lrc", "[00:01.00]wings\u{7}\n\0");
+    let (ok, text) = s.run(&fake, &["add", &alone]);
+    assert!(ok, "{text}");
+    assert!(
+        s.song_with("Copper Moth")
+            .has(&manual("added/Copper Moth.lrc")),
+        "{text}"
+    );
+}
+
+#[test]
+fn lyrics_beside_a_song_that_read_as_no_text_are_said() {
+    let s = Setup::new();
+    let fake = library();
+    let song = s.file("rips/Lantern Weather.flac");
+    let lrc = s.written("rips/Lantern Weather.lrc", &"\0\u{1}\u{2}".repeat(100));
+    let (ok, text) = s.run(&fake, &["add", &song, &lrc]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("the lyrics beside it read as no text"),
+        "{text}"
+    );
+    assert!(!library_has_lyrics(&s), "{text}");
+}
+
 #[test]
 fn a_mistyped_loose_file_is_no_file() {
     let s = Setup::new();
@@ -689,7 +735,10 @@ fn a_loose_file_left_out_still_lets_the_songs_added_with_it_be_written() {
     let said = s.not_added(&fake, &["add", &song, &lrc, "--to", "nothing-like-it"]);
     assert!(said.contains("No song matches"), "{said}");
     assert!(library_has(&s, "Paper Kite.flac"), "{said}");
-    let binary = s.written("dl/broken.lrc", "\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}");
+    let binary = s.written(
+        "dl/broken.lrc",
+        &"\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}".repeat(8),
+    );
     let e = run_with(
         &s.job(&["add", &binary]),
         &fake,

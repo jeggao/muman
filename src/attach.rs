@@ -182,11 +182,11 @@ pub fn sort(path: &Path) -> Result<Option<What>> {
         return Ok(Some(What::Lyrics));
     }
     if LOOSE.contains(&ext.as_str()) {
-        let text = read_text(path)?;
-        if tagfile::format_of(path, &text).is_some() {
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        if tagfile::format_of(path, &lyrics::decode(&bytes)).is_some() {
             return Ok(Some(What::Tags));
         }
-        if ext == "txt" && !text.trim().is_empty() && lyrics::is_text(&text) {
+        if ext == "txt" && lyrics::read(&bytes).is_some_and(|t| !t.trim().is_empty()) {
             return Ok(Some(What::Lyrics));
         }
     }
@@ -842,9 +842,12 @@ fn read_item<R: Runner>(runner: &R, path: &Path, what: What, scratch: &Path) -> 
                 bytes = Some(converted);
                 text
             } else {
-                read_text(path)?
+                let raw =
+                    std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                lyrics::read(&raw)
+                    .with_context(|| format!("{} reads as no text", path.display()))?
             };
-            if text.trim().is_empty() || !lyrics::is_text(&text) {
+            if text.trim().is_empty() {
                 bail!("{} holds no lyrics", path.display());
             }
             let h = lyrics::headers(&text);

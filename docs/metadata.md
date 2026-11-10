@@ -322,6 +322,11 @@ Comets (Album Version)` agrees with `Paper Comets`. Lyrics are cleaned as a
 song is written. Tags you set in a song's or an album's `tags.<name>`
 are never cleaned.
 
+Lyrics are read alike from a file and a tag, whatever the switches say:
+a control character, as DOS's end-of-file mark or a terminal's colour
+code, is dropped. A lyrics file that reads as other data gives no
+lyrics, and is said when its song is measured.
+
 Each rule is a switch under `[tags.clean.<tier>]`, or
 `[lyrics.clean.<tier>]` for lyrics; the song list lists every one.
 `muman status` names each rule that changed a tag, as `<tier>.<key>`.
