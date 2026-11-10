@@ -158,6 +158,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A cue sheet or tag file in a folder given to `add` goes to its
+  songs**, as it does when named: an untagged rip given as a folder no
+  longer becomes "Untitled" songs, and a one-file rip exits 4. Rip notes
+  in a plain `.txt` and yt-dlp `.info.json` files are still left out.
+- **An export levels a song it mixes into another layout on the mix**,
+  as a sync does: a 5.1 song exported with `--codec mp3` gets its
+  ReplayGain, and a song mixed down to fit `--max-size` its own level.
 - **A question waiting for an answer holds no other run back.** `set`,
   `remove`, `restore`, `review` and merging duplicates take the home
   only once you answer, so a scheduled `sync` no longer waits on a
