@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An album's lossy rip no longer wins over a lossless copy of the same
+  audio**: of audio scored alike, lossless, more bits and the lower rate
+  come before the folder most of the album comes from.
+- **A song with no date joins its album**, spelled, foldered, levelled and
+  checked for duplicates with the songs of its name dated in one year.
+- **A title or artist spelled alike but for case is spelled as most
+  sources spell it**, so the library path no longer follows the order of
+  `sources`.
 - **More than 255 chapters in an MP3**: a source with more is written as
   MP3 with every one, where the song failed on every sync. FLAC, Ogg and
   Opus keep the first 1000, as many as Vorbis comments number, and say

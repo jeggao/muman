@@ -25,7 +25,8 @@ Audio and covers are scored. muman counts each measure in whole steps,
 so noise never decides between near-equals, and multiplies each step
 by its measure's weight. The lowest sum wins. A source missing a
 measure ranks after those missing fewer. The weights a song list starts
-with rank by each measure in turn, each outweighing all after it.
+with rank by each measure in turn, each outweighing all after it, but
+dynamics, off until set, which weighs against bandwidth step by step.
 `[audio.pick]` and `[cover.pick]` change a measure's weight and steps
 or switch it off ([how sources are
 ranked](configuration.md#how-sources-are-ranked)).
