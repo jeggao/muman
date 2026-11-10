@@ -31,6 +31,16 @@
 //! blind to case holds them: one in its own case first, and none named
 //! exactly as another song file, which is that file's.
 //!
+//! A listed manual file gone from its path is followed to the file no
+//! song lists that is it, moved ([`moved_manual`]): one of the same size
+//! and modification time, which a move keeps, or, of those arrived too
+//! lately to be read yet ([`Store::unlisted`]), one of the same size
+//! holding the bytes measuring last read of it. A rename places a file
+//! anew, so it looks as freshly arrived as a copy under way, but a copy
+//! under way does not yet hold every byte of the file. The digest needs
+//! nothing beyond what measuring keeps, on every system, where a file's
+//! ID would have to be recorded before it went.
+//!
 //! Lyrics and pictures `add` gives to songs are copied into the manual
 //! folder's `added/`, which holds no song file, so none of them becomes
 //! a song's sidecar or a folder's cover by its name.
@@ -1108,16 +1118,27 @@ fn sidecars(files: &BTreeMap<PathBuf, Kind>, rel: &Path) -> (Option<PathBuf>, Ve
     (lyrics, covers)
 }
 
+/// What measuring last recorded of a listed source's files.
+#[derive(Debug, Clone, Copy)]
+pub struct Recorded<'a> {
+    /// Their revision, [`Located::rev`].
+    pub rev: &'a str,
+    /// The digests of their bytes, the main file's first, where taken.
+    pub content: Option<&'a str>,
+}
+
 /// Each listed manual file gone from its path that is one of `ready`,
 /// the manual files no song lists, by its size and modification time,
-/// which a move keeps: the file moved there, taken out of `ready`. A
-/// listed `.lrc` or picture, which `ready` never holds, is followed to
-/// one no song lists either.
+/// or one of `settling`, those that arrived too lately to be read yet,
+/// by its size and the digest of its bytes, as the module says: the file
+/// moved there, taken out of its list. A listed `.lrc` or picture,
+/// which neither list holds, is followed to one no song lists either.
 pub fn moved_manual<'a>(
     listed: &BTreeSet<SourceKey>,
-    rev_of: impl Fn(&SourceKey) -> Option<&'a str>,
+    recorded: impl Fn(&SourceKey) -> Option<Recorded<'a>>,
     store: &Store,
     ready: &mut Vec<SourceKey>,
+    settling: &mut Vec<PathBuf>,
 ) -> BTreeMap<SourceKey, SourceKey> {
     let mut moved = BTreeMap::new();
     let mut loose: Vec<SourceKey> = store
@@ -1131,7 +1152,10 @@ pub fn moved_manual<'a>(
         .iter()
         .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k));
     for gone in gone {
-        let Some(was) = rev_of(gone).and_then(stamp_of_rev) else {
+        let Some(record) = recorded(gone) else {
+            continue;
+        };
+        let Some(was) = stamp_of_rev(record.rev) else {
             continue;
         };
         let media = matches!(gone, SourceKey::Manual(m) if kind_of(m.path()) == Some(Kind::Media));
@@ -1141,6 +1165,22 @@ pub fn moved_manual<'a>(
             .position(|k| store.locate(k).and_then(|l| stamp(&l.path)) == Some(was));
         if let Some(at) = at {
             moved.insert(gone.clone(), candidates.remove(at));
+            continue;
+        }
+        let Some(bytes) = record
+            .content
+            .filter(|_| media)
+            .and_then(|c| c.split(';').next())
+        else {
+            continue;
+        };
+        let at = settling.iter().position(|rel| {
+            let path = store.manual_file(rel);
+            stamp(&path).is_some_and(|(size, _)| size == was.0)
+                && crate::hash::digest_file(&path).as_deref() == Some(bytes)
+        });
+        if let Some(at) = at {
+            moved.insert(gone.clone(), SourceKey::Manual(settling.remove(at).into()));
         }
     }
     moved
@@ -1617,6 +1657,51 @@ mod tests {
         let (ready, settling) = store.unlisted(&listed, SystemTime::now(), SETTLING);
         assert_eq!(ready, []);
         assert_eq!(settling, vec![PathBuf::from("b.mp3")]);
+    }
+
+    #[test]
+    fn a_file_settling_with_every_byte_of_a_gone_one_is_it_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let gone = touch(dir.path(), "sources/manual/a.flac");
+        let rev = format!("{}:{}", gone.metadata().unwrap().len(), 1);
+        let content = crate::hash::digest_file(&gone).unwrap();
+        let moved = dir.path().join("sources/manual/Ula/drop.flac");
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&gone, &moved).unwrap();
+        std::fs::write(
+            dir.path().join("sources/manual/b.flac"),
+            b"sources/manual/a.fla_",
+        )
+        .unwrap();
+        let store = Store::scan(&d).unwrap();
+        let listed = BTreeSet::from([manual("a.flac")]);
+        let (mut ready, mut settling) = store.unlisted(&listed, SystemTime::now(), SETTLING);
+        assert_eq!(ready, []);
+        let unhashed = |_: &SourceKey| {
+            Some(Recorded {
+                rev: rev.as_str(),
+                content: None,
+            })
+        };
+        let none = moved_manual(&listed, unhashed, &store, &mut ready, &mut settling);
+        assert!(none.is_empty(), "no digest, no telling a move from a copy");
+        let hashed = |_: &SourceKey| {
+            Some(Recorded {
+                rev: rev.as_str(),
+                content: Some(content.as_str()),
+            })
+        };
+        let found = moved_manual(&listed, hashed, &store, &mut ready, &mut settling);
+        assert_eq!(
+            found,
+            BTreeMap::from([(manual("a.flac"), manual("Ula/drop.flac"))])
+        );
+        assert_eq!(
+            settling,
+            vec![PathBuf::from("b.flac")],
+            "of the same size, other bytes"
+        );
     }
 
     #[test]

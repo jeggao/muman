@@ -10,7 +10,7 @@
 //! old name, which `purge` lists. A filesystem that makes no second
 //! name, as FAT, moves the file after the state instead.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::time::{Duration, SystemTime};
 
@@ -34,12 +34,13 @@ pub(super) fn foresee_moves<W: Write>(
     let listed = manifest.keys();
     let mut known = listed.clone();
     known.extend(manifest.removed_keys());
-    let (mut ready, _) = store.unlisted(&known, SystemTime::now(), settling);
+    let (mut ready, mut settling) = store.unlisted(&known, SystemTime::now(), settling);
     let moved = store::moved_manual(
         &listed,
-        |k| state.facts.get(k).map(|f| f.rev.as_str()),
+        |k| state.recorded(k),
         store,
         &mut ready,
+        &mut settling,
     );
     for (from, to) in &moved {
         crate::ui::info(
@@ -54,6 +55,31 @@ pub(super) fn foresee_moves<W: Write>(
         state.rekey(&moved)?;
     }
     Ok(())
+}
+
+/// Each listed manual file gone while a file no song lists is still
+/// arriving, which may be it, moved by a copy that has not ended: its
+/// song waits for it, as one waits for a fetch, rather than fail.
+pub(crate) fn arriving(
+    manifest: &Manifest,
+    state: &State,
+    store: &Store,
+    settling: Duration,
+) -> BTreeSet<SourceKey> {
+    let listed = manifest.keys();
+    let mut known = listed.clone();
+    known.extend(manifest.removed_keys());
+    let (_, settling) = store.unlisted(&known, SystemTime::now(), settling);
+    if settling
+        .into_iter()
+        .all(|p| state.listed.contains(&SourceKey::Manual(p.into())))
+    {
+        return BTreeSet::new();
+    }
+    listed
+        .into_iter()
+        .filter(|k| matches!(k, SourceKey::Manual(_)) && !store.has(k))
+        .collect()
 }
 
 /// Each listed source the song list's `[sites]` names otherwise, by the

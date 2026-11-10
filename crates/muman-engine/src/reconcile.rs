@@ -46,6 +46,7 @@ pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
 pub use self::decide::{Doing, Foreseen, files_of, foresee};
+pub(crate) use self::keys::arriving;
 use self::keys::{foresee_moves, sites_found};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
@@ -329,6 +330,10 @@ pub fn reconcile_into<R: Runner, W: Write>(
     } else {
         BTreeSet::new()
     };
+    let waiting: BTreeSet<SourceKey> = arriving(&manifest, &state, &store, opts.settling)
+        .into_iter()
+        .chain(to_fetch.iter().cloned())
+        .collect();
     let on_disk: BTreeSet<SourceKey> = listed
         .iter()
         .filter(|k| (store.has(k) && !unread(&state, &store, k)) || to_fetch.contains(k))
@@ -339,11 +344,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &state,
         &dirs.library,
         Some(&on_disk),
-        &to_fetch,
+        &waiting,
         out,
     )?;
     let mut ok = failed.is_empty();
-    failed.extend(to_fetch.iter().cloned());
+    failed.extend(waiting.iter().cloned());
     // Every song this sync fails, by its place in the list, with why, so
     // `check` names each until a sync writes it.
     let mut song_errors: Vec<(usize, String)> = Vec::new();

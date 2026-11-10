@@ -1293,6 +1293,75 @@ fn a_dropped_in_file_is_listed_and_a_moved_one_followed() {
     assert!(!text.contains("Updated"), "a file that only moved: {text}");
 }
 
+/// Run `args` in `s`, a dropped-in file settling for an hour.
+fn run_settling(s: &Setup, fake: &Fake, args: &[&str]) -> (bool, String) {
+    let mut job = s.job(args);
+    job.settling = std::time::Duration::from_secs(3600);
+    let mut out = Vec::new();
+    let ok = run_with(
+        &job,
+        fake,
+        &Server::default(),
+        None,
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    (ok, String::from_utf8(out).unwrap())
+}
+
+#[test]
+fn a_file_renamed_in_the_manual_folder_is_followed_without_settling() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    let from = s.dir.path().join("home/sources/manual/a.flac");
+    let to = s.dir.path().join("home/sources/manual/Artist/drop.flac");
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::rename(&from, &to).unwrap();
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+    assert!(report.contains("followed by the next sync"), "{report}");
+    let (ok, text) = run_settling(&s, &flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:Artist/drop.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("Still being copied in"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [vec![SourceKey::Manual("Artist/drop.flac".into())]]
+    );
+}
+
+#[test]
+fn a_listed_file_gone_while_another_is_copied_in_waits_rather_than_fails() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let built: Vec<PathBuf> =
+        crate::store::files_below(&s.dir.path().join("lib"), 9, |_| true).unwrap();
+    assert_eq!(built.len(), 1, "{text}");
+
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.flac")).unwrap();
+    std::fs::write(
+        s.dir.path().join("home/sources/manual/b.flac"),
+        b"half of a.flac",
+    )
+    .unwrap();
+    let (ok, text) = run_settling(&s, &flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Still being copied in"), "{text}");
+    assert!(text.contains("Made once its file is copied in"), "{text}");
+    assert!(!text.contains("Failed"), "{text}");
+    assert!(built[0].exists(), "its file is kept: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
 #[test]
 fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
     let s = Setup::new();

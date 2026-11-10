@@ -204,8 +204,17 @@ pub(super) fn resolve_all<W: Write>(
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
     let resolution = resolve_songs(manifest, settings, state, library, on_disk, waiting)?;
     for &n in &resolution.awaiting {
-        let name = name_of(&manifest.songs[n], None, &state.facts);
-        crate::ui::info(out, &format!("Made once a sync fetches it: {name}"))?;
+        let song = &manifest.songs[n];
+        let name = name_of(song, None, &state.facts);
+        let copied = (song.sources.iter())
+            .filter(|k| waiting.contains(k))
+            .all(|k| matches!(k, SourceKey::Manual(_)));
+        let when = if copied {
+            "once its file is copied in"
+        } else {
+            "once a sync fetches it"
+        };
+        crate::ui::info(out, &format!("Made {when}: {name}"))?;
     }
     let mut failed = BTreeSet::new();
     for (n, e) in &resolution.unresolved {
@@ -237,15 +246,15 @@ pub(super) fn resolve_all<W: Write>(
 }
 
 /// Each song of `unresolved` with a file the state records as made from
-/// a plan: held at that plan while it fails, as its file stays in the
-/// library, so the songs beside it take neither its path nor its place
-/// in its album's loudness.
+/// a plan: held at that plan while it fails or waits, as its file stays
+/// in the library, so the songs beside it take neither its path nor its
+/// place in its album's loudness.
 fn held(
     manifest: &Manifest,
     state: &State,
-    unresolved: &[(usize, anyhow::Error)],
+    unresolved: impl IntoIterator<Item = usize>,
 ) -> Vec<(usize, Resolved)> {
-    let files = super::files_of(unresolved.iter().map(|(n, _)| *n), manifest, &state.outputs);
+    let files = super::files_of(unresolved, manifest, &state.outputs);
     files
         .into_iter()
         .filter_map(|(n, path)| {
@@ -513,7 +522,12 @@ fn resolve_fitted(
             .filter(|(_, r)| naming::units(&library.join(path_of(r)).to_string_lossy()) > max)
             .count();
     }
-    let held = held(manifest, state, &resolution.unresolved);
+    let unresolved = resolution.unresolved.iter().map(|(n, _)| *n);
+    let held = held(
+        manifest,
+        state,
+        unresolved.chain(resolution.awaiting.clone()),
+    );
     for (n, r) in &mut resolution.planned {
         if let Some(format) = fitted.get(n) {
             r.plan = r.plan.with_format(*format);

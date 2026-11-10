@@ -219,8 +219,29 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                  or a magnet link of it is given to `add` again"
         ))?;
     }
+    let mut known = listed.clone();
+    known.extend(manifest.removed_keys());
+    let (mut ready, mut settling) =
+        store.unlisted(&known, std::time::SystemTime::now(), store::SETTLING);
+    let moved = store::moved_manual(
+        &listed,
+        |k| state.recorded(k),
+        &store,
+        &mut ready,
+        &mut settling,
+    );
+    let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
     for key in &listed {
-        if !store.has(key) {
+        if let Some(to) = moved.get(key) {
+            said.info(format!(
+                "Moved, followed by the next sync: {key} is now {to}"
+            ))?;
+        } else if arriving.contains(key) {
+            said.info(format!(
+                "Missing from sources while a file is still being copied in, its song \
+                 waiting for it: {key}"
+            ))?;
+        } else if !store.has(key) {
             let page = manifest
                 .song_with(key)
                 .and_then(|s| s.held.get(key))
