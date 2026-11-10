@@ -158,6 +158,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Files in `sources/manual` are followed by what they hold**: two
+  that trade names, or one renamed over another listed name, keep each
+  song's own tags, pins and offset; a removed song's file moved stays
+  out and `restore` finds it; undoing the sync that followed moved
+  lyrics or a picture follows them again; undoing an add whose copy you
+  moved takes the copy out. Two files either of which could be one gone
+  are not guessed at, and said so.
 - **A file beside a song that you changed is left when a build no
   longer writes it**, as a folder cover a new template drops: it stays
   yours rather than fail the song.
