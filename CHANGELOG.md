@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
 ### Added
 
 - **`muman check --calibrate` counts how well vetting's evidence tells
@@ -2858,7 +2860,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **Hooks** run a command for each song written or once a run changed
   the library, with values as placeholders and `MUMAN_*` variables.
 
-[Unreleased]: https://github.com/jeggao/muman/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/jeggao/muman/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/jeggao/muman/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jeggao/muman/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/jeggao/muman/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jeggao/muman/compare/v0.8.0...v0.9.0
