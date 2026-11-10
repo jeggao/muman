@@ -1154,6 +1154,12 @@ fn a_limit_too_small_for_any_bitrate_leaves_songs_out() {
     );
     assert!(!h.lib("Artist/Record/02 Song.opus").exists());
     assert!(!h.lib("Artist/Record/02 Song.flac").exists());
+    let failures = State::load(&h.dirs.home).unwrap().song_failures;
+    assert_eq!(failures.len(), 1, "check names the song left out");
+    assert!(
+        failures.values().all(|f| f.error.contains("max_size")),
+        "{failures:?}"
+    );
 }
 
 /// Three manual FLACs a second long with no cover, whose audio takes 30,

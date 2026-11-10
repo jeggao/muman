@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`check` names every song the last sync failed**: one `max_size`
+  left out, and one whose source was damaged since it was built, as
+  well as one that could not be written.
+- **A sync whose library cannot be locked stops**, as `undo` does,
+  rather than write the library unlocked.
+- **The old state kept as `state.json.bak` is never written over.** A
+  stub whose line ends an editor changed stays the stub, and a second
+  `state.json` is kept beside the first, numbered.
 - **A song retitled beside lyrics you edited stays where it is.** It
   was moved, then failed partway, its file retagged but recorded as it
   was: from then on it read as changed by you, `check` failed and

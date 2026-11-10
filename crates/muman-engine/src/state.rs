@@ -3,10 +3,12 @@
 //! delete only its own files and rebuild only what changed, and caches
 //! of what it measured, which are safe to lose. A `state.json` an
 //! earlier muman kept is read once and brought into the store,
-//! then kept as `state.json.bak`; a stub of a newer format takes its
-//! place, so an earlier muman refuses the home rather than take every
-//! library file for the user's. Moving the `.bak` back, the store aside,
-//! goes back to the earlier muman, losing what ran since.
+//! then kept as `state.json.bak`, numbered beside one kept already; a
+//! stub of a newer format takes its place, so an earlier muman refuses
+//! the home rather than take every library file for the user's. The stub
+//! is known by what it says, so a line end an editor changed keeps it
+//! one. Moving the `.bak` back, the store aside, goes back to the earlier
+//! muman, losing what ran since.
 //!
 //! | Table | Safe to lose |
 //! |---|---|
@@ -146,7 +148,7 @@ pub fn written_at(home: &Path) -> Option<SystemTime> {
 fn bring_over(home: &Path) -> Result<Option<State>> {
     let file = home.join(crate::dirs::STATE);
     let text = match std::fs::read(&file) {
-        Ok(text) if text != STUB => text,
+        Ok(text) if !is_stub(&text) => text,
         Ok(_) => return Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Set aside by a run stopped before its stub.
@@ -201,13 +203,27 @@ fn clear_import(home: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Keep `state.json` as `state.json.bak`, a stub in its place.
+/// Whether `text` is the stub, by what it says rather than its bytes: a
+/// line end an editor or git changed leaves it the stub, never a state
+/// to set aside over the one kept.
+fn is_stub(text: &[u8]) -> bool {
+    text == STUB
+        || serde_json::from_slice::<serde_json::Value>(text)
+            .is_ok_and(|v| v.get("moved_to").and_then(serde_json::Value::as_str) == Some(db::FILE))
+}
+
+/// Keep `state.json` as `state.json.bak`, a stub in its place; one kept
+/// already stays, and this one is kept beside it, numbered.
 // Keeps state.json as state.json.bak.
 #[expect(clippy::disallowed_methods)]
 fn set_aside(home: &Path) -> Result<()> {
     let file = home.join(crate::dirs::STATE);
-    atomic::rename(&file, &home.join(BACKUP))
-        .with_context(|| format!("setting {} aside", file.display()))?;
+    let backup = std::iter::once(BACKUP.to_string())
+        .chain((2..=u16::MAX).map(|n| format!("{BACKUP}.{n}")))
+        .map(|name| home.join(name))
+        .find(|p| !p.exists())
+        .context("every name to keep the old state under is taken")?;
+    atomic::rename(&file, &backup).with_context(|| format!("setting {} aside", file.display()))?;
     stub(home)
 }
 
@@ -831,7 +847,7 @@ impl State {
     pub fn dump(home: &Path, out: &mut impl std::io::Write) -> Result<()> {
         let file = home.join(crate::dirs::STATE);
         let state = match std::fs::read(&file) {
-            Ok(text) if !exists(home) && text != STUB => json::read(&file, &text)?,
+            Ok(text) if !exists(home) && !is_stub(&text) => json::read(&file, &text)?,
             _ if exists(home) => db::Db::open(home, BUSY_WAIT)?.snapshot()?.0,
             _ => Self {
                 version: VERSION,
@@ -1731,6 +1747,29 @@ mod tests {
             text,
             "brought over once"
         );
+    }
+
+    #[test]
+    fn a_stub_with_other_line_ends_or_a_second_state_json_keeps_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        old_home(home);
+        let text = std::fs::read(home.join(STATE)).unwrap();
+        State::load(home).unwrap();
+        let crlf = String::from_utf8(STUB.to_vec())
+            .unwrap()
+            .replace('\n', "\r\n");
+        std::fs::write(home.join(STATE), &crlf).unwrap();
+        State::load(home).unwrap();
+        assert_eq!(std::fs::read(home.join(BACKUP)).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(home.join(STATE)).unwrap(), crlf);
+
+        std::fs::write(home.join(STATE), b"{\"version\": 3}").unwrap();
+        State::load(home).unwrap();
+        assert_eq!(std::fs::read(home.join(BACKUP)).unwrap(), text);
+        let second = home.join(format!("{BACKUP}.2"));
+        assert_eq!(std::fs::read(second).unwrap(), b"{\"version\": 3}");
+        assert_eq!(std::fs::read(home.join(STATE)).unwrap(), STUB);
     }
 
     #[test]

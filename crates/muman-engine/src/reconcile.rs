@@ -182,7 +182,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let _library = if opts.dry_run {
         None
     } else {
-        Some(Lock::library(&dirs.library, dirs.lock_folder()?))
+        Some(Lock::library(&dirs.library, dirs.lock_folder()?)?)
     };
     let mut manifest = Manifest::load(home)?;
     if let Some(run) = run.as_deref_mut() {
@@ -334,6 +334,9 @@ pub fn reconcile_into<R: Runner, W: Write>(
     )?;
     let mut ok = failed.is_empty();
     failed.extend(to_fetch.iter().cloned());
+    // Every song this sync fails, by its place in the list, with why, so
+    // `check` names each until a sync writes it.
+    let mut song_errors: Vec<(usize, String)> = Vec::new();
     adopt(&mut state, &dirs.library, out)?;
     vouch_for_copies(&dirs.library, &mut state);
     if !opts.dry_run {
@@ -390,6 +393,11 @@ pub fn reconcile_into<R: Runner, W: Write>(
         if let Some((f, _)) = fitted.as_ref().filter(|(f, _)| !f.left_out.is_empty()) {
             ok = false;
             left_out(&manifest, &state, f, out)?;
+            let why = format!(
+                "max_size {} cannot hold it, at the lowest bitrates",
+                crate::ui::bytes(f.max)
+            );
+            song_errors.extend(f.left_out.iter().map(|n| (*n, why.clone())));
         }
         fitted.map_or((None, HashMap::new()), |(f, made)| (Some(f), made))
     } else {
@@ -429,6 +437,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         };
         if let (Doing::Held { .. }, Some(damage)) = (d, f.damage()) {
             ok = false;
+            song_errors.push((*n, damage.describe(&r.plan.audio.key)));
             crate::ui::error(
                 out,
                 &format!(
@@ -527,7 +536,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     ok &= applied.ok;
     state.sizes.extend(applied.learned);
     state.songs_failed(
-        (applied.songs_failed.into_iter())
+        (song_errors.into_iter().chain(applied.songs_failed))
             .filter_map(|(n, e)| Some((manifest.songs[n].id()?.clone(), e))),
     );
     if let Some(f) = &fitted {

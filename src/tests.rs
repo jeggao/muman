@@ -6874,6 +6874,25 @@ fn a_command_stopped_on_a_song_list_that_does_not_read_keeps_no_run() {
 }
 
 #[test]
+fn a_sync_whose_library_cannot_be_locked_writes_nothing() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let blocker = s.file("not-a-folder");
+    let mut job = s.job(&["sync"]);
+    job.dirs.locks = Some(Path::new(&blocker).join("locks"));
+    let e = run_with(
+        &job,
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    assert!(e.is_err());
+    assert!(library_of(&s).is_empty());
+}
+
+#[test]
 fn a_change_to_a_home_not_there_is_refused_and_makes_nothing() {
     let s = Setup::new();
     for args in [
