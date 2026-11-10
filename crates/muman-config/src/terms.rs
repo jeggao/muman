@@ -17,6 +17,8 @@ pub const DERIVED: [&str; 7] = ["key", "path", "format", "cover", "lyrics", "fro
 
 #[derive(Debug, Clone)]
 pub enum Test {
+    /// Bare text, folded: each of its words, or all of it as a key's ID
+    /// or a file's name.
     Word(String),
     Key(SourceKey),
     Contains(String, String),
@@ -104,7 +106,7 @@ impl Query {
                 Some(rest) => (true, rest),
                 None => (false, raw.as_str()),
             };
-            if body.is_empty() {
+            if body.trim().is_empty() {
                 bail!("`{raw}` is an empty term");
             }
             let test = match body.split_once(':') {
@@ -130,7 +132,7 @@ impl Query {
                         bail!("`{raw}`: {field} takes a name, not a pattern");
                     }
                     if let Some(pattern) = rest.strip_prefix(':') {
-                        let re = RegexBuilder::new(pattern)
+                        let re = RegexBuilder::new(&fold_pattern(pattern))
                             .case_insensitive(true)
                             .build()
                             .with_context(|| format!("`{raw}`"))?;
@@ -165,6 +167,22 @@ pub fn fold(text: &str) -> String {
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .collect::<String>()
         .to_lowercase()
+        .nfc()
+        .collect()
+}
+
+/// A regular expression as [`fold`] folds the text it is matched
+/// against, its accents taken off and its typography written plain, its
+/// case kept: lower-cased, `\D` would read as `\d`, and the pattern is
+/// matched ignoring case anyway.
+fn fold_pattern(pattern: &str) -> String {
+    let plain: String = pattern
+        .chars()
+        .map(crate::clean::plain_punctuation)
+        .collect();
+    plain
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
         .nfc()
         .collect()
 }

@@ -4,15 +4,22 @@
 //!
 //! A bare word matches when the title, artist, album or album artist
 //! holds it, or it is a key's ID or a manual file's name whole: never
-//! part of a key, which would take `man` for every manual song.
-//! `field:text` a field containing the text, `field:=text` one equal to
-//! it, `field::regex` one matching it; `^` before any term negates it. A
+//! part of a key, which would take `man` for every manual song. Bare
+//! text with spaces, as one argument quoted, is its words, each to match
+//! as one alone would, so a script passing `"$query"` finds what the
+//! words typed apart find; all of it may still name a file whole, as
+//! `"02 tide.flac"`. `field:text` a field containing the text, spaces
+//! and all, `field:=text` one equal to it, `field::regex` one matching
+//! it; `^` before any term negates it. A
 //! field that is no tag muman knows and that no song has is refused, so
 //! a misspelled one neither matches nothing nor, negated, every song.
 //! A source key, as `youtube.com:<id>`, names its song exactly, and several
 //! name each of theirs. Every other term is required, and case and
 //! accents are ignored throughout, as is how a name was composed: `cafe`
-//! matches "Café", written in either Unicode form.
+//! matches "Café", written in either Unicode form. A regex is matched
+//! against the field folded so, lower-cased and its accents taken off,
+//! and its own accents are taken off too, so `title::^cafe` finds
+//! "Café Noir"; `(?-i)\p{Lu}`, asking for upper case, finds nothing.
 //!
 //! `lyrics:` is yes, none, timed or untimed, `cover:` yes, none, sharp
 //! or small, `from:<provider>` holds when a source of the song is from
@@ -36,7 +43,6 @@ use std::path::PathBuf;
 use std::path::Path;
 
 use anyhow::Result;
-use unicode_normalization::UnicodeNormalization;
 
 use crate::facts::Facts;
 use crate::manifest::{Manifest, Removed, Song};
@@ -414,19 +420,19 @@ fn holds(term: &Test, view: &View) -> bool {
     let any =
         |field: &str, f: &dyn Fn(&str) -> bool| view.values(field).iter().any(|v| f(&fold(v)));
     match term {
-        Test::Word(w) => {
-            ["title", "artist", "album", "album_artist"]
-                .iter()
-                .any(|f| any(f, &|v| v.contains(w.as_str())))
-                || view.keys.iter().any(|k| names_key(k, w))
+        Test::Word(text) => {
+            let word = |w: &str| {
+                ["title", "artist", "album", "album_artist"]
+                    .iter()
+                    .any(|f| any(f, &|v| v.contains(w)))
+                    || view.keys.iter().any(|k| names_key(k, w))
+            };
+            view.keys.iter().any(|k| names_key(k, text)) || text.split_whitespace().all(word)
         }
         Test::Key(k) => view.keys.contains(k),
         Test::Contains(f, text) => any(f, &|v| v.contains(text.as_str())),
         Test::Equals(f, text) => any(f, &|v| v == text),
-        Test::Matches(f, re) => view
-            .values(f)
-            .iter()
-            .any(|v| re.is_match(&v.nfc().collect::<String>())),
+        Test::Matches(f, re) => view.values(f).iter().any(|v| re.is_match(&fold(v))),
         Test::Is(c) => c.holds(view),
     }
 }
@@ -558,6 +564,47 @@ mod tests {
             let q = query(&[term]);
             assert!(q.matches(&composed) && q.matches(&decomposed), "{term}");
         }
+    }
+
+    #[test]
+    fn a_regex_is_matched_against_the_field_folded() {
+        let composed = view("Caf\u{e9} Noir", "Lumo Fenn", "manual:a.flac");
+        let plain = view("Cafe Noir", "Lumo Fenn", "manual:b.flac");
+        for term in [
+            "title::^cafe",
+            "title::^caf\u{e9}",
+            "title::^CAFE\\s",
+            "title::^cafe\u{301}",
+        ] {
+            let q = query(&[term]);
+            assert!(q.matches(&composed) && q.matches(&plain), "{term}");
+        }
+        assert!(
+            !query(&["title::(?-i)\\p{Lu}afe"]).matches(&plain),
+            "lower-cased"
+        );
+        let quoted = view("Don\u{2019}t Wait", "Lumo Fenn", "manual:c.flac");
+        assert!(query(&["title::don't"]).matches(&quoted));
+    }
+
+    #[test]
+    fn bare_text_with_spaces_is_each_of_its_words() {
+        let v = view(
+            "Paper Comets",
+            "Marlo Venn",
+            "manual:Marlo Venn/02 Tide.flac",
+        );
+        for term in ["comets paper", "venn paper", "  paper   comets "] {
+            assert!(query(&[term]).matches(&v), "{term}");
+        }
+        assert!(!query(&["paper lantern"]).matches(&v));
+        assert!(query(&["^paper lantern"]).matches(&v));
+        assert!(query(&["02 tide.flac"]).matches(&v), "a file's name whole");
+        assert!(
+            !query(&["title:\"comets paper\""]).matches(&v),
+            "a field's text is a phrase"
+        );
+        assert!(Query::parse(&["  ".to_string()], &BTreeSet::new()).is_err());
     }
 
     #[test]

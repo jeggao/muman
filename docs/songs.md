@@ -24,6 +24,15 @@ matches "Café":
 | `^lyrics:yes` | Songs the term does not match |
 | `youtube.com:vid00000001` | The song listing that key; any key `list --keys` writes, a torrent's or a record's too |
 
+Words quoted together, as `"paper comets"`, are still each a word of
+its own, so a script passing a query as one argument finds what the
+words typed apart find; all of them together may also name a file
+whole, as `"02 Tide.flac"`. A field's text is one phrase:
+`title:"paper comets"` finds that title, not "Comets of Paper". A
+regular expression is matched against the field lower-cased and with
+its accents taken off, and its own accents are taken off too, so
+`title::^cafe` and `title::^café` both find "Café Noir".
+
 A field is any tag, or one of these:
 
 | Field | Holds |
