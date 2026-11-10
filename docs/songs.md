@@ -52,7 +52,9 @@ song when negated.
 - **`set`** sets tags, pins and the lyrics offset. `genre=Folk` sets a
   tag, and given twice sets two values; `genre!` clears it so the
   sources' value shows. `audio=<key>` pins the audio to a source and
-  `audio!` unpins it; `lyrics=false` takes no lyrics. `set` refuses a
+  `audio!` unpins it; `lyrics=false` takes no lyrics. A `cover` or
+  `lyrics` pinned to a source that holds none leaves the song without
+  it, which `sync`, `status` and `check` say. `set` refuses a
   track or disc that is no number, a date that is none, and a ReplayGain
   gain or peak.
 - **`set` with a query alone**, on a terminal, steps through the songs

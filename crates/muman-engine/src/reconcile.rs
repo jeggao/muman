@@ -495,6 +495,20 @@ pub fn reconcile_into<R: Runner, W: Write>(
         }
     }
 
+    if !opts.dry_run {
+        for (n, r) in &planned {
+            for said in r
+                .why
+                .doubts
+                .iter()
+                .filter_map(crate::resolve::Doubt::pinned_to_nothing)
+            {
+                let name = name_of(&manifest.songs[*n], Some(r), &state.facts);
+                crate::ui::warning(out, &format!("{name}: {said}"))?;
+            }
+        }
+    }
+
     let edits = crate::held::records(&manifest, &state.facts, &taken);
     let mut intent = intend(
         &planned,

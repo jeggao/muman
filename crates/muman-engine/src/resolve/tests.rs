@@ -491,6 +491,25 @@ fn a_pin_overrides_the_measures() {
     assert!(r.plan.lyrics.is_none());
 }
 
+#[test]
+fn a_pin_to_a_source_that_holds_none_is_a_doubt() {
+    let (mut song, mut facts, alignments) = release_and_video();
+    let video = yt("vvvvvvvvvvv");
+    let f = facts.get_mut(&video).unwrap();
+    f.covers.clear();
+    f.lyrics.clear();
+    song.cover = Some(video.clone());
+    song.lyrics = Some(LyricsPin::From(video.clone()));
+    let r = run(&song, &facts, &alignments);
+    assert!(r.plan.cover.is_none() && r.plan.lyrics.is_none());
+    let pins: Vec<String> = (r.why.doubts.iter())
+        .filter_map(Doubt::pinned_to_nothing)
+        .collect();
+    assert_eq!(pins.len(), 2, "{pins:?}");
+    assert!(pins[0].starts_with(&format!("no cover: pinned to {video}")));
+    assert!(pins[1].starts_with(&format!("no lyrics: pinned to {video}")));
+}
+
 /// Facts of lossless audio cut at `khz`, `rate` Hz, declaring `bits` and
 /// using `used`, its revision `rev`.
 fn lossless(rev: &str, khz: f64, rate: u32, bits: u32, used: u32) -> Facts {

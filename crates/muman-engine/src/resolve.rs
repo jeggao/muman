@@ -917,9 +917,24 @@ pub enum Doubt {
     /// An upload whose title reads more than one way, none clear of the
     /// rest ([`crate::readings`]).
     Reading { key: SourceKey, why: String },
+    /// A pin of its cover or lyrics, `part`, to a source measured to hold
+    /// none: the song has none of that part.
+    Pin { part: &'static str, key: SourceKey },
 }
 
 impl Doubt {
+    /// What a pin to nothing leaves the song without, as `status` and
+    /// `sync` say it; none for any other doubt.
+    #[must_use]
+    pub fn pinned_to_nothing(&self) -> Option<String> {
+        match self {
+            Self::Pin { part, key } => Some(format!(
+                "no {part}: pinned to {key}, which holds none; `muman set` with `{part}!` unpins it"
+            )),
+            _ => None,
+        }
+    }
+
     /// It in one line, as `check` and `review` say it.
     #[must_use]
     pub fn line(&self) -> String {
@@ -929,6 +944,7 @@ impl Doubt {
             Self::Recording { key, why } => format!("another recording: {key}: {why}"),
             Self::Length { key, why } => format!("another length: {key}: {why}"),
             Self::Reading { key, why } => format!("read two ways: {key}: {why}"),
+            Self::Pin { part, key } => format!("pinned to nothing: its {part} to {key}"),
         }
     }
 }
@@ -2741,6 +2757,31 @@ fn contested_unset(
         .collect()
 }
 
+/// The song's pins of its cover and lyrics to a source measured to hold
+/// none, which leave it without that part.
+fn empty_pins(input: &Input<'_>) -> Vec<Doubt> {
+    let lyrics = match &input.song.lyrics {
+        Some(LyricsPin::From(key)) => Some(key),
+        _ => None,
+    };
+    let mut pins = Vec::new();
+    for (_, key, facts) in input.present() {
+        if input.song.cover.as_ref() == Some(key) && facts.covers.is_empty() {
+            pins.push(Doubt::Pin {
+                part: "cover",
+                key: key.clone(),
+            });
+        }
+        if lyrics == Some(key) && facts.lyrics.is_empty() {
+            pins.push(Doubt::Pin {
+                part: "lyrics",
+                key: key.clone(),
+            });
+        }
+    }
+    pins
+}
+
 /// What the song's picks leave in doubt: its fields contested, its
 /// sources set aside, its audio sources of another recording, and each
 /// record it believes whose length is [`vet::FAR_MS`] or more from
@@ -2771,6 +2812,7 @@ fn doubts_of(
         why: why.clone(),
     }));
     doubts.extend(readings_of(input));
+    doubts.extend(empty_pins(input));
     for (_, key, facts) in input.present() {
         let (Some(stated), Some(heard)) = (facts.length_ms, audio_ms) else {
             continue;

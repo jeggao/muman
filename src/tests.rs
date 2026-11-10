@@ -1702,6 +1702,30 @@ fn two_listed(s: &Setup) {
     assert!(ok, "{text}");
 }
 
+#[test]
+fn a_pin_to_a_source_that_holds_none_is_said_by_sync_status_and_check() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "lyrics=manual:a.flac"],
+    );
+    let said = "no lyrics: pinned to manual:a.flac, which holds none";
+    assert!(ok && text.contains(said), "the sync after set: {text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains(said), "every sync: {text}");
+    let (_, text) = s.run(&flacs(), &["status"]);
+    assert!(text.contains("1 problem(s) found"), "status: {text}");
+    let (_, report) = s.report(&flacs(), &["status", "--all"]);
+    assert!(report.contains(said), "status: {report}");
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(
+        !ok && report.contains("A pin leaves its song without a part"),
+        "{report}"
+    );
+}
+
 /// The genre each song of `s` was given by hand, by its sources.
 fn genres(s: &Setup) -> Vec<(Vec<SourceKey>, Option<String>)> {
     let manifest = Manifest::load(&s.dir.path().join("home")).unwrap();

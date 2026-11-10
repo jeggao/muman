@@ -98,6 +98,14 @@ pub(super) fn show_why<W: Write>(r: &Resolved, out: &mut W) -> Result<()> {
     for why in &r.why.set_aside {
         line(out, format!("  set aside  {why}"))?;
     }
+    for said in r
+        .why
+        .doubts
+        .iter()
+        .filter_map(crate::resolve::Doubt::pinned_to_nothing)
+    {
+        line(out, format!("  {said}"))?;
+    }
     for why in &r.why.dropped {
         line(out, format!("  dropped  {why}"))?;
     }

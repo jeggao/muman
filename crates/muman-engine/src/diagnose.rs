@@ -332,6 +332,10 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
                         Doubt::Reading { key, why } => said.warning(format!(
                             "A title read more than one way: {song}: {key}: {why}"
                         ))?,
+                        Doubt::Pin { .. } => said.problem(format!(
+                            "A pin leaves its song without a part: {song}: {}",
+                            doubt.pinned_to_nothing().unwrap_or_default()
+                        ))?,
                         Doubt::SetAside { .. } => {}
                     }
                 }
