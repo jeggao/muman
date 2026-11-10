@@ -158,6 +158,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Placeholders are dropped whatever the typography**: MusicBrainz's
+  `[non-album tracks]` is dropped, as `status` says, after typographic
+  hyphens respell it, and the song is a single.
+- **A featured artist moved into the title leaves the album artist
+  too**, so the song stays in its album's folder.
+- **`The Orchards` is not `Orchards`**: an album's article counts when
+  one artist's songs are told into albums.
+- **`[[tags.from]]` refuses a table that names nothing**: a `torrent`
+  that is not a hash, both a `torrent` and a `channel`, or an empty
+  `channel`; and a channel matches case aside in any script.
+- **Tags are named as the song list names them** in a refused
+  `until`, as `has:isrc`, not by their ID3 names.
 - **`purge` never deletes what a run under way is about to use.** It
   waits for an `add` or `sync` fetching what no song lists yet, and
   keeps each file a song lists by then.
