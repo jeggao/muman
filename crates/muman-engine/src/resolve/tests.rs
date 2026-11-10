@@ -3350,6 +3350,62 @@ fn values_alike_spell_as_the_source_believed_first() {
 }
 
 #[test]
+fn a_value_alike_but_for_case_is_spelled_as_most_sources_spell_it_in_any_order() {
+    let spelled = |spellings: [(&str, &str); 3]| {
+        let keys = [manual("a.flac"), manual("b.flac"), manual("c.flac")];
+        let mut facts = BTreeMap::new();
+        for (key, (title, artist)) in keys.iter().zip(spellings) {
+            let mut f = audio("flac", 22.0);
+            f.rev = key.to_string();
+            tag(&mut f, Field::Title, &[title], true);
+            tag(&mut f, Field::Artist, &[artist], true);
+            facts.insert(key.clone(), f);
+        }
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let made: BTreeSet<(PathBuf, Option<String>, Option<String>)> = orders
+            .iter()
+            .map(|order| {
+                let s = song(&order.map(|i| keys[i].clone()));
+                let r = run(&s, &facts, &[]);
+                (
+                    r.stem.clone(),
+                    value(&r, Field::Title),
+                    value(&r, Field::Artist),
+                )
+            })
+            .collect();
+        assert_eq!(made.len(), 1, "{made:?}");
+        made.into_iter().next().unwrap()
+    };
+    let (_, title, artist) = spelled([
+        ("night ferry", "marlo venn"),
+        ("Night Ferry", "Marlo Venn"),
+        ("Night Ferry", "Marlo Venn"),
+    ]);
+    assert_eq!(
+        (title.as_deref(), artist.as_deref()),
+        (Some("Night Ferry"), Some("Marlo Venn"))
+    );
+    let (_, title, _) = spelled([
+        ("NIGHT FERRY", "Marlo Venn"),
+        ("night ferry", "Marlo Venn"),
+        ("Night Ferry", "Marlo Venn"),
+    ]);
+    assert_eq!(
+        title.as_deref(),
+        Some("Night Ferry"),
+        "a tie, as an album's"
+    );
+}
+
+#[test]
 fn a_version_one_title_names_keeps_it_whatever_the_order() {
     let (file, record, facts) = file_and_record(
         &[

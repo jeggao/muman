@@ -68,7 +68,9 @@ YouTube Music track, and an upload; `files-first` puts files first;
 The kind believed first decides:
 
 - how a value its sources agree on is spelled, so a file's typo gives
-  way to MusicBrainz's spelling;
+  way to MusicBrainz's spelling. Of sources believed alike that spell
+  it alike but for case and punctuation, the spelling most of them
+  write wins, then as an album's tie goes, whatever their order;
 - which artists a song credits when its sources credit others, so a
   concert's record crediting each singer wins over a file crediting its
   star; a record vetting is unsure of never does, nor one crediting no

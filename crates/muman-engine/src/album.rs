@@ -770,8 +770,9 @@ fn settle(
 
 /// How a spelling ranks among those as common, smaller first: more words
 /// opening with a capital, then fewer capitals, as a title is cased
-/// rather than shouted. Neither depends on the order songs are listed in.
-fn cased(values: &[String]) -> (std::cmp::Reverse<usize>, usize) {
+/// rather than shouted. Neither depends on the order songs or sources
+/// are listed in.
+pub(crate) fn cased(values: &[String]) -> (std::cmp::Reverse<usize>, usize) {
     let words = values
         .iter()
         .flat_map(|v| v.split_whitespace())

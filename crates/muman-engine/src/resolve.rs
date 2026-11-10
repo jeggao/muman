@@ -44,7 +44,12 @@
 //!   believed first among those that agree spells it, so a file's typo
 //!   gives way to MusicBrainz's spelling while a file's `Song (Live)`
 //!   stays apart from MusicBrainz's `Song`, and of two such the one
-//!   naming the version wins whatever their order. A field won by the
+//!   naming the version wins whatever their order. Of sources believed
+//!   alike that spell a value alike in its letters, as `Night Ferry` and
+//!   `night ferry`, the spelling most of the song's sources write wins,
+//!   a tie going as an album's spellings tie ([`crate::album`]),
+//!   then by its text: never by the order of `sources`, which would move
+//!   the song's file as that order changes. A field won by the
 //!   order of `sources` alone over another value is contested, which
 //!   `status` and `check` name. The
 //!   release fields come together from one source so a song's release
@@ -2633,11 +2638,32 @@ fn best_offer_then<'c, 'a, K: Ord>(
     let group = groups(&offers, field);
     let ranked = ranked(&offers, &group, field, &then);
     let best = *ranked.first()?;
-    let spelled = (0..offers.len())
+    let standing = |i: usize| {
+        let c = offers[i];
+        (!c.offer.structured, c.rank, decorated(c), then(c.key))
+    };
+    let first = (0..offers.len())
         .filter(|&i| group[i] == group[best])
+        .min_by_key(|&i| (standing(i), offers[i].n))?;
+    let letters = |i: usize| tags::normalized(&offers[i].offer.values);
+    let offered = |i: usize| {
+        (0..offers.len())
+            .filter(|&j| {
+                group[j] == group[best] && offers[j].offer.values == offers[i].offer.values
+            })
+            .count()
+    };
+    let spelled = (0..offers.len())
+        .filter(|&i| group[i] == group[best] && standing(i) == standing(first))
+        .filter(|&i| letters(i) == letters(first))
         .min_by_key(|&i| {
-            let c = offers[i];
-            (!c.offer.structured, c.rank, decorated(c), then(c.key), c.n)
+            let values = &offers[i].offer.values;
+            (
+                std::cmp::Reverse(offered(i)),
+                crate::album::cased(values),
+                values,
+                offers[i].n,
+            )
         })?;
     Some(offers[spelled])
 }
