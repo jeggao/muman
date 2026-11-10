@@ -172,7 +172,7 @@ pub struct Hooked {
 pub fn hooked_from(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<Hooked> {
     Some(Hooked {
         home: var(hooks::HOOK_HOME)?.into(),
-        library: var("MUMAN_LIBRARY").map(PathBuf::from),
+        library: var(hooks::HOOK_LIBRARY).map(PathBuf::from),
     })
 }
 
@@ -774,8 +774,8 @@ pub(crate) struct Traits {
 }
 
 /// Refuse to run on the library `hooked`, the run whose hook this is,
-/// named in the `MUMAN_LIBRARY` the hook inherits, under another home:
-/// two homes would write one library.
+/// named in the `MUMAN_HOOK_LIBRARY` the hook inherits, under another
+/// home: two homes would write one library.
 fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
     let elsewhere = !platform::same_path(&hooked.home, &dirs.home);
     if elsewhere
@@ -786,7 +786,7 @@ fn refuse_hooked(hooked: &Hooked, dirs: &Dirs) -> Result<()> {
     {
         return Err(change::Refused(format!(
             "a hook cannot run this on {}, the library of the run that started it, under \
-             another home; pass --library to name another",
+             another home; pass --library or set MUMAN_LIBRARY to name another",
             dirs.library.display()
         ))
         .into());

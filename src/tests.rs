@@ -9013,12 +9013,14 @@ fn a_hooked_run_is_read_from_its_variables_alone() {
     assert_eq!(
         hooked_from(&vars(&[
             ("MUMAN_HOOK_HOME", "home"),
-            ("MUMAN_LIBRARY", "lib")
+            ("MUMAN_HOOK_LIBRARY", "lib"),
+            ("MUMAN_LIBRARY", "other-lib")
         ])),
         Some(Hooked {
             home: "home".into(),
             library: Some("lib".into()),
-        })
+        }),
+        "a hook's muman given another library in MUMAN_LIBRARY reads its run's apart"
     );
 }
 

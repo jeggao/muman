@@ -462,9 +462,9 @@ a batch file (`.bat`, `.cmd`) gets the variables only. Its output shows
 as `hook:` as it comes; a failure is warned of but fails nothing; and
 muman waits for the hook, not for a job it leaves running.
 
-A hook muman cannot run, as one `on = "written"`, is refused alone:
-commands that would run it say so, `check` reports it, and the rest
-still work. A tag a program should add is a [tag file](songs.md#giving-songs-lyrics-pictures-and-tags)
+A hook muman cannot run, as one `on = "written"`, is refused alone, said
+by each command that would run it and by `check`. A tag a program should add is a [tag file](songs.md#giving-songs-lyrics-pictures-and-tags)
 given to `muman add`; ReplayGain is [`[loudness]`](audio.md#loudness)'s.
-A muman a hook runs under another home, on the library the hook's run
-wrote, stops with exit code 5: pass `--library` to name another.
+The run's home and library are `MUMAN_HOOK_HOME` and `MUMAN_HOOK_LIBRARY`
+too: a muman the hook runs under another home stops with exit code 5 on
+that library; `--library` or `MUMAN_LIBRARY` names another.
