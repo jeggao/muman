@@ -736,6 +736,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   is named `.flac`; refusals of a file named twice and of a song list
   that is not valid TOML are worded alike everywhere.
 
+- **Stopping muman stops what its programs started**: on Linux and
+  macOS, Ctrl-C or a stop signal also ends a hook's background jobs and
+  whatever yt-dlp or a wrapper script started; on Windows only the
+  program muman started is ended.
+- **A hook's background job no longer holds muman**: muman waits for
+  the hook itself and lets go of its output a second after it exits.
+- **A hook's output shows as it comes**, stdout and stderr in the order
+  written, instead of all at once after the hook ends.
+- **A hook whose `run` holds a number or a boolean is refused**, and
+  `check` reports it, instead of running with those words dropped.
+- **Ctrl-C at a question exits 130**, as Ctrl-C does elsewhere, instead
+  of failing with exit 4.
+- **A read-only home can be read**: `list`, `status`, `check`, `info`
+  and `duplicates` work on a home muman may not write, such as a
+  read-only mount or a backup snapshot, and make no file there.
+- **`MUMAN_LIBRARY` works inside a hook**: a hook is also given
+  `MUMAN_HOOK_LIBRARY`, so a muman it runs on another library is no
+  longer refused as running on its own.
+
 ## [0.10.1] - 2026-11-04
 
 ### Changed
