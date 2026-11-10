@@ -158,6 +158,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An album keeps one gain while a song of it is left as built**: the
+  song counts in its album's loudness as its file was made.
+- **A cut-short cover a lookup kept is no cover**: any picture source
+  that does not decode whole is said and left out.
 - **An Opus copy no longer outranks its lossless source**: a lossy copy
   counts its bandwidth no wider than a lossless copy of its recording
   that was not itself made from lossy audio.
