@@ -28,7 +28,9 @@ Each field describes either the recording or the release.
 
 Then the songs of one album agree: a MusicBrainz release group, else
 an album artist and album alike but for case and punctuation, in one
-year. Songs on several releases of it take the one most can be on, as
+year. A song with no date joins the songs of its name dated in one
+year; of two, as an original and its reissue, it stays an album of its
+own. The songs of one album are levelled as one too. Songs on several releases of it take the one most can be on, as
 [releases rank](library.md#musicbrainz-and-acoustid); a mono mix on a mono edition keeps its own. An
 album spelled two ways, as `On The Border` and `On the Border`, is
 spelled as most of its songs spell it; of spellings as common, the one

@@ -103,9 +103,9 @@ downmix = ["5.1", "stereo"]
 muman measures every song whole, as EBU R128 and ITU-R BS.1770 measure
 loudness, and levels it to `[loudness] target`. It measures an album's
 loudness over all of its songs in the list together, so the album keeps
-its songs' levels against each other. Songs share an album when they
-share its name and album artist; a single, named for its title, is an
-album of its own.
+its songs' levels against each other. Songs share an album as their
+tags [agree on one](metadata.md#tags); a single, named for its title,
+is an album of its own.
 
 `[loudness] mode` says where the gain goes:
 

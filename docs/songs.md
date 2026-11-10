@@ -239,8 +239,9 @@ within `sources/manual` is followed, as a song file is.
 `muman duplicates` lists songs listed apart that are one recording, by
 their audio fingerprints. First come files an album holds twice, then
 tracks with copies on other albums, which a library of whole albums
-keeps on purpose. An album is told by its album artist and name. A
-query picks the groups shown. Listing changes nothing.
+keeps on purpose. An album is told as its songs' tags [agree on
+one](metadata.md#tags), and a single is on none. A query picks the
+groups shown. Listing changes nothing.
 
 `duplicates --resolve` steps through the groups on a terminal. Each
 group is shown side by side, a column for each song: key, album and

@@ -1,8 +1,10 @@
 //! Every planned song levelled as `[loudness]` says, from what
 //! [`crate::loudness`] measured. A song's track gain is the target less
 //! its own loudness; its album's, the target less the loudness of every
-//! block of the album's songs pooled. A single, named for its title, is
-//! levelled alone. A gain set by hand wins over one measured, and the
+//! block of the album's songs pooled, an album as [`crate::album::of_each`]
+//! tells the songs of one from another's, so the songs an album's
+//! agreement spells alike are levelled alike. A single, named for its
+//! title, is levelled alone. A gain set by hand wins over one measured, and the
 //! source's own gain tags stand where nothing was measured. The mode says
 //! how the gain the scope picks is applied, capped by the ceiling, and
 //! one applied to the samples of a copied song makes it encoded. Only
@@ -10,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::album::Album;
 use crate::analysis::Analysis;
 use crate::loudness::{
     Apply, GainScope, Gains, Level, LoudnessMode, Measure, capped, hundredths_to_q78, integrated,
@@ -36,29 +39,6 @@ fn measure_of<'a>(plan: &Plan, state: &'a State) -> Option<&'a Measure> {
             .and_then(Analysis::loudness),
         None => facts.audio.as_ref()?.analysis.loudness(),
     }
-}
-
-/// The album a song is levelled with, by its album artist and album; none
-/// for a single, named for its title.
-pub(crate) fn album_of(r: &Resolved) -> Option<(String, String)> {
-    let value = |field: Field| {
-        r.plan
-            .tags
-            .iter()
-            .find(|(k, _)| k == field.vorbis())
-            .map(|(_, v)| crate::tags::normalized(v))
-    };
-    let single = r
-        .why
-        .tags
-        .iter()
-        .any(|t| t.key == Field::Album.vorbis() && t.from == crate::resolve::SINGLE);
-    (!single).then(|| {
-        Some((
-            value(Field::AlbumArtist).unwrap_or_default(),
-            value(Field::Album)?,
-        ))
-    })?
 }
 
 /// The value a tag of `field` has in `r`, and whether it was set by hand.
@@ -127,14 +107,15 @@ pub fn settle(
         .chain(held)
         .map(|(_, r)| measure_of(&r.plan, state))
         .collect();
-    let mut albums: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
-    for (i, (_, r)) in planned.iter().chain(held).enumerate() {
-        if let Some(key) = album_of(r) {
-            albums.entry(key).or_default().push(i);
+    let album_of = crate::album::of_each(planned.iter().chain(held).map(|(_, r)| r));
+    let mut albums: BTreeMap<&Album, Vec<usize>> = BTreeMap::new();
+    for (i, album) in album_of.iter().enumerate() {
+        if let Some(album) = album {
+            albums.entry(album).or_default().push(i);
         }
     }
-    let pooled: BTreeMap<&(String, String), (Option<Level>, usize)> = albums
-        .iter()
+    let pooled: BTreeMap<&Album, (Option<Level>, usize)> = albums
+        .into_iter()
         .map(|(key, songs)| {
             let of_album: Vec<&Measure> = songs.iter().filter_map(|&i| measures[i]).collect();
             let peak = of_album
@@ -153,9 +134,8 @@ pub fn settle(
         else {
             continue;
         };
-        let key = album_of(r);
+        let key = album_of[i].as_ref();
         let (album_measured, songs) = key
-            .as_ref()
             .and_then(|k| pooled.get(k).copied())
             .unwrap_or((track_measured.then_some(track), 1));
         let album = level_of(r, Field::AlbumGain, Field::AlbumPeak, album_measured);

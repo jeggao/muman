@@ -20,7 +20,15 @@
 //! year. A song on no release group joins the one release group of its
 //! folded name, so an upload naming the album alone joins
 //! the album's songs whatever date it gives; two release groups of one
-//! name, as two albums named for their artist, stay apart.
+//! name, as two albums named for their artist, stay apart. A song dated
+//! in no year joins the songs of its name dated in one, where they are
+//! dated in one alone, and so takes their date and spelling; where they
+//! are dated in two, as an original and its reissue, nothing says which
+//! it is on, and it stays an album of its own. Every pass that groups
+//! songs into albums groups them so ([`of_each`]): levelling, the
+//! folder's cover and `duplicates` too, so the songs spelled as one
+//! album are levelled as one, share its folder's cover and are the
+//! album a file twice on it is found on.
 //!
 //! - The edition: where an album's songs are on more than one release,
 //!   the release most of them can be on wins, then as MusicBrainz ranks
@@ -145,8 +153,16 @@ impl<'a> Member<'a> {
             .map(|((_, v), why)| (v.as_slice(), why.from.as_str()))
     }
 
+    /// `field`'s values as its plan writes them, read even of a song held
+    /// at its last plan, which keeps no reasons.
+    fn values(&self, field: Field) -> Option<&'a [String]> {
+        (self.r.plan.tags.iter())
+            .find(|(k, _)| k == field.vorbis())
+            .map(|(_, v)| v.as_slice())
+    }
+
     fn first(&self, field: Field) -> Option<&'a str> {
-        self.tag(field)?.0.first().map(String::as_str)
+        self.values(field)?.first().map(String::as_str)
     }
 
     fn by_hand(&self, field: Field) -> bool {
@@ -154,17 +170,24 @@ impl<'a> Member<'a> {
             .is_some_and(|(_, from)| BY_HAND.contains(&from))
     }
 
+    /// Whether it is on an album, not a single named for its title.
+    fn names_album(&self) -> bool {
+        self.values(Field::Album).is_some()
+            && self
+                .tag(Field::Album)
+                .is_none_or(|(_, from)| from != resolve::SINGLE)
+    }
+
     /// Whether it is on an album its sources name, not set by hand.
     fn on_album(&self) -> bool {
-        self.tag(Field::Album)
-            .is_some_and(|(_, from)| from != resolve::SINGLE && !BY_HAND.contains(&from))
+        self.names_album() && !self.by_hand(Field::Album)
     }
 
     /// Its album artist and album, folded.
     fn name(&self) -> (String, String) {
         let fold = |f: Field| {
-            self.tag(f)
-                .map(|(v, _)| folded(f, &v.join(" ")))
+            self.values(f)
+                .map(|v| folded(f, &v.join(" ")))
                 .unwrap_or_default()
         };
         (fold(Field::AlbumArtist), fold(Field::Album))
@@ -321,11 +344,9 @@ fn album_source<'a>(
 /// in the song list.
 #[must_use]
 pub fn agree(planned: &[(usize, Resolved)]) -> BTreeMap<usize, Vec<Agreed>> {
-    let all = members(planned);
-    let albums = albums(&all);
     let mut agreed: BTreeMap<usize, Vec<Agreed>> = BTreeMap::new();
-    for album in albums.iter().filter(|a| a.len() > 1) {
-        agree_on(album, &mut agreed);
+    for album in albums(planned).iter().filter(|a| a.len() > 1) {
+        agree_on(&album.iter().collect::<Vec<_>>(), &mut agreed);
     }
     agreed
 }
@@ -343,9 +364,8 @@ pub fn consistent(
     songs: &[Song],
     facts: &BTreeMap<SourceKey, Facts>,
 ) -> BTreeMap<usize, (Option<Look>, Option<String>)> {
-    let all = members(planned);
     let mut out: BTreeMap<usize, (Option<Look>, Option<String>)> = BTreeMap::new();
-    for album in albums(&all).iter().filter(|a| a.len() > 1) {
+    for album in albums(planned).iter().filter(|a| a.len() > 1) {
         let shown: Vec<Option<(Look, u32)>> = album.iter().map(|m| shown(m.r, facts)).collect();
         let pinned: Vec<Option<(Look, u32)>> = album
             .iter()
@@ -575,40 +595,81 @@ pub fn unit_groups(songs: &[Song], facts: &BTreeMap<SourceKey, Facts>) -> BTreeM
         .collect()
 }
 
-/// The songs on albums its sources name, album by album: a MusicBrainz
-/// release group, else the one release group of its folded album artist
-/// and album, else that name in one year.
-fn albums<'m>(all: &'m [Member<'m>]) -> Vec<Vec<&'m Member<'m>>> {
+/// The album a song is on, as every pass that groups songs into albums
+/// tells them apart ([`of_each`]): a MusicBrainz release group, else a
+/// folded album artist and album in one year.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Album {
+    group: String,
+    name: String,
+    year: String,
+}
+
+/// The album each of `songs` is on, in their order; none for a single,
+/// named for its title, or a song naming no album. A MusicBrainz release
+/// group, else the one release group of its folded album artist and
+/// album, else that name in one year: a song dated in no year in the one
+/// year of that name's songs dated in one, and in none where they are
+/// dated in two, as an original and its reissue. Songs set by hand count:
+/// the album agreement leaves them out, but they are levelled with their
+/// album and share its folder.
+pub fn of_each<'r>(songs: impl IntoIterator<Item = &'r Resolved>) -> Vec<Option<Album>> {
+    let all: Vec<Option<Member<'_>>> = songs
+        .into_iter()
+        .map(|r| Some(Member { n: 0, r }).filter(Member::names_album))
+        .collect();
     let mut named: BTreeMap<(String, String), BTreeSet<&str>> = BTreeMap::new();
-    for m in all {
+    let mut dated: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for m in all.iter().flatten() {
         if let Some(group) = m.first(Field::MusicBrainzReleaseGroupId) {
             named.entry(m.name()).or_default().insert(group);
+        } else if !m.year().is_empty() {
+            dated.entry(m.name()).or_default().insert(m.year());
         }
     }
-    let mut albums: BTreeMap<(String, String, String), Vec<&Member<'_>>> = BTreeMap::new();
-    for m in all {
-        let name = m.name();
-        let key = match m.first(Field::MusicBrainzReleaseGroupId) {
-            Some(group) => (group.to_string(), String::new(), String::new()),
-            None => match named.get(&name).filter(|g| g.len() == 1) {
-                Some(groups) => (
-                    groups
-                        .iter()
-                        .next()
-                        .copied()
-                        .unwrap_or_default()
-                        .to_string(),
-                    String::new(),
-                    String::new(),
-                ),
-                None => (
-                    String::new(),
-                    format!("{}\u{1f}{}", name.0, name.1),
-                    m.year(),
-                ),
-            },
-        };
-        albums.entry(key).or_default().push(m);
+    all.iter()
+        .map(|m| {
+            let m = m.as_ref()?;
+            let name = m.name();
+            let group = m
+                .first(Field::MusicBrainzReleaseGroupId)
+                .or_else(|| {
+                    let groups = named.get(&name).filter(|g| g.len() == 1)?;
+                    groups.iter().next().copied()
+                })
+                .map(str::to_string);
+            if let Some(group) = group {
+                return Some(Album {
+                    group,
+                    name: String::new(),
+                    year: String::new(),
+                });
+            }
+            let year = match (m.year(), dated.get(&name)) {
+                (own, Some(years)) if own.is_empty() && years.len() == 1 => {
+                    years.iter().next().cloned().unwrap_or_default()
+                }
+                (own, _) => own,
+            };
+            Some(Album {
+                group: String::new(),
+                name: format!("{}\u{1f}{}", name.0, name.1),
+                year,
+            })
+        })
+        .collect()
+}
+
+/// The songs on albums their sources name, not set by hand, album by
+/// album ([`of_each`]).
+fn albums(planned: &[(usize, Resolved)]) -> Vec<Vec<Member<'_>>> {
+    let each = of_each(planned.iter().map(|(_, r)| r));
+    let mut albums: BTreeMap<Album, Vec<Member<'_>>> = BTreeMap::new();
+    for ((n, r), album) in planned.iter().zip(each) {
+        let m = Member { n: *n, r };
+        if let Some(album) = album.filter(|_| m.on_album()) {
+            albums.entry(album).or_default().push(m);
+        }
     }
     albums.into_values().collect()
 }
@@ -936,7 +997,7 @@ mod tests {
             named(2, "Marlo Venn", "The Orchards"),
             named(3, "Marlo Venn", "Orchards, The"),
         ];
-        assert_eq!(albums(&members(&planned)).len(), 3);
+        assert_eq!(albums(&planned).len(), 3);
         for n in 0..4 {
             assert_eq!(agreed(&planned, n, Field::Album), None, "song {n}");
         }
@@ -945,11 +1006,54 @@ mod tests {
             named(1, "Marlo Venn", "Orchards"),
             named(2, "Marlo Venn", "Orchards"),
         ];
-        assert_eq!(albums(&members(&planned)).len(), 1);
+        assert_eq!(albums(&planned).len(), 1);
         assert_eq!(
             agreed(&planned, 0, Field::AlbumArtist),
             Some(vec!["Marlo Venn".to_string()])
         );
+    }
+
+    #[test]
+    fn an_undated_song_joins_the_one_dated_album_of_its_name_in_every_pass() {
+        let named = |n, album, date: Option<&str>| {
+            let mut tags = vec![
+                (Field::Album, album, "manual:a.flac"),
+                (Field::AlbumArtist, "Marlo Venn", "manual:a.flac"),
+            ];
+            tags.extend(date.map(|d| (Field::Date, d, "manual:a.flac")));
+            song(n, &tags)
+        };
+        let planned = vec![
+            named(0, "On The Border", Some("1976")),
+            named(1, "On The Border", Some("1976")),
+            named(2, "On The Border", Some("1976-05-01")),
+            named(3, "on the border", None),
+        ];
+        let mut held = named(4, "On The Border", None);
+        held.1.why = Why::default();
+        let each = of_each(planned.iter().chain([&held]).map(|(_, r)| r));
+        assert!(
+            each.iter().all(|a| a.is_some() && *a == each[0]),
+            "{each:?}"
+        );
+        assert_eq!(albums(&planned).len(), 1);
+        assert_eq!(
+            agreed(&planned, 3, Field::Album),
+            Some(vec!["On The Border".to_string()])
+        );
+        assert_eq!(
+            agreed(&planned, 3, Field::Date),
+            Some(vec!["1976".to_string()])
+        );
+        let planned = vec![
+            named(0, "On The Border", Some("1976")),
+            named(1, "On The Border", Some("2018")),
+            named(2, "on the border", None),
+        ];
+        let each = of_each(planned.iter().map(|(_, r)| r));
+        assert!(each[2] != each[0] && each[2] != each[1], "{each:?}");
+        assert_eq!(albums(&planned).len(), 3);
+        assert_eq!(agreed(&planned, 2, Field::Album), None);
     }
 
     #[test]

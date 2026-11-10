@@ -4,8 +4,8 @@
 //!
 //! A folder is the songs whose files the template puts in it, its name
 //! folded as a filesystem blind to case folds it. Its songs are of one
-//! album when they share an album artist and album, as an album is
-//! levelled ([`crate::loudness`]); a single, or a song on no album, is an
+//! album when [`crate::album::of_each`] puts them on one, as they are
+//! levelled ([`crate::levels`]); a single, or a song on no album, is an
 //! album of its own. A folder of one album takes its cover, but for the
 //! library folder itself, which holds the songs a template puts in no
 //! folder: its cover would stand for the whole library, said. A folder of
@@ -75,9 +75,8 @@ pub enum Why {
     Root,
 }
 
-/// An album of a folder: its artist and name, or for a song on none, the
-/// song's place.
-type Album = (Option<(String, String)>, Option<usize>);
+/// An album of a folder, or for a song on none, the song's place.
+type Album = (Option<crate::album::Album>, Option<usize>);
 
 /// Give each folder's cover, as the folder outputs of `cover` say, to
 /// the song of `planned` that holds it, the songs of `held` counted
@@ -115,6 +114,7 @@ fn assigned(
     given: &mut Vec<(usize, CoverRef)>,
 ) -> Vec<Unplaced> {
     let paths: Vec<PathBuf> = all.iter().map(|(_, r)| path_of(r)).collect();
+    let album_of = crate::album::of_each(all.iter().map(|(_, r)| r));
     let taken: BTreeSet<String> = all
         .iter()
         .zip(&paths)
@@ -140,7 +140,7 @@ fn assigned(
         }
         let mut albums: BTreeMap<Album, Vec<usize>> = BTreeMap::new();
         for &i in songs.iter() {
-            let album = crate::levels::album_of(&all[i].1);
+            let album = album_of[i].clone();
             let own = album.is_none().then_some(i);
             albums.entry((album, own)).or_default().push(i);
         }
