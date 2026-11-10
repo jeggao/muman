@@ -423,6 +423,27 @@ fn a_copy_clipped_louder_never_beats_the_clean_lossless_copy_by_its_splatter() {
     assert_eq!(r.plan.audio.key, clipped, "a lossy copy caps no bandwidth");
 }
 
+#[test]
+fn a_lossy_copy_never_counts_wider_than_a_lossless_copy_of_its_recording() {
+    let (flac, opus, fake) = (manual("cd.flac"), manual("cd.opus"), manual("fake.flac"));
+    let facts = BTreeMap::from([
+        (flac.clone(), audio("flac", 20.3)),
+        (opus.clone(), audio("opus", 20.6)),
+        (fake.clone(), audio("flac", 18.6)),
+    ]);
+    let mut alignments = both(&facts, &flac, &opus, 0, 0.99).to_vec();
+    alignments.extend(both(&facts, &fake, &opus, 0, 0.99));
+    for order in [[&opus, &flac], [&flac, &opus]] {
+        let r = run(&song(&order.map(Clone::clone)), &facts, &alignments);
+        assert_eq!(r.plan.audio.key, flac, "{}", r.why.audio);
+    }
+    let r = run(&song(&[fake, opus.clone()]), &facts, &alignments);
+    assert_eq!(
+        r.plan.audio.key, opus,
+        "a FLAC made from lossy audio bounds nothing"
+    );
+}
+
 /// Both directions of a comparison of `whole` against `excerpt`, cut off
 /// where `whole` plays `lacks_ms` of the song on, `offset_ms` of it first.
 fn cut(

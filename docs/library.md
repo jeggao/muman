@@ -59,8 +59,8 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
 - **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
   made from an MP3 measures as narrow as the MP3, under any fill 20 dB
   down, while a recording whose treble fades on its own measures full.
-  What clipping splatters past a lowpass is not counted: a copy that
-  clips more than a lossless copy of its recording counts no wider.
+  A lossy copy, or one that clips more, counts no wider than a lossless
+  copy of its recording: what clipping or an encoder fills in is no sound.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
@@ -216,8 +216,7 @@ These leave songs out:
   `[providers] skip` leaves songs out of every provider.
 - `lookups = false` on a song asks no provider; `lookups.<provider> =
   false` asks that one nothing.
-- `enabled = false` in a provider's table asks its service nothing at
-  all, not even for a record it found before.
+- `enabled = false` in a provider's table asks its service nothing, not even for a record it found before.
 - `--offline` makes no lookup in that run.
 
 The other keys pace a provider: `concurrency` is how many lookups run

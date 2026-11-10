@@ -75,11 +75,20 @@
 //! The default weights rank as the order above does, each measure first
 //! by a margin wider than everything after it can make up: a step of
 //! purity outweighs mono and any bandwidth up to 240 kHz together, mono
-//! any such bandwidth, and a step of bandwidth all of clipping. A copy
-//! clipping more than a lossless copy of its recording counts its
-//! bandwidth no wider than that copy's ([`unclipped`]): what clipping
-//! splatters past a lowpass is no sound of the recording, so a copy
-//! raised into clipping never beats the copy it was made from. Mono
+//! any such bandwidth, and a step of bandwidth all of clipping. A lossy
+//! copy, or one clipping more, counts its bandwidth no wider than that of
+//! a lossless copy of its recording not made from lossy audio
+//! ([`bounded`]): what clipping splatters past a lowpass is no sound of
+//! the recording, and nor is what an encoder fills in above it. Opus
+//! codes the band from 15.6 to 20 kHz by its energy alone, filling it to
+//! its own lowpass. Of 56 game soundtrack pieces cut a minute long as
+//! FLAC, 34 measured as lossless audio does; of copies made from those,
+//! a 500 Hz step or more wider than their FLAC measured Opus at 96 kbit/s
+//! in 11, Opus at 160 kbit/s in 9, MP3 at 320 kbit/s in 2 and Vorbis at
+//! quality 5 in 1, and AAC at 192 kbit/s in none. A lossless copy made
+//! from lossy audio, as the other 22 were, bounds nothing: a lossy copy
+//! wider than it may come from a better source, though of these the Opus
+//! copies at 96 kbit/s measured wider in 17. Mono
 //! comes before bandwidth because it is the larger loss to a listener:
 //! MP3 at 128 kbit/s measured 16 to 16.5 kHz and Opus at 128 kbit/s 20 to
 //! 20.6 kHz ([`crate::quality`]), at least 7 steps apart, so ranked by
@@ -1442,7 +1451,7 @@ fn pick_audio(
             let unmatched = beyond
                 .map(|ms| ms + lacks.max(missing))
                 .or_else(|| any_missing.then_some(missing));
-            let q = unclipped(facts, &compared, &audible);
+            let q = bounded(facts, &compared, &audible);
             let w = &input.audio.pick;
             let [unknown, sum] = score(&[
                 (
@@ -1655,22 +1664,26 @@ fn audio_why(input: &Input<'_>, chosen: &Scored<'_>, recordings: &Recordings) ->
 }
 
 /// The quality `facts` measured, its bandwidth no wider than that of any
-/// lossless copy of its recording, among `compared`, that clips less than
-/// it does: what clipping adds above a lowpass is no sound of the
-/// recording, and a step of bandwidth outweighs all of clipping.
-fn unclipped(
+/// lossless copy of its recording, among `compared`, not made from lossy
+/// audio, that clips less than it does or of which it is a lossy copy:
+/// what clipping adds above a lowpass is no sound of the recording, nor
+/// what an encoder fills in above it, and a step of bandwidth outweighs
+/// all of clipping and every tie-break.
+fn bounded(
     facts: &Facts,
     compared: &[&Aligned],
     audible: &[(usize, &SourceKey, &Facts)],
 ) -> Option<AudioQuality> {
-    let q = facts.audio.as_ref()?.quality?;
+    let audio = facts.audio.as_ref()?;
+    let q = audio.quality?;
+    let lossy = !audio.is_lossless();
     let cleaner = compared
         .iter()
         .filter_map(|a| audible.iter().find(|(_, key, _)| **key == a.b))
         .filter_map(|(_, _, facts)| facts.audio.as_ref())
         .filter(|audio| audio.is_lossless() && !audio.flags().band_limited)
         .filter_map(|audio| audio.quality)
-        .filter(|other| other.clipping < q.clipping)
+        .filter(|other| lossy || other.clipping < q.clipping)
         .map(|other| other.bandwidth_hz)
         .reduce(f64::max);
     Some(AudioQuality {
