@@ -386,8 +386,9 @@ lookup alone.
   times, as a fetch does.
 - **`purge`** deletes the fetched sources and lookup records no song
   uses, which `status` and `info` name: an upload a release replaced, a
-  source taken out of its song. A removed song's sources stay for
-  `restore`, and files of your own are never touched.
+  source taken out of its song; and a folder that leaves empty, as a
+  torrent's. A removed song's sources stay for `restore`, and files of
+  your own are never touched.
 - **`duplicates`** lists songs listed apart that are one recording
   ([duplicates](songs.md#duplicates)).
 

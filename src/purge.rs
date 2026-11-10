@@ -8,19 +8,20 @@
 //! them, and a file in the manual folder is never touched, one no song
 //! lists being added by the next sync, but for the lyrics and pictures
 //! `add` copied into its `added/`, muman's copies of files the user
-//! keeps where they were. Nothing here can be undone, but
-//! nothing is lost either: a fetched source a song lists again is fetched
-//! again by the next sync.
+//! keeps where they were. A folder a purge leaves empty, as a torrent's,
+//! goes with it, up to the folder of its kind of source, which stays.
+//! Nothing here can be undone, but nothing is lost either: a fetched
+//! source a song lists again is fetched again by the next sync.
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::atomic::Lock;
 use crate::cli::Confirm;
-use crate::dirs::Dirs;
+use crate::dirs::{ADDED, Dirs};
 use crate::manifest::Manifest;
 use crate::store::Store;
 use crate::ui::Prompter;
@@ -73,8 +74,36 @@ pub fn purge<W: Write>(
             _ => {}
         }
     }
+    remove_emptied(dirs, &doomed);
     crate::ui::success(out, &format!("Freed {}", crate::ui::bytes(total)))?;
     Ok(true)
+}
+
+/// Remove each folder the deleted `files` leave empty, as a torrent's
+/// own, up to the folder of their kind of source, which stays.
+// Removes the folders a purge empties; one still holding anything stays.
+#[expect(clippy::disallowed_methods)]
+fn remove_emptied(dirs: &Dirs, files: &[PathBuf]) {
+    let roots: Vec<PathBuf> = [dirs.ytdlp(), dirs.torrent(), dirs.manual().join(ADDED)]
+        .into_iter()
+        .chain(crate::store::KEPT.iter().map(|k| k.dir(dirs)))
+        .collect();
+    let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
+    for file in files {
+        let Some(root) = roots.iter().find(|r| file.starts_with(r)) else {
+            continue;
+        };
+        folders.extend(
+            (file.ancestors().skip(1))
+                .take_while(|d| *d != root.as_path())
+                .map(Path::to_path_buf),
+        );
+    }
+    let mut folders: Vec<PathBuf> = folders.into_iter().collect();
+    folders.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+    for folder in folders {
+        let _ = std::fs::remove_dir(folder);
+    }
 }
 
 /// What no listed or removed song uses now, by the song list read whole.
@@ -199,6 +228,11 @@ mod tests {
         std::fs::write(store::metainfo_path(&torrents, &other_hash), &other).unwrap();
         let gone = [
             touch(&dirs, "sources/yt-dlp/c/Old [ooooooooooo].mkv"),
+            touch(&dirs, "sources/yt-dlp/d/Old [ddddddddddd].mkv"),
+            touch(
+                &dirs,
+                "sources/musicbrainz/00000000-0000-0000-0000-000000000001.json",
+            ),
             touch(&dirs, "sources/lrclib/8.lrc"),
             touch(&dirs, "sources/lrclib/8.json"),
             touch(&dirs, "sources/lrclib/9.LRC"),
@@ -233,7 +267,7 @@ mod tests {
         assert!(!purge(&dirs, &confirm, None, &mut out).unwrap());
         assert!(gone.iter().all(|p| p.exists()), "a dry run deletes nothing");
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Deleting 8 unused files"), "{text}");
+        assert!(text.contains("Deleting 10 unused files"), "{text}");
 
         let confirm = Confirm {
             yes: true,
@@ -243,6 +277,15 @@ mod tests {
         assert!(purge(&dirs, &confirm, None, &mut Vec::new()).unwrap());
         assert!(gone.iter().all(|p| !p.exists()));
         assert!(kept.iter().all(|p| p.exists()));
+        assert!(
+            !torrents.join(&other_hash).exists(),
+            "a folder emptied goes"
+        );
+        assert!(!dirs.ytdlp().join("d").exists());
+        assert!(
+            dirs.sources("musicbrainz").is_dir(),
+            "a kind's folder stays"
+        );
     }
 
     #[test]
