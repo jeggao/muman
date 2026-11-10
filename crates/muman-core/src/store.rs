@@ -24,7 +24,11 @@
 //! What each kind of kept record is, its folder, its files and what it
 //! offers, is said once, in [`KEPT`]: the store, `remove --purge`, the
 //! providers and `info` all read it there, so a provider added is one
-//! entry. A key of any other scheme is a file yt-dlp fetched.
+//! entry. A key of any other scheme is a file yt-dlp fetched. A record's
+//! files are read by one rule, their extensions in any case, as a
+//! filesystem blind to case holds them, whether a status names them or
+//! a purge deletes them; a part of no record, as a `.json` whose `.lrc`
+//! is gone, is no source.
 //!
 //! A manual song file brings the `.lrc` and pictures named as it is in
 //! any case, as a folder's `COVER.JPG` covers it and as a filesystem
@@ -436,21 +440,19 @@ impl Kept {
         dirs.sources(self.folder)
     }
 
-    /// The files kept for `id` that are on disk: the one a key names and
-    /// those beside it.
-    #[must_use]
-    pub fn files(&self, dirs: &Dirs, id: &str) -> Vec<PathBuf> {
-        self.files_in(&self.dir(dirs), id)
-    }
-
-    /// [`Self::files`], in `dir`, this kind's folder.
-    fn files_in(&self, dir: &Path, id: &str) -> Vec<PathBuf> {
-        self.main
-            .iter()
-            .chain(self.beside)
-            .map(|ext| dir.join(format!("{id}.{ext}")))
-            .filter(|p| p.exists())
-            .collect()
+    /// The ID of the record `file` in this kind's folder is a part of,
+    /// and the rank in [`Self::main`] of its extension, `None` for one
+    /// kept beside: extensions in any case, as a filesystem blind to
+    /// case holds them and as every reading of a record takes them.
+    fn part<'a>(&self, file: &'a Path) -> Option<(&'a str, Option<usize>)> {
+        let id = file.file_stem()?.to_str()?;
+        let ext = file.extension()?.to_str()?;
+        let rank = |exts: &[&str]| exts.iter().position(|e| e.eq_ignore_ascii_case(ext));
+        let part = rank(self.main);
+        if part.is_none() {
+            rank(self.beside)?;
+        }
+        (self.valid)(id).then_some((id, part))
     }
 }
 
@@ -547,8 +549,6 @@ pub fn stamp_of_rev(rev: &str) -> Option<(u64, u128)> {
 #[derive(Debug, Default)]
 pub struct Store {
     manual_root: PathBuf,
-    /// Each kind of kept record's folder, by scheme.
-    kept_dirs: HashMap<&'static str, PathBuf>,
     fetched_root: PathBuf,
     /// What yt-dlp fetched, each at its key's place.
     fetched: BTreeMap<SourceKey, PathBuf>,
@@ -560,6 +560,9 @@ pub struct Store {
     leftovers: Vec<PathBuf>,
     /// Kept records by scheme, then ID.
     kept: HashMap<&'static str, HashMap<String, PathBuf>>,
+    /// Every file of each kept record by scheme, then ID: the one its key
+    /// names, those beside it and a second of the one a key names.
+    parts: HashMap<&'static str, BTreeMap<String, Vec<PathBuf>>>,
     /// Manual files by their path in the manual folder.
     manual: BTreeMap<PathBuf, Kind>,
     /// The name on disk of each manual file whose key differs from it: a
@@ -580,7 +583,6 @@ impl Store {
     pub fn scan(dirs: &Dirs) -> Result<Self> {
         let mut store = Self {
             manual_root: dirs.manual(),
-            kept_dirs: KEPT.iter().map(|k| (k.extractor, k.dir(dirs))).collect(),
             fetched_root: dirs.ytdlp(),
             torrent_root: dirs.torrent(),
             ..Self::default()
@@ -623,28 +625,29 @@ impl Store {
         }
         store.leftovers.sort();
         for kind in &KEPT {
-            let mut found: HashMap<String, PathBuf> = HashMap::new();
+            let mut found: HashMap<String, (usize, PathBuf)> = HashMap::new();
+            let mut parts: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
             for file in walk(&kind.dir(dirs), 1)? {
-                let (Some(id), Some(ext)) = (
-                    file.file_stem().and_then(|s| s.to_str()),
-                    file.extension().and_then(|e| e.to_str()),
-                ) else {
+                let Some((id, rank)) = kind.part(&file) else {
                     continue;
                 };
-                let Some(rank) = kind.main.iter().position(|m| m.eq_ignore_ascii_case(ext)) else {
-                    continue;
-                };
-                let better = found.get(id).is_none_or(|have| {
-                    have.extension()
-                        .and_then(|e| e.to_str())
-                        .and_then(|e| kind.main.iter().position(|m| m.eq_ignore_ascii_case(e)))
-                        .is_none_or(|r| rank < r)
-                });
-                if (kind.valid)(id) && better {
-                    found.insert(id.to_string(), file.clone());
+                parts.entry(id.to_string()).or_default().push(file.clone());
+                if let Some(rank) = rank
+                    && found.get(id).is_none_or(|(have, _)| rank < *have)
+                {
+                    found.insert(id.to_string(), (rank, file.clone()));
                 }
             }
+            // A part of no record, as a record's `.json` whose `.lrc` is
+            // gone, is what no key reads.
+            for (id, files) in &parts {
+                if !found.contains_key(id) {
+                    store.leftovers.extend(files.iter().cloned());
+                }
+            }
+            let found = found.into_iter().map(|(id, (_, f))| (id, f)).collect();
             store.kept.insert(kind.extractor, found);
+            store.parts.insert(kind.extractor, parts);
         }
         store.scan_torrents()?;
         let root = dirs.manual();
@@ -964,6 +967,16 @@ impl Store {
         self.kept.get(kind.extractor)?.get(id)
     }
 
+    /// Every file kept for the record `id` of `kind`: the one its key
+    /// names, those beside it, each extension in any case.
+    #[must_use]
+    pub fn record_files(&self, kind: &Kept, id: &str) -> Vec<PathBuf> {
+        (self.parts.get(kind.extractor))
+            .and_then(|parts| parts.get(id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Every manual file, by its key, and its kind, in path order.
     pub fn manual_files(&self) -> impl Iterator<Item = (SourceKey, Kind)> + '_ {
         (self.manual.iter()).map(|(rel, kind)| (SourceKey::Manual(rel.into()), *kind))
@@ -1058,9 +1071,8 @@ impl Store {
             }
             if let SourceKey::Remote { site, id } = key
                 && let Some(kind) = kept(site)
-                && let Some(dir) = self.kept_dirs.get(kind.extractor)
             {
-                used.extend(kind.files_in(dir, id));
+                used.extend(self.record_files(kind, id));
             }
             if let Some(l) = self.locate(key) {
                 used.insert(l.path);
@@ -1107,7 +1119,7 @@ impl Store {
             let kind = KEPT.iter().find(|k| path.starts_with(k.dir(dirs)));
             let id = path.file_stem().and_then(|s| s.to_str());
             match (kind, id) {
-                (Some(kind), Some(id)) => all.extend(kind.files(dirs, id)),
+                (Some(kind), Some(id)) => all.extend(self.record_files(kind, id)),
                 _ => {
                     all.insert(path.clone());
                 }
@@ -1586,6 +1598,35 @@ mod tests {
         let located = store.locate(&key).unwrap();
         assert_eq!((located.path, located.kind), (json, Kind::Tags));
         assert!(!store.has(&SourceKey::parse("musicbrainz:not-an-id").unwrap()));
+    }
+
+    #[test]
+    fn a_record_s_files_are_read_in_any_case_and_a_part_of_none_is_unused() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dirs(dir.path());
+        let upper = [
+            touch(dir.path(), "sources/lrclib/7.LRC"),
+            touch(dir.path(), "sources/lrclib/7.Json"),
+        ];
+        let orphan = touch(dir.path(), "sources/lrclib/8.json");
+        let listed_part = touch(dir.path(), "sources/lrclib/9.json");
+        touch(dir.path(), "sources/lrclib/notes.txt");
+        let store = Store::scan(&d).unwrap();
+        let lrclib = kept(LRCLIB).unwrap();
+        let mut seven = store.record_files(lrclib, "7");
+        seven.sort();
+        assert_eq!(seven, [upper[1].clone(), upper[0].clone()]);
+        assert!(store.has(&SourceKey::parse("lrclib:7").unwrap()));
+        assert!(!store.has(&SourceKey::parse("lrclib:8").unwrap()));
+        let known = BTreeSet::from([SourceKey::parse("lrclib:9").unwrap()]);
+        let named = store.purgeable(&d, &known);
+        assert_eq!(named, [upper[0].clone(), orphan.clone()]);
+        assert_eq!(
+            store.with_their_files(&d, &known, &named),
+            [upper[1].clone(), upper[0].clone(), orphan],
+            "what status names, purge deletes, with the files of its record"
+        );
+        assert!(!store.unused(&known).contains(&listed_part));
     }
 
     #[test]

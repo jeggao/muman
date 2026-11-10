@@ -254,10 +254,10 @@ impl Read {
 
 /// Every file in the store a key brings: what yt-dlp fetched under its
 /// ID, or a manual or torrent's file with its own lyrics and pictures.
-fn store_files(store: &Store, dirs: &Dirs, key: &SourceKey) -> Vec<PathBuf> {
+fn store_files(store: &Store, key: &SourceKey) -> Vec<PathBuf> {
     match key {
         SourceKey::Remote { site, id } if crate::store::kept(site).is_some() => {
-            crate::store::kept(site).map_or_else(Vec::new, |k| k.files(dirs, id))
+            crate::store::kept(site).map_or_else(Vec::new, |k| store.record_files(k, id))
         }
         SourceKey::Remote { .. } => store.fetched_files(key),
         SourceKey::Manual(_) | SourceKey::Torrent(_) => {
@@ -337,7 +337,7 @@ pub fn remove<W: Write>(
             for key in view.keys.iter().filter(|k| !shared(k)) {
                 let own = matches!(key, SourceKey::Manual(_));
                 if held(key) {
-                    for file in store_files(&store, dirs, key) {
+                    for file in store_files(&store, key) {
                         crate::ui::line(
                             out,
                             &format!("    keeps {}, which a removed song lists", file.display()),
@@ -345,7 +345,7 @@ pub fn remove<W: Write>(
                     }
                     continue;
                 }
-                for file in store_files(&store, dirs, key) {
+                for file in store_files(&store, key) {
                     let how = if own { "trashes" } else { "deletes" };
                     crate::ui::line(out, &format!("    {how} {}", file.display()))?;
                     doomed.push((file, own));

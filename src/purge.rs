@@ -201,6 +201,8 @@ mod tests {
             touch(&dirs, "sources/yt-dlp/c/Old [ooooooooooo].mkv"),
             touch(&dirs, "sources/lrclib/8.lrc"),
             touch(&dirs, "sources/lrclib/8.json"),
+            touch(&dirs, "sources/lrclib/9.LRC"),
+            touch(&dirs, "sources/lrclib/10.json"),
             touch(&dirs, &format!("sources/torrent/{listed_hash}/b.flac")),
             touch(&dirs, &format!("sources/torrent/{other_hash}/c.flac")),
             store::metainfo_path(&torrents, &other_hash),
@@ -231,7 +233,7 @@ mod tests {
         assert!(!purge(&dirs, &confirm, None, &mut out).unwrap());
         assert!(gone.iter().all(|p| p.exists()), "a dry run deletes nothing");
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("Deleting 6 unused files"), "{text}");
+        assert!(text.contains("Deleting 8 unused files"), "{text}");
 
         let confirm = Confirm {
             yes: true,
