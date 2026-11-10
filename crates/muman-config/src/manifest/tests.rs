@@ -48,6 +48,10 @@ fn adding_a_listed_source_joins_its_song_and_sets_its_album_once() {
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     let album = SourceKey::parse("youtube.com:playlist/OLAK5uy_abcdef").unwrap();
+    m.edit(Edit::AddAlbum {
+        source: album.clone(),
+        tracks: Some(9),
+    });
     m.edit(Edit::Add {
         sources: vec![yt("aaaaaaaaaaa"), SourceKey::Manual("x.flac".into())],
         album: Some((album.clone(), 3)),
@@ -288,6 +292,32 @@ fn a_skip_naming_a_field_no_song_has_is_refused_as_list_refuses_it() {
             }
             (got, _) => panic!("{skip}: {:?}", got.map(drop)),
         }
+    }
+}
+
+#[test]
+fn a_song_is_on_a_listed_album_at_a_place_from_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let album = "[[album]]\nsource = \"youtube.com:playlist/pl00000001\"\ntracks = 2\n";
+    let song = "[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
+    let on = "album = \"youtube.com:playlist/pl00000001\"\n";
+    write(dir.path(), &format!("{song}{on}track = 2\n{album}"));
+    let m = Manifest::load(dir.path()).unwrap();
+    assert_eq!(m.songs[0].track, Some(2));
+    assert_eq!(m.albums[0].tracks, Some(2));
+    for (body, says) in [
+        (
+            format!("{song}album = \"youtube.com:playlist/pl00000002\"\n{album}"),
+            "no [[album]] lists",
+        ),
+        (format!("{song}{on}track = \"x\"\n{album}"), "`track`"),
+        (format!("{song}{on}track = 0\n{album}"), "`track`"),
+        (format!("{song}{on}track = -3\n{album}"), "`track`"),
+        (format!("{song}{on}{}", album.replace('2', "0")), "`tracks`"),
+    ] {
+        write(dir.path(), &body);
+        let e = Manifest::load(dir.path()).unwrap_err();
+        assert!(format!("{e:#}").contains(says), "{body}: {e:#}");
     }
 }
 

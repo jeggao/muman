@@ -134,13 +134,13 @@ tags.genre = ""
 |---|---|
 | `version` | The file's format; muman refuses a newer one |
 | `sources` | Every source the song may be made from. A file belongs to one song; a lookup's record may be listed by every song of its recording |
-| `album`, `track` | The `[[album]]` the song is on, and its place there |
+| `album`, `track` | The `source` of the `[[album]]` the song is on, which must be listed, and its place there, from 1 |
 | `audio`, `cover`, `lyrics` | A pin: that part from that source, whatever the measures say. `lyrics = false` takes none |
 | `lyrics_offset` | Moves the lyrics later by this time, on top of the offset measured; a negative time moves them earlier |
 | `lookups` | `false` asks no provider anything for the song; `lookups.<provider> = false` asks that one nothing ([lookups](library.md#lookups)) |
 | `tags.<name>` | A tag set over what the sources offer; an empty value sets nothing |
 | `held."<key>"` | What a source held when the song was built, written by muman ([a source that changes](#a-source-that-changes)) |
-| `[[album]]` | A YouTube Music album added whole, with `tags.<name>` over what its tracks offer |
+| `[[album]]` | A YouTube Music album added whole: its key as `source`, as `youtube.com:playlist/<id>`, how many songs it holds as `tracks`, and `tags.<name>` over what its tracks offer |
 | `[torrents."<hash>"]` | A torrent whose files songs list: its `name`, `trackers` and `v2` hash, from which it is fetched again ([torrents](#torrents)) |
 | `[[removed]]` | A song `remove` took out, kept whole under a `note` naming it ([removed songs](#removed-songs)) |
 

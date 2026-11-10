@@ -987,6 +987,19 @@ fn keys_of(t: &Table, what: &str) -> Result<Vec<SourceKey>> {
         .collect()
 }
 
+/// The whole number of 1 or more `key` sets in `t`, if it sets one: a
+/// song's place on its album, or how many songs the album holds.
+fn numbered(t: &Table, key: &str, what: &str) -> Result<Option<u32>> {
+    t.get(key)
+        .map(|item| {
+            item.as_integer()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n > 0)
+                .with_context(|| format!("{what}: `{key}` must be a whole number of 1 or more"))
+        })
+        .transpose()
+}
+
 /// The keys song `n`'s table lists, refused when another song lists one
 /// of its files: `owner` has every file's song so far.
 fn owned_keys(
@@ -1006,6 +1019,22 @@ fn owned_keys(
         }
     }
     Ok(keys)
+}
+
+/// Refuse a song on an album no `[[album]]` lists.
+fn refuse_albumless(songs: &[Song], albums: &[Album]) -> Result<()> {
+    for (n, song) in songs.iter().enumerate() {
+        if let Some(album) = &song.album
+            && !albums.iter().any(|a| &a.source == album)
+        {
+            bail!(
+                "song {} ({}) is on album {album}, which no [[album]] lists as its `source`",
+                n + 1,
+                song.sources[0]
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a song whose every key another song lists too: a song is named
@@ -1118,10 +1147,7 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         };
         let song = Song {
             album: key_at(t, "album", &what)?,
-            track: t
-                .get("track")
-                .and_then(Item::as_integer)
-                .and_then(|i| u32::try_from(i).ok()),
+            track: numbered(t, "track", &what)?,
             audio: key_at(t, "audio", &what)?,
             cover: key_at(t, "cover", &what)?,
             lyrics,
@@ -1163,13 +1189,11 @@ fn parse(doc: &DocumentMut) -> Result<Parsed> {
         };
         albums.push(Album {
             source,
-            tracks: t
-                .get("tracks")
-                .and_then(Item::as_integer)
-                .and_then(|i| u32::try_from(i).ok()),
+            tracks: numbered(t, "tracks", &what)?,
             tags: tags_of(t.get("tags"), &what)?,
         });
     }
+    refuse_albumless(&songs, &albums)?;
     let removed = removed_of(doc)?;
     let settings = crate::settings::read(doc)?;
     let providers = providers::read(doc)?;
