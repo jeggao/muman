@@ -232,11 +232,11 @@ ASCII.
 
 ### Chapters
 
-A song keeps the chapters of the source its audio comes from, as an
-M4B audiobook or a video in parts has them. The song stays one file,
-and a player skips from chapter to chapter within it. MP4 holds them as
-MP4 chapters, FLAC, Ogg and Opus as `CHAPTER000` and `CHAPTER000NAME`
-comments, and MP3 as `CTOC` and `CHAP` frames. WavPack holds none.
+A song keeps its audio source's chapters, as an M4B audiobook or a
+video in parts has them, in one file a player skips through: MP4 as MP4
+chapters, MP3 as `CTOC` and `CHAP` frames, and FLAC, Ogg and Opus as
+`CHAPTER000` to `CHAPTER999` comments, so writing a song says it drops
+any past the 1000th. WavPack holds none.
 
 ### How muman edits the song list
 

@@ -687,7 +687,7 @@ fn vouch<R: Runner, W: Write>(
         out,
         &format!("{verb}: {}", crate::relpath::show(&done.audio)),
     )?;
-    for problem in &done.problems {
+    for problem in done.problems.iter().chain(&r.why.chapters) {
         crate::ui::warning(out, &format!("  {problem}"))?;
     }
     let learned = job.fitted.map(|f| {

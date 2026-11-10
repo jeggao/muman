@@ -174,7 +174,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::clean::{self, Albums, Settings};
-use crate::codec::{Adapt, Chain, Codec, Container, Layout};
+use crate::codec::{Adapt, Chain, Codec, Layout};
 use crate::detect::{self, Watermarks};
 use crate::facts::{AudioFacts, CoverAt, Facts, LyricsAt};
 use crate::integrity::Damage;
@@ -878,6 +878,9 @@ pub struct Why {
     /// The release it was moved to and why ([`crate::release`]), as
     /// `<key>: <why>`.
     pub release: Option<String>,
+    /// Which of its audio's chapters its container leaves out
+    /// ([`crate::chapters::held`]), said whenever it is written.
+    pub chapters: Option<String>,
 }
 
 /// Something a song's picks leave in doubt, which `check` lists and
@@ -1200,6 +1203,11 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
     let contested = contested_unset(&candidates, &tag_why);
     let doubts = doubts_of(input, &vets, &recordings, &contested, ms_of(facts));
     let release = moved(input, &tag_why);
+    let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
+    let (chapters, chapters_why) = crate::chapters::held(
+        crate::chapters::within(&facts.chapters, length_ms),
+        format.codec().container(),
+    );
     Ok(Resolved {
         plan: Plan {
             folder: None,
@@ -1215,12 +1223,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             tags,
             loudness: None,
             tagging: TAGGING,
-            chapters: if format.codec().container() == Container::WavPack {
-                Vec::new()
-            } else {
-                let length_ms = facts.length().map(|s| (s * 1000.0).round() as u64);
-                crate::chapters::within(&facts.chapters, length_ms)
-            },
+            chapters,
         },
         stem,
         why: Why {
@@ -1235,6 +1238,7 @@ pub fn resolve(input: &Input<'_>) -> Result<Resolved> {
             contested: contested.into_iter().map(|(_, _, why)| why).collect(),
             doubts,
             release,
+            chapters: chapters_why,
         },
     })
 }
