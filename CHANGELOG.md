@@ -158,6 +158,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A song retitled beside lyrics you edited stays where it is.** It
+  was moved, then failed partway, its file retagged but recorded as it
+  was: from then on it read as changed by you, `check` failed and
+  `undo` refused. It keeps its name with a warning until `sync
+  --force`, and a song one of whose files is refused writes none.
 - **A damaged copy no longer replaces the whole one.** A source cut
   off, missing audio or cut short ranks below every whole copy of its
   recording, however little it lacks. A copy with holes is compared
