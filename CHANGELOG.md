@@ -158,6 +158,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **More than 255 chapters in an MP3**: a source with more is written as
+  MP3 with every one, where the song failed on every sync. FLAC, Ogg and
+  Opus keep the first 1000, as many as Vorbis comments number, and say
+  so.
+- **A copied FLAC states its length**: one copied from a FLAC that states
+  none, as one encoded into a pipe or an Ogg FLAC holds, is given its
+  sample count. Every FLAC song is written again once. An Ogg FLAC's
+  tags are read.
+- **Covers labelled wrong are read by their bytes**: an embedded cover
+  whose media type is wrong or unknown to ffmpeg, as a JPEG labelled PNG
+  or WebP in FLAC, is kept where it was dropped; one that does not
+  decode is said.
 - **`max_size` counts a song left as built as its file**, so another
   song gives up the room, and the song is not reported lowered.
 - **An export makes no song from a source cut off since it was built**:
