@@ -74,8 +74,7 @@ fn each_change_lands_in_the_part_that_writes_it() {
         ("lyrics.placement", T),
         ("lyrics.files", F),
         ("lyrics.inside", T),
-        // A file of cues' end, which the lyrics inside never read.
-        ("lyrics.end_ms", F),
+        ("lyrics.end_ms", lyric),
         ("lyrics.language", T),
         ("lyrics.clean_off", lyric),
         ("lyrics.cleaning", lyric),

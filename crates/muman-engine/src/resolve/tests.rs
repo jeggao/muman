@@ -3024,8 +3024,8 @@ fn every_format() -> Vec<Format> {
 /// Digests of the stored form and the plan key of a plan with every part
 /// in [`every_format`], as the last release kept them.
 const KEPT: (&str, &str) = (
-    "6cfbb0edc688b3e216eb69a1739d41ab7ffe7f8c8bfa83a8070341f258582af4",
-    "d394f35e2b2181b2bef61aa8a79365b65fda0019345a709392c7d907090112ab",
+    "6bcbc0006bfb7a3c48abd0f53563e565349809868d43bc44888084d52d9a71bf",
+    "cd2ff396efbc761a41d8245cd6ca041a6e558c3f26556fe12abb72a29934b212",
 );
 
 #[test]

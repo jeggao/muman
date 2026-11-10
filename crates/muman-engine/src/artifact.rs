@@ -83,6 +83,9 @@ pub struct LyricText<'a> {
     pub at: &'a LyricsAt,
     pub shift_ms: i64,
     pub stretch_ppm: i64,
+    /// Where the song ends, past which no line is kept, and which ends a
+    /// file of cues' last cue.
+    pub end_ms: Option<i64>,
     pub clean_off: &'a [String],
     pub cleaning: u32,
     pub writing: u32,
@@ -102,8 +105,6 @@ pub struct LyricsInside<'a> {
 pub struct LyricsFilePart<'a> {
     pub text: LyricText<'a>,
     pub file: LyricsFile,
-    /// Where the song ends, which ends a file of cues' last cue.
-    pub end_ms: Option<i64>,
 }
 
 /// What a cover picture is made from, wherever it goes.
@@ -189,7 +190,6 @@ pub fn parts(plan: &Plan) -> Parts<'_> {
             Beside::Lyrics(LyricsFilePart {
                 text: text.clone(),
                 file,
-                end_ms: l.end_ms,
             })
         }));
     }
@@ -240,6 +240,7 @@ fn lyric_text<'a>(plan: &'a Plan, l: &'a LyricsRef) -> LyricText<'a> {
         at: &l.at,
         shift_ms: l.shift_ms,
         stretch_ppm: l.stretch_ppm,
+        end_ms: l.end_ms,
         clean_off: &l.clean_off,
         cleaning: l.cleaning,
         writing: l.writing,

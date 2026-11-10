@@ -124,7 +124,8 @@ comment, `©lyr` in MP4, `Lyrics` in APEv2. A `.lrc` with no audio of
 its own is taken as timed for the song. One that states its length, as
 LRCLIB's do, is trusted as far as that length agrees with the chosen
 audio's, and lyrics timed past the audio's end are another cut's, taken
-only where no lyrics fit. A song sung in no language, as MusicBrainz marks one
+only where no lyrics fit; a line starting over 2 s past the end is left
+out of any lyrics, and said. A song sung in no language, as MusicBrainz marks one
 (`zxx`), or titled as an instrumental or a karaoke take, takes no lyrics.
 Lyrics that state no language are the song's own, unless their letters
 are Latin alone and the song is sung in another script: then they are

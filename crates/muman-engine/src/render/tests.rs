@@ -908,6 +908,58 @@ fn a_lyrics_file_is_cleaned_and_moved_without_ffmpeg() {
 }
 
 #[test]
+fn a_line_timed_past_the_song_s_end_is_left_out_and_said() {
+    let mut f = fixture();
+    let lrc = f.dir.path().join("store/x.lrc");
+    fs::write(
+        &lrc,
+        "[00:05.00]five\n[999999999:00.00]huge\n[00:20.50]tail\n",
+    )
+    .unwrap();
+    let key = SourceKey::Manual("x.lrc".into());
+    f.sources.insert(
+        key.clone(),
+        Located {
+            key: key.clone(),
+            path: lrc,
+            kind: Kind::Lyrics,
+            lyrics: None,
+            covers: Vec::new(),
+        },
+    );
+    let mut p = plan(Format::Copy { codec: Codec::Opus });
+    p.cover = None;
+    p.lyrics = Some(LyricsRef {
+        key,
+        rev: "r".into(),
+        at: LyricsAt::File,
+        shift_ms: 0,
+        stretch_ppm: 0,
+        placement: LyricsPlacement::Sidecar,
+        files: None,
+        inside: None,
+        end_ms: Some(20_000),
+        language: None,
+        clean_off: Vec::new(),
+        cleaning: crate::clean::lyrics::EDITION,
+        writing: crate::lyrics::WRITING,
+    });
+    let rendered = go(&Fake::default(), &f, &p).unwrap();
+    assert_eq!(
+        fs::read_to_string(f.dir.path().join("lib/A/Record/Song.lrc")).unwrap(),
+        "[00:05.00]five\n[00:20.50]tail\n"
+    );
+    assert!(
+        rendered
+            .problems
+            .iter()
+            .any(|p| p.ends_with("1 line(s) left out, timed past the song's end")),
+        "{:?}",
+        rendered.problems
+    );
+}
+
+#[test]
 fn a_retag_writes_the_new_tags_and_keeps_the_cover_and_lyrics_in_every_format() {
     use lofty::file::TaggedFileExt;
     let formats = [

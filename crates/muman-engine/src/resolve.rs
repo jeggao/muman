@@ -540,8 +540,9 @@ pub struct LyricsRef {
     /// word times.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inside: Option<LyricsFile>,
-    /// Where the song ends, in ms, which ends the last cue of a file of
-    /// cues; none where no file holds cues.
+    /// Where the song ends, in ms, past which no line is kept and which
+    /// ends the last cue of a file of cues; none where its length is not
+    /// known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<i64>,
     /// The ISO 639-2 code of the language their source names them in.
@@ -1753,8 +1754,9 @@ struct Fitting {
 fn runs_past(timing: Option<lyrics::Timing>, offset: i64, duration_ms: f64) -> bool {
     // A song's milliseconds are far below 2^52, held exactly.
     duration_ms > 0.0
-        && timing
-            .is_some_and(|t| (t.last_ms - offset) as f64 > duration_ms + f64::from(FIT_GRACE_MS))
+        && timing.is_some_and(|t| {
+            (t.last_ms - offset) as f64 > duration_ms + lyrics::END_GRACE_MS as f64
+        })
 }
 
 /// Why lyrics of `role` and `timing` were taken, `own` none for lyrics
@@ -1774,10 +1776,6 @@ fn lyrics_why(role: Option<Role>, timing: Option<lyrics::Timing>, own: Option<i6
         Some(Role::Translation) => format!("a translation, {timing}"),
     }
 }
-
-/// How far past the song's audio a timed line may start and its lyrics
-/// still be the song's: a fade or a rip's tail apart.
-const FIT_GRACE_MS: i32 = 2_000;
 
 /// Whether `tags` say the song sings no words: MusicBrainz's language
 /// `zxx` alone, or a title whose decoration names an instrumental or a
@@ -2203,12 +2201,10 @@ fn lyrics_outputs(
     };
     let tag = outs.clone().find(|o| o.to == To::Tag);
     let files: Vec<LyricsFile> = outs.filter(|o| o.to == To::File).map(form).collect();
-    let cues = files.iter().any(|f| f.format.cues());
     let end_ms = input
         .facts
         .get(audio)
         .and_then(Facts::length)
-        .filter(|_| cues)
         .map(|s| (s * 1000.0).round() as i64);
     let inside = tag.map(form).filter(|f| *f != LyricsFile::default());
     let (placement, files) = LyricsRef::placed(tag.is_some(), files);

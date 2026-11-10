@@ -33,7 +33,7 @@
 //! ([`is_text`]).
 //!
 //! [`WRITING`] names how a song's lyrics are read from their source,
-//! moved and written: [`decode`], [`shift_lrc`], ffmpeg's
+//! moved and written: [`decode`], [`shift_lrc`], [`until`], ffmpeg's
 //! [`LRC_ARGS`](crate::facts::LRC_ARGS) for a stream, and
 //! [`cues::write`](crate::cues::write). A plan records it, so a change to
 //! what these make writes every song's lyrics again, inside the song and
@@ -50,7 +50,7 @@ use crate::info::VideoInfo;
 use crate::probe::Subtitle;
 
 /// How a song's lyrics are read, moved and written; see the module docs.
-pub const WRITING: u32 = 4;
+pub const WRITING: u32 = 5;
 
 /// What a stream or file of lyrics is known to be written in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -912,6 +912,40 @@ impl<'a> Lrc<'a> {
     }
 }
 
+/// How far past a song's audio a timed line may start and still be its
+/// lyrics: a fade or a rip's tail apart.
+pub const END_GRACE_MS: i64 = 2_000;
+
+/// LRC without the times past `end_ms`, where the song ends, and its
+/// [`END_GRACE_MS`], and how many lines of words were left out for
+/// keeping none: such a line is never heard, and as the last cue it
+/// would hold the line before it on screen until it came. A word's time
+/// is left as it is, as is a line of no time.
+#[must_use]
+pub fn until(text: &str, end_ms: i64) -> (String, usize) {
+    let last = end_ms.saturating_add(END_GRACE_MS);
+    let mut out = String::with_capacity(text.len());
+    let mut left_out = 0;
+    for line in text.lines() {
+        let opened = opened(line);
+        if opened.damaged || opened.times.iter().all(|ms| *ms <= last) {
+            out.push_str(line);
+        } else {
+            let kept: Vec<i64> = opened.times.into_iter().filter(|ms| *ms <= last).collect();
+            if kept.is_empty() {
+                left_out += usize::from(!without_word_times(opened.rest).trim().is_empty());
+                continue;
+            }
+            for ms in kept {
+                stamp(&mut out, ms, '[', ']');
+            }
+            out.push_str(opened.rest);
+        }
+        out.push('\n');
+    }
+    (out, left_out)
+}
+
 /// The value of the line `line` if it is the ID tag `name`, as `[offset:+500]`.
 pub(crate) fn id_tag<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let inner = line.trim().strip_prefix('[')?.strip_suffix(']')?;
@@ -1264,6 +1298,18 @@ mod tests {
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
         assert!(read(&noise).is_none());
+    }
+
+    #[test]
+    fn a_line_past_the_song_s_end_and_its_grace_is_left_out() {
+        let lrc = "[ar:Marlo Venn]\n[00:05.00]five\n[00:21.00][999999999:00.00]huge\n\
+                   [00:23.00]late\n[00:30.00]\n[00:19.00]<00:19.50>last\n";
+        let (kept, left_out) = until(lrc, 20_000);
+        assert_eq!(
+            kept,
+            "[ar:Marlo Venn]\n[00:05.00]five\n[00:21.00]huge\n[00:19.00]<00:19.50>last\n"
+        );
+        assert_eq!(left_out, 1);
     }
 
     #[test]
