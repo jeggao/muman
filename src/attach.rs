@@ -829,13 +829,20 @@ fn ids_of(tags: &Tags) -> BTreeSet<String> {
 
 /// The subtitles at `path` converted to LRC at `lrc`, its bytes. ffmpeg
 /// reads subtitles as UTF-8 and drops each cue that is not, so they reach
-/// it as the text [`lyrics::decode`] makes of them, written beside `lrc`.
+/// it as the text [`lyrics::decode`] makes of them, written beside `lrc`;
+/// WebVTT without its style and region blocks, after which ffmpeg reads
+/// no cue ([`lyrics::webvtt_cues`]).
 fn subtitles_as_lrc<R: Runner>(runner: &R, path: &Path, lrc: &Path) -> Result<Vec<u8>> {
     let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let scratch = lrc.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
-    let name = crate::atomic::Name::new(format!("subtitles.{}", extension(path)))?;
-    crate::atomic::write(scratch, &name, lyrics::decode(&raw).as_bytes())?;
+    let ext = extension(path);
+    let mut text = lyrics::decode(&raw);
+    if ext == "vtt" {
+        text = lyrics::webvtt_cues(&text);
+    }
+    let name = crate::atomic::Name::new(format!("subtitles.{ext}"))?;
+    crate::atomic::write(scratch, &name, text.as_bytes())?;
     let args: Vec<std::ffi::OsString> = facts::LRC_ARGS.iter().map(Into::into).collect();
     let output = crate::ffmpeg::Output::new(args, lrc);
     let decoded = scratch.join(name.as_str());

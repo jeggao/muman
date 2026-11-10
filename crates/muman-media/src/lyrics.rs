@@ -760,6 +760,27 @@ pub fn as_read(text: &str) -> String {
     out
 }
 
+/// WebVTT without its `STYLE` and `REGION` blocks, each a block whose
+/// first line opens with the word: ffmpeg 6's demuxer reads no cue of a
+/// file holding one, though YouTube and other tools write them.
+#[must_use]
+pub fn webvtt_cues(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut opening, mut skipping) = (true, false);
+    for line in text.split_inclusive('\n') {
+        let blank = line.trim().is_empty();
+        if opening && !blank {
+            let word = line.split_whitespace().next();
+            skipping = matches!(word, Some("STYLE" | "REGION"));
+        }
+        opening = blank;
+        if blank || !skipping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// UTF-16 with no byte-order mark, told by its zero bytes: an ASCII
 /// character has one in its pair, on the side its byte order says.
 fn utf16_unmarked(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
@@ -1243,6 +1264,16 @@ mod tests {
             .map(|i| i.wrapping_mul(2_654_435_761).to_le_bytes()[2])
             .collect();
         assert!(read(&noise).is_none());
+    }
+
+    #[test]
+    fn webvtt_loses_its_style_and_region_blocks_alone() {
+        let vtt = "WEBVTT\n\nSTYLE\n::cue { color: red }\n\nREGION\nid:low\n\n\
+                   NOTE a STYLE word\n\n00:00:01.000 --> 00:00:02.000\nSTYLE of the night\n";
+        assert_eq!(
+            webvtt_cues(vtt),
+            "WEBVTT\n\n\n\nNOTE a STYLE word\n\n00:00:01.000 --> 00:00:02.000\nSTYLE of the night\n"
+        );
     }
 
     #[test]
