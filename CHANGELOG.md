@@ -690,8 +690,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   bare text passed as one argument matches each of its words apart.
 - **`set track=0` says tracks and discs count from 1**, instead of
   calling 0 no number.
-- **A line break set by hand in a name becomes a space**, so the value
-  is stored as `list` shows it and one-line reports stay one line.
+- **A line break set by hand in a name becomes a space**, so a title,
+  artist or other named field is stored as `list` shows it. A comment
+  or unknown tag keeps its lines, is listed with each break as `\n`,
+  and is matched as if the break were a space.
 - **`set` refuses the query fields `from=` and `has=`**, as it refused
   `key=` and `path=`, and `release=<ID>` pins the song's release
   instead of writing a tag.
