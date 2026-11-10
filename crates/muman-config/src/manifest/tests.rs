@@ -330,6 +330,12 @@ fn a_source_listed_twice_is_refused() {
     );
     let e = Manifest::load(dir.path()).unwrap_err();
     assert!(format!("{e:#}").contains("both song 1 and song 2"), "{e:#}");
+    write(
+        dir.path(),
+        "[[song]]\nsources = [\"manual:a.flac\", \"manual:a.flac\"]\n",
+    );
+    let e = Manifest::load(dir.path()).unwrap_err();
+    assert!(format!("{e:#}").contains("listed twice by song 1"), "{e:#}");
 }
 
 #[test]

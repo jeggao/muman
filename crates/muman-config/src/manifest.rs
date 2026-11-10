@@ -1011,6 +1011,9 @@ fn owned_keys(
     let keys = keys_of(t, what)?;
     for key in keys.iter().filter(|k| !shareable(k)) {
         if let Some(other) = owner.insert(key.clone(), n) {
+            if other == n {
+                bail!("{key} is listed twice by song {}", n + 1);
+            }
             bail!(
                 "{key} is listed by both song {} and song {}",
                 other + 1,

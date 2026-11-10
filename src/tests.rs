@@ -5136,6 +5136,32 @@ fn a_template_that_cannot_name_every_song_is_refused_before_anything_is_written(
 }
 
 #[test]
+fn a_song_list_that_is_no_toml_is_worded_alike_by_every_command() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    std::fs::write(&songs, format!("{listed}\n[[song\n")).unwrap();
+    for args in [&["status"][..], &["sync"], &["list"], &["info"]] {
+        let e = run_with(
+            &s.job(args),
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        let said = format!("{e:#}");
+        assert!(
+            said.starts_with(&format!("{} is not valid TOML", songs.display())),
+            "{args:?}: {said}"
+        );
+    }
+}
+
+#[test]
 fn a_setting_that_does_not_read_is_invalid_and_a_song_that_does_not_is_a_failure() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

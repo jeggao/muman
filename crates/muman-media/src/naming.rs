@@ -354,6 +354,17 @@ impl Naming {
     }
 }
 
+/// Whether `text` names something a reader sees once made a name: not
+/// empty, nor only dots, spaces and characters that show nothing, which
+/// would leave a song a file of its extension alone, a hidden one.
+#[must_use]
+pub fn shows(text: &str) -> bool {
+    !trim_dots(text)
+        .trim_end_matches(|c: char| c == '.' || c.is_whitespace())
+        .chars()
+        .all(|c| invisible(c) || c.is_control() || reorders(c))
+}
+
 /// `text` without the dots and spaces it starts with and the spaces it
 /// ends with, however they alternate, so `. .` leaves nothing rather
 /// than a dot.

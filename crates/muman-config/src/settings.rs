@@ -638,13 +638,15 @@ impl Cover {
                         o.format
                             .extensions()
                             .iter()
-                            .map(|e| format!("{}.{e}", o.suffix).to_uppercase())
+                            .map(|e| format!("{}.{e}", o.suffix))
                             .collect()
                     };
                     let twice = self.out[..n].iter().any(|o| {
                         o.to == To::File
                             && o.scope == Scope::Song
-                            && names(o).iter().any(|a| names(out).contains(a))
+                            && names(o)
+                                .iter()
+                                .any(|a| names(out).iter().any(|b| one_name(a, b)))
                     });
                     if twice {
                         bail!(
@@ -673,12 +675,15 @@ impl Cover {
             o.format
                 .extensions()
                 .iter()
-                .map(|e| format!("{}.{e}", o.name).to_uppercase())
+                .map(|e| format!("{}.{e}", o.name))
                 .collect()
         };
-        let twice = before
-            .iter()
-            .any(|o| o.scope == Scope::Folder && names(o).iter().any(|a| names(out).contains(a)));
+        let twice = before.iter().any(|o| {
+            o.scope == Scope::Folder
+                && names(o)
+                    .iter()
+                    .any(|a| names(out).iter().any(|b| one_name(a, b)))
+        });
         if twice {
             bail!(
                 "[[cover.out]] names the folder's file `{}` twice",
@@ -692,6 +697,12 @@ impl Cover {
     pub fn of(&self, scope: Scope) -> impl Iterator<Item = &CoverOut> {
         self.out.iter().filter(move |o| o.scope == scope)
     }
+}
+
+/// Whether `a` and `b` name one file where case is not told apart, as on
+/// Windows and macOS.
+fn one_name(a: &str, b: &str) -> bool {
+    a.to_uppercase() == b.to_uppercase()
 }
 
 /// The quality a cover is encoded at, where `[[cover.out]]` sets none.
@@ -1263,11 +1274,9 @@ impl Lyrics {
                 To::File => {
                     crate::naming::check_suffix(&out.suffix)
                         .map_err(|e| anyhow::anyhow!("[[lyrics.out]] suffix: {e}"))?;
-                    let name = |o: &LyricsOut| {
-                        format!("{}.{}", o.suffix, o.format.extension()).to_uppercase()
-                    };
+                    let name = |o: &LyricsOut| format!("{}.{}", o.suffix, o.format.extension());
                     let twice = self.out[..n].iter().any(|o| {
-                        o.to == To::File && name(o) == name(out) && o.when.meets(out.when)
+                        o.to == To::File && one_name(&name(o), &name(out)) && o.when.meets(out.when)
                     });
                     if twice {
                         bail!(
@@ -1576,6 +1585,13 @@ fn checked(doc: &DocumentMut, overrides: &[Override]) -> Result<Settings> {
     if library.block_size.0 == 0 {
         bail!("[library] block_size must be above 0");
     }
+    if !crate::naming::shows(&library.untitled) {
+        bail!(
+            "[library] untitled names a song with no title, so it must name something seen, \
+             not `{}`",
+            library.untitled
+        );
+    }
     let least = [
         (
             "max_name_bytes",
@@ -1818,7 +1834,12 @@ mod tests {
             ),
             (
                 "[[lyrics.out]]\nto = \"file\"\n[[lyrics.out]]\nto = \"file\"\nwhen = \"timed\"\n",
-                "twice",
+                "names the file `<song>.lrc` twice",
+            ),
+            (
+                "[[lyrics.out]]\nto = \"file\"\nsuffix = \".en\"\n\
+                 [[lyrics.out]]\nto = \"file\"\nsuffix = \".EN\"\n",
+                "`<song>.EN.lrc` twice",
             ),
             ("[[lyrics.out]]\nto = \"aside\"\n", "aside"),
         ] {
@@ -1967,6 +1988,11 @@ mod tests {
         );
         assert!(settings("[library]\nmax_folder_bytes = 3\n").is_err());
         assert!(settings("[library]\nmax_name_bytes = 40\nmax_folder_bytes = 16\n").is_ok());
+        for untitled in ["", " . ", "\u{200b}"] {
+            let e = settings(&format!("[library]\nuntitled = \"{untitled}\"\n")).unwrap_err();
+            assert!(format!("{e:#}").contains("untitled"), "{e:#}");
+        }
+        assert!(settings("[library]\nunknown_artist = \"\"\nunknown_album = \"\"\n").is_ok());
         let empty = settings("[library]\ntemplate = \" / / \"\n").unwrap();
         assert!(empty.library.naming(Path::new("lib")).is_err());
         let e = settings("[library]\nmax_folder_bytes = 1000\n").unwrap_err();
