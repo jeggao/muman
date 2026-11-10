@@ -762,7 +762,7 @@ pub(crate) struct Traits {
     /// holds songs, and each setting it renames is said first.
     pub edits_list: bool,
     /// It may run a tool, a hook or a request on the song list's
-    /// settings, so asks first ([`trust`]). `undo` asks apart, about the
+    /// settings, so asks first ([`trust`]). `undo` asks again, about the
     /// list it puts back.
     pub gated: bool,
     /// It may run ffmpeg or ffprobe: an export only when it encodes,
@@ -831,8 +831,11 @@ pub(crate) fn traits(command: &Command) -> Traits {
         | Command::Set { .. }
         | Command::Edit { .. }
         | Command::Review { .. } => edits(CHANGE),
+        // The song list as it stands names the programs undo's sync runs,
+        // so it is trusted first, and the list put back after.
         Command::Undo { .. } => Traits {
             apart: true,
+            gated: true,
             ffmpeg: true,
             steps: CHANGE,
             ..reads

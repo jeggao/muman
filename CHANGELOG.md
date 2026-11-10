@@ -158,6 +158,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`undo` runs nothing a song list names until it is trusted**: it read
+  the programs of an untrusted list's `[tools]` before asking, as no
+  other command does.
 - **An album keeps one gain while a song of it is left as built**: the
   song counts in its album's loudness as its file was made.
 - **A cut-short cover a lookup kept is no cover**: any picture source

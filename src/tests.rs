@@ -6856,6 +6856,8 @@ fn a_song_list_s_hook_runs_only_once_trusted_and_y_trusts_nothing() {
         &["sync"][..],
         &["set", "-y", "manual:a.flac", "genre=Folk"],
         &["info"],
+        &["undo", "-y"],
+        &["undo", "-n"],
     ] {
         let fake = flacs();
         let e = s.trusting(&fake, args, None).unwrap_err();
@@ -8634,7 +8636,7 @@ fn each_command_is_classified_as_it_runs() {
         (&["set", "a", "title=b"], is(true, true, true, true, CHANGE)),
         (&["edit"], is(true, true, true, true, CHANGE)),
         (&["review"], is(true, true, true, true, CHANGE)),
-        (&["undo"], is(true, false, false, true, CHANGE)),
+        (&["undo"], is(true, false, true, true, CHANGE)),
         (&["purge"], is(true, false, false, false, &[])),
         (&["check"], is(false, false, false, false, &["Decoding"])),
         (
