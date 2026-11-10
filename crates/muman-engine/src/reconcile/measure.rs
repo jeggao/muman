@@ -638,11 +638,20 @@ pub fn compare<R: Runner, W: Write>(
         }))
         .filter_map(|(k, e)| Some((k.clone(), e?)))
         .collect();
+    let lost = |k: &SourceKey| {
+        let damage = state.facts.get(k).and_then(Facts::damage);
+        damage.map_or(0, |d| d.lost_ms())
+    };
     let compared = parallel::map(&due, parallel::builds(), |(a, b, revs)| {
         let (ea, eb) = (envelopes.get(a)?, envelopes.get(b)?);
-        let found = align::align(ea, eb).unwrap_or(align::Alignment {
+        let lost = align::Lost {
+            upload_ms: lost(a),
+            track_ms: lost(b),
+        };
+        let found = align::align_lacking(ea, eb, lost).unwrap_or(align::Alignment {
             offset_ms: 0,
             stretch_ppm: 0,
+            stepped_ms: 0,
             score: 0.0,
             coverage: 0.0,
         });

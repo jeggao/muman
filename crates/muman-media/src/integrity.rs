@@ -150,6 +150,23 @@ impl Damage {
             Self::Missing { seconds, .. } => (seconds * 1000.0).round() as i64,
         }
     }
+
+    /// Milliseconds of its audio that may be lost anywhere in it, which
+    /// comparing it lets it lack ([`crate::align::align_lacking`]): what is
+    /// missing, or what a cut stream says past its packets' end, since
+    /// packets a demuxer skips as unreadable end the stream that much
+    /// early; and [`SLACK_S`] more, as far as the lengths may be off. An
+    /// MP3 file with a run of its bytes zeroed said 2.51 s past its end and
+    /// had lost 2.61 s.
+    #[must_use]
+    pub fn lost_ms(&self) -> i64 {
+        let lost = match *self {
+            Self::Cut { said, ends } => said - ends,
+            Self::Short { .. } => return 0,
+            Self::Missing { seconds, .. } => seconds,
+        };
+        ((lost + SLACK_S) * 1000.0).round() as i64
+    }
 }
 
 /// Where a stream's packets lie, from a `framecrc` list of them.
@@ -360,6 +377,16 @@ mod tests {
             holes.describe(&key)
         );
         assert_eq!(holes.missing_ms(), 10_600);
+        assert_eq!((cut.lost_ms(), holes.lost_ms()), (270_000, 11_600));
+        let short = Damage::Short {
+            stated: 200.0,
+            ends: 150.0,
+        };
+        assert_eq!(
+            short.lost_ms(),
+            0,
+            "it lacks its end, which comparing finds"
+        );
         let corrupt = Damage::Missing {
             seconds: 56.0,
             holes: 0.0,

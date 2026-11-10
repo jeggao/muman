@@ -430,8 +430,11 @@ of damage:
   a download that lost pieces leaves, or packets too corrupt to decode.
 
 A cut-off source is encoded rather than copied, so its song ends
-cleanly. A source missing audio ranks below any whole copy of the
-recording. A damaged download is fetched again, at once and then less
+cleanly. A damaged source ranks below any whole copy of the recording,
+however little it lacks. Audio a hole lost plays as if never there, so
+everything after it comes early; muman compares a damaged copy with
+the others allowing for that, and it stays the same recording. A
+damaged download is fetched again, at once and then less
 often, up to five times or until `sync --retry`. A torrent's file is
 not when the torrent itself holds the damage ([torrents](#torrents)).
 The whole copy a fetch brings is taken without `--accept`, since

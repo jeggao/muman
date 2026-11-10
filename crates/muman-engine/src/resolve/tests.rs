@@ -1797,6 +1797,46 @@ fn audio_missing_from_a_source_ranks_it_below_an_intact_one() {
 }
 
 #[test]
+fn a_copy_lacking_less_than_a_step_ranks_below_its_whole_copy_aligned_or_not() {
+    let holed = manual("a-holed.flac");
+    let cut = manual("a-cut.flac");
+    let whole = manual("b-whole.flac");
+    let facts = BTreeMap::from([
+        (
+            holed.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 198.1),
+        ),
+        (
+            cut.clone(),
+            measured(audio("flac", 22.0), 200.0, 198.5, 198.5),
+        ),
+        (
+            whole.clone(),
+            measured(audio("flac", 22.0), 200.0, 200.0, 200.0),
+        ),
+    ]);
+    let mut aligned = both(&facts, &holed, &whole, 0, 0.95).to_vec();
+    aligned.extend(both(&facts, &cut, &whole, 0, 0.95));
+    for damaged in [&holed, &cut] {
+        let s = song(&[damaged.clone(), whole.clone()]);
+        for alignments in [&[][..], &aligned[..]] {
+            let r = run(&s, &facts, alignments);
+            assert_eq!(r.plan.audio.key, whole, "{:?}", r.why);
+        }
+    }
+    let r = run(
+        &song(&[holed.clone(), cut.clone(), whole.clone()]),
+        &facts,
+        &[],
+    );
+    assert_eq!(
+        r.plan.audio.key, whole,
+        "outvoted by no damaged copy: {:?}",
+        r.why
+    );
+}
+
+#[test]
 fn a_song_with_no_damaged_source_is_ranked_as_ever() {
     let a = manual("a.flac");
     let b = manual("b.mp3");

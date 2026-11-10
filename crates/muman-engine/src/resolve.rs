@@ -8,8 +8,12 @@
 //! fewer such.
 //!
 //! - Audio: the song's recording before another ([`vet::recordings`]),
-//!   then least that is not the song (a video's intro or skit) or
-//!   is missing from it (past an excerpt's cut), then
+//!   then a whole copy before a damaged one, cut off, missing audio or
+//!   cut short ([`crate::integrity`]), however little it lacks: purity
+//!   counts audio lacked in steps, and a hole under a step would rank
+//!   the damage alike with the whole copy, which the order of `sources`
+//!   then decides; then least that is not the song (a video's intro or
+//!   skit) or is missing from it (past an excerpt's cut), then
 //!   real stereo, the widest bandwidth, least clipping; scored alike,
 //!   from the folder most of its album's audio comes from, then
 //!   lossless, then the most bits used, then the lowest rate.
@@ -1321,7 +1325,7 @@ type Rank = Vec<i64>;
 /// Where a [`Rank`] holds whether a source came from its album's folder,
 /// which sways the audio a song plays but not the audio a lookup was
 /// asked with.
-const FROM_ALBUM: usize = 2;
+const FROM_ALBUM: usize = 3;
 
 /// An unmeasured score ranks after every measured one.
 const UNKNOWN: i64 = i64::MAX / 2;
@@ -1429,6 +1433,7 @@ fn pick_audio(
                 ),
             ]);
             let rank: Rank = vec![
+                i64::from(facts.damage().is_some()),
                 unknown,
                 sum,
                 i64::from(!from_album(input, key)),
@@ -1511,6 +1516,7 @@ fn recordings_of(
             ms: ms_of(s.facts),
             digest: s.facts.audio.as_ref().and_then(|a| a.digest.as_deref()),
             first: Some(unswayed(s)) == best,
+            whole: s.facts.damage().is_none(),
         })
         .collect();
     if audible.len() < 2 {

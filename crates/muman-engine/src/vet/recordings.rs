@@ -24,8 +24,14 @@
 //!    the song's only audio. A record counts only for a recording holding
 //!    none of them, or where a file names its recording ID, and records
 //!    that count for two recordings decide nothing.
-//! 2. Else the one with the most sources, where one holds more than every
-//!    other.
+//! 2. Else the one with the most whole sources, then the most sources,
+//!    where one holds more than every other. A damaged source
+//!    ([`crate::integrity`]) is counted last: a hole can part it from its
+//!    own recording where comparing cannot step past it
+//!    ([`crate::align::align_lacking`]), and two copies of one damaged
+//!    file are one recording by their digest, so damaged copies would
+//!    otherwise outvote the one whole copy and rank it as another
+//!    recording.
 //! 3. Else none: every recording ranks alike, and the song is picked as
 //!    though it held one.
 //!
@@ -63,6 +69,8 @@ pub struct Audible<'a> {
     /// Whether its measures alone rank it first, ties included: the
     /// audio a lookup asked with.
     pub first: bool,
+    /// Whether its audio is all there ([`crate::integrity`]).
+    pub whole: bool,
 }
 
 /// A record vetting believes, as a length to hold the recordings to.
@@ -314,7 +322,8 @@ fn top(root: &[usize], mut i: usize) -> usize {
 }
 
 /// The song's recording among `groups`, and what decided it: a record
-/// fitting it alone that no source of it led to, else the most sources.
+/// fitting it alone that no source of it led to, else the most whole
+/// sources, then the most sources.
 fn song_of(
     groups: &[Vec<SourceKey>],
     of: &BTreeMap<SourceKey, Place>,
@@ -344,11 +353,13 @@ fn song_of(
     if let [(group, ms)] = decided.into_iter().collect::<Vec<_>>()[..] {
         return Some((group, By::Record(ms)));
     }
-    let most = groups.iter().map(Vec::len).max()?;
+    let whole: BTreeSet<&SourceKey> = sorted.iter().filter(|a| a.whole).map(|a| a.key).collect();
+    let count = |g: &Vec<SourceKey>| (g.iter().filter(|k| whole.contains(k)).count(), g.len());
+    let most = groups.iter().map(count).max()?;
     match groups
         .iter()
         .enumerate()
-        .filter(|(_, g)| g.len() == most)
+        .filter(|(_, g)| count(g) == most)
         .collect::<Vec<_>>()[..]
     {
         [(group, _)] => Some((group, By::Most)),
@@ -390,6 +401,7 @@ mod tests {
             ms: Some(ms),
             digest: None,
             first: false,
+            whole: true,
         }
     }
 
@@ -469,6 +481,29 @@ mod tests {
         assert_eq!((r.rank(&a), r.rank(&c)), (0, 1), "its lookup's own audio");
         let r = recordings(&all, &[record(true)], &alignments);
         assert_eq!((r.rank(&a), r.rank(&c)), (1, 0), "a file names it");
+    }
+
+    #[test]
+    fn copies_of_one_damaged_file_outvote_no_whole_copy() {
+        let (a, b, c) = (key("a"), key("b"), key("c"));
+        let mut all = vec![
+            audible(&a, 200_000),
+            audible(&b, 198_000),
+            audible(&c, 198_000),
+        ];
+        for damaged in &mut all[1..] {
+            damaged.digest = Some("x");
+            damaged.whole = false;
+        }
+        let r = recordings(&all, &[], &[]);
+        assert_eq!((r.rank(&a), r.rank(&b), r.rank(&c)), (0, 1, 1));
+        all[0].whole = false;
+        let r = recordings(&all, &[], &[]);
+        assert_eq!(
+            (r.rank(&a), r.rank(&b)),
+            (1, 0),
+            "all damaged: the most sources"
+        );
     }
 
     #[test]

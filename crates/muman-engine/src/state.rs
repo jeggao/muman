@@ -725,6 +725,7 @@ impl Aligned {
         align::Alignment {
             offset_ms: self.offset_ms,
             stretch_ppm: self.stretch_ppm,
+            stepped_ms: 0,
             score: self.score,
             coverage: self.coverage,
         }
