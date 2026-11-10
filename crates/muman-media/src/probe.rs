@@ -14,7 +14,13 @@
 //! read from its packets instead. An MP3's own header says whether it
 //! states its frames, as ffmpeg reads it: the Xing or Info tag, with its
 //! frame count, after the first frame's side information, or the VBRI tag
-//! 32 bytes in. A file that cannot be read keeps ffprobe's lengths.
+//! 32 bytes in. A WAVE file states its length for PCM and float audio,
+//! whose data size over its block size is exact, but for compressed audio
+//! held in it, as MP3, only in a `fact` chunk counting its samples:
+//! without one, ffmpeg divides the data's size by the header's average
+//! byte rate, which a muxer may write as anything. An MP3 in WAVE of 90 s
+//! whose header said 27 kb/s for its 112 read as 359 s. A file that cannot
+//! be read keeps ffprobe's lengths.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -344,15 +350,77 @@ pub fn read<R: Runner>(runner: &R, path: &Path) -> Result<Probed> {
 /// streams, whose demuxer leaves ffmpeg to guess one from the bitrate.
 const UNSTATED: [&str; 6] = ["aac", "ac3", "eac3", "dts", "truehd", "mlp"];
 
-/// Whether a file of `format` states no length: one of [`UNSTATED`], or an
-/// MP3 whose header, read from what `open` gives, counts no frames.
+/// Whether a file of `format` states no length: one of [`UNSTATED`], an
+/// MP3 whose header, read from what `open` gives, counts no frames, or a
+/// WAVE file of compressed audio with no `fact` chunk.
 fn guessed<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> bool {
     match format {
         "mp3" => open()
             .and_then(mp3_counts_frames)
             .is_ok_and(|counts| !counts),
+        "wav" => open()
+            .and_then(wave_states_length)
+            .is_ok_and(|states| !states),
         _ => UNSTATED.contains(&format),
     }
+}
+
+/// The WAVE format tags whose length the data's size states: PCM and IEEE
+/// float.
+const WAVE_EXACT: [u16; 2] = [0x0001, 0x0003];
+
+/// The format tag of a WAVE file whose real one is in its extension.
+const WAVE_EXTENSIBLE: u16 = 0xfffe;
+
+/// Whether a WAVE file states its length: its audio PCM or float, or a
+/// `fact` chunk counting samples, before its `data`. A file not shaped as
+/// one states it, as ffmpeg's lengths are kept for what is not read.
+fn wave_states_length<F: Read + Seek>(mut file: F) -> std::io::Result<bool> {
+    let mut head = [0_u8; 12];
+    file.read_exact(&mut head)?;
+    if !matches!(&head[..4], b"RIFF" | b"RF64") || &head[8..] != b"WAVE" {
+        return Ok(true);
+    }
+    let (mut tag, mut counted) = (None, false);
+    loop {
+        let mut chunk = [0_u8; 8];
+        if file.read_exact(&mut chunk).is_err() {
+            break;
+        }
+        let size = u64::from(u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]));
+        match &chunk[..4] {
+            b"data" => break,
+            b"fmt " => {
+                let mut fmt = vec![0_u8; size.min(64) as usize];
+                file.read_exact(&mut fmt)?;
+                let word = |at: usize| {
+                    fmt.get(at..at + 2)
+                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                };
+                tag = match word(0) {
+                    Some(WAVE_EXTENSIBLE) => word(24),
+                    other => other,
+                };
+                past(&mut file, size, fmt.len())?;
+            }
+            b"fact" => {
+                let mut samples = [0_u8; 4];
+                file.read_exact(&mut samples)?;
+                counted = u32::from_le_bytes(samples) > 0;
+                past(&mut file, size, 4)?;
+            }
+            _ => past(&mut file, size, 0)?,
+        }
+    }
+    Ok(tag.is_none_or(|t| WAVE_EXACT.contains(&t)) || counted)
+}
+
+/// Seek past the rest of a chunk of `size` bytes, padded to an even
+/// length, `read` of them read already.
+fn past<F: Seek>(file: &mut F, size: u64, read: usize) -> std::io::Result<()> {
+    let rest = (size + (size & 1)).saturating_sub(read as u64);
+    file.seek(SeekFrom::Current(i64::try_from(rest).unwrap_or(i64::MAX)))
+        .map(drop)
 }
 
 /// Bytes read for an MP3's first frame, past its `ID3v2` tag: enough for
@@ -592,6 +660,52 @@ mod tests {
         ] {
             assert!(!guessed(format, open), "{format}");
         }
+    }
+
+    /// A WAVE file's header: its format tag, an extension's subformat tag
+    /// where given, and a `fact` chunk's sample count where given.
+    fn wave(tag: u16, sub: Option<u16>, fact: Option<u32>) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend(tag.to_le_bytes());
+        fmt.extend(2_u16.to_le_bytes());
+        fmt.extend(44_100_u32.to_le_bytes());
+        fmt.extend(3375_u32.to_le_bytes());
+        fmt.extend(1_u16.to_le_bytes());
+        fmt.extend(0_u16.to_le_bytes());
+        if let Some(sub) = sub {
+            fmt.extend(22_u16.to_le_bytes());
+            fmt.extend([0; 6]);
+            fmt.extend(sub.to_le_bytes());
+            fmt.extend([0; 14]);
+        }
+        let mut body = b"WAVE".to_vec();
+        let mut chunk = |id: &[u8], data: &[u8]| {
+            body.extend(id);
+            body.extend((data.len() as u32).to_le_bytes());
+            body.extend(data);
+        };
+        chunk(b"fmt ", &fmt);
+        if let Some(samples) = fact {
+            chunk(b"fact", &samples.to_le_bytes());
+        }
+        chunk(b"LIST", b"INFOjunk");
+        chunk(b"data", &[0; 16]);
+        let mut file = b"RIFF".to_vec();
+        file.extend((body.len() as u32).to_le_bytes());
+        file.extend(body);
+        file
+    }
+
+    #[test]
+    fn a_wave_of_compressed_audio_states_its_length_only_by_its_samples() {
+        let wav = |bytes: Vec<u8>| guessed("wav", || Ok(Cursor::new(bytes)));
+        assert!(!wav(wave(0x0001, None, None)), "PCM");
+        assert!(!wav(wave(0x0003, None, None)), "float");
+        assert!(!wav(wave(0xfffe, Some(0x0001), None)), "extensible PCM");
+        assert!(wav(wave(0x0055, None, None)), "MP3 with no fact chunk");
+        assert!(!wav(wave(0x0055, None, Some(3_969_000))), "MP3 counted");
+        assert!(wav(wave(0xfffe, Some(0x0055), None)), "extensible MP3");
+        assert!(!wav(b"not a wave at all".to_vec()));
     }
 
     #[test]

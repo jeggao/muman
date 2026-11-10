@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/3";
+pub const METHOD: &str = "integrity/4";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -460,10 +460,13 @@ mod tests {
     /// What the pass measures of audio holding samples that are no number,
     /// beside packets whole, gapped, out of order, listed with durations
     /// no packet lasts, or none, and a length stated or guessed, with
-    /// [`METHOD`].
+    /// [`METHOD`]. Version 4 measures as 3 did, the method it names aside,
+    /// from probes that take the length of a WAVE file of compressed audio
+    /// with no `fact` chunk for guessed, which every measure of 3 took for
+    /// stated.
     const WRITTEN: (&str, &str) = (
-        "integrity/3",
-        "d0259807b05e7a7aae0d2eac016784282e4f2a5ab217283013f2ccc18429789d",
+        "integrity/4",
+        "1bfdd380181dab270d75c03c2310c266e66f630fdc14414c286bc784426836c1",
     );
 
     #[test]

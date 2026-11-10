@@ -3182,6 +3182,38 @@ fn a_damaged_torrent_file_its_torrent_holds_so_is_not_fetched_even_on_retry() {
 }
 
 #[test]
+fn a_torrent_file_measured_whole_since_it_was_not_mended_is_no_problem() {
+    let s = Setup::new();
+    let (key, file, fake) = damaged_at_source(&s, &[("Paper Comets.flac", b"a copy with holes")]);
+    let (_, text) = s.run(&fake, &["sync"]);
+    let state = crate::state::State::load(&s.dir.path().join("home")).unwrap();
+    assert_eq!(
+        state.failures.get(&key).map(|f| f.step),
+        Some(crate::state::Step::Mend),
+        "{text}"
+    );
+    let (ok, report) = s.report(&fake, &["check"]);
+    assert!(!ok && report.contains("to mend"), "{report}");
+
+    // Measured anew, as by a measure that judges it whole since.
+    let home = s.dir.path().join("home");
+    let mut state = crate::state::State::load(&home).unwrap();
+    let audio = state.facts.get_mut(&key).unwrap().audio.as_mut().unwrap();
+    audio.analysis.integrity = None;
+    state.save(&home).unwrap();
+    let whole = Fake {
+        hashes: vec![("Paper Comets".into(), 1)],
+        ..Fake::default()
+    }
+    .probe(".flac", FLAC);
+    let (_, text) = s.run(&whole, &["sync"]);
+    assert!(file.exists());
+    let (_, report) = s.report(&whole, &["check"]);
+    assert!(!report.contains("to mend"), "{text}\n{report}");
+    assert!(!report.contains("Damaged audio"), "{report}");
+}
+
+#[test]
 fn a_damaged_torrent_file_fetched_back_as_it_was_is_not_fetched_again() {
     let s = Setup::new();
     // The piece reaches into the notes, which no song brings, so the

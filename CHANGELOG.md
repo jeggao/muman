@@ -158,6 +158,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A WAVE file of MP3 or other compressed audio is not called cut
+  off** when its header gives a false byte rate: with no `fact` chunk
+  counting its samples, its length is taken for a guess, as a headerless
+  MP3's is. Every source's integrity is measured again once.
+- **A source not mended goes once it measures whole**: `check` no longer
+  fails on a torrent's file noted as holding its torrent's own damaged
+  bytes after a measure since finds it whole.
 - **Files in `sources/manual` are followed by what they hold**: two
   that trade names, or one renamed over another listed name, keep each
   song's own tags, pins and offset; a removed song's file moved stays

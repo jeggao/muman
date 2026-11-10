@@ -643,14 +643,19 @@ impl Failure {
     /// Whether the failure still stands, for a source the store holds
     /// as `located`, none when it holds none, with `facts` as measured: a
     /// measure failed while no facts hold for the file as it is, a fetch
-    /// while the store lacks it. A copy fetched again, or mended, stands
-    /// until its own step says otherwise.
+    /// while the store lacks it. A copy fetched again stands until its own
+    /// step says otherwise; a mend while the file, as it is, still measures
+    /// damaged, since one measured anew whole, as by a measure that judges
+    /// otherwise since, needs none.
     #[must_use]
     pub fn applies(&self, located: Option<&crate::store::Located>, facts: Option<&Facts>) -> bool {
         match self.step {
             Step::Measure => located.is_some_and(|l| !facts.is_some_and(|f| f.holds_for(&l.rev()))),
             Step::Fetch => located.is_none(),
-            Step::Refetch | Step::Mend => true,
+            Step::Refetch => true,
+            Step::Mend => located.is_some_and(|l| {
+                facts.is_none_or(|f| !f.holds_for(&l.rev()) || f.damage().is_some())
+            }),
         }
     }
 
