@@ -72,6 +72,15 @@ const SONG_FAILURES: &str = "
     CREATE TABLE IF NOT EXISTS song_failures (key TEXT PRIMARY KEY, row TEXT NOT NULL);
 ";
 
+/// The loudness of the audio each library file was made from, a table a
+/// store made before it lacks, so made on every open.
+const BUILT_TABLE: &str = "
+    CREATE TABLE IF NOT EXISTS built (
+        audio TEXT NOT NULL, layout TEXT NOT NULL, row TEXT NOT NULL,
+        PRIMARY KEY (audio, layout)
+    );
+";
+
 /// The tables of [`SCHEMA`], each value a row of JSON text; a `digest`
 /// is of that text.
 const TABLES: &str = "
@@ -148,12 +157,14 @@ impl Db {
                     tx.pragma_update(None, "user_version", SCHEMA)?;
                 }
                 tx.execute_batch(SONG_FAILURES)?;
+                tx.execute_batch(BUILT_TABLE)?;
                 Ok(tx.execute_batch(RENAMINGS)?)
             })
             .with_context(|| format!("making {}", db.file.display()))?;
         } else {
             db.conn
                 .execute_batch(SONG_FAILURES)
+                .and_then(|()| db.conn.execute_batch(BUILT_TABLE))
                 .and_then(|()| db.conn.execute_batch(RENAMINGS))
                 .with_context(|| format!("opening {}", db.file.display()))?;
         }
@@ -267,6 +278,7 @@ const ALIGNMENTS: Table = table(
     false,
 );
 const MIXES: Table = table("mixes", &["audio", "layout"], Some("row"), false);
+const BUILT: Table = table("built", &["audio", "layout"], Some("row"), false);
 const FAILURES: Table = table("failures", &["key"], Some("row"), false);
 const SONGS_FAILED: Table = table("song_failures", &["key"], Some("row"), false);
 const LOOKUPS: Table = table("lookups", &["source", "find"], Some("row"), false);
@@ -287,7 +299,7 @@ const fn table(
 }
 
 /// Every table, in the order a snapshot reads them.
-const TABLES_OF_STATE: [&Table; 13] = [
+const TABLES_OF_STATE: [&Table; 14] = [
     &META,
     &OUTPUTS,
     &REPLACED,
@@ -295,6 +307,7 @@ const TABLES_OF_STATE: [&Table; 13] = [
     &DAMAGED,
     &TRUSTED,
     &SONGS_FAILED,
+    &BUILT,
     &FACTS,
     &ALIGNMENTS,
     &MIXES,
@@ -396,6 +409,9 @@ fn state_of(read: &BTreeMap<&'static str, Vec<Row>>, file: &Path) -> Result<Stat
         .filter_map(|r| serde_json::from_str(&value(r)).ok())
         .collect();
     state.mixes = parse(&MIXES)
+        .filter_map(|r| serde_json::from_str(&value(r)).ok())
+        .collect();
+    state.built = parse(&BUILT)
         .filter_map(|r| serde_json::from_str(&value(r)).ok())
         .collect();
     for row in parse(&SONGS_FAILED) {
@@ -505,6 +521,17 @@ fn rows_of(state: &State) -> Result<Vec<(&'static Table, Vec<Row>)>> {
             .song_failures
             .iter()
             .map(|(k, f)| Ok(Row::new(vec![key(k)], Some(json(f)?))))
+            .collect::<Result<_>>()?,
+    ));
+    tables.push((
+        &BUILT,
+        state
+            .built
+            .iter()
+            .map(|b| {
+                let layout = b.layout.map(|l| l.name().to_string()).unwrap_or_default();
+                Ok(Row::new(vec![b.audio.clone(), layout], Some(json(b)?)))
+            })
             .collect::<Result<_>>()?,
     ));
     tables.extend(cache_rows(state)?);
@@ -835,6 +862,17 @@ mod tests {
         drop(db);
         let mut db = Db::open(dir.path(), WAIT).unwrap();
         assert_eq!(count(&mut db, "song_failures"), 0);
+    }
+
+    #[test]
+    fn a_store_made_before_the_table_of_built_loudness_gains_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        db.write(|tx| Ok(tx.execute_batch("DROP TABLE built")?))
+            .unwrap();
+        drop(db);
+        let mut db = Db::open(dir.path(), WAIT).unwrap();
+        assert_eq!(count(&mut db, "built"), 0);
     }
 
     #[test]

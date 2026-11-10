@@ -123,8 +123,8 @@ fn context(dirs: &Dirs, verbose: bool) -> Result<Context<'_>> {
         &manifest.settings,
         &state,
         &dirs.library,
-        Some(&on_disk),
-        &BTreeSet::new(),
+        (Some(&on_disk), &BTreeSet::new()),
+        (false, false),
     )?;
     let mut planned = resolution.planned;
     crate::limit::as_written(&manifest, &state, &mut planned);

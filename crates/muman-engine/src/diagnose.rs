@@ -301,8 +301,8 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         &manifest.settings,
         &state,
         library,
-        Some(&on_disk),
-        &waiting,
+        (Some(&on_disk), &waiting),
+        (false, false),
     );
     match resolution {
         Ok(r) => {

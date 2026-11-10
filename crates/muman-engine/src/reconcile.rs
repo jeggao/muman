@@ -45,7 +45,7 @@ use crate::store::{Located, Store};
 pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
-pub use self::decide::{Doing, Foreseen, files_of, foresee};
+pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built};
 pub(crate) use self::keys::arriving;
 use self::keys::{Following, sites_found};
 pub use self::keys::{Moves, Unlisted, deleted, hearing, moved};
@@ -357,8 +357,8 @@ pub fn reconcile_into<R: Runner, W: Write>(
         &manifest,
         &state,
         &dirs.library,
-        Some(&on_disk),
-        &waiting,
+        (Some(&on_disk), &waiting),
+        (opts.force, opts.accept),
         out,
     )?;
     let mut ok = failed.is_empty() && unsure.is_empty();
@@ -399,18 +399,13 @@ pub fn reconcile_into<R: Runner, W: Write>(
             persist(home, &state, opts.dry_run, &lock)?;
         }
         let block = manifest.settings.library.block_size.0;
-        let foreseen = foresee(
+        let held = left_as_built(
             &manifest,
             &state,
             &planned,
             &dirs.library,
             (opts.force, opts.accept),
         );
-        let held: BTreeMap<usize, std::path::PathBuf> = (foreseen.held.iter())
-            .filter(|_| !opts.force)
-            .filter_map(|n| Some((*n, foreseen.files.get(n)?.clone())))
-            .filter(|(_, file)| dirs.library.join(file).exists())
-            .collect();
         let at = limit::Workshop {
             sources: &located,
             scratch: workshop.path(),
@@ -427,7 +422,8 @@ pub fn reconcile_into<R: Runner, W: Write>(
             let as_fitted: BTreeMap<usize, crate::resolve::Plan> =
                 planned.iter().map(|(n, r)| (*n, r.plan.clone())).collect();
             let found = (Some(&on_disk), &to_fetch);
-            plan::level_as_fitted(&manifest, &state, &dirs.library, found, &mut planned)?;
+            let asked = (opts.force, opts.accept);
+            plan::level_as_fitted(&manifest, &state, &dirs.library, found, asked, &mut planned)?;
             // A song rendered at the gains it had before is rendered again.
             for (n, r) in &planned {
                 if as_fitted.get(n) != Some(&r.plan) {
@@ -654,6 +650,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .alignments
         .retain(|a| audio.contains(&a.revs.0) && audio.contains(&a.revs.1));
     state.mixes.retain(|m| audio.contains(&m.audio));
+    crate::levels::keep_built(&mut state);
     if let Some(run) = run.as_deref_mut() {
         run.outputs_after(home, &state.outputs)?;
     }

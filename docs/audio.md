@@ -105,7 +105,11 @@ loudness, and levels it to `[loudness] target`. It measures an album's
 loudness over all of its songs in the list together, so the album keeps
 its songs' levels against each other. Songs share an album as their
 tags [agree on one](metadata.md#tags); a single, named for its title,
-is an album of its own.
+is an album of its own. A song whose file stays as it was made, as one
+`sync` leaves as built until `--accept` (see
+[the guide](guide.md#a-source-that-changes)), counts in its album's
+loudness as that file's audio measured, so its album's songs keep one
+album gain.
 
 `[loudness] mode` says where the gain goes:
 

@@ -5,7 +5,10 @@
 //! at the plan that file was made from: no song takes its path, and its
 //! album's loudness is pooled with it as it was. What it failed with is
 //! its own sources, never a picture or a record it shares, so no other
-//! song's file is kept for it.
+//! song's file is kept for it. A song a sync leaves as built
+//! ([`left_as_built`](super::left_as_built)) keeps its plan and path, and
+//! is pooled in its album's loudness by the plan its file was made from
+//! alike.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -133,17 +136,19 @@ pub fn plan<W: Write>(
     on_disk: Option<&BTreeSet<SourceKey>>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
-    plan_awaiting(manifest, state, library, on_disk, &BTreeSet::new(), out)
+    let found = (on_disk, &BTreeSet::new());
+    plan_awaiting(manifest, state, library, found, (false, false), out)
 }
 
 /// [`plan`], a song that cannot be resolved while a source of it is
-/// `waiting` to be fetched said to wait, and not one that failed.
+/// `waiting` to be fetched said to wait, and not one that failed, each
+/// song levelled as a sync `asked` to force and accept leaves it.
 pub(super) fn plan_awaiting<W: Write>(
     manifest: &Manifest,
     state: &State,
     library: &Path,
-    on_disk: Option<&BTreeSet<SourceKey>>,
-    waiting: &BTreeSet<SourceKey>,
+    (on_disk, waiting): (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    asked: (bool, bool),
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
     for key in &manifest.clean.unknown {
@@ -166,8 +171,7 @@ pub(super) fn plan_awaiting<W: Write>(
         &manifest.settings,
         state,
         library,
-        on_disk,
-        waiting,
+        ((on_disk, waiting), asked),
         out,
     )
 }
@@ -182,13 +186,13 @@ pub fn plan_with<W: Write>(
     on_disk: Option<&BTreeSet<SourceKey>>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
+    let found = (on_disk, &BTreeSet::new());
     resolve_all(
         manifest,
         settings,
         state,
         library,
-        on_disk,
-        &BTreeSet::new(),
+        (found, (false, false)),
         out,
     )
 }
@@ -198,11 +202,17 @@ pub(super) fn resolve_all<W: Write>(
     settings: &crate::settings::Settings,
     state: &State,
     library: &Path,
-    on_disk: Option<&BTreeSet<SourceKey>>,
-    waiting: &BTreeSet<SourceKey>,
+    ((on_disk, waiting), asked): Found<'_>,
     out: &mut W,
 ) -> Result<(Planned, BTreeSet<SourceKey>)> {
-    let resolution = resolve_songs(manifest, settings, state, library, on_disk, waiting)?;
+    let resolution = resolve_songs(
+        manifest,
+        settings,
+        state,
+        library,
+        (on_disk, waiting),
+        asked,
+    )?;
     for &n in &resolution.awaiting {
         let song = &manifest.songs[n];
         let name = name_of(song, None, &state.facts);
@@ -245,16 +255,12 @@ pub(super) fn resolve_all<W: Write>(
     Ok((resolution.planned, failed))
 }
 
-/// Each song of `unresolved` with a file the state records as made from
-/// a plan: held at that plan while it fails or waits, as its file stays
-/// in the library, so the songs beside it take neither its path nor its
-/// place in its album's loudness.
-fn held(
-    manifest: &Manifest,
-    state: &State,
-    unresolved: impl IntoIterator<Item = usize>,
-) -> Vec<(usize, Resolved)> {
-    let files = super::files_of(unresolved, manifest, &state.outputs);
+/// Each song of `files` whose file the state records as made from a
+/// plan, held at that plan while its file stays in the library as it
+/// was made: a song failing or waiting, so the songs beside it take
+/// neither its path nor its place in its album's loudness, and one left
+/// as built, so its album's is pooled as its file was made.
+fn held(state: &State, files: BTreeMap<usize, PathBuf>) -> Vec<(usize, Resolved)> {
     files
         .into_iter()
         .filter_map(|(n, path)| {
@@ -427,25 +433,26 @@ fn agree_on_albums(
     again(planned, &picks, &swayed);
 }
 
+/// The sources on disk, when the store was looked at, and those waiting
+/// to be fetched; then whether a sync was asked to force and to accept.
+type Found<'a> = (
+    (Option<&'a BTreeSet<SourceKey>>, &'a BTreeSet<SourceKey>),
+    (bool, bool),
+);
+
 /// Resolve every song under `settings`, each with a path of its own,
-/// saying nothing.
+/// saying nothing, each levelled as a sync `asked` to force and accept
+/// leaves it.
 pub fn resolve_songs(
     manifest: &Manifest,
     settings: &crate::settings::Settings,
     state: &State,
     library: &Path,
-    on_disk: Option<&BTreeSet<SourceKey>>,
-    waiting: &BTreeSet<SourceKey>,
+    found: (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    asked: (bool, bool),
 ) -> Result<Resolution> {
     let fitted = BTreeMap::new();
-    resolve_fitted(
-        manifest,
-        settings,
-        state,
-        library,
-        (on_disk, waiting),
-        &fitted,
-    )
+    resolve_fitted(manifest, settings, state, library, (found, asked), &fitted)
 }
 
 /// Level every song of `planned` again at the format fitting gave it,
@@ -457,10 +464,12 @@ pub(super) fn level_as_fitted(
     state: &State,
     library: &Path,
     found: (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    asked: (bool, bool),
     planned: &mut Planned,
 ) -> Result<()> {
     let fitted: BTreeMap<usize, Format> =
         planned.iter().map(|(n, r)| (*n, r.plan.format)).collect();
+    let found = (found, asked);
     let again = resolve_fitted(manifest, &manifest.settings, state, library, found, &fitted)?;
     let mut again: BTreeMap<usize, Resolved> = again.planned.into_iter().collect();
     for (n, r) in planned.iter_mut() {
@@ -485,7 +494,7 @@ pub fn resolve_as_fitted(
     library: &Path,
     fitted: &BTreeMap<usize, Format>,
 ) -> Result<Planned> {
-    let found = (None, &BTreeSet::new());
+    let found = ((None, &BTreeSet::new()), (false, false));
     Ok(resolve_fitted(manifest, settings, state, library, found, fitted)?.planned)
 }
 
@@ -496,7 +505,7 @@ fn resolve_fitted(
     settings: &crate::settings::Settings,
     state: &State,
     library: &Path,
-    (on_disk, waiting): (Option<&BTreeSet<SourceKey>>, &BTreeSet<SourceKey>),
+    ((on_disk, waiting), asked): Found<'_>,
     fitted: &BTreeMap<usize, Format>,
 ) -> Result<Resolution> {
     let resolver = Resolver::new(manifest, settings, state, library)?;
@@ -523,26 +532,30 @@ fn resolve_fitted(
             .count();
     }
     let unresolved = resolution.unresolved.iter().map(|(n, _)| *n);
-    let held = held(
-        manifest,
-        state,
+    let failed = super::files_of(
         unresolved.chain(resolution.awaiting.clone()),
+        manifest,
+        &state.outputs,
     );
+    let failing = held(state, failed);
+    let left = super::left_as_built(manifest, state, &resolution.planned, library, asked);
     for (n, r) in &mut resolution.planned {
         if let Some(format) = fitted.get(n) {
             r.plan = r.plan.with_format(*format);
         }
     }
-    crate::levels::settle(&mut resolution.planned, &held, state, settings);
+    let as_made: Vec<(usize, Resolved)> =
+        failing.iter().cloned().chain(held(state, left)).collect();
+    crate::levels::settle(&mut resolution.planned, &as_made, state, settings);
     separate(
         &mut resolution.planned,
-        &held,
+        &failing,
         &resolver.naming,
         &|path, plan| crate::artifact::parts(plan).files(path),
     );
     resolution.unplaced = crate::folder::assign(
         &mut resolution.planned,
-        &held,
+        &failing,
         &settings.cover,
         &state.facts,
     );

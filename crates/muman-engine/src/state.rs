@@ -15,6 +15,7 @@
 //! | `outputs` | No: without it nothing is deleted, and no file is written over until `sync --force` |
 //! | `replaced` | Mostly: a playlist added again fetches those uploads |
 //! | `library`, `alignments`, `facts`, `mixes` | Yes: measured or set again |
+//! | `built` | Yes: a song left as built, its source holding other audio since, is levelled without its file until accepted |
 //! | `sizes` | Yes: songs are rendered again to measure them |
 //! | `failures`, `lookups` | Yes: each is tried or made again at once |
 //! | `song_failures` | Yes: `check` names a song the last sync could not write only after the next sync fails it again |
@@ -275,6 +276,16 @@ pub struct State {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub mixes: Vec<Mix>,
+    /// The loudness of the audio each library file was made from, found
+    /// by that audio and the layout it was mixed into, so a song left as
+    /// built is levelled as its file was made once its source holds other
+    /// audio ([`crate::levels::keep_built`]).
+    #[serde(
+        default,
+        deserialize_with = "json::lenient_list",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub built: Vec<Built>,
     /// What could not be done for a source, so it is not tried again at
     /// once.
     #[serde(default, deserialize_with = "json::lenient_map")]
@@ -716,6 +727,16 @@ pub struct Mix {
     /// The [`crate::codec::MIXING`] it was mixed by.
     #[serde(default = "first_mixing")]
     pub filter: u32,
+    pub analysis: Analysis,
+}
+
+/// What the audio `audio` a library file was made from measured, mixed
+/// into `layout` where it was written mixed: its loudness alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Built {
+    pub audio: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
     pub analysis: Analysis,
 }
 

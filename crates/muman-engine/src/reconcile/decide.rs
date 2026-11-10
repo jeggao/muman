@@ -154,14 +154,7 @@ pub fn foresee(
     (force, accept): (bool, bool),
 ) -> Foreseen {
     let files = files_of(planned.iter().map(|(n, _)| *n), manifest, &state.outputs);
-    let drifts = crate::held::drifts(manifest, &state.facts);
-    let damaged = if force {
-        BTreeSet::new()
-    } else {
-        damaged_since_built(planned, &drifts, &state.facts)
-    };
-    let (_, kept) = split_drifts(&drifts, &damaged, accept, state);
-    let holding: BTreeSet<usize> = kept.iter().map(|d| d.song).collect();
+    let (drifts, holding, damaged) = holding(manifest, state, planned, (force, accept));
     let decided = decide(
         planned,
         &files,
@@ -177,6 +170,50 @@ pub fn foresee(
         damaged,
         decided,
     }
+}
+
+/// The sources holding otherwise than their songs were built from, and
+/// of `planned` the songs held as built for them, not yet accepted, and
+/// those of audio damaged since, `force` and `accept` as given.
+fn holding(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    (force, accept): (bool, bool),
+) -> (Vec<Drift>, BTreeSet<usize>, BTreeSet<usize>) {
+    let drifts = crate::held::drifts(manifest, &state.facts);
+    let damaged = if force {
+        BTreeSet::new()
+    } else {
+        damaged_since_built(planned, &drifts, &state.facts)
+    };
+    let (_, kept) = split_drifts(&drifts, &damaged, accept, state);
+    let holding = kept.iter().map(|d| d.song).collect();
+    (drifts, holding, damaged)
+}
+
+/// Each song of `planned` a sync leaves as built, [`Foreseen::held`] as
+/// `foresee` holds it, with its file still in `library`: what a file of
+/// it holds, not what its sources hold now, is what it weighs in its
+/// album's loudness and in the library's size. None is left under
+/// `force`, which writes every song.
+#[must_use]
+pub fn left_as_built(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    library: &Path,
+    (force, accept): (bool, bool),
+) -> BTreeMap<usize, PathBuf> {
+    if force {
+        return BTreeMap::new();
+    }
+    let (_, holding, damaged) = holding(manifest, state, planned, (force, accept));
+    let files = files_of(planned.iter().map(|(n, _)| *n), manifest, &state.outputs);
+    (holding.union(&damaged))
+        .filter_map(|n| Some((*n, files.get(n)?.clone())))
+        .filter(|(_, file)| library.join(file).exists())
+        .collect()
 }
 
 /// Each of `planned` kept as it is, decided before any moves: its file

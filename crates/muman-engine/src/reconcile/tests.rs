@@ -2298,6 +2298,50 @@ fn songs_are_levelled_by_what_they_measured_and_an_album_by_all_its_songs() {
 }
 
 #[test]
+fn a_song_left_as_built_is_pooled_in_its_album_as_its_file_was_made() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    let source = h.fetched("bbbbbbbbbbb");
+    h.songs(ALBUM);
+    assert!(h.run(&levelled(), Options::default()).0);
+    let album_gains = |h: &Home| -> BTreeSet<String> {
+        (plans(h).iter())
+            .filter_map(|p| tag(p, "REPLAYGAIN_ALBUM_GAIN").map(str::to_string))
+            .collect()
+    };
+    let built = album_gains(&h);
+    assert_eq!(built.len(), 1, "{built:?}");
+    let state = State::load(&h.dirs.home).unwrap();
+    let (path, _) = (state.outputs.iter())
+        .find(|(_, w)| w.sources == [SourceKey::youtube("bbbbbbbbbbb")])
+        .unwrap();
+    let song = h.dirs.library.join(path);
+    let file = std::fs::read(&song).unwrap();
+    std::fs::write(&source, "re-encoded louder by the site").unwrap();
+    let mut louder = levelled();
+    louder.wavs[1].1 = tone(0.9);
+
+    let (ok, text) = h.run(&louder, Options::default());
+    assert!(ok, "{text}");
+    assert!(crate::ui::plain(&text).contains("left as built"), "{text}");
+    assert!(!text.contains("Updated"), "{text}");
+    assert_eq!(album_gains(&h), built, "one album, one gain");
+    assert_eq!(std::fs::read(&song).unwrap(), file);
+    let (_, again) = h.run(&louder, Options::default());
+    assert!(!again.contains("Updated"), "{again}");
+
+    let accept = Options {
+        accept: true,
+        ..Options::default()
+    };
+    let (ok, text) = h.run(&louder, accept);
+    assert!(ok, "{text}");
+    let taken = album_gains(&h);
+    assert_eq!(taken.len(), 1, "{taken:?}");
+    assert_ne!(taken, built, "pooled by what it holds once accepted");
+}
+
+#[test]
 fn a_gain_put_in_the_opus_header_is_a_retag_and_a_gain_in_the_samples_an_encode() {
     let h = home();
     h.fetched("aaaaaaaaaaa");
