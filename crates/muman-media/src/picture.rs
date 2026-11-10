@@ -24,7 +24,9 @@
 //! `quality::image` trims; over the centred square of that content,
 //! which is the cover a thumbnail frames on a blurred background; and,
 //! for a frame of another shape, over the centred square of the whole
-//! frame, since a dark cover in black bars is trimmed into its own art.
+//! frame, which is the cover wherever the bars around it were not found
+//! as bars, as in facts measured before `quality/10`, which trimmed a
+//! dark cover in black bars into its own art.
 //! Two pictures are one design when any pair of those is:
 //!
 //! | pHash bits apart | dHash bits apart | Verdict |
