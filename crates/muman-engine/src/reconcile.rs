@@ -48,7 +48,7 @@ use self::decide::intend;
 pub use self::decide::{Doing, Foreseen, files_of, foresee};
 pub(crate) use self::keys::arriving;
 use self::keys::{Following, sites_found};
-pub use self::keys::{Unlisted, hearing, moved};
+pub use self::keys::{Moves, Unlisted, hearing, moved};
 pub use self::measure::{Measuring, look, measure};
 use self::measure::{analyze, hash, sizes};
 pub use self::measure::{analyze_mixes, compare};

@@ -100,7 +100,8 @@ muman set artist:="Marlo Venn" album="Lantern Weather"
 `undo` brings back the files a run wrote over or removed, and moves
 back the files it moved. A file you had changed comes back still yours.
 A file `add` copied into the sources goes: deleted while it holds what
-was copied, moved to the trash once changed. A hand edit to the song
+was copied, wherever you moved it within `sources/manual`, and moved to
+the trash once changed. A hand edit to the song
 list is undone with the run that applied it. A file of yours in
 `sources/manual` stays where you moved it, and its song follows it again.
 

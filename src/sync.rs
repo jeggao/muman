@@ -499,7 +499,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
     let mut unlisted = Unlisted::of(&manifest, &state, &store, wait);
     let scratch = atomic::Scratch::new()?;
     let hear = crate::reconcile::hearing(runner, scratch.path());
-    let renames = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
+    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
     let Unlisted {
         mut ready,
         settling,
@@ -532,20 +532,19 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
             ),
         )?;
     }
-    for (gone, to) in &renames {
-        ui::info(out, &format!("Moved: {gone} is now {to}"))?;
-        manifest.edit(Edit::Rename {
-            from: gone.clone(),
-            to: to.clone(),
-        });
+    for line in moves.moved.keys().filter_map(|k| moves.line(k, false)) {
+        ui::info(out, &line)?;
+    }
+    if !moves.moved.is_empty() {
+        manifest.edit(Edit::Moved(moves.moved.clone()));
     }
     manifest.save()?;
     // So the song's plan names its file anew and the song is not written
     // again for a file that only moved.
-    if !renames.is_empty() {
+    if !moves.moved.is_empty() {
         let _lock = atomic::Lock::folder(&dirs.home)?;
         let mut state = State::load(&dirs.home)?;
-        state.rekey(&renames)?;
+        state.rekey(&moves.moved)?;
         state.save(&dirs.home)?;
     }
     Ok(ready

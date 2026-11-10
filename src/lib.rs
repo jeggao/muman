@@ -650,7 +650,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
         }
         Command::Restore { query, confirm } => {
             let mut later = Later::new(&dirs.home)?;
-            let changed = change::restore(dirs, query, confirm, prompter, &mut later, out);
+            let changed = change::restore(runner, dirs, query, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;

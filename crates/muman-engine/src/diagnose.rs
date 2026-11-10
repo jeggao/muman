@@ -220,13 +220,14 @@ pub fn diagnose(dirs: &Dirs) -> Result<Diagnosis> {
         ))?;
     }
     let mut unlisted = crate::reconcile::Unlisted::of(&manifest, &state, &store, store::SETTLING);
-    let moved = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, |_| None);
+    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, |_| None);
+    for line in moves.unsure_lines() {
+        said.problem(line)?;
+    }
     let arriving = crate::reconcile::arriving(&manifest, &state, &store, store::SETTLING);
     for key in &listed {
-        if let Some(to) = moved.get(key) {
-            said.info(format!(
-                "Moved, followed by the next sync: {key} is now {to}"
-            ))?;
+        if let Some(line) = moves.line(key, true) {
+            said.info(line)?;
         } else if arriving.contains(key) {
             said.info(format!(
                 "Missing from sources while a file is still being copied in, its song \

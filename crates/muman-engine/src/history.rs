@@ -79,7 +79,12 @@
 //! and `undo` takes each copy out with its song, else the next sync
 //! would list it again as a file dropped in: a copy as made is deleted,
 //! the file it came from untouched, and one changed since goes to the
-//! trash.
+//! trash. A copy gone from its path is looked for where the user may
+//! have moved it within the manual folder, by that digest, among the
+//! files the song list put back names nowhere, as a sync follows a moved
+//! file by its bytes, and taken out the same: left, it would be listed
+//! again too. Two files holding it are both left, and named, as which is
+//! the copy cannot be told.
 //!
 //! A record holds the song list's text, and with it any login or token
 //! the song list holds, so on Unix the history's folders are made `0700`
@@ -1223,7 +1228,7 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
             crate::relpath::show(&m.to)
         ));
     }
-    lines.extend(copies_said(home, &record));
+    lines.extend(copies_said(dirs, &record));
     let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
     let added = state
         .outputs
@@ -1412,23 +1417,88 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
 
 /// What undoing does with each copy `add` made that is still there, a
 /// line each.
-fn copies_said(home: &Path, record: &Record) -> Vec<String> {
-    record
-        .copied
-        .iter()
-        .filter(|(rel, _)| home.join(rel).exists())
-        .map(|(rel, digest)| {
-            let how = if as_copied(&home.join(rel), digest) {
-                "deleted"
-            } else {
-                "changed since, moved to the trash"
-            };
-            format!(
-                "{}: the copy the run made, {how}",
-                crate::relpath::show(rel)
-            )
-        })
-        .collect()
+fn copies_said(dirs: &Dirs, record: &Record) -> Vec<String> {
+    let copies = Copies::of(dirs, record);
+    let mut lines = Vec::new();
+    for (rel, digest) in &record.copied {
+        let Copy::At(copy) = copies.find(rel, digest) else {
+            continue;
+        };
+        let how = if as_copied(&copy, digest) {
+            "deleted"
+        } else {
+            "changed since, moved to the trash"
+        };
+        let shown = copy.strip_prefix(&dirs.home).unwrap_or(&copy);
+        lines.push(format!(
+            "{}: the copy the run made, {how}",
+            crate::relpath::show(shown)
+        ));
+    }
+    lines
+}
+
+/// Where a copy `add` made is now.
+enum Copy {
+    At(PathBuf),
+    Gone,
+    /// Moved, to one of these files, each holding every byte of it.
+    Unsure(Vec<PathBuf>),
+}
+
+/// The manual files the song list an undo puts back names nowhere, but
+/// at the path of a copy the run made, among which a copy the user moved
+/// within the folder is found by its bytes; none when that song list does
+/// not read.
+struct Copies {
+    home: PathBuf,
+    manual: PathBuf,
+    loose: Vec<PathBuf>,
+}
+
+impl Copies {
+    fn of(dirs: &Dirs, record: &Record) -> Self {
+        let before = record
+            .songs_before
+            .as_deref()
+            .unwrap_or(crate::manifest::NEW);
+        let loose = (crate::manifest::keys_in(before))
+            .zip(crate::store::Store::scan(dirs).ok())
+            .map(|(named, store)| {
+                (store.manual_files())
+                    .filter(|(k, _)| !named.contains(k))
+                    .filter_map(|(k, _)| Some(store.locate(&k)?.path))
+                    .filter(|p| !record.copied.keys().any(|rel| dirs.home.join(rel) == *p))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            home: dirs.home.clone(),
+            manual: dirs.manual(),
+            loose,
+        }
+    }
+
+    /// Where the copy at `rel` under the home, of `digest` as copied, is:
+    /// at its path, else the one loose file holding every byte of it.
+    fn find(&self, rel: &Path, digest: &str) -> Copy {
+        let at = self.home.join(rel);
+        if at.exists() {
+            return Copy::At(at);
+        }
+        if digest.is_empty() || !at.starts_with(&self.manual) {
+            return Copy::Gone;
+        }
+        let mut found: Vec<PathBuf> = (self.loose.iter())
+            .filter(|f| as_copied(f, digest))
+            .cloned()
+            .collect();
+        match found.len() {
+            0 => Copy::Gone,
+            1 => Copy::At(found.remove(0)),
+            _ => Copy::Unsure(found),
+        }
+    }
 }
 
 /// Move a file of the user's own to the desktop's trash. On macOS this
@@ -1451,16 +1521,33 @@ pub fn to_trash(file: &Path) -> Result<(), trash::Error> {
 // Removes the copies `add` made, as undo.
 #[expect(clippy::disallowed_methods)]
 fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Result<()> {
-    let home = &dirs.home;
+    let copies = Copies::of(dirs, record);
     for (rel, digest) in &record.copied {
-        let copy = home.join(rel);
-        if !copy.exists() {
-            crate::ui::info(
-                out,
-                &format!("The copy the run made is gone already: {}", copy.display()),
-            )?;
-            continue;
-        }
+        let copy = match copies.find(rel, digest) {
+            Copy::At(copy) => copy,
+            Copy::Gone => {
+                crate::ui::info(
+                    out,
+                    &format!(
+                        "The copy the run made is gone already: {}",
+                        dirs.home.join(rel).display()
+                    ),
+                )?;
+                continue;
+            }
+            Copy::Unsure(files) => {
+                let files: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+                crate::ui::warning(
+                    out,
+                    &format!(
+                        "Left, as more than one file holds the copy the run made of {}: {}",
+                        dirs.home.join(rel).display(),
+                        files.join(", ")
+                    ),
+                )?;
+                continue;
+            }
+        };
         // No digest: the run stopped as it copied, so what is there is
         // its copy, whole or not.
         if digest.is_empty() || as_copied(&copy, digest) {
@@ -1479,7 +1566,7 @@ fn take_out_copies<W: Write>(dirs: &Dirs, record: &Record, out: &mut W) -> Resul
                 ),
             )?;
         }
-        let sources = home.join("sources");
+        let sources = dirs.home.join("sources");
         for folder in copy
             .ancestors()
             .skip(1)

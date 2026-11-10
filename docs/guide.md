@@ -358,10 +358,10 @@ song files are read without the lyrics and pictures they bring.
 `muman add <FILE|FOLDER>` copies audio into `sources/manual`. You can
 also drop files there yourself; the next `sync` lists them. muman reads
 a dropped file only 10 s after it arrived, whatever modification time
-the copy kept, so it never reads a file still being copied. Any command
-that syncs follows a listed file you move within the folder: at once
-when it holds every byte it held, else once settled, by its audio,
-retagged too. While it is gone and another is copied in, its song waits.
+the copy kept. Any command that syncs follows a file you move within
+the folder, a removed song's too, by its bytes, else once settled by its
+audio: files that trade names keep their songs; one two files could be
+is named, not guessed. While gone as a file copies in, its song waits.
 
 A song file brings what sits beside it:
 

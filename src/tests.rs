@@ -1518,6 +1518,204 @@ fn a_file_renamed_and_retagged_at_once_is_followed_by_its_audio() {
     );
 }
 
+/// The two manual files `s` lists, `a.flac` and `b.flac`, synced; the
+/// first song given a genre by hand.
+fn two_listed(s: &Setup) {
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok, "{text}");
+}
+
+/// The genre each song of `s` was given by hand, by its sources.
+fn genres(s: &Setup) -> Vec<(Vec<SourceKey>, Option<String>)> {
+    let manifest = Manifest::load(&s.dir.path().join("home")).unwrap();
+    (manifest.songs.into_iter())
+        .map(|song| {
+            let genre = (song.tags.iter())
+                .find(|(k, _)| k == "genre")
+                .and_then(|(_, v)| v.first().cloned());
+            (song.sources, genre)
+        })
+        .collect()
+}
+
+#[test]
+fn two_files_that_trade_names_are_each_followed_to_the_other_s() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    move_manual(&s, "a.flac", "x.flac");
+    move_manual(&s, "b.flac", "a.flac");
+    move_manual(&s, "x.flac", "b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:a.flac is now manual:b.flac"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:a.flac"),
+        "{text}"
+    );
+    assert!(!text.contains("has changed since"), "{text}");
+    let (a, b) = (
+        SourceKey::Manual("a.flac".into()),
+        SourceKey::Manual("b.flac".into()),
+    );
+    assert_eq!(
+        genres(&s),
+        [(vec![b], Some("Folk".to_string())), (vec![a], None)],
+        "each song keeps its own tags"
+    );
+}
+
+#[test]
+fn a_file_moved_over_another_listed_one_takes_its_song_there() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    move_manual(&s, "b.flac", "a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "the song of the file replaced has none: {text}");
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:a.flac"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Replaced by manual:b.flac, moved over it: manual:a.flac"),
+        "{text}"
+    );
+    let (a, b) = (
+        SourceKey::Manual("a.flac".into()),
+        SourceKey::Manual("b.flac".into()),
+    );
+    assert_eq!(
+        genres(&s),
+        [(vec![b], Some("Folk".to_string())), (vec![a], None)],
+        "the Folk song waits for its own file"
+    );
+}
+
+#[test]
+fn files_edited_in_place_are_followed_as_changed_not_as_moved() {
+    let s = Setup::new();
+    two_listed(&s);
+
+    s.written("home/sources/manual/a.flac", "other audio of a");
+    s.written("home/sources/manual/b.flac", "other audio of b");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Moved"), "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn a_gone_file_two_files_could_be_is_not_guessed_at() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    let manual = s.dir.path().join("home/sources/manual");
+    for copy in ["x", "y"] {
+        std::fs::create_dir_all(manual.join(copy)).unwrap();
+        std::fs::copy(manual.join("a.flac"), manual.join(copy).join("a.flac")).unwrap();
+    }
+    std::fs::remove_file(manual.join("a.flac")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains(
+            "Not followed, as which file is which cannot be told: manual:a.flac held what \
+             manual:x/a.flac, manual:y/a.flac hold"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Added"), "neither is listed anew: {text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
+#[test]
+fn a_removed_song_s_file_moved_stays_out_and_is_restored_where_it_is() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+
+    move_manual(&s, "b.flac", "sorted/b.flac");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "manual:b.flac"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:b.flac is now manual:sorted/b.flac"),
+        "{text}"
+    );
+    let removed = |s: &Setup| {
+        (Manifest::load(&s.dir.path().join("home")).unwrap().removed)
+            .into_iter()
+            .flat_map(|r| r.sources)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(removed(&s), [SourceKey::Manual("sorted/b.flac".into())]);
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "{text}");
+
+    move_manual(&s, "sorted/b.flac", "kept/b.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(
+        !text.contains("Added"),
+        "a file moved after its removal: {text}"
+    );
+    assert_eq!(removed(&s), [SourceKey::Manual("kept/b.flac".into())]);
+
+    move_manual(&s, "kept/b.flac", "b.flac");
+    let (ok, text) = s.run(&flacs(), &["restore", "-y", "manual:kept/b.flac"]);
+    assert!(ok, "{text}");
+    assert_eq!(
+        s.songs(),
+        [
+            vec![SourceKey::Manual("a.flac".into())],
+            vec![SourceKey::Manual("b.flac".into())]
+        ]
+    );
+}
+
+#[test]
+fn undoing_an_add_whose_copy_was_moved_takes_the_copy_out() {
+    let s = Setup::new();
+    let a = s.file("rips/a.flac");
+    let b = s.file("rips/b.flac");
+    assert!(s.run(&flacs(), &["add", &a]).0);
+    assert!(s.run(&flacs(), &["add", &b]).0);
+
+    move_manual(&s, "b.flac", "sorted/b.flac");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Deleted the copy the run made"), "{text}");
+    assert!(!text.contains("gone already"), "{text}");
+    let moved = s.dir.path().join("home/sources/manual/sorted/b.flac");
+    assert!(!moved.exists(), "{text}");
+    assert!(
+        s.dir.path().join("rips/b.flac").exists(),
+        "the user's own stays"
+    );
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(!text.contains("Added"), "{text}");
+    assert_eq!(s.songs(), [vec![SourceKey::Manual("a.flac".into())]]);
+}
+
 #[test]
 fn an_original_yt_dlp_fetched_goes_into_the_store_under_its_key() {
     let s = Setup::new();

@@ -225,22 +225,22 @@ impl Song {
         self.sources.contains(key)
     }
 
-    /// `from` named `to` wherever the song names it, as a file that moved.
-    pub fn rename(&mut self, from: &SourceKey, to: &SourceKey) {
+    /// Each key `moved` names written as the key it names, all at once,
+    /// wherever the song names it, its record kept: files that moved.
+    pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
         let follow = |k: &mut SourceKey| {
-            if k == from {
+            if let Some(to) = moved.get(k) {
                 k.clone_from(to);
             }
         };
         self.sources.iter_mut().for_each(follow);
+        self.album.iter_mut().for_each(follow);
         self.audio.iter_mut().for_each(follow);
         self.cover.iter_mut().for_each(follow);
         if let Some(LyricsPin::From(k)) = &mut self.lyrics {
             follow(k);
         }
-        if let Some(held) = self.held.remove(from) {
-            self.held.insert(to.clone(), held);
-        }
+        self.held = rekeyed(std::mem::take(&mut self.held), moved);
     }
 
     /// The key that names this song alone, by [`id_of`].
@@ -259,6 +259,18 @@ pub struct Removed {
     pub note: String,
     /// The tags it was given by hand.
     pub tags: Tags,
+    /// What each source held when the song was last built.
+    pub held: BTreeMap<SourceKey, crate::held::Held>,
+}
+
+/// `held` with each key `moved` names under the key it names.
+fn rekeyed<T>(
+    held: BTreeMap<SourceKey, T>,
+    moved: &BTreeMap<SourceKey, SourceKey>,
+) -> BTreeMap<SourceKey, T> {
+    held.into_iter()
+        .map(|(k, h)| (moved.get(&k).cloned().unwrap_or(k), h))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +357,11 @@ pub enum Edit {
     /// What `key` held forgotten by every song listing it, so each is
     /// built from what it holds now: a record a lookup kept anew.
     Unhold(SourceKey),
+    /// Each key named written as the key it names, all at once, wherever
+    /// a song, an album or a removed song names it, its record kept:
+    /// manual files followed to where they moved, two of which may have
+    /// traded names.
+    Moved(BTreeMap<SourceKey, SourceKey>),
 }
 
 /// What an edited song became.
@@ -583,6 +600,28 @@ impl Manifest {
             .collect()
     }
 
+    /// Each key `moved` names written as the key it names, all at once,
+    /// wherever a song, an album or a removed song names it, here alone;
+    /// [`Edit::Moved`] writes it in the file.
+    pub fn rekey(&mut self, moved: &BTreeMap<SourceKey, SourceKey>) {
+        for song in &mut self.songs {
+            song.rekey(moved);
+        }
+        for album in &mut self.albums {
+            if let Some(to) = moved.get(&album.source) {
+                album.source.clone_from(to);
+            }
+        }
+        for removed in &mut self.removed {
+            for k in &mut removed.sources {
+                if let Some(to) = moved.get(k) {
+                    k.clone_from(to);
+                }
+            }
+            removed.held = rekeyed(std::mem::take(&mut removed.held), moved);
+        }
+    }
+
     /// Every key a removed song lists that no song lists.
     #[must_use]
     pub fn removed_keys(&self) -> BTreeSet<SourceKey> {
@@ -763,6 +802,19 @@ fn with_header(text: &str) -> Option<String> {
     };
     let new = format!("{HEADER}{rest}");
     (new != text).then_some(new)
+}
+
+/// Every key a song or a removed song lists in the song list `text`;
+/// none when it does not read.
+#[must_use]
+pub fn keys_in(text: &str) -> Option<BTreeSet<SourceKey>> {
+    let parsed = parse(&text.parse().ok()?).ok()?;
+    Some(
+        (parsed.songs.iter().flat_map(|s| &s.sources))
+            .chain(parsed.removed.iter().flat_map(|r| &r.sources))
+            .cloned()
+            .collect(),
+    )
 }
 
 fn read(dir: &Path) -> Result<DocumentMut> {
@@ -1134,6 +1186,7 @@ fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
                 .unwrap_or_default()
                 .to_string(),
             tags: tags_of(t.get("tags"), &what)?,
+            held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
         });
     }
     Ok(removed)
@@ -1583,6 +1636,12 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         Edit::Respell { from, to } => {
             let (from, to) = (from.to_string(), to.to_string());
             respell(doc, &|k| (k == from).then(|| to.clone()));
+        }
+        Edit::Moved(moved) => {
+            let moved: BTreeMap<String, String> = (moved.iter())
+                .map(|(from, to)| (from.to_string(), to.to_string()))
+                .collect();
+            respell(doc, &|k| moved.get(k).cloned());
         }
         Edit::Unhold(key) => {
             let text = key.to_string();

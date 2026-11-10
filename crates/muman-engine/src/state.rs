@@ -867,16 +867,6 @@ impl State {
         state.save(home)
     }
 
-    /// What measuring last recorded of `key`'s files, to follow it by
-    /// where it moved ([`crate::store::moved_manual`]).
-    #[must_use]
-    pub fn recorded(&self, key: &SourceKey) -> Option<crate::store::Recorded<'_>> {
-        self.facts.get(key).map(|f| crate::store::Recorded {
-            rev: &f.rev,
-            content: f.content.as_deref(),
-        })
-    }
-
     /// Name each key `renames` names anew, wherever this names it: a
     /// source an extractor's name keyed, renamed by its site.
     pub fn rekey(&mut self, renames: &BTreeMap<SourceKey, SourceKey>) -> Result<()> {

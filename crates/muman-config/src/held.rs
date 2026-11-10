@@ -118,8 +118,24 @@ fn of_all(parts: &[(String, &String)]) -> Option<String> {
     cut(&crate::hash::digest(text.as_bytes()))
 }
 
+/// What a record holds of `aspect` for a source that is one file whole,
+/// a lyrics file, a picture or a tag file, whose bytes' digest is
+/// `digest`, as [`Held::now`] records it; none of audio, which no such
+/// file offers.
+#[must_use]
+pub fn of_file(aspect: Aspect, digest: &str) -> Option<String> {
+    let digest = digest.to_string();
+    match aspect {
+        Aspect::Audio => None,
+        Aspect::Cover => of_all(&[(format!("{:?}", crate::facts::CoverAt::File), &digest)]),
+        Aspect::Lyrics => of_all(&[(format!("{:?}", crate::facts::LyricsAt::File), &digest)]),
+        Aspect::Tags => cut(&digest),
+    }
+}
+
 /// Whether two digests agree as far as both go.
-fn agree(a: &str, b: &str) -> bool {
+#[must_use]
+pub fn agree(a: &str, b: &str) -> bool {
     let n = a.len().min(b.len());
     a[..n] == b[..n]
 }

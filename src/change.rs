@@ -462,7 +462,8 @@ fn removal(
 
 /// List again the removed songs the query picks. Returns whether any
 /// was.
-pub fn restore<W: Write>(
+pub fn restore<R: crate::runner::Runner, W: Write>(
+    runner: &R,
     dirs: &Dirs,
     terms: &[String],
     confirm: &Confirm,
@@ -493,12 +494,18 @@ pub fn restore<W: Write>(
     }
     // A file of your own `remove --purge` trashed would leave its song
     // listed with nothing to make it from, and every sync failing.
+    // A file moved within the folder is followed by the sync after.
     let store = Store::scan(dirs)?;
+    let mut unlisted =
+        crate::reconcile::Unlisted::of(&manifest, &state, &store, crate::store::SETTLING);
+    let scratch = crate::atomic::Scratch::new()?;
+    let hear = crate::reconcile::hearing(runner, scratch.path());
+    let moves = crate::reconcile::moved(&manifest, &state, &store, &mut unlisted, hear);
     let gone: Vec<String> = picked
         .iter()
         .flat_map(|n| &manifest.removed[*n].sources)
         .filter_map(|k| match k {
-            SourceKey::Manual(m) if store.locate(k).is_none() => {
+            SourceKey::Manual(m) if store.locate(k).is_none() && !moves.moved.contains_key(k) => {
                 Some(format!("  {}", dirs.manual().join(m.path()).display()))
             }
             _ => None,

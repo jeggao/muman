@@ -614,6 +614,45 @@ fn a_shared_picture_moved_in_the_manual_folder_is_followed_by_each_song() {
     assert!(s.song_with("Copper Moth").has(&moved));
 }
 
+#[test]
+fn undoing_the_sync_that_followed_moved_lyrics_and_a_picture_follows_them_again() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Night Ferry"]);
+    let lrc = s.written("dl/Night Ferry.lrc", "[00:01.00]boats go out\n");
+    let png = s.file("dl/front.png");
+    assert!(s.run(&fake, &["add", &lrc]).0);
+    assert!(s.run(&fake, &["add", &png, "--to", "ferry"]).0);
+    let home = s.dir.path().join("home/sources/manual");
+    for dir in ["words", "art"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    moved(
+        &home.join("added/Night Ferry.lrc"),
+        &home.join("words/nf.lrc"),
+    );
+    moved(&home.join("added/front.png"), &home.join("art/nf.png"));
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("is now manual:words/nf.lrc"), "{text}");
+
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("Moved: manual:added/Night Ferry.lrc is now manual:words/nf.lrc"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Moved: manual:added/front.png is now manual:art/nf.png"),
+        "{text}"
+    );
+    let song = s.song_with("Night Ferry");
+    assert!(song.has(&manual("words/nf.lrc")), "{:?}", song.sources);
+    assert!(song.has(&manual("art/nf.png")), "{:?}", song.sources);
+    let (ok, text) = s.run(&fake, &["check"]);
+    assert!(ok, "{text}");
+}
+
 fn library_has(s: &Setup, name: &str) -> bool {
     crate::store::files_below(&s.dir.path().join("lib"), usize::MAX, |_| true)
         .unwrap()
