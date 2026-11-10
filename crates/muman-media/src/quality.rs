@@ -112,7 +112,11 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/13";
+pub const METHOD: &str = "quality/14";
+/// The method before a picture that is a source of its own, as a cover a
+/// lookup kept, was no cover when it did not decode whole: what it
+/// measured holds, unless a picture did not decode.
+pub const BEFORE_WHOLE_FILES: &str = "quality/13";
 /// The method before a TIFF was read as ffmpeg can read one
 /// ([`read_whole`]): what it measured holds, unless a picture did not
 /// decode.

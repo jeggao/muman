@@ -58,7 +58,9 @@
 //! are not the tags' one for one, each in the format its bytes are, they
 //! are read as `lofty` reads them ([`picture::tag_pictures`]) and decoded
 //! as their bytes say. A picture that does not decode is no cover, and
-//! said when its source is measured ([`Unkept::Picture`]).
+//! said when its source is measured ([`Unkept::Picture`]): one rule for a
+//! picture in a file, beside it, or a source of its own, as a cover a
+//! lookup kept or a picture in the manual folder.
 //!
 //! Each picture is also known by how it looks, [`crate::picture`]'s
 //! hashes of the gray pixels its quality is measured from, so a picture
@@ -98,6 +100,13 @@ pub fn method() -> String {
 /// `quality::METHOD`.
 fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
+}
+
+/// [`method`] before a picture that is a source of its own was no cover
+/// when it did not decode whole: facts it made hold, unless a picture did
+/// not decode.
+fn before_whole_files() -> String {
+    measured_by(quality::BEFORE_WHOLE_FILES)
 }
 
 /// [`method`] before a TIFF was read as ffmpeg can read one: facts it
@@ -284,6 +293,7 @@ impl Facts {
         let clips = self.clips();
         let before = |method: String| self.method == method && !self.undecoded();
         self.method == method()
+            || before(before_whole_files())
             || before(before_tiff())
             || before(before_unclipped()) && !clips
             || before(before_lowest()) && !lossy && !clips
@@ -772,17 +782,17 @@ pub fn gather<R: Runner>(
             });
             facts.tags_method = tags_method(Kind::Lyrics);
         }
-        Kind::Image => {
-            let (quality, look) = image_file(runner, located, scratch);
-            facts.covers.push(CoverFacts {
+        Kind::Image => match image_file(runner, located, scratch) {
+            Some((quality, look)) => facts.covers.push(CoverFacts {
                 at: CoverAt::File,
                 mimetype: mimetype_of(&located.path),
                 quality,
                 digest: digest_file(&located.path),
                 look,
                 other: named_other(&located.path),
-            });
-        }
+            }),
+            None => facts.unkept.push(Unkept::Picture),
+        },
         Kind::Tags => {
             let record = crate::record::read(&located.path)?;
             facts.tags = tags::from_record(&record);
@@ -1025,19 +1035,20 @@ fn picture_input(path: &Path, mimetype: Option<&str>) -> Input {
     Input::new(quality::whole_pictures_but(&streams), path)
 }
 
-/// The measures of the picture `located` is.
+/// The measures of the picture `located` is; none when it does not
+/// decode whole, as a picture in or beside a media file is none.
 fn image_file<R: Runner>(
     runner: &R,
     located: &Located,
     scratch: &Path,
-) -> (Option<ImageQuality>, Option<Look>) {
+) -> Option<(Option<ImageQuality>, Option<Look>)> {
     let out = scratch.join("file.pam");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
     let input = picture_input(&located.path, picture::sniff_file(&located.path));
     let ok = ffmpeg::run(runner, &[input], &outputs);
     match ok.into_iter().next() {
-        Some(Ok(())) => measure_image(&out),
-        _ => (None, None),
+        Some(Ok(())) => Some(measure_image(&out)),
+        _ => None,
     }
 }
 
@@ -1163,7 +1174,7 @@ pub fn look<R: Runner>(
     match located.kind {
         Kind::Image => Ok(vec![(
             CoverAt::File,
-            image_file(runner, located, scratch).1,
+            image_file(runner, located, scratch).and_then(|(_, look)| look),
         )]),
         Kind::Media => {
             let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;

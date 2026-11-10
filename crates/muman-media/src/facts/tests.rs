@@ -206,6 +206,43 @@ fn a_picture_that_does_not_decode_is_said() {
 }
 
 #[test]
+fn a_picture_source_that_does_not_decode_whole_is_no_cover_and_is_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = Located {
+        kind: Kind::Image,
+        ..located(dir.path(), "A/cover.jpg")
+    };
+    std::fs::write(&source.path, crate::testing::PIXEL_JPEG).unwrap();
+    let scratch = dir.path().join("scratch");
+    let whole = gather(&Fake::default(), &source, &scratch, &[]).unwrap();
+    assert_eq!(whole.covers.len(), 1);
+    assert!(whole.unkept.is_empty());
+
+    let cut = Fake {
+        failing: vec!["image2".into()],
+        ..Fake::default()
+    };
+    let facts = gather(&cut, &source, &scratch, &[]).unwrap();
+    assert!(facts.covers.is_empty(), "{:?}", facts.covers);
+    assert_eq!(facts.unkept, [Unkept::Picture]);
+
+    let kept_before = Facts {
+        method: before_whole_files(),
+        covers: vec![CoverFacts {
+            quality: None,
+            ..whole.covers[0].clone()
+        }],
+        ..whole.clone()
+    };
+    assert!(!kept_before.holds_for(&whole.rev), "measured again");
+    let whole_before = Facts {
+        method: before_whole_files(),
+        ..whole.clone()
+    };
+    assert!(whole_before.holds_for(&whole.rev));
+}
+
+#[test]
 fn a_file_s_own_lyrics_tag_is_lyrics_of_it_measured_hashed_and_read_again() {
     use lofty::config::WriteOptions;
     use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
@@ -904,7 +941,7 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/13",
+    "quality/14",
     "70e878c3c7d12fa9b6edb5efb0ea5d8db180c00f7bc4331e9c73fe1531405c9d",
 );
 
