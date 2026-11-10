@@ -371,6 +371,8 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
         Some("image/gif")
     } else if bytes.starts_with(b"BM") && bytes.len() > 26 {
         Some("image/bmp")
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        Some("image/tiff")
     } else {
         None
     }
@@ -592,6 +594,8 @@ mod tests {
         assert_eq!(sniff(b"\xFF\xD8\xFF\xE0\0\x10JFIF"), Some("image/jpeg"));
         assert_eq!(sniff(b"RIFF\0\0\0\0WEBPVP8X"), Some("image/webp"));
         assert_eq!(sniff(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff(b"II*\0\x08\0\0\0"), Some("image/tiff"));
+        assert_eq!(sniff(b"MM\0*\0\0\0\x08"), Some("image/tiff"));
         assert_eq!(sniff(b"\x89PN"), None, "cut short");
         assert!(!typed_other(Some("Cover (front)")) && !typed_other(Some("Other")));
         assert!(!typed_other(None));

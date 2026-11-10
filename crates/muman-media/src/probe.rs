@@ -285,9 +285,12 @@ impl Stream {
 
     /// The image type of a picture stream: by the codec ffmpeg reads its
     /// bytes as, over the type its tag says, which a file may get wrong.
+    /// A TIFF is named so it is read as ffmpeg can read one
+    /// ([`crate::quality::read_whole`]).
     fn picture_type(&self) -> Option<String> {
         let read = crate::picture::ImageFormat::of_codec(&self.codec_name)
-            .map(crate::picture::ImageFormat::mimetype);
+            .map(crate::picture::ImageFormat::mimetype)
+            .or((self.codec_name == "tiff").then_some("image/tiff"));
         let said = self.tag("mimetype").filter(|m| m.starts_with("image/"));
         if said.is_none() && self.disposition.get("attached_pic") != Some(&1) {
             return None;
@@ -828,6 +831,9 @@ mod tests {
              "disposition": {"attached_pic": 1}}]}"#;
         let o = parse(json.as_bytes()).unwrap();
         assert_eq!(o.pictures[0].mimetype, "image/png");
+        let tiff = json.replace(r#""codec_name": "png""#, r#""codec_name": "tiff""#);
+        let o = parse(tiff.as_bytes()).unwrap();
+        assert_eq!(o.pictures[0].mimetype, "image/tiff");
     }
 
     #[test]

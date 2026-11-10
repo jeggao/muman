@@ -100,8 +100,15 @@ fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
 }
 
+/// [`method`] before a TIFF was read as ffmpeg can read one: facts it
+/// made hold, unless a picture did not decode.
+fn before_tiff() -> String {
+    measured_by(quality::BEFORE_TIFF)
+}
+
 /// [`method`] before bandwidth was read where the audio does not clip:
-/// facts it made hold, unless their audio clips.
+/// facts it made hold, unless their audio clips, or as [`before_tiff`]'s
+/// do not.
 fn before_unclipped() -> String {
     measured_by(quality::BEFORE_UNCLIPPED)
 }
@@ -266,17 +273,19 @@ impl Facts {
     fn method_holds(&self) -> bool {
         let lossy = self.audio.as_ref().is_some_and(|a| !a.is_lossless());
         let clips = self.clips();
+        let before = |method: String| self.method == method && !self.undecoded();
         self.method == method()
-            || self.method == before_unclipped() && !clips
-            || self.method == before_lowest() && !lossy && !clips
-            || self.method == before_square() && !self.unsquare() && !lossy && !clips
-            || self.method == before_alpha()
+            || before(before_tiff())
+            || before(before_unclipped()) && !clips
+            || before(before_lowest()) && !lossy && !clips
+            || before(before_square()) && !self.unsquare() && !lossy && !clips
+            || before(before_alpha())
                 && !self.detailless()
                 && !self.oversized()
                 && !self.unsquare()
                 && !lossy
                 && !clips
-            || self.method == before_sound()
+            || before(before_sound())
                 && !self.soundless()
                 && !self.detailless()
                 && !self.oversized()
@@ -335,6 +344,12 @@ impl Facts {
             c.quality
                 .is_some_and(|q| q.is_cropped() && !q.is_square(quality::SQUARE_TOLERANCE))
         })
+    }
+
+    /// Whether a picture did not decode, as a TIFF did not before
+    /// [`quality::read_whole`].
+    fn undecoded(&self) -> bool {
+        self.covers.iter().any(|c| c.quality.is_none())
     }
 
     /// Whether its audio measured any clipping.
@@ -989,6 +1004,18 @@ fn measure_image(pam: &Path) -> (Option<ImageQuality>, Option<Look>) {
     (quality, look)
 }
 
+/// The picture file at `path`, of `mimetype` by its bytes, read whole or
+/// not at all where ffmpeg can ([`quality::read_whole`]).
+fn picture_input(path: &Path, mimetype: Option<&str>) -> Input {
+    let lenient = mimetype.is_some_and(|m| !quality::read_whole(m));
+    let streams = if lenient {
+        vec!["v:0".to_string()]
+    } else {
+        Vec::new()
+    };
+    Input::new(quality::whole_pictures_but(&streams), path)
+}
+
 /// The measures of the picture `located` is.
 fn image_file<R: Runner>(
     runner: &R,
@@ -997,7 +1024,7 @@ fn image_file<R: Runner>(
 ) -> (Option<ImageQuality>, Option<Look>) {
     let out = scratch.join("file.pam");
     let outputs = [Output::new(quality::gray_output(0, "v:0"), &out)];
-    let input = Input::new(quality::whole_pictures(), &located.path);
+    let input = picture_input(&located.path, picture::sniff_file(&located.path));
     let ok = ffmpeg::run(runner, &[input], &outputs);
     match ok.into_iter().next() {
         Some(Ok(())) => measure_image(&out),
@@ -1037,7 +1064,7 @@ fn cover_outputs(
         if !dumped.exists() {
             continue;
         }
-        inputs.push(Input::new(quality::whole_pictures(), &dumped));
+        inputs.push(picture_input(&dumped, picture::sniff_file(&dumped)));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
@@ -1067,7 +1094,7 @@ fn cover_outputs(
             continue;
         }
         let file = scratch.join(name.as_str());
-        inputs.push(Input::new(quality::whole_pictures(), &file));
+        inputs.push(picture_input(&file, picture::sniff(&bytes)));
         outputs.push((
             Output::new(
                 quality::gray_output(inputs.len() - 1, "v:0"),
@@ -1106,7 +1133,7 @@ fn sidecar_cover<R: Runner>(
         quality::gray_output(0, "v:0"),
         &scratch.join(format!("side{n}.pam")),
     );
-    let input = Input::new(quality::whole_pictures(), cover);
+    let input = picture_input(cover, picture::sniff_file(cover));
     let result = ffmpeg::run(runner, &[input], std::slice::from_ref(&output))
         .into_iter()
         .next()
@@ -1326,7 +1353,16 @@ fn media<R: Runner>(
     let tags = tags_digest(info.is_some(), &probed, &located.path, scratch);
     let info = info.unwrap_or_default();
 
-    let mut inputs = vec![Input::new(quality::whole_pictures(), &located.path)];
+    let lenient: Vec<String> = probed
+        .pictures
+        .iter()
+        .filter(|p| !quality::read_whole(&p.mimetype))
+        .map(|p| p.index.to_string())
+        .collect();
+    let mut inputs = vec![Input::new(
+        quality::whole_pictures_but(&lenient),
+        &located.path,
+    )];
     let mut outputs: Vec<(Output, Measured)> = hash_outputs(&probed, scratch)
         .into_iter()
         .map(|(o, part)| (o, Measured::Hash(part)))

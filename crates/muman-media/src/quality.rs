@@ -112,10 +112,14 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/12";
+pub const METHOD: &str = "quality/13";
+/// The method before a TIFF was read as ffmpeg can read one
+/// ([`read_whole`]): what it measured holds, unless a picture did not
+/// decode.
+pub const BEFORE_TIFF: &str = "quality/12";
 /// The method before bandwidth was read where the audio does not clip:
 /// what it measured holds for audio that does not clip, or as
-/// [`BEFORE_LOWEST`]'s does not hold.
+/// [`BEFORE_TIFF`]'s does not hold.
 pub const BEFORE_UNCLIPPED: &str = "quality/11";
 /// The method before bandwidth was read at the lowest wall: what it
 /// measured holds for lossless audio, and lossy audio is measured again.
@@ -428,15 +432,34 @@ pub fn segment_output(input: usize, index: u32) -> Vec<OsString> {
 /// decoded.
 #[must_use]
 pub fn whole_pictures() -> Vec<OsString> {
-    [
+    whole_pictures_but(&[])
+}
+
+/// [`whole_pictures`], but the streams `lenient` names, as ffmpeg
+/// specifies them (`v:0`, `3`), are read as ffmpeg reads any picture:
+/// those of a format [`read_whole`] says ffmpeg cannot read whole.
+#[must_use]
+pub fn whole_pictures_but(lenient: &[String]) -> Vec<OsString> {
+    let mut args = vec![
         "-err_detect:v".to_string(),
         "explode".to_string(),
         "-max_pixels:v".to_string(),
         MOST_PIXELS.to_string(),
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+    ];
+    for stream in lenient {
+        args.extend([format!("-err_detect:{stream}"), "careful".to_string()]);
+    }
+    args.into_iter().map(OsString::from).collect()
+}
+
+/// Whether ffmpeg can read a picture of `mimetype` whole or not at all.
+/// Its TIFF decoder fails on every tag it does not know, as the
+/// orientation every TIFF `ImageMagick` writes holds, when told to fail on
+/// any error, and on every TIFF ffmpeg writes itself; one cut short fails
+/// either way, its directory or its strips past the end of its bytes.
+#[must_use]
+pub fn read_whole(mimetype: &str) -> bool {
+    mimetype != "image/tiff"
 }
 
 /// The most pixels a picture measured may hold, as the module says.
@@ -1737,6 +1760,27 @@ mod tests {
         assert_eq!(q.effective, 256, "{q:?}");
         let opaque: Vec<u8> = art.iter().flat_map(|&g| [g, 255]).collect();
         assert_eq!(flatten(&opaque), art);
+    }
+
+    #[test]
+    fn a_tiff_is_read_as_ffmpeg_can_read_one_and_every_other_picture_whole() {
+        assert!(!read_whole("image/tiff"));
+        assert!(
+            ["image/jpeg", "image/png", "image/bmp", "image/unknown"]
+                .iter()
+                .all(|m| read_whole(m))
+        );
+        let args: Vec<String> = whole_pictures_but(&["3".to_string()])
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let at = |arg: &str| args.iter().position(|a| a == arg).unwrap();
+        assert!(
+            at("-err_detect:3") > at("-err_detect:v"),
+            "the later one holds"
+        );
+        assert_eq!(args[at("-err_detect:3") + 1], "careful");
+        assert_eq!(whole_pictures(), whole_pictures_but(&[]));
     }
 
     #[test]

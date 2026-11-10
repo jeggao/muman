@@ -317,6 +317,27 @@ fn facts_of_the_measure_before_hold_unless_they_found_no_sound() {
 }
 
 #[test]
+fn facts_of_older_measures_with_a_picture_that_did_not_decode_are_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].flac");
+    for method in [before_tiff(), before_unclipped(), before_sound()] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.covers = vec![CoverFacts {
+            at: CoverAt::Picture { index: 1 },
+            mimetype: "image/unknown".into(),
+            quality: None,
+            digest: None,
+            look: None,
+            other: false,
+        }];
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+        f.covers.clear();
+        assert!(f.holds_for(&source.rev()), "{method}: no picture");
+    }
+}
+
+#[test]
 fn facts_of_older_measures_of_audio_that_clips_are_measured_again() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
@@ -883,7 +904,7 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/12",
+    "quality/13",
     "70e878c3c7d12fa9b6edb5efb0ea5d8db180c00f7bc4331e9c73fe1531405c9d",
 );
 
