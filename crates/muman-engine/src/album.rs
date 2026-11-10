@@ -32,7 +32,11 @@
 //!   than the release holds keeps its own.
 //! - The names: an album or album artist spelled differently by songs of
 //!   one album, but alike once folded, is spelled as most of them spell
-//!   it, the first song in the song list breaking a tie.
+//!   it. Of spellings as common, the one with more words opening with a
+//!   capital wins, then the one of fewer capitals, as a title is cased
+//!   rather than shouted, then the first by its text: never the song
+//!   listed first, so the same files make the same album folder whatever
+//!   order they were added in.
 //! - The release: songs on one release, by its MusicBrainz ID, give each
 //!   other the fields of the whole release, [`WHOLE`], as most of them
 //!   have it, a song lacking one taking it; a song on none in an album of
@@ -41,7 +45,9 @@
 //! - The cover and the audio ([`consistent`]): the design a pinned cover
 //!   shows, else the one most of an album's songs show
 //!   ([`crate::picture::alike`]), which a song showing another shows too
-//!   from a source of its own that holds it; and the folder most of their
+//!   from a source of its own that holds it, a tie going to the design
+//!   of more detail, then by its hashes, never by the order of the songs;
+//!   and the folder most of their
 //!   audio comes from ([`origin_of`]), a
 //!   disc's folder counting as its album's, which wins a song's audio
 //!   between sources its measures rank alike, so an album plays from one
@@ -407,8 +413,8 @@ fn shown(r: &Resolved, facts: &BTreeMap<SourceKey, Facts>) -> Option<(Look, u32)
 
 /// The design most of an album's covers show, `shown` as each song shows
 /// one: covers grouped by [`picture::alike`] reading them one design; of
-/// groups alike in size, the one holding the most detail; its sharpest
-/// cover stands for it.
+/// groups alike in size, the one holding the most detail, then the one
+/// whose [`hashes`] come first; its sharpest cover stands for it.
 fn design(shown: &[Option<(Look, u32)>]) -> Option<Look> {
     let mut group: Vec<usize> = (0..shown.len()).collect();
     for i in 0..shown.len() {
@@ -436,13 +442,32 @@ fn design(shown: &[Option<(Look, u32)>]) -> Option<Look> {
         (0..shown.len())
             .filter(|&i| group[i] == g)
             .filter_map(|i| shown[i])
-            .max_by_key(|(_, detail)| *detail)
+            .max_by_key(|(look, detail)| (*detail, std::cmp::Reverse(hashes(look))))
     };
     let best = (0..shown.len())
         .filter(|&i| has(i))
         .map(|i| group[i])
-        .max_by_key(|&g| (size(g), sharpest(g).map(|(_, d)| d), std::cmp::Reverse(g)))?;
+        .max_by_key(|&g| {
+            let (look, detail) = sharpest(g).unzip();
+            (size(g), detail, std::cmp::Reverse(look.map(|l| hashes(&l))))
+        })?;
     sharpest(best).map(|(look, _)| look)
+}
+
+/// Every hash of a look, and whether it is flat.
+type LookHashes = (u64, u64, Option<(u64, u64)>, Option<(u64, u64)>, bool);
+
+/// A look's hashes, an order for covers alike in every other way, which
+/// the order of the songs showing them does not change.
+fn hashes(look: &Look) -> LookHashes {
+    let pair = |h: picture::Hashes| (h.p, h.d);
+    (
+        look.content.p,
+        look.content.d,
+        look.square.map(pair),
+        look.frame.map(pair),
+        look.flat,
+    )
 }
 
 /// The value most of `values` are, where two or more are and no other is
@@ -654,9 +679,9 @@ fn agree_on(album: &[&Member<'_>], agreed: &mut BTreeMap<usize, Vec<Agreed>>) {
     }
 }
 
-/// `field` given the value most of `voters` have, the first breaking a
-/// tie, to each of `songs` that has another or none: `of` songs being on
-/// the album.
+/// `field` given the value most of `voters` have, a tie going as
+/// [`cased`] ranks them, to each of `songs` that has another or none: `of`
+/// songs being on the album.
 fn settle(
     field: Field,
     voters: &[&Member<'_>],
@@ -664,21 +689,23 @@ fn settle(
     of: usize,
     agreed: &mut BTreeMap<usize, Vec<Agreed>>,
 ) {
-    let mut tally: Vec<(&[String], &str, usize)> = Vec::new();
+    let mut tally: BTreeMap<&[String], (usize, &str)> = BTreeMap::new();
     for m in voters {
         let Some((values, from)) = m.tag(field).filter(|(v, _)| !v.is_empty()) else {
             continue;
         };
-        match tally.iter_mut().find(|(v, _, _)| *v == values) {
-            Some(vote) => vote.2 += 1,
-            None => tally.push((values, from, 1)),
-        }
+        let vote = tally.entry(values).or_insert((0, from));
+        vote.0 += 1;
+        vote.1 = vote.1.min(from);
     }
-    let Some(&(values, from, count)) = tally.iter().min_by_key(|v| std::cmp::Reverse(v.2)) else {
+    let Some((values, &(count, from))) = tally
+        .iter()
+        .min_by_key(|(values, (count, _))| (std::cmp::Reverse(*count), cased(values), *values))
+    else {
         return;
     };
     for m in songs {
-        if m.tag(field).is_some_and(|(v, _)| v == values) {
+        if m.tag(field).is_some_and(|(v, _)| v == *values) {
             continue;
         }
         agreed.entry(m.n).or_default().push(Agreed {
@@ -687,6 +714,27 @@ fn settle(
             from: format!("{from}, as {count} of its album's {of} songs have it"),
         });
     }
+}
+
+/// How a spelling ranks among those as common, smaller first: more words
+/// opening with a capital, then fewer capitals, as a title is cased
+/// rather than shouted. Neither depends on the order songs are listed in.
+fn cased(values: &[String]) -> (std::cmp::Reverse<usize>, usize) {
+    let words = values
+        .iter()
+        .flat_map(|v| v.split_whitespace())
+        .filter(|w| {
+            w.chars()
+                .find(|c| c.is_alphabetic())
+                .is_some_and(char::is_uppercase)
+        })
+        .count();
+    let capitals = values
+        .iter()
+        .flat_map(|v| v.chars())
+        .filter(|c| c.is_uppercase())
+        .count();
+    (std::cmp::Reverse(words), capitals)
 }
 
 #[cfg(test)]
@@ -841,6 +889,42 @@ mod tests {
         );
         assert_eq!(agreed(&planned, 1, Field::Album), None);
         assert_eq!(agreed(&planned, 3, Field::Album), None);
+    }
+
+    #[test]
+    fn a_tie_of_spellings_goes_alike_whatever_the_order_of_the_songs() {
+        let named = |n, album, from| {
+            song(
+                n,
+                &[
+                    (Field::Album, album, from),
+                    (Field::AlbumArtist, "Marlo Venn", from),
+                    (Field::Date, "1974", from),
+                ],
+            )
+        };
+        let spellings = [
+            ("Glass Hours", "manual:a.flac"),
+            ("Glass hours", "manual:b.flac"),
+            ("glass Hours", "manual:c.flac"),
+            ("GLASS HOURS", "manual:d.flac"),
+        ];
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let planned: Vec<(usize, Resolved)> = order
+                .iter()
+                .enumerate()
+                .map(|(n, &i)| named(n, spellings[i].0, spellings[i].1))
+                .collect();
+            let all = agree(&planned);
+            let agreed: Vec<&Agreed> = (all.values().flatten())
+                .filter(|a| a.field == Field::Album)
+                .collect();
+            assert_eq!(agreed.len(), 3, "{order:?}");
+            for a in agreed {
+                assert_eq!(a.values, ["Glass Hours"], "{order:?}");
+                assert_eq!(a.from, "manual:a.flac, as 1 of its album's 4 songs have it");
+            }
+        }
     }
 
     #[test]
@@ -1128,5 +1212,12 @@ mod tests {
             "of groups alike in size, the sharpest"
         );
         assert_eq!(design(&[None, None]), None);
+    }
+
+    #[test]
+    fn of_designs_alike_in_size_and_detail_one_wins_whatever_the_order() {
+        let (a, b) = (look(0), look(u64::MAX));
+        assert_eq!(design(&[Some((a, 600)), Some((b, 600))]), Some(a));
+        assert_eq!(design(&[Some((b, 600)), Some((a, 600))]), Some(a));
     }
 }

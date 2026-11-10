@@ -31,8 +31,10 @@ an album artist and album alike but for case and punctuation, in one
 year. Songs on several releases of it take the one most can be on, as
 [releases rank](library.md#musicbrainz-and-acoustid); a mono mix on a mono edition keeps its own. An
 album spelled two ways, as `On The Border` and `On the Border`, is
-spelled as most of its songs spell it, and songs on one release share
-its date, label and IDs. A tag set by hand never changes nor counts.
+spelled as most of its songs spell it; of spellings as common, the one
+with more words opening with a capital, then fewer capitals, whatever
+order the songs were added in. Songs on one release share its date,
+label and IDs. A tag set by hand never changes nor counts.
 `original_year` puts every edition in one folder
 ([configuration](configuration.md#the-path-template)).
 
