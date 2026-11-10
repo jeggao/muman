@@ -5813,6 +5813,33 @@ fn set_shows_and_stores_each_value_as_it_takes_effect() {
 }
 
 #[test]
+fn a_line_break_set_by_hand_reads_as_a_space_stored_shown_and_matched() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.run(&flacs(), &["sync"]);
+    let (ok, text) = s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "title=Paper\nComets\t"],
+    );
+    assert!(ok, "{text}");
+    assert!(text.contains("→ Paper Comets\n"), "{text}");
+    let songs = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(songs.contains("title = \"Paper Comets\""), "{songs}");
+    let listed = s.listed(&["list", "title:=Paper Comets"]);
+    assert!(listed.contains("Paper Comets"), "{listed}");
+    std::fs::write(
+        s.dir.path().join("home/songs.toml"),
+        songs.replace("Paper Comets", "Paper\\nComets"),
+    )
+    .unwrap();
+    let listed = s.listed(&["list", "title:=Paper Comets"]);
+    assert!(
+        listed.contains("Paper Comets"),
+        "a hand edit reads alike: {listed}"
+    );
+}
+
+#[test]
 fn set_tags_a_song_and_writes_it_again() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

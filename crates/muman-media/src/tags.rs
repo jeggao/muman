@@ -1134,7 +1134,9 @@ pub fn song_list_name(name: &str) -> String {
 /// Vorbis comment cannot carry (printable ASCII but `=`, as APEv2 keys
 /// are ASCII too), a number that is none, a date that is none, or a gain
 /// muman measures and writes over. An empty value sets nothing, so it is
-/// never wrong.
+/// never wrong. A line break or tab, with the spaces around it, reads as
+/// one space: a value set by hand is one line, as `list` and every
+/// message show it and as a query matches it, wherever it was set.
 pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
     if name.is_empty()
         || !name
@@ -1150,6 +1152,12 @@ pub fn by_hand(name: &str, value: &str) -> Result<String, String> {
         .chars()
         .filter(|c| !crate::portable::reorders(*c))
         .collect();
+    let value = value
+        .split(['\n', '\r', '\t'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if value.trim().is_empty() {
         return Ok(String::new());
     }
@@ -2776,6 +2784,11 @@ mod tests {
                 .contains("a count starts at 1")
         );
         assert!(by_hand("track", "x").unwrap_err().contains("no number"));
+        assert_eq!(
+            by_hand("title", "line1\n line2\r\n\tend").unwrap(),
+            "line1 line2 end"
+        );
+        assert_eq!(by_hand("title", "\n\t").unwrap(), "");
         assert!(by_hand("date", "2019-07-04Tea").is_err());
         assert_eq!(
             by_hand("date", "2019-07-04T10:00:00Z").unwrap(),

@@ -65,7 +65,9 @@ song when negated.
   `lyrics` pinned to a source that holds none leaves the song without
   it, which `sync`, `status` and `check` say. `set` refuses a
   track or disc that is no number or below 1, as they count from 1, a
-  date that is none, and a ReplayGain gain or peak.
+  date that is none, and a ReplayGain gain or peak. A value is one
+  line: a line break or tab in it reads as a space, set by `set`,
+  `edit` or a tag file, as `list` shows it and a query matches it.
 - **`set` with a query alone**, on a terminal, steps through the songs
   field by field. Each field shows its value and where it came from;
   opened, it shows what each source offers, for you to keep, take, type
