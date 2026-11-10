@@ -88,6 +88,42 @@ fn comments_and_unknown_keys_survive_a_write() {
 }
 
 #[test]
+fn a_write_keeps_the_byte_order_mark_and_line_endings_it_found() {
+    let lf = "# mine\nversion = 1\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n";
+    for (bom, crlf) in [(true, true), (false, true), (true, false), (false, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let body = if crlf {
+            lf.replace('\n', "\r\n")
+        } else {
+            lf.to_string()
+        };
+        let mark = if bom { "\u{feff}" } else { "" };
+        std::fs::write(dir.path().join(MANIFEST), format!("{mark}{body}")).unwrap();
+        let mut m = Manifest::load(dir.path()).unwrap();
+        m.edit(Edit::Add {
+            sources: vec![yt("bbbbbbbbbbb")],
+            album: None,
+        });
+        m.save().unwrap();
+        let t = text(dir.path());
+        assert_eq!(t.starts_with('\u{feff}'), bom, "{t:?}");
+        let lines = t.matches('\n').count();
+        let ended = if crlf {
+            t.matches("\r\n").count()
+        } else {
+            lines - t.matches('\r').count()
+        };
+        assert_eq!(ended, lines, "{t:?}");
+        assert!(t.contains("# mine"), "{t:?}");
+        assert_eq!(
+            m.text().unwrap(),
+            t.trim_start_matches('\u{feff}').replace("\r\n", "\n")
+        );
+        assert_eq!(Manifest::load(dir.path()).unwrap().songs.len(), 2);
+    }
+}
+
+#[test]
 fn a_save_keeps_what_another_run_wrote_meanwhile() {
     let dir = tempfile::tempdir().unwrap();
     let mut first = Manifest::load(dir.path()).unwrap();

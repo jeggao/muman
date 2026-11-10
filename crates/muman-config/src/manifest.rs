@@ -32,6 +32,11 @@
 //! still listed as it was: a song changed meanwhile, by hand or by
 //! another run, refuses the save and nothing is written.
 //!
+//! A byte-order mark and CRLF line endings, as Windows editors may
+//! write, are read past and written back as the file had them when
+//! saved: CRLF when most of its lines end so, so a file an editor wrote
+//! whole keeps its form and one muman never saw stays LF.
+//!
 //! Every write puts the usage comment atop the file, replacing one an
 //! earlier version wrote, while the user's own comments below it stay;
 //! and it gives each song the common `tags.<name>` keys it lacks, added
@@ -446,9 +451,40 @@ pub struct Manifest {
     pub respelled: BTreeMap<String, String>,
     edits: Vec<Edit>,
     stale: bool,
-    /// The file's text as this was read from it or last wrote it; `None`
-    /// for a home without one.
+    /// The file's text as this was read from it or last wrote it, with
+    /// LF endings and no byte-order mark; `None` for a home without one.
     text: Option<String>,
+}
+
+/// What a song list's text holds besides its TOML, kept by a write.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Form {
+    bom: bool,
+    crlf: bool,
+}
+
+impl Form {
+    fn of(raw: &str) -> Self {
+        let crlf = raw.matches("\r\n").count();
+        Self {
+            bom: raw.starts_with('\u{feff}'),
+            crlf: crlf > 0 && crlf * 2 >= raw.matches('\n').count(),
+        }
+    }
+
+    /// `text`, with LF endings and no mark, in this form.
+    fn apply(self, text: &str) -> String {
+        let text = if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text.to_string()
+        };
+        if self.bom {
+            format!("\u{feff}{text}")
+        } else {
+            text
+        }
+    }
 }
 
 /// The top-level keys the song list reads besides the settings'
@@ -574,7 +610,7 @@ impl Manifest {
     /// stating a newer version than its songs need is stale, so the next
     /// save writes it down and an older muman reads it again.
     pub fn load(home: &Path) -> Result<Self> {
-        let (doc, text) = read_text(home)?;
+        let (doc, text, _) = read_text(home)?;
         let file = home.join(MANIFEST);
         let parsed = parse(&doc).with_context(|| format!("reading {}", file.display()))?;
         let stale = file.exists()
@@ -734,7 +770,7 @@ impl Manifest {
             ))
             .into());
         }
-        let mut doc = read(&self.dir)?;
+        let (mut doc, _, form) = read_text(&self.dir)?;
         let now = parse(&doc)?;
         let changed: Vec<SourceKey> = expected
             .iter()
@@ -767,7 +803,8 @@ impl Manifest {
         }
         let text = doc.to_string();
         let text = with_header(&text).unwrap_or(text);
-        atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, text.as_bytes())?;
+        let written = form.apply(&text);
+        atomic::write(&self.dir, &atomic::Name::new(MANIFEST)?, written.as_bytes())?;
         self.text = Some(text);
         self.edits.clear();
         (self.songs, self.albums, self.removed) = (parsed.songs, parsed.albums, parsed.removed);
@@ -854,24 +891,23 @@ pub fn keys_in(text: &str) -> Option<BTreeSet<SourceKey>> {
 }
 
 fn read(dir: &Path) -> Result<DocumentMut> {
-    read_text(dir).map(|(doc, _)| doc)
+    read_text(dir).map(|(doc, ..)| doc)
 }
 
-/// The song list in `dir` and its text as read, `None` for none.
-fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
+/// The song list in `dir`, its text as read with LF endings and no mark,
+/// `None` for none, and the form it was read in.
+fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>, Form)> {
     let file = dir.join(MANIFEST);
     let raw = match std::fs::read_to_string(&file) {
         Ok(text) => Some(text),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
     };
-    // Windows editors may add a byte-order mark and CRLF endings; the
-    // file is written back with neither, rather than with both mixed.
-    let text = raw.as_deref().map_or_else(
-        || NEW.to_string(),
-        |t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"),
-    );
-    let doc: DocumentMut = text
+    let form = raw.as_deref().map(Form::of).unwrap_or_default();
+    let raw = raw.map(|t| t.trim_start_matches('\u{feff}').replace("\r\n", "\n"));
+    let doc: DocumentMut = raw
+        .as_deref()
+        .unwrap_or(NEW)
         .parse()
         .with_context(|| format!("{} is not valid TOML", file.display()))?;
     match doc.get("version").and_then(Item::as_integer) {
@@ -902,7 +938,7 @@ fn read_text(dir: &Path) -> Result<(DocumentMut, Option<String>)> {
             );
         }
     }
-    Ok((doc, raw))
+    Ok((doc, raw, form))
 }
 
 fn key_at(t: &Table, name: &str, what: &str) -> Result<Option<SourceKey>> {

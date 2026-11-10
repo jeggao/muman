@@ -240,10 +240,10 @@ any past the 1000th. WavPack holds none.
 
 ### How muman edits the song list
 
-muman edits `songs.toml` in place. Comments, order and keys it does not
-know survive every write, and two runs at once keep each other's
-songs. Each write fills in the common `tags.<name>` keys a song lacks,
-empty, so you can see what to set.
+muman edits `songs.toml` in place. Comments, order, keys it does not
+know, CRLF line endings and a byte-order mark survive every write, and
+two runs at once keep each other's songs. Each write fills in the common
+`tags.<name>` keys a song lacks, empty, so you can see what to set.
 
 These stop a run before anything is written: a key that does not
 parse, a file two songs list, and a pin to a source the song does not
