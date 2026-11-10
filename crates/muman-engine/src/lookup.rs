@@ -1000,7 +1000,10 @@ pub fn run<R: Runner, W: Write>(
             retry: false,
             say_unread: false,
             checkpoint: &mut |s: &State| s.keep_since(home, &mut loaded),
-            analyses: crate::analysis::wanted(&manifest.settings.loudness),
+            analyses: crate::analysis::wanted(
+                &manifest.settings.loudness,
+                manifest.settings.audio.pick.dynamics.enabled,
+            ),
         };
         reconcile::measure(
             runner,

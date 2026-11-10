@@ -104,7 +104,10 @@ pub fn identify<R: Runner, W: Write>(
             retry: false,
             say_unread: false,
             checkpoint: &mut |s: &State| s.keep_since(home, &mut base),
-            analyses: crate::analysis::wanted(&manifest.settings.loudness),
+            analyses: crate::analysis::wanted(
+                &manifest.settings.loudness,
+                manifest.settings.audio.pick.dynamics.enabled,
+            ),
         };
         reconcile::measure(
             runner,

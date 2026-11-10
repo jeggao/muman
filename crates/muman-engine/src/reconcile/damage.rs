@@ -258,7 +258,10 @@ pub fn note_damaged<R: Runner, W: Write>(
         retry,
         say_unread: false,
         checkpoint: &mut |s: &State| persist(&dirs.home, s, false, &lock),
-        analyses: crate::analysis::wanted(&manifest.settings.loudness),
+        analyses: crate::analysis::wanted(
+            &manifest.settings.loudness,
+            manifest.settings.audio.pick.dynamics.enabled,
+        ),
     };
     measure(
         runner,

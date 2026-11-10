@@ -1679,12 +1679,12 @@ fn unclipped(
     })
 }
 
-/// How far `facts`' true peak stands above its integrated loudness, in
-/// hundredths of a dB, as its loudness was measured.
+/// How far `facts`' peak ([`crate::dynamics`]) stands above its
+/// integrated loudness, in hundredths of a dB.
 fn dynamics_of(facts: &Facts) -> Option<i64> {
-    let measure = facts.audio.as_ref()?.analysis.loudness()?;
-    let peak = 20.0 * measure.true_peak.log10();
-    let range = (peak - measure.lufs()?) * 100.0;
+    let analysis = &facts.audio.as_ref()?.analysis;
+    let crate::dynamics::Measure { peak_db } = *analysis.dynamics()?;
+    let range = (peak_db - analysis.loudness()?.lufs()?) * 100.0;
     range.is_finite().then(|| range.round() as i64)
 }
 

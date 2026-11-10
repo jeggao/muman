@@ -3992,20 +3992,32 @@ fn a_song_moved_to_another_release_takes_its_fields_in_place_of_its_record_s() {
     );
 }
 
-/// Facts of a FLAC whose true peak is `peak` of full scale and whose
+/// Facts of a FLAC whose peaks reach `peak` of full scale and whose
 /// blocks are all as loud, `momentary` giving the histogram as stored.
 fn mastered(rev: &str, peak: f64, momentary: &str) -> Facts {
-    let mut f = audio("flac", 22.0);
+    encoded(rev, "flac", peak, peak, momentary)
+}
+
+/// [`mastered`] in `codec`, its true peak `true_peak`.
+fn encoded(rev: &str, codec: &str, peak: f64, true_peak: f64, momentary: &str) -> Facts {
+    let mut f = audio(codec, 22.0);
     f.rev = rev.into();
     let measure = serde_json::json!({
         "momentary": momentary,
         "short_term": "",
-        "true_peak": peak,
-        "sample_peak": peak,
+        "true_peak": true_peak,
+        "sample_peak": true_peak.min(1.0),
     });
-    f.audio.as_mut().unwrap().analysis.loudness = Some(crate::analysis::Measured {
+    let analysis = &mut f.audio.as_mut().unwrap().analysis;
+    analysis.loudness = Some(crate::analysis::Measured {
         method: crate::loudness::METHOD.into(),
         value: Some(serde_json::from_value(measure).unwrap()),
+    });
+    analysis.dynamics = Some(crate::analysis::Measured {
+        method: crate::dynamics::METHOD.into(),
+        value: Some(crate::dynamics::Measure {
+            peak_db: 20.0 * peak.log10(),
+        }),
     });
     f
 }
@@ -4040,6 +4052,26 @@ fn a_master_squeezed_louder_loses_only_where_dynamics_count() {
         "{}",
         r.why.audio
     );
+}
+
+#[test]
+fn a_lossy_copy_whose_codec_overshoots_ranks_as_its_lossless_master() {
+    let (lossless, lossy) = (manual("open.flac"), manual("open.opus"));
+    let facts = BTreeMap::from([
+        (lossless.clone(), mastered("flac", 0.5, OPEN)),
+        (lossy.clone(), encoded("opus", "opus", 0.5, 0.7, OPEN)),
+    ]);
+    let mut audio = Audio::default();
+    audio.pick.dynamics.enabled = true;
+    for order in [[&lossy, &lossless], [&lossless, &lossy]] {
+        let s = song(&order.map(Clone::clone));
+        let r = resolve(&Input {
+            audio: &audio,
+            ..defaults(&s, &facts)
+        })
+        .unwrap();
+        assert_eq!(r.plan.audio.key, lossless, "{}", r.why.audio);
+    }
 }
 
 #[test]

@@ -226,7 +226,10 @@ pub fn reconcile_into<R: Runner, W: Write>(
         retry: opts.retry,
         say_unread: true,
         checkpoint: &mut |s: &State| persist(home, s, opts.dry_run, &lock),
-        analyses: crate::analysis::wanted(&manifest.settings.loudness),
+        analyses: crate::analysis::wanted(
+            &manifest.settings.loudness,
+            manifest.settings.audio.pick.dynamics.enabled,
+        ),
     };
     measure(
         runner,
@@ -242,7 +245,10 @@ pub fn reconcile_into<R: Runner, W: Write>(
     if hash(runner, &store, &listed, &mut state, temp.path(), out)? {
         persist(home, &state, opts.dry_run, &lock)?;
     }
-    let analyses = crate::analysis::wanted(&manifest.settings.loudness);
+    let analyses = crate::analysis::wanted(
+        &manifest.settings.loudness,
+        manifest.settings.audio.pick.dynamics.enabled,
+    );
     let analyzed = analyze(
         runner,
         &store,

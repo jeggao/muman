@@ -542,7 +542,8 @@ pub fn analyze_mixes<R: Runner, W: Write>(
     (settings, fitted): (&crate::settings::Settings, bool),
     out: &mut W,
 ) -> Result<bool> {
-    let mut wanted = crate::analysis::wanted(&settings.loudness);
+    let mut wanted =
+        crate::analysis::wanted(&settings.loudness, settings.audio.pick.dynamics.enabled);
     wanted.retain(|k| k.mixed());
     if wanted.is_empty() {
         return Ok(false);

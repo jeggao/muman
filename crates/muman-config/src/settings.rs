@@ -896,8 +896,8 @@ impl Default for Stereo {
 pub struct Dynamics {
     pub enabled: bool,
     pub weight: u32,
-    /// In hundredths of a dB: wider than the tenth of a dB a lossy
-    /// encoding of one master moves it by.
+    /// In hundredths of a dB: wider than the few tenths of a dB a lossy
+    /// encoding of one master moves it by, 0.6 at most as measured.
     #[serde(rename = "step", deserialize_with = "serde_as::db")]
     pub step_cdb: i32,
 }

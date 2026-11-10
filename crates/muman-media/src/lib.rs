@@ -23,6 +23,7 @@ pub mod codec;
 pub mod cue;
 pub mod cues;
 pub mod detect;
+pub mod dynamics;
 pub mod facts;
 pub mod ffmpeg;
 pub mod flac;

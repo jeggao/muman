@@ -65,10 +65,10 @@ switch it off ([how sources are ranked](configuration.md#how-sources-are-ranked)
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
   past full scale, only those at its own peak count.
-- **Dynamics** is how far the true peak stands over the loudness, which
-  a master squeezed louder lowers. It counts only where
-  `[audio.pick.dynamics]` is on, a matter of taste: it puts an older
-  master on a lossy upload ahead of a louder one on a CD.
+- **Dynamics** is how far the peaks, the loudest 0.1% of samples, stand
+  over the loudness: a master squeezed louder lowers it, a codec's
+  overshoot barely moves it. It counts only where `[audio.pick.dynamics]`
+  is on, a matter of taste: it puts an older master on a lossy upload ahead of a louder one on a CD.
 
 muman measures every channel as it is, never mixed into two. Of audio
 scored alike, lossless beats lossy, then the more bits its samples use,

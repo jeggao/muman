@@ -21,9 +21,10 @@
 //! it, sits in four layers, each one place for what joins it later:
 //!
 //! 1. **Analysis**, here: one decode, many analyzers. Loudness
-//!    ([`crate::loudness`]) is the first; a dynamic-range meter, silence
-//!    at the ends, DC offset or tempo would each be one more [`Kind`],
-//!    one field of [`Analysis`] and a module of their own. Integrity
+//!    ([`crate::loudness`]) is the first, and the peaks dynamics are
+//!    ranked by ([`crate::dynamics`]) the second; silence at the ends, DC
+//!    offset or tempo would each be one more [`Kind`], one field of
+//!    [`Analysis`] and a module of their own. Integrity
 //!    ([`crate::integrity`]) is measured by the pass itself, which counts
 //!    the frames decoded and the samples that were no number before any
 //!    analyzer sees them, beside what the packets and the stream say
@@ -42,6 +43,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::dynamics;
 use crate::integrity;
 use crate::loudness;
 
@@ -50,6 +52,7 @@ use crate::loudness;
 pub enum Kind {
     Loudness,
     Integrity,
+    Dynamics,
 }
 
 impl Kind {
@@ -60,6 +63,7 @@ impl Kind {
         match self {
             Self::Loudness => loudness::METHOD,
             Self::Integrity => integrity::METHOD,
+            Self::Dynamics => dynamics::METHOD,
         }
     }
 
@@ -69,7 +73,7 @@ impl Kind {
     pub fn mixed(self) -> bool {
         match self {
             Self::Loudness => true,
-            Self::Integrity => false,
+            Self::Integrity | Self::Dynamics => false,
         }
     }
 }
@@ -91,6 +95,8 @@ pub struct Analysis {
     pub loudness: Option<Measured<loudness::Measure>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrity: Option<Measured<integrity::Measure>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<Measured<dynamics::Measure>>,
 }
 
 impl Analysis {
@@ -105,6 +111,7 @@ impl Analysis {
                 let method = match kind {
                     Kind::Loudness => self.loudness.as_ref().map(|m| m.method.as_str()),
                     Kind::Integrity => self.integrity.as_ref().map(|m| m.method.as_str()),
+                    Kind::Dynamics => self.dynamics.as_ref().map(|m| m.method.as_str()),
                 };
                 method != Some(kind.method())
             })
@@ -129,6 +136,15 @@ impl Analysis {
             .and_then(|m| m.value.as_ref())
     }
 
+    /// The peak measured, if it was by today's method.
+    #[must_use]
+    pub fn dynamics(&self) -> Option<&dynamics::Measure> {
+        self.dynamics
+            .as_ref()
+            .filter(|m| m.method == dynamics::METHOD)
+            .and_then(|m| m.value.as_ref())
+    }
+
     /// `newer` over this analysis: each kind it took replaces this one's.
     pub fn merge(&mut self, newer: Self) {
         if newer.loudness.is_some() {
@@ -137,17 +153,25 @@ impl Analysis {
         if newer.integrity.is_some() {
             self.integrity = newer.integrity;
         }
+        if newer.dynamics.is_some() {
+            self.dynamics = newer.dynamics;
+        }
     }
 }
 
-/// The kinds the settings want measured: integrity always.
+/// The kinds the settings want measured: integrity always, loudness as
+/// `loudness` measures it, and peaks where `dynamics` ranks sources by
+/// them, which needs their loudness too.
 #[must_use]
-pub fn wanted(loudness: &crate::loudness::Loudness) -> Vec<Kind> {
+pub fn wanted(loudness: &crate::loudness::Loudness, dynamics: bool) -> Vec<Kind> {
+    let mut kinds = vec![Kind::Integrity];
     if loudness.measured() {
-        vec![Kind::Integrity, Kind::Loudness]
-    } else {
-        vec![Kind::Integrity]
+        kinds.push(Kind::Loudness);
+        if dynamics {
+            kinds.push(Kind::Dynamics);
+        }
     }
+    kinds
 }
 
 /// The decoded stream, as its WAV header gives it.
@@ -171,6 +195,7 @@ pub trait Analyzer {
 fn start(kind: Kind, stream: &Stream) -> Option<Box<dyn Analyzer>> {
     match kind {
         Kind::Loudness => loudness::Meter::new(stream).map(|m| Box::new(m) as Box<dyn Analyzer>),
+        Kind::Dynamics => Some(Box::new(dynamics::Meter::new(stream))),
         Kind::Integrity => None,
     }
 }
@@ -387,6 +412,12 @@ impl Pass {
                         value: None,
                     });
                 }
+                Kind::Dynamics => {
+                    analysis.dynamics.get_or_insert(Measured {
+                        method,
+                        value: None,
+                    });
+                }
                 Kind::Integrity => {
                     let rate = self.header.stream.map(|s| s.rate);
                     let value = integrity::measure(rate, self.counted, self.unfinite, found);
@@ -537,24 +568,27 @@ mod tests {
             mode: crate::loudness::LoudnessMode::Off,
             ..crate::loudness::Loudness::default()
         };
-        assert_eq!(wanted(&off), [Kind::Integrity]);
-        assert!(wanted(&crate::loudness::Loudness::default()).contains(&Kind::Loudness));
+        assert_eq!(wanted(&off, true), [Kind::Integrity]);
+        let on = crate::loudness::Loudness::default();
+        assert_eq!(wanted(&on, false), [Kind::Integrity, Kind::Loudness]);
+        assert!(wanted(&on, true).contains(&Kind::Dynamics));
         let old = Analysis {
             loudness: Some(Measured {
                 method: loudness::METHOD.into(),
                 value: None,
             }),
             integrity: None,
+            dynamics: None,
         };
         assert_eq!(
-            old.stale(&[Kind::Integrity, Kind::Loudness]),
-            [Kind::Integrity]
+            old.stale(&[Kind::Integrity, Kind::Loudness, Kind::Dynamics]),
+            [Kind::Integrity, Kind::Dynamics]
         );
         let mut p = Pass::new(vec![Kind::Integrity]);
         p.take(b"not audio at all");
         let unread = p.finish(&none());
         assert_eq!(unread.stale(&[Kind::Integrity]), [] as [Kind; 0]);
         assert!(unread.integrity().is_none());
-        assert!(!Kind::Integrity.mixed() && Kind::Loudness.mixed());
+        assert!(!Kind::Integrity.mixed() && Kind::Loudness.mixed() && !Kind::Dynamics.mixed());
     }
 }

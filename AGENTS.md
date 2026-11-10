@@ -93,7 +93,7 @@ crates/muman-media/src/   the media layer: sources measured, tags, lyrics, names
   facts.rs          one source measured; probe.rs, info.rs, ffmpeg.rs
   analysis.rs       the whole of a source's audio, one decode, every analyzer
   integrity.rs      whether a source's audio is all there: cut off or missing
-  loudness.rs       EBU R128 loudness and a song's gains
+  loudness.rs, dynamics.rs   EBU R128 loudness and a song's gains; how high its peaks stand
   tags.rs, clean.rs tag offers and the cleaning rules; clean/lyrics.rs, the lyrics'
   detect.rs         values that say nothing of a song: placeholders and watermarks
   genres.rs         the genres a MusicBrainz record gives, spelled as genres/spelled.txt says
