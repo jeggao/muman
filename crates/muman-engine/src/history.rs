@@ -22,11 +22,13 @@
 //!
 //! The record is written ahead of what it records: before the run moves,
 //! writes over or removes a library file, which a sync does only through
-//! [`crate::library::Ledger`], or writes a new one, before and after it
-//! saves the song list ([`Run::saving`]), so `undo` takes the song list
-//! of a run stopped between the two as the run's own, and again as it goes,
+//! [`crate::library::Ledger`], or writes a new one, and again as it goes,
 //! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
-//! interrupted, and can be undone. The next run that changes the home,
+//! interrupted, and can be undone. Such a run may have saved the song list
+//! after its last record, as many of its steps do, so `undo` takes back
+//! the song list as it stands, saying so where it differs from that
+//! record: a hand edit since is told apart from the run's own save by
+//! nothing on disk. The next run that changes the home,
 //! holding the runs lock that proves the stopped one gone, goes on in
 //! its record rather than begin its own: the song list before and the
 //! files kept are the stopped run's, so one undo takes back both, and
@@ -131,9 +133,6 @@ struct Moved {
 }
 
 /// What one run changed, as `undo` reads it.
-// Each flag is a key of `run.json` of its own, which records of every
-// version read alike.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Record {
     #[serde(default = "version_one")]
@@ -144,11 +143,6 @@ struct Record {
     /// Set by an `undo` under way, so a second one finishes it.
     #[serde(default)]
     undoing: bool,
-    /// Set, recorded ahead, as the run saves the song list, and cleared
-    /// once it has: a run stopped between the two may have left the song
-    /// list as it saved it, which its last record does not say.
-    #[serde(default)]
-    saving: bool,
     /// Set once that undo put the song list and the state back, leaving
     /// only its sync to do.
     #[serde(default)]
@@ -265,23 +259,21 @@ impl Later {
         })
     }
 
-    /// The run, begun now if it was not, and recorded ahead as about to
-    /// save the song list ([`Run::saving`]): called just before the
-    /// command saves, so a run under way is waited for while nothing is
-    /// changed yet.
+    /// The run, begun now if it was not: called just before the command
+    /// saves, so a run under way is waited for while nothing is changed
+    /// yet.
     pub fn begin(&mut self) -> Result<&mut Run> {
-        let run = match &mut self.run {
-            Some(run) => run,
-            none => none.insert(Run::begin_from(&self.home, self.found.as_deref())?),
-        };
-        run.saving(&self.home)?;
-        Ok(run)
+        match &mut self.run {
+            Some(run) => Ok(run),
+            none => Ok(none.insert(Run::begin_from(&self.home, self.found.as_deref())?)),
+        }
     }
 
-    /// Note that the command saved the song list ([`Run::saved`]).
+    /// Note that the command saved the song list, recorded as it now
+    /// stands.
     pub fn saved(&mut self) -> Result<()> {
         match &mut self.run {
-            Some(run) => run.saved(&self.home),
+            Some(run) => run.checkpoint(&self.home),
             None => Ok(()),
         }
     }
@@ -524,9 +516,6 @@ impl Run {
             Some((dir, mut record)) => {
                 record.version = VERSION;
                 record.songs_before = songs_before;
-                // The song list the stopped run may have saved is this run's
-                // to go on from, as it stands.
-                record.saving = false;
                 (dir, record, true)
             }
             None => (
@@ -722,18 +711,6 @@ impl Run {
                 self.record.changed.remove(&rel);
             }
         }
-    }
-
-    /// Record ahead that the run is about to save the song list.
-    pub fn saving(&mut self, home: &Path) -> Result<()> {
-        self.record.saving = true;
-        self.checkpoint(home)
-    }
-
-    /// Record that the run saved the song list, as it now stands.
-    pub fn saved(&mut self, home: &Path) -> Result<()> {
-        self.record.saving = false;
-        self.checkpoint(home)
     }
 
     /// Record that the run is moving a library file, before it does.
@@ -1160,9 +1137,10 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
         .songs_before
         .clone()
         .or_else(|| Some(crate::manifest::NEW.to_string()));
-    // A run stopped as it saved the song list may have left it so.
-    let saving = !record.complete && record.saving;
-    if songs != record.songs_after && !(record.undoing && songs == before) && !saving {
+    // A run stopped partway may have saved the song list after its last
+    // record: what it holds now is taken back, said so below.
+    let stopped = !record.complete && !record.undoing;
+    if songs != record.songs_after && !(record.undoing && songs == before) && !stopped {
         return Err(crate::errors::Refused(format!(
             "The song list changed after the last run; undoing it would lose those changes. \
              Edit {} by hand instead",
@@ -1214,10 +1192,15 @@ pub fn plan(dirs: &Dirs) -> Result<UndoPlan> {
     if !record.complete {
         lines.push("The run was stopped before it ended".to_string());
     }
-    if saving {
-        lines.push("It was stopped as it saved the song list".to_string());
+    if stopped && songs != record.songs_after {
+        lines.push(
+            "The song list differs from the stopped run's last record: what it saved since, \
+             or was edited by hand since, is taken back too"
+                .to_string(),
+        );
     }
-    if record.songs_before != record.songs_after && !record.undone {
+    if (record.songs_before != record.songs_after || songs != record.songs_after) && !record.undone
+    {
         lines.push("Put the song list back as it was".to_string());
     }
     // What an undo stopped partway put back already is not said again.
@@ -1706,6 +1689,31 @@ mod tests {
                 .lines()
                 .iter()
                 .any(|l| l.contains("x.opus"))
+        );
+    }
+
+    #[test]
+    fn a_stopped_run_is_undone_saying_what_the_song_list_holds_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        std::fs::write(d.home.join(MANIFEST), "saved by the run").unwrap();
+        run.checkpoint(&d.home).unwrap();
+        drop(run);
+        std::fs::write(d.home.join(MANIFEST), "saved again, or by hand").unwrap();
+        let planned = plan(&d).unwrap();
+        let said = planned.lines().join("\n");
+        assert!(said.contains("stopped before it ended"), "{said}");
+        assert!(said.contains("is taken back too"), "{said}");
+        assert!(said.contains("Put the song list back"), "{said}");
+        undo(&d, planned, &mut Vec::new())
+            .unwrap()
+            .finish()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.home.join(MANIFEST)).unwrap(),
+            "before"
         );
     }
 

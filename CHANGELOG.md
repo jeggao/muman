@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Undoing a run stopped partway says what it takes back**: the song
+  list as it stands, with a line when it differs from what the run last
+  recorded, whether the run saved it or a hand did, rather than refuse
+  a run stopped in one of its steps, or rewrite the list unsaid.
+- **An `edit` whose save is refused and left leaves no run behind** for
+  `undo` to take for stopped.
+- **A change to a song list whose template names no field is refused
+  before it is saved**, as `sync` is, rather than saved and then refused.
 - **A file moved in `sources/manual` stays followed by every command**:
   `set`, `remove`, `add` and `undo` follow it as `sync` does, a file a
   tagger renamed and retagged at once matched by its audio. Undoing the

@@ -4459,6 +4459,15 @@ fn a_template_naming_no_field_is_refused_before_the_sync_while_songs_still_list(
     assert!(e.contains("names albm"), "{e}");
     assert_eq!(library_of(&s), before);
     assert!(!std::fs::read_to_string(&songs).unwrap().contains("b.flac"));
+    let edited = std::fs::read_to_string(&songs).unwrap();
+    for args in [
+        &["set", "-y", "manual:a.flac", "genre=Folk"][..],
+        &["remove", "-y", "manual:a.flac"],
+    ] {
+        let e = s.refused(args);
+        assert!(e.contains("names albm"), "{args:?}: {e}");
+        assert_eq!(std::fs::read_to_string(&songs).unwrap(), edited, "{args:?}");
+    }
     assert!(s.listed(&["list"]).contains("manual:a.flac"));
     let (ok, report) = s.report(&flacs(), &["check"]);
     assert!(!ok && report.contains("names albm"), "{report}");

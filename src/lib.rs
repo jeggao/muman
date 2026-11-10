@@ -382,6 +382,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     if traits.edits_list {
         crate::state::present(&dirs.home)?;
         say_renamed(&dirs.home, out)?;
+        // A library the song list cannot name is refused before anything
+        // is changed, rather than after a change is saved.
+        if dirs.manifest().exists() {
+            Manifest::load(&dirs.home)?
+                .settings
+                .library
+                .naming(&dirs.library)?;
+        }
     }
     if traits.gated {
         let held = trust::held_in(&dirs.home)?;
