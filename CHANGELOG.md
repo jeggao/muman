@@ -158,6 +158,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`export --folder` onto a file or a link to nothing exits 5** with
+  a refusal, as onto a folder holding anything, not with an error of
+  the system's.
 - **Copies of one song moved together stay its own**, and are followed
   again after `undo`; a move that cannot be told apart keeps the song's
   library file, held as built, rather than delete it.

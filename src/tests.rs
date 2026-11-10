@@ -7565,6 +7565,20 @@ fn export_fills_an_empty_folder_and_refuses_one_holding_anything() {
     assert!(format!("{e:#}").contains("is not empty"), "{e:#}");
     assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert_eq!(files_under(&folder), before);
+
+    let file = s.written("notes.txt", "a file of my own");
+    let e = run_with(
+        &s.job(&[&args[..], &[file.as_str()]].concat()),
+        &fake,
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(format!("{e:#}").contains("no folder"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "a file of my own");
 }
 
 #[test]

@@ -989,6 +989,14 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
         ))
         .into());
     }
+    // Read by the link itself, so a link to nothing is found too.
+    if fs::symlink_metadata(output).is_ok() && !output.is_dir() {
+        return Err(crate::errors::Refused(format!(
+            "{} is there already, and no folder; name a folder to make",
+            output.display()
+        ))
+        .into());
+    }
     if output.exists() {
         let empty = fs::read_dir(output)
             .with_context(|| format!("reading {}", output.display()))?
