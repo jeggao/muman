@@ -7903,7 +7903,11 @@ fn a_link_in_a_folder_added_is_followed_only_to_a_place_inside_it() {
     assert!(!manual.join("extras").exists());
     assert_eq!(
         s.songs(),
-        [vec![SourceKey::Manual("Album/Song.flac".into())]]
+        [vec![
+            SourceKey::Manual("Album/Song.flac".into()),
+            SourceKey::Manual("added/front.jpg".into())
+        ]],
+        "art/front.jpg, which no song file beside it brings, given as a named picture is"
     );
     assert!(s.dir.path().join("lib/Artist/Record/02 Song.flac").exists());
     assert!(!s.dir.path().join("lib/Artist/Record/02 Song.lrc").exists());

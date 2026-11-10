@@ -423,16 +423,18 @@ fn import_all<R: Runner, W: Write>(
                     originals.push((file.clone(), key));
                 }
             }
+            let songs = songs_among(files, &originals);
             let mut own = |file: &Path| {
                 store::kind_of(file).is_some()
                     && !originals.iter().any(|(o, _)| o == file)
+                    && kept_with_songs(file, &songs)
                     && audio(file)
             };
             if originals.len() < files.len() {
                 copy_tree(&folder, files, &to, &mut own, copied)?;
             }
             let given = loose.len();
-            let left = found_loose(files, loose);
+            let left = found_loose(files, &songs, loose);
             others |= loose.len() > given;
             say_left_out(path, &left, out)?;
             crate::given::say_outside(path, &walked.outside, out)?;
@@ -633,24 +635,57 @@ fn propose(
         .collect()
 }
 
-/// The files of a folder given to `add`, `files`, that it gives to songs
-/// as it gives one named ([`attach::sort`]), each with what it holds,
-/// into `loose`; returned are those neither copied with the folder nor
-/// given to songs, which are left out. Two kinds a named file may be are
-/// not read from a folder, which holds them for another purpose: a `.txt`
-/// of plain text not named as a song file beside it, as a rip's notes,
-/// and yt-dlp's `.info.json`, which describes a video, not a song.
-fn found_loose(files: &[PathBuf], loose: &mut attach::Loose) -> Vec<PathBuf> {
-    let songs: Vec<&PathBuf> = files
+/// The song files of `files`, a folder's, copied into the manual folder:
+/// all but the `originals` going into the store.
+fn songs_among<'a>(files: &'a [PathBuf], originals: &[(PathBuf, SourceKey)]) -> Vec<&'a PathBuf> {
+    files
         .iter()
         .filter(|f| store::kind_of(f) == Some(store::Kind::Media))
-        .collect();
+        .filter(|f| !originals.iter().any(|(o, _)| o == *f))
+        .collect()
+}
+
+/// Whether `file` of a folder given to `add` is copied with the folder:
+/// anything but lyrics and pictures, and those a song file of `songs`
+/// brings from the manual folder, named as it is or its folder's cover.
+/// Lyrics or a picture no song file there brings would be no song's in
+/// the manual folder, so it is given to its songs as a named one is.
+fn kept_with_songs(file: &Path, songs: &[&PathBuf]) -> bool {
+    if !matches!(
+        store::kind_of(file),
+        Some(store::Kind::Lyrics | store::Kind::Image)
+    ) {
+        return true;
+    }
+    let cover = store::kind_of(file) == Some(store::Kind::Image)
+        && file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| store::FOLDER_COVERS.contains(&s.to_ascii_lowercase().as_str()));
+    songs
+        .iter()
+        .any(|s| store::named_as(file, s) || (cover && s.parent() == file.parent()))
+}
+
+/// The files of a folder given to `add`, `files`, that it gives to songs
+/// as it gives one named ([`attach::sort`]), each with what it holds,
+/// into `loose`: those no copy reads, and lyrics and pictures none of
+/// its song files, `songs`, brings ([`kept_with_songs`]). Returned are those
+/// neither copied with the folder nor given to songs, which are left
+/// out. Two kinds a named file may be are not read from a folder, which
+/// holds them for another purpose: a `.txt` of plain text not named as a
+/// song file beside it, as a rip's notes, and yt-dlp's `.info.json`,
+/// which describes a video, not a song.
+fn found_loose(files: &[PathBuf], songs: &[&PathBuf], loose: &mut attach::Loose) -> Vec<PathBuf> {
     let named = |file: &Path, ext: &str| {
         file.extension()
             .is_some_and(|e| e.eq_ignore_ascii_case(ext))
     };
     let mut left = Vec::new();
-    for file in files.iter().filter(|f| store::kind_of(f).is_none()) {
+    for file in files
+        .iter()
+        .filter(|f| store::kind_of(f).is_none() || !kept_with_songs(f, songs))
+    {
         let info_json = file
             .file_name()
             .is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(".info.json"));

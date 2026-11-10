@@ -888,3 +888,37 @@ fn a_picture_that_does_not_decode_is_not_added() {
     assert!(format!("{e:#}").contains("could not be added"), "{e:#}");
     assert_eq!(s.added(), [] as [String; 0]);
 }
+
+#[test]
+fn lyrics_in_a_folder_given_go_to_their_songs_unless_a_song_there_brings_them() {
+    let s = Setup::new();
+    let fake = library();
+    s.songs_named(&fake, &["Lantern Weather", "Copper Moth"]);
+    s.written("words/Lantern Weather.lrc", "[00:01.00]first light\n");
+    s.written("words/Copper Moth.lrc", "[00:01.00]moth wings\n");
+    let words = s.dir.path().join("words");
+    let (ok, text) = s.run(&fake, &["add", &words.to_string_lossy()]);
+    assert!(ok, "a folder of lyrics alone: {text}");
+    let lantern = manual("added/Lantern Weather.lrc");
+    assert!(s.song_with("Lantern Weather").has(&lantern), "{text}");
+    let moth = manual("added/Copper Moth.lrc");
+    assert!(s.song_with("Copper Moth").has(&moth), "{text}");
+    let manual_dir = s.dir.path().join("home/sources/manual");
+    assert!(
+        !manual_dir.join("words").exists(),
+        "no copy no song brings: {text}"
+    );
+
+    s.file("rip/Night Ferry.flac");
+    s.written("rip/Night Ferry.lrc", "[00:01.00]ferry\n");
+    s.written("rip/Copper Moth.lrc", "[00:01.00]other wings\n");
+    let rip = s.dir.path().join("rip");
+    let (ok, text) = s.run(&fake, &["add", "--new", &rip.to_string_lossy()]);
+    assert!(ok, "{text}");
+    assert!(manual_dir.join("rip/Night Ferry.lrc").exists(), "{text}");
+    assert!(!manual_dir.join("rip/Copper Moth.lrc").exists(), "{text}");
+    assert!(
+        crate::ui::plain(&text).contains("the lyrics of Copper Moth — Marlo Venn"),
+        "given to its song, not dropped: {text}"
+    );
+}
