@@ -158,6 +158,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An Opus copy no longer outranks its lossless source**: a lossy copy
+  counts its bandwidth no wider than a lossless copy of its recording
+  that was not itself made from lossy audio.
 - **Short sources compare**: copies and excerpts of 5 s or more align as
   one recording, and one under 5 s is "too short to compare", rather
   than "another recording"; excerpts under a minute no longer join

@@ -92,8 +92,9 @@ song ends cleanly. [Audio](audio.md#codecs) says what each codec holds.
 
 muman checks a picture that is not square for bars, and crops a video
 frame with square art in the middle to that art. Effective resolution
-is the size up to which a picture keeps its detail, so an upscale
-measures no larger than the picture it was made from. Block artifacts
+is the size up to which a picture keeps its detail: an upscale gains
+little, though a mild one can measure up to 1.6 times its source's
+size, as a smooth picture keeps much the same detail. Block artifacts
 are how much more the pixels jump across JPEG's 8×8 block edges than
 between them.
 

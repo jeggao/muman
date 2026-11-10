@@ -23,7 +23,7 @@ any machine. It never deletes or writes over a file it did not write.
 
 - **Covers and lyrics are measured too.** muman crops a cover out of a
   video frame's bars and ranks it by the detail it holds, so an upscale
-  gains nothing. It shifts timed lyrics to fit the audio chosen.
+  gains little. It shifts timed lyrics to fit the audio chosen.
 - **It copies before it encodes.** muman copies audio in a codec you
   allow packet for packet. A new tag goes into the file in place, a new
   path template moves files, and loudness goes into ReplayGain tags or
