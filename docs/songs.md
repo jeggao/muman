@@ -9,8 +9,8 @@ made from its sources in [making the library](library.md).
 
 ## Queries
 
-`list`, `remove`, `restore`, `set`, `edit`, `status` and `duplicates`
-take a query. muman answers it from what earlier runs resolved, without
+`list`, `remove`, `restore`, `set`, `edit`, `review`, `status` and
+`duplicates` take a query. muman answers it from what earlier runs resolved, without
 fetching or measuring anything. Every term must match, and case,
 accents and how a character was composed are ignored, so `cafe`
 matches "Café":

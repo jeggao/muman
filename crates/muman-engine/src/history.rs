@@ -217,6 +217,11 @@ pub struct Run {
     /// The outputs a run stopped partway made, which this run continues:
     /// none was there before it, so none is kept to put back.
     made_before: BTreeSet<PathBuf>,
+    /// The song list as the run found it, a hand edit since the last run
+    /// included.
+    found: Option<String>,
+    /// The library the run kept files of, once it kept one.
+    library: Option<PathBuf>,
     /// Held while the run lasts, so no other begins meanwhile.
     _runs: atomic::Lock,
 }
@@ -239,7 +244,7 @@ fn songs_text(home: &Path) -> Result<Option<String>> {
 }
 
 fn history(home: &Path) -> PathBuf {
-    home.join("history")
+    home.join(crate::dirs::HISTORY)
 }
 
 /// Whether the history keeps any run of `home`.
@@ -425,6 +430,7 @@ impl Run {
             .and_then(|doc| crate::settings::read(&doc).ok())
             .unwrap_or_default()
             .history;
+        let found = now.clone();
         let mine = resumed.as_ref().map(|(dir, _)| dir.clone());
         let others = runs(home)
             .unwrap_or_default()
@@ -467,6 +473,8 @@ impl Run {
             finishes,
             synced: false,
             made_before,
+            found,
+            library: None,
             _runs: runs_lock,
         })
     }
@@ -579,6 +587,7 @@ impl Run {
         if let Some(dir) = to.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
+        self.library = Some(library.to_path_buf());
         // A stopped run this one goes on with may have kept it already,
         // its record not yet saying so; a copy onto that link would empty
         // the library's file too.
@@ -603,6 +612,34 @@ impl Run {
             }
         }
         Ok(())
+    }
+
+    /// Let go of each file kept that the run never replaced: a link to
+    /// the library's file still, which a tagger writing in place would
+    /// change with it, and which `undo` has no need of.
+    // Lets go of a link the run made in its own folder.
+    #[expect(clippy::disallowed_methods)]
+    fn let_go_of_unreplaced(&mut self) {
+        let Some(library) = self.library.clone() else {
+            return;
+        };
+        let unreplaced: Vec<PathBuf> = (self.record.kept.iter())
+            .filter(|rel| {
+                let kept = self.dir.join("files").join(rel);
+                same_file::is_same_file(library.join(rel), &kept).unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        for rel in unreplaced {
+            let kept = self.dir.join("files").join(&rel);
+            let bytes = std::fs::metadata(&kept).map_or(0, |m| m.len());
+            if std::fs::remove_file(&kept).is_ok() {
+                self.record.bytes = self.record.bytes.saturating_sub(bytes);
+                self.record.kept.remove(&rel);
+                self.record.touched.remove(&rel);
+                self.record.changed.remove(&rel);
+            }
+        }
     }
 
     /// Record that the run is moving a library file, before it does.
@@ -699,6 +736,7 @@ impl Run {
         if self.lost {
             return Ok(());
         }
+        self.let_go_of_unreplaced();
         let mut same_outputs = false;
         if let Ok(now) = State::load(home) {
             let was = &self.record.was;
@@ -711,10 +749,14 @@ impl Run {
                 .collect();
             self.changing.extend(changed);
         }
+        // A run that never read the song list, as one stopped on a list that
+        // does not read, and left it as it found it applied no hand edit:
+        // that is the next run's.
+        let applied = matches!(self.seen, Seen::As(_)) || self.record.songs_after != self.found;
         if self.record.touched.is_empty()
             && self.record.moves.is_empty()
             && self.record.copied.is_empty()
-            && self.record.songs_after == self.record.songs_before
+            && (self.record.songs_after == self.record.songs_before || !applied)
             && same_outputs
         {
             let _ = std::fs::remove_dir_all(&self.dir);
@@ -1541,6 +1583,27 @@ mod tests {
     }
 
     #[test]
+    fn a_file_kept_that_the_run_never_replaced_is_let_go_of() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, state) = library(dir.path());
+        let mut run = Run::begin(&d.home).unwrap();
+        run.outputs_before(&state.outputs);
+        run.keep(&d.library, Path::new("A/x.opus")).unwrap();
+        std::fs::write(d.home.join(MANIFEST), "after").unwrap();
+        run.finish(&d.home).unwrap();
+        let kept = runs(&d.home).unwrap();
+        assert_eq!(kept.len(), 1, "the song list's change is the run's");
+        assert!(!kept[0].join("files/A/x.opus").exists());
+        assert!(
+            !plan(&d)
+                .unwrap()
+                .lines()
+                .iter()
+                .any(|l| l.contains("x.opus"))
+        );
+    }
+
+    #[test]
     fn undo_is_refused_over_a_file_edited_since_the_run_wrote_it() {
         let dir = tempfile::tempdir().unwrap();
         let (d, mut state) = library(dir.path());
@@ -2041,6 +2104,7 @@ mod tests {
             let mut run = Run::begin(&d.home).unwrap();
             run.keep(&d.library, Path::new(&format!("{n}.flac")))
                 .unwrap();
+            std::fs::remove_file(d.library.join(format!("{n}.flac"))).unwrap();
             run.finish(&d.home).unwrap();
         }
         let kept: Vec<u64> = runs(&d.home).unwrap().iter().map(|r| held(r)).collect();

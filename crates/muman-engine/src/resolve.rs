@@ -2820,12 +2820,16 @@ pub const SINGLE: &str = "a single, named for its title";
 /// artist's own source.
 const FIRST_ARTIST: &str = "the first artist of ";
 
+/// Where a loudness tag muman measured comes from, alone or before what
+/// it was measured over.
+pub const MEASURED: &str = "measured";
+
 /// Whether a tag from `from` is one muman fills in itself, which no
 /// source nor the song list gives: an album named for a single's title,
-/// or an album artist taken from the artist.
+/// an album artist taken from the artist, or a loudness it measured.
 #[must_use]
 pub fn derived(from: &str) -> bool {
-    from == SINGLE || from.starts_with(FIRST_ARTIST)
+    from == SINGLE || from.starts_with(FIRST_ARTIST) || from.starts_with(MEASURED)
 }
 
 /// Take the MusicBrainz recording IDs of `release`, the source the

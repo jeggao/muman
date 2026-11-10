@@ -190,10 +190,11 @@ pub fn settle(
         let why = |field: Field, by_measure: bool| {
             let from = match (by_measure, field.scope()) {
                 (false, _) => None,
-                (true, Scope::AlbumLoudness) if key.is_some() => {
-                    Some(format!("measured over its album's {songs} song(s)"))
-                }
-                (true, _) => Some("measured".to_string()),
+                (true, Scope::AlbumLoudness) if key.is_some() => Some(format!(
+                    "{} over its album's {songs} song(s)",
+                    crate::resolve::MEASURED
+                )),
+                (true, _) => Some(crate::resolve::MEASURED.to_string()),
             };
             (field, from)
         };

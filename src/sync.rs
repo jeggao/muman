@@ -142,7 +142,11 @@ pub(crate) fn fetch_missing<R: Runner, W: Write>(
     let mut state = State::load(&job.dirs.home)?;
     let base = state.caches();
     let root = job.dirs.torrent();
-    let partial = job.dirs.home.join("partial").join(crate::source::TORRENT);
+    let partial = job
+        .dirs
+        .home
+        .join(crate::dirs::PARTIAL)
+        .join(crate::source::TORRENT);
     let places = crate::aria2::Places {
         store: &root,
         partial: &partial,
@@ -322,7 +326,7 @@ pub(crate) fn network<R: Runner, W: Write, T>(
     let store = Store::scan(&job.dirs)?;
     let temp = atomic::Scratch::new()?;
     let ytdlp = job.dirs.ytdlp();
-    let partial = job.dirs.home.join("partial");
+    let partial = job.dirs.home.join(crate::dirs::PARTIAL);
     clear_stale(
         &partial,
         manifest.settings.ytdlp.keep_partial,

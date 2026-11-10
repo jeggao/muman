@@ -158,6 +158,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **A library in the home's `history/` or `partial/` is refused**, as
+  one in `sources/` is: muman deletes what it keeps there as runs fall
+  out of the history, and the user's files with it.
+- **`has:` holds only for tags a source or the song list gives.** The
+  ReplayGain tags muman measures no longer match it.
+- **`undo` keeps no link to a song a run never wrote over.** A run that
+  changed only a song's lyrics or folder cover kept the song's own
+  file, so a tagger writing it in place changed what `undo` put back.
+- **A command stopped on a song list that does not read keeps no run**,
+  so it no longer pushes a real run out of the history.
+- **An export's output that is taken or not there exits 5**, a folder
+  that is not empty as a zip there already does.
 - **`undo` puts the library back as the run found it.** A file the run
   added is taken out by the undo itself, so a forced sync that wrote a
   held-back song at a new path is undone with the song held back again,

@@ -6050,6 +6050,7 @@ fn export_writes_the_song_list_and_the_library_into_a_zip() {
     )
     .unwrap_err();
     assert!(format!("{e}").contains("is no folder"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert!(!zip.exists(), "no folder made for a typo");
     std::fs::create_dir_all(&zip).unwrap();
     let (ok, text) = s.run(&fake, &["export", "-o", &zip.to_string_lossy()]);
@@ -6383,6 +6384,7 @@ fn export_fills_an_empty_folder_and_refuses_one_holding_anything() {
     )
     .unwrap_err();
     assert!(format!("{e:#}").contains("is not empty"), "{e:#}");
+    assert!(e.downcast_ref::<change::Refused>().is_some(), "{e:#}");
     assert_eq!(files_under(&folder), before);
 }
 
@@ -6784,6 +6786,45 @@ fn a_dry_run_or_a_refused_change_keeps_no_run_to_undo() {
 }
 
 #[test]
+fn has_holds_for_tags_a_source_gives_and_not_for_loudness_muman_measured() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let has = s.listed(&["list", "-f", "{has}"]);
+    assert!(has.contains("title"), "{has}");
+    assert!(!has.contains("replaygain"), "{has}");
+    assert!(s.listed(&["list", "has:replaygain_track_gain"]).is_empty());
+}
+
+#[test]
+fn a_command_stopped_on_a_song_list_that_does_not_read_keeps_no_run() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let history = s.dir.path().join("home/history");
+    let runs = || std::fs::read_dir(&history).unwrap().count();
+    let before = runs();
+    let songs = s.dir.path().join("home/songs.toml");
+    let listed = std::fs::read_to_string(&songs).unwrap();
+    let version = listed.lines().find(|l| l.starts_with("version")).unwrap();
+    let broken = listed.replacen(version, "", 1);
+    std::fs::write(&songs, &broken).unwrap();
+    let e = run_with(
+        &s.job(&["set", "-y", "manual:a.flac", "genre=Folk"]),
+        &flacs(),
+        &Server::default(),
+        None,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    );
+    assert!(e.is_err());
+    assert_eq!(runs(), before);
+    assert_eq!(std::fs::read_to_string(&songs).unwrap(), broken);
+}
+
+#[test]
 fn a_change_to_a_home_not_there_is_refused_and_makes_nothing() {
     let s = Setup::new();
     for args in [
@@ -7015,6 +7056,29 @@ fn a_library_in_the_home_s_sources_is_refused() {
     .unwrap_err();
     assert!(format!("{e:#}").contains("in the home's sources"), "{e:#}");
     assert!(!job.dirs.library.exists());
+}
+
+#[test]
+fn a_library_in_a_folder_muman_keeps_in_the_home_is_refused() {
+    let s = Setup::new();
+    for kept in ["history", "partial"] {
+        let mut job = s.job(&["sync"]);
+        job.dirs.library = s.dir.path().join("home").join(kept).join("music");
+        let e = run_with(
+            &job,
+            &flacs(),
+            &Server::default(),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains(&format!("in the home's {kept}")),
+            "{e:#}"
+        );
+        assert!(!job.dirs.library.exists());
+    }
 }
 
 #[test]

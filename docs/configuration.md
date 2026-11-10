@@ -34,7 +34,7 @@ Without them, each folder is the platform's own:
 
 Neither folder may hold the other, except that the library may sit
 beside `sources/` in the home. A command that writes refuses a library
-inside `sources/`, or a home inside the library.
+inside `sources/`, `history/` or `partial/`, or a home in the library.
 
 When you point muman at another library folder, it writes the library
 there. Files it finds there exactly as it wrote them, as after you
@@ -202,10 +202,9 @@ defaults for finding peers:
 
 Local peer discovery and the IPv6 DHT are off. Once a torrent's files
 are fetched, aria2c seeds them for `[torrent] seed_time` at most, or
-until it has sent as much as it fetched. `[torrent] args` changes any
-of this: `["--enable-dht=false", "--enable-peer-exchange=false"]` keeps
-to a torrent's trackers, and `["--max-overall-upload-limit=50K"]` caps
-the upload.
+until it has sent as much as it fetched. `[torrent] args` changes all
+this: `["--enable-dht=false", "--enable-peer-exchange=false"]` keeps to
+a torrent's trackers; `["--max-overall-upload-limit=50K"]` caps uploads.
 
 ### Commands, servers and secrets
 
@@ -474,8 +473,9 @@ any filesystem holds.
 Windows programs and some players stop at 260 characters for a whole
 path. `max_path` cuts each title so the full path, library folder
 included, stays within it, and a sync warns of any song it cannot fit.
-It counts characters as Windows does, in UTF-16 units, so an emoji
-counts two.
+Folders that would leave a title less than an even share are cut to
+that share, for every song in them alike. It counts characters as
+Windows does, in UTF-16 units, so an emoji counts two.
 
 Two names a case-insensitive filesystem holds as one, as `Song` and
 `SONG`, or `ΟΔΟΣ` and `οδοσ`, are told apart by a suffix naming the

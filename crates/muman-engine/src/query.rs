@@ -222,10 +222,10 @@ pub fn view_of(
         .iter()
         .map(|(k, _)| k)
         .filter(|k| {
-            !r.why
+            r.why
                 .tags
                 .iter()
-                .any(|t| &t.key == *k && crate::resolve::derived(&t.from))
+                .any(|t| &t.key == *k && !crate::resolve::derived(&t.from))
         })
         .cloned()
         .collect();

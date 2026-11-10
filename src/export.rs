@@ -868,10 +868,11 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
         .to_string_lossy()
         .ends_with(std::path::is_separator);
     if named_folder && !output.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or name the zip to write",
             output.display()
-        );
+        ))
+        .into());
     }
     let zip = if output.is_dir() {
         output.join("muman.zip")
@@ -883,10 +884,11 @@ fn zip_at(output: &Path) -> Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     if !folder.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or write the zip into one that is",
             folder.display()
-        );
+        ))
+        .into());
     }
     Ok(zip)
 }
@@ -959,10 +961,11 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     if !parent.is_dir() {
-        bail!(
+        return Err(crate::errors::Refused(format!(
             "{} is no folder; make it first, or write the export into one that is",
             parent.display()
-        );
+        ))
+        .into());
     }
     if output.exists() {
         let empty = fs::read_dir(output)
@@ -970,11 +973,12 @@ fn folder_at(output: &Path) -> Result<PathBuf> {
             .next()
             .is_none();
         if !empty {
-            bail!(
+            return Err(crate::errors::Refused(format!(
                 "{} is not empty; name a folder to make, such as {}",
                 output.display(),
                 output.join("muman").display()
-            );
+            ))
+            .into());
         }
     }
     Ok(output.to_path_buf())

@@ -759,7 +759,10 @@ fn add_torrents<R: Runner, W: Write>(
     let mut manifest = Manifest::load(&dirs.home)?;
     let options = manifest.settings.torrent.clone();
     let store_root = dirs.torrent();
-    let partial = dirs.home.join("partial").join(crate::source::TORRENT);
+    let partial = dirs
+        .home
+        .join(crate::dirs::PARTIAL)
+        .join(crate::source::TORRENT);
     crate::sync::clear_stale(&partial, options.keep_partial, None);
     let places = crate::aria2::Places {
         store: &store_root,
