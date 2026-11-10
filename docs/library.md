@@ -432,13 +432,12 @@ loudness when the song list's `[loudness] mode` measures none.
 `--max-size` caps the export, as `--max-size 32GiB` for a card. In a
 folder, each file counts in whole blocks of `[library] block_size`,
 which `--set` may change. muman encodes the songs that do not fit again
-from their sources, at lower bitrates of `[audio] lossy`, the least
-audible loss for each byte saved first, as [the library's own
-limit](audio.md#library-size) does. It measures each song once encoded
-and fits the rest again on what it really took, so the export lands
-under the cap. When even the lowest bitrates cannot fit, muman writes
-nothing and says what size the export needs. The library itself never
-changes.
+from their sources, at lower bitrates of `[audio] lossy`, by the rule of
+[the library's own limit](audio.md#library-size). The songs get the cap
+less the song list and are lowered as a library of that `max_size`
+would be, a zip counting its own few bytes for each file too. When even
+the lowest bitrates cannot fit, muman writes nothing and says what size
+the export needs. The library itself never changes.
 
 ## Hooks
 

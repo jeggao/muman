@@ -21,7 +21,9 @@
 //! measured, `PASSES` times at most, each rung it asks for rendered into
 //! a scratch folder to measure it. Each file counts whole `[library]
 //! block_size` blocks, and two standard deviations of the estimates
-//! still in the sum are kept free.
+//! still in the sum are kept free. An export under `--max-size` fits from
+//! the same [`rungs`], [`key`]s and [`policy`], counting what its own
+//! files take, so it lowers what a library under that size would.
 //!
 //! Real sizes are kept in `state.db` by [`plan_key`], the plan's media
 //! and the ffmpeg version together, and taken from there instead of
@@ -90,7 +92,7 @@ const SIGMAS: f64 = 2.0;
 /// How many times songs are fitted again on real sizes. A pass only
 /// learns sizes, so the passes end once no rung picked is unknown; real
 /// libraries settle in two or three.
-const PASSES: usize = 20;
+pub const PASSES: usize = 20;
 
 /// Bitrates in kbit/s a copy of a codec is guessed at when its packets
 /// were never measured.
@@ -279,6 +281,73 @@ pub fn estimate(format: Format, facts: &Facts, seconds: f64) -> (f64, f64) {
     (bytes, bytes * sigma)
 }
 
+/// How songs are fitted into `max` bytes: on estimates, `SIGMAS`
+/// standard deviations of those still in the sum kept free.
+#[must_use]
+pub fn policy(max: u64) -> Policy {
+    Policy {
+        max,
+        sigmas: SIGMAS,
+    }
+}
+
+/// What ties between songs fitted alike are broken by: the first of the
+/// song's `sources`, else the audio its `plan` is made from.
+#[must_use]
+pub fn key(sources: &[SourceKey], plan: &Plan) -> String {
+    sources
+        .first()
+        .map_or_else(|| plan.audio.key.to_string(), ToString::to_string)
+}
+
+/// The rungs a song planned as `plan` starts fitting with, none of them
+/// measured: `plan` itself, then, when it may be `lowered`, each format
+/// [`fit::lower`] gives under `audio` that saves a tenth of it. Each is
+/// estimated from the `facts` of its audio alone, by [`estimate`] and
+/// the guess at what its files hold besides audio, and counted as
+/// `takes` counts the files of `plan` in that format: the audio file's
+/// bytes, then those of each file beside it.
+pub fn rungs(
+    plan: &Plan,
+    facts: Option<&Facts>,
+    (audio, lowered): (&crate::settings::Audio, bool),
+    takes: &dyn Fn(&Plan, u64, &[u64]) -> u64,
+) -> Vec<Rung> {
+    let seconds = facts.and_then(Facts::length).filter(|d| *d > 0.0);
+    let (extras, beside) = crate::artifact::parts(plan).guess();
+    let rung = |format: Format, loss: f64| {
+        let (bytes, sigma) = match (facts, seconds) {
+            (Some(f), Some(s)) => estimate(format, f, s),
+            _ => (0.0, 0.0),
+        };
+        Rung {
+            format,
+            bytes: takes(&plan.with_format(format), bytes as u64 + extras, &beside),
+            loss,
+            sigma,
+            known: false,
+        }
+    };
+    let mut rungs = vec![rung(plan.format, 0.0)];
+    let (true, Some(seconds), Some(shape)) =
+        (lowered, seconds, facts.and_then(|f| f.audio.as_ref()))
+    else {
+        return rungs;
+    };
+    let source = Source {
+        lossless: shape.is_lossless(),
+        bandwidth_hz: shape.quality.map(|q| q.bandwidth_hz),
+        seconds,
+    };
+    for format in fit::lower(plan.format, &shape.shape(), audio) {
+        let lower = rung(format, fit::loss(&source, plan.format, format));
+        if lower.bytes.saturating_mul(10) <= rungs[0].bytes.saturating_mul(9) {
+            rungs.push(lower);
+        }
+    }
+    rungs
+}
+
 fn ladder(
     manifest: &Manifest,
     state: &State,
@@ -289,21 +358,25 @@ fn ladder(
     tools: &str,
 ) -> Ladder {
     let block = manifest.settings.library.block_size.0;
-    let key = manifest.songs[song]
-        .sources
-        .first()
-        .map_or_else(|| plan.audio.key.to_string(), ToString::to_string);
-    let facts = state.facts.get(&plan.audio.key);
-    let seconds = facts.and_then(Facts::length).filter(|d| *d > 0.0);
-    let (extras, beside) = crate::artifact::parts(plan).guess();
-    let beside: u64 = beside.iter().map(|bytes| blocks(*bytes, block)).sum();
-    let choice = |format: Format, loss: f64| -> Choice {
-        let (audio, sigma) = match (facts, seconds) {
-            (Some(f), Some(s)) => estimate(format, f, s),
-            _ => (0.0, 0.0),
-        };
-        let plan = plan.with_format(format);
-        let renamed = !state.rebased.is_empty() || !state.respelled.is_empty();
+    let fixed = written
+        .get(&plan.audio)
+        .into_iter()
+        .flatten()
+        .filter(|_| !at.force)
+        .find(|(path, _)| changed_since_written(at.library, &state.outputs, path))
+        .map(|(path, w)| on_disk(at.library, path, w, block));
+    let takes = |_: &Plan, file: u64, beside: &[u64]| {
+        blocks(file, block) + beside.iter().map(|b| blocks(*b, block)).sum::<u64>()
+    };
+    let rungs = rungs(
+        plan,
+        state.facts.get(&plan.audio.key),
+        (&manifest.settings.audio, fixed.is_none()),
+        &takes,
+    );
+    let renamed = !state.rebased.is_empty() || !state.respelled.is_empty();
+    let choice = |rung: Rung| -> Choice {
+        let plan = plan.with_format(rung.format);
         let was = renamed.then(|| plan_key(tools, &state.as_before(&plan)));
         let plan_key = plan_key(tools, &plan);
         let kept_key = written
@@ -317,45 +390,21 @@ fn ladder(
             })
             .map(|old| self::plan_key(tools, old));
         Choice {
-            format,
+            format: rung.format,
             was_key: was.filter(|w| *w != plan_key),
             legacy_key: legacy_key(tools, &plan),
             kept_key: kept_key.filter(|k| *k != plan_key),
             plan_key,
-            estimate: blocks(audio as u64 + extras, block) + beside,
-            sigma,
-            loss,
+            estimate: rung.bytes,
+            sigma: rung.sigma,
+            loss: rung.loss,
         }
     };
-    let fixed = written
-        .get(&plan.audio)
-        .into_iter()
-        .flatten()
-        .filter(|_| !at.force)
-        .find(|(path, _)| changed_since_written(at.library, &state.outputs, path))
-        .map(|(path, w)| on_disk(at.library, path, w, block));
-    let mut ladder = Ladder {
-        key,
-        rungs: vec![choice(plan.format, 0.0)],
+    Ladder {
+        key: key(&manifest.songs[song].sources, plan),
+        rungs: rungs.into_iter().map(choice).collect(),
         fixed,
-    };
-    let (Some(seconds), Some(audio), None) =
-        (seconds, facts.and_then(|f| f.audio.as_ref()), ladder.fixed)
-    else {
-        return ladder;
-    };
-    let source = Source {
-        lossless: audio.is_lossless(),
-        bandwidth_hz: audio.quality.map(|q| q.bandwidth_hz),
-        seconds,
-    };
-    for format in fit::lower(plan.format, &audio.shape(), &manifest.settings.audio) {
-        let lower = choice(format, fit::loss(&source, plan.format, format));
-        if lower.estimate.saturating_mul(10) <= ladder.rungs[0].estimate.saturating_mul(9) {
-            ladder.rungs.push(lower);
-        }
     }
-    ladder
 }
 
 /// What a file of the library takes on disk, those beside it included.
@@ -479,7 +528,6 @@ fn items(ladders: &[Ladder]) -> Vec<Item> {
             Item {
                 key: l.key.clone(),
                 rungs,
-                churn: 0.0,
             }
         })
         .collect()
@@ -558,10 +606,7 @@ pub fn fit_library<R: Runner, W: Write>(
         .iter()
         .flat_map(|l| l.rungs.iter().map(|c| c.plan_key.clone()))
         .collect();
-    let policy = Policy {
-        max: budget,
-        sigmas: SIGMAS,
-    };
+    let policy = policy(budget);
     let mut learnt = Learnt::default();
     let mut left_out = Vec::new();
     let mut floor = None;

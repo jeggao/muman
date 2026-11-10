@@ -7411,6 +7411,108 @@ fn export_fits_songs_made_anew_into_its_size() {
     assert!(unzip(&zip).contains_key("library/Artist/Record/02 Song.opus"));
 }
 
+/// Every file under `dir`, by its path there with `/`.
+fn paths_under(dir: &Path) -> std::collections::BTreeSet<String> {
+    files_under(dir).into_keys().collect()
+}
+
+/// Each song `fake` encoded in Opus, by its file's name, with each
+/// bitrate it was encoded at.
+fn opus_encodes(fake: &Fake) -> std::collections::BTreeSet<(String, String)> {
+    (fake.calls().iter())
+        .filter(|c| c.iter().any(|a| a == "libopus"))
+        .filter_map(|c| {
+            let kbps = c.iter().skip_while(|a| *a != "-b:a").nth(1)?;
+            let name = Path::new(c.last()?).file_name()?.to_string_lossy();
+            Some((name.into_owned(), kbps.clone()))
+        })
+        .collect()
+}
+
+#[test]
+fn an_export_and_a_library_fitted_into_one_size_lower_the_same_songs() {
+    let s = Setup::new();
+    let songs = [
+        ("song-a", "Alder", 6_000, "0.4"),
+        ("song-b", "Birch", 9_000, "0.3"),
+        ("song-c", "Cedar", 12_000, "0.2"),
+        ("song-d", "Dogwood", 40_000, "0.6"),
+    ];
+    for (file, ..) in songs {
+        s.file(&format!("home/sources/manual/{file}.flac"));
+    }
+    let fake = || {
+        let mut fake = Fake::default();
+        for (n, (file, title, packets, seconds)) in songs.into_iter().enumerate() {
+            let probe = format!(
+                r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "flac",
+                "channels": 2, "sample_rate": "44100"}}], "format": {{"duration": "{seconds}",
+                "tags": {{"TITLE": "{title}", "ARTIST": "Marlo Venn", "ALBUM": "Kites",
+                "track": "{}"}}}}}}"#,
+                n + 1
+            );
+            fake = fake.probe(&format!("{file}.flac"), &probe);
+            fake.packets.push((format!("{file}.flac"), packets));
+        }
+        fake
+    };
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let list = s.dir.path().join("home/songs.toml");
+    let edit = |from: &str, to: &str| {
+        let text = std::fs::read_to_string(&list).unwrap();
+        assert!(text.contains(from), "{from}");
+        s.written("home/songs.toml", &text.replacen(from, to, 1));
+    };
+    edit(r#"block_size = "4 KiB""#, "block_size = 1");
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let whole: u64 = files_under(&s.dir.path().join("lib"))
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .sum();
+    let max = whole - 12_000;
+
+    let folder = s.dir.path().join("out");
+    let cap = max + std::fs::metadata(&list).unwrap().len();
+    let exporting = fake();
+    let (ok, text) = s.run(
+        &exporting,
+        &[
+            "export",
+            "--folder",
+            "-o",
+            &folder.to_string_lossy(),
+            "--max-size",
+            &cap.to_string(),
+        ],
+    );
+    assert!(ok, "{text}");
+    edit(
+        "block_size = 1",
+        &format!("block_size = 1\nmax_size = {max}"),
+    );
+    let syncing = fake();
+    let (ok, text) = s.run(&syncing, &["sync"]);
+    assert!(ok, "{text}");
+
+    let fitted = paths_under(&s.dir.path().join("lib"));
+    let lowered = fitted
+        .iter()
+        .filter(|p| Path::new(p).extension().is_some_and(|e| e == "opus"))
+        .count();
+    assert!(
+        0 < lowered && lowered < songs.len(),
+        "the size lowers some songs and not all: {fitted:?}"
+    );
+    assert_eq!(paths_under(&folder.join("library")), fitted, "{text}");
+    assert_eq!(
+        opus_encodes(&exporting),
+        opus_encodes(&syncing),
+        "each tries the same rungs: {text}"
+    );
+}
+
 /// A home holding one 5.1 FLAC song, `seconds` long, synced once each
 /// `(line, replacement)` of `settings` is made in its song list, and a
 /// fake whose stereo mix of it is far quieter than its six channels.
