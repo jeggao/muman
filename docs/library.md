@@ -459,8 +459,8 @@ starts runs no hook. It is given `library` and how many files were
 and `MUMAN_<NAME>` variables, such as `MUMAN_LIBRARY`; none holds a
 title or a file's name. `run` is a list of words, run without a shell;
 a batch file (`.bat`, `.cmd`) gets the variables only. Its output shows
-as `hook:`, a failure is warned of but fails nothing, and muman waits
-for the hook alone: a job it leaves running is let go once it exits.
+as `hook:` as it comes; a failure is warned of but fails nothing; and
+muman waits for the hook, not for a job it leaves running.
 
 A hook muman cannot run, as one `on = "written"`, is refused alone:
 commands that would run it say so, `check` reports it, and the rest

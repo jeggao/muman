@@ -3,7 +3,8 @@
 //! any file, an undo's files put back counting as written, and after
 //! the run has let go of the home and the library, so a hook may run
 //! muman there. Each is an argument list, run without a shell; its
-//! output is relayed and a failure is warned of, never fatal. muman
+//! output is relayed line by line as it comes, stdout and stderr in the
+//! order written, and a failure is warned of, never fatal. muman
 //! waits for the hook, not for a job it leaves running, as `mpc update &`
 //! does: once the hook exits, its pipes are let go (`runner`).
 //!
@@ -199,14 +200,14 @@ fn run<R: Runner, W: Write>(
             .iter()
             .map(|word| fill(word, values).into())
             .collect();
-        let mut lines = Vec::new();
+        let mut relayed = Ok(());
         let ran = runner.stream_env(&argv, &env, &mut |line| {
             let (Line::Out(l) | Line::Err(l)) = line;
-            lines.push(l.to_string());
+            if relayed.is_ok() {
+                relayed = crate::ui::relayed(out, &format!("hook: {l}"));
+            }
         });
-        for line in lines {
-            crate::ui::relayed(out, &format!("hook: {line}"))?;
-        }
+        relayed?;
         match ran {
             Ok(true) => {}
             Ok(false) => {

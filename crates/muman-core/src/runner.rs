@@ -189,7 +189,9 @@ pub trait Runner: Sync {
         crate::fingerprint::compute(pcm)
     }
 
-    /// [`Self::stream`] with `env` added to the program's environment.
+    /// [`Self::stream`] with `env` added to the program's environment, and
+    /// its stdout and stderr one pipe, so their lines keep the order they
+    /// were written in, each a [`Line::Out`].
     fn stream_env(
         &self,
         cmd: &[OsString],
@@ -390,7 +392,17 @@ impl Runner for System {
     }
 
     fn stream(&self, cmd: &[OsString], on_line: &mut dyn FnMut(Line<'_>)) -> Result<bool> {
-        self.stream_env(cmd, &[], on_line)
+        let mut command = self.command(cmd)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = Spawned::new(&mut command, cmd)?;
+        let (tx, rx) = mpsc::sync_channel(AHEAD);
+        if let Some(r) = child.0.take_stdout() {
+            reader(r, true, tx.clone());
+        }
+        if let Some(r) = child.0.take_stderr() {
+            reader(r, false, tx.clone());
+        }
+        relayed(&child, tx, &rx, on_line)
     }
 
     fn stream_env(
@@ -400,25 +412,18 @@ impl Runner for System {
         on_line: &mut dyn FnMut(Line<'_>),
     ) -> Result<bool> {
         let mut command = self.command(cmd)?;
+        let (pipe, write) = std::io::pipe().context("making a pipe")?;
         command
             .envs(env.iter().map(|(k, v)| (k, v)))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(write.try_clone().context("making a pipe")?)
+            .stderr(write);
         let child = Spawned::new(&mut command, cmd)?;
-        let (tx, rx) = mpsc::channel();
-        if let Some(r) = child.0.take_stdout() {
-            reader(r, true, tx.clone());
-        }
-        if let Some(r) = child.0.take_stderr() {
-            reader(r, false, tx.clone());
-        }
-        let waited = Arc::clone(&child.0);
-        std::thread::spawn(move || {
-            let _ = waited.wait();
-            let _ = tx.send(Said::Exited);
-        });
-        relay(&rx, on_line);
-        Ok(child.0.wait()?.success())
+        // It holds muman's copies of the pipe's end, which would keep the
+        // pipe open once the program's close.
+        drop(command);
+        let (tx, rx) = mpsc::sync_channel(AHEAD);
+        reader(pipe, true, tx.clone());
+        relayed(&child, tx, &rx, on_line)
     }
 
     fn tool(&self, name: &str) -> Option<Status> {
@@ -769,10 +774,15 @@ enum Said {
 /// what a program it left running holds open.
 const AFTER_EXIT: Duration = Duration::from_secs(1);
 
+/// How many lines a streamed program's pipes are read ahead of the one
+/// handed on, so a program saying much faster than it is relayed waits
+/// rather than fill memory.
+const AHEAD: usize = 1024;
+
 /// Send each line of `pipe` until it closes; a carriage return ends a
 /// line too, as progress written in place does. Not joined: a program
 /// left running by the one streamed may hold the pipe for ever.
-fn reader<R: Read + Send + 'static>(pipe: R, out: bool, tx: mpsc::Sender<Said>) {
+fn reader<R: Read + Send + 'static>(pipe: R, out: bool, tx: mpsc::SyncSender<Said>) {
     std::thread::spawn(move || {
         let mut pipe = BufReader::new(pipe);
         let mut buf = Vec::new();
@@ -789,6 +799,23 @@ fn reader<R: Read + Send + 'static>(pipe: R, out: bool, tx: mpsc::Sender<Said>) 
             buf.clear();
         }
     });
+}
+
+/// Hand each line of `child`'s that `rx` brings to `on_line`, as it
+/// comes, and whether it exited successfully; `tx` says when it exits.
+fn relayed(
+    child: &Spawned,
+    tx: mpsc::SyncSender<Said>,
+    rx: &mpsc::Receiver<Said>,
+    on_line: &mut dyn FnMut(Line<'_>),
+) -> Result<bool> {
+    let waited = Arc::clone(&child.0);
+    std::thread::spawn(move || {
+        let _ = waited.wait();
+        let _ = tx.send(Said::Exited);
+    });
+    relay(rx, on_line);
+    Ok(child.0.wait()?.success())
 }
 
 /// Hand each line `rx` brings to `on_line` until every pipe closes, or
@@ -973,6 +1000,23 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_s_stdout_and_stderr_lines_keep_their_order() {
+        let script = "for n in 1 2 3 4 5 6 7 8; do echo out $n; echo err $n >&2; done";
+        let cmd = ["sh", "-c", script].map(OsString::from);
+        let mut said = Vec::new();
+        let ran = System::default().stream_env(&cmd, &[], &mut |line| {
+            let (Line::Out(l) | Line::Err(l)) = line;
+            said.push(l.to_string());
+        });
+        assert!(ran.unwrap());
+        let written: Vec<String> = (1..=8)
+            .flat_map(|n| [format!("out {n}"), format!("err {n}")])
+            .collect();
+        assert_eq!(said, written);
     }
 
     #[test]
