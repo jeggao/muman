@@ -24,7 +24,9 @@ Each field describes either the recording or the release.
   totals, country and release IDs, all come from the one source whose
   album ranks best. So one release's IDs never mix with another's. Of
   albums that rank alike, the source with more of the release's fields
-  wins.
+  wins. With no album artist offered, muman fills in the first artist,
+  less anyone it features: `Marlo Venn feat. Kiri Hoshino` fills in
+  `Marlo Venn`, so a guest on one song leaves its album whole.
 
 Then the songs of one album agree: a MusicBrainz release group, else
 an album artist and album alike but for case and punctuation, in one
@@ -270,8 +272,7 @@ each their own way: `Night Ferry (feat. Kiri Hoshino)` beside
 `[tags]` keys write each one way once a song's values are chosen:
 
 - `featured`: `title` moves a featured artist the credit names into the
-  title, as `(feat. Kiri Hoshino)`, out of the album artist muman fills
-  in from the artist too; `artist` moves one the title names
+  title, as `(feat. Kiri Hoshino)`; `artist` moves one the title names
   into the credit, after `feat.`. A name already there is not written
   twice, one featured list takes them all, and `(With You)` is a
   subtitle, featuring no one.

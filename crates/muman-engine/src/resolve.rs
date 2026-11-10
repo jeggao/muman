@@ -173,7 +173,10 @@
 //! title, without release fields but a date.
 //! The album artist is one a source names, else the first credited
 //! artist as finally set, a hand-set one included, never the joined
-//! `ARTIST`.
+//! `ARTIST`, and its lead credit alone: `Marlo Venn feat. Kiri Hoshino`
+//! read as one artist fills in `Marlo Venn`, whatever `[tags] featured`
+//! asks, so an album whose songs credit a guest each their own way stays
+//! one album.
 //!
 //! A plan is stored whole and compared whole, which is how a song renders
 //! again exactly when its sources' revisions, the picks, the tags or the
@@ -202,6 +205,7 @@ use crate::loudness::Gains;
 use crate::lyrics::{self, Language};
 use crate::manifest::{Album, LyricsPin, Manifest, Song};
 use crate::naming::{self, Naming};
+use crate::parts;
 use crate::picture::{self, Alike};
 use crate::quality::{AudioQuality, ImageQuality, Rect};
 use crate::settings::{Audio, LyricsPlacement, Prefer, To};
@@ -3058,8 +3062,8 @@ impl Slot {
 }
 
 /// What the tags of a song, from its sources and its song list merged,
-/// lack and say all the same: an album artist, its first artist; and an
-/// album, for a song on none, its title, as a single. Derived once, from
+/// lack and say all the same: an album artist, its first artist less any
+/// featured names; and an album, for a song on none, its title, as a single. Derived once, from
 /// the tags as finally set, each at its field's place, so a hand-set
 /// artist or title names the song as one a source offered would.
 fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
@@ -3071,8 +3075,11 @@ fn derive(written: &mut Vec<(String, Slot)>, artists: &[String]) {
     if get(written, Field::AlbumArtist).is_none()
         && let (Some(artist), Some(first)) = (get(written, Field::Artist), artists.first())
     {
+        let lead = parts::credit(first)
+            .featured_at
+            .map_or(first.as_str(), |at| first[..at].trim_end());
         let slot = Slot {
-            values: vec![first.clone()],
+            values: vec![lead.to_string()],
             from: format!("{FIRST_ARTIST}{}", artist.from),
             cleaned: artist.cleaned,
         };

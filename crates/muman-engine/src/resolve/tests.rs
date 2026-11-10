@@ -4459,6 +4459,40 @@ fn a_featured_artist_moved_into_the_title_leaves_the_album_artist_filled_from_th
 }
 
 #[test]
+fn the_album_artist_filled_from_a_credit_leaves_out_who_it_features_in_every_style() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Rain"], true);
+    tag(
+        &mut f,
+        Field::Artist,
+        &["Marlo Venn feat. Kiri Hoshino"],
+        true,
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let s = song(std::slice::from_ref(&key));
+    for featured in [
+        style::Featured::Keep,
+        style::Featured::Artist,
+        style::Featured::Title,
+    ] {
+        let r = resolve(&Input {
+            style: style::Style {
+                featured,
+                ..style::Style::default()
+            },
+            ..defaults(&s, &facts)
+        })
+        .unwrap();
+        assert_eq!(
+            get(&r, "ALBUMARTIST").as_deref(),
+            Some("Marlo Venn"),
+            "{featured:?}"
+        );
+    }
+}
+
+#[test]
 fn a_title_set_by_hand_settles_how_an_upload_reads() {
     let upload = yt("vid00000001");
     let mut u = audio("opus", 20.0);
