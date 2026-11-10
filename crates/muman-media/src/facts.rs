@@ -91,14 +91,22 @@ fn measured_by(quality: &str) -> String {
     format!("{quality}+{}+{}", fingerprint::METHOD, probe::METHOD)
 }
 
+/// [`method`] before bars running into square art stopped at the frame's
+/// centred square: facts it made hold, unless a picture's content was
+/// trimmed to no square.
+fn before_square() -> String {
+    measured_by(quality::BEFORE_SQUARE)
+}
+
 /// [`method`] before transparent pictures were laid over mid-gray: facts
-/// it made hold, unless a picture had no detail.
+/// it made hold, unless a picture had no detail, or as [`before_square`]'s
+/// do not.
 fn before_alpha() -> String {
     measured_by(quality::BEFORE_ALPHA)
 }
 
 /// [`method`] before excerpts that fell silent were taken again: facts it
-/// made hold, unless they found no sound, or a picture no detail.
+/// made hold, unless they found no sound, or as [`before_alpha`]'s do not.
 fn before_sound() -> String {
     measured_by(quality::BEFORE_SOUND)
 }
@@ -236,11 +244,16 @@ impl Facts {
     /// method whose results stand for these.
     fn method_holds(&self) -> bool {
         self.method == method()
-            || self.method == before_alpha() && !self.detailless() && !self.oversized()
+            || self.method == before_square() && !self.unsquare()
+            || self.method == before_alpha()
+                && !self.detailless()
+                && !self.oversized()
+                && !self.unsquare()
             || self.method == before_sound()
                 && !self.soundless()
                 && !self.detailless()
                 && !self.oversized()
+                && !self.unsquare()
     }
 
     /// These facts at revision `rev`, for files whose revision changed
@@ -284,6 +297,15 @@ impl Facts {
         self.covers
             .iter()
             .any(|c| c.quality.is_some_and(|q| q.effective == 0))
+    }
+
+    /// Whether a picture's content was trimmed to no square, as bars that
+    /// ran into its art's edge left it before [`quality::METHOD`].
+    fn unsquare(&self) -> bool {
+        self.covers.iter().any(|c| {
+            c.quality
+                .is_some_and(|q| q.is_cropped() && !q.is_square(quality::SQUARE_TOLERANCE))
+        })
     }
 
     /// Whether its audio measured no sound to judge.

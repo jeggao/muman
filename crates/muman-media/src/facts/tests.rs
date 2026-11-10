@@ -320,6 +320,41 @@ fn facts_of_older_measures_of_a_picture_past_the_largest_measured_do_not_hold() 
 }
 
 #[test]
+fn facts_of_older_measures_of_a_frame_trimmed_to_no_square_do_not_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
+    let framed = |x: u32, width: u32| CoverFacts {
+        at: CoverAt::File,
+        mimetype: "image/png".into(),
+        quality: Some(ImageQuality {
+            width: 1280,
+            height: 720,
+            content: quality::Rect {
+                x,
+                y: 0,
+                width,
+                height: 720,
+            },
+            effective: 512,
+            blockiness: 0.0,
+        }),
+        digest: None,
+        look: None,
+        other: false,
+    };
+    for method in [before_square(), before_alpha(), before_sound()] {
+        let mut f = Facts::unreadable(source.rev());
+        f.method.clone_from(&method);
+        f.covers = vec![framed(280, 720)];
+        assert!(f.holds_for(&source.rev()), "{method}: its square art");
+        f.covers = vec![framed(0, 1280)];
+        assert!(f.holds_for(&source.rev()), "{method}: a frame untrimmed");
+        f.covers = vec![framed(320, 640)];
+        assert!(!f.holds_for(&source.rev()), "{method}: measured again");
+    }
+}
+
+#[test]
 fn facts_round_trip_through_json() {
     let dir = tempfile::tempdir().unwrap();
     let source = located(dir.path(), "c/Song [aaaaaaaaaaa].mkv");
@@ -662,6 +697,11 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
             }
         })
         .collect();
+    let dark_edged: Vec<u8> = boxed
+        .iter()
+        .enumerate()
+        .map(|(i, &g)| if (90..230).contains(&(i % 320)) { g } else { 0 })
+        .collect();
     let blocky: Vec<u8> = (0..256 * 256)
         .map(|i| {
             let (x, y) = (i % 256, i / 256);
@@ -672,6 +712,7 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
         (detailed, 256, 256),
         (upscaled, 384, 384),
         (boxed, 320, 180),
+        (dark_edged, 320, 180),
         (blocky, 256, 256),
         (vec![90; 64 * 64], 64, 64),
     ]
@@ -681,8 +722,8 @@ fn quality_pictures() -> Vec<(Vec<u8>, u32, u32)> {
 /// [`quality_pictures`], of a graymap transparent in places, and of one
 /// past what [`quality::MOST_PIXELS`] allows, with [`quality::METHOD`].
 const QUALITY_WRITTEN: (&str, &str) = (
-    "quality/9",
-    "11ef60693c8bd1abcba85a59a6fcadd493748a64b33957b73c499758c4604879",
+    "quality/10",
+    "3e89fe1e34bbcfc280e4606f9a39ae1fff6257964f1f066c7104dfcba185286b",
 );
 
 #[test]

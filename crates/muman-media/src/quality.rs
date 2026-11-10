@@ -66,7 +66,18 @@
 //!   bars, and the content is what they enclose: a pillarboxed video frame
 //!   yields its square art, which the cover is cropped to. Square art is
 //!   never trimmed: bands across it are its design, and a solid edge on
-//!   one side only is part of any picture.
+//!   one side only is part of any picture. Art with an edge the color of
+//!   its bars is the exception: a dark cover with a black field, padded
+//!   into a 16:9 frame with black bars, ran its bars 40 px into the art on
+//!   each side, and was written 640 × 720 for 720 × 720. So where the
+//!   bars enclose no square, but every line from each end of the long
+//!   side up to the frame's centred square is bar, within the same 2%,
+//!   the content is that square: the bars pad square art out to the
+//!   frame. Art enclosed on all four sides, as a 4:3 frame boxes a square
+//!   one, is trimmed as before, its bars enclosing a square; a portrait
+//!   picture pillarboxed in a landscape frame is taken as the square too,
+//!   keeping some of its bars, since a cover cut out of square art is
+//!   worse than a cover with a margin.
 //! - **Effective resolution.** Detail at a size is the mean squared
 //!   Laplacian over the variance, once the picture is averaged down to
 //!   that size. Stepping up from 256 px by half an octave, each size must
@@ -91,10 +102,17 @@ pub const SOFT_COVER: u32 = 500;
 
 /// Names the measures and their constants; facts measured by another
 /// are measured again, so changing anything below means changing this.
-pub const METHOD: &str = "quality/9";
+pub const METHOD: &str = "quality/10";
+/// The method before bars that run into square art were stopped at the
+/// frame's centred square: what it measured holds, unless a picture's
+/// content was trimmed to no square. A frame whose art's edge ran into
+/// bars of another width on each side was not trimmed at all, and keeps
+/// its whole frame until its source is measured again.
+pub const BEFORE_SQUARE: &str = "quality/9";
 /// The method before transparent pictures were laid over mid-gray: what
 /// it measured holds, unless a picture had no detail or was larger than
-/// [`MOST_PIXELS`], which it measured.
+/// [`MOST_PIXELS`], which it measured, or as [`BEFORE_SQUARE`]'s does not
+/// hold.
 pub const BEFORE_ALPHA: &str = "quality/8";
 /// The method before excerpts that all fell silent were placed again in
 /// what sounds: what it measured holds, unless it found no sound, or a
@@ -878,24 +896,49 @@ pub fn image(pixels: &[u8], width: u32, height: u32) -> Option<ImageQuality> {
 
 /// The picture inside uniform bars that match on opposite sides, as a
 /// pillarboxed video frame holds its square art. A solid edge on one
-/// side only is part of the picture.
+/// side only is part of the picture. Where every line outside the
+/// frame's centred square is bar but what the bars enclose is no square,
+/// the art's own edge ran on into them, and the content is that square.
 fn content_box(gray: &Gray<'_>, w: usize, h: usize) -> Rect {
     let col = |x: usize| gray.line_stats((0..h).map(move |y| (x, y)));
     let row = |y: usize| gray.line_stats((0..w).map(move |x| (x, y)));
-    let (left, right) = bars(w, col);
-    let (top, bottom) = bars(h, row);
+    let (across, down) = (edges(w, col), edges(h, row));
+    let (left, right) = bars(w, across);
+    let (top, bottom) = bars(h, down);
     let n = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
+    let (cw, ch) = (w - left - right, h - top - bottom);
+    if (real(cw) / real(ch)).ln().abs() > SQUARE_TOLERANCE {
+        let (long, short, sides) = if w > h { (w, h, across) } else { (h, w, down) };
+        if padded(long, short, sides) {
+            let margin = (long - short) / 2;
+            let at = if w > h { (margin, 0) } else { (0, margin) };
+            return Rect {
+                x: n(at.0),
+                y: n(at.1),
+                width: n(short),
+                height: n(short),
+            };
+        }
+    }
     Rect {
         x: n(left),
         y: n(top),
-        width: n(w - left - right),
-        height: n(h - top - bottom),
+        width: n(cw),
+        height: n(ch),
     }
 }
 
-/// The widths of the bars at each end of a side `len` long, from each
-/// line's mean and spread; zero both when they are no matched pair.
-fn bars(len: usize, line: impl Fn(usize) -> (f64, f64)) -> (usize, usize) {
+/// The uniform lines at each end of a side `len` long, from each line's
+/// mean and spread: how many run from each end matching its edge line, at
+/// most half the side, and whether the two edge lines match each other.
+#[derive(Debug, Clone, Copy)]
+struct Edges {
+    start: usize,
+    end: usize,
+    alike: bool,
+}
+
+fn edges(len: usize, line: impl Fn(usize) -> (f64, f64)) -> Edges {
     let uniform =
         |l: (f64, f64), edge: f64| l.1 < BORDER_STDDEV && (l.0 - edge).abs() < BORDER_MATCH;
     let (first, last) = (line(0), line(len - 1));
@@ -907,12 +950,34 @@ fn bars(len: usize, line: impl Fn(usize) -> (f64, f64)) -> (usize, usize) {
     while end < len / 2 && uniform(line(len - 1 - end), last.0) {
         end += 1;
     }
+    Edges {
+        start,
+        end,
+        alike: (first.0 - last.0).abs() < BORDER_MATCH,
+    }
+}
+
+/// The widths of the bars at each end of a side `len` long; zero both
+/// when its uniform `edges` are no matched pair.
+fn bars(len: usize, edges: Edges) -> (usize, usize) {
+    let Edges { start, end, alike } = edges;
     let matched = start > 0
         && end > 0
-        && (first.0 - last.0).abs() < BORDER_MATCH
+        && alike
         && real(start.abs_diff(end)) <= real(len) * BAR_SYMMETRY
         && real(len - start - end) >= real(len) * MIN_CONTENT;
     if matched { (start, end) } else { (0, 0) }
+}
+
+/// Whether the uniform `edges` of a frame's long side, `long` against its
+/// `short` one, reach the margins of its centred square on both sides,
+/// within [`BAR_SYMMETRY`] of the long side, in one color: bars that pad
+/// square art out to the frame.
+fn padded(long: usize, short: usize, edges: Edges) -> bool {
+    let margin = (long - short) / 2;
+    let slack = (real(long) * BAR_SYMMETRY) as usize;
+    let reach = margin.saturating_sub(slack);
+    edges.alike && reach > 0 && edges.start >= reach && edges.end >= reach
 }
 
 fn crop(gray: &Gray<'_>, r: Rect) -> Vec<f64> {
@@ -1447,6 +1512,55 @@ mod tests {
             .collect();
         let full = image(&full, 320, 180).unwrap();
         assert!(!full.is_square(SQUARE_TOLERANCE) && !full.is_cropped());
+    }
+
+    /// A black frame `w` × `h` holding a picture over `art`, its other
+    /// pixels black.
+    fn framed(w: usize, h: usize, art: Rect) -> Vec<u8> {
+        let detail = gray(&picture(256));
+        let mut frame = vec![0_u8; w * h];
+        let (x0, y0) = (art.x as usize, art.y as usize);
+        for y in y0..y0 + art.height as usize {
+            for x in x0..x0 + art.width as usize {
+                frame[y * w + x] = detail[(y % 256) * 256 + x % 256].max(40);
+            }
+        }
+        frame
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn square_art_with_a_black_field_in_black_bars_is_cut_at_its_square() {
+        let square = rect(70, 0, 180, 180);
+        // The art, 180 px square at x = 70, is black for 20 px at each side.
+        let q = image(&framed(320, 180, rect(90, 0, 140, 180)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "not 140 × 180");
+        let q = image(&framed(320, 180, rect(90, 0, 155, 180)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "black edges of two widths");
+        let q = image(&framed(320, 180, rect(90, 60, 140, 60)), 320, 180).unwrap();
+        assert_eq!(q.content, square, "a black field on four sides");
+        let q = image(&framed(180, 320, rect(0, 90, 180, 140)), 180, 320).unwrap();
+        assert_eq!(q.content, rect(0, 70, 180, 180), "letterboxed");
+    }
+
+    #[test]
+    fn art_boxed_on_four_sides_or_wider_than_square_keeps_its_own_box() {
+        let boxed = rect(100, 30, 120, 120);
+        let q = image(&framed(320, 180, boxed), 320, 180).unwrap();
+        assert_eq!(q.content, boxed, "a square boxed as a 4:3 frame boxes it");
+        let wide = rect(40, 0, 240, 180);
+        let q = image(&framed(320, 180, wide), 320, 180).unwrap();
+        assert_eq!(q.content, wide, "4:3 art pillarboxed");
+        let one_side = image(&framed(320, 180, rect(0, 0, 200, 180)), 320, 180).unwrap();
+        assert!(!one_side.is_cropped(), "a solid edge on one side only");
     }
 
     #[test]
