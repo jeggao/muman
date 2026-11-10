@@ -91,7 +91,7 @@ use crate::source::SourceKey;
 use crate::state::State;
 use crate::store::{self, Kind, Store};
 use crate::tagfile::{self, Sheet, Tags};
-use crate::tags::Field;
+use crate::tags::{Field, song_list_name};
 use crate::ui::{self, Prompter};
 
 const STRONG: i64 = 40;
@@ -325,19 +325,6 @@ fn thousandths(d: f64) -> i64 {
 
 fn ms_f(ms: i64) -> f64 {
     ms as f64
-}
-
-/// The tag file name a song list writes a Vorbis comment as.
-fn song_list_name(vorbis: &str) -> String {
-    match Field::named(vorbis) {
-        Some(Field::AlbumArtist) => "album_artist".into(),
-        Some(Field::Track) => "track".into(),
-        Some(Field::Disc) => "disc".into(),
-        Some(Field::TrackTotal) => "track_total".into(),
-        Some(Field::DiscTotal) => "disc_total".into(),
-        Some(Field::ReleaseCountry) => "release_country".into(),
-        _ => vorbis.to_ascii_lowercase(),
-    }
 }
 
 fn values<'a>(tags: &'a [(String, Vec<String>)], name: &str) -> impl Iterator<Item = &'a String> {

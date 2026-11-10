@@ -220,12 +220,7 @@ impl std::fmt::Display for Closed {
             Self::Lyrics(h) => write!(f, "lyrics:{}", have(h, "timed", "untimed")),
             Self::Cover(h) => write!(f, "cover:{}", have(h, "sharp", "small")),
             Self::From(p) => write!(f, "from:{p}"),
-            Self::Has(tag) => {
-                let name = Field::named(tag)
-                    .and_then(|x| x.aliases().first().copied())
-                    .map_or_else(|| tag.to_ascii_lowercase(), str::to_string);
-                write!(f, "has:{name}")
-            }
+            Self::Has(tag) => write!(f, "has:{}", tags::song_list_name(tag)),
         }
     }
 }

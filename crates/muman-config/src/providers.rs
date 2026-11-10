@@ -483,6 +483,26 @@ mod tests {
             "the error names what lrclib takes: {e:#}"
         );
         assert!(config("[providers.musicbrainz]\nuntil = \"has:genre\"\n").is_err());
+        let e = config("[providers.musicbrainz]\nuntil = \"has:mood\"\n").unwrap_err();
+        let said = format!("{e:#}");
+        for name in [
+            "has:isrc",
+            "has:language",
+            "has:musicbrainz_trackid",
+            "has:label",
+        ] {
+            assert!(
+                said.contains(name),
+                "named as the docs name it, {name}: {said}"
+            );
+        }
+        for alias in ["tsrc", "tlan", "track id", "publisher", "has:upc"] {
+            assert!(!said.contains(alias), "no alias, {alias}: {said}");
+        }
+        for name in said.split("it takes ").nth(1).unwrap().split(", ") {
+            config(&format!("[providers.musicbrainz]\nuntil = \"{name}\"\n"))
+                .unwrap_or_else(|e| panic!("{name} as the message names it: {e:#}"));
+        }
         assert!(config("[providers.manual]\nuntil = \"from:manual\"\n").is_err());
         assert!(config("[providers]\nskip = [\"\"]\n").is_err());
         assert!(config("[providers.lrclib]\nskip = \"genre:ambient\"\n").is_err());

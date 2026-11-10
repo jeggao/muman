@@ -1101,6 +1101,24 @@ pub fn vorbis_key(name: &str) -> String {
     Field::named(name).map_or_else(|| name.to_ascii_uppercase(), |f| f.vorbis().to_string())
 }
 
+/// The name a song list, a query and muman's messages give the tag
+/// `name`, by any spelling of it: a known field as the docs write it, as
+/// `album_artist`, `isrc` or `musicbrainz_trackid`, never an alias a file
+/// format reads it by, and any other lower-cased.
+#[must_use]
+pub fn song_list_name(name: &str) -> String {
+    match Field::named(name) {
+        Some(Field::AlbumArtist) => "album_artist".into(),
+        Some(Field::Track) => "track".into(),
+        Some(Field::Disc) => "disc".into(),
+        Some(Field::TrackTotal) => "track_total".into(),
+        Some(Field::DiscTotal) => "disc_total".into(),
+        Some(Field::ReleaseCountry) => "release_country".into(),
+        Some(f) => f.vorbis().to_ascii_lowercase(),
+        None => name.trim().to_ascii_lowercase(),
+    }
+}
+
 /// `value` of the tag `name` as a song list holds it when set by hand,
 /// read as its field's [`Kind`] says, or what is wrong with it: a name a
 /// Vorbis comment cannot carry (printable ASCII but `=`, as APEv2 keys
