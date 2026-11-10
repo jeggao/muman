@@ -12,13 +12,16 @@
 //! yt-dlp tags Filipino `fin`, the code for Finnish.
 //!
 //! A line is no lyric when it is a cue or a credit. A cue is blank, only
-//! music symbols, or wholly in brackets and of cue words (`[Chorus]`,
-//! `(Guitar solo)`, `（間奏）`, `*GuitarSolo*`), or a short bracket naming a
-//! passage played (`(gentle piano solo)`); brackets of other words hold a
-//! backing vocal, which is sung. A credit is credit words, a separator
-//! and a name, in the shapes `is_credit` lists, and is one only in a
-//! block at the start or end of the lyrics, where credits sit: between
-//! two lines sung, `Music by the water` is sung too.
+//! music symbols, or wholly in brackets of any kind and of cue words
+//! (`[Chorus]`, `{Verse 2}`, `(Guitar solo)`, `（間奏）`, `*GuitarSolo*`),
+//! or a short bracket naming a passage played (`(gentle piano solo)`);
+//! brackets of other words hold a backing vocal, which is sung. A
+//! section's heading out of brackets is a cue too when a colon closes it
+//! or it is in capitals (`Verse 1:`, `CHORUS x2`); `Chorus` alone in
+//! small letters may be sung. A credit is credit words, a separator and
+//! a name, in the shapes `is_credit` lists, or a copyright line, and is
+//! one only in a block at the start or end of the lyrics, where credits
+//! sit: between two lines sung, `Music by the water` is sung too.
 //!
 //! Lyrics come from LRCLIB, subtitles, tags and files anyone may write,
 //! up to a body of megabytes, so each line is read in time linear in its
@@ -146,7 +149,7 @@ pub(crate) enum Kind {
 /// Words that make a wholly bracketed line a cue: a section, a sound
 /// that is not sung, or a repeat. A line in brackets of other words, as
 /// `(Down by the river)`, is a backing vocal and sung.
-const CUES: [&str; 50] = [
+const CUES: [&str; 54] = [
     "instrumental",
     "music",
     "applause",
@@ -163,6 +166,10 @@ const CUES: [&str; 50] = [
     "bridge",
     "hook",
     "refrain",
+    "rap",
+    "strophe",
+    "breakdown",
+    "postchorus",
     "solo",
     "interlude",
     "repeat",
@@ -240,9 +247,10 @@ const CUE_ENDINGS: [&[&str]; 5] = [
 ];
 
 /// The pairs a cue or a credit may be wholly wrapped in.
-pub(crate) const WRAPPERS: [(char, char); 5] = [
+pub(crate) const WRAPPERS: [(char, char); 6] = [
     ('[', ']'),
     ('(', ')'),
+    ('{', '}'),
     ('（', '）'),
     ('【', '】'),
     ('*', '*'),
@@ -304,6 +312,49 @@ pub(crate) fn is_cue(inner: &str) -> bool {
     ends || words.iter().any(cue)
         && words.iter().all(|w| {
             cue(w) || CUE_FILLERS.contains(&w.as_str()) || w.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+/// Words that name a section of a song, which head it out of brackets
+/// too, as `Verse 1:`.
+const SECTIONS: [&str; 14] = [
+    "verse",
+    "chorus",
+    "prechorus",
+    "postchorus",
+    "bridge",
+    "hook",
+    "intro",
+    "outro",
+    "refrain",
+    "interlude",
+    "rap",
+    "strophe",
+    "breakdown",
+    "solo",
+];
+
+/// Whether `text` heads a section out of brackets: section words, as
+/// `pre`, `part`, a number or a count may go with them, closed by a colon
+/// or written in capitals, as `Verse 1:` or `CHORUS x2`.
+fn is_heading(text: &str) -> bool {
+    let (head, closed) = match text.strip_suffix([':', '：']) {
+        Some(head) => (head, true),
+        None => (text, false),
+    };
+    let words = cue_words(&head.replace('×', "x"));
+    let section = |w: &String| SECTIONS.contains(&w.as_str());
+    let shouted = head
+        .split_whitespace()
+        .filter(|w| !is_repeat(&w.to_lowercase()))
+        .all(|w| !w.chars().any(char::is_lowercase));
+    (closed || shouted)
+        && words.iter().any(section)
+        && words.iter().all(|w| {
+            section(w)
+                || is_repeat(w)
+                || matches!(w.as_str(), "pre" | "post" | "part")
+                || w.bytes().all(|b| b.is_ascii_digit())
         })
 }
 
@@ -431,7 +482,10 @@ fn is_name(rest: &str) -> bool {
 ///   brackets, a colon and a name: `Translation (English) : …`,
 ///   `Lyrics/music: …`, `English translation: …`;
 /// - credit words, at most two other words, `by` and a name, or nothing:
-///   `Composed and written by …`, `Lyrics posted by …`, `Arrangement by`;
+///   `Composed and written by …`, `Lyrics posted by …`, `Arrangement by`,
+///   `English translation by …`;
+/// - a copyright: `©`, `℗`, `(c)`, `(p)` or `Copyright`, then a year or a
+///   name;
 /// - a role of [`ROLES`] alone, or before up to four capitalized words:
 ///   `Voice Kasane Teto`;
 /// - an address: an e-mail, a URL or an `@handle`;
@@ -446,7 +500,15 @@ pub(crate) fn is_credit(text: &str) -> bool {
     {
         return true;
     }
-    is_address(t) || headed(t) || by_credit(t) || named(t)
+    is_address(t) || headed(t) || by_credit(t) || named(t) || is_copyright(t)
+}
+
+fn is_copyright(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    ["©", "℗", "(c) ", "(p) ", "copyright "].iter().any(|mark| {
+        let rest = t.get(mark.len()..).unwrap_or_default().trim();
+        lower.starts_with(mark) && rest.chars().next().is_some_and(|c| !c.is_lowercase())
+    })
 }
 
 fn is_address(t: &str) -> bool {
@@ -537,7 +599,10 @@ fn by_credit(t: &str) -> bool {
         .iter()
         .filter(|(w, _)| !is_credit_word(w) && !JOINERS.contains(&w.as_str()))
         .count();
-    is_credit_word(&before[0].0) && credits > 0 && others <= 2 && is_name(rest)
+    // A qualifier may open the credit, as `English translation by`.
+    let opened = is_credit_word(&before[0].0)
+        || before.len() == 2 && before.last().is_some_and(|(w, _)| is_credit_word(w));
+    opened && credits > 0 && others <= 2 && is_name(rest)
 }
 
 /// Credit words that never open a line sung, which may stand before a
@@ -582,7 +647,7 @@ pub(crate) fn kind(text: &str) -> Kind {
     if t.chars().all(|c| !c.is_alphanumeric()) {
         return Kind::Cue;
     }
-    if wrapped(t).is_some_and(is_cue) {
+    if wrapped(t).is_some_and(is_cue) || is_heading(t) {
         Kind::Cue
     } else if is_credit(t) {
         Kind::Credit
@@ -1502,8 +1567,28 @@ mod tests {
             "(x2)",
             "（間奏）",
             "Lyrics/music: Marlo Venn",
+            "Verse 1:",
+            "Pre-Chorus:",
+            "CHORUS",
+            "VERSE 2 x2",
+            "[Rap]",
+            "[Strophe 1]",
+            "{Chorus}",
+            "{Verse 2: Ada Quill}",
+            "[Chorus x2]",
         ] {
             assert_eq!(sung(no), "", "{no}");
+        }
+        for credit in [
+            "© 2024 Marlo Venn",
+            "(c) 2024 Marlo Venn",
+            "℗ 2024 Glass Orchard Records",
+            "Copyright 2024 Marlo Venn",
+            "English translation by Ada Quill",
+            "Translated by Ada Quill",
+            "Written by Marlo Venn",
+        ] {
+            assert_eq!(kind(credit), Kind::Credit, "{credit}");
         }
         for yes in [
             "Music fills the harbor",
@@ -1513,6 +1598,11 @@ mod tests {
             "(Down by the river, down by the shore)",
             "Music by the water plays all night",
             "Mix: the night and the morning light",
+            "Chorus of the gulls",
+            "Bridge",
+            "HOLD ON",
+            "Chorus: sing it louder",
+            "(c) is for the cold",
         ] {
             assert_eq!(sung(yes), format!("{yes}\n"), "{yes}");
         }

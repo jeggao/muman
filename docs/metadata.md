@@ -338,6 +338,17 @@ Each rule is a switch under `[tags.clean.<tier>]`, or
 | `structure` | Split or swap a whole value by its shape: artists joined by `;`, a disc number closing an album | Put lines in time order; join a subtitle's line wrapped in two; keep once a subtitle written again for each frame |
 | `guesswork` | Read a video title by convention, as `Marlo Venn - Paper Comets (feat. Ada Quill)`; can misread | Keep, as one line, a subtitle line typed out over three lines or more |
 
+Of the `packaging` lyric rules, `cues` drops a line that names a
+section or a sound, not sung: wholly in brackets of any kind, `[Intro]`,
+`(Bridge)`, `{Chorus}`, `【MV】`, with a count, a number or who sings,
+as `[Chorus x2]` or `[Verse 2: Ada Quill]`; out of brackets, a
+section's name closed by a colon or in capitals, as `Verse 1:` or
+`CHORUS`. `Chorus` alone in small letters may be sung, and stays.
+`credits` drops a credit, as `Written by …`, `Translated by …`, `Mix:
+…` or a copyright line, `© 2024 …`, before the first line sung or
+after the last; between two lines sung, it is sung. `headers` drops the
+ID tags, as `[ar:]`, an untimed player would show as lines.
+
 Flipping a lyric switch writes every song's lyrics again. A new title
 or artist writes again the lyrics of a song cleaned by its old one.
 Either way only the lyrics change: a file beside a song is written

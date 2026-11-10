@@ -76,7 +76,7 @@ use crate::lyrics::{self, Kind};
 
 /// What the rules write, raised whenever a rule writes otherwise than
 /// before, so every song with lyrics is written again.
-pub const EDITION: u32 = 4;
+pub const EDITION: u32 = 5;
 
 /// One rule: what it does to the lyrics, knowing the song.
 type Edit = fn(&mut Lyrics, &Context<'_>);

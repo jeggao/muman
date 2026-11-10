@@ -271,7 +271,7 @@ fn every_rule_reading_the_song_is_named() {
 }
 
 /// Lyrics every rule changes something in.
-const SAMPLES: [&str; 8] = [
+const SAMPLES: [&str; 9] = [
     "\n[00:01.00] <b>Paper comets</b>\\h \n[00:00.50]\"Paper Comets\"\n[00:00.60]Art: @someone\n",
     "[length:03:00]\n[Chorus]\nTurn your h\u{435}ad\n\n\nLyrics posted by Ada Quill\n",
     "[by:someone]\n[00:01.00]Lantern\n[00:01.03]Lantern\n[00:03.00](Spoken) Quay &amp; lamps\n[00:02.00]Pier\n",
@@ -281,14 +281,15 @@ const SAMPLES: [&str; 8] = [
     "[ar:Lantern Hollow]\n[ar:Marlo Venn]\n[00:01.00]Paper comets\n",
     "[00:00.00]These captions are made for desktop players.\n[00:01.00]Why are you\n\
      [00:01.00]drifting there?\n[00:02.00][Quiet buzzing of a lamp]\n[00:03.00]The lamps along the quay\n",
+    "Verse 1:\nPaper comets\n{Chorus}\nCHORUS x2\nLantern weather\n\u{a9} 2024 Marlo Venn\n",
 ];
 
 /// What the rules write of [`SAMPLES`], with [`EDITION`]. A change to any
 /// rule's output changes it: raise [`EDITION`], so every song with lyrics
 /// is written again, then record the new digest here.
 const WRITTEN: (u32, &str) = (
-    4,
-    "fbbeab0617bb3a80139e6b94e9f7252161dff4319c2bfd750674ed05040a7326",
+    5,
+    "8916a79645d00a3dedd4f3d95954e48cc82ccee0a2eea6dd05bbb0e53b3054cd",
 );
 
 #[test]
