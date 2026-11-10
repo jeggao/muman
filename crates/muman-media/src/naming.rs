@@ -475,7 +475,8 @@ fn split(start: &str) -> String {
         .to_string()
 }
 
-/// The most bytes a suffix the song list gives may take.
+/// The most bytes a suffix the song list gives may take after its dot,
+/// and a folder's file's name before its extension.
 pub const MOST_SUFFIX: usize = 24;
 
 /// Whether `suffix`, what follows a song's stem in a file beside it, as
@@ -489,7 +490,7 @@ pub fn check_suffix(suffix: &str) -> Result<(), String> {
     if !suffix.starts_with('.') {
         return Err(format!("`{suffix}` must begin with a dot, as `.en`"));
     }
-    plain(suffix)
+    plain(suffix, '.'.len_utf8() + MOST_SUFFIX)
 }
 
 /// Whether `name`, a file a folder of songs holds once, as `cover`, is
@@ -504,15 +505,14 @@ pub fn check_name(name: &str) -> Result<(), String> {
     if name.ends_with([' ', '.']) || reserved(name) {
         return Err(format!("`{name}` is a name Windows refuses"));
     }
-    plain(name)
+    plain(name, MOST_SUFFIX)
 }
 
-/// `text` of nothing a name refuses on any system, within
-/// [`MOST_SUFFIX`] bytes.
-fn plain(text: &str) -> Result<(), String> {
-    if text.len() > MOST_SUFFIX {
+/// `text` of nothing a name refuses on any system, within `most` bytes.
+fn plain(text: &str, most: usize) -> Result<(), String> {
+    if text.len() > most {
         return Err(format!(
-            "`{text}` is over {MOST_SUFFIX} bytes, the most a name keeps for it"
+            "`{text}` is over {most} bytes, the most a name keeps for it"
         ));
     }
     if let Some(c) = text
@@ -599,7 +599,8 @@ mod tests {
 
     #[test]
     fn a_suffix_or_a_folder_s_file_is_one_plain_name() {
-        for good in ["", ".en", ".lrc", ".zh-Hant"] {
+        let most = format!(".{}", "x".repeat(MOST_SUFFIX));
+        for good in ["", ".en", ".lrc", ".zh-Hant", &most] {
             assert_eq!(check_suffix(good), Ok(()), "{good}");
         }
         for bad in [
@@ -609,12 +610,14 @@ mod tests {
             ".a\\b",
             ".a:b",
             ".\u{7}",
-            &".x".repeat(13),
+            &format!("{most}x"),
         ] {
             assert!(check_suffix(bad).is_err(), "{bad}");
         }
         assert_eq!(check_name("cover"), Ok(()));
         assert_eq!(check_name("folder"), Ok(()));
+        assert_eq!(check_name(&most[1..]), Ok(()));
+        assert!(check_name(&format!("{}x", &most[1..])).is_err());
         for bad in ["", ".cover", "../cover", "a/b", "CON", "cover.", "cover "] {
             assert!(check_name(bad).is_err(), "{bad}");
         }
