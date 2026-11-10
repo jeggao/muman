@@ -5,12 +5,21 @@
 //!
 //! Every program [`System`] starts is held in `LIVE` until it has been
 //! waited for, so a signal that stops muman stops them too ([`stop`]):
-//! a Ctrl-C reaches a terminal's whole process group, but a `kill` or a
-//! service manager's stop reaches muman alone, and aria2c, left behind,
-//! would go on fetching into the home. Once [`stop`] begins nothing more
-//! starts, so none is spawned between it and the exit. While a program
-//! of the user's own runs in the terminal, as an editor, a signal is
-//! that program's to answer ([`Interactive`]): Ctrl-C in vim is no stop.
+//! a `kill` or a service manager's stop reaches muman alone, and
+//! aria2c, left behind, would go on fetching into the home. Once
+//! [`stop`] begins nothing more starts, so none is spawned between it
+//! and the exit. While a program of the user's own runs in the terminal,
+//! as an editor, a signal is that program's to answer ([`Interactive`]):
+//! Ctrl-C in vim is no stop.
+//!
+//! What those programs started is stopped with them where the system
+//! allows. On Unix each starts in a process group of its own, and
+//! [`stop`] kills the whole group: a hook's background job, the ffmpeg
+//! a yt-dlp started, the program a wrapper script runs. A Ctrl-C at the
+//! terminal so reaches muman alone, which stops each group. On Windows
+//! the program muman started is ended alone: a job object would hold
+//! what it starts, and no safe interface offers one, so what it started
+//! runs on, though a Ctrl-C at the console reaches every program there.
 
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read};
@@ -48,9 +57,21 @@ pub fn stop() -> bool {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     live.0 = true;
     for child in &live.1 {
-        let _ = child.kill();
+        end(child);
     }
     true
+}
+
+/// Kill `child` and, on Unix, every program in its process group.
+fn end(child: &SharedChild) {
+    #[cfg(unix)]
+    if let Ok(group) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(group),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.kill();
 }
 
 /// Held while a program of the user's own runs in the terminal, so a
@@ -81,6 +102,8 @@ impl Spawned {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         anyhow::ensure!(!live.0, "muman is stopping; {} was not started", name(cmd));
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(command, 0);
         let child = Arc::new(
             SharedChild::spawn(command).with_context(|| format!("spawning {}", name(cmd)))?,
         );
@@ -884,6 +907,22 @@ mod tests {
             err.contains("[tools.yt-dlp] command names muman-no-such-fork"),
             "{err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_program_stopped_takes_what_it_started_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let late = dir.path().join("late");
+        let script = format!("(sleep 1; touch '{}') & wait", late.display());
+        let cmd = ["sh", "-c", &script].map(OsString::from);
+        let mut command = System::default().command(&cmd).unwrap();
+        let started = Spawned::new(&mut command, &cmd).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        end(&started.0);
+        assert!(!started.0.wait().unwrap().success());
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        assert!(!late.exists(), "the background job outlived its program");
     }
 
     #[test]

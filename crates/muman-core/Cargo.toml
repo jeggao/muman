@@ -47,5 +47,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 walkdir = "2"
 which = "8"
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
 [lints]
 workspace = true
