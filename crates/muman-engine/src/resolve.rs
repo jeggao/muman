@@ -3122,7 +3122,8 @@ fn resolve_tags(
 }
 
 /// The title and artist in `input`'s style, its artists one by one with
-/// them, a name moved out of the credit left out and one moved in added;
+/// them, a name moved out of the credit left out and one moved in added,
+/// so the album artist filled from the first of them is styled too;
 /// a value restyled names `style` among the rules that changed it. No
 /// featured artist moves where the title or the artist is set by hand,
 /// so one is never written in both.
@@ -3146,6 +3147,13 @@ fn restyle(input: &Input<'_>, fields: &mut BTreeMap<Field, Slot>, artists: &mut 
     let (title, artist) = (first(Field::Title, fields), first(Field::Artist, fields));
     let styled = style.apply(&title, &artist);
     if styled.artist != artist {
+        // A credit read as one artist, `Orrin Vale feat. Kiri Hoshino`, is
+        // its first artist, which the album artist is filled from.
+        if !styled.removed.is_empty() {
+            for a in artists.iter_mut().filter(|a| **a == artist) {
+                a.clone_from(&styled.artist);
+            }
+        }
         artists.retain(|a| !styled.removed.iter().any(|r| similar::caseless(r, a)));
         artists.extend(styled.added.iter().cloned());
     }

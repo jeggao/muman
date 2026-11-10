@@ -264,7 +264,8 @@ each their own way: `Night Ferry (feat. Kiri Hoshino)` beside
 `[tags]` keys write each one way once a song's values are chosen:
 
 - `featured`: `title` moves a featured artist the credit names into the
-  title, as `(feat. Kiri Hoshino)`; `artist` moves one the title names
+  title, as `(feat. Kiri Hoshino)`, out of the album artist muman fills
+  in from the artist too; `artist` moves one the title names
   into the credit, after `feat.`. A name already there is not written
   twice, one featured list takes them all, and `(With You)` is a
   subtitle, featuring no one.

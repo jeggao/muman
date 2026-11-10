@@ -4254,6 +4254,35 @@ fn a_featured_artist_moved_into_a_band_s_credit_leaves_the_band_whole() {
 }
 
 #[test]
+fn a_featured_artist_moved_into_the_title_leaves_the_album_artist_filled_from_the_artist() {
+    let key = manual("a.flac");
+    let mut f = audio("flac", 22.0);
+    tag(&mut f, Field::Title, &["Night Ferry"], true);
+    tag(
+        &mut f,
+        Field::Artist,
+        &["Orrin Vale feat. Kiri Hoshino"],
+        true,
+    );
+    let facts = BTreeMap::from([(key.clone(), f)]);
+    let s = song(std::slice::from_ref(&key));
+    let r = resolve(&Input {
+        style: style::Style {
+            featured: style::Featured::Title,
+            ..style::Style::default()
+        },
+        ..defaults(&s, &facts)
+    })
+    .unwrap();
+    assert_eq!(
+        get(&r, "TITLE").as_deref(),
+        Some("Night Ferry (feat. Kiri Hoshino)")
+    );
+    assert_eq!(get(&r, "ARTIST").as_deref(), Some("Orrin Vale"));
+    assert_eq!(get(&r, "ALBUMARTIST").as_deref(), Some("Orrin Vale"));
+}
+
+#[test]
 fn a_title_set_by_hand_settles_how_an_upload_reads() {
     let upload = yt("vid00000001");
     let mut u = audio("opus", 20.0);
