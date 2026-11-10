@@ -3,6 +3,14 @@
 //! not read reopens with what is wrong atop it; songs changed in the
 //! song list while it was open are said so, and saving again applies.
 //!
+//! A file saved over songs changed meanwhile reopens on the songs as
+//! they are now, comments and values alike, so that saving it again
+//! cannot quietly take back what changed. The user's edits are merged in
+//! field by field, three ways: a value the user changed from what was
+//! first shown is theirs, any other is the song list's now, so an edit
+//! wins over the change only where both touched one field. The note atop
+//! names each field the change set, song by song.
+//!
 //! Above each song are comments on what it resolves to now: each tag
 //! written, where it came from, a source, the song's own tags, its
 //! album's or its place there, with the cleaning that changed it, and
@@ -52,6 +60,7 @@ const NOTICE: &str = "# NOTE: ";
 
 /// One song as opened: its id, its name, its table as listed, and the
 /// comments on where its tags come from.
+#[derive(Clone)]
 struct Opened {
     id: SourceKey,
     name: String,
@@ -147,6 +156,11 @@ fn describe(view: &View) -> String {
 
 /// The file the editor opens.
 fn render(opened: &[Opened], views: &[&View]) -> String {
+    format!("{HEADER}{}", render_doc(opened, views))
+}
+
+/// The songs of the file the editor opens, below its header.
+fn render_doc(opened: &[Opened], views: &[&View]) -> DocumentMut {
     let mut doc = DocumentMut::new();
     let mut list = toml_edit::ArrayOfTables::new();
     for (o, view) in opened.iter().zip(views) {
@@ -173,7 +187,74 @@ fn render(opened: &[Opened], views: &[&View]) -> String {
         list.push(table);
     }
     doc.insert("song", Item::ArrayOfTables(list));
-    format!("{HEADER}{doc}")
+    doc
+}
+
+/// `item` as its value reads, without the spaces and comments around it.
+fn bare(item: Option<&Item>) -> Option<String> {
+    let mut item = item?.clone();
+    if let Item::Value(v) = &mut item {
+        v.decor_mut().clear();
+    }
+    Some(item.to_string().trim().to_string())
+}
+
+/// The keys of `tables`, each once, in the order first met, but the id
+/// and the record of what was held, which are muman's.
+fn keys_of(tables: &[&Table]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for (k, _) in tables.iter().flat_map(|t| t.iter()) {
+        if k != "id" && k != "held" && !keys.iter().any(|x| x == k) {
+            keys.push(k.to_string());
+        }
+    }
+    keys
+}
+
+/// `theirs`, a song as the song list holds it now, with each value the
+/// user changed in `mine` from `base`, what was first shown, taken from
+/// `mine`; a key the user deleted is deleted.
+fn merge(base: &Table, mine: &Table, theirs: &mut Table) {
+    for key in keys_of(&[base, mine]) {
+        let (b, m) = (base.get(&key), mine.get(&key));
+        if let Some(Item::Table(m)) = m
+            && let Some(Item::Table(t)) = theirs.get_mut(&key)
+        {
+            let empty = Table::new();
+            merge(b.and_then(Item::as_table).unwrap_or(&empty), m, t);
+            continue;
+        }
+        if bare(b) == bare(m) {
+            continue;
+        }
+        match mine.get_key_value(&key) {
+            Some((k, item)) => {
+                theirs.insert_formatted(k, item.clone());
+            }
+            None => {
+                theirs.remove(&key);
+            }
+        }
+    }
+}
+
+/// The fields of a song that differ between `then` and `now`, each named
+/// as the file names it, as `tags.genre`.
+fn changed_fields(then: &Table, now: &Table, prefix: &str, out: &mut Vec<String>) {
+    for key in keys_of(&[then, now]) {
+        let (a, b) = (then.get(&key), now.get(&key));
+        let name = format!("{prefix}{key}");
+        match (a, b) {
+            (Some(Item::Table(a)), Some(Item::Table(b))) => {
+                changed_fields(a, b, &format!("{name}."), out);
+            }
+            (Some(Item::Table(t)), None) | (None, Some(Item::Table(t))) => {
+                changed_fields(t, &Table::new(), &format!("{name}."), out);
+            }
+            _ if bare(a) != bare(b) => out.push(name),
+            _ => {}
+        }
+    }
 }
 
 /// `text` without the lines muman put atop it.
@@ -434,9 +515,9 @@ pub fn edit<W: Write>(
         return Ok(false);
     }
     let store = Store::scan(dirs)?;
-    let opened = open(&read, &picked, &dirs.library)?;
-    let views: Vec<&View> = picked.iter().map(|n| &read.views[*n]).collect();
-    let first = render(&opened, &views);
+    let mut opened = open(&read, &picked, &dirs.library)?;
+    let mut views: Vec<View> = picked.iter().map(|n| read.views[*n].clone()).collect();
+    let mut first = render(&opened, &views.iter().collect::<Vec<_>>());
     let dir = tempfile::tempdir().context("creating a temporary directory")?;
     let file = dir.path().join("songs.toml");
     let mut shown = first.clone();
@@ -479,32 +560,117 @@ pub fn edit<W: Write>(
             return Ok(true);
         }
         later.abandon();
-        read.manifest = crate::manifest::Manifest::load(&dirs.home)?;
+        read = Read::new(dirs, terms)?;
         gone = opened
             .iter()
             .filter(|o| read.manifest.song_with(&o.id).is_none())
             .map(|o| o.id.clone())
             .collect();
-        expected = changed
-            .iter()
-            .filter_map(|k| read.manifest.song_with(k).cloned())
-            .chain(
-                expected
-                    .iter()
-                    .filter(|e| !e.sources.first().is_some_and(|k| changed.contains(k)))
-                    .cloned(),
-            )
-            .collect();
-        let names: Vec<String> = changed.iter().map(ToString::to_string).collect();
+        let then = std::mem::take(&mut opened);
+        let (now, now_views, live) = reopen(&read, then.clone(), views, &dirs.library)?;
+        let mut said = Vec::new();
+        for (was, is) in then.iter().zip(&now) {
+            let mut fields = Vec::new();
+            changed_fields(&was.table, &is.table, "", &mut fields);
+            if gone.contains(&was.id) {
+                said.push(format!("{} is no longer listed", was.id));
+            } else if !fields.is_empty() {
+                said.push(format!("{} sets {}", was.id, change::spoken_owned(&fields)));
+            }
+        }
+        let doc = render_doc(&now, &now_views.iter().collect::<Vec<_>>());
+        first = format!("{HEADER}{doc}");
+        let merged = merged(&text, &then, doc);
+        (opened, views) = (now, now_views);
+        expected = read.songs(&live);
+        let what = if said.is_empty() {
+            names(&changed)
+        } else {
+            said.join("; ")
+        };
         shown = with_notes(
-            &text,
+            &format!("{HEADER}{merged}"),
             NOTICE,
             &[format!(
-                "The song list changed while this was open, for {}.\nSave again to apply this over it; quit without saving to keep it.",
-                names.join(", ")
+                "The song list changed while this was open: {what}.\nBelow is each song as it is now, \
+                 your edits over it. Save again to apply them; quit without saving to keep it."
             )],
         );
     }
+}
+
+/// `keys` as a note names them.
+fn names(keys: &[SourceKey]) -> String {
+    let names: Vec<String> = keys.iter().map(ToString::to_string).collect();
+    change::spoken_owned(&names)
+}
+
+/// `opened` as the song list holds each now, its comments made anew,
+/// with what each shows and the songs' places in `read`; one no longer
+/// listed under its id stays as it was opened.
+fn reopen(
+    read: &Read,
+    opened: Vec<Opened>,
+    views: Vec<View>,
+    library: &Path,
+) -> Result<(Vec<Opened>, Vec<View>, Vec<usize>)> {
+    let at = |o: &Opened| (read.manifest.songs.iter()).position(|s| s.id() == Some(&o.id));
+    let live: Vec<usize> = opened.iter().filter_map(at).collect();
+    let mut fresh = open(read, &live, library)?.into_iter();
+    let mut now = Vec::new();
+    let mut shown = Vec::new();
+    for (o, view) in opened.into_iter().zip(views) {
+        if let Some(n) = at(&o) {
+            now.push(fresh.next().context("a song reopened twice")?);
+            shown.push(read.views[n].clone());
+        } else {
+            now.push(o);
+            shown.push(view);
+        }
+    }
+    Ok((now, shown, live))
+}
+
+/// The file `mine` the user saved, merged into `theirs`, the songs
+/// `then` as the song list holds them now: [`merge`] for each song the
+/// user kept, none the user deleted, and any song of the user's own
+/// after them, as one split off.
+fn merged(mine: &str, then: &[Opened], mut theirs: DocumentMut) -> DocumentMut {
+    let Ok(mine) = mine.parse::<DocumentMut>() else {
+        return theirs;
+    };
+    let mine: Vec<&Table> = (mine.get("song").and_then(Item::as_array_of_tables))
+        .into_iter()
+        .flat_map(|list| list.iter())
+        .collect();
+    let id_of = |t: &Table| t.get("id").and_then(Item::as_str).map(str::to_string);
+    let Some(list) = theirs
+        .get_mut("song")
+        .and_then(Item::as_array_of_tables_mut)
+    else {
+        return theirs;
+    };
+    let mut kept = toml_edit::ArrayOfTables::new();
+    for mut table in list.iter().cloned() {
+        let id = id_of(&table);
+        let base = then.iter().find(|o| Some(o.id.to_string()) == id);
+        let edited = mine.iter().find(|t| id_of(t) == id);
+        match (base, edited) {
+            (Some(base), Some(edited)) => {
+                merge(&base.table, edited, &mut table);
+                kept.push(table);
+            }
+            (Some(_), None) => {}
+            (None, _) => kept.push(table),
+        }
+    }
+    let opened =
+        |t: &&&Table| id_of(t).is_some_and(|id| then.iter().any(|o| o.id.to_string() == id));
+    for table in mine.iter().filter(|t| !opened(t)) {
+        kept.push((*table).clone());
+    }
+    *list = kept;
+    theirs
 }
 
 /// The songs at `picked` as opened, each with where its tags come from.

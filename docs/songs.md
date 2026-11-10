@@ -164,8 +164,10 @@ every song it names. `edit` needs a terminal for its editor and takes
 no `-y`. A question waiting for your answer holds no other run back,
 and a song changed meanwhile, by hand or by another run, refuses
 the save of `remove`, `restore` or `set NAME=VALUE`. `edit` opens again
-and says so: save again to apply your edit over the change, or quit
-without saving to keep it. `set` stepping through fields applies your
+on the songs as they are now, naming each field the change set, with
+your edits over them: a field you changed stays as you made it, any
+other shows the change. Save again to apply your edits, or quit
+without saving to keep the change alone. `set` stepping through fields applies your
 choices to the song as it is now.
 
 ## Giving songs lyrics, pictures and tags

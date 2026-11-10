@@ -282,6 +282,56 @@ fn a_song_changed_meanwhile_is_said_and_saving_again_applies() {
 }
 
 #[test]
+fn a_file_reopened_shows_the_change_made_meanwhile_under_the_edits() {
+    let h = home(TWO);
+    let manifest = h.dirs.manifest();
+    let (changed, _, seen) = edit_with(
+        &h,
+        &[
+            Box::new(move |t| {
+                let now = std::fs::read_to_string(&manifest).unwrap();
+                std::fs::write(
+                    &manifest,
+                    now.replace(
+                        "[\"manual:c.flac\"]",
+                        "[\"manual:c.flac\"]\ntags.genre = \"Folk\"\nlyrics_offset_ms = 9",
+                    ),
+                )
+                .unwrap();
+                t.replace(
+                    "[\"manual:c.flac\"]",
+                    "[\"manual:c.flac\"]\nlyrics_offset_ms = 1\ntags.title = \"Sea\"",
+                )
+            }),
+            Box::new(str::to_string),
+        ],
+    );
+    assert!(changed);
+    let again = &seen[1];
+    assert!(
+        again.starts_with(&format!(
+            "{NOTICE}The song list changed while this was open: manual:c.flac sets \
+             tags.genre and lyrics_offset_ms.\n"
+        )),
+        "{again}"
+    );
+    assert!(
+        again.contains("tags.genre = \"Folk\""),
+        "the change shown: {again}"
+    );
+    assert!(
+        again.contains("lyrics_offset_ms = 1"),
+        "the edit over it: {again}"
+    );
+    assert!(again.contains("title = \"Sea\""), "{again}");
+    let song = &songs(&h).songs[1];
+    assert_eq!(song.lyrics_offset_ms, 1);
+    let tags: BTreeMap<_, _> = song.tags.iter().cloned().collect();
+    assert_eq!(tags["genre"], ["Folk"], "the change kept: {tags:?}");
+    assert_eq!(tags["title"], ["Sea"], "{tags:?}");
+}
+
+#[test]
 fn a_song_removed_meanwhile_is_not_said_to_change() {
     let h = home(TWO);
     let manifest = h.dirs.manifest();
