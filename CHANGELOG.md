@@ -158,6 +158,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **An Opus made from an MP3 no longer replaces it.** Bandwidth is read
+  at the MP3's lowpass, under the noise Opus fills in above it, so a
+  transcode cannot win on bandwidth and cost a generation. Lossy sources
+  are measured again once. An Opus made from AAC, whose fill sits close
+  to the music's level, can still measure as wide.
+- **A whole Ogg file remuxed with `ffmpeg -c copy` is no longer called
+  damaged.** A last packet whose listed duration is impossible no longer
+  stretches the stream to many hours.
 - **A cue sheet or tag file in a folder given to `add` goes to its
   songs**, as it does when named: an untagged rip given as a folder no
   longer becomes "Untitled" songs, and a one-file rip exits 4. Rip notes

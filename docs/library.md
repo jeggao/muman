@@ -57,9 +57,8 @@ ranked](configuration.md#how-sources-are-ranked)).
   at different levels or a few samples apart. Of more than two
   channels, it compares the first two.
 - **Bandwidth** is where a lowpass cuts the sound off. A FLAC or Opus
-  made from an MP3 measures as narrow as the MP3, under the noise Opus
-  fills in above it where that stands 20 dB down, while a recording
-  whose treble fades on its own measures full.
+  made from an MP3 measures as narrow as the MP3, under any fill 20 dB
+  down, while a recording whose treble fades on its own measures full.
 - **Clipping** is the share of samples stuck at full scale or at the
   audio's own peak, or piled up just under full scale where a lossy
   encoder smeared them. In float lossless audio, which can hold samples
