@@ -367,7 +367,7 @@ pub fn remove<W: Write>(
         };
         read.manifest.edit(Edit::Remove {
             key: id.clone(),
-            note: view.name(),
+            note: view.note(),
         });
     }
     later.begin()?;

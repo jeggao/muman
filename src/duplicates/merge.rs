@@ -153,7 +153,7 @@ pub(super) fn edit(m: &Manifest, keeper: usize, others: &[usize], winners: &Tags
     let mut songs = vec![(id, Rewritten::Table(SongTable(table)))];
     for o in others {
         let other = m.songs[*o].id().context("a song lists no source")?.clone();
-        let note = other.to_string();
+        let note = other.to_string().into();
         songs.push((other, Rewritten::Removed(note)));
     }
     Ok(Edit::Rewrite {

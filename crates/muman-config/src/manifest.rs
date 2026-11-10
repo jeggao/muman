@@ -257,6 +257,10 @@ pub struct Removed {
     pub sources: Vec<SourceKey>,
     /// How the song was named when it was removed.
     pub note: String,
+    /// The title and artist it resolved to when it was removed, which
+    /// name it once its sources are gone, as after `remove --purge`.
+    pub title: Option<String>,
+    pub artist: Option<String>,
     /// The tags it was given by hand.
     pub tags: Tags,
     /// What each source held when the song was last built.
@@ -329,7 +333,7 @@ pub enum Edit {
         drop: Vec<String>,
     },
     /// The song listing `key` moved to `[[removed]]`, named by `note`.
-    Remove { key: SourceKey, note: String },
+    Remove { key: SourceKey, note: Note },
     /// `key`, which no song lists, kept under `[[removed]]`, named by
     /// `note`, as a song taken out by hand.
     Tombstone { key: SourceKey, note: String },
@@ -369,8 +373,40 @@ pub enum Edit {
 pub enum Rewritten {
     Table(SongTable),
     /// Removed, named by the note.
-    Removed(String),
+    Removed(Note),
 }
+
+/// How a song removed is named under `[[removed]]`: the text said, and
+/// the title and artist it was made of, each kept apart so a query
+/// still reads them as fields once its sources are gone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Note {
+    pub text: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+}
+
+impl From<&str> for Note {
+    fn from(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<String> for Note {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
+/// The keys under `[[removed]]` that name the song, which a song listed
+/// again does not keep.
+const NAMING: [&str; 3] = ["note", "title", "artist"];
 
 /// A `[[song]]` table as written, compared by its text.
 #[derive(Debug, Clone)]
@@ -1173,6 +1209,14 @@ fn torrents_of(doc: &DocumentMut) -> Result<BTreeMap<String, Torrent>> {
     Ok(torrents)
 }
 
+/// The text of a removed song's `key`, as its title, when it has some.
+fn named_by(t: &Table, key: &str) -> Option<String> {
+    (t.get(key).and_then(Item::as_str))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 /// The songs `[[removed]]` lists, each kept to be restored.
 fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
     let mut removed = Vec::new();
@@ -1185,6 +1229,8 @@ fn removed_of(doc: &DocumentMut) -> Result<Vec<Removed>> {
                 .and_then(Item::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            title: named_by(t, "title"),
+            artist: named_by(t, "artist"),
             tags: tags_of(t.get("tags"), &what)?,
             held: crate::held::read(t, &keys_of(t, &what)?, &what)?,
         });
@@ -1540,14 +1586,17 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
         Edit::Tombstone { key, note } => {
             let mut song = Table::new();
             song.insert("sources", key_array(std::slice::from_ref(key)));
-            tables_mut(doc, "removed")?.push(tombstone(song, note, Near::default()));
+            let note = Note::from(note.as_str());
+            tables_mut(doc, "removed")?.push(tombstone(song, &note, Near::default()));
         }
         Edit::Restore(key) => {
             let Some(mut song) = take(doc, "removed", key) else {
                 return Ok(());
             };
             let removed = song.clone();
-            song.remove("note");
+            for key in NAMING {
+                song.remove(key);
+            }
             unplace(&mut song);
             let listed: BTreeSet<String> = tables(doc, "song").flat_map(listed_keys).collect();
             let taken =
@@ -1676,11 +1725,19 @@ fn apply(doc: &mut DocumentMut, edit: &Edit) -> Result<()> {
     Ok(())
 }
 
-/// A song's table as `[[removed]]` keeps it, its note first.
-fn tombstone(mut song: Table, note: &str, near: Near) -> Table {
+/// A song's table as `[[removed]]` keeps it, its note, title and artist
+/// first.
+fn tombstone(mut song: Table, note: &Note, near: Near) -> Table {
     let mut gone = Table::new();
-    gone.insert("note", value(note));
-    song.remove("note");
+    gone.insert("note", value(note.text.as_str()));
+    for (key, named) in [("title", &note.title), ("artist", &note.artist)] {
+        if let Some(named) = named.as_deref().filter(|n| !n.is_empty()) {
+            gone.insert(key, value(named));
+        }
+    }
+    for key in NAMING {
+        song.remove(key);
+    }
     gone.extend(song.iter().map(|(k, v)| (k.to_string(), v.clone())));
     for (name, key) in [("next", near.next), ("prev", near.prev)] {
         match key {

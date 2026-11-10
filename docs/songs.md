@@ -57,7 +57,8 @@ song when negated.
 - **`list`** writes each song's first key, artist, title and album,
   separated by tabs. `-f` takes a template of `{field}`s instead,
   `--keys` writes the first key alone, and `--removed` lists the songs
-  `remove` took out.
+  `remove` took out, each by the title and artist it had, which its
+  `[[removed]]` entry keeps once `--purge` deleted its sources.
 - **`set`** sets tags, pins and the lyrics offset. `genre=Folk` sets a
   tag, and given twice sets two values; `genre!` clears it so the
   sources' value shows. `audio=<key>` pins the audio to a source and

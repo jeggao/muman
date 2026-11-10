@@ -630,7 +630,7 @@ fn apply<W: Write>(
                 let key = m.songs[*n].id().context("a song lists no source")?.clone();
                 edits.push(Edit::Remove {
                     key,
-                    note: found.views[*n].name(),
+                    note: found.views[*n].note(),
                 });
                 touched.push(*n);
                 removed += 1;

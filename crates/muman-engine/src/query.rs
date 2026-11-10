@@ -45,7 +45,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::facts::Facts;
-use crate::manifest::{Manifest, Removed, Song};
+use crate::manifest::{Manifest, Note, Removed, Song};
 use crate::provider::Provider;
 use crate::providers::ProviderRules;
 use crate::reconcile;
@@ -120,6 +120,18 @@ impl View {
     #[must_use]
     pub fn first(&self, field: &str) -> String {
         self.values(field).into_iter().next().unwrap_or_default()
+    }
+
+    /// How the song is named when it is removed: as in messages, its
+    /// title and artist kept apart too.
+    #[must_use]
+    pub fn note(&self) -> Note {
+        let field = |name: &str| Some(self.first(name)).filter(|v| !v.is_empty());
+        Note {
+            text: self.name(),
+            title: field("title"),
+            artist: field("artist"),
+        }
     }
 
     /// How a song is named in messages.
@@ -294,18 +306,22 @@ pub fn source_view(key: &SourceKey, facts: Option<&Facts>) -> View {
     }
 }
 
-/// A removed song as a query reads it: its keys, and its note as its
-/// title.
+/// A removed song as a query reads it: with the tags it was given, the
+/// title and artist it was removed as, and the tags its sources offer,
+/// so `album:` finds it as it found the song listed and `artist:` once
+/// its sources are purged; titled by its note when nothing else names
+/// it.
 #[must_use]
-/// A removed song as a query reads it: titled by its note, with the
-/// tags it was given and those its sources offer, so `album:` finds it
-/// as it found the song listed.
 pub fn removed_view(removed: &Removed, state: &State) -> View {
     let mut tags: Vec<(String, Vec<String>)> = Vec::new();
+    let named = [("TITLE", &removed.title), ("ARTIST", &removed.artist)]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.to_string(), vec![v.clone()?])));
     let given = removed
         .tags
         .iter()
-        .map(|(k, v)| (tags::vorbis_key(k), v.clone()));
+        .map(|(k, v)| (tags::vorbis_key(k), v.clone()))
+        .chain(named);
     let offers = removed.sources.iter().find_map(|k| state.facts.get(k));
     let offered = Field::ALL.iter().filter_map(|field| {
         let offer = offers.and_then(|f| f.tags.get(field))?;

@@ -825,15 +825,25 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     let mut m = Manifest::load(dir.path()).unwrap();
     m.edit(Edit::Remove {
         key: yt("bbbbbbbbbbb"),
-        note: "Song — Artist".into(),
+        note: crate::manifest::Note {
+            text: "Song — Artist".into(),
+            title: Some("Song".into()),
+            artist: Some("Artist".into()),
+        },
     });
     m.save().unwrap();
     assert_eq!(m.songs.len(), 1);
     assert_eq!(m.removed.len(), 1);
     assert_eq!(Manifest::load(dir.path()).unwrap().removed.len(), 1);
     assert_eq!(m.removed[0].note, "Song — Artist");
+    assert_eq!(m.removed[0].title.as_deref(), Some("Song"));
+    assert_eq!(m.removed[0].artist.as_deref(), Some("Artist"));
     assert_eq!(m.removed_keys().len(), 2);
-    assert!(text(dir.path()).contains("[[removed]]\nnote = \"Song — Artist\""));
+    assert!(
+        text(dir.path()).contains(
+            "[[removed]]\nnote = \"Song — Artist\"\ntitle = \"Song\"\nartist = \"Artist\""
+        )
+    );
 
     m.edit(Edit::Restore(yt("aaaaaaaaaaa")));
     m.save().unwrap();
@@ -843,6 +853,10 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     assert_eq!(song.tags, [("genre".to_string(), vec!["Pop".to_string()])]);
     let t = text(dir.path());
     assert!(!t.contains("note") && !t.contains("next ="), "{t}");
+    assert!(
+        !t.contains("title = \"Song\"") && !t.contains("artist = \"Artist\""),
+        "{t}"
+    );
 }
 
 #[test]

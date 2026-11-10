@@ -6129,6 +6129,33 @@ fn two_songs_of_one_recording_share_its_lyrics_and_a_purge_spares_them() {
 }
 
 #[test]
+fn a_song_purged_keeps_its_title_and_artist_as_fields() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let (ok, text) = s.run(&flacs(), &["remove", "-y", "--purge", "manual:a.flac"]);
+    assert!(ok, "{text}");
+    assert!(!s.dir.path().join("home/sources/manual/a.flac").exists());
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        list.contains("title = \"Song\"\nartist = \"Artist\""),
+        "{list}"
+    );
+    assert_eq!(
+        s.listed(&["list", "--removed", "-f", "{artist}|{title}"]),
+        "Artist|Song\n"
+    );
+    for term in ["artist:artist", "title:=Song"] {
+        assert_eq!(
+            s.listed(&["list", "--removed", "--keys", term]),
+            "manual:a.flac\n",
+            "{term}"
+        );
+    }
+}
+
+#[test]
 fn offline_a_sync_asks_no_service_and_an_add_fetches_no_url() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

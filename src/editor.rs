@@ -55,6 +55,7 @@ const NOTICE: &str = "# NOTE: ";
 struct Opened {
     id: SourceKey,
     name: String,
+    note: crate::manifest::Note,
     table: Table,
     origins: Vec<String>,
 }
@@ -289,7 +290,7 @@ fn interpret(
         }
     }
     for o in opened.iter().filter(|o| !seen.contains(&o.id)) {
-        songs.push((o.id.clone(), Rewritten::Removed(o.name.clone())));
+        songs.push((o.id.clone(), Rewritten::Removed(o.note.clone())));
     }
     if !problems.is_empty() {
         return Err(problems);
@@ -531,6 +532,7 @@ fn open(read: &Read, picked: &[usize], library: &Path) -> Result<Vec<Opened>> {
         opened.push(Opened {
             id,
             name: read.views[*n].name(),
+            note: read.views[*n].note(),
             table,
             origins,
         });
