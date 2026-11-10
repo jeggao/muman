@@ -158,6 +158,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Short sources compare**: copies and excerpts of 5 s or more align as
+  one recording, and one under 5 s is "too short to compare", rather
+  than "another recording"; excerpts under a minute no longer join
+  unrelated recordings.
+- **Clipping is no bandwidth**: a copy raised into clipping no longer
+  beats the clean copy it was made from.
+- **`[audio.pick.dynamics]` ignores codec overshoot**, so a lossy copy no
+  longer beats its lossless master; a squeezed master still loses.
+- **An embedded TIFF cover is read**, where it was dropped.
+- **A source that could not be read is read again once muman reads it
+  differently**, without waiting for the file to change or `--retry`.
 - **A control character no longer costs a lyrics file its lyrics**: a
   DOS end-of-file mark, a terminal colour code or a NUL is dropped, as in
   a lyrics tag; a file that reads as other data is said. Every song's
