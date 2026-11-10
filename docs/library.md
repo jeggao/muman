@@ -137,8 +137,7 @@ its romanization, ranked as `[lyrics] prefer` ranks one. A pin, as
 Lyrics are [cleaned](metadata.md#cleaning) of cues such as `[Music]`, credits and
 what a site wrapped around them. A line in brackets of other words is a
 backing vocal, and is sung.
-[`[[lyrics.out]]`](configuration.md#where-lyrics-go) says where lyrics
-go.
+[`[[lyrics.out]]`](configuration.md#where-lyrics-go) says where they go.
 
 ### Tags
 
