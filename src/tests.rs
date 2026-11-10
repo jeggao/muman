@@ -4345,6 +4345,60 @@ fn one_undo_takes_back_a_sync_killed_as_it_kept_files_it_writes_over() {
     );
 }
 
+#[test]
+fn one_undo_takes_back_a_sync_killed_as_it_moved_and_retagged_a_song() {
+    one_undo_takes_back_a_sync_killed_at_any_step(
+        &|s| {
+            s.file("home/sources/manual/a.flac");
+            s.file("home/sources/manual/b.flac");
+        },
+        &|s| edit_list(s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\""),
+    );
+}
+
+#[test]
+fn undo_of_a_run_that_moved_a_song_and_wrote_beside_it_takes_that_file_out() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let library = library_of(&s);
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    edit_list(&s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\"");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert!(text.contains("Moved"), "{text}");
+    std::fs::remove_file(s.dir.path().join("home/sources/manual/a.lrc")).unwrap();
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), library, "{text}");
+}
+
+#[test]
+fn undo_of_a_forced_sync_that_wrote_a_held_song_anew_leaves_it_held() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let file = s.dir.path().join("lib/Artist/Record/02 Song.flac");
+    let mut retagged = std::fs::read(&file).unwrap();
+    retagged.extend_from_slice(b"a comment of my own");
+    std::fs::write(&file, &retagged).unwrap();
+    edit_list(&s, "tags.title = \"\"", "tags.title = \"Rooms of Salt\"");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    let held = library_of(&s);
+    let (ok, text) = s.run(&flacs(), &["sync", "--force"]);
+    assert!(ok, "{text}");
+    assert_ne!(library_of(&s), held, "{text}");
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(library_of(&s), held, "{text}");
+    let (_, text) = s.run(&flacs(), &["sync"]);
+    assert!(text.contains("changed since muman wrote it"), "{text}");
+    assert_eq!(library_of(&s), held, "{text}");
+}
+
 /// A sync after `edit`, of a home `prepare` fills and a sync builds,
 /// killed at each step, then synced to its end: one undo puts back the
 /// song list and the library as they were before it.
@@ -6727,6 +6781,21 @@ fn a_dry_run_or_a_refused_change_keeps_no_run_to_undo() {
     assert!(ok, "{text}");
     s.refused(&["set", "-y", "nothing-matches", "genre=Folk"]);
     assert_eq!(runs(), before);
+}
+
+#[test]
+fn a_change_to_a_home_not_there_is_refused_and_makes_nothing() {
+    let s = Setup::new();
+    for args in [
+        &["undo", "-n"][..],
+        &["set", "-n", "title:x", "genre=Folk"],
+        &["remove", "-y", "title:x"],
+        &["purge", "-n"],
+    ] {
+        let e = s.refused(args);
+        assert!(e.contains("nothing listed yet"), "{args:?}: {e}");
+        assert!(!s.dir.path().join("home").exists(), "{args:?}");
+    }
 }
 
 #[test]

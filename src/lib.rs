@@ -360,6 +360,16 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
     progress::current().plan(traits.steps);
     if traits.apart {
         dirs.apart()?;
+        // Only `add` and `sync` make a home; any other change would make one,
+        // as its lock does, only to find nothing listed in it.
+        let makes_home = matches!(job.command, Command::Add { .. } | Command::Sync { .. });
+        if !makes_home && !dirs.home.exists() {
+            return Err(change::Refused(format!(
+                "No home at {}: nothing listed yet",
+                dirs.home.display()
+            ))
+            .into());
+        }
         if !matches!(job.command, Command::Undo { .. }) && history::undo_unfinished(&dirs.home) {
             return Err(change::Refused(
                 "An undo stopped partway has not put the library back yet; run `muman undo` to \

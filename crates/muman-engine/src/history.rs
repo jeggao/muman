@@ -35,7 +35,10 @@
 //! the state could say so is followed by the next run, by the moves the
 //! record lists, so it stays muman's. `undo` goes in the reverse of the
 //! run's order: files put back where the run wrote over them, then moves
-//! reversed, as a song retagged where it moved to needs. A file the user
+//! reversed, as a song retagged where it moved to needs, then each file
+//! the run made, an output or one beside it, taken out: the sync after
+//! cannot, as the song list put back may still name its path, and a file
+//! no record names is the user's to it. A file the user
 //! had changed since muman wrote it, which only a forced run writes over,
 //! is noted so as it is kept and put back with the stamp it no longer
 //! matches, still the user's to the sync after.
@@ -327,10 +330,14 @@ fn held(dir: &Path) -> u64 {
 /// by the outputs as `home`'s state holds them now: the output, if new,
 /// and each file beside it its song lists now but did not then. A run
 /// going on with it keeps none of them, as it would keep a file it found.
+/// A file the stopped run moved is not one it made: it holds what was
+/// there before the run, which undoing it moves back, so a run going on
+/// keeps it before writing over it.
 fn made_by(record: &Record, home: &Path) -> BTreeSet<PathBuf> {
     if record.before.is_empty() {
         return BTreeSet::new();
     }
+    let moved: BTreeSet<&PathBuf> = record.moves.iter().map(|m| &m.to).collect();
     let now = State::load(home).map(|s| s.outputs).unwrap_or_default();
     let files = |rel: &Path, w: Option<&Written>| -> BTreeSet<PathBuf> {
         w.map(|w| w.files(rel).map(Path::to_path_buf).collect())
@@ -343,7 +350,7 @@ fn made_by(record: &Record, home: &Path) -> BTreeSet<PathBuf> {
             if was.is_none() {
                 made.insert(rel.clone());
             }
-            made.retain(|f| !then.contains(f));
+            made.retain(|f| !then.contains(f) && !moved.contains(f));
             made
         })
         .collect()
@@ -1170,10 +1177,10 @@ impl Undone {
 
 /// Carry out `plan`, made under the lock the caller holds: the song
 /// list and the state back as they were before the run, its moved files
-/// back where they were and its kept files in place. The sync that
-/// follows writes again what was not kept and removes what the run
-/// added, then finishes the undo. An undo stopped partway, in its sync
-/// too, finishes when run again.
+/// back where they were, its kept files in place, and the files it made
+/// taken out, as the outputs as it began did not record them. The sync
+/// that follows writes again what was not kept, then finishes the undo.
+/// An undo stopped partway, in its sync too, finishes when run again.
 // Puts kept files back and removes what the run added.
 #[expect(clippy::disallowed_methods)]
 pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone> {
@@ -1222,27 +1229,31 @@ pub fn undo<W: Write>(dirs: &Dirs, plan: UndoPlan, out: &mut W) -> Result<Undone
             &format!("Moved back: {}", crate::relpath::show(&m.from)),
         )?;
     }
-    let left: Vec<PathBuf> = record.moves.iter().map(|m| m.to.clone()).collect();
-    crate::library::remove_empty_folders(&dirs.library, &left);
-    // Files the run wrote beside a song it had before are recorded by
-    // nothing once its record is put back, so they go now.
-    for (rel, now) in &state.outputs {
-        let Some(before) = record.was.get(rel) else {
-            continue;
-        };
-        for sidecar in now.sidecar_paths() {
-            let path = dirs.library.join(sidecar);
-            if !before.sidecar_paths().any(|b| b == sidecar)
-                && !record.kept.contains(sidecar)
-                && path.exists()
-            {
-                atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
-                changed.removed += 1;
-                crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(sidecar)))?;
-            }
-        }
+    // A run stopped partway may have left a part beside any path it wrote,
+    // which the sync after clears only beside the outputs put back.
+    let named: BTreeSet<PathBuf> = (state.outputs.iter().chain(&record.was))
+        .flat_map(|(rel, w)| w.files(rel).map(Path::to_path_buf))
+        .chain(record.before.keys().cloned())
+        .chain(
+            record
+                .moves
+                .iter()
+                .flat_map(|m| [m.from.clone(), m.to.clone()]),
+        )
+        .collect();
+    crate::library::clear_leftovers(&dirs.library, named.into_iter());
+    let made = made_by_run(&record, &state.outputs, &dirs.library);
+    for rel in &made {
+        let path = dirs.library.join(rel);
+        atomic::remove(&path).with_context(|| format!("removing {}", path.display()))?;
+        changed.removed += 1;
+        crate::ui::info(out, &format!("Removed: {}", crate::relpath::show(rel)))?;
     }
-    state.outputs = outputs_put_back(&record, &state.outputs, &dirs.library);
+    let left: Vec<PathBuf> = (record.moves.iter().map(|m| m.to.clone()))
+        .chain(made)
+        .collect();
+    crate::library::remove_empty_folders(&dirs.library, &left);
+    state.outputs = outputs_put_back(&record, &dirs.library);
     take_out_copies(dirs, &record, out)?;
     // A home that had no song list before gets one that lists nothing, so
     // the sync after removes what the run added.
@@ -1360,22 +1371,45 @@ fn as_copied(file: &Path, digest: &str) -> bool {
     crate::hash::digest_file(file).as_deref() == Some(digest)
 }
 
-/// The outputs once `record`'s run is undone, from `now`'s: as the run
-/// found them, each file put back stamped as it lies, and each the run
-/// wrote over and did not keep left for the sync after to write again.
-fn outputs_put_back(
-    record: &Record,
-    now: &BTreeMap<PathBuf, Written>,
-    library: &Path,
-) -> BTreeMap<PathBuf, Written> {
-    let mut outputs = now.clone();
-    for m in &record.moves {
-        outputs.remove(&m.to);
+/// The library files `record`'s run made that undoing it takes out, by
+/// the outputs `now` records: each file, an output or one beside it,
+/// that the outputs as the run began did not record, still as muman
+/// wrote it. One the run kept is put back instead, and one changed since
+/// it was written is left, the user's once its record is put back.
+fn made_by_run(record: &Record, now: &BTreeMap<PathBuf, Written>, library: &Path) -> Vec<PathBuf> {
+    let then: BTreeSet<&Path> = (record.was.iter())
+        .flat_map(|(rel, w)| w.files(rel))
+        .collect();
+    let moved_back: BTreeSet<&Path> = record.moves.iter().map(|m| m.from.as_path()).collect();
+    let mine = |rel: &Path| {
+        !then.contains(rel)
+            && !moved_back.contains(rel)
+            && !record.kept.contains(rel)
+            && library.join(rel).is_file()
+    };
+    let mut made = Vec::new();
+    for (rel, w) in now {
+        if mine(rel) && !crate::reconcile::edited_since_written(library, now, rel) {
+            made.push(rel.clone());
+        }
+        for sidecar in &w.sidecars {
+            if mine(&sidecar.path) && crate::reconcile::sidecar_as_written(library, sidecar) {
+                made.push(sidecar.path.clone());
+            }
+        }
     }
-    // A file put back that was no output before is the user's again.
-    for rel in record.kept.iter().filter(|r| !record.was.contains_key(*r)) {
-        outputs.remove(rel);
-    }
+    made.sort();
+    made.dedup();
+    made
+}
+
+/// The outputs once `record`'s run is undone: as the run found them,
+/// each file put back stamped as it lies, and each the run wrote over and
+/// did not keep left for the sync after to write again. An output the run
+/// added is no longer one: [`made_by_run`] took it out, or it is the
+/// user's.
+fn outputs_put_back(record: &Record, library: &Path) -> BTreeMap<PathBuf, Written> {
+    let mut outputs = BTreeMap::new();
     // A file moved back holds what the run wrote over it where it went,
     // unless what it held there was kept and put back.
     let written_over: BTreeSet<&PathBuf> = record

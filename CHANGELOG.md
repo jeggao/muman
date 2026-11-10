@@ -158,6 +158,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **`undo` puts the library back as the run found it.** A file the run
+  added is taken out by the undo itself, so a forced sync that wrote a
+  held-back song at a new path is undone with the song held back again,
+  a file of your own it wrote over stays yours, and lyrics or a folder
+  cover written beside a song the run moved no longer stay behind. A
+  sync killed after it moved a song and then carried on by the next
+  sync is undone to the song's original bytes.
+- **A change to a home that is not there makes nothing.** `set`,
+  `remove`, `restore`, `edit`, `review`, `undo`, `purge` and merging
+  duplicates on a mistyped `--home` refuse, exit 5, instead of creating
+  the folder and its lock files, a dry run included.
 - **Lyrics from subtitles lose the uploader's notes and the sounds.**
   Notes around the lyrics, as `These captions are designed for desktop`
   or `English Subtitles`, and descriptions of sounds in square brackets,
