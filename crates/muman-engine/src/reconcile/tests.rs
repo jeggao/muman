@@ -1261,6 +1261,77 @@ fn a_changed_file_forced_fits_as_the_next_sync_does() {
 }
 
 #[test]
+fn a_song_left_as_built_counts_against_the_limit_as_its_file_is() {
+    let h = home();
+    listing(&h, "", &["a", "b"]);
+    let (ok, text) = h.run(&three_flacs(), Options::default());
+    assert!(ok, "{text}");
+    let built = formats(&h);
+    std::fs::write(h.dirs.manual().join("a.flac"), "a copy stopped short").unwrap();
+    let cut = || {
+        let mut fake = Fake {
+            held: vec![("a.flac".into(), 3)],
+            ..three_flacs()
+        };
+        let said = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "flac",
+            "channels": 2, "sample_rate": "44100", "duration": "200.0"}], "format":
+            {"duration": "200.0", "tags": {"TITLE": "Song", "ARTIST": "Artist",
+            "ALBUM": "Record", "track": "2"}}}"#;
+        fake.probes.insert(0, ("a.flac".into(), said.into()));
+        fake
+    };
+    let (ok, text) = h.run(&cut(), Options::default());
+    assert!(!ok && text.contains("cut off"), "{text}");
+    let (held, _) = built
+        .iter()
+        .find(|(p, _)| {
+            let w = &State::load(&h.dirs.home).unwrap().outputs[p];
+            w.sources.iter().any(|k| k.to_string().ends_with("a.flac"))
+        })
+        .cloned()
+        .expect("a's file");
+    let kept = std::fs::read(h.lib(&held.to_string_lossy())).unwrap();
+    let whole: u64 = built
+        .iter()
+        .map(|(p, _)| {
+            std::fs::metadata(h.lib(&p.to_string_lossy()))
+                .unwrap()
+                .len()
+        })
+        .sum();
+    let max = whole - 2_000;
+    let list = std::fs::read_to_string(h.dirs.manifest()).unwrap();
+    let block = r#"block_size = "4 KiB""#;
+    assert!(list.contains(block), "{list}");
+    let limited = list.replacen(block, &format!("block_size = 1\nmax_size = {max}"), 1);
+    std::fs::write(h.dirs.manifest(), limited).unwrap();
+    let (_, text) = h.run(&cut(), Options::default());
+    assert!(
+        text.contains("1 song(s) below their best format"),
+        "the song left as built is not counted lowered: {text}"
+    );
+    assert_eq!(
+        std::fs::read(h.lib(&held.to_string_lossy())).unwrap(),
+        kept,
+        "{text}"
+    );
+    let fitted = formats(&h);
+    assert!(
+        fitted.iter().any(|(p, f)| *p != held && f.is_encoded()),
+        "the song written is lowered for the one left as built: {fitted:?} {text}"
+    );
+    let total: u64 = fitted
+        .iter()
+        .map(|(p, _)| {
+            std::fs::metadata(h.lib(&p.to_string_lossy()))
+                .unwrap()
+                .len()
+        })
+        .sum();
+    assert!(total <= max, "{total} > {max}: {text}");
+}
+
+#[test]
 fn sizes_measured_under_another_limit_change_no_choice() {
     let fresh = home();
     listing(&fresh, &limit(20_000), &["a", "b", "c"]);

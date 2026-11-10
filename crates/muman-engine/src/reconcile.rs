@@ -393,12 +393,25 @@ pub fn reconcile_into<R: Runner, W: Write>(
             persist(home, &state, opts.dry_run, &lock)?;
         }
         let block = manifest.settings.library.block_size.0;
+        let foreseen = foresee(
+            &manifest,
+            &state,
+            &planned,
+            &dirs.library,
+            (opts.force, opts.accept),
+        );
+        let held: BTreeMap<usize, std::path::PathBuf> = (foreseen.held.iter())
+            .filter(|_| !opts.force)
+            .filter_map(|n| Some((*n, foreseen.files.get(n)?.clone())))
+            .filter(|(_, file)| dirs.library.join(file).exists())
+            .collect();
         let at = limit::Workshop {
             sources: &located,
             scratch: workshop.path(),
             library: &dirs.library,
             kept: limit::kept(&state, &dirs.library, &failed, block),
             force: opts.force,
+            held: &held,
         };
         let mut fitted = limit::fit_library(runner, &manifest, &mut state, &mut planned, &at, out)?;
         if fitted.as_ref().is_some_and(|(f, _)| f.rendered > 0) {

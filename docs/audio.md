@@ -199,5 +199,7 @@ would take; `info` shows what it takes against `max_size`.
 
 A song you changed since muman wrote it counts as it is and is never
 encoded again, unless `sync --force` writes it again, which fits it as
-any other song. muman does not count files in the library that it did
-not write.
+any other song. So does a song a sync leaves as built: one whose source
+was cut off since, until `sync --force`, or was fetched again holding
+something else, until `sync --accept`. muman does not count files in the
+library that it did not write.

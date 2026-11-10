@@ -51,7 +51,11 @@
 //! file goes as a removed song's does.
 //!
 //! Songs changed since muman wrote them, and the files a failed song
-//! keeps, are counted as they are and never moved: they are yours. A run
+//! keeps, are counted as they are and never moved: they are yours. So is
+//! the file of a song a sync leaves as built, a source holding otherwise
+//! than it was built from ([`crate::reconcile::Foreseen::held`]): it stays
+//! as it is, so the fit counts it so rather than lowering a song that is
+//! not written. A run
 //! that writes changed files again, as `sync --force` does, fits their
 //! songs as any other: counted as they are, a file about to be replaced
 //! would leave room the song's new file then takes, and the next run,
@@ -358,13 +362,17 @@ fn ladder(
     tools: &str,
 ) -> Ladder {
     let block = manifest.settings.library.block_size.0;
+    let held = (at.held.get(&song))
+        .and_then(|path| Some((path, state.outputs.get(path)?)))
+        .map(|(path, w)| on_disk(at.library, path, w, block));
     let fixed = written
         .get(&plan.audio)
         .into_iter()
         .flatten()
         .filter(|_| !at.force)
         .find(|(path, _)| changed_since_written(at.library, &state.outputs, path))
-        .map(|(path, w)| on_disk(at.library, path, w, block));
+        .map(|(path, w)| on_disk(at.library, path, w, block))
+        .or(held);
     let takes = |_: &Plan, file: u64, beside: &[u64]| {
         blocks(file, block) + beside.iter().map(|b| blocks(*b, block)).sum::<u64>()
     };
@@ -560,6 +568,9 @@ pub struct Workshop<'a> {
     /// Whether the run writes again the files changed since muman wrote
     /// them, as `sync --force` does.
     pub force: bool,
+    /// The songs the run leaves as built ([`crate::reconcile::Foreseen::held`]),
+    /// by their place in the list, each with its file.
+    pub held: &'a BTreeMap<usize, PathBuf>,
 }
 
 /// Fit the planned songs into `[library] max_size`, setting each one's
