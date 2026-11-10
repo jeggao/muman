@@ -371,6 +371,62 @@ fn a_file_cut_off_is_judged_by_its_stream_and_measured_within_its_packets() {
     assert_eq!((facts.damage(), facts.length()), (None, Some(200.0)));
 }
 
+/// An MP3 whose ffprobe says it plays `said` seconds, its first bytes
+/// `head`, decoding to `decoded` seconds of audio.
+fn mp3_facts(head: Vec<u8>, said: f64, decoded: f64) -> Facts {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.mp3");
+    std::fs::write(&source.path, head).unwrap();
+    let json = format!(
+        r#"{{"streams": [{{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+            "sample_rate": "44100", "channels": 2, "duration": "{said}"}}],
+            "format": {{"format_name": "mp3", "duration": "{said}"}}}}"#
+    );
+    let fake = Fake {
+        wavs: vec![("Song.mp3".into(), wav_of(decoded))],
+        ..Fake::default()
+    }
+    .probe("Song.mp3", &json);
+    let wanted = [crate::analysis::Kind::Integrity];
+    gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap()
+}
+
+#[test]
+fn an_mp3_whose_length_ffmpeg_guessed_is_whole_and_plays_its_packets() {
+    let bare = mp3_facts(crate::probe::mp3_head(true, true, true, None), 62.0, 40.0);
+    assert_eq!(bare.damage(), None, "62 s is a guess from its bitrate");
+    assert_eq!(bare.integrity().unwrap().said, None);
+    assert_eq!((bare.duration, bare.length()), (None, Some(40.0)));
+    let xing = Some((b"Xing", 36, 0x0f, 7656));
+    let cut = mp3_facts(crate::probe::mp3_head(true, true, true, xing), 200.0, 50.0);
+    assert_eq!(
+        cut.damage(),
+        Some(crate::integrity::Damage::Cut {
+            said: 200.0,
+            ends: 50.0
+        }),
+        "its Xing header counts the frames it should hold"
+    );
+    assert_eq!(cut.length(), Some(50.0));
+}
+
+#[test]
+fn an_adts_stream_states_no_length_to_be_cut_short_of() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = located(dir.path(), "A/Song.aac");
+    let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+        "sample_rate": "44100", "channels": 2, "duration": "123.0"}],
+        "format": {"format_name": "aac", "duration": "123.0"}}"#;
+    let fake = Fake {
+        wavs: vec![("Song.aac".into(), wav_of(44.0))],
+        ..Fake::default()
+    }
+    .probe("Song.aac", json);
+    let wanted = [crate::analysis::Kind::Integrity];
+    let facts = gather(&fake, &source, &dir.path().join("scratch"), &wanted).unwrap();
+    assert_eq!((facts.damage(), facts.length()), (None, Some(44.0)));
+}
+
 #[test]
 fn a_subtitle_running_past_the_audio_cuts_nothing_off() {
     let dir = tempfile::tempdir().unwrap();

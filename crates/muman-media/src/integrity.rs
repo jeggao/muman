@@ -5,7 +5,12 @@
 //! - **Said:** the audio stream's own length, [`crate::probe::Audio::duration`].
 //!   Never the file's, which counts every stream: a `WebVTT` subtitle
 //!   running a second or two past the audio would make every such video
-//!   look cut off.
+//!   look cut off. Never a length ffmpeg guessed from the bitrate either,
+//!   for a file that states none ([`crate::probe::Probed::guessed`]): a
+//!   whole VBR MP3 with no Xing header, its first frames quieter than the
+//!   rest, said 62 s for 40 s. Guessed from the bytes there are, such a
+//!   length never shows a cut, and only makes one up, so the file is
+//!   judged by its span and its decode alone.
 //! - **Span:** from where the stream's first packet starts to where its
 //!   last ends ([`Timeline`]), as the packets list them without decoding.
 //!   Not the sum of the packets' durations: Matroska leaves some packets'
@@ -41,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use crate::source::SourceKey;
 
 /// Names the measure; a measure by another is taken again.
-pub const METHOD: &str = "integrity/1";
+pub const METHOD: &str = "integrity/2";
 
 /// Seconds the lengths may differ by before a source counts as damaged:
 /// containers round lengths, and Opus skips its first few milliseconds.
@@ -58,9 +63,14 @@ const HOLE_S: f64 = 0.1;
 /// What a source's audio was found to hold, in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Measure {
-    /// The audio stream's own length, where it says one.
+    /// The audio stream's own length, where it states one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub said: Option<f64>,
+    /// Whether the file states no length, so that the one ffprobe gave
+    /// was a guess, left out of `said`, and the audio plays to where its
+    /// packets end.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guessed: bool,
     pub decoded: f64,
     /// Where the first packet starts and the last ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,8 +233,10 @@ impl Timeline {
 /// What the pass is told of a stream beside its samples.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Found {
-    /// The audio stream's own length.
+    /// The audio stream's own length, where the file states one.
     pub said: Option<f64>,
+    /// Whether ffprobe only guessed it ([`crate::probe::Probed::guessed`]).
+    pub guessed: bool,
     pub timeline: Option<Timeline>,
 }
 
@@ -237,6 +249,7 @@ pub fn measure(rate: Option<u32>, frames: u64, unfinite: u64, found: &Found) -> 
     let decoded = frames as f64 / f64::from(rate);
     Some(Measure {
         said: found.said,
+        guessed: found.guessed,
         decoded,
         span: found.timeline.map(|t| (t.start, t.end)),
         holes: found.timeline.map_or(0.0, |t| t.holes),
@@ -266,6 +279,7 @@ mod tests {
     fn a_file_whole_in_itself_but_short_of_its_sites_length_is_cut_short() {
         let measure = Measure {
             said: Some(143.78),
+            guessed: false,
             decoded: 143.78,
             span: Some((0.0, 143.78)),
             holes: 0.0,
@@ -323,6 +337,7 @@ mod tests {
     fn measured(said: Option<f64>, packets: &[(i64, i64)], decoded: f64) -> Measure {
         let found = Found {
             said,
+            guessed: false,
             timeline: Timeline::parse(&list(packets)),
         };
         let frames = (decoded * 48_000.0).round() as u64;
@@ -396,11 +411,11 @@ mod tests {
     }
 
     /// What the pass measures of audio holding samples that are no number,
-    /// beside packets whole, gapped, out of order or none, with
-    /// [`METHOD`].
+    /// beside packets whole, gapped, out of order or none, and a length
+    /// stated or guessed, with [`METHOD`].
     const WRITTEN: (&str, &str) = (
-        "integrity/1",
-        "bb71ab3ecdf2f533a5f2d2b0d7e05f739cb5dcb51dedf03a15290ffc93c00167",
+        "integrity/2",
+        "bf1275ebfa8dc5a6395ce0dea1119fa7bf5f4874679692c15cd912ee8762e22c",
     );
 
     #[test]
@@ -428,6 +443,7 @@ mod tests {
         {
             let found = Found {
                 said,
+                guessed: said.is_none(),
                 timeline: packets.and_then(|p| Timeline::parse(&list(&p))),
             };
             let mut pass = Pass::new(vec![Kind::Integrity]);

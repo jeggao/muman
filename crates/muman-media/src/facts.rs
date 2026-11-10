@@ -355,17 +355,20 @@ impl Facts {
 
     /// Seconds its audio plays: to where a cut-off file's packets end,
     /// else its audio stream's own length, else the file's, which counts
-    /// its other streams too, else its packets' span.
+    /// its other streams too, else its packets' span. Where the file
+    /// states no length ([`integrity::Measure::guessed`]), ffprobe's are
+    /// guesses, and its packets' span comes before the file's.
     #[must_use]
     pub fn length(&self) -> Option<f64> {
         let measure = self.integrity();
         if let Some(Damage::Cut { ends, .. }) = self.damage() {
             return Some(ends);
         }
-        measure
-            .and_then(|m| m.said)
-            .or(self.duration)
-            .or_else(|| measure.and_then(|m| m.span).map(|(_, end)| end))
+        let span = measure.and_then(|m| m.span).map(|(_, end)| end);
+        let file = self
+            .duration
+            .filter(|_| !measure.is_some_and(|m| m.guessed));
+        measure.and_then(|m| m.said).or(file).or(span)
     }
 
     /// The analyses of `wanted` the audio lacks; none for no audio.
@@ -1222,8 +1225,8 @@ fn media<R: Runner>(
     wanted: &[analysis::Kind],
     facts: &mut Facts,
 ) -> Result<()> {
-    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
-    facts.duration = probed.duration;
+    let probed = probe::read(runner, &located.path)?;
+    facts.duration = probed.duration.filter(|_| !probed.guessed);
     let info = dump_attachments(runner, located, &probed, scratch, true);
     facts.tags = tags_of(info.as_ref(), &probed, &located.path);
     facts.release = info.as_ref().is_some_and(VideoInfo::is_release);
@@ -1358,6 +1361,7 @@ fn media<R: Runner>(
     }
     let found = Found {
         said: probed.audio.as_ref().and_then(|a| a.duration),
+        guessed: probed.guessed,
         timeline,
     };
     let sounding = pass.sounding();
@@ -1374,12 +1378,21 @@ fn media<R: Runner>(
             .extend(l.digest.clone().map(|d| (LyricsAt::Tag, d)));
         facts.lyrics.push(l);
     }
-    // Segments placed by a length the packets fall short of read nothing.
+    // Segments placed by a length the packets fall short of read nothing;
+    // placed by a guessed one, they miss the shares of the audio there is.
+    let misplaced = timeline.map(|t| t.end).filter(|ends| {
+        probed.guessed
+            && probed
+                .duration
+                .is_some_and(|d| (d - ends).abs() > integrity::SLACK_S)
+    });
     if let (Some(Damage::Cut { ends, .. }), Some(a)) = (
         analysis.integrity().and_then(integrity::Measure::damage),
         &probed.audio,
     ) && quality::audio(&segments, a.sample_rate, headroom).is_none()
     {
+        segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
+    } else if let (Some(ends), Some(a)) = (misplaced, &probed.audio) {
         segments = measure_segments(runner, located, a, &segment_starts(Some(ends)), scratch);
     }
     // Excerpts that all fell in silence are taken again where it sounds.
@@ -1611,10 +1624,9 @@ pub fn analyze<R: Runner>(
         0
     };
     let found = if integrity {
-        let said = runner
-            .output(&probe::ffprobe_command(&located.path))
-            .ok()
-            .and_then(|json| probe::parse(&json).ok())
+        let probed = probe::read(runner, &located.path).ok();
+        let guessed = probed.as_ref().is_some_and(|p| p.guessed);
+        let said = probed
             .and_then(|p| p.audio)
             .filter(|a| a.index == audio.index)
             .and_then(|a| a.duration);
@@ -1622,7 +1634,11 @@ pub fn analyze<R: Runner>(
             .then(|| std::fs::read_to_string(&packets).ok())
             .flatten()
             .and_then(|text| Timeline::parse(&text));
-        Found { said, timeline }
+        Found {
+            said,
+            guessed,
+            timeline,
+        }
     } else {
         Found::default()
     };
@@ -1637,7 +1653,7 @@ pub fn integrity<R: Runner>(
     scratch: &Path,
 ) -> Result<Option<integrity::Measure>> {
     std::fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
-    let probed = probe::parse(&runner.output(&probe::ffprobe_command(&located.path))?)?;
+    let probed = probe::read(runner, &located.path)?;
     let Some(audio) = probed.audio else {
         return Ok(None);
     };
@@ -1660,6 +1676,7 @@ pub fn integrity<R: Runner>(
         .and_then(|text| Timeline::parse(&text));
     let found = Found {
         said: audio.duration,
+        guessed: probed.guessed,
         timeline,
     };
     Ok(pass.finish(&found).integrity().copied())

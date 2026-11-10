@@ -1729,6 +1729,7 @@ fn a_file_cut_off_is_encoded_however_it_is_coded() {
         method: crate::integrity::METHOD.into(),
         value: Some(crate::integrity::Measure {
             said: Some(40.0),
+            guessed: false,
             decoded: 22.0,
             span: Some((0.0, 22.0)),
             holes: 0.0,
@@ -1757,6 +1758,7 @@ fn measured(mut f: Facts, said: f64, span: f64, decoded: f64) -> Facts {
         method: crate::integrity::METHOD.into(),
         value: Some(crate::integrity::Measure {
             said: Some(said),
+            guessed: false,
             decoded,
             span: Some((0.0, span)),
             holes: span - decoded,

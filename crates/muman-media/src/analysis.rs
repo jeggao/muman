@@ -516,6 +516,7 @@ mod tests {
         assert_eq!(measure(7), whole, "however it is cut");
         let found = integrity::Found {
             said: Some(3.0),
+            guessed: false,
             timeline: Some(integrity::Timeline {
                 start: 0.0,
                 end: 3.0,

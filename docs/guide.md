@@ -428,7 +428,10 @@ of damage:
 - **Cut off:** the audio's packets end before its stream says, as a
   copy or download stopped short leaves them. The length a file states
   counts every stream in it, so a subtitle running past the audio is no
-  cut.
+  cut. A file that states no length, as a raw AAC or AC-3 stream or an
+  MP3 with no Xing or VBRI header, is never cut off: the length ffmpeg
+  gives it is a guess from its bitrate, and it plays as long as its
+  packets run.
 - **Missing:** less audio decodes than the packets span, as from holes
   a download that lost pieces leaves, or packets too corrupt to decode.
 

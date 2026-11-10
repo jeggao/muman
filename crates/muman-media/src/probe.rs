@@ -1,19 +1,38 @@
 //! What a source file holds, read from ffprobe's JSON.
+//!
+//! A length ffprobe gives is not always one the file states. A raw
+//! elementary stream, as an ADTS `.aac`, an AC-3 or DTS file, or an MP3
+//! with no Xing, Info or VBRI header, holds no length; ffmpeg then guesses
+//! one from the file's size and the bitrate of its first frames
+//! ("Estimating duration from bitrate", a warning `-v error` hides), and
+//! gives the guess as the stream's and the file's `duration` alike, with
+//! nothing in the JSON to tell it apart. A VBR MP3 of 40 s with no header
+//! read as 62 s, and an ADTS file of 44 s as 123 s, where its first frames
+//! were loud. [`read`] drops the stream's length where it is such a guess
+//! ([`Probed::guessed`]), so that only a length the file states is held
+//! against its packets and its decode, and the length a song plays is
+//! read from its packets instead. An MP3's own header says whether it
+//! states its frames, as ffmpeg reads it: the Xing or Info tag, with its
+//! frame count, after the first frame's side information, or the VBRI tag
+//! 32 bytes in. A file that cannot be read keeps ffprobe's lengths.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::chapters::Chapter;
+use crate::runner::Runner;
 
 /// Names which audio stream is taken and what is read of it and of the
 /// file; facts read by another are made again, so changing any means
 /// changing this. What only a versioned analysis reads, as the integrity
-/// measure reads [`Audio::duration`], is versioned by that analysis
-/// instead, and caught up without measuring every source again.
+/// measure reads [`Audio::duration`], [`Probed::format`] and
+/// [`Probed::guessed`], is versioned by that analysis instead, and caught
+/// up without measuring every source again.
 pub const METHOD: &str = "probe/3";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,8 +99,15 @@ pub struct Probed {
     pub subtitles: Vec<Subtitle>,
     pub attachments: Vec<Attachment>,
     pub pictures: Vec<Picture>,
-    /// Seconds, from the container.
+    /// ffprobe's names for the container's format, as `mp3` or
+    /// `mov,mp4,m4a,3gp,3g2,mj2`.
+    pub format: String,
+    /// Seconds, from the container; ffmpeg's guess where [`Self::guessed`].
     pub duration: Option<f64>,
+    /// Whether the file states no length, so that ffprobe's lengths are
+    /// guessed from its size and bitrate; [`read`] then drops the audio
+    /// stream's.
+    pub guessed: bool,
     /// The container's tags, then the audio stream's where the container
     /// has none by that name, as Ogg keeps them; keys lower-cased.
     pub tags: BTreeMap<String, String>,
@@ -163,6 +189,8 @@ fn title(tag: &str) -> String {
 
 #[derive(Deserialize, Default)]
 struct Format {
+    #[serde(default, rename = "format_name")]
+    name: String,
     #[serde(default)]
     duration: Option<String>,
     #[serde(default)]
@@ -299,12 +327,96 @@ pub fn ffprobe_command(path: &Path) -> Vec<OsString> {
     cmd
 }
 
+/// What `path` holds, by one ffprobe run, its audio stream's length
+/// dropped where the file states none ([`Probed::guessed`]).
+pub fn read<R: Runner>(runner: &R, path: &Path) -> Result<Probed> {
+    let mut probed = parse(&runner.output(&ffprobe_command(path))?)?;
+    probed.guessed = guessed(&probed.format, || std::fs::File::open(path));
+    if probed.guessed
+        && let Some(audio) = &mut probed.audio
+    {
+        audio.duration = None;
+    }
+    Ok(probed)
+}
+
+/// ffprobe's names of the formats that state no length: raw elementary
+/// streams, whose demuxer leaves ffmpeg to guess one from the bitrate.
+const UNSTATED: [&str; 6] = ["aac", "ac3", "eac3", "dts", "truehd", "mlp"];
+
+/// Whether a file of `format` states no length: one of [`UNSTATED`], or an
+/// MP3 whose header, read from what `open` gives, counts no frames.
+fn guessed<F: Read + Seek>(format: &str, open: impl FnOnce() -> std::io::Result<F>) -> bool {
+    match format {
+        "mp3" => open()
+            .and_then(mp3_counts_frames)
+            .is_ok_and(|counts| !counts),
+        _ => UNSTATED.contains(&format),
+    }
+}
+
+/// Bytes read for an MP3's first frame, past its `ID3v2` tag: enough for
+/// junk before the frame and the largest header after it.
+const MP3_HEAD: u64 = 8192;
+
+/// Whether an MP3's first frame carries a Xing or Info tag with its frame
+/// count, or a VBRI tag, as ffmpeg's demuxer finds them.
+fn mp3_counts_frames(mut file: impl Read + Seek) -> std::io::Result<bool> {
+    let mut id3 = [0u8; 10];
+    let mut skip = 0;
+    if file.read_exact(&mut id3).is_ok() && id3.starts_with(b"ID3") {
+        let size = id3[6..10]
+            .iter()
+            .fold(0u64, |size, b| (size << 7) | u64::from(b & 0x7f));
+        let footer = if id3[5] & 0x10 == 0 { 0 } else { 10 };
+        skip = 10 + size + footer;
+    }
+    file.seek(SeekFrom::Start(skip))?;
+    let mut head = Vec::new();
+    file.take(MP3_HEAD).read_to_end(&mut head)?;
+    let Some(at) = (0..head.len().saturating_sub(3)).find(|&i| mp3_frame(&head[i..i + 4])) else {
+        return Ok(false);
+    };
+    let frame = &head[at..];
+    let (mpeg1, mono) = (frame[1] & 0x18 == 0x18, frame[3] >> 6 == 3);
+    let side = match (mpeg1, mono) {
+        (true, false) => 32,
+        (true, true) | (false, false) => 17,
+        (false, true) => 9,
+    };
+    let tagged = |at: usize, tag: &[u8]| frame.get(at..at + 4) == Some(tag);
+    let word = |at: usize| {
+        frame
+            .get(at..at + 4)
+            .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let xing = 4 + side;
+    if (tagged(xing, b"Xing") || tagged(xing, b"Info"))
+        && word(xing + 4).is_some_and(|f| f & 1 == 1)
+    {
+        return Ok(word(xing + 8).is_some_and(|frames| frames > 0));
+    }
+    Ok(tagged(36, b"VBRI") && word(36 + 14).is_some_and(|frames| frames > 0))
+}
+
+/// Whether `b` begins an MPEG audio frame: its sync, and a version, layer,
+/// bitrate and sample rate that are not reserved.
+fn mp3_frame(b: &[u8]) -> bool {
+    b[0] == 0xff
+        && b[1] & 0xe0 == 0xe0
+        && b[1] & 0x18 != 0x08
+        && b[1] & 0x06 != 0
+        && !matches!(b[2] >> 4, 0 | 15)
+        && b[2] & 0x0c != 0x0c
+}
+
 /// Parse `ffprobe -show_streams -show_format -show_chapters`. The audio stream a song is
 /// made from is the best: lossless before lossy, then the one with the
 /// most channels, then the highest rate, then the first.
 pub fn parse(json: &[u8]) -> Result<Probed> {
     let probe: Probe = serde_json::from_slice(json).context("parsing ffprobe JSON")?;
     let mut probed = Probed {
+        format: probe.format.name,
         duration: probe
             .format
             .duration
@@ -390,9 +502,120 @@ pub fn parse(json: &[u8]) -> Result<Probed> {
     Ok(probed)
 }
 
+/// The start of an MP3: an `ID3v2` tag of 300 bytes where `id3`, then the
+/// first frame of an MPEG-1 (else MPEG-2) Layer III stream, `stereo` or
+/// mono, holding `tag` at `at` bytes into the frame, with its flags and
+/// frame count after it, and a frame's worth of silence.
+#[cfg(test)]
+pub(crate) fn mp3_head(
+    id3: bool,
+    mpeg1: bool,
+    stereo: bool,
+    tag: Option<(&[u8; 4], usize, u32, u32)>,
+) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if id3 {
+        bytes.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x02\x2c");
+        bytes.resize(bytes.len() + 300, 0);
+    }
+    let start = bytes.len();
+    let version = if mpeg1 { 0xfb } else { 0xf3 };
+    let mode = if stereo { 0x64 } else { 0xc4 };
+    bytes.extend_from_slice(&[0xff, version, 0x90, mode]);
+    bytes.resize(start + 417, 0);
+    if let Some((name, at, flags, frames)) = tag {
+        let at = start + at;
+        bytes[at..at + 4].copy_from_slice(name);
+        let (flags_at, frames_at) = if name == b"VBRI" {
+            (at + 10, at + 14)
+        } else {
+            (at + 4, at + 8)
+        };
+        bytes[flags_at..flags_at + 4].copy_from_slice(&flags.to_be_bytes());
+        bytes[frames_at..frames_at + 4].copy_from_slice(&frames.to_be_bytes());
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    fn mp3_guessed(bytes: Vec<u8>) -> bool {
+        guessed("mp3", || Ok(Cursor::new(bytes)))
+    }
+
+    #[test]
+    fn an_mp3_states_its_length_only_by_a_header_counting_its_frames() {
+        let xing = Some((b"Xing", 36, 0x0f, 1500));
+        assert!(!mp3_guessed(mp3_head(true, true, true, xing)));
+        assert!(!mp3_guessed(mp3_head(false, true, true, xing)));
+        let info = Some((b"Info", 21, 0x01, 1500));
+        assert!(!mp3_guessed(mp3_head(true, true, false, info)), "mono");
+        let mpeg2 = Some((b"Xing", 13, 0x0f, 1500));
+        assert!(!mp3_guessed(mp3_head(true, false, false, mpeg2)));
+        let vbri = Some((b"VBRI", 36, 0, 1500));
+        assert!(!mp3_guessed(mp3_head(true, true, true, vbri)));
+
+        assert!(mp3_guessed(mp3_head(true, true, true, None)), "no header");
+        let uncounted = Some((b"Xing", 36, 0x0e, 0));
+        assert!(mp3_guessed(mp3_head(true, true, true, uncounted)));
+        let misplaced = Some((b"Xing", 21, 0x0f, 1500));
+        assert!(
+            mp3_guessed(mp3_head(true, true, true, misplaced)),
+            "a stereo frame's side information is 32 bytes"
+        );
+        assert!(
+            mp3_guessed(b"ID3\x04\x00\x00\x00\x00\x00\x00".to_vec()),
+            "no frame"
+        );
+        assert!(
+            !guessed::<Cursor<Vec<u8>>>("mp3", || Err(std::io::ErrorKind::NotFound.into())),
+            "a file that cannot be read keeps ffprobe's lengths"
+        );
+    }
+
+    #[test]
+    fn a_raw_stream_states_no_length_and_a_container_does() {
+        let open = || Ok(Cursor::new(Vec::new()));
+        for format in ["aac", "ac3", "eac3", "dts"] {
+            assert!(guessed(format, open), "{format}");
+        }
+        for format in [
+            "flac",
+            "ogg",
+            "wav",
+            "matroska,webm",
+            "mov,mp4,m4a,3gp,3g2,mj2",
+        ] {
+            assert!(!guessed(format, open), "{format}");
+        }
+    }
+
+    #[test]
+    fn a_guessed_length_is_dropped_from_the_stream_and_kept_for_the_file() {
+        use crate::testing::Fake;
+
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{"streams": [{"index": 0, "codec_type": "audio", "codec_name": "mp3",
+            "sample_rate": "44100", "channels": 2, "duration": "62.0"}],
+            "format": {"format_name": "mp3", "duration": "62.0"}}"#;
+        let fake = Fake::default().probe(".mp3", json);
+        let bare = dir.path().join("Bare.mp3");
+        std::fs::write(&bare, mp3_head(true, true, true, None)).unwrap();
+        let probed = read(&fake, &bare).unwrap();
+        assert!(probed.guessed);
+        assert_eq!(probed.audio.unwrap().duration, None);
+        assert_eq!(probed.duration, Some(62.0), "where excerpts are placed");
+        let counted = dir.path().join("Counted.mp3");
+        let xing = Some((b"Xing", 36, 0x0f, 2374));
+        std::fs::write(&counted, mp3_head(true, true, true, xing)).unwrap();
+        let probed = read(&fake, &counted).unwrap();
+        assert!(!probed.guessed);
+        assert_eq!(probed.audio.unwrap().duration, Some(62.0));
+    }
 
     // Trimmed from ffprobe on a real yt-dlp original.
     const FIXTURE: &str = r#"{"streams": [
@@ -689,7 +912,7 @@ mod tests {
     /// [`METHOD`].
     const WRITTEN: (&str, &str) = (
         "probe/3",
-        "64a1a2eb703690337fa6710ee67451a45e7276378a1ccc129c5e92f7dafaf9ee",
+        "8f725d4bed9c52ee0f23d973b54cda1f3de6b907c9a860e178ba18cf8a664eea",
     );
 
     #[test]
