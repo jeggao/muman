@@ -1012,6 +1012,46 @@ fn a_folder_s_cover_moves_with_its_album() {
 }
 
 #[test]
+fn songs_of_two_folders_moved_into_the_library_folder_move_and_take_no_cover() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    let other = FLAC
+        .replace("\"Artist\"", "\"Kiri Hoshino\"")
+        .replace("\"Record\"", "\"Shoals\"")
+        .replace("\"Song\"", "\"Two\"");
+    let fake = || Fake::default().probe("b.flac", &other).probe(".flac", FLAC);
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake(), &["sync"]);
+    assert!(ok, "{text}");
+    let lib = s.dir.path().join("lib");
+    assert!(lib.join("Artist/Record/cover.jpg").exists(), "{text}");
+    assert!(lib.join("Kiri Hoshino/Shoals/cover.jpg").exists(), "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let flat = listed.replace(&default, "template = \"{{ artist }} - {{ title }}\"");
+    std::fs::write(&list, flat).unwrap();
+    let fake = fake();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(text.matches("Moved:").count(), 2, "{text}");
+    assert!(!text.contains("Added:"), "{text}");
+    assert!(!fake.ran("-c:a"), "moved, not written: {text}");
+    assert!(
+        text.contains("No folder cover in the library folder itself"),
+        "{text}"
+    );
+    assert!(!text.contains("share a folder"), "{text}");
+    assert!(!lib.join("cover.jpg").exists(), "{text}");
+    assert!(!lib.join("Artist").exists(), "{text}");
+    assert!(!lib.join("Kiri Hoshino").exists(), "{text}");
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Up to date: 2 song(s)"), "{text}");
+}
+
+#[test]
 fn a_song_that_fails_still_counts_toward_its_folder_s_majority() {
     let s = Setup::new();
     for name in ["a.flac", "b.flac", "other.flac"] {

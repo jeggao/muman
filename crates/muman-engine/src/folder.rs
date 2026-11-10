@@ -6,7 +6,9 @@
 //! folded as a filesystem blind to case folds it. Its songs are of one
 //! album when they share an album artist and album, as an album is
 //! levelled ([`crate::loudness`]); a single, or a song on no album, is an
-//! album of its own. A folder of one album takes its cover. A folder of
+//! album of its own. A folder of one album takes its cover, but for the
+//! library folder itself, which holds the songs a template puts in no
+//! folder: its cover would stand for the whole library, said. A folder of
 //! several takes none, said, unless an output's `mixed = "majority"`
 //! takes the album most of its songs are on, where one album's songs
 //! outnumber every other's. An album's cover is the one most of its
@@ -24,7 +26,9 @@
 //!
 //! A song that moves carries the folder's file with it, as it carries
 //! its own, so a folder a path template renames keeps its cover, the
-//! user's change to it with it, as their change to a song's `.lrc`. But
+//! user's change to it with it, as their change to a song's `.lrc`; only
+//! where it holds its new folder's file, so songs of several folders
+//! moving into one bring no file there of each, in one another's way. But
 //! one the user changed stays where it is while songs are left in its
 //! folder, as when the song that holds it moves to another album: it is
 //! that folder's cover, not the song's. Carried off, it would sit in
@@ -67,6 +71,8 @@ pub enum Why {
     Tie(usize),
     /// A song's own file takes the name.
     Taken(PathBuf),
+    /// The folder is the library's own.
+    Root,
 }
 
 /// An album of a folder: its artist and name, or for a song on none, the
@@ -125,6 +131,13 @@ fn assigned(
     for songs in folders.values_mut() {
         songs.sort_by_key(|&i| (folded(&paths[i]), paths[i].clone()));
         let folder = parent(&paths[songs[0]]).to_path_buf();
+        if folder.as_os_str().is_empty() {
+            unplaced.push(Unplaced {
+                folder,
+                why: Why::Root,
+            });
+            continue;
+        }
         let mut albums: BTreeMap<Album, Vec<usize>> = BTreeMap::new();
         for &i in songs.iter() {
             let album = crate::levels::album_of(&all[i].1);
@@ -259,6 +272,13 @@ pub fn said(unplaced: &[Unplaced]) -> Vec<String> {
             "No folder cover where no album has the most of a folder's songs: {}",
             named(&tied)
         ));
+    }
+    if unplaced.iter().any(|u| u.why == Why::Root) {
+        lines.push(
+            "No folder cover in the library folder itself, where the template puts songs \
+             in no folder of their own"
+                .to_string(),
+        );
     }
     for u in unplaced {
         if let Why::Taken(file) = &u.why {

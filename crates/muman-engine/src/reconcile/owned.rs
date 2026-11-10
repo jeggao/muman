@@ -120,18 +120,22 @@ pub(super) fn stays(
 
 /// The files beside the song's file at `from`, as `written` records
 /// them, that moving it to `to` carries, each from and to: all but those
-/// that [`stay`](stays) in a folder of `filled`.
+/// that [`stay`](stays) in a folder of `filled`, and a folder's file
+/// `plan` does not make where it goes ([`crate::folder`]).
 pub(super) fn carried(
     library: &Path,
     filled: &BTreeSet<String>,
     written: &Written,
     (from, to): (&Path, &Path),
+    plan: &Plan,
 ) -> Vec<(PathBuf, PathBuf)> {
+    let made = crate::artifact::parts(plan).files(to);
     written
         .sidecars
         .iter()
         .filter(|s| !stays(library, filled, from, s))
         .map(|s| (s.path.clone(), crate::outputs::moved(from, to, &s.path)))
+        .filter(|(at, to)| !crate::outputs::of_folder(from, at) || made.contains(to))
         .collect()
 }
 

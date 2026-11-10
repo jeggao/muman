@@ -340,14 +340,14 @@ format = "webp"
 max_side = 600
 ```
 
-`scope = "folder"` writes one file in the song's folder, named by
-`name` and the format's extension: the cover most of the folder's songs
-take. Songs share an album when they share an album artist and album;
-a single is an album of its own. A folder holding songs of several
-albums gets no file, and `sync` says so, unless `mixed = "majority"`
-takes the album most of its songs are on. A file of yours at that name
-is left alone, even by `sync --force`. This writes the cover inside
-each song and as `cover.jpg` in its folder:
+`scope = "folder"` writes one file in the song's folder, named by `name`
+and the format's extension: the cover most of the folder's songs take.
+Songs share an album when they share an album artist and album; a single
+is an album of its own. A folder holding songs of several albums gets no
+file, and `sync` says so, unless `mixed = "majority"` takes the album
+most of its songs are on; the library folder itself never gets one. A
+file of yours at that name is left alone, even by `sync --force`. This
+writes the cover inside each song and as `cover.jpg` in its folder:
 
 ```toml
 [[cover.out]]

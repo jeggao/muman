@@ -298,7 +298,8 @@ fn decide_in(
     loop {
         let before = moving.len();
         moving.retain(|(i, from, to, retag)| {
-            let beside = carried(library, filled, &old[from], (from, to));
+            let plan = &planned[*i].1.plan;
+            let beside = carried(library, filled, &old[from], (from, to), plan);
             let fits = |from: &Path, to: &Path| own_place(library, from, to) || free(&held, to);
             if !fits(from, to) || beside.iter().any(|(a, b)| !fits(a, b)) {
                 return true;

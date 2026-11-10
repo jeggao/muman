@@ -253,7 +253,17 @@ pub(super) fn apply<R: Runner, W: Write>(
     )?;
     failed.extend(wrote.failed.iter().cloned());
     outputs.extend(wrote.outputs);
-    crate::library::remove_empty_folders(library, &wrote.failed_at);
+    // A folder's file a moved song left behind, cleared, can empty its folder.
+    let beside_before = (due.iter())
+        .filter_map(|((_, r), _)| old.get(&path_of(r)))
+        .flat_map(|w| w.sidecar_paths().cloned());
+    let emptied: Vec<PathBuf> = wrote
+        .failed_at
+        .iter()
+        .cloned()
+        .chain(beside_before)
+        .collect();
+    crate::library::remove_empty_folders(library, &emptied);
     let removed = prune(ledger, &old, &mut outputs, failed, force, out)?;
     let up_to_date = doing.iter().filter(|d| **d == Doing::Keep).count();
     if up_to_date > 0 {
