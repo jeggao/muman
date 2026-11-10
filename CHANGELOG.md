@@ -158,6 +158,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 
 ### Fixed
 
+- **Retagging an `.m4a` never crashes the run**: tags that came out
+  exactly 8 bytes shorter made the tag library panic, exit 101; a tag
+  writer that fails in any way now fails only that song.
+- **An album's spelling no longer depends on the order songs were
+  added**, nor a tie between cover designs.
+- **A template with no folders moves songs rather than writing them
+  anew**: the library folder itself gets no folder cover.
+- **Every source key names its song in a query**: `torrent:`,
+  `lrclib:`, `musicbrainz:` and `coverart:` keys as well.
 - **`undo` takes back a change with no earlier run kept**, as after the
   history was let go of: `set`, `remove` and `restore` record the song
   list as they found it.
