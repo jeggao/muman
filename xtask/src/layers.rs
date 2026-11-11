@@ -4,12 +4,16 @@
 //! Each layer is a crate: `crates/<crate>`, then muman itself, the
 //! command line, at the top. A crate's layer is how many of the
 //! workspace's crates it depends on, as its Cargo.toml lists them, and a
-//! module's is its crate's. A module may name any module of its own layer
-//! or a lower one; one that names a higher one, in its code, its tests or
-//! a doc link, fails the check. Cargo already refuses a crate that uses
-//! one above it; this names the module and the place, and holds the
-//! tests and doc links too. `--report` prints each module's fan-in and
-//! the cycles among a crate's modules.
+//! module's is its crate's. The manifest is read as TOML, so a
+//! dependency counts in any form Cargo takes (a version, a table, a
+//! dotted `name.workspace = true`, a `package` it is renamed from),
+//! under `[dependencies]` or a `[target.….dependencies]`; a dev- or
+//! build-dependency is no part of the crate's code. A module may name
+//! any module of its own layer or a lower one; one that names a higher
+//! one, in its code, its tests or a doc link, fails the check. Cargo
+//! already refuses a crate that uses one above it; this names the module
+//! and the place, and holds the tests and doc links too. `--report`
+//! prints each module's fan-in and the cycles among a crate's modules.
 //!
 //! References are read from the code, not compiled: `crate::name` paths
 //! and the names in `crate::{…}` groups, with comments set aside by
@@ -98,24 +102,14 @@ pub fn run(root: &Path, report: bool) -> Result<usize> {
 /// depends on, as its Cargo.toml lists them, transitively. muman is the
 /// root's; a crate under `crates/` is named by its folder.
 pub fn crate_ranks(root: &Path) -> Result<BTreeMap<String, usize>> {
-    let dep = Regex::new(r"(?m)^(muman(?:-[a-z]+)?)\s*=").expect("a valid pattern");
-    let mut needs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut read = |name: String, manifest: PathBuf| -> Result<()> {
-        let text = std::fs::read_to_string(&manifest)
-            .with_context(|| format!("reading {}", manifest.display()))?;
-        let deps = text
-            .split_once("[dependencies]")
-            .map(|(_, rest)| rest.split("\n[").next().unwrap_or(rest))
-            .unwrap_or_default();
-        let on = dep
-            .captures_iter(deps)
-            .map(|c| c[1].to_string())
-            .filter(|d| *d != name)
-            .collect();
-        needs.insert(name, on);
-        Ok(())
-    };
-    read("muman".into(), root.join("Cargo.toml"))?;
+    let top = manifest(&root.join("Cargo.toml"))?;
+    let empty = toml::Table::new();
+    let shared = top
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(toml::Value::as_table)
+        .unwrap_or(&empty);
+    let mut needs = BTreeMap::from([("muman".to_string(), dependencies(&top, shared))]);
     for src in source_roots(root)?.into_iter().skip(1) {
         let dir = src.parent().unwrap_or(&src);
         let name = dir
@@ -123,7 +117,12 @@ pub fn crate_ranks(root: &Path) -> Result<BTreeMap<String, usize>> {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        read(name, dir.join("Cargo.toml"))?;
+        let on = dependencies(&manifest(&dir.join("Cargo.toml"))?, shared);
+        needs.insert(name, on);
+    }
+    let crates: BTreeSet<String> = needs.keys().cloned().collect();
+    for (name, on) in &mut needs {
+        on.retain(|d| d != name && crates.contains(d));
     }
     let mut ranks = BTreeMap::new();
     for name in needs.keys() {
@@ -137,6 +136,42 @@ pub fn crate_ranks(root: &Path) -> Result<BTreeMap<String, usize>> {
         ranks.insert(name.clone(), seen.len());
     }
     Ok(ranks)
+}
+
+fn manifest(path: &Path) -> Result<toml::Table> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    text.parse()
+        .with_context(|| format!("parsing {}", path.display()))
+}
+
+/// The crates `manifest` builds its code on, by the names they are
+/// published as; an entry with `workspace = true` is read from `shared`,
+/// the workspace's `[workspace.dependencies]`.
+fn dependencies(manifest: &toml::Table, shared: &toml::Table) -> BTreeSet<String> {
+    let targets = manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::Table::values);
+    let tables = std::iter::once(manifest.get("dependencies"))
+        .chain(targets.map(|t| t.get("dependencies")))
+        .flatten()
+        .filter_map(toml::Value::as_table);
+    let mut on = BTreeSet::new();
+    for table in tables {
+        for (key, entry) in table {
+            let inherited = entry.get("workspace").and_then(toml::Value::as_bool) == Some(true);
+            let entry = if inherited {
+                shared.get(key).unwrap_or(entry)
+            } else {
+                entry
+            };
+            let name = entry.get("package").and_then(toml::Value::as_str);
+            on.insert(name.unwrap_or(key).to_string());
+        }
+    }
+    on
 }
 
 /// The folders the library's code is in: `src`, then each crate's
@@ -569,6 +604,100 @@ mod tests {
             .map(|(c, n)| (c.to_string(), n))
             .into();
         assert_eq!(ranks, want);
+    }
+
+    /// The dependencies `manifest` builds on, in a workspace that shares
+    /// `muman-core` and, renamed, `core`.
+    fn on(manifest: &str) -> Vec<String> {
+        let shared: toml::Table = "muman-core = { path = \"crates/muman-core\" }\n\
+                                   core = { package = \"muman-core\", path = \"crates/muman-core\" }"
+            .parse()
+            .unwrap();
+        let manifest: toml::Table = manifest.parse().unwrap();
+        dependencies(&manifest, &shared).into_iter().collect()
+    }
+
+    #[test]
+    fn a_dependency_counts_as_a_version() {
+        assert_eq!(on("[dependencies]\nmuman-core = \"0.1\""), ["muman-core"]);
+    }
+
+    #[test]
+    fn a_dependency_counts_as_a_dotted_workspace_key() {
+        assert_eq!(
+            on("[dependencies]\nmuman-core.workspace = true"),
+            ["muman-core"]
+        );
+    }
+
+    #[test]
+    fn a_dependency_counts_as_a_workspace_table() {
+        assert_eq!(
+            on("[dependencies]\nmuman-core = { workspace = true, features = [\"testing\"] }"),
+            ["muman-core"]
+        );
+    }
+
+    #[test]
+    fn a_dependency_counts_as_a_path_table() {
+        assert_eq!(
+            on("[dependencies]\nmuman-core = { path = \"../muman-core\" }"),
+            ["muman-core"]
+        );
+    }
+
+    #[test]
+    fn a_dependency_counts_in_its_own_table() {
+        assert_eq!(
+            on("[dependencies.muman-core]\npath = \"../muman-core\""),
+            ["muman-core"]
+        );
+    }
+
+    #[test]
+    fn a_dependency_counts_by_the_package_it_renames() {
+        assert_eq!(
+            on("[dependencies]\ncore = { package = \"muman-core\", path = \"../muman-core\" }"),
+            ["muman-core"]
+        );
+        assert_eq!(on("[dependencies]\ncore.workspace = true"), ["muman-core"]);
+    }
+
+    #[test]
+    fn a_dependency_counts_for_one_target() {
+        assert_eq!(
+            on("[target.'cfg(unix)'.dependencies]\nmuman-core.workspace = true"),
+            ["muman-core"]
+        );
+    }
+
+    #[test]
+    fn a_dev_or_build_dependency_does_not_count() {
+        let manifest = "[dev-dependencies]\nmuman-core.workspace = true\n\
+                        [build-dependencies]\nmuman-core.workspace = true\n\
+                        [target.'cfg(unix)'.dev-dependencies]\nmuman-core.workspace = true";
+        assert_eq!(on(manifest), [] as [String; 0]);
+    }
+
+    /// The workspace's own manifests, in the style they are written in,
+    /// rank every crate: a style no form above reads would put them all
+    /// at 0, where no reference can reach up.
+    #[test]
+    fn the_workspace_s_crates_stand_in_their_layers() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits in the repository");
+        let want: BTreeMap<String, usize> = [
+            ("muman-core", 0),
+            ("muman-media", 1),
+            ("muman-net", 2),
+            ("muman-config", 3),
+            ("muman-engine", 4),
+            ("muman", 5),
+        ]
+        .map(|(c, n)| (c.to_string(), n))
+        .into();
+        assert_eq!(crate_ranks(root).unwrap(), want);
     }
 
     #[test]

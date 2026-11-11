@@ -13,6 +13,7 @@ clap.workspace = true
 clap-markdown.workspace = true
 muman = { path = ".." }
 regex.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
