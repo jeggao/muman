@@ -365,6 +365,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   after its sync followed a moved file is finished by running `undo`
   again, and the next run no longer takes the follow for a hand edit.
 
+- **A folder gets its cover when one of its songs is held back**: a
+  song left where it was for a file you changed, or kept unwritten by a
+  file of yours, no longer takes the folder's cover and leaves the
+  folder without one, sync after sync.
+- **`undo` keeps the files you moved where you moved them**: undoing a
+  sync that followed files you moved in `sources/manual` puts the song
+  list back naming each file where it is now, swaps and copies
+  included, instead of the next sync finding them again by content.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added
