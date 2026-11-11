@@ -17,8 +17,6 @@ pub const DERIVED: [&str; 7] = ["key", "path", "format", "cover", "lyrics", "fro
 
 #[derive(Debug, Clone)]
 pub enum Test {
-    /// Bare text, folded: each of its words, or all of it as a key's ID
-    /// or a file's name.
     Word(String),
     Key(SourceKey),
     Contains(String, String),

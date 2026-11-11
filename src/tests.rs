@@ -8438,7 +8438,7 @@ fn has_holds_for_tags_a_source_gives_and_not_for_loudness_muman_measured() {
     let has = s.listed(&["list", "-f", "{has}"]);
     assert!(has.contains("title"), "{has}");
     assert!(!has.contains("replaygain"), "{has}");
-    assert!(s.listed(&["list", "has:replaygain_track_gain"]).is_empty());
+    assert_eq!(s.listed(&["list", "has:replaygain_track_gain"]), "");
 }
 
 #[test]
@@ -8462,7 +8462,7 @@ fn has_holds_for_a_gain_a_source_gives_though_muman_writes_its_own() {
         &mut data,
     )
     .unwrap();
-    assert!(!data.is_empty());
+    assert_ne!(data, b"");
 }
 
 #[test]

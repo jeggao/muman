@@ -543,7 +543,7 @@ mod tests {
         assert!(!r.several());
         assert_eq!((r.rank(&a), r.rank(&c)), (0, 0));
         assert_eq!(r.describe(&c), "too short to compare with the others");
-        assert!(r.others(&a).is_empty());
+        assert_eq!(r.others(&a), []);
         let r = recordings(&all[1..], &[], &alignments);
         assert_eq!(r.describe(&b), "the only audio long enough to compare");
         assert_eq!(r.aside(&b), None);

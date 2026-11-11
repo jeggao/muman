@@ -201,7 +201,7 @@ fn a_picture_that_does_not_decode_is_said() {
     let mut fake = Fake::default().probe("Song.flac", FLAC);
     fake.failing = vec!["image2".into()];
     let facts = gather(&fake, &source, &dir.path().join("scratch"), &[]).unwrap();
-    assert!(facts.covers.is_empty());
+    assert_eq!(facts.covers, []);
     assert_eq!(facts.unkept, [Unkept::Picture]);
 }
 
@@ -216,7 +216,7 @@ fn a_picture_source_that_does_not_decode_whole_is_no_cover_and_is_said() {
     let scratch = dir.path().join("scratch");
     let whole = gather(&Fake::default(), &source, &scratch, &[]).unwrap();
     assert_eq!(whole.covers.len(), 1);
-    assert!(whole.unkept.is_empty());
+    assert_eq!(whole.unkept, []);
 
     let cut = Fake {
         failing: vec!["image2".into()],
