@@ -13,9 +13,11 @@
 //! A manual file a song or a removed song names, gone from its path, is
 //! followed by every run that brings the library in line, so no command
 //! fails its song for a file the user only moved, a removed song's file
-//! moved stays out rather than come back as a new song, and an undo,
-//! which puts back the song list a move was followed in but not the
-//! user's file, has it followed again. Song files, `.lrc` files,
+//! moved stays out rather than come back as a new song. The run records
+//! the moves it follows, and its undo puts the song list back with them
+//! followed, as the state and the user's file stay ([`crate::history`]);
+//! the undo of a run an earlier muman recorded puts back the keys before,
+//! and the sync after has them followed again. Song files, `.lrc` files,
 //! pictures and tag files alike.
 //!
 //! A file is known by what it held, never by its name alone: the name
@@ -23,13 +25,13 @@
 //! fixing two track numbers leaves them, each hold every byte the other
 //! held. What a named file held is what measuring last read of it, its
 //! size and modification time, which a move keeps, and the digest of its
-//! bytes, and what its song, or removed song, records it held, which an
-//! undo puts back with the song list while the state keeps the file's
-//! record under the key it moved to: for a song file the digest of its
-//! audio's packets, which no retag touches, so a file a tagger renamed
-//! as it retagged it is still found; for a lyrics file, a picture or a
-//! tag file its bytes. One recording in two files of another encoding is
-//! two audios.
+//! bytes, and what its song, or removed song, records it held, which the
+//! undo of an earlier muman's run puts back with the song list while the
+//! state keeps the file's record under the key it moved to: for a song
+//! file the digest of its audio's packets, which no retag touches, so a
+//! file a tagger renamed as it retagged it is still found; for a lyrics
+//! file, a picture or a tag file its bytes. One recording in two files
+//! of another encoding is two audios.
 //!
 //! The files gone are matched to those that may be them: the files no
 //! song or removed song names, and the named files whose size or time
@@ -55,8 +57,9 @@
 //! holding the same, each of which as many files could be, as two
 //! copies of one file moved together, are matched to those files in the
 //! order of their names, since any order makes one song of one set of
-//! files and records. An undo, which puts back the keys but not the
-//! state's stamps that told them apart, finds such copies so.
+//! files and records. The undo of an earlier muman's run, which puts back
+//! the keys but not the state's stamps that told them apart, finds such
+//! copies so.
 //!
 //! A named file whose own content moved elsewhere is gone too, but only
 //! once another named file is matched to its path: one that holds other
@@ -72,13 +75,13 @@
 //! never named twice.
 //!
 //! A named file is changed, too, when what measuring read at its name,
-//! as it is now, is other than what its record names it held: an undo
-//! puts back the song list's keys and records, but the state keeps each
-//! file's record under the name it moved to, so after a swap was
-//! followed each name holds what the other's record names, though no
-//! stamp changed. Such files are matched as any changed one, and the
-//! state, which names each where it is already, is not moved again
-//! ([`Moves::drifted`]).
+//! as it is now, is other than what its record names it held: the undo
+//! of an earlier muman's run puts back the song list's keys and records,
+//! but the state keeps each file's record under the name it moved to, so
+//! after a swap was followed each name holds what the other's record
+//! names, though no stamp changed. Such files are matched as any changed
+//! one, and the state, which names each where it is already, is not
+//! moved again ([`Moves::drifted`]).
 //!
 //! A removed song keeps out what it held, by the same rule, not a name:
 //! a song file only a removed song names, settled and not as measuring
@@ -760,11 +763,11 @@ pub struct Following<'a> {
 impl Following<'_> {
     /// Follow each named manual file to where it moved ([`moved`]), and
     /// when listing take each file deleted by hand out of its song, in the
-    /// song list and the state, saved, the list noted in `rec`; a dry run
-    /// follows them in memory alone, so it reports on the songs as the
-    /// next sync will find them. Returns the moves, with what it cannot
-    /// tell ([`Moves::unsure`]), and the files no song names that are none
-    /// of those followed.
+    /// song list and the state, saved, the list noted in `rec` and the
+    /// moves in its run; a dry run follows them in memory alone, so it
+    /// reports on the songs as the next sync will find them. Returns the
+    /// moves, with what it cannot tell ([`Moves::unsure`]), and the files
+    /// no song names that are none of those followed.
     pub fn follow<W: Write>(
         mut self,
         manifest: &mut Manifest,
@@ -811,6 +814,12 @@ impl Following<'_> {
         } else {
             if !moves.moved.is_empty() {
                 manifest.edit(Edit::Moved(moves.moved.clone()));
+            }
+            // Recorded ahead, so the undo of a run stopped once the list is
+            // saved puts it back with the files followed.
+            if let Some(run) = self.rec.run() {
+                run.followed(&moves.moved);
+                run.checkpoint(self.home)?;
             }
             // The list before the state: stopped between, the next run
             // measures the file again, where the other way it would find

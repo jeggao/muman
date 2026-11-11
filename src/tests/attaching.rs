@@ -716,7 +716,7 @@ fn a_shared_picture_moved_in_the_manual_folder_is_followed_by_each_song() {
 }
 
 #[test]
-fn undoing_the_sync_that_followed_moved_lyrics_and_a_picture_follows_them_again() {
+fn undoing_the_sync_that_followed_moved_lyrics_and_a_picture_keeps_them_followed() {
     let s = Setup::new();
     let fake = library();
     s.songs_named(&fake, &["Night Ferry"]);
@@ -740,12 +740,8 @@ fn undoing_the_sync_that_followed_moved_lyrics_and_a_picture_follows_them_again(
     let (ok, text) = s.run(&fake, &["undo", "-y"]);
     assert!(ok, "{text}");
     assert!(
-        text.contains("Moved: manual:added/Night Ferry.lrc is now manual:words/nf.lrc"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Moved: manual:added/front.png is now manual:art/nf.png"),
-        "{text}"
+        !text.contains("Moved: manual:"),
+        "put back followed: {text}"
     );
     let song = s.song_with("Night Ferry");
     assert!(song.has(&manual("words/nf.lrc")), "{:?}", song.sources);

@@ -1527,7 +1527,52 @@ fn a_moved_file_is_followed_by_every_command_that_syncs() {
 }
 
 #[test]
-fn undoing_the_sync_that_followed_a_move_follows_it_again() {
+fn undoing_the_sync_that_followed_a_move_keeps_it_followed() {
+    undoing_a_followed_move(false);
+}
+
+#[test]
+fn undoing_an_earlier_muman_s_sync_that_followed_a_move_follows_it_again() {
+    undoing_a_followed_move(true);
+}
+
+#[test]
+fn each_undo_back_from_a_followed_move_puts_back_the_list_with_it_followed() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    s.file("home/sources/manual/b.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let (ok, text) = s.run(&flacs(), &["set", "-y", "manual:a.flac", "genre=Folk"]);
+    assert!(ok, "{text}");
+    move_manual(&s, "a.flac", "x/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    move_manual(&s, "x/a.flac", "y/a.flac");
+    assert!(s.run(&flacs(), &["sync"]).0);
+    let there = SourceKey::Manual("y/a.flac".into());
+    let b = SourceKey::Manual("b.flac".into());
+    for genre in [Some("Folk"), Some("Folk"), None] {
+        let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+        assert!(ok, "{text}");
+        assert!(
+            !text.contains("Moved: manual:"),
+            "put back followed: {text}"
+        );
+        assert_eq!(
+            genres(&s),
+            [
+                (vec![there.clone()], genre.map(ToString::to_string)),
+                (vec![b.clone()], None)
+            ],
+            "{text}"
+        );
+    }
+    let (ok, report) = s.report(&flacs(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+/// A move followed by a sync, then undone, the sync's record as an earlier
+/// muman wrote it, keeping no moves, when `earlier`.
+fn undoing_a_followed_move(earlier: bool) {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");
     let (ok, text) = s.run(&flacs(), &["sync"]);
@@ -1539,11 +1584,22 @@ fn undoing_the_sync_that_followed_a_move_follows_it_again() {
     move_manual(&s, "a.flac", "Artist/a.flac");
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
+    let (file, mut record) = latest_record(&s);
+    assert_eq!(
+        record["followed"],
+        serde_json::json!({"manual:a.flac": "manual:Artist/a.flac"})
+    );
+    if earlier {
+        record.as_object_mut().unwrap().remove("followed");
+        record["version"] = 2.into();
+        std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    }
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
     assert!(ok, "{text}");
-    assert!(
+    assert_eq!(
         text.contains("Moved: manual:a.flac is now manual:Artist/a.flac"),
-        "{text}"
+        earlier,
+        "followed again only after an earlier muman's undo: {text}"
     );
     assert!(!text.contains("Removed"), "{text}");
     assert!(built[0].exists(), "its file is kept: {text}");
@@ -1717,6 +1773,35 @@ fn a_song_whose_copies_cannot_be_told_apart_keeps_its_file() {
     move_manual(&s, "in/a.flac", "x/p.flac");
     move_manual(&s, "in/copy.flac", "x/q.flac");
     assert!(s.run(&copies(), &["sync"]).0, "told apart by their stamps");
+    let moved = s.songs();
+    for args in [&["undo", "-y"][..], &["sync"]] {
+        let (ok, text) = s.run(&copies(), args);
+        assert!(ok, "put back followed, nothing is left to tell: {text}");
+        assert!(!text.contains("Not followed"), "{text}");
+        assert!(!text.contains("Removed"), "{text}");
+        assert!(built.exists(), "{text}");
+        assert_eq!(s.songs(), moved, "{text}");
+    }
+    let (ok, report) = s.report(&copies(), &["check"]);
+    assert!(ok, "{report}");
+}
+
+#[test]
+fn a_song_whose_copies_cannot_be_told_apart_after_an_earlier_muman_s_undo_keeps_its_file() {
+    let s = Setup::new();
+    let built = copies_listed(&s, &copies());
+    let (ok, text) = s.run(
+        &copies(),
+        &["set", "-y", "manual:in/a.flac", "audio=manual:in/copy.flac"],
+    );
+    assert!(ok, "{text}");
+    move_manual(&s, "in/a.flac", "x/p.flac");
+    move_manual(&s, "in/copy.flac", "x/q.flac");
+    assert!(s.run(&copies(), &["sync"]).0, "told apart by their stamps");
+    let (file, mut record) = latest_record(&s);
+    record.as_object_mut().unwrap().remove("followed");
+    record["version"] = 2.into();
+    std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
     for args in [&["undo", "-y"][..], &["sync"]] {
         let (ok, text) = s.run(&copies(), args);
         assert!(!ok, "which is pinned cannot be told: {text}");
@@ -1861,7 +1946,7 @@ fn two_files_that_trade_names_are_each_followed_to_the_other_s() {
 }
 
 #[test]
-fn undoing_the_sync_that_followed_a_round_of_names_follows_it_again() {
+fn undoing_the_sync_that_followed_a_round_of_names_keeps_it_followed() {
     let s = Setup::new();
     s.file("home/sources/manual/c.flac");
     two_listed(&s);
@@ -1885,14 +1970,15 @@ fn undoing_the_sync_that_followed_a_round_of_names_follows_it_again() {
     let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
     assert!(ok, "{text}");
     assert!(
-        text.contains("Moved: manual:a.flac is now manual:b.flac"),
-        "{text}"
+        !text.contains("Moved: manual:"),
+        "put back followed: {text}"
     );
     assert!(!text.contains("has changed since"), "{text}");
-    assert!(!text.contains("Updated"), "{text}");
     assert_eq!(genres(&s), followed, "each song keeps its own tags");
     let (ok, report) = s.report(&flacs(), &["check"]);
     assert!(ok, "{report}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok && text.contains("Up to date: 3 song(s)"), "{text}");
 }
 
 #[test]
@@ -5850,7 +5936,7 @@ fn a_run_records_the_songs_it_changed_alone_and_undoes_them() {
     );
     assert!(ok, "{text}");
     let (_, record) = latest_record(&s);
-    assert_eq!(record["version"], 2);
+    assert_eq!(record["version"], 3);
     assert!(record.get("outputs").is_none(), "{record}");
     let before = record["before"].as_object().unwrap();
     assert_eq!(

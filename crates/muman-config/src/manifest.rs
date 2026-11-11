@@ -921,6 +921,20 @@ fn with_header(text: &str) -> Option<String> {
     (new != text).then_some(new)
 }
 
+/// The song list `text` with each key `moved` names written as the key it
+/// names, all at once, as [`Edit::Moved`] writes them, and nothing else
+/// changed; `text` as it is when it does not read.
+#[must_use]
+pub fn moved_in(text: &str, moved: &BTreeMap<SourceKey, SourceKey>) -> String {
+    let Ok(mut doc) = text.parse::<DocumentMut>() else {
+        return text.to_string();
+    };
+    if moved.is_empty() || apply(&mut doc, &Edit::Moved(moved.clone())).is_err() {
+        return text.to_string();
+    }
+    doc.to_string()
+}
+
 /// Every key a song or a removed song lists in the song list `text`;
 /// none when it does not read.
 #[must_use]
