@@ -86,6 +86,7 @@ clap-markdown = "=0.1.5"
 clap_complete = "4"
 crc = "3.4"
 ctrlc = { version = "3.5.2", features = ["termination"] }
+data-encoding = "2"
 deunicode = "1"
 directories = "6"
 dunce = "1"

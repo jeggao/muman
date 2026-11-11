@@ -1238,6 +1238,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "data-encoding",
  "deunicode",
  "directories",
  "dunce",
