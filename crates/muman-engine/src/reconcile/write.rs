@@ -12,6 +12,13 @@
 //! row alone ([`crate::state::State::save_output`]): a run stopped
 //! partway writes again only the song it was writing, and the commit
 //! costs the same whatever the size of the state.
+//!
+//! A panic building a song, in muman or a crate it calls, fails that song
+//! alone, as an error does ([`crate::errors::caught`]), and clears the
+//! `.part` files it staged. Unwinding there is safe: a build changes no
+//! other song's files, and puts each of its own in place through the
+//! ledger whole, so one stopped partway leaves its song as an error at
+//! that point would, recorded as it was before.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -584,8 +591,7 @@ fn render_due<R: Runner, W: Write>(
         songs_failed: Vec::new(),
     };
     let writing = progress::step("Writing", Some(due.len() as u64));
-    let render_one = |((n, r), retag): &(&PlannedSong, bool)| {
-        let _working = writing.working(&progress::label(&r.stem));
+    let build_one = |((n, r), retag): &(&PlannedSong, bool)| {
         let claim = &claims[n];
         let path = path_of(r);
         let recorded: Vec<PathBuf> = old
@@ -616,6 +622,22 @@ fn render_due<R: Runner, W: Write>(
             return retag_one(*runner, &render_job, (old, r), &recorded, anew.contains(n));
         }
         render::render(*runner, &render_job)
+    };
+    let render_one = |song: &(&PlannedSong, bool)| {
+        let (_, r) = song.0;
+        let _working = writing.working(&progress::label(&r.stem));
+        crate::errors::caught(|| build_one(song)).inspect_err(|e| {
+            if e.is::<crate::errors::Panicked>() {
+                let path = path_of(r);
+                let parts = crate::artifact::parts(&r.plan);
+                let shared = parts.folder_files(&path);
+                let own = parts
+                    .files(&path)
+                    .into_iter()
+                    .filter(|f| !shared.contains(f));
+                crate::library::clear_leftovers(&dirs.library, std::iter::once(path).chain(own));
+            }
+        })
     };
     parallel::chunked(due, parallel::builds(), render_one, |chunk, rendered| {
         for (((n, r), retag), result) in chunk.iter().zip(rendered) {

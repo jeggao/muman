@@ -1276,7 +1276,7 @@ fn a_tag_writer_that_panics_fails_the_write_alone() {
     let (_dir, path) = written(&bytes, "song.m4a");
     write_tags(&path, codec, &album("Paper Comet Sampler"), None, None, &[]).unwrap();
     let e = write_tags(&path, codec, &album("Paper Comet"), None, None, &[]).unwrap_err();
-    assert!(format!("{e:#}").contains("the tag writer stopped"), "{e:#}");
+    assert!(format!("{e:#}").contains("(a panic at "), "{e:#}");
 }
 
 #[test]

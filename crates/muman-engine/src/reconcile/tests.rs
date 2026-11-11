@@ -673,6 +673,86 @@ fn a_song_whose_write_failed_keeps_its_record_as_it_was() {
     );
 }
 
+/// A runner that panics building the song at a path holding a fragment,
+/// as a crate's bug would, and runs every other command as `Fake` does.
+struct Panicking<'a>(&'a Fake, &'a str);
+
+impl crate::runner::Runner for Panicking<'_> {
+    fn run(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<()> {
+        let args: Vec<String> = cmd
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let building = |a: &String| a.contains(&format!("{}.opus.part", self.1));
+        assert!(!args.iter().any(building), "a width past every name");
+        self.0.run(cmd)
+    }
+
+    fn output(&self, cmd: &[std::ffi::OsString]) -> anyhow::Result<Vec<u8>> {
+        self.0.output(cmd)
+    }
+
+    fn stream(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_line: &mut dyn FnMut(crate::runner::Line<'_>),
+    ) -> anyhow::Result<bool> {
+        self.0.stream(cmd, on_line)
+    }
+
+    fn pipe(
+        &self,
+        cmd: &[std::ffi::OsString],
+        on_bytes: &mut dyn FnMut(&[u8]),
+    ) -> anyhow::Result<()> {
+        self.0.pipe(cmd, on_bytes)
+    }
+
+    fn fingerprint(&self, pcm: &Path) -> anyhow::Result<Vec<u32>> {
+        self.0.fingerprint(pcm)
+    }
+}
+
+#[test]
+fn a_panic_building_one_song_fails_that_song_alone() {
+    let h = home();
+    h.fetched("aaaaaaaaaaa");
+    h.fetched("bbbbbbbbbbb");
+    h.songs(TWO);
+    let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
+    let mut out = Vec::new();
+    let runner = Panicking(&fake, "bbbbbbbbbbb");
+    let ok = reconcile(&runner, &h.dirs, Options::default(), None, &mut out)
+        .unwrap()
+        .ok;
+    let text = String::from_utf8(out).unwrap();
+    h.holds(&text);
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("Failed: ") && text.contains("a width past every name (a panic at "),
+        "the panic is said in the song's failure: {text}"
+    );
+    assert!(
+        h.lib("Chan/Title aaaaaaaaaaa/Title aaaaaaaaaaa.opus")
+            .exists(),
+        "{text}"
+    );
+    h.audit(&[], &text);
+    let failures = State::load(&h.dirs.home).unwrap().song_failures;
+    assert_eq!(failures.len(), 1, "check names the song: {failures:?}");
+    assert!(
+        failures
+            .values()
+            .all(|f| f.error.contains("a width past every name")),
+        "{failures:?}"
+    );
+    let (ok, text) = h.run(&fake, Options::default());
+    assert!(
+        ok && text.contains("Added: "),
+        "the next sync writes it: {text}"
+    );
+}
+
 #[test]
 fn an_empty_or_unfinished_file_is_written_again() {
     let h = home();

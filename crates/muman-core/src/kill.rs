@@ -65,6 +65,18 @@ struct Guarded {
 /// The libraries guarded, a test's each.
 static GUARDED: Mutex<Vec<Guarded>> = Mutex::new(Vec::new());
 
+thread_local! {
+    /// Whether a guard failed a change on this thread.
+    static TRIPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a panic with `payload` is one of a hook here, a kill or a
+/// guard failing a change: a test's own, which
+/// [`crate::errors::caught`] lets through.
+pub fn stops_a_test(payload: &(dyn std::any::Any + Send)) -> bool {
+    payload.is::<Killed>() || TRIPPED.get()
+}
+
 /// `path` resolved as [`change_point`] resolves the files it is given,
 /// though it may not be made yet.
 fn resolved(path: &Path) -> PathBuf {
@@ -164,11 +176,10 @@ pub fn change_point(path: &Path) {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
         .any(|g| g.held == 0 && path.starts_with(&g.root));
-    assert!(
-        !unlocked,
-        "{} changed while no lock held its library",
-        path.display()
-    );
+    if unlocked {
+        TRIPPED.set(true);
+        panic!("{} changed while no lock held its library", path.display());
+    }
     let killed = {
         let mut armed = ARMED
             .lock()

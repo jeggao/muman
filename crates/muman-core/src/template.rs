@@ -20,7 +20,9 @@
 //! [`MOST_WIDTH`], include no other template, and render for a song
 //! with every field set. A template that fails only on a song missing a
 //! field, as `{{ track + 1 }}` without a track, still names every song
-//! that has it, so that song alone fails as it is named. Each refusal is
+//! that has it, so that song alone fails as it is named; so does one
+//! MiniJinja or a filter panics on ([`crate::errors::caught`]), and a
+//! panic as the template is tried refuses it. Each refusal is
 //! [`Refused`](crate::errors::Refused), which a query reading the songs
 //! unnamed passes over. The filters and tests a template applies are
 //! found in its compiled instructions, which MiniJinja shows only through
@@ -45,7 +47,7 @@
 //! as `_`, as `[library] restrict = "ascii"` does a tag's; a `/` or `\`
 //! the text held before it stays.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use minijinja::machinery::Instruction;
 use minijinja::value::Serde;
 use minijinja::{Environment, ErrorKind, UndefinedBehavior, Value};
@@ -161,21 +163,14 @@ impl Template {
             )));
         }
         check(&env).map_err(|why| refused(format!("the library template {why}")))?;
-        env.get_template(NAME)?
-            .render(Serde(Fields::probe()))
-            .map_err(|e| {
-                refused(format!(
-                    "the library template does not render: {}",
-                    said(&e)
-                ))
-            })?;
+        crate::errors::caught(|| Ok(env.get_template(NAME)?.render(Serde(Fields::probe()))))
+            .and_then(|tried| tried.map_err(|e| anyhow!(said(&e))))
+            .map_err(|e| refused(format!("the library template does not render: {e:#}")))?;
         Ok(Self { env })
     }
 
     pub fn render(&self, fields: &Fields) -> Result<String> {
-        self.env
-            .get_template(NAME)?
-            .render(Serde(fields))
+        crate::errors::caught(|| Ok(self.env.get_template(NAME)?.render(Serde(fields))?))
             .context("rendering the library template")
     }
 }

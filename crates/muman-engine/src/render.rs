@@ -109,10 +109,9 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom};
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use lofty::TextEncoding;
 use lofty::ape::{ApeItem, ApeTag};
 use lofty::config::{ParseOptions, WriteOptions};
@@ -1024,21 +1023,8 @@ fn write_tags(
             .and_then(|()| file.rewind())
             .with_context(|| format!("writing tags to {}", path.display()))?;
     }
-    let written = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        save_tags(&mut file, path, codec, tags, lyrics, picture, chapters)
-    }));
-    match written {
-        Ok(written) => written?,
-        Err(panic) => bail!(
-            "writing tags to {}: the tag writer stopped: {}",
-            path.display(),
-            panic
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                .unwrap_or("no reason given")
-        ),
-    }
+    crate::errors::caught(|| save_tags(&mut file, path, codec, tags, lyrics, picture, chapters))
+        .with_context(|| format!("writing tags to {}", path.display()))?;
     if codec.container() == Container::Mp4 {
         drop_meta_atoms(&mut file, &[*b"free"])
             .with_context(|| format!("writing tags to {}", path.display()))?;

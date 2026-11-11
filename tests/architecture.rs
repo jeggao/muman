@@ -238,6 +238,10 @@ const STATICS: &[(&str, &str)] = &[
         "kill.rs",
         "the kills and guarded libraries tests arm, compiled for tests alone",
     ),
+    (
+        "errors.rs",
+        "whether a thread catches a panic, and what the one caught said, for its error",
+    ),
 ];
 
 #[test]
