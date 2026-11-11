@@ -21,6 +21,7 @@ clap = { workspace = true, features = ["env", "wrap_help"] }
 deunicode.workspace = true
 directories.workspace = true
 dunce.workspace = true
+httpdate.workspace = true
 icu_locale.workspace = true
 icu_properties.workspace = true
 isolang.workspace = true

@@ -373,6 +373,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
   sync that followed files you moved in `sources/manual` puts the song
   list back naming each file where it is now, swaps and copies
   included, instead of the next sync finding them again by content.
+- **A server's `Retry-After` date is read in all three forms** RFC 9110
+  has a client read, not only the one it has servers send. A date of a
+  day there is not, or with the wrong weekday, is no date, and the
+  request waits as after any refusal.
 
 ## [0.11.0] - 2026-11-10
 
