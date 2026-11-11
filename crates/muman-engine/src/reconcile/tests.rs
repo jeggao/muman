@@ -723,9 +723,15 @@ fn a_panic_building_one_song_fails_that_song_alone() {
     let fake = infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]);
     let mut out = Vec::new();
     let runner = Panicking(&fake, "bbbbbbbbbbb");
-    let ok = reconcile(&runner, &h.dirs, Options::default(), None, &mut out)
-        .unwrap()
-        .ok;
+    let ok = reconcile(
+        &runner,
+        &h.dirs,
+        Options::default(),
+        Recording::Test,
+        &mut out,
+    )
+    .unwrap()
+    .ok;
     let text = String::from_utf8(out).unwrap();
     h.holds(&text);
     assert!(!ok, "{text}");
