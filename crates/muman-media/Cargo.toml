@@ -28,6 +28,7 @@ lofty.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strsim.workspace = true
 unicode-normalization.workspace = true
 unicode-security.workspace = true
 unicode-segmentation.workspace = true
