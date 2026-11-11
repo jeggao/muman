@@ -39,12 +39,15 @@
 //! next holder, which writes beside it, and the song's new folder gets
 //! a cover of its own.
 //!
-//! A song held at its last plan while it fails, or while a sync leaves it
-//! as built ([`crate::reconcile`]), is one of its folder's songs still, by
-//! that plan: it counts toward the albums, the majority and the cover,
+//! A song held at its last plan while it fails, while a sync leaves it as
+//! built, or while a file of the user's keeps it unwritten
+//! ([`crate::reconcile`]), is one of its folder's songs still, by that
+//! plan: it counts toward the albums, the majority and the cover,
 //! and one that holds the folder's file keeps it, its file kept with it.
 //! So such a song moves no cover, makes none appear and takes none away,
-//! and no two songs list one file.
+//! and no two songs list one file. One a file of the user's keeps from
+//! being written with no file of its own counts by its plan and holds
+//! no folder's file, which another song writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

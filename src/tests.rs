@@ -928,6 +928,71 @@ fn a_folder_s_cover_the_user_changed_stays_with_a_song_held_back_from_its_move()
 }
 
 #[test]
+fn a_song_left_where_it_is_for_lyrics_the_user_changed_leaves_its_new_folder_a_cover() {
+    let s = Setup::new();
+    // Song, the folder's first, holds its cover; Wren goes with the album.
+    let wren = FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Wren\"");
+    let fake = Fake::default().probe("b.flac", &wren).probe(".flac", FLAC);
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    let lrc = (library_of(&s).into_keys())
+        .find(|p| p.extension().is_some_and(|e| e == "lrc"))
+        .expect(&text);
+    std::fs::write(
+        s.dir.path().join("lib").join(lrc),
+        "[00:01.00]Paper comets, mine\n",
+    )
+    .unwrap();
+    let (ok, text) = s.run(&fake, &["set", "-y", "manual:a.flac", "title=Tidewater"]);
+    assert!(ok && text.contains("Left at Artist/Record/"), "{text}");
+    let listed = std::fs::read_to_string(&list).unwrap();
+    let default = format!("template = \"{}\"", crate::settings::DEFAULT_TEMPLATE);
+    let renamed = listed.replace(&default, "template = \"{{ album }}/{{ title }}\"");
+    std::fs::write(&list, &renamed).unwrap();
+
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Moved:"), "{text}");
+    let lib = s.dir.path().join("lib");
+    assert_eq!(
+        std::fs::read(lib.join("Record/cover.jpg")).ok().as_deref(),
+        Some(crate::testing::PIXEL_JPEG),
+        "the song that moves holds its folder's cover: {text}"
+    );
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Up to date: 1 song(s)"), "{text}");
+}
+
+#[test]
+fn a_song_a_file_of_the_user_s_keeps_unwritten_leaves_its_folder_a_cover() {
+    let s = Setup::new();
+    let wren = FLAC.replace("\"TITLE\": \"Song\"", "\"TITLE\": \"Wren\"");
+    let fake = Fake::default().probe("b.flac", &wren).probe(".flac", FLAC);
+    s.file("home/sources/manual/a.flac");
+    s.written("home/sources/manual/a.lrc", "[00:01.00]Paper comets\n");
+    s.file("home/sources/manual/b.flac");
+    std::fs::create_dir_all(s.dir.path().join("home")).unwrap();
+    let list = s.dir.path().join("home/songs.toml");
+    std::fs::write(&list, format!("version = 1\n{FOLDER_COVER}")).unwrap();
+    // Song, the folder's first, would hold its cover.
+    s.written("lib/Artist/Record/02 Song.lrc", "[00:01.00]My own words\n");
+    let (_, text) = s.run(&fake, &["sync"]);
+    assert!(text.contains("Left alone, not muman's"), "{text}");
+    assert_eq!(
+        std::fs::read(s.dir.path().join("lib/Artist/Record/cover.jpg"))
+            .ok()
+            .as_deref(),
+        Some(crate::testing::PIXEL_JPEG),
+        "the song written holds its folder's cover: {text}"
+    );
+}
+
+#[test]
 fn a_folder_s_cover_the_user_changed_moves_with_its_whole_album() {
     let s = Setup::new();
     s.file("home/sources/manual/a.flac");

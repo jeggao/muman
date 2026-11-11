@@ -216,6 +216,37 @@ pub fn left_as_built(
         .collect()
 }
 
+/// Each song of `planned` a sync does not write for a file of the
+/// user's, its own changed since muman wrote it or one in its way
+/// ([`Doing::Guard`], [`Doing::Blocked`], [`Doing::Unowned`]), with its
+/// own file where one is left: what it weighs in its folder is that file,
+/// as a song left as built, and one with none holds no file there; the
+/// folders' files are given again so.
+#[must_use]
+pub fn left_in_place(
+    manifest: &Manifest,
+    state: &State,
+    planned: &[PlannedSong],
+    library: &Path,
+    asked: (bool, bool),
+) -> BTreeMap<usize, Option<PathBuf>> {
+    let foreseen = foresee(manifest, state, planned, library, asked);
+    let own = |n: &usize| {
+        (foreseen.files.get(n))
+            .filter(|f| library.join(f).exists())
+            .cloned()
+    };
+    (planned.iter().zip(&foreseen.decided))
+        .filter_map(|((n, _), d)| match d {
+            Doing::Guard { file } | Doing::Blocked { file, .. } => {
+                Some((*n, own(n).filter(|f| f == file)))
+            }
+            Doing::Unowned { .. } => Some((*n, own(n))),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Each of `planned` kept as it is, decided before any moves: its file
 /// as it would be written, or one built before from what a source no
 /// longer holds, of the songs `holding` or `damaged` since built. A song

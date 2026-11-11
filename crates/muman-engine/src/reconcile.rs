@@ -45,7 +45,7 @@ use crate::store::{Located, Store};
 pub use self::damage::{as_its_torrent, note_damaged};
 use self::damage::{note_damage, say_drifts, split_drifts, whole_again};
 use self::decide::intend;
-pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built};
+pub use self::decide::{Doing, Foreseen, files_of, foresee, left_as_built, left_in_place};
 pub(crate) use self::keys::arriving;
 use self::keys::{Following, sites_found};
 pub use self::keys::{Moves, Unlisted, deleted, hearing, moved};

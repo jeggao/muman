@@ -603,5 +603,34 @@ fn resolve_fitted(
         &settings.cover,
         &state.facts,
     );
+    // Not written for a file of the user's, a song holds its folder's file
+    // by the plan its file was made from, as one left as built does, and
+    // with no file left, none.
+    let mut in_place = super::left_in_place(manifest, state, &resolution.planned, library, asked);
+    in_place.retain(|n, _| as_made.iter().all(|(m, _)| m != n));
+    if !in_place.is_empty() {
+        for (_, r) in &mut resolution.planned {
+            r.plan.folder = None;
+        }
+        let (built, unbuilt): (BTreeMap<_, _>, BTreeMap<_, _>) =
+            in_place.into_iter().partition(|(_, f)| f.is_some());
+        let built = built
+            .into_iter()
+            .filter_map(|(n, f)| Some((n, f?)))
+            .collect();
+        let unbuilt = (resolution.planned.iter())
+            .filter(|(n, _)| unbuilt.contains_key(n))
+            .cloned();
+        let as_placed: Vec<(usize, Resolved)> = (as_made.into_iter())
+            .chain(held(state, built))
+            .chain(unbuilt)
+            .collect();
+        resolution.unplaced = crate::folder::assign(
+            &mut resolution.planned,
+            &as_placed,
+            &settings.cover,
+            &state.facts,
+        );
+    }
     Ok(resolution)
 }
