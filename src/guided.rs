@@ -21,7 +21,8 @@
 //! neither marked to be made nor counted. A field set on the album, and
 //! cleared on its songs so the album's value shows, is one change. A song
 //! changed meanwhile, by hand or by another run, has the choices applied
-//! again to it as it is now, rather than the work lost.
+//! again to it as it is now, rather than the work lost, the run begun for
+//! the save let go of while it asks again.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -53,13 +54,14 @@ const CHOOSE: &str = "Choose among the values…";
 const SHOWN: usize = 32;
 
 /// Change the songs `terms` picks field by field on a terminal, then
-/// save what was chosen. Returns whether anything changed.
+/// save what was chosen under the run `later` begins. Returns whether
+/// anything changed.
 pub fn edit<W: Write>(
     dirs: &Dirs,
     terms: &[String],
     confirm: &Confirm,
     p: &mut dyn Prompter,
-    mut later: Option<&mut crate::history::Later>,
+    later: &mut crate::history::Later,
     out: &mut W,
 ) -> Result<bool> {
     let mut read = Read::new(dirs, terms)?;
@@ -141,20 +143,15 @@ pub fn edit<W: Write>(
             read.manifest.edit(edit);
         }
         let albums: Vec<_> = held.into_iter().collect();
-        if let Some(later) = later.as_deref_mut() {
-            later.begin()?;
-        }
         if read
             .manifest
-            .save_if_unchanged_with(&expected, &albums)?
+            .save_if_unchanged_with(&expected, &albums, later.begin()?)?
             .is_empty()
         {
-            if let Some(later) = later.as_deref_mut() {
-                later.saved()?;
-            }
             return Ok(true);
         }
         read.manifest.discard();
+        later.let_go();
         crate::ui::info(
             out,
             "The song list changed while this was open; the changes are applied to it as it is now",

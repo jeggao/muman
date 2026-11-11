@@ -39,7 +39,7 @@ use crate::dirs::Dirs;
 use crate::given::{Folder, Walked};
 use crate::history::Run;
 use crate::http::HttpTransport;
-use crate::manifest::{Edit, Manifest};
+use crate::manifest::{Edit, Manifest, Recorder};
 use crate::reconcile::Options;
 use crate::runner::Runner;
 use crate::source::{SourceKey, id_of};
@@ -100,7 +100,7 @@ pub(crate) fn run<R: Runner, W: Write>(
         copied.finish()?;
         let mut proposals = imported?;
         if !torrents.is_empty() {
-            let (fine, found) = add_torrents(job, runner, &torrents, request.from, out)?;
+            let (fine, found) = add_torrents(job, runner, &torrents, request.from, &mut run, out)?;
             ok &= fine;
             proposals.extend(found);
         }
@@ -113,7 +113,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             let (fine, additions) =
                 network(job, runner, out, |acquire| acquire.urls(&urls, matching))?;
             ok &= fine;
-            proposals.extend(record(dirs, additions)?);
+            proposals.extend(record(dirs, additions, &mut run)?);
         }
         let declined = declined(request.no_match, &proposals);
         let how = Listing {
@@ -129,6 +129,7 @@ pub(crate) fn run<R: Runner, W: Write>(
             proposals,
             &how,
             change::reborrow(&mut prompter),
+            &mut run,
             out,
         )?;
         let attaching = attach::How {
@@ -136,7 +137,8 @@ pub(crate) fn run<R: Runner, W: Write>(
             to: request.to.to_vec(),
             verbose: job.verbose,
         };
-        let attached = attach::attach(runner, dirs, &loose, &beside, &attaching, prompter, out);
+        let answering: (_, &mut dyn Recorder) = (prompter, &mut run);
+        let attached = attach::attach(runner, dirs, &loose, &beside, &attaching, answering, out);
         let attached = held_back(attached, &mut refused)?;
         left_out = (attached.left_out, attached.by_yes);
         unread.extend(attached.unread);
@@ -144,15 +146,16 @@ pub(crate) fn run<R: Runner, W: Write>(
             .copied
             .iter()
             .for_each(|f| run.copied(&dirs.home, f));
-        give_tags(dirs, &attached.songs, &how, listed, out)?;
-        // Listing, attaching and tagging each saved the song list.
+        give_tags(dirs, &attached.songs, &how, listed, &mut run, out)?;
+        // The copies attaching made, noted ahead of the steps after.
         run.checkpoint(&dirs.home)?;
-        ok &= look_up(job, runner, http, lookup::Ask::default(), &declined, out)?;
+        let ask = lookup::Ask::default();
+        ok &= look_up(job, runner, http, ask, &declined, &mut run, out)?;
         ok &= crate::reconcile_now(
             job,
             runner,
             Options::default(),
-            Some(&mut run),
+            crate::history::Recording::Run(&mut run),
             &mut due,
             out,
         )?;
@@ -259,12 +262,14 @@ fn not_added(unread: &[String], (left_out, by_yes): (usize, usize)) -> Result<()
 }
 
 /// Set the tags given on the command line on every song a loose file was
-/// given to, after the file's own, so the command line wins.
+/// given to, after the file's own, so the command line wins, as `run`
+/// records.
 pub(crate) fn give_tags<W: Write>(
     dirs: &Dirs,
     songs: &[SourceKey],
     how: &Listing,
     listed: bool,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<()> {
     if how.tags.is_empty() || !how.loose {
@@ -284,7 +289,7 @@ pub(crate) fn give_tags<W: Write>(
             tags: how.tags.clone(),
         });
     }
-    manifest.save()
+    manifest.save(run)
 }
 
 /// The files of `files` `add` gives to songs rather than lists, each with
@@ -835,6 +840,7 @@ fn add_torrents<R: Runner, W: Write>(
     runner: &R,
     inputs: &[&String],
     from: Option<&Path>,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<(bool, Vec<Proposal>)> {
     let dirs = &job.dirs;
@@ -853,7 +859,7 @@ fn add_torrents<R: Runner, W: Write>(
     };
     let mut known = manifest.keys();
     known.extend(manifest.removed_keys());
-    let (mut ok, metas) = read_all(runner, out, &places, &mut manifest, inputs)?;
+    let (mut ok, metas) = read_all(runner, out, &places, (&mut manifest, run), inputs)?;
     let on_disk = |meta, f| on_disk(places.store, meta, f);
     let mut wanted = Vec::new();
     for meta in &metas {
@@ -1008,7 +1014,7 @@ fn read_all<R: Runner, W: Write>(
     runner: &R,
     out: &mut W,
     places: &crate::aria2::Places<'_>,
-    manifest: &mut Manifest,
+    (manifest, run): (&mut Manifest, &mut dyn Recorder),
     inputs: &[&String],
 ) -> Result<(bool, Vec<crate::torrent::Metainfo>)> {
     let mut ok = true;
@@ -1055,7 +1061,7 @@ fn read_all<R: Runner, W: Write>(
         };
         let kept = bytes
             .map_err(anyhow::Error::msg)
-            .and_then(|b| keep_given(places, manifest, input, &b, trackers));
+            .and_then(|b| keep_given(places, (manifest, run), input, &b, trackers));
         match kept {
             Ok(meta)
                 if metas
@@ -1095,7 +1101,7 @@ fn read_torrent(input: &str) -> Result<Given> {
 /// record it.
 fn keep_given(
     places: &crate::aria2::Places<'_>,
-    manifest: &mut Manifest,
+    (manifest, run): (&mut Manifest, &mut dyn Recorder),
     input: &str,
     bytes: &[u8],
     trackers: Vec<String>,
@@ -1107,7 +1113,7 @@ fn keep_given(
             meta.name
         );
     }
-    keep_torrent(places.store, manifest, &meta, bytes, trackers)?;
+    keep_torrent(places.store, (manifest, run), &meta, bytes, trackers)?;
     Ok(meta)
 }
 
@@ -1116,7 +1122,7 @@ fn keep_given(
 /// where it is not private.
 fn keep_torrent(
     root: &Path,
-    manifest: &mut Manifest,
+    (manifest, run): (&mut Manifest, &mut dyn Recorder),
     meta: &crate::torrent::Metainfo,
     bytes: &[u8],
     mut trackers: Vec<String>,
@@ -1134,7 +1140,7 @@ fn keep_torrent(
             v2: meta.v2.clone(),
         },
     });
-    manifest.save()
+    manifest.save(run)
 }
 
 /// Whether `input`, which names nothing on disk, was meant as a path

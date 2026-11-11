@@ -1282,7 +1282,8 @@ impl std::fmt::Display for LeftOut {
 impl std::error::Error for LeftOut {}
 
 /// Match each of `paths`, files `sort` found loose, to its songs, ask
-/// where needed, copy what is accepted and record the edits. `beside` are
+/// where needed, `prompter` answering, copy what is accepted and record
+/// the edits, saved as `run` records. `beside` are
 /// the song files the same command added, by where they came from, for a
 /// folder's cover.
 // The steps read in the order they run; split up, the order would be in the call sites.
@@ -1293,7 +1294,7 @@ pub fn attach<R: Runner, W: Write>(
     paths: &[(PathBuf, What)],
     beside: &[(PathBuf, SourceKey)],
     how: &How,
-    prompter: Option<&mut dyn Prompter>,
+    (prompter, run): (Option<&mut dyn Prompter>, &mut dyn manifest::Recorder),
     out: &mut W,
 ) -> Result<Attached> {
     if paths.is_empty() {
@@ -1493,7 +1494,7 @@ pub fn attach<R: Runner, W: Write>(
             }
         }
     }
-    manifest.save()?;
+    manifest.save(run)?;
     Ok(attached)
 }
 

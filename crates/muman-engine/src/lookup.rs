@@ -971,7 +971,8 @@ impl ThisRun {
 /// [`ROUNDS`] rounds, or until none is due when `ask.persist`.
 /// `ask.rematch` makes the first round's lookups whatever was found
 /// before; a YouTube Music lookup from a key in `declined` is recorded
-/// declined instead. Returns whether every fetch succeeded.
+/// declined instead. The song list is saved as the run `run` records.
+/// Returns whether every fetch succeeded.
 // The rounds and each round's steps, in the order they run.
 #[expect(clippy::too_many_lines)]
 pub fn run<R: Runner, W: Write>(
@@ -981,6 +982,7 @@ pub fn run<R: Runner, W: Write>(
     throttles: &Throttles,
     ask: Ask,
     declined: &BTreeSet<SourceKey>,
+    run: &mut dyn crate::manifest::Recorder,
 ) -> Result<bool> {
     let home = &dirs.home;
     let runner = acquire.runner;
@@ -1442,7 +1444,7 @@ pub fn run<R: Runner, W: Write>(
         for key in renewed {
             manifest.edit(Edit::Unhold(key));
         }
-        manifest.save()?;
+        manifest.save(run)?;
         State::keep_lookups(home, &records, &replaced)?;
         let uploads: Vec<SourceKey> = replaced.iter().map(|(upload, _)| upload.clone()).collect();
         for file in store.discard(&uploads, &manifest.keys())? {

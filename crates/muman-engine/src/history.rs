@@ -25,10 +25,10 @@
 //! [`crate::library::Ledger`], or writes a new one, and again as it goes,
 //! so a run stopped partway, by a crash or Ctrl-C, is still listed, as
 //! interrupted, and can be undone. Such a run may have saved the song list
-//! after its last record, as many of its steps do, so `undo` takes back
-//! the song list as it stands, saying so where it differs from that
-//! record: a hand edit since is told apart from the run's own save by
-//! nothing on disk. The next run that changes the home,
+//! after its last record, stopped between a save and its note, so `undo`
+//! takes back the song list as it stands, saying so where it differs from
+//! that record: a hand edit since is told apart from the run's own save
+//! by nothing on disk. The next run that changes the home,
 //! holding the runs lock that proves the stopped one gone, goes on in
 //! its record rather than begin its own: the song list before and the
 //! files kept are the stopped run's, so one undo takes back both, and
@@ -54,7 +54,28 @@
 //! one ended rather than record the other's change as its own. The song
 //! list a run leaves is the one it last read or wrote, as its sync
 //! reports it ([`Run::saw`]), so a hand edit made while it ran, which it
-//! never read, is the next run's. `undo` holds the library's lock while
+//! never read, is the next run's.
+//!
+//! A run begins, taking the runs lock and writing its record, before the
+//! song list is saved, and each save is noted in the record as it is
+//! written: every save takes a [`crate::manifest::Recorder`], which only a
+//! begun run, the undo whose sync saves and the list a new home starts
+//! with are, so a save outside a run does not build. Every other order
+//! has failed: a run begun after the save, with no earlier run
+//! kept, took the changed list for its list before, and Ctrl-C while it
+//! waited on another run left the change saved and no run's; a record
+//! first written after the save left a kill between the two a change
+//! `undo` refused as a hand edit; a mark written ahead at some saves
+//! alone had a run stopped after another refused, and one stopped at a
+//! marked save take back a hand edit unsaid. No question waits while the
+//! runs lock is held, as every other run would wait on it: a command
+//! that asks begins its run only at its save ([`Later`]), lets go of it
+//! before it asks again, a save refused included, and goes on in its
+//! record at the next save, as a run goes on in a stopped one's. The sync
+//! after an undo saves as the undo records ([`Undone`]), under the runs
+//! lock the undo holds.
+//!
+//! `undo` holds the library's lock while
 //! it puts files back, as a sync does while it writes them, and
 //! refuses when the song list changed after the run, by hand or
 //! otherwise, rather than lose those changes. It marks the record
@@ -207,6 +228,7 @@ struct Record {
 #[expect(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct Run {
+    home: PathBuf,
     dir: PathBuf,
     record: Record,
     outputs_known: bool,
@@ -222,6 +244,8 @@ pub struct Run {
     lost: bool,
     /// The song list as the run last read or wrote it.
     seen: Seen,
+    /// Whether the run saved the song list.
+    saved: bool,
     /// An undo stopped in its sync, which this run's sync finishes.
     finishes: Option<PathBuf>,
     /// Whether the run's sync reached its end.
@@ -242,18 +266,23 @@ pub struct Run {
 }
 
 /// The run of a command that asks before it changes the song list,
-/// begun only once its questions are answered, as it saves: no other run
+/// begun only once a question is answered, as it saves: no other run
 /// waits on an answer, and a change declined begins none. The song list
-/// as the command found it is kept from the start, so a run begun after
-/// a save, as `review` begins its run once its last question is
-/// answered, still knows what it was before where no earlier run says.
-/// What the command read is checked again as it saves, a song changed
-/// meanwhile refusing the save.
+/// as the command found it is kept from the start, so the run still knows
+/// what it was before where no earlier run says. What the command read is
+/// checked again as it saves, a song changed meanwhile refusing the save.
+///
+/// A command that asks again after a save, as `review` asks about the
+/// next song, lets go of its run first ([`Later::let_go`]); its record
+/// stays as the save left it, as a stopped run's, and the next save goes
+/// on in it, so one `undo` takes back every answer.
 #[derive(Debug)]
 pub struct Later {
     home: PathBuf,
     found: Option<String>,
     run: Option<Run>,
+    /// Whether a run let go of had saved, its record left to go on in.
+    left: bool,
 }
 
 impl Later {
@@ -267,12 +296,13 @@ impl Later {
             home: home.to_path_buf(),
             found,
             run: None,
+            left: false,
         })
     }
 
-    /// The run, begun now if it was not: called just before the command
-    /// saves, so a run under way is waited for while nothing is changed
-    /// yet.
+    /// The run, begun now if it was not, going on in the one let go of:
+    /// called just before the command saves, which it is passed to, so a
+    /// run under way is waited for while nothing is changed yet.
     pub fn begin(&mut self) -> Result<&mut Run> {
         match &mut self.run {
             Some(run) => Ok(run),
@@ -280,27 +310,27 @@ impl Later {
         }
     }
 
-    /// Note that the command saved the song list, recorded as it now
-    /// stands.
-    pub fn saved(&mut self) -> Result<()> {
-        match &mut self.run {
-            Some(run) => run.checkpoint(&self.home),
-            None => Ok(()),
-        }
-    }
-
-    /// Let go of a run begun for a save refused, as before asking again:
-    /// it changed nothing, and holds no other run back while it asks.
-    pub fn abandon(&mut self) {
+    /// Let go of the run before asking again, so it holds no other run
+    /// back meanwhile. One that saved nothing, as for a save refused, goes
+    /// with the record it wrote ahead; one that saved keeps its record as
+    /// it stands, which the next [`Self::begin`] goes on in, as any run
+    /// goes on in one stopped partway. A run begun elsewhere meanwhile
+    /// goes on in it first and ends it: what was saved is then that run's,
+    /// undone with it, and the next save here begins anew.
+    pub fn let_go(&mut self) {
         if let Some(run) = self.run.take() {
+            self.left |= run.saved;
             run.discard();
         }
     }
 
-    /// The run, if one began.
-    #[must_use]
-    pub fn begun(self) -> Option<Run> {
-        self.run
+    /// The run, if one began: the one let go of gone on in, so the command
+    /// ends it, its change synced.
+    pub fn begun(mut self) -> Result<Option<Run>> {
+        if self.run.is_none() && self.left {
+            self.begin()?;
+        }
+        Ok(self.run)
     }
 }
 
@@ -550,6 +580,7 @@ impl Run {
         let changing: BTreeSet<PathBuf> = record.before.keys().cloned().collect();
         let made_before = made_by(&record, home);
         let mut run = Self {
+            home: home.to_path_buf(),
             dir,
             record,
             outputs_known,
@@ -558,6 +589,7 @@ impl Run {
             limits,
             lost: false,
             seen: Seen::Not,
+            saved: false,
             finishes,
             synced: false,
             made_before,
@@ -571,12 +603,13 @@ impl Run {
         Ok(run)
     }
 
-    /// Let go of the run, having changed nothing: the record it wrote
-    /// ahead goes, unless it went on in a stopped run's.
+    /// Let go of the run unfinished: the record it wrote ahead goes if it
+    /// saved nothing, unless it went on in a stopped run's; else it stays
+    /// as it stands, for a run to go on in.
     // Removes the run's own folder, written ahead and never used.
     #[expect(clippy::disallowed_methods)]
     fn discard(self) {
-        if self.fresh {
+        if self.fresh && !self.saved {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
@@ -887,6 +920,72 @@ impl Run {
             .collect();
         let _ = make_room(&mut others, self.record.bytes, self.limits.max_size.0);
         Ok(())
+    }
+}
+
+/// A run's save of the song list, begun and written ahead before it: the
+/// list noted as saved, and the record written again, so it never lags
+/// the list the run wrote.
+impl crate::manifest::Recorder for Run {
+    fn saved(&mut self, manifest: &crate::manifest::Manifest) -> Result<()> {
+        self.saw(manifest);
+        self.saved = true;
+        let home = self.home.clone();
+        self.checkpoint(&home)
+    }
+}
+
+/// What a sync records its song-list saves in.
+#[derive(Debug)]
+pub enum Recording<'a> {
+    /// The run the sync is part of.
+    Run(&'a mut Run),
+    /// The undo whose sync it is, under the runs lock the undo holds.
+    Undo(&'a mut Undone),
+    /// None, for a dry run, which saves nothing: a save is refused.
+    DryRun,
+    /// None, for a test's sync.
+    #[cfg(any(test, feature = "testing"))]
+    Test,
+}
+
+impl Recording<'_> {
+    /// The run, when the sync is part of one.
+    pub fn run(&mut self) -> Option<&mut Run> {
+        match self {
+            Self::Run(run) => Some(run),
+            _ => None,
+        }
+    }
+
+    /// The same, borrowed for a step of the sync.
+    pub fn reborrow(&mut self) -> Recording<'_> {
+        match self {
+            Self::Run(run) => Recording::Run(run),
+            Self::Undo(undone) => Recording::Undo(undone),
+            Self::DryRun => Self::DryRun,
+            #[cfg(any(test, feature = "testing"))]
+            Self::Test => Self::Test,
+        }
+    }
+}
+
+impl crate::manifest::Recorder for Recording<'_> {
+    fn ahead(&self) -> Result<()> {
+        match self {
+            Self::DryRun => anyhow::bail!("a dry run saves no song list"),
+            _ => Ok(()),
+        }
+    }
+
+    fn saved(&mut self, manifest: &crate::manifest::Manifest) -> Result<()> {
+        match self {
+            Self::Run(run) => run.saved(manifest),
+            Self::Undo(undone) => undone.saved(manifest),
+            Self::DryRun => Ok(()),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Test => Ok(()),
+        }
     }
 }
 
@@ -1376,6 +1475,52 @@ impl Undone {
         let text = serde_json::to_vec(&record).context("writing the run record")?;
         atomic::write_private(&last, &atomic::Name::new(RECORD)?, &text)
     }
+}
+
+/// A save of the song list by the sync after the undo, as following a
+/// file the user moved: the list the undo leaves, written into its record
+/// as the list put back, and the run before, which left the list the undo
+/// put back, moved on to it, as [`Undone::finish`] moves it. Stopped
+/// before that, the next run begins from the list saved rather than take
+/// it for a hand edit, and an `undo` run again to finish this one finds
+/// the list as it left it.
+impl crate::manifest::Recorder for Undone {
+    fn saved(&mut self, manifest: &crate::manifest::Manifest) -> Result<()> {
+        let now = manifest.text().unwrap_or(crate::manifest::NEW);
+        let was = rewrite_record(&self.dir, "songs_before", now)?;
+        let Some(home) = self.dir.parent().and_then(Path::parent) else {
+            return Ok(());
+        };
+        let before = runs(home)?
+            .into_iter()
+            .take_while(|dir| *dir != self.dir)
+            .last();
+        let left = (before.as_deref())
+            .and_then(head)
+            .filter(|h| h.complete && !h.undoing && !h.undone)
+            .and_then(|h| h.songs_after);
+        match before {
+            Some(before) if was.is_some() && left == was => {
+                rewrite_record(&before, "songs_after", now).map(drop)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Set the song list `key` names in the record in `dir` to `text`;
+/// returns what it was.
+fn rewrite_record(dir: &Path, key: &str, text: &str) -> Result<Option<String>> {
+    let file = dir.join(RECORD);
+    let mut record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
+    )
+    .with_context(|| format!("reading {}", file.display()))?;
+    let was = record[key].as_str().map(str::to_string);
+    record[key] = serde_json::Value::String(text.to_string());
+    let bytes = serde_json::to_vec(&record).context("writing the run record")?;
+    atomic::write_private(dir, &atomic::Name::new(RECORD)?, &bytes)?;
+    Ok(was)
 }
 
 /// Carry out `plan`, made under the lock the caller holds: the song

@@ -2579,7 +2579,7 @@ fn sync_fetches_a_torrents_file_gone_from_the_store_again() {
         key: SourceKey::parse(&format!("torrent:{hash}/02 Rooms of Salt.flac")).unwrap(),
         note: "Rooms of Salt".into(),
     });
-    manifest.save().unwrap();
+    manifest.save(&mut crate::manifest::Unrecorded).unwrap();
     let torrents = s.dir.path().join("home/sources/torrent");
     let comets = torrents.join(&hash).join("01 Paper Comets.flac");
     let salt = torrents.join(&hash).join("02 Rooms of Salt.flac");
@@ -8577,6 +8577,209 @@ fn a_change_asking_its_question_holds_no_other_run_back() {
     assert!(s.listed(&["list"]).contains("manual:a.flac"));
 }
 
+/// A [`crate::ui::MockPrompter`], noting whether a run held the home at
+/// any question.
+struct Watched {
+    home: PathBuf,
+    p: crate::ui::MockPrompter,
+    held: bool,
+    /// Text replaced in the song list as the first yes or no is asked,
+    /// as a hand edit made while the question waits.
+    edit: Option<(&'static str, &'static str)>,
+}
+
+impl Watched {
+    fn new(s: &Setup, p: crate::ui::MockPrompter) -> Self {
+        Self {
+            home: s.dir.path().join("home"),
+            p,
+            held: false,
+            edit: None,
+        }
+    }
+
+    fn noted(&mut self) {
+        self.held |= Lock::busy(&self.home);
+    }
+}
+
+impl crate::ui::Prompter for Watched {
+    fn ask(&mut self, question: &str) -> std::io::Result<bool> {
+        self.noted();
+        if let Some((from, to)) = self.edit.take() {
+            let list = self.home.join("songs.toml");
+            let text = std::fs::read_to_string(&list)?;
+            std::fs::write(&list, text.replace(from, to))?;
+        }
+        self.p.ask(question)
+    }
+
+    fn choose(
+        &mut self,
+        question: &str,
+        items: &[String],
+        picked: &[usize],
+    ) -> std::io::Result<Vec<usize>> {
+        self.noted();
+        self.p.choose(question, items, picked)
+    }
+
+    fn select(&mut self, question: &str, items: &[String]) -> std::io::Result<Option<usize>> {
+        self.noted();
+        self.p.select(question, items)
+    }
+
+    fn text(&mut self, question: &str, help: &str) -> std::io::Result<Option<String>> {
+        self.noted();
+        self.p.text(question, help)
+    }
+
+    fn text_with(
+        &mut self,
+        question: &str,
+        help: &str,
+        initial: &str,
+        check: crate::ui::Check,
+    ) -> std::io::Result<Option<String>> {
+        self.noted();
+        self.p.text_with(question, help, initial, check)
+    }
+}
+
+/// Two songs, each of two files of the user's whose titles contest, so
+/// `review` asks about both, synced; and the runner that reads them so.
+fn contested(s: &Setup) -> Fake {
+    for n in [1, 2] {
+        s.file(&format!("home/sources/manual/a{n}.flac"));
+        s.file(&format!("home/sources/manual/b{n}.flac"));
+    }
+    s.written(
+        "home/songs.toml",
+        "version = 1\n\n[[song]]\nsources = [\"manual:a1.flac\", \"manual:b1.flac\"]\n\n\
+         [[song]]\nsources = [\"manual:a2.flac\", \"manual:b2.flac\"]\n",
+    );
+    let other = FLAC.replace("\"Song\"", "\"Paper Comets\"");
+    let fake = Fake::default()
+        .probe("b1.flac", &other)
+        .probe("b2.flac", &other)
+        .probe(".flac", FLAC);
+    let (ok, text) = s.run(&fake, &["sync"]);
+    assert!(ok, "{text}");
+    fake
+}
+
+/// `review` run with `p`'s answers, stopped where they run out as a kill
+/// stops it; whether it ended.
+fn reviewed(s: &Setup, fake: &Fake, p: &mut Watched) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_with(
+            &s.job(&["review"]),
+            fake,
+            &Server::default(),
+            Some(p),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap()
+    }))
+    .is_ok()
+}
+
+/// Answers to one song `review` asks about that retitle it `title`,
+/// through the menu `set` with a query opens.
+fn retitled(p: &mut crate::ui::MockPrompter, title: &str) {
+    p.push_select(Some(0));
+    p.push_select(Some(0)).push_select(Some(2));
+    p.push_text(Some(title));
+    p.push_select(Some(REVIEW_ROW));
+}
+
+const REVIEW_ROW: usize = 12;
+
+#[test]
+fn set_step_by_step_asks_again_holding_no_run_back_once_its_save_is_refused() {
+    let s = Setup::new();
+    s.file("home/sources/manual/a.flac");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    let mut p = crate::ui::MockPrompter::answering([true, true]);
+    p.push_select(Some(0)).push_select(Some(1));
+    p.push_text(Some("Tide"));
+    p.push_select(Some(REVIEW_ROW));
+    let mut p = Watched::new(&s, p);
+    p.edit = Some(("tags.genre = \"\"", "tags.genre = \"Folk\""));
+    run_with(
+        &s.job(&["set", "song"]),
+        &flacs(),
+        &Server::default(),
+        Some(&mut p),
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let asked: Vec<&String> = (p.p.asked.iter())
+        .filter(|a| a.starts_with("Save "))
+        .collect();
+    assert_eq!(asked.len(), 2, "{:?}", p.p.asked);
+    assert!(
+        !p.held,
+        "a run held the home as it asked again: {:?}",
+        p.p.asked
+    );
+    let list = std::fs::read_to_string(s.dir.path().join("home/songs.toml")).unwrap();
+    assert!(
+        list.contains("\"Tide\"") && list.contains("\"Folk\""),
+        "{list}"
+    );
+}
+
+#[test]
+fn a_review_stopped_at_a_question_is_undone_with_each_answer_it_saved() {
+    let s = Setup::new();
+    let fake = contested(&s);
+    let list = s.dir.path().join("home/songs.toml");
+    let before = std::fs::read_to_string(&list).unwrap();
+    let synced = library_of(&s);
+    let mut p = crate::ui::MockPrompter::answering([true]);
+    retitled(&mut p, "Tide");
+    let mut p = Watched::new(&s, p);
+    assert!(!reviewed(&s, &fake, &mut p), "{:?}", p.p.asked);
+    assert!(
+        std::fs::read_to_string(&list).unwrap().contains("Tide"),
+        "{:?}",
+        p.p.asked
+    );
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), before, "{text}");
+    assert_eq!(library_of(&s), synced, "{text}");
+}
+
+#[test]
+fn a_review_holds_no_run_back_while_it_asks_and_is_undone_whole() {
+    let s = Setup::new();
+    let fake = contested(&s);
+    let list = s.dir.path().join("home/songs.toml");
+    let before = std::fs::read_to_string(&list).unwrap();
+    let synced = library_of(&s);
+    let mut p = crate::ui::MockPrompter::answering([true, true]);
+    retitled(&mut p, "Tide");
+    retitled(&mut p, "Ember");
+    let mut p = Watched::new(&s, p);
+    assert!(reviewed(&s, &fake, &mut p), "{:?}", p.p.asked);
+    assert!(
+        !p.held,
+        "a run held the home as review asked: {:?}",
+        p.p.asked
+    );
+    let after = std::fs::read_to_string(&list).unwrap();
+    assert!(after.contains("Tide") && after.contains("Ember"), "{after}");
+    let (ok, text) = s.run(&fake, &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), before, "{text}");
+    assert_eq!(library_of(&s), synced, "{text}");
+}
+
 #[test]
 fn a_change_to_a_home_not_there_is_refused_and_makes_nothing() {
     let s = Setup::new();
@@ -9678,6 +9881,46 @@ fn a_change_waits_for_an_undo_stopped_before_it_put_the_library_back() {
     assert_eq!(library_of(&s), synced);
     let (ok, text) = s.run(&flacs(), &["sync"]);
     assert!(ok, "{text}");
+}
+
+#[test]
+fn an_undo_stopped_after_its_sync_followed_a_moved_file_is_finished_with_it() {
+    let s = Setup::new();
+    two_songs(&s);
+    s.run(
+        &flacs(),
+        &["set", "-y", "manual:a.flac", "album=Lanternfall"],
+    );
+    let manual = s.dir.path().join("home/sources/manual");
+    moved(&manual.join("a.flac"), &manual.join("c.flac"));
+    let dirs = s.job(&["undo"]).dirs;
+    let planned = crate::history::plan(&dirs).unwrap();
+    let mut undone = crate::history::undo(&dirs, planned, &mut Vec::new()).unwrap();
+    let mut said = Vec::new();
+    crate::reconcile_now(
+        &s.job(&["undo"]),
+        &flacs(),
+        Options::default(),
+        crate::history::Recording::Undo(&mut undone),
+        &mut crate::hooks::Due::default(),
+        &mut said,
+    )
+    .unwrap();
+    // Stopped before it let go of the record.
+    drop(undone);
+    let list = s.dir.path().join("home/songs.toml");
+    let followed = std::fs::read_to_string(&list).unwrap();
+    assert!(
+        followed.contains("manual:c.flac"),
+        "{followed}\n{}",
+        String::from_utf8_lossy(&said)
+    );
+    let (ok, text) = s.run(&flacs(), &["undo", "-y"]);
+    assert!(ok, "{text}");
+    assert_eq!(std::fs::read_to_string(&list).unwrap(), followed, "{text}");
+    let (ok, text) = s.run(&flacs(), &["sync"]);
+    assert!(ok, "{text}");
+    assert_eq!(crate::history::songs_as_last_left(&dirs.home), Some(true));
 }
 
 #[test]

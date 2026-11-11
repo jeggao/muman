@@ -670,13 +670,13 @@ fn apply<W: Write>(
     for edit in edits {
         found.manifest.edit(edit);
     }
-    later.begin()?;
-    let changed = found.manifest.save_if_unchanged(&expected)?;
+    let changed = found
+        .manifest
+        .save_if_unchanged(&expected, later.begin()?)?;
     if !changed.is_empty() {
         found.manifest.discard();
         bail!("the song list changed while this ran; nothing was changed, run it again");
     }
-    later.saved()?;
     Ok(true)
 }
 

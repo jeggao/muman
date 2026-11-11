@@ -551,15 +551,13 @@ pub fn edit<W: Write>(
                 continue;
             }
         };
-        later.begin()?;
         read.manifest.edit(edit.clone());
-        let changed = read.manifest.save_if_unchanged(&expected)?;
+        let changed = read.manifest.save_if_unchanged(&expected, later.begin()?)?;
         if changed.is_empty() {
-            later.saved()?;
             summarize(&edit, &opened, &gone, out)?;
             return Ok(true);
         }
-        later.abandon();
+        later.let_go();
         read = Read::new(dirs, terms)?;
         gone = opened
             .iter()

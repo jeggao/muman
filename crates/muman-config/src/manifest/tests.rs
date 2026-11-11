@@ -23,7 +23,7 @@ fn a_new_list_carries_its_header_defaults_and_each_song() {
         sources: vec![yt("aaaaaaaaaaa"), yt("bbbbbbbbbbb")],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     assert!(t.starts_with(&format!("{HEADER}{NEW}")), "{t}");
     assert!(
@@ -60,7 +60,7 @@ fn adding_a_listed_source_joins_its_song_and_sets_its_album_once() {
         sources: vec![yt("aaaaaaaaaaa")],
         album: Some((album.clone(), 9)),
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.songs.len(), 1);
     let song = &m.songs[0];
     assert_eq!(
@@ -83,7 +83,7 @@ fn comments_and_unknown_keys_survive_a_write() {
         sources: vec![yt("bbbbbbbbbbb")],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     for kept in ["# mine", "future = true", "rating = 5"] {
         assert!(t.contains(kept), "{kept} lost:\n{t}");
@@ -108,7 +108,7 @@ fn a_write_keeps_the_byte_order_mark_and_line_endings_it_found() {
             sources: vec![yt("bbbbbbbbbbb")],
             album: None,
         });
-        m.save().unwrap();
+        m.save(&mut Unrecorded).unwrap();
         let t = text(dir.path());
         assert_eq!(t.starts_with('\u{feff}'), bom, "{t:?}");
         let lines = t.matches('\n').count();
@@ -140,8 +140,8 @@ fn a_save_keeps_what_another_run_wrote_meanwhile() {
         sources: vec![yt("bbbbbbbbbbb")],
         album: None,
     });
-    first.save().unwrap();
-    second.save().unwrap();
+    first.save(&mut Unrecorded).unwrap();
+    second.save(&mut Unrecorded).unwrap();
     assert_eq!(second.songs.len(), 2);
 }
 
@@ -404,7 +404,7 @@ fn songs_share_a_kept_record_but_never_a_file() {
         key: SourceKey::youtube("bbbbbbbbbbb"),
         tags: vec![("genre".into(), vec!["Folk".into()])],
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(
         m.songs.len(),
@@ -441,7 +441,7 @@ fn a_song_listing_a_torrents_file_is_written_in_version_4() {
         sources: vec![SourceKey::parse(&file).unwrap()],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(
         text(dir.path()).contains("version = 4"),
         "{}",
@@ -457,7 +457,7 @@ fn a_song_listing_a_torrents_file_is_written_in_version_4() {
         sources: vec![SourceKey::Manual("b.flac".into())],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(text(dir.path()).contains(&file), "{}", text(dir.path()));
 }
 
@@ -478,7 +478,7 @@ fn songs_share_a_picture_of_the_users_but_not_its_lyrics_in_version_3() {
         ],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs.len(), 2);
     assert!(
@@ -526,7 +526,7 @@ fn a_song_with_no_source_of_its_own_is_refused_and_never_made() {
         sources: vec![SourceKey::Manual("a.flac".into())],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert!(
         m.removed.is_empty(),
@@ -545,7 +545,7 @@ fn a_list_needing_an_older_version_than_it_states_is_written_down_to_it() {
     )
     .unwrap();
     let mut m = Manifest::load(dir.path()).unwrap();
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(
         text(dir.path()).contains("version = 1"),
         "{}",
@@ -566,7 +566,7 @@ fn a_picture_one_song_lists_twice_is_shared_with_no_one() {
         key: SourceKey::Manual("a.flac".into()),
         tags: vec![("genre".into(), vec!["Folk".into()])],
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(
         text(dir.path()).contains("version = 1"),
         "{}",
@@ -587,7 +587,7 @@ fn a_rename_and_a_drop_follow_the_key_into_its_pins() {
         to: SourceKey::Manual("new.flac".into()),
     });
     m.edit(Edit::Drop(yt("aaaaaaaaaaa")));
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let s = &m.songs[0];
     assert_eq!(s.sources, [SourceKey::Manual("new.flac".into())]);
     assert_eq!(s.audio, Some(SourceKey::Manual("new.flac".into())));
@@ -619,7 +619,7 @@ fn a_record_superseded_in_one_song_stays_in_another() {
         old: key(old),
         new: Some(key(new)),
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.songs[0].sources, [key("manual:a.flac"), key(new)]);
     assert_eq!(m.songs[1].sources, [key("manual:b.flac"), key(old)]);
     assert_eq!(m.songs[2].sources, [key("manual:c.flac"), key(new)]);
@@ -628,7 +628,7 @@ fn a_record_superseded_in_one_song_stays_in_another() {
         old: key(old),
         new: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.songs[1].sources, [key("manual:b.flac")]);
 }
 
@@ -643,7 +643,7 @@ fn an_album_is_added_once_with_its_template() {
             tracks: Some(12),
         });
     }
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.albums.len(), 1);
     assert_eq!(m.albums[0].tracks, Some(12));
     assert!(
@@ -656,7 +656,10 @@ fn an_album_is_added_once_with_its_template() {
 #[test]
 fn nothing_recorded_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    Manifest::load(dir.path()).unwrap().save().unwrap();
+    Manifest::load(dir.path())
+        .unwrap()
+        .save(&mut Unrecorded)
+        .unwrap();
     assert!(!dir.path().join(MANIFEST).exists());
 }
 
@@ -695,7 +698,7 @@ fn tags_set_replace_every_spelling_and_keep_the_rest() {
             ("title".into(), vec!["Song".into()]),
         ],
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let tags =
         |n: usize| -> BTreeMap<String, Vec<String>> { m.songs[n].tags.iter().cloned().collect() };
     assert_eq!(tags(0)["artist"], artists);
@@ -720,7 +723,7 @@ fn every_cleaning_switch_is_listed_after_the_defaults_and_read_back() {
     let mut m = Manifest::load(dir.path()).unwrap();
     assert!(!m.clean.is_on("packaging.remaster"));
     assert!(m.clean.is_on("packaging.album_version"));
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
     assert!(at("[lyrics]") < at("[tags.clean.tidy]"), "{t}");
@@ -750,7 +753,7 @@ fn every_lyric_cleaning_switch_is_listed_after_the_tags_and_read_back() {
     assert!(!m.clean.is_on("lyrics.packaging.credits"));
     assert!(m.clean.is_on("lyrics.tidy.markup"));
     assert_eq!(m.clean.unknown, ["lyrics.clean.odd.x"]);
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
     assert!(at("[lyrics]") < at("[lyrics.clean.tidy]"), "{t}");
@@ -783,7 +786,7 @@ fn a_new_list_lists_its_cleaning_switches_before_its_songs() {
         sources: vec![yt("aaaaaaaaaaa")],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
     assert!(at("[sites.") < at("[lyrics.clean.tidy]"), "{t}");
@@ -818,7 +821,7 @@ fn an_unknown_cleaning_switch_is_kept_and_reported() {
         ["tags.clean.tidy.spaceing", "tags.clean.other.x"]
     );
     assert!(m.clean.is_on("tidy.spacing"));
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(text(dir.path()).contains("spaceing = false"));
 }
 
@@ -848,7 +851,7 @@ fn an_override_of_a_torrent_s_or_channel_s_sources_is_read_and_kept() {
             .map(crate::overrides::Pattern::as_str),
         Some("%artist% - %title%")
     );
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(text(dir.path()).contains("title = \"%artist% - %title%\""));
     for bad in [
         "[[tags.from]]\ndrop = [\"work\"]\n",
@@ -906,7 +909,7 @@ fn a_release_pin_and_a_field_left_out_of_a_channel_are_written_and_read() {
             drop: vec![drop.into()],
         });
     }
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs[0].release.as_deref(), Some(release.as_str()));
     let [channel] = &m.clean.from[..] else {
@@ -921,7 +924,7 @@ fn a_release_pin_and_a_field_left_out_of_a_channel_are_written_and_read() {
         key: yt("aaaaaaaaaaa"),
         release: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(!text(dir.path()).contains(&release), "the pin taken away");
 }
 
@@ -941,7 +944,7 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
             artist: Some("Artist".into()),
         },
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.songs.len(), 1);
     assert_eq!(m.removed.len(), 1);
     assert_eq!(Manifest::load(dir.path()).unwrap().removed.len(), 1);
@@ -956,7 +959,7 @@ fn a_removed_song_is_kept_whole_and_restored_as_it_was() {
     );
 
     m.edit(Edit::Restore(yt("aaaaaaaaaaa")));
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.removed, []);
     let song = &m.songs[0];
     assert_eq!(song.audio, Some(yt("bbbbbbbbbbb")), "back where it stood");
@@ -981,14 +984,14 @@ fn adding_a_removed_key_lifts_it_from_its_tombstone() {
         sources: vec![yt("aaaaaaaaaaa")],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert_eq!(m.songs[0].sources, [yt("aaaaaaaaaaa")]);
     assert_eq!(m.removed[0].sources, [yt("bbbbbbbbbbb")]);
     m.edit(Edit::Add {
         sources: vec![yt("bbbbbbbbbbb")],
         album: None,
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     assert!(m.removed.is_empty(), "an emptied tombstone goes");
     assert_eq!(Manifest::load(dir.path()).unwrap().removed, []);
     assert!(!text(dir.path()).contains("note = "));
@@ -1025,7 +1028,7 @@ fn a_rewrite_finds_every_song_before_changing_any() {
         ],
         new: vec![table("sources = [\"youtube.com:bbbbbbbbbbb\"]")],
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let lists: Vec<Vec<SourceKey>> = m.songs.iter().map(|s| s.sources.clone()).collect();
     assert_eq!(
         lists,
@@ -1060,11 +1063,14 @@ fn edits_are_not_saved_over_a_song_changed_meanwhile() {
         key: yt("aaaaaaaaaaa"),
         note: "x".into(),
     });
-    assert_eq!(m.save_if_unchanged(&seen).unwrap(), [yt("aaaaaaaaaaa")]);
+    assert_eq!(
+        m.save_if_unchanged(&seen, &mut Unrecorded).unwrap(),
+        [yt("aaaaaaaaaaa")]
+    );
     assert!(text(dir.path()).contains("lyrics_offset_ms = 5"));
     assert!(m.has_edits(), "the edits wait for another try");
     let now = Manifest::load(dir.path()).unwrap().songs;
-    assert_eq!(m.save_if_unchanged(&now).unwrap(), []);
+    assert_eq!(m.save_if_unchanged(&now, &mut Unrecorded).unwrap(), []);
     assert!(m.songs.is_empty() && m.removed.len() == 1);
 }
 
@@ -1169,7 +1175,7 @@ fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     let before = (m.songs.clone(), m.albums.clone());
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     assert!(
         t.contains(
@@ -1187,7 +1193,10 @@ fn tags_tables_are_written_back_as_dotted_keys_with_their_comments() {
     );
     let again = Manifest::load(dir.path()).unwrap();
     assert_eq!((again.songs, again.albums), before);
-    Manifest::load(dir.path()).unwrap().save().unwrap();
+    Manifest::load(dir.path())
+        .unwrap()
+        .save(&mut Unrecorded)
+        .unwrap();
     assert_eq!(text(dir.path()), t);
 }
 
@@ -1216,7 +1225,7 @@ fn a_key_named_by_its_extractor_is_written_by_its_site() {
         key: archived,
         tags: vec![("genre".to_string(), vec!["Folk".to_string()])],
     });
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     assert!(
         t.contains(
@@ -1264,7 +1273,7 @@ fn restoring_a_song_whose_sources_are_listed_again_lists_nothing() {
     );
     let mut m = Manifest::load(dir.path()).unwrap();
     m.edit(Edit::Restore(SourceKey::Manual("a.flac".into())));
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let m = Manifest::load(dir.path()).unwrap();
     assert_eq!(m.songs.len(), 1);
     assert_eq!(m.removed, []);
@@ -1278,7 +1287,7 @@ fn a_record_of_what_a_source_held_goes_when_the_song_lists_it_no_more() {
         "[[song]]\nsources = [\"manual:a.flac\"]\nheld.\"manual:a.flac\" = { audio = \"0000000000000001\" }\nheld.\"manual:b.flac\" = { audio = \"0000000000000002\" }\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     assert!(t.contains("held.\"manual:a.flac\""), "{t}");
     assert!(!t.contains("manual:b.flac"), "{t}");
@@ -1345,7 +1354,7 @@ fn an_album_s_tags_are_set_unless_the_album_changed_meanwhile() {
         tags: genre(&["Folk"]),
     });
     assert_eq!(
-        m.save_if_unchanged_with(&[], std::slice::from_ref(&album))
+        m.save_if_unchanged_with(&[], std::slice::from_ref(&album), &mut Unrecorded)
             .unwrap(),
         Vec::<SourceKey>::new()
     );
@@ -1376,7 +1385,8 @@ fn an_album_s_tags_are_set_unless_the_album_changed_meanwhile() {
         tags: genre(&["Ambient"]),
     });
     assert_eq!(
-        m.save_if_unchanged_with(&[], &[before]).unwrap(),
+        m.save_if_unchanged_with(&[], &[before], &mut Unrecorded)
+            .unwrap(),
         [album.source]
     );
     assert_eq!(
@@ -1398,7 +1408,7 @@ fn an_older_list_gains_its_tags_settings_just_above_their_switches() {
         "edition = 8\n\n[library]\nblock_size = \"4 KiB\"\n\n[tags.clean.tidy]\nspacing = false # mine\n\n[[song]]\nsources = [\"youtube.com:aaaaaaaaaaa\"]\n",
     );
     let mut m = Manifest::load(dir.path()).unwrap();
-    m.save().unwrap();
+    m.save(&mut Unrecorded).unwrap();
     let t = text(dir.path());
     let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
     assert!(
@@ -1424,7 +1434,7 @@ fn a_list_removed_while_muman_runs_is_not_written_again() {
         sources: vec![yt("aaaaaaaaaaa")],
         album: None,
     });
-    let error = m.save().unwrap_err();
+    let error = m.save(&mut Unrecorded).unwrap_err();
     assert!(
         error.downcast_ref::<crate::errors::Refused>().is_some(),
         "{error:#}"

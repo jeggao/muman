@@ -30,7 +30,7 @@ use anyhow::{Context as _, Result};
 
 use crate::atomic::Lock;
 use crate::dirs::Dirs;
-use crate::history::Run;
+use crate::history::Recording;
 use crate::hooks;
 use crate::library::Ledger;
 use crate::limit;
@@ -137,15 +137,15 @@ pub struct Synced {
 }
 
 /// Bring the library in line with the song list, recording what it
-/// replaces and removes in `run`.
+/// replaces and removes in the run `rec` names.
 pub fn reconcile<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     opts: Options,
-    run: Option<&mut Run>,
+    rec: Recording<'_>,
     out: &mut W,
 ) -> Result<Synced> {
-    reconcile_into(runner, dirs, opts, run, out, None)
+    reconcile_into(runner, dirs, opts, rec, out, None)
 }
 
 /// Where a dry run writes what a sync would do, and of which songs.
@@ -175,7 +175,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     opts: Options,
-    mut run: Option<&mut Run>,
+    mut rec: Recording<'_>,
     out: &mut W,
     report: Option<Report<'_>>,
 ) -> Result<Synced> {
@@ -189,7 +189,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         Some(Lock::library(&dirs.library, dirs.lock_folder()?)?)
     };
     let mut manifest = Manifest::load(home)?;
-    if let Some(run) = run.as_deref_mut() {
+    if let Some(run) = rec.run() {
         run.saw(&manifest);
     }
     let query = report
@@ -215,7 +215,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     let following = Following {
         home,
         lock: &lock,
-        run: run.as_deref_mut(),
+        rec: rec.reborrow(),
         dry_run: opts.dry_run,
         settling: opts.settling,
     };
@@ -308,10 +308,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
                 to: to.clone(),
             });
         }
-        manifest.save_locked(&lock)?;
-        if let Some(run) = run.as_deref_mut() {
-            run.saw(&manifest);
-        }
+        manifest.save_locked(&lock, &mut rec)?;
         for at in linked {
             crate::store::unplace(&ytdlp, &at)?;
         }
@@ -448,7 +445,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
     } else {
         (None, HashMap::new())
     };
-    if let Some(run) = run.as_deref_mut() {
+    if let Some(run) = rec.run() {
         run.outputs_before(&state.outputs);
     }
     let Foreseen {
@@ -580,7 +577,7 @@ pub fn reconcile_into<R: Runner, W: Write>(
         });
     }
     let edits = std::mem::take(&mut intent.edits);
-    let mut ledger = Ledger::new(&dirs.library, home, run.as_deref_mut());
+    let mut ledger = Ledger::new(&dirs.library, home, rec.run());
     let job = Writing {
         runner,
         dirs,
@@ -655,16 +652,15 @@ pub fn reconcile_into<R: Runner, W: Write>(
         .retain(|a| audio.contains(&a.revs.0) && audio.contains(&a.revs.1));
     state.mixes.retain(|m| audio.contains(&m.audio));
     crate::levels::keep_built(&mut state);
-    if let Some(run) = run.as_deref_mut() {
+    if let Some(run) = rec.run() {
         run.outputs_after(home, &state.outputs)?;
     }
     state.save(home)?;
     for edit in edits {
         manifest.edit(edit);
     }
-    manifest.save_locked(&lock)?;
-    if let Some(run) = run {
-        run.saw(&manifest);
+    manifest.save_locked(&lock, &mut rec)?;
+    if let Some(run) = rec.run() {
         run.synced();
     }
     let counts = (

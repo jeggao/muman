@@ -32,6 +32,14 @@
 //! still listed as it was: a song changed meanwhile, by hand or by
 //! another run, refuses the save and nothing is written.
 //!
+//! Every save takes a [`Recorder`], so `undo` can take it back: the run
+//! the save is part of, begun before it, told of the list once it is
+//! written. The engine's run is that recorder, and as a run records
+//! itself as it begins, a save stopped anywhere is one a record covers;
+//! this crate, below the engine, names only the trait. [`Unrecorded`]
+//! records nothing, for the list a new home starts with, before its
+//! first run and holding nothing to take back, and for tests.
+//!
 //! A byte-order mark and CRLF line endings, as Windows editors may
 //! write, are read past and written back as the file had them when
 //! saved: CRLF when most of its lines end so, so a file an editor wrote
@@ -567,18 +575,45 @@ fn needed_version(parsed: &Parsed) -> i64 {
     }
 }
 
+/// What records a save of the song list: a run begun before the save,
+/// so a save stopped anywhere is one its record covers, told of the list
+/// once it is written.
+pub trait Recorder {
+    /// Whether the save may go on, asked before anything is read; a
+    /// recorder of nothing, as a dry run's, refuses.
+    fn ahead(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Note `manifest` as just written, the folder's lock still held: it
+    /// takes no lock of the folder.
+    fn saved(&mut self, manifest: &Manifest) -> Result<()>;
+}
+
+/// The recorder of a save no run records: the list a new home starts
+/// with, and tests.
+#[derive(Debug, Default)]
+pub struct Unrecorded;
+
+impl Recorder for Unrecorded {
+    fn saved(&mut self, _: &Manifest) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Write the song list a new home starts with, every setting written
 /// out to edit, when `home` has none: `sync` on a new home makes it, so
 /// lookups can be turned off before the first `add`. A list gone missing
 /// from a home muman wrote songs from is refused before this, by
-/// `state::present`.
+/// `state::present`. No run records it: it comes before the first, which
+/// takes it as its list before, and holds nothing to take back.
 pub fn start(home: &Path) -> Result<()> {
     if home.join(MANIFEST).exists() {
         return Ok(());
     }
     let mut m = Manifest::load(home)?;
     m.stale = true;
-    m.save()
+    m.save(&mut Unrecorded)
 }
 
 impl Manifest {
@@ -732,35 +767,38 @@ impl Manifest {
     }
 
     /// Apply what was recorded to the file as it is now, so a run that
-    /// finished meanwhile keeps its own changes. The folder is locked for
-    /// the read and the write, and the file replaced through a rename.
-    pub fn save(&mut self) -> Result<()> {
+    /// finished meanwhile keeps its own changes, `run` told once it is
+    /// written. The folder is locked for the read and the write, and the
+    /// file replaced through a rename.
+    pub fn save(&mut self, run: &mut dyn Recorder) -> Result<()> {
         if self.edits.is_empty() && !self.stale {
             return Ok(());
         }
         let lock = Lock::folder(&self.dir)?;
-        self.save_locked(&lock)
+        self.save_locked(&lock, run)
     }
 
     /// [`Self::save`] under a lock the caller already holds.
-    pub fn save_locked(&mut self, lock: &Lock) -> Result<()> {
-        self.save_expecting(lock, &[], &[]).map(drop)
+    pub fn save_locked(&mut self, lock: &Lock, run: &mut dyn Recorder) -> Result<()> {
+        self.save_expecting(lock, &[], &[], run).map(drop)
     }
 
     /// Apply what was recorded only while each song in `expected` is
     /// still listed as it was, by any of its keys, and each album in
     /// `albums` as it was. Returns the first key of each song, and the
     /// source of each album, that changed meanwhile; when any did,
-    /// nothing is written and the edits are kept.
-    pub fn save_expecting(
+    /// nothing is written, the edits are kept and `run` is told nothing.
+    fn save_expecting(
         &mut self,
         _lock: &Lock,
         expected: &[Song],
         albums: &[Album],
+        run: &mut dyn Recorder,
     ) -> Result<Vec<SourceKey>> {
         if self.edits.is_empty() && !self.stale {
             return Ok(Vec::new());
         }
+        run.ahead()?;
         let file = self.dir.join(MANIFEST);
         if self.text.is_some() && !file.exists() {
             return Err(crate::errors::Refused(format!(
@@ -813,12 +851,17 @@ impl Manifest {
         self.torrents = parsed.torrents;
         (self.renamed, self.respelled) = (parsed.renamed, parsed.respelled);
         self.stale = false;
+        run.saved(self)?;
         Ok(Vec::new())
     }
 
     /// [`Self::save_expecting`] under a lock of its own.
-    pub fn save_if_unchanged(&mut self, expected: &[Song]) -> Result<Vec<SourceKey>> {
-        self.save_if_unchanged_with(expected, &[])
+    pub fn save_if_unchanged(
+        &mut self,
+        expected: &[Song],
+        run: &mut dyn Recorder,
+    ) -> Result<Vec<SourceKey>> {
+        self.save_if_unchanged_with(expected, &[], run)
     }
 
     /// [`Self::save_expecting`] under a lock of its own, albums too.
@@ -826,9 +869,10 @@ impl Manifest {
         &mut self,
         expected: &[Song],
         albums: &[Album],
+        run: &mut dyn Recorder,
     ) -> Result<Vec<SourceKey>> {
         let lock = Lock::folder(&self.dir)?;
-        self.save_expecting(&lock, expected, albums)
+        self.save_expecting(&lock, expected, albums, run)
     }
 
     /// Whether `edits` would leave a song list that reads, applied to the

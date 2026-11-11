@@ -747,19 +747,19 @@ pub fn hearing<'a, R: Runner>(
 pub(super) struct Following<'a> {
     pub home: &'a Path,
     pub lock: &'a crate::atomic::Lock,
-    pub run: Option<&'a mut crate::history::Run>,
+    pub rec: crate::history::Recording<'a>,
     pub dry_run: bool,
     pub settling: Duration,
 }
 
 impl Following<'_> {
     /// Follow each named manual file to where it moved ([`moved`]), in
-    /// the song list and the state, saved, the list noted in `run`; a dry
+    /// the song list and the state, saved, the list noted in `rec`; a dry
     /// run follows them in memory alone, so it reports on the songs as
     /// the next sync will find them. What it cannot tell is returned, as
     /// [`Moves::unsure`].
     pub(super) fn follow<W: Write>(
-        self,
+        mut self,
         manifest: &mut Manifest,
         state: &mut State,
         store: &Store,
@@ -791,10 +791,7 @@ impl Following<'_> {
             // The list before the state: stopped between, the next run
             // measures the file again, where the other way it would find
             // no record of the file gone to follow it by.
-            manifest.save_locked(self.lock)?;
-            if let Some(run) = self.run {
-                run.saw(manifest);
-            }
+            manifest.save_locked(self.lock, &mut self.rec)?;
         }
         state.rekey(&moves.of_state())?;
         if !self.dry_run {

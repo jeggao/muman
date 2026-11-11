@@ -120,7 +120,7 @@ use clap::FromArgMatches;
 use crate::atomic::Lock;
 use crate::cli::{Cli, Command, Matching};
 use crate::dirs::Dirs;
-use crate::history::{Later, Run};
+use crate::history::{Later, Recording, Run};
 use crate::identify::Mode;
 use crate::manifest::Manifest;
 use crate::platform::Defaults;
@@ -425,7 +425,15 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 query,
                 all: *all,
             };
-            let ok = reconcile::reconcile_into(runner, dirs, opts, None, out, Some(report))?.ok;
+            let ok = reconcile::reconcile_into(
+                runner,
+                dirs,
+                opts,
+                Recording::DryRun,
+                out,
+                Some(report),
+            )?
+            .ok;
             let problems = diagnose::diagnose(dirs)?.problems();
             if problems > 0 {
                 ui::warning(
@@ -478,7 +486,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 duplicates::merge(runner, dirs, query, &confirm, prompter, &mut later, out)
             };
             synced_after(job, runner, later, changed, out, |run, due, out| {
-                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
             })
         }
         Command::Duplicates { query, .. } => {
@@ -564,7 +579,7 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             if !trust::gate(&dirs.home, &held, job.trust, prompter, out)? {
                 return Ok(true);
             }
-            let undone = {
+            let mut undone = {
                 let _lock = Lock::folder(&dirs.home)?;
                 let _library = Lock::library(&dirs.library, dirs.lock_folder()?)?;
                 let again = history::plan(dirs)?;
@@ -581,7 +596,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 ..Options::default()
             };
             let mut due = hooks::Due::default();
-            let ok = reconcile_now(job, runner, opts, None, &mut due, out)?;
+            let ok = reconcile_now(
+                job,
+                runner,
+                opts,
+                Recording::Undo(&mut undone),
+                &mut due,
+                out,
+            )?;
             undone.finish()?;
             drop(runs);
             run_hooks(job, runner, &due, out)?;
@@ -641,7 +663,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let mut later = Later::new(&dirs.home)?;
             let changed = change::remove(dirs, query, *purge, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
-                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
             })
         }
         Command::Restore { query, confirm } => {
@@ -650,7 +679,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             synced_after(job, runner, later, changed, out, |run, due, out| {
                 let manifest = Manifest::load(&dirs.home)?;
                 let mut ok = sync::fetch_missing(job, runner, http, &manifest, true, out)?;
-                ok &= reconcile_now(job, runner, Options::default(), Some(run), due, out)?;
+                ok &= reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )?;
                 Ok(ok)
             })
         }
@@ -658,14 +694,28 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
             let mut later = Later::new(&dirs.home)?;
             let changed = review::review(dirs, query, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
-                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
             })
         }
         Command::Set { terms, confirm } => {
             let mut later = Later::new(&dirs.home)?;
             let changed = change::set(dirs, terms, confirm, prompter, &mut later, out);
             synced_after(job, runner, later, changed, out, |run, due, out| {
-                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
             })
         }
         Command::Edit { query, all } => {
@@ -682,7 +732,14 @@ pub fn run_with<R: Runner, W: Write, D: Write>(
                 out,
             );
             synced_after(job, runner, later, edited, out, |run, due, out| {
-                reconcile_now(job, runner, Options::default(), Some(run), due, out)
+                reconcile_now(
+                    job,
+                    runner,
+                    Options::default(),
+                    Recording::Run(run),
+                    due,
+                    out,
+                )
             })
         }
     }
@@ -699,7 +756,7 @@ fn synced_after<R: Runner, W: Write>(
     out: &mut W,
     after: impl FnOnce(&mut Run, &mut hooks::Due, &mut W) -> Result<bool>,
 ) -> Result<bool> {
-    let Some(mut run) = later.begun() else {
+    let Some(mut run) = later.begun()? else {
         return changed.map(|_| true);
     };
     let mut due = hooks::Due::default();
@@ -719,7 +776,7 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     opts: Options,
-    run: Option<&mut Run>,
+    rec: Recording<'_>,
     due: &mut hooks::Due,
     out: &mut W,
 ) -> Result<bool> {
@@ -727,7 +784,7 @@ pub(crate) fn reconcile_now<R: Runner, W: Write>(
         settling: job.settling,
         ..opts
     };
-    let synced = reconcile::reconcile(runner, &job.dirs, opts, run, out)?;
+    let synced = reconcile::reconcile(runner, &job.dirs, opts, rec, out)?;
     due.then(synced.due);
     Ok(synced.ok)
 }

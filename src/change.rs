@@ -233,10 +233,11 @@ impl Read {
             .collect()
     }
 
-    /// Save the recorded edits unless a picked song changed meanwhile.
-    pub fn save(&mut self, picked: &[usize]) -> Result<()> {
+    /// Save the recorded edits unless a picked song changed meanwhile,
+    /// as `run` records.
+    pub fn save(&mut self, picked: &[usize], run: &mut crate::history::Run) -> Result<()> {
         let expected = self.songs(picked);
-        let changed = self.manifest.save_if_unchanged(&expected)?;
+        let changed = self.manifest.save_if_unchanged(&expected, run)?;
         if !changed.is_empty() {
             self.manifest.discard();
             bail!(
@@ -370,13 +371,11 @@ pub fn remove<W: Write>(
             note: view.note(),
         });
     }
-    later.begin()?;
-    read.save(&picked)?;
     let run = later.begin()?;
     for (file, _) in doomed.iter().filter(|(_, own)| *own) {
         run.trashed(&dirs.home, file);
     }
-    later.saved()?;
+    read.save(&picked, run)?;
     purge_all(doomed)?;
     Ok(true)
 }
@@ -550,9 +549,7 @@ pub fn restore<R: crate::runner::Runner, W: Write>(
     for id in picked.iter().filter_map(|n| views[*n].id()) {
         manifest.edit(Edit::Restore(id.clone()));
     }
-    later.begin()?;
-    manifest.save()?;
-    later.saved()?;
+    manifest.save(later.begin()?)?;
     Ok(true)
 }
 
@@ -854,7 +851,7 @@ pub fn set<W: Write>(
         if let Some(p) = prompter
             && !query_terms.is_empty()
         {
-            return crate::guided::edit(dirs, &query_terms, confirm, p, Some(later), out);
+            return crate::guided::edit(dirs, &query_terms, confirm, p, later, out);
         }
         return refuse(
             "Nothing to set: give NAME=VALUE or NAME!, or a query alone on a terminal to set \
@@ -891,9 +888,7 @@ pub fn set<W: Write>(
         songs,
         new: Vec::new(),
     });
-    later.begin()?;
-    read.save(&picked)?;
-    later.saved()?;
+    read.save(&picked, later.begin()?)?;
     Ok(true)
 }
 

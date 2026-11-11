@@ -96,7 +96,8 @@ quietly matches nothing, or every song when negated.
   AcoustID found its recording on, its `release` key, which takes it
   out of its album's choice; or leave the contested field out of
   everything its torrent or channel offers, a `[[tags.from]]`. Each
-  change is saved as you make it, and `undo` takes back the run.
+  change is saved as you make it, and one `undo` takes back them all,
+  of a review stopped partway too.
 - **`edit`** opens the songs' entries in `$VISUAL`, else `$EDITOR`,
   else `vi`, or Notepad on Windows. Delete a table to remove its song.
   Move a key into another table to join two songs, or into a new table

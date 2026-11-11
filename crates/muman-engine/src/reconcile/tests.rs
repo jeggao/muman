@@ -5,6 +5,7 @@ use super::measure::out_of_space;
 use super::prune::{Pruned, prune_plan};
 use super::*;
 use crate::facts::Facts;
+use crate::history::Run;
 use crate::resolve::Plan;
 use crate::state::{Step, Written};
 use crate::testing::{Fake, words};
@@ -40,7 +41,7 @@ impl Home {
 
     fn run(&self, fake: &Fake, opts: Options) -> (bool, String) {
         let mut out = Vec::new();
-        let ok = reconcile(fake, &self.dirs, opts, None, &mut out)
+        let ok = reconcile(fake, &self.dirs, opts, Recording::Test, &mut out)
             .unwrap()
             .ok;
         let text = String::from_utf8(out).unwrap();
@@ -67,7 +68,7 @@ impl Home {
             fake,
             &self.dirs,
             opts,
-            None,
+            Recording::DryRun,
             &mut std::io::sink(),
             Some(shown),
         )
@@ -310,7 +311,7 @@ fn a_dry_run_elsewhere_keeps_what_it_measured_and_nothing_of_the_library() {
         &infos(&["aaaaaaaaaaa", "bbbbbbbbbbb"]),
         &elsewhere,
         dry,
-        None,
+        Recording::DryRun,
         &mut out,
     )
     .unwrap();
@@ -884,7 +885,7 @@ fn a_run_keeps_what_it_replaces_and_removes() {
         &infos(&["aaaaaaaaaaa"]),
         &h.dirs,
         Options::default(),
-        Some(&mut run),
+        Recording::Run(&mut run),
         &mut out,
     )
     .unwrap();
@@ -2040,7 +2041,7 @@ fn status_refuses_a_field_no_song_has() {
         &infos(&["aaaaaaaaaaa"]),
         &h.dirs,
         opts,
-        None,
+        Recording::DryRun,
         &mut std::io::sink(),
         Some(shown),
     )
@@ -2280,7 +2281,13 @@ fn a_site_rename_stopped_anywhere_ends_at_the_new_key() {
         let (h, old) = prepare();
         let kill = crate::kill::kill_at(h.dirs.home.parent().unwrap(), at);
         let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reconcile(&fake, &h.dirs, Options::default(), None, &mut Vec::new())
+            reconcile(
+                &fake,
+                &h.dirs,
+                Options::default(),
+                Recording::Test,
+                &mut Vec::new(),
+            )
         }));
         drop(kill);
         assert!(stopped.is_err(), "not stopped at step {at} of {steps}");

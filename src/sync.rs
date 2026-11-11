@@ -24,10 +24,10 @@ use crate::Job;
 use crate::acquire::{Acquire, Additions, Fetcher, Proposal};
 use crate::cli::Matching;
 use crate::dirs::Dirs;
-use crate::history::Run;
+use crate::history::{Recording, Run};
 use crate::http::HttpTransport;
 use crate::identify::Mode;
-use crate::manifest::{Edit, Manifest, Tags};
+use crate::manifest::{Edit, Manifest, Recorder, Tags};
 use crate::reconcile::{Options, Unlisted};
 use crate::runner::Runner;
 use crate::source::SourceKey;
@@ -71,9 +71,9 @@ pub(crate) fn run<R: Runner, W: Write>(
     let mut due = crate::hooks::Due::default();
     let done = (|| {
         if request.update_defaults {
-            update_settings(&dirs.home, out)?;
+            update_settings(&dirs.home, &mut run, out)?;
         }
-        let proposals = dropped_in(runner, dirs, job.settling, out)?;
+        let proposals = dropped_in(runner, dirs, job.settling, &mut run, out)?;
         if !job.offline {
             crate::reconcile::note_damaged(runner, dirs, request.retry, out)?;
         }
@@ -86,31 +86,33 @@ pub(crate) fn run<R: Runner, W: Write>(
             tags: Vec::new(),
             loose: false,
         };
-        list(runner, dirs, proposals, &how, prompter, out)?;
+        list(runner, dirs, proposals, &how, prompter, &mut run, out)?;
         let ask = lookup::Ask {
             rematch: request.rematch,
             persist: request.until_done,
         };
-        ok &= look_up(job, runner, http, ask, &BTreeSet::new(), out)?;
+        ok &= look_up(job, runner, http, ask, &BTreeSet::new(), &mut run, out)?;
         let opts = Options {
             force: request.force,
             retry,
             accept: request.accept,
             ..Options::default()
         };
-        ok &= crate::reconcile_now(job, runner, opts, Some(&mut run), &mut due, out)?;
+        ok &= crate::reconcile_now(job, runner, opts, Recording::Run(&mut run), &mut due, out)?;
         Ok(ok)
     })();
     crate::finished(job, runner, run, done, &due, out)
 }
 
-/// Make every lookup due, as `lookup::run` does.
+/// Make every lookup due, as `lookup::run` does, its saves as `run`
+/// records.
 pub(crate) fn look_up<R: Runner, W: Write>(
     job: &Job,
     runner: &R,
     http: &(dyn HttpTransport + Sync),
     ask: lookup::Ask,
     declined: &BTreeSet<SourceKey>,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<bool> {
     if job.offline {
@@ -118,7 +120,7 @@ pub(crate) fn look_up<R: Runner, W: Write>(
     }
     let (ok, ()) = network(job, runner, out, |acquire| {
         Ok((
-            lookup::run(acquire, &job.dirs, http, &job.throttles, ask, declined)?,
+            lookup::run(acquire, &job.dirs, http, &job.throttles, ask, declined, run)?,
             (),
         ))
     })?;
@@ -296,11 +298,15 @@ fn torrents_due<W: Write>(
 
 /// Move the song list's settings still at an earlier edition's default
 /// to the current one, saying which moved.
-pub(crate) fn update_settings<W: Write>(home: &Path, out: &mut W) -> Result<()> {
+pub(crate) fn update_settings<W: Write>(
+    home: &Path,
+    run: &mut dyn Recorder,
+    out: &mut W,
+) -> Result<()> {
     let mut manifest = Manifest::load(home)?;
     let moved = manifest.stale_defaults.clone();
     manifest.edit(Edit::UpdateDefaults);
-    manifest.save()?;
+    manifest.save(run)?;
     if moved.is_empty() {
         ui::info(
             out,
@@ -405,8 +411,13 @@ pub(crate) fn clear_stale(partial: &Path, limit: std::time::Duration, apart: Opt
 }
 
 /// Record what a network step found beyond its proposals: albums and
-/// renames in the song list, replaced uploads in the state.
-pub(crate) fn record(dirs: &Dirs, additions: Additions) -> Result<Vec<Proposal>> {
+/// renames in the song list, as `run` records, replaced uploads in the
+/// state.
+pub(crate) fn record(
+    dirs: &Dirs,
+    additions: Additions,
+    run: &mut dyn Recorder,
+) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
     for (source, tracks) in additions.albums {
         manifest.edit(Edit::AddAlbum {
@@ -417,7 +428,7 @@ pub(crate) fn record(dirs: &Dirs, additions: Additions) -> Result<Vec<Proposal>>
     for (from, to) in additions.renames {
         manifest.edit(Edit::Rename { from, to });
     }
-    manifest.save()?;
+    manifest.save(run)?;
     State::keep_lookups(&dirs.home, &additions.looked_up, &additions.replaced)?;
     Ok(additions.proposals)
 }
@@ -434,13 +445,14 @@ pub(crate) struct Listing {
 
 /// List each proposal as a song, or as a source of the song it is the
 /// same recording as, and set the tags given on each: whether any song
-/// was given them.
+/// was given them; saved as `run` records.
 pub(crate) fn list<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     proposals: Vec<Proposal>,
     how: &Listing,
     prompter: Option<&mut dyn Prompter>,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<bool> {
     let edits = identify::identify(
@@ -471,16 +483,18 @@ pub(crate) fn list<R: Runner, W: Write>(
             });
         }
     }
-    manifest.save()?;
+    manifest.save(run)?;
     Ok(any)
 }
 
 /// Song files dropped into the manual folder that no song lists, each a
-/// proposal; a listed file moved within the folder is followed instead.
+/// proposal; a listed file moved within the folder is followed instead,
+/// the song list saved as `run` records.
 pub(crate) fn dropped_in<R: Runner, W: Write>(
     runner: &R,
     dirs: &Dirs,
     wait: Duration,
+    run: &mut dyn Recorder,
     out: &mut W,
 ) -> Result<Vec<Proposal>> {
     let mut manifest = Manifest::load(&dirs.home)?;
@@ -553,7 +567,7 @@ pub(crate) fn dropped_in<R: Runner, W: Write>(
         )?;
         manifest.edit(Edit::Drop(key));
     }
-    manifest.save()?;
+    manifest.save(run)?;
     // So the song's plan names its file anew and the song is not written
     // again for a file that only moved.
     if !moves.moved.is_empty() {
