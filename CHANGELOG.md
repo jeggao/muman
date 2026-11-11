@@ -354,6 +354,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) as
 - **A home muman may not write is read on Windows** when a failed open
   left an empty `-wal` beside the store.
 
+- **A review stopped partway is undone**: each answer `review` saves is
+  recorded as it is saved, so Ctrl-C or a kill after an answer leaves a
+  run that `undo` takes back whole, rather than a change it refuses as a
+  hand edit. One `undo` takes back every answer of a review.
+- **`set` asking again holds no run back**: when a song changed while
+  `set` stepped through its fields, asking again no longer keeps a
+  scheduled sync waiting.
+- **An undo stopped in its sync is finished by `undo`**: an undo stopped
+  after its sync followed a moved file is finished by running `undo`
+  again, and the next run no longer takes the follow for a hand edit.
+
 ## [0.11.0] - 2026-11-10
 
 ### Added
