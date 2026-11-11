@@ -34,7 +34,6 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 tempfile = "3"
 trash = "5"
-unicode-normalization = "0.1"
 unicode-width = "0.2"
 
 [dev-dependencies]

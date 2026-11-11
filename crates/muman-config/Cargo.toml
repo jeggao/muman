@@ -22,17 +22,17 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 shell-words = "1"
 strsim = "0.11"
-tempfile = "3"
 toml = "1"
 toml_edit = "0.25"
 unicode-normalization = "0.1"
-unicode-segmentation = "1"
 which = "8"
 
 [dev-dependencies]
 muman-core = { workspace = true, features = ["testing"] }
 muman-media = { workspace = true, features = ["testing"] }
 muman-net = { workspace = true, features = ["testing"] }
+tempfile = "3"
+unicode-segmentation = "1"
 
 [lints]
 workspace = true

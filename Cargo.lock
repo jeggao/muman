@@ -1268,7 +1268,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "trash",
- "unicode-normalization",
  "unicode-width",
 ]
 

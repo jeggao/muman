@@ -21,7 +21,6 @@ clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 deunicode = "1"
 directories = "6"
 dunce = "1"
-filetime = "0.2"
 icu_locale = "2.3"
 icu_properties = "2.3"
 isolang = { version = "2.4", default-features = false }
@@ -49,6 +48,9 @@ which = "8"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+filetime = "0.2"
 
 [lints]
 workspace = true

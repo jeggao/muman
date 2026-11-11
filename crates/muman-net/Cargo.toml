@@ -19,13 +19,13 @@ anyhow = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-tempfile = "3"
 terminal_size = "0.4"
 unicode-width = "0.2"
 
 [dev-dependencies]
 muman-core = { workspace = true, features = ["testing"] }
 muman-media = { workspace = true, features = ["testing"] }
+tempfile = "3"
 
 [lints]
 workspace = true
